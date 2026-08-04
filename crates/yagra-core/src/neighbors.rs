@@ -68,6 +68,16 @@ pub struct AdjacencySettings {
     pub arp_enabled: bool,
     /// How often each SNMP node's `ipNetToPhysicalTable`/`ipNetToMediaTable` are walked.
     pub arp_interval_secs: u32,
+    /// Whether routing-adjacency jobs are scheduled at all (ADR-043 Increment 4).
+    ///
+    /// **Defaults on**, like the neighbour and interface-address walks and unlike the ARP one. The
+    /// tables read here are sized by the device's own peering mesh, and the route probes are
+    /// bounded by construction (one subtree per destination, and only for a node that holds a host
+    /// address of its own), so this does not carry the cost that made ARP opt-in.
+    pub routing_enabled: bool,
+    /// How often each SNMP node's `bgpPeerTable`/`ospfNbrTable` are walked and its route probes
+    /// issued.
+    pub routing_interval_secs: u32,
 }
 
 impl Default for AdjacencySettings {
@@ -79,6 +89,8 @@ impl Default for AdjacencySettings {
             l3_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
             arp_enabled: false,
             arp_interval_secs: crate::arp::DEFAULT_ARP_INTERVAL_SECS,
+            routing_enabled: true,
+            routing_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
         }
     }
 }
@@ -90,6 +102,7 @@ impl AdjacencySettings {
         interval_in_bounds(self.neighbors_interval_secs)
             && interval_in_bounds(self.l3_interval_secs)
             && interval_in_bounds(self.arp_interval_secs)
+            && interval_in_bounds(self.routing_interval_secs)
     }
 }
 
@@ -387,6 +400,21 @@ mod tests {
         );
         assert!(d.arp_interval_secs > d.l3_interval_secs);
         assert!(interval_in_bounds(d.arp_interval_secs));
+    }
+
+    /// The routing walk sides with the two cheap walks, not with ARP — and the reason is the table
+    /// it reads, so pin it rather than leaving it to be re-argued.
+    #[test]
+    fn the_routing_walk_ships_on_because_its_tables_are_sized_by_the_device() {
+        let d = AdjacencySettings::default();
+        assert!(
+            d.routing_enabled,
+            "bgpPeerTable and ospfNbrTable are sized by the device's peering mesh, and the route \
+             probes are bounded by construction — none of that is the network-sized cost that \
+             made the ARP walk opt-in"
+        );
+        assert_eq!(d.routing_interval_secs, d.l3_interval_secs);
+        assert!(interval_in_bounds(d.routing_interval_secs));
     }
 
     #[test]

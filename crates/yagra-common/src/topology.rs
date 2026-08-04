@@ -36,9 +36,9 @@ pub const MAX_LINKS_PER_NODE: usize = 512;
 //
 // The ordering is a total order by strength and it is load-bearing: ADR-043 決定 4 says a manually
 // pinned link always wins a recomputation, and expressing that as a rank on this enum makes it one
-// function's property instead of a rule repeated wherever links are merged. Increments 2–4 append
-// variants (`Route`, `Bgp`, `Ospf`); they slot in by rank rather than by declaration order, and the
-// stored column is a plain `TEXT[]` with no `CHECK`, so adding one needs no migration.
+// function's property instead of a rule repeated wherever links are merged. The routing variants
+// (`Ospf`, `Route`, `Bgp`, Increment 4) slotted in by rank rather than by declaration order, and the
+// stored column is a plain `TEXT[]` with no `CHECK`, so adding them needed no migration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkSource {
@@ -48,16 +48,25 @@ pub enum LinkSource {
     Lldp,
     /// Cisco Discovery Protocol adjacency, matched by the peer's cache address.
     Cdp,
+    /// An OSPF neighbour relationship, matched by the neighbour's own address.
+    Ospf,
+    /// A connected host route to the peer's address — the point-to-point links that share no subnet.
+    Route,
+    /// A BGP peering session whose peer address is on a network this node terminates.
+    Bgp,
     /// Both nodes have an interface address in the same IP subnet.
     L3Subnet,
 }
 
 impl LinkSource {
     /// Every source, for iteration and coverage tests.
-    pub const ALL: [LinkSource; 4] = [
+    pub const ALL: [LinkSource; 7] = [
         LinkSource::Manual,
         LinkSource::Lldp,
         LinkSource::Cdp,
+        LinkSource::Ospf,
+        LinkSource::Route,
+        LinkSource::Bgp,
         LinkSource::L3Subnet,
     ];
 
@@ -68,6 +77,9 @@ impl LinkSource {
             LinkSource::Manual => "manual",
             LinkSource::Lldp => "lldp",
             LinkSource::Cdp => "cdp",
+            LinkSource::Ospf => "ospf",
+            LinkSource::Route => "route",
+            LinkSource::Bgp => "bgp",
             LinkSource::L3Subnet => "l3_subnet",
         }
     }
@@ -80,6 +92,9 @@ impl LinkSource {
             "manual" => Some(LinkSource::Manual),
             "lldp" => Some(LinkSource::Lldp),
             "cdp" => Some(LinkSource::Cdp),
+            "ospf" => Some(LinkSource::Ospf),
+            "route" => Some(LinkSource::Route),
+            "bgp" => Some(LinkSource::Bgp),
             "l3_subnet" => Some(LinkSource::L3Subnet),
             _ => None,
         }
@@ -89,15 +104,24 @@ impl LinkSource {
     ///
     /// LLDP outranks CDP because it is the standard, and because [`crate::NeighborProto`] already
     /// documents that a device speaking both reports the same link twice under different
-    /// identities. Both outrank shared-subnet membership: L2 names a physical port, whereas L3
-    /// co-membership is an inference from two nodes being on one network.
+    /// identities. Both outrank the routing evidence, which names no physical port at all, and all
+    /// of it outranks shared-subnet membership: L2 names a port, a routing adjacency names a
+    /// relationship, and L3 co-membership is an inference from two nodes being on one network.
+    //
+    // Within the routing group: an OSPF neighbour is link-local by construction, a connected host
+    // route says the destination is on a local interface, and a BGP session — even after the
+    // reachability qualifier `RoutingProto::implies_direct_link` demands — is the weakest of the
+    // three, because it is the only one whose protocol permits a peer several hops away.
     #[must_use]
     pub const fn rank(self) -> u8 {
         match self {
             LinkSource::Manual => 0,
             LinkSource::Lldp => 1,
             LinkSource::Cdp => 2,
-            LinkSource::L3Subnet => 3,
+            LinkSource::Ospf => 3,
+            LinkSource::Route => 4,
+            LinkSource::Bgp => 5,
+            LinkSource::L3Subnet => 6,
         }
     }
 
@@ -393,6 +417,24 @@ pub struct TopologyLinkSummary {
     /// Links produced from an LLDP adjacency.
     #[serde(default)]
     pub lldp_links: u32,
+    /// Links produced from an OSPF neighbour relationship.
+    #[serde(default)]
+    pub ospf_links: u32,
+    /// Links produced from a connected host route — the point-to-point links that share no subnet.
+    #[serde(default)]
+    pub route_links: u32,
+    /// Links produced from a BGP peering session.
+    #[serde(default)]
+    pub bgp_links: u32,
+    /// Routing adjacencies whose peer address matched no monitored node.
+    #[serde(default)]
+    pub unmatched_routing_peers: u32,
+    /// BGP peers that matched a monitored node but sit on no network the reporting node terminates,
+    /// so the session is not evidence of a link between them. The normal reading is iBGP between
+    /// loopbacks; a number that stays at zero on a network running iBGP means the reporting node's
+    /// interface addresses have not been observed.
+    #[serde(default)]
+    pub bgp_peers_not_adjacent: u32,
     /// LLDP rows whose management address matched no monitored node.
     #[serde(default)]
     pub unmatched_lldp_rows: u32,
@@ -464,7 +506,20 @@ mod tests {
                 "the DB token and the JSON tag are produced by different mechanisms"
             );
         }
-        assert_eq!(LinkSource::from_token("bgp"), None);
+        assert_eq!(LinkSource::from_token("isis"), None);
+    }
+
+    #[test]
+    fn the_routing_sources_rank_between_l2_adjacency_and_shared_subnet() {
+        // The placement is the claim: a routing adjacency is better evidence than "these two are on
+        // one network" and worse evidence than a protocol that named a physical port.
+        for routing in [LinkSource::Ospf, LinkSource::Route, LinkSource::Bgp] {
+            assert!(routing.rank() > LinkSource::Cdp.rank(), "{routing:?}");
+            assert!(routing.rank() < LinkSource::L3Subnet.rank(), "{routing:?}");
+        }
+        // And BGP is the weakest of the three — the only one whose protocol permits a distant peer.
+        assert!(LinkSource::Bgp.rank() > LinkSource::Ospf.rank());
+        assert!(LinkSource::Bgp.rank() > LinkSource::Route.rank());
     }
 
     #[test]

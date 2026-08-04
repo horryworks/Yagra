@@ -9,6 +9,7 @@
 use crate::collection::CollectionRepo;
 use crate::dns_check::DnsCheckRepo;
 use crate::neighbors::AdjacencySettings;
+use crate::routing::RoutingPlan;
 use crate::secrets::{self, CredentialStore, SnmpV3Secret};
 use crate::url_check::UrlCheckRepo;
 use std::collections::{HashMap, HashSet};
@@ -18,13 +19,15 @@ use uuid::Uuid;
 use yagra_bus::{
     DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpArpCheck, SnmpArpColumn,
     SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck,
-    SnmpNeighborColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check,
-    SnmpV3NeighborCheck, SnmpV3TableCheck, SyncBus,
+    SnmpNeighborColumn, SnmpRouteProbe, SnmpRoutingCheck, SnmpRoutingColumn, SnmpTableCheck,
+    SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3RoutingCheck,
+    SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
     builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
-    builtin_neighbor_columns, CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node,
-    NodeId, NodeKind, NodeRows, ProfileId, UrlCheckConfig,
+    builtin_neighbor_columns, builtin_routing_columns, route_probe_columns, route_probe_oid,
+    CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node, NodeId, NodeKind, NodeRows,
+    ProfileId, UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -363,6 +366,73 @@ pub fn build_snmp_v3_arp_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3
     }
 }
 
+/// Build the SNMP v2c routing-adjacency check (ADR-043 Increment 4).
+///
+/// `targets` is the node's slice of the fleet's host-route addresses, decided by [`RoutingPlan`].
+/// The probe OIDs are built **here** rather than poller-side, so `inetCidrRouteTable`'s index
+/// grammar stays a fact core owns — the same reason every other check is sent its column OIDs.
+#[must_use]
+pub fn build_snmp_routing_check(
+    community: &str,
+    targets: &[std::net::IpAddr],
+    timeout_ms: u32,
+) -> SnmpRoutingCheck {
+    SnmpRoutingCheck {
+        community: community.to_owned(),
+        columns: routing_columns(),
+        route_probes: route_probes(targets),
+        timeout_ms,
+    }
+}
+
+/// Build the SNMP v3 (USM) routing-adjacency check — the v3 analogue of
+/// [`build_snmp_routing_check`].
+#[must_use]
+pub fn build_snmp_v3_routing_check(
+    secret: &SnmpV3Secret,
+    targets: &[std::net::IpAddr],
+    timeout_ms: u32,
+) -> SnmpV3RoutingCheck {
+    SnmpV3RoutingCheck {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        columns: routing_columns(),
+        route_probes: route_probes(targets),
+        timeout_ms,
+    }
+}
+
+fn routing_columns() -> Vec<SnmpRoutingColumn> {
+    builtin_routing_columns()
+        .into_iter()
+        .map(|(field, oid)| SnmpRoutingColumn {
+            field,
+            oid: oid.to_owned(),
+        })
+        .collect()
+}
+
+/// One probe per (column, destination): the route type says whether the destination is on a local
+/// interface and the ifIndex says which one, so both are needed for every target.
+fn route_probes(targets: &[std::net::IpAddr]) -> Vec<SnmpRouteProbe> {
+    let columns = route_probe_columns();
+    let mut probes = Vec::with_capacity(targets.len() * columns.len());
+    for target in targets {
+        for (field, base) in &columns {
+            probes.push(SnmpRouteProbe {
+                field: *field,
+                oid: route_probe_oid(base, *target),
+                target: *target,
+            });
+        }
+    }
+    probes
+}
+
 fn arp_columns() -> Vec<SnmpArpColumn> {
     builtin_arp_columns()
         .into_iter()
@@ -404,7 +474,7 @@ fn neighbor_columns() -> Vec<SnmpNeighborColumn> {
 /// One struct for both walks (L2 adjacency, ADR-038; L3 interface addresses, ADR-043) so the sweep
 /// resolves settings once. Increment 3's ARP cadence and Increment 4's routing cadence become
 /// fields here rather than another settings query in the scheduling loop.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdjacencyPolicy {
     /// Whether CDP/LLDP neighbour jobs are issued.
     pub neighbors_enabled: bool,
@@ -423,9 +493,22 @@ pub struct AdjacencyPolicy {
     /// ARP cadence in seconds. Slower again than the two above: what it discovers is "which hosts
     /// exist on my segments", which is an inventory question, not a state one.
     pub arp_interval_secs: u32,
+    /// Whether routing-adjacency jobs are issued (ADR-043 Increment 4).
+    pub routing_enabled: bool,
+    /// Routing-adjacency cadence in seconds.
+    pub routing_interval_secs: u32,
+    /// Which host addresses each node is asked to probe for, resolved once per sweep alongside the
+    /// settings. Shared rather than cloned per node — it is the same fleet-wide fact for all of
+    /// them, and nearly every node's entry is empty.
+    pub routing_plan: Arc<RoutingPlan>,
 }
 
 impl From<AdjacencySettings> for AdjacencyPolicy {
+    /// Settings alone, with an **empty** probe plan.
+    ///
+    /// The plan needs a database read, so a policy built from settings only issues the two walked
+    /// columns and no route probes. Every caller that can afford the read uses
+    /// [`PollDispatcher::adjacency_policy`] instead, which fills it in.
     fn from(s: AdjacencySettings) -> Self {
         Self {
             neighbors_enabled: s.neighbors_enabled,
@@ -434,6 +517,9 @@ impl From<AdjacencySettings> for AdjacencyPolicy {
             l3_interval_secs: s.l3_interval_secs,
             arp_enabled: s.arp_enabled,
             arp_interval_secs: s.arp_interval_secs,
+            routing_enabled: s.routing_enabled,
+            routing_interval_secs: s.routing_interval_secs,
+            routing_plan: Arc::new(RoutingPlan::default()),
         }
     }
 }
@@ -442,6 +528,20 @@ impl Default for AdjacencyPolicy {
     fn default() -> Self {
         AdjacencySettings::default().into()
     }
+}
+
+/// How long a [`RoutingPlan`] is reused before it is rebuilt.
+///
+/// The plan is derived from the fleet's host-route addressing, which changes when an interface is
+/// re-addressed — on the order of weeks. Rebuilding it per sweep would mean a `jsonb_array_elements`
+/// scan of `node_l3` every thirty seconds to find tens of rows; five minutes matches the derivation
+/// task's own cadence, so the probe list and the graph it feeds move together.
+const ROUTING_PLAN_TTL: Duration = Duration::from_secs(300);
+
+/// The cached plan and when it was built.
+struct CachedRoutingPlan {
+    plan: Arc<RoutingPlan>,
+    built_at: Option<std::time::Instant>,
 }
 
 /// A node's resolved SNMP authentication: a v2c community string or a v3 USM document.
@@ -524,7 +624,7 @@ pub fn assemble_node_jobs(
     items: &[CollectionItem],
     monitor: Option<SpecialMonitor<'_>>,
     interval_secs: u32,
-    neighbors: AdjacencyPolicy,
+    neighbors: &AdjacencyPolicy,
 ) -> Vec<(PollJob, &'static str)> {
     // A URL or DNS monitor is its own node kind: dispatch that one job and nothing else. ICMP is
     // *not* added — a URL target may be non-pingable (e.g. behind a CDN), and a name has no
@@ -589,6 +689,20 @@ pub fn assemble_node_jobs(
                 );
                 jobs.push((job, "snmp_arp"));
             }
+            if neighbors.routing_enabled {
+                let job = PollJob::snmp_routing(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_routing_check(
+                        community,
+                        neighbors.routing_plan.targets_for(node.id),
+                        SNMP_TIMEOUT_MS,
+                    ),
+                    neighbors.routing_interval_secs,
+                );
+                jobs.push((job, "snmp_routing"));
+            }
         }
         Some(SnmpAuth::V3(secret)) => {
             if let Some(check) = build_snmp_v3_check(secret, items, SNMP_TIMEOUT_MS) {
@@ -630,6 +744,20 @@ pub fn assemble_node_jobs(
                 );
                 jobs.push((job, "snmp_v3_arp"));
             }
+            if neighbors.routing_enabled {
+                let job = PollJob::snmp_v3_routing(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_v3_routing_check(
+                        secret,
+                        neighbors.routing_plan.targets_for(node.id),
+                        SNMP_TIMEOUT_MS,
+                    ),
+                    neighbors.routing_interval_secs,
+                );
+                jobs.push((job, "snmp_v3_routing"));
+            }
         }
         None => {}
     }
@@ -658,6 +786,12 @@ pub struct PollDispatcher {
     /// neighbour policy once per round and passes it in explicitly (as it already does with the
     /// poll interval), so this is never read in the hot loop.
     settings: Arc<crate::repo::NodeRepo>,
+    /// Interface addresses, read only to rebuild the route-probe plan (ADR-043 Increment 4).
+    l3: Arc<crate::l3::L3Repo>,
+    /// The route-probe plan, rebuilt at most every [`ROUTING_PLAN_TTL`]. Behind a lock rather than
+    /// recomputed per sweep because it is a `jsonb_array_elements` scan of `node_l3` that returns
+    /// tens of rows, and the addressing it reads changes on the order of weeks.
+    routing_plan: tokio::sync::RwLock<CachedRoutingPlan>,
     /// v2c community fallback for nodes without a bound credential.
     env_community: Option<String>,
     /// Fallback poll interval (seconds) stamped on on-demand "poll now" jobs. The periodic
@@ -681,6 +815,8 @@ pub struct PollDispatcherSeams {
     pub meraki_devices: Arc<crate::meraki::MerakiDeviceRepo>,
     /// Deployment-wide settings — see the field of the same name on [`PollDispatcher`].
     pub settings: Arc<crate::repo::NodeRepo>,
+    /// Interface addresses — see the field of the same name on [`PollDispatcher`].
+    pub l3: Arc<crate::l3::L3Repo>,
     /// v2c community fallback for nodes without a bound credential.
     pub env_community: Option<String>,
     /// Fallback poll interval (seconds) for on-demand "poll now" jobs — see the field of the
@@ -699,6 +835,7 @@ impl PollDispatcher {
             dns_checks,
             meraki_devices,
             settings,
+            l3,
             env_community,
             interval_secs,
         } = seams;
@@ -710,15 +847,63 @@ impl PollDispatcher {
             dns_checks,
             meraki_devices,
             settings,
+            l3,
+            routing_plan: tokio::sync::RwLock::new(CachedRoutingPlan {
+                plan: Arc::new(RoutingPlan::default()),
+                built_at: None,
+            }),
             env_community,
             interval_secs,
         }
     }
 
     /// The deployment's adjacency policy, degrading to the compiled default on a read failure —
-    /// used by the on-demand path only (the sweep resolves it once per round instead).
+    /// resolved once per sweep, and once per action on the on-demand path.
     pub async fn adjacency_policy(&self) -> AdjacencyPolicy {
-        self.settings.get_adjacency_settings().await.into()
+        let mut policy: AdjacencyPolicy = self.settings.get_adjacency_settings().await.into();
+        if policy.routing_enabled {
+            policy.routing_plan = self.routing_plan().await;
+        }
+        policy
+    }
+
+    /// The route-probe plan, rebuilt when the cached one has expired (ADR-043 Increment 4).
+    ///
+    /// A failed read keeps the previous plan rather than falling back to an empty one: an empty
+    /// plan issues no probes at all, so a transient database error would silently stop collecting
+    /// point-to-point links — and nothing downstream could tell that apart from "there are none".
+    /// The TTL is not advanced on failure, so the next sweep retries.
+    async fn routing_plan(&self) -> Arc<RoutingPlan> {
+        {
+            let cached = self.routing_plan.read().await;
+            if cached
+                .built_at
+                .is_some_and(|at| at.elapsed() < ROUTING_PLAN_TTL)
+            {
+                return cached.plan.clone();
+            }
+        }
+        let mut cached = self.routing_plan.write().await;
+        // Re-checked under the write lock: two sweeps racing here would otherwise both rebuild.
+        if cached
+            .built_at
+            .is_some_and(|at| at.elapsed() < ROUTING_PLAN_TTL)
+        {
+            return cached.plan.clone();
+        }
+        match self.l3.host_addresses().await {
+            Ok(hosts) => {
+                let plan = Arc::new(RoutingPlan::build(&hosts));
+                metrics::gauge!("yagra_route_probe_nodes")
+                    .set(u32::try_from(plan.prober_count()).unwrap_or(u32::MAX));
+                cached.plan = plan;
+                cached.built_at = Some(std::time::Instant::now());
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "route-probe plan refresh failed; keeping the previous plan");
+            }
+        }
+        cached.plan.clone()
     }
 
     /// Every node that is a DNS monitor, for the periodic scheduler to preload once per sweep.
@@ -764,7 +949,7 @@ impl PollDispatcher {
         }
         // One node, one settings read — this path is an operator action, not the sweep.
         let neighbors = self.adjacency_policy().await;
-        self.build_scheduled_jobs_hinted(node, interval_secs, None, neighbors)
+        self.build_scheduled_jobs_hinted(node, interval_secs, None, &neighbors)
             .await
     }
 
@@ -786,7 +971,7 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
         dns_hint: Option<&HashSet<Uuid>>,
-        neighbors: AdjacencyPolicy,
+        neighbors: &AdjacencyPolicy,
     ) -> Vec<(PollJob, &'static str)> {
         let node_uuid = node.id.as_uuid();
         let url = self.url_checks.get(node_uuid).await.unwrap_or_else(|e| {
@@ -840,7 +1025,7 @@ impl PollDispatcher {
         node: &Node,
         interval_secs: u32,
         dns_hint: Option<&HashSet<Uuid>>,
-        neighbors: AdjacencyPolicy,
+        neighbors: &AdjacencyPolicy,
     ) -> Vec<JobSpec> {
         self.build_scheduled_jobs_hinted(node, interval_secs, dns_hint, neighbors)
             .await
@@ -1340,7 +1525,7 @@ mod tests {
             &[],
             None,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["icmp"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Icmp(_)));
@@ -1357,7 +1542,7 @@ mod tests {
             &[],
             monitor,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Http(_)));
@@ -1375,7 +1560,7 @@ mod tests {
             &[],
             monitor,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["dns"]);
         assert!(matches!(jobs[0].0.check, CheckSpec::Dns(_)));
@@ -1396,7 +1581,7 @@ mod tests {
             &[],
             monitor,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
     }
@@ -1507,11 +1692,18 @@ mod tests {
             &items,
             None,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(
             kinds(&jobs),
-            vec!["snmp", "snmp_table", "snmp_neighbors", "snmp_l3", "icmp"]
+            vec![
+                "snmp",
+                "snmp_table",
+                "snmp_neighbors",
+                "snmp_l3",
+                "snmp_routing",
+                "icmp"
+            ]
         );
         // The maker is unknown (vendor None), so the scalar SNMP job carries the identity probe.
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
@@ -1534,7 +1726,7 @@ mod tests {
             &items,
             None,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         let snmp = jobs.iter().find(|(_, k)| *k == "snmp").unwrap();
         assert!(
@@ -1566,7 +1758,7 @@ mod tests {
             &items,
             None,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(
             kinds(&jobs),
@@ -1575,6 +1767,7 @@ mod tests {
                 "snmp_v3_table",
                 "snmp_v3_neighbors",
                 "snmp_v3_l3",
+                "snmp_v3_routing",
                 "icmp"
             ]
         );
@@ -1607,11 +1800,17 @@ mod tests {
             &items,
             None,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(
             kinds(&jobs),
-            vec!["snmp_v3", "snmp_v3_neighbors", "snmp_v3_l3", "icmp"]
+            vec![
+                "snmp_v3",
+                "snmp_v3_neighbors",
+                "snmp_v3_l3",
+                "snmp_v3_routing",
+                "icmp"
+            ]
         );
     }
 
@@ -1627,13 +1826,14 @@ mod tests {
         )];
         let auth = SnmpAuth::V2c("public".to_owned());
         let policy = AdjacencyPolicy::default();
-        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, policy);
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &policy);
         for (job, kind) in &jobs {
-            let expected = if kind.contains("neighbors") || kind.contains("l3") {
-                3600
-            } else {
-                30
-            };
+            let expected =
+                if kind.contains("neighbors") || kind.contains("l3") || kind.contains("routing") {
+                    3600
+                } else {
+                    30
+                };
             assert_eq!(job.interval_secs, expected, "{kind} cadence");
         }
         // The legacy publish path keys its extra due-check off exactly this inequality.
@@ -1666,18 +1866,18 @@ mod tests {
             &items,
             None,
             30,
-            off,
+            &off,
         );
-        assert_eq!(kinds(&v2c), vec!["snmp_table", "icmp"]);
+        assert_eq!(kinds(&v2c), vec!["snmp_table", "snmp_routing", "icmp"]);
         let v3 = assemble_node_jobs(
             &node("fw"),
             Some(&SnmpAuth::V3(v3_secret())),
             &items,
             None,
             30,
-            off,
+            &off,
         );
-        assert_eq!(kinds(&v3), vec!["snmp_v3_table", "icmp"]);
+        assert_eq!(kinds(&v3), vec!["snmp_v3_table", "snmp_v3_routing", "icmp"]);
     }
 
     /// The two walks share a settings struct but not a switch. A fleet may want L2 adjacency and
@@ -1696,15 +1896,21 @@ mod tests {
             neighbors_enabled: false,
             ..AdjacencyPolicy::default()
         };
-        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, l3_only);
-        assert_eq!(kinds(&jobs), vec!["snmp_table", "snmp_l3", "icmp"]);
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &l3_only);
+        assert_eq!(
+            kinds(&jobs),
+            vec!["snmp_table", "snmp_l3", "snmp_routing", "icmp"]
+        );
 
         let neighbors_only = AdjacencyPolicy {
             l3_enabled: false,
             ..AdjacencyPolicy::default()
         };
-        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, neighbors_only);
-        assert_eq!(kinds(&jobs), vec!["snmp_table", "snmp_neighbors", "icmp"]);
+        let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &neighbors_only);
+        assert_eq!(
+            kinds(&jobs),
+            vec!["snmp_table", "snmp_neighbors", "snmp_routing", "icmp"]
+        );
     }
 
     /// ARP discovery is off in the default policy, and that default is what every node gets until an
@@ -1728,7 +1934,7 @@ mod tests {
                 &items,
                 None,
                 30,
-                AdjacencyPolicy::default(),
+                &AdjacencyPolicy::default(),
             );
             assert!(
                 !kinds(&jobs).contains(&kind),
@@ -1756,7 +1962,7 @@ mod tests {
             &items,
             None,
             30,
-            policy,
+            &policy,
         );
         let arp = jobs.iter().find(|(_, k)| *k == "snmp_arp").expect("issued");
         assert_eq!(arp.0.interval_secs, 21_600);
@@ -1774,6 +1980,102 @@ mod tests {
             sent, declared,
             "core is the one place the OID set is decided"
         );
+    }
+
+    /// The routing walk is the third to ride the slow tier, and unlike ARP it ships on. Its cost
+    /// argument is the tables it reads, so pin that it is actually issued by default.
+    #[test]
+    fn the_routing_walk_is_issued_by_default_on_both_protocols() {
+        let items = [item(
+            "if_hc_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            CollectionKind::Table,
+        )];
+        assert!(AdjacencyPolicy::default().routing_enabled);
+        for (auth, kind) in [
+            (SnmpAuth::V2c("public".to_owned()), "snmp_routing"),
+            (SnmpAuth::V3(v3_secret()), "snmp_v3_routing"),
+        ] {
+            let jobs = assemble_node_jobs(
+                &node("rtr"),
+                Some(&auth),
+                &items,
+                None,
+                30,
+                &AdjacencyPolicy::default(),
+            );
+            let job = jobs.iter().find(|(_, k)| *k == kind).expect("issued");
+            assert_eq!(job.0.interval_secs, 3600, "{kind} rides the slow tier");
+        }
+    }
+
+    /// The toggle is the safety valve here too: off means no job is built at all, on either
+    /// protocol — not a job the poller then declines to run.
+    #[test]
+    fn disabling_routing_collection_emits_no_job_for_either_protocol() {
+        let off = AdjacencyPolicy {
+            routing_enabled: false,
+            ..AdjacencyPolicy::default()
+        };
+        for auth in [
+            SnmpAuth::V2c("public".to_owned()),
+            SnmpAuth::V3(v3_secret()),
+        ] {
+            let jobs = assemble_node_jobs(&node("rtr"), Some(&auth), &[], None, 30, &off);
+            assert!(kinds(&jobs).iter().all(|k| !k.contains("routing")));
+        }
+    }
+
+    /// A node with no host address of its own gets the adjacency walk and **no probes** — the rule
+    /// that keeps `inetCidrRouteTable` off 50,000 nodes. Nearly every node is in this state.
+    #[test]
+    fn a_node_with_no_planned_targets_walks_adjacency_but_probes_nothing() {
+        let jobs = assemble_node_jobs(
+            &node("rtr"),
+            Some(&SnmpAuth::V2c("public".to_owned())),
+            &[],
+            None,
+            30,
+            &AdjacencyPolicy::default(),
+        );
+        let job = jobs
+            .iter()
+            .find(|(_, k)| *k == "snmp_routing")
+            .expect("issued");
+        let CheckSpec::SnmpRouting(check) = &job.0.check else {
+            panic!("wrong variant");
+        };
+        assert!(check.route_probes.is_empty());
+        let sent: Vec<&str> = check.columns.iter().map(|c| c.oid.as_str()).collect();
+        let declared: Vec<&str> = builtin_routing_columns().iter().map(|(_, o)| *o).collect();
+        assert_eq!(
+            sent, declared,
+            "core is the one place the OID set is decided"
+        );
+    }
+
+    /// A planned target becomes one probe per route column, each rooted at that destination — and
+    /// the OID must end in the destination's index encoding, because that is the whole reason the
+    /// routing table can be consulted without being walked.
+    #[test]
+    fn a_planned_target_becomes_one_probe_per_route_column() {
+        let targets = ["198.51.100.2".parse().unwrap()];
+        let check = build_snmp_routing_check("public", &targets, 2000);
+        assert_eq!(check.route_probes.len(), route_probe_columns().len());
+        for probe in &check.route_probes {
+            assert_eq!(probe.target, targets[0]);
+            assert!(
+                probe.oid.ends_with(".1.4.198.51.100.2"),
+                "the probe must pin the destination: {}",
+                probe.oid
+            );
+        }
+        // Both protocols must ask for the same thing, or a v3 fleet quietly derives fewer links.
+        let v3 = build_snmp_v3_routing_check(&v3_secret(), &targets, 2000);
+        let v2c_oids: Vec<&str> = check.route_probes.iter().map(|p| p.oid.as_str()).collect();
+        let v3_oids: Vec<&str> = v3.route_probes.iter().map(|p| p.oid.as_str()).collect();
+        assert_eq!(v2c_oids, v3_oids);
+        assert_eq!(check.columns.len(), v3.columns.len());
     }
 
     /// The L3 job must carry exactly the columns `yagra-common` declares — core is the one place
@@ -1800,7 +2102,7 @@ mod tests {
             &[],
             None,
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["icmp"]);
     }
@@ -1816,7 +2118,7 @@ mod tests {
             &[],
             SpecialMonitor::resolve(Some(&url), None),
             30,
-            AdjacencyPolicy::default(),
+            &AdjacencyPolicy::default(),
         );
         assert_eq!(kinds(&jobs), vec!["http"]);
     }

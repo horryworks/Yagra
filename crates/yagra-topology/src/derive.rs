@@ -22,8 +22,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::IpAddr;
 use yagra_common::{
-    DerivedLink, L3Snapshot, LinkOverride, LinkOverrideAction, LinkSource, NeighborProto,
-    NeighborSet, NodeId, SubnetKey, TopologyLinkSummary, MAX_LINKS_PER_NODE,
+    subnet_key, DerivedLink, L3Snapshot, LinkOverride, LinkOverrideAction, LinkSource,
+    NeighborProto, NeighborSet, NodeId, RoutingSnapshot, SubnetKey, TopologyLinkSummary,
+    MAX_LINKS_PER_NODE,
 };
 
 /// Cap on how many members of one subnet are considered. A `/16` with every host answering SNMP
@@ -44,6 +45,9 @@ pub struct DeriveInput<'a> {
     pub l3: &'a [(NodeId, L3Snapshot)],
     /// Each node's most recent CDP/LLDP observation.
     pub neighbors: &'a [(NodeId, NeighborSet)],
+    /// Each node's most recent routing-adjacency observation (ADR-043 Increment 4): the evidence
+    /// for the links that share no subnet, and which the shared-subnet rule therefore cannot see.
+    pub routing: &'a [(NodeId, RoutingSnapshot)],
     /// Operator decisions. Empty in Increment 1.
     pub overrides: &'a [LinkOverride],
 }
@@ -267,6 +271,57 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         }
     }
 
+    // ── Routing adjacency: the links that share no subnet ────────────────────
+    //
+    // Matched to inventory by the peer's address, exactly as the L2 rows above are, and with the
+    // same `owner` map — so a peer that two nodes claim identifies neither, and a router naming its
+    // own address names no link.
+    //
+    // The asymmetry between the protocols is deliberate and is the reason `implies_direct_link`
+    // exists: an OSPF neighbour and a connected host route are link-local facts, while a BGP
+    // session is routinely established between loopbacks many hops apart. In a route-reflector
+    // design every router peers with the reflector, so taking BGP at face value would draw a star
+    // to it that does not exist — and in `derived` suppression mode that star becomes a parent that
+    // silences real outages. A BGP peer therefore also has to sit on a network the reporting node
+    // terminates, which is a fact read off its own `L3Snapshot`.
+    let own_subnets: BTreeMap<NodeId, BTreeSet<SubnetKey>> = input
+        .l3
+        .iter()
+        .map(|(id, snap)| (*id, snap.subnets()))
+        .collect();
+    for (id, snap) in input.routing {
+        if snap.truncated {
+            summary.truncated_nodes += 1;
+        }
+        for adj in &snap.adjacencies {
+            if contested.contains(&adj.peer) {
+                summary.ambiguous_mgmt_addrs += 1;
+                continue;
+            }
+            let Some(peer) = owner.get(&adj.peer).copied() else {
+                summary.unmatched_routing_peers += 1;
+                continue;
+            };
+            if peer == *id {
+                continue;
+            }
+            if !adj.proto.implies_direct_link() && !terminates(own_subnets.get(id), adj.peer) {
+                summary.bgp_peers_not_adjacent += 1;
+                continue;
+            }
+            let mut link = DerivedLink::new(*id, peer, adj.proto.link_source());
+            // `local_ifindex` describes *this* node's side, so it follows the endpoint through
+            // canonicalization rather than always landing on `a` — the same rule the L2 rows above
+            // apply to `local_port`.
+            if link.is_a(*id) {
+                link.a_ifindex = adj.local_ifindex;
+            } else {
+                link.b_ifindex = adj.local_ifindex;
+            }
+            add(link, &mut links);
+        }
+    }
+
     // ── Manual decisions win ─────────────────────────────────────────────────
     apply_overrides(&mut links, input.overrides);
 
@@ -287,8 +342,11 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         match LinkSource::best(&link.sources) {
             Some(LinkSource::Lldp) => summary.lldp_links += 1,
             Some(LinkSource::Cdp) => summary.cdp_links += 1,
+            Some(LinkSource::Ospf) => summary.ospf_links += 1,
+            Some(LinkSource::Route) => summary.route_links += 1,
+            Some(LinkSource::Bgp) => summary.bgp_links += 1,
             Some(LinkSource::L3Subnet) => summary.l3_links += 1,
-            _ => {}
+            Some(LinkSource::Manual) | None => {}
         }
         out.push(link);
     }
@@ -297,6 +355,22 @@ pub fn derive_links(input: DeriveInput<'_>) -> DeriveOutput {
         links: out,
         summary,
     }
+}
+
+/// Whether `subnets` contains a network that `peer` falls inside.
+///
+/// The BGP qualifier, and the reason it is a fact rather than a heuristic: a node's own interface
+/// addresses say exactly which networks it terminates, so "is this peer on one of them" has an
+/// observed answer. A node whose `L3Snapshot` has not been collected terminates nothing as far as
+/// this can tell, and its BGP peers are declined and counted — the fail-safe direction, since a
+/// missing edge only fails to suppress, while a wrong one silences a real outage.
+fn terminates(subnets: Option<&BTreeSet<SubnetKey>>, peer: IpAddr) -> bool {
+    let Some(subnets) = subnets else {
+        return false;
+    };
+    subnets
+        .iter()
+        .any(|key| subnet_key(peer, key.prefix_len).as_ref() == Some(key))
 }
 
 /// Apply operator decisions to a derived set. **The only place "manual always wins" is expressed.**
@@ -348,7 +422,7 @@ fn apply_overrides(links: &mut BTreeMap<String, DerivedLink>, overrides: &[LinkO
 #[cfg(test)]
 mod tests {
     use super::*;
-    use yagra_common::{L3Address, Neighbor};
+    use yagra_common::{L3Address, Neighbor, RoutingProto};
 
     fn ip(s: &str) -> IpAddr {
         s.parse().unwrap()
@@ -379,6 +453,7 @@ mod tests {
             nodes: &[],
             l3,
             neighbors: &[],
+            routing: &[],
             overrides: &[],
         })
     }
@@ -508,6 +583,7 @@ mod tests {
             // inventory address is also 127.0.0.1.
             l3: &[(n[3], snap(&[("127.0.0.1", 8), ("10.0.0.1", 24)]))],
             neighbors: &[],
+            routing: &[],
             overrides: &[],
         });
         assert_eq!(
@@ -524,6 +600,7 @@ mod tests {
                 (m[1], snap(&[("10.0.0.1", 24), ("10.0.2.1", 24)])),
             ],
             neighbors: &[],
+            routing: &[],
             overrides: &[],
         });
         assert_eq!(out.summary.duplicate_addresses, 1);
@@ -595,6 +672,7 @@ mod tests {
             nodes: &[],
             l3: &[],
             neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            routing: &[],
             overrides: &[],
         });
         assert!(out.links.is_empty());
@@ -615,6 +693,7 @@ mod tests {
             nodes: &[(n[0], ip("10.0.0.1")), (n[1], ip("10.0.0.2"))],
             l3: &[],
             neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            routing: &[],
             overrides: &[],
         });
         assert_eq!(out.links.len(), 1);
@@ -644,6 +723,7 @@ mod tests {
             ],
             l3: &[],
             neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            routing: &[],
             overrides: &[],
         });
         assert!(out.links.is_empty());
@@ -663,6 +743,7 @@ mod tests {
                 (n[1], snap(&[("10.0.0.2", 24)])),
             ],
             neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            routing: &[],
             overrides: &[],
         });
         assert_eq!(out.links.len(), 1, "one physical link, not two rows");
@@ -725,6 +806,7 @@ mod tests {
             nodes: &[],
             l3: &l3,
             neighbors: &[],
+            routing: &[],
             overrides: &[LinkOverride {
                 a_node: n[1],
                 b_node: n[0], // reversed on purpose: the override is canonicalized like any link
@@ -738,6 +820,7 @@ mod tests {
             nodes: &[],
             l3: &[],
             neighbors: &[],
+            routing: &[],
             overrides: &[LinkOverride {
                 a_node: n[0],
                 b_node: n[2],
@@ -758,6 +841,7 @@ mod tests {
             nodes: &[(n[0], ip("10.0.0.1"))],
             l3: &[],
             neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            routing: &[],
             overrides: &[],
         });
         assert!(out.links.is_empty());
@@ -770,6 +854,382 @@ mod tests {
         s.truncated = true;
         let out = derive(&[(n[0], s)]);
         assert_eq!(out.summary.truncated_nodes, 1);
+    }
+
+    // ── Increment 4: the links that share no subnet ──────────────────────────
+
+    fn routing(rows: &[(NodeId, RoutingSnapshot)]) -> DeriveOutput {
+        derive_links(DeriveInput {
+            nodes: &[],
+            l3: &[],
+            neighbors: &[],
+            routing: rows,
+            overrides: &[],
+        })
+    }
+
+    fn adj(proto: RoutingProto, peer: &str) -> yagra_common::RoutingAdjacency {
+        yagra_common::RoutingAdjacency::new(proto, ip(peer))
+    }
+
+    #[test]
+    fn a_host_route_pair_that_shares_no_subnet_becomes_a_link() {
+        // The gap Increment 1 named and left open: two `/32`s share no prefix, not even with each
+        // other, so the shared-subnet rule structurally cannot see this link. The connected route
+        // is what closes it.
+        let n = ids(2);
+        let out = derive_links(DeriveInput {
+            nodes: &[],
+            l3: &[
+                (n[0], snap(&[("198.51.100.1", 32)])),
+                (n[1], snap(&[("198.51.100.2", 32)])),
+            ],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Route, "198.51.100.2")], false),
+            )],
+            overrides: &[],
+        });
+        assert_eq!(out.links.len(), 1);
+        assert_eq!(pair(&out.links[0]), (n[0], n[1]));
+        assert_eq!(out.links[0].sources, vec![LinkSource::Route]);
+        assert_eq!(out.summary.route_links, 1);
+    }
+
+    #[test]
+    fn an_ospf_neighbour_becomes_a_link_and_keeps_the_reporting_nodes_interface() {
+        // The unnumbered case. Neither node has a shared prefix with the other, and the local
+        // ifIndex belongs to whichever endpoint reported it — not to `a` by default.
+        let n = ids(2);
+        let mut a = adj(RoutingProto::Ospf, "10.0.0.2");
+        a.local_ifindex = Some(7);
+        let out = derive_links(DeriveInput {
+            nodes: &[(n[1], ip("10.0.0.2"))],
+            l3: &[],
+            neighbors: &[],
+            routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
+            overrides: &[],
+        });
+        assert_eq!(out.links.len(), 1);
+        assert_eq!(out.links[0].sources, vec![LinkSource::Ospf]);
+        assert_eq!(out.summary.ospf_links, 1);
+        let l = &out.links[0];
+        let reporter_side = if l.a_node == n[0] {
+            l.a_ifindex
+        } else {
+            l.b_ifindex
+        };
+        assert_eq!(reporter_side, Some(7));
+    }
+
+    #[test]
+    fn a_down_bgp_session_still_produces_an_edge() {
+        // Conditioning the edge on `established(6)` would make the topology flap in step with the
+        // outage it exists to explain — losing the link exactly when suppression needed it.
+        let n = ids(2);
+        for state in 1..=6 {
+            let mut a = adj(RoutingProto::Bgp, "10.0.0.2");
+            a.state = Some(state);
+            let out = derive_links(DeriveInput {
+                nodes: &[],
+                l3: &[
+                    (n[0], snap(&[("10.0.0.1", 24)])),
+                    (n[1], snap(&[("10.0.0.2", 24)])),
+                ],
+                neighbors: &[],
+                routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
+                overrides: &[],
+            });
+            assert_eq!(out.links.len(), 1, "state {state} must still yield an edge");
+            assert_eq!(
+                out.links[0].sources,
+                vec![LinkSource::Bgp, LinkSource::L3Subnet],
+                "state {state}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ibgp_session_between_loopbacks_does_not_invent_a_link() {
+        // **The systematic false edge this qualifier exists to prevent.** Three routers peering
+        // with a route reflector over loopbacks: the sessions are real, the links are not, and a
+        // star to the reflector would become a parent that silences every one of them.
+        let n = ids(4);
+        let rr = n[3];
+        let mut l3: Vec<(NodeId, L3Snapshot)> = (0..3)
+            .map(|i| {
+                (
+                    n[i],
+                    snap(&[
+                        (&format!("10.255.0.{}", i + 1), 32),
+                        (&format!("10.{}.0.1", i + 1), 24),
+                    ]),
+                )
+            })
+            .collect();
+        l3.push((rr, snap(&[("10.255.0.9", 32)])));
+
+        let routing_rows: Vec<(NodeId, RoutingSnapshot)> = (0..3)
+            .map(|i| {
+                (
+                    n[i],
+                    RoutingSnapshot::new(vec![adj(RoutingProto::Bgp, "10.255.0.9")], false),
+                )
+            })
+            .collect();
+
+        let out = derive_links(DeriveInput {
+            nodes: &[],
+            l3: &l3,
+            neighbors: &[],
+            routing: &routing_rows,
+            overrides: &[],
+        });
+        assert!(
+            out.links.is_empty(),
+            "a route reflector is not cabled to its clients"
+        );
+        assert_eq!(out.summary.bgp_peers_not_adjacent, 3);
+    }
+
+    #[test]
+    fn an_ebgp_session_over_a_shared_segment_is_admitted() {
+        // The other half of the same rule: the peer is on a network this node terminates, so the
+        // session really is evidence of a link. Here the two are on a /30 that the shared-subnet
+        // rule also sees, so the edge carries both sources and is counted once, by the stronger.
+        let n = ids(2);
+        let out = derive_links(DeriveInput {
+            nodes: &[],
+            l3: &[
+                (n[0], snap(&[("192.0.2.1", 30)])),
+                (n[1], snap(&[("192.0.2.2", 30)])),
+            ],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Bgp, "192.0.2.2")], false),
+            )],
+            overrides: &[],
+        });
+        assert_eq!(out.links.len(), 1);
+        assert_eq!(
+            out.links[0].sources,
+            vec![LinkSource::Bgp, LinkSource::L3Subnet]
+        );
+        assert_eq!(out.summary.bgp_links, 1);
+        assert_eq!(out.summary.l3_links, 0, "counted once, by its best source");
+        assert_eq!(out.summary.bgp_peers_not_adjacent, 0);
+    }
+
+    #[test]
+    fn a_bgp_peer_is_declined_when_the_reporting_node_has_no_observed_addressing() {
+        // Fail-safe: with no `L3Snapshot` the node terminates nothing as far as this can tell, so
+        // the session is declined and counted rather than admitted on trust. A missing edge only
+        // fails to suppress; a wrong one silences a real outage.
+        let n = ids(2);
+        let out = derive_links(DeriveInput {
+            nodes: &[(n[0], ip("10.0.0.1")), (n[1], ip("10.0.0.2"))],
+            l3: &[],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Bgp, "10.0.0.2")], false),
+            )],
+            overrides: &[],
+        });
+        assert!(out.links.is_empty());
+        assert_eq!(out.summary.bgp_peers_not_adjacent, 1);
+    }
+
+    #[test]
+    fn a_routing_peer_that_matches_no_node_is_counted_not_dropped() {
+        // An upstream ISP's BGP peer or an OSPF neighbour outside the inventory. Silence here would
+        // make an incomplete graph indistinguishable from a complete one.
+        let n = ids(1);
+        let out = routing(&[(
+            n[0],
+            RoutingSnapshot::new(
+                vec![
+                    adj(RoutingProto::Ospf, "203.0.113.1"),
+                    adj(RoutingProto::Route, "203.0.113.2"),
+                ],
+                false,
+            ),
+        )]);
+        assert!(out.links.is_empty());
+        assert_eq!(out.summary.unmatched_routing_peers, 2);
+    }
+
+    #[test]
+    fn a_contested_peer_address_produces_no_link() {
+        // Two nodes claim the address the peer advertised — a VIP, or a duplicate. Choosing one
+        // would be the guess 決定 2 forbids, exactly as for an L2 management address.
+        let n = ids(3);
+        let out = derive_links(DeriveInput {
+            nodes: &[
+                (n[0], ip("10.0.0.1")),
+                (n[1], ip("10.0.0.9")),
+                (n[2], ip("10.0.0.9")),
+            ],
+            l3: &[],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Ospf, "10.0.0.9")], false),
+            )],
+            overrides: &[],
+        });
+        assert!(out.links.is_empty());
+        assert_eq!(out.summary.ambiguous_mgmt_addrs, 1);
+    }
+
+    #[test]
+    fn a_node_reporting_itself_as_its_own_peer_does_not_link_to_itself() {
+        let n = ids(1);
+        let out = derive_links(DeriveInput {
+            nodes: &[(n[0], ip("10.0.0.1"))],
+            l3: &[],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Ospf, "10.0.0.1")], false),
+            )],
+            overrides: &[],
+        });
+        assert!(out.links.is_empty());
+    }
+
+    #[test]
+    fn ospf_and_a_host_route_seeing_the_same_pair_produce_one_link_with_two_sources() {
+        let n = ids(2);
+        let out = derive_links(DeriveInput {
+            nodes: &[(n[1], ip("198.51.100.2"))],
+            l3: &[],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(
+                    vec![
+                        adj(RoutingProto::Ospf, "198.51.100.2"),
+                        adj(RoutingProto::Route, "198.51.100.2"),
+                    ],
+                    false,
+                ),
+            )],
+            overrides: &[],
+        });
+        assert_eq!(out.links.len(), 1, "one physical link, not two rows");
+        assert_eq!(
+            out.links[0].sources,
+            vec![LinkSource::Ospf, LinkSource::Route]
+        );
+        assert_eq!(out.summary.ospf_links, 1);
+        assert_eq!(out.summary.route_links, 0);
+    }
+
+    #[test]
+    fn an_l2_adjacency_still_names_the_port_when_routing_saw_the_same_link() {
+        // Precedence check across the increments: LLDP outranks every routing source, so the
+        // physical port name survives a routing observation of the same pair.
+        let n = ids(2);
+        let mut nb = Neighbor::new(NeighborProto::Lldp, "Gi0/1", "peer", "Gi1/0/2");
+        nb.remote_mgmt_addr = Some("10.0.0.2".into());
+        nb.local_ifindex = Some(1);
+        let mut a = adj(RoutingProto::Ospf, "10.0.0.2");
+        a.local_ifindex = Some(99);
+
+        let out = derive_links(DeriveInput {
+            nodes: &[(n[0], ip("10.0.0.1")), (n[1], ip("10.0.0.2"))],
+            l3: &[],
+            neighbors: &[(n[0], NeighborSet::new(vec![nb]))],
+            routing: &[(n[0], RoutingSnapshot::new(vec![a], false))],
+            overrides: &[],
+        });
+        assert_eq!(out.links.len(), 1);
+        assert_eq!(
+            LinkSource::best(&out.links[0].sources),
+            Some(LinkSource::Lldp)
+        );
+        let l = &out.links[0];
+        let (name, index) = if l.a_node == n[0] {
+            (&l.a_if_name, l.a_ifindex)
+        } else {
+            (&l.b_if_name, l.b_ifindex)
+        };
+        assert_eq!(name.as_deref(), Some("Gi0/1"));
+        assert_eq!(index, Some(1), "L2 names the physical port");
+    }
+
+    #[test]
+    fn a_truncated_routing_observation_is_reported() {
+        let n = ids(1);
+        let out = routing(&[(n[0], RoutingSnapshot::new(Vec::new(), true))]);
+        assert_eq!(out.summary.truncated_nodes, 1);
+    }
+
+    #[test]
+    fn derivation_stays_deterministic_with_routing_in_the_mix() {
+        let n = ids(4);
+        let l3 = [
+            (n[0], snap(&[("10.0.0.1", 30), ("198.51.100.1", 32)])),
+            (n[1], snap(&[("10.0.0.2", 30)])),
+            (n[2], snap(&[("198.51.100.2", 32)])),
+            (n[3], snap(&[("172.16.0.1", 24)])),
+        ];
+        let mut rows = vec![
+            (
+                n[0],
+                RoutingSnapshot::new(
+                    vec![
+                        adj(RoutingProto::Route, "198.51.100.2"),
+                        adj(RoutingProto::Bgp, "10.0.0.2"),
+                    ],
+                    false,
+                ),
+            ),
+            (
+                n[2],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Ospf, "10.0.0.1")], false),
+            ),
+        ];
+        let build = |rows: &[(NodeId, RoutingSnapshot)]| {
+            derive_links(DeriveInput {
+                nodes: &[],
+                l3: &l3,
+                neighbors: &[],
+                routing: rows,
+                overrides: &[],
+            })
+        };
+        let forward = build(&rows);
+        rows.reverse();
+        assert_eq!(forward, build(&rows));
+        assert_eq!(forward, build(&rows));
+    }
+
+    #[test]
+    fn the_lab_dialer_still_produces_no_link_because_its_peer_is_not_monitored() {
+        // The honest lab result for Increment 4, and the reason its acceptance is a unit test.
+        // The USG's PPPoE `/32` has a real peer, but the peer is the ISP's — not in the inventory —
+        // so the probe finds a route to nothing this deployment knows about.
+        let n = ids(2);
+        let out = derive_links(DeriveInput {
+            nodes: &[],
+            l3: &[
+                (n[0], snap(&[("192.168.1.1", 24), ("133.123.189.109", 32)])),
+                (n[1], snap(&[("192.168.1.2", 24)])),
+            ],
+            neighbors: &[],
+            routing: &[(
+                n[0],
+                RoutingSnapshot::new(vec![adj(RoutingProto::Route, "133.123.189.1")], false),
+            )],
+            overrides: &[],
+        });
+        assert_eq!(out.links.len(), 1, "only the shared /24 from Increment 1");
+        assert_eq!(out.links[0].sources, vec![LinkSource::L3Subnet]);
+        assert_eq!(out.summary.unmatched_routing_peers, 1);
     }
 
     #[test]

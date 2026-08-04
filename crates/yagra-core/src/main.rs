@@ -63,6 +63,7 @@ mod repo;
 mod reports;
 mod retention;
 mod ring;
+mod routing;
 mod scheduler;
 mod secrets;
 mod seed_ids;
@@ -460,6 +461,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
     let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
     let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
+    let routing_repo = Arc::new(routing::RoutingRepo::new(repo.pool()));
     let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
     let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
     let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
@@ -476,6 +478,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             dns_checks: dns_checks.clone(),
             meraki_devices: meraki_devices.clone(),
             settings: repo.clone(),
+            l3: l3_repo.clone(),
             env_community: env_community.clone(),
             interval_secs: cfg.poll_interval_secs,
         },
@@ -636,6 +639,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
         arp: arp_repo.clone(),
+        routing: routing_repo.clone(),
         discovered: discovered_repo.clone(),
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
@@ -684,6 +688,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
         arp: arp_repo.clone(),
+        // No `routing` here on purpose: Increment 4 adds no read endpoint. Its edges reach the API
+        // through the links `run_topology_derivation` writes, which `/topology/links` already
+        // serves — so the route ledger gains no line and the MCP gap does not move (ADR-042).
         discovered: discovered_repo.clone(),
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
@@ -891,6 +898,7 @@ struct LeaderTasks {
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
     arp: Arc<arp::ArpRepo>,
+    routing: Arc<routing::RoutingRepo>,
     discovered: Arc<arp::DiscoveredRepo>,
     topology_links: Arc<topology_links::TopoLinkRepo>,
     link_overrides: Arc<link_overrides::LinkOverrideRepo>,
@@ -977,6 +985,7 @@ impl LeaderTasks {
                 neighbors: self.neighbors.clone(),
                 l3: self.l3.clone(),
                 arp: self.arp.clone(),
+                routing: self.routing.clone(),
             },
             self.history.clone(),
             self.shutdown.clone(),
@@ -1170,6 +1179,7 @@ impl LeaderTasks {
                 self.repo.clone(),
                 self.l3.clone(),
                 self.neighbors.clone(),
+                self.routing.clone(),
                 self.topology_links.clone(),
                 self.link_overrides.clone(),
             ),
@@ -1240,6 +1250,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         neighbors: None,
         l3: None,
         arp: None,
+        routing: None,
         observational: false,
         poller_id: None,
         trace_context: Default::default(),
@@ -1410,6 +1421,9 @@ struct MetaRecord {
     /// The ARP/ND cache observed on this poll (ARP walks only, ADR-043 Increment 3). Same tier
     /// again. `None` means no summary was observed and nothing is written — never "no endpoints".
     arp: Option<yagra_common::ArpSummary>,
+    /// The routing adjacency observed on this poll (routing walks only, ADR-043 Increment 4). Same
+    /// tier again. `None` means nothing was observed and nothing is written — never "no peers".
+    routing: Option<yagra_common::RoutingSnapshot>,
 }
 
 /// One alert-lifecycle transition for the async PG writer's history batch. Never shed — the matcher
@@ -1541,12 +1555,16 @@ fn persist_metrics_and_meta(
     // And the ARP summary, for the fourth time: an endpoint dropped here is re-observed on the next
     // walk, and the endpoint table's `last_seen` simply does not advance in the meantime.
     let arp = result.arp.clone();
+    // And the routing adjacency, for the fifth time: a snapshot dropped here is re-observed on the
+    // next collection, and the stored one simply does not advance in the meantime.
+    let routing = result.routing.clone();
     if !interfaces.is_empty()
         || identity.is_some()
         || dns_chain.is_some()
         || neighbors.is_some()
         || l3.is_some()
         || arp.is_some()
+        || routing.is_some()
     {
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
@@ -1556,6 +1574,7 @@ fn persist_metrics_and_meta(
             neighbors,
             l3,
             arp,
+            routing,
         };
         match meta_tx.try_send(rec) {
             Ok(()) => {}
@@ -1707,17 +1726,21 @@ async fn run_topology_derivation(
     repo: Arc<NodeRepo>,
     l3: Arc<l3::L3Repo>,
     neighbors: Arc<neighbors::NeighborRepo>,
+    routing: Arc<routing::RoutingRepo>,
     links: Arc<topology_links::TopoLinkRepo>,
     overrides: Arc<link_overrides::LinkOverrideRepo>,
 ) {
     type Watermark = Option<chrono::DateTime<chrono::Utc>>;
-    let mut last_signal: Option<(u64, Watermark, Watermark)> = None;
+    let mut last_signal: Option<(u64, Watermark, Watermark, Watermark)> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(TOPO_DERIVE_INTERVAL_SECS)).await;
 
         let l3_mark = l3.observation_watermark().await.unwrap_or(None);
         let nb_mark = neighbors.observation_watermark().await.unwrap_or(None);
-        let signal = (config_gen::current(), l3_mark, nb_mark);
+        // The third watermark, added with Increment 4: a point-to-point link appearing changes no
+        // address and no CDP/LLDP row, so without this the map would not redraw for it.
+        let rt_mark = routing.observation_watermark().await.unwrap_or(None);
+        let signal = (config_gen::current(), l3_mark, nb_mark, rt_mark);
         if last_signal.as_ref() == Some(&signal) {
             metrics::counter!("yagra_topology_derive_skipped_total").increment(1);
             continue;
@@ -1741,6 +1764,13 @@ async fn run_topology_derivation(
                 continue;
             }
         };
+        let rt_rows = match routing.all_current().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "topology derivation: reading routing adjacency failed");
+                continue;
+            }
+        };
 
         // An override read that fails degrades to *no* overrides rather than skipping the cycle:
         // the derivation's own output is still correct, it just lacks the operator's corrections
@@ -1754,6 +1784,7 @@ async fn run_topology_derivation(
             nodes: &inventory,
             l3: &l3_rows,
             neighbors: &nb_rows,
+            routing: &rt_rows,
             overrides: &ovr,
         });
 
@@ -2347,6 +2378,7 @@ struct MetaStores {
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
     arp: Arc<arp::ArpRepo>,
+    routing: Arc<routing::RoutingRepo>,
 }
 
 async fn run_pg_writer(
@@ -2425,6 +2457,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         neighbors,
         l3,
         arp,
+        routing,
     } = stores;
     if buf.is_empty() {
         return;
@@ -2436,6 +2469,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
     let mut arp_rows: Vec<(Uuid, yagra_common::ArpSummary)> = Vec::new();
+    let mut routing_rows: Vec<(Uuid, yagra_common::RoutingSnapshot)> = Vec::new();
     for rec in buf.drain(..) {
         for (ifindex, name, alias, speed) in rec.interfaces {
             iface_rows.push((rec.node_id, ifindex, name, alias, speed));
@@ -2454,6 +2488,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some(summary) = rec.arp {
             arp_rows.push((rec.node_id, summary));
+        }
+        if let Some(snapshot) = rec.routing {
+            routing_rows.push((rec.node_id, snapshot));
         }
     }
     if !iface_rows.is_empty() {
@@ -2512,6 +2549,16 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     }
     if !arp_rows.is_empty() {
         metrics::counter!("yagra_arp_persisted_total").increment(arp_rows.len() as u64);
+    }
+    // Routing adjacency is current state like ARP, not a sequence, and is written the same way and
+    // for the same reason.
+    for (node_id, snapshot) in &routing_rows {
+        if let Err(e) = routing.record_observation(*node_id, snapshot).await {
+            tracing::warn!(node = %node_id, error = %e, "routing adjacency observation failed");
+        }
+    }
+    if !routing_rows.is_empty() {
+        metrics::counter!("yagra_routing_persisted_total").increment(routing_rows.len() as u64);
     }
     metrics::counter!("yagra_result_meta_persisted_total").increment(count);
 }
@@ -2670,7 +2717,11 @@ async fn run_scheduler(
         let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
         // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
         // no per-node settings query enters the sweep. Degrades to the compiled default.
-        let neighbors: scheduler::AdjacencyPolicy = repo.get_adjacency_settings().await.into();
+        //
+        // Resolved through the dispatcher rather than straight off `repo`, because it also carries
+        // the route-probe plan (ADR-043 Increment 4), which the dispatcher caches on its own TTL —
+        // rebuilding that per sweep would mean a JSONB scan of `node_l3` every round.
+        let neighbors = dispatcher.adjacency_policy().await;
         // Folder-pool inheritance (ADR-009/020). One small query per rebuild — never on the cached
         // fast path above, which is already generation-keyed.
         match groups_repo.pool_rows().await {
@@ -2766,13 +2817,15 @@ async fn run_scheduler(
                             .map(|(node, secs)| {
                                 let dispatcher = dispatcher.clone();
                                 let dns_nodes = dns_nodes.clone();
+                                // Cheap: scalars plus one `Arc` to the shared route-probe plan.
+                                let neighbors = neighbors.clone();
                                 async move {
                                     let specs = dispatcher
                                         .build_node_specs(
                                             &node,
                                             secs,
                                             Some(dns_nodes.as_ref()),
-                                            neighbors,
+                                            &neighbors,
                                         )
                                         .await;
                                     (node.id, specs)
@@ -2802,7 +2855,7 @@ async fn run_scheduler(
                                     node,
                                     *secs,
                                     Some(dns_nodes.as_ref()),
-                                    neighbors,
+                                    &neighbors,
                                 )
                                 .await
                             {
@@ -3524,6 +3577,7 @@ mod tests {
             neighbors: None,
             l3: None,
             arp: None,
+            routing: None,
             observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
@@ -3602,6 +3656,7 @@ mod tests {
             neighbors: Some(yagra_common::NeighborSet::default()),
             l3: None,
             arp: None,
+            routing: None,
             observational: true,
             poller_id: None,
             trace_context: Default::default(),
@@ -3614,6 +3669,7 @@ mod tests {
             neighbors: None,
             l3: None,
             arp: None,
+            routing: None,
             ..observational_result(node, outcome, at)
         }
     }
@@ -3767,6 +3823,7 @@ mod tests {
             neighbors: None,
             l3: None,
             arp: None,
+            routing: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

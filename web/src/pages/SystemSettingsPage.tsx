@@ -137,9 +137,9 @@ export function SystemSettingsPage() {
  *  (LLDP-MIB / CISCO-CDP-MIB, RFC 1213 / RFC 4293), so there is nothing to tune per device — only
  *  whether to walk and how often.
  *
- *  Rendered from `DISCOVERY_WALKS` rather than as three near-identical blocks, so a fourth walk is a
- *  registry entry plus its locale strings. All judgement is in `neighborSettings.ts` — Vitest never
- *  runs a .tsx (testing.md). */
+ *  Rendered from `DISCOVERY_WALKS` rather than as one block per walk, so adding one is a registry
+ *  entry plus its locale strings — which is exactly what the routing walk (ADR-043 Increment 4)
+ *  cost. All judgement is in `neighborSettings.ts` — Vitest never runs a .tsx (testing.md). */
 function NeighborCard({ authed }: { authed: boolean }) {
   const { t } = useTranslation('system');
   const [saved, setSavedCfg] = useState<NeighborConfig | null>(null);

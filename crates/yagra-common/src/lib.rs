@@ -24,6 +24,7 @@ pub mod node_kind;
 pub mod notify_template;
 pub mod profile;
 pub mod rbac;
+pub mod routing;
 pub mod severity;
 pub mod state;
 pub mod thresholds;
@@ -77,6 +78,13 @@ pub use notify_template::{
 };
 pub use profile::ProfileCategory;
 pub use rbac::{Permission, Principal, Role, Scope, TokenSurface, UserKind};
+pub use routing::{
+    bgp_mib_covers, bgp_peer_from_instance, builtin_routing_columns, host_prefix_len,
+    ospf_neighbor_from_instance, route_prefix_len_from_instance, route_probe_columns,
+    route_probe_oid, RoutingAdjacency, RoutingColumn, RoutingProto, RoutingSnapshot,
+    INET_CIDR_ROUTE_TYPE_LOCAL, MAX_ROUTE_PROBES_PER_NODE, MAX_ROUTE_PROBE_ROWS,
+    MAX_ROUTING_ADJACENCIES_PER_NODE, MAX_ROUTING_WALK_ROWS, METRIC_SNMP_ROUTING_ADJACENCY_COUNT,
+};
 pub use severity::Severity;
 pub use state::NodeState;
 pub use thresholds::{

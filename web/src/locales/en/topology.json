@@ -27,6 +27,9 @@
       "manual": "Confirmed by hand",
       "lldp": "LLDP",
       "cdp": "CDP",
+      "ospf": "OSPF neighbor",
+      "route": "Connected route",
+      "bgp": "BGP peer",
       "l3_subnet": "Shared subnet"
     }
   },

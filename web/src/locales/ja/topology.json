@@ -24,6 +24,9 @@
       "manual": "手動で確定",
       "lldp": "LLDP",
       "cdp": "CDP",
+      "ospf": "OSPF 隣接",
+      "route": "直結経路",
+      "bgp": "BGP ピア",
       "l3_subnet": "サブネット共有"
     }
   },

@@ -5876,7 +5876,7 @@ export interface components {
          * @description What kind of evidence produced a link, ordered strongest first.
          * @enum {string}
          */
-        LinkSource: "manual" | "lldp" | "cdp" | "l3_subnet";
+        LinkSource: "manual" | "lldp" | "cdp" | "ospf" | "route" | "bgp" | "l3_subnet";
         /** @description The `PUT /api/v1/llm/config` body. */
         LlmConfigInput: {
             /**
@@ -6255,6 +6255,22 @@ export interface components {
              * @description Smallest cadence this deployment accepts, in seconds.
              */
             min_interval_secs?: number;
+            /**
+             * @description Whether routing-adjacency collection is issued at all. Omitted on update leaves it unchanged.
+             *
+             *     On unless an operator turns it off. This is what finds the links that share no subnet — a
+             *     point-to-point `/32`, an unnumbered OSPF link, an eBGP session across a segment — which the
+             *     shared-subnet rule structurally cannot see. The tables it reads are sized by the device's own
+             *     peering mesh, and the routing table itself is never walked: it is probed one destination at a
+             *     time.
+             */
+            routing_enabled?: boolean | null;
+            /**
+             * Format: int32
+             * @description How often each SNMP node's routing adjacency is collected, in seconds. Omitted on update
+             *     leaves it unchanged.
+             */
+            routing_interval_secs?: number | null;
         };
         /** @description One page of adjacency changes, newest first. */
         NeighborHistory: {
@@ -7824,6 +7840,19 @@ export interface components {
             ambiguous_mgmt_addrs?: number;
             /**
              * Format: int32
+             * @description Links produced from a BGP peering session.
+             */
+            bgp_links?: number;
+            /**
+             * Format: int32
+             * @description BGP peers that matched a monitored node but sit on no network the reporting node terminates,
+             *     so the session is not evidence of a link between them. The normal reading is iBGP between
+             *     loopbacks; a number that stays at zero on a network running iBGP means the reporting node's
+             *     interface addresses have not been observed.
+             */
+            bgp_peers_not_adjacent?: number;
+            /**
+             * Format: int32
              * @description Links produced from a CDP adjacency.
              */
             cdp_links?: number;
@@ -7845,10 +7874,20 @@ export interface components {
             lldp_links?: number;
             /**
              * Format: int32
+             * @description Links produced from an OSPF neighbour relationship.
+             */
+            ospf_links?: number;
+            /**
+             * Format: int32
              * @description Segments with more than two members where no member could be identified as routing for the
              *     others, so no link was drawn.
              */
             oversized_segments?: number;
+            /**
+             * Format: int32
+             * @description Links produced from a connected host route — the point-to-point links that share no subnet.
+             */
+            route_links?: number;
             /**
              * Format: int32
              * @description Addresses sharing network bits but disagreeing on prefix length.
@@ -7869,6 +7908,11 @@ export interface components {
              * @description LLDP rows whose management address matched no monitored node.
              */
             unmatched_lldp_rows?: number;
+            /**
+             * Format: int32
+             * @description Routing adjacencies whose peer address matched no monitored node.
+             */
+            unmatched_routing_peers?: number;
         };
         /**
          * @description Which dependency graph the alert engine uses.

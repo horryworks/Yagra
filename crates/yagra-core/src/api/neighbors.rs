@@ -306,6 +306,19 @@ pub(crate) struct NeighborConfig {
     /// update leaves it unchanged.
     #[serde(default)]
     pub arp_interval_secs: Option<u32>,
+    /// Whether routing-adjacency collection is issued at all. Omitted on update leaves it unchanged.
+    ///
+    /// On unless an operator turns it off. This is what finds the links that share no subnet — a
+    /// point-to-point `/32`, an unnumbered OSPF link, an eBGP session across a segment — which the
+    /// shared-subnet rule structurally cannot see. The tables it reads are sized by the device's own
+    /// peering mesh, and the routing table itself is never walked: it is probed one destination at a
+    /// time.
+    #[serde(default)]
+    pub routing_enabled: Option<bool>,
+    /// How often each SNMP node's routing adjacency is collected, in seconds. Omitted on update
+    /// leaves it unchanged.
+    #[serde(default)]
+    pub routing_interval_secs: Option<u32>,
     /// Smallest cadence this deployment accepts, in seconds.
     #[serde(default)]
     pub min_interval_secs: u32,
@@ -336,6 +349,8 @@ async fn get_adjacency_settings(
         l3_interval_secs: Some(s.l3_interval_secs),
         arp_enabled: Some(s.arp_enabled),
         arp_interval_secs: Some(s.arp_interval_secs),
+        routing_enabled: Some(s.routing_enabled),
+        routing_interval_secs: Some(s.routing_interval_secs),
         min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
         max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
     }))
@@ -374,6 +389,10 @@ async fn update_neighbor_settings(
         l3_interval_secs: body.l3_interval_secs.unwrap_or(current.l3_interval_secs),
         arp_enabled: body.arp_enabled.unwrap_or(current.arp_enabled),
         arp_interval_secs: body.arp_interval_secs.unwrap_or(current.arp_interval_secs),
+        routing_enabled: body.routing_enabled.unwrap_or(current.routing_enabled),
+        routing_interval_secs: body
+            .routing_interval_secs
+            .unwrap_or(current.routing_interval_secs),
     };
     if !next.in_bounds() {
         return Err(ApiError::bad_request(
@@ -552,6 +571,8 @@ mod tests {
             l3_interval_secs: Some(3600),
             arp_enabled: Some(false),
             arp_interval_secs: Some(21_600),
+            routing_enabled: Some(true),
+            routing_interval_secs: Some(3600),
             min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
             max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
         };

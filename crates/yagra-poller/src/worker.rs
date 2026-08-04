@@ -172,6 +172,41 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             )
             .await
         }
+        CheckSpec::SnmpRouting(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_routing(
+                job,
+                transport,
+                at_unix_ms,
+                &check.columns,
+                &check.route_probes,
+                timeout,
+                &walker,
+            )
+            .await
+        }
+        CheckSpec::SnmpV3Routing(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
+                user: check.user.clone(),
+                security_level: check.security_level.clone(),
+                auth_protocol: check.auth_protocol.clone(),
+                auth_key: check.auth_key.clone(),
+                priv_protocol: check.priv_protocol.clone(),
+                priv_key: check.priv_key.clone(),
+            });
+            execute_routing(
+                job,
+                transport,
+                at_unix_ms,
+                &check.columns,
+                &check.route_probes,
+                timeout,
+                &walker,
+            )
+            .await
+        }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in
             // `run_stream`; `execute` (one job → one result) is never used for them. Guard anyway.
@@ -348,6 +383,7 @@ pub async fn execute_meraki(
             neighbors: None,
             l3: None,
             arp: None,
+            routing: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),
@@ -636,6 +672,7 @@ async fn execute_table_walk(
         neighbors: None,
         l3: None,
         arp: None,
+        routing: None,
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
@@ -818,6 +855,108 @@ async fn execute_arp(
             tracing::debug!(job_id = %job.job_id, error = %err, "ARP walk failed");
         }
     }
+    r
+}
+
+/// Execute a routing-adjacency collection (v2c or v3, selected by `walker`) — ADR-043 Increment 4.
+///
+/// Shares the three properties of [`execute_neighbors`], [`execute_l3`] and [`execute_arp`] —
+/// observational, `Some` only when something was actually collected, `Some(empty)` is a real answer
+/// — and adds a fourth specific to this check:
+///
+/// * **Two calls, two budgets.** The adjacency walk reads tables sized by the device's peering
+///   mesh; the probes read one destination each. Sharing a budget would let a route reflector's
+///   hundreds of iBGP peers consume it before the probes ran, and which half lost would depend on
+///   the order the bases happened to be listed in — a silent, configuration-dependent gap.
+///
+/// A failure of *either* call leaves that half's rows out and lets the other half through: a device
+/// that answers `bgpPeerState` but has no `inetCidrRouteTable` is ordinary, and refusing the whole
+/// observation because one table is absent would collect nothing from most of the fleet.
+async fn execute_routing(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    columns: &[yagra_bus::SnmpRoutingColumn],
+    probes: &[yagra_bus::SnmpRouteProbe],
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
+    r.observational = true;
+
+    let mut rows = Vec::new();
+    let mut answered = false;
+    let mut truncated = false;
+
+    if !columns.is_empty() {
+        let bases: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
+        match walker
+            .walk_instances(
+                transport,
+                job.target,
+                &bases,
+                timeout,
+                yagra_common::MAX_ROUTING_WALK_ROWS,
+            )
+            .await
+        {
+            Ok(found) => {
+                truncated |= found.len() >= yagra_common::MAX_ROUTING_WALK_ROWS;
+                rows.extend(found);
+                answered = true;
+            }
+            Err(err) => {
+                tracing::debug!(job_id = %job.job_id, error = %err, "routing adjacency walk failed");
+            }
+        }
+    }
+
+    if !probes.is_empty() {
+        // Every probe is its own subtree root, so they go in one call: the transport walks each in
+        // turn and the shared budget is the *probe* budget, sized for exactly this many roots.
+        let bases: Vec<String> = probes.iter().map(|p| p.oid.clone()).collect();
+        match walker
+            .walk_instances(
+                transport,
+                job.target,
+                &bases,
+                timeout,
+                yagra_common::MAX_ROUTE_PROBE_ROWS,
+            )
+            .await
+        {
+            Ok(found) => {
+                truncated |= found.len() >= yagra_common::MAX_ROUTE_PROBE_ROWS;
+                rows.extend(found);
+                answered = true;
+            }
+            Err(err) => {
+                tracing::debug!(job_id = %job.job_id, error = %err, "route probes failed");
+            }
+        }
+    }
+
+    if !answered {
+        // Neither half produced anything, so nothing was observed. Sending `Some(empty)` here would
+        // erase the node's stored adjacency on a transport failure — and, one derivation later,
+        // every link that node was in.
+        return r;
+    }
+
+    let snapshot = crate::routing::assemble(columns, probes, &rows, truncated);
+    if snapshot.truncated {
+        metrics::counter!("yagra_routing_rows_truncated_total").increment(1);
+        tracing::warn!(
+            job_id = %job.job_id,
+            kept = snapshot.len(),
+            "routing adjacency exceeded a walk or sample cap; the excess was dropped"
+        );
+    }
+    r.samples.push(Sample::gauge(
+        yagra_common::METRIC_SNMP_ROUTING_ADJACENCY_COUNT,
+        snapshot.len() as f64,
+    ));
+    r.routing = Some(snapshot);
     r
 }
 
@@ -1007,6 +1146,7 @@ fn result(
         neighbors: None,
         l3: None,
         arp: None,
+        routing: None,
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).

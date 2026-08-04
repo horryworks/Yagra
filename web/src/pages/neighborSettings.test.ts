@@ -22,6 +22,8 @@ const SAVED: NeighborConfig = {
   l3_interval_secs: 3600,
   arp_enabled: false,
   arp_interval_secs: 21600,
+  routing_enabled: true,
+  routing_interval_secs: 3600,
   min_interval_secs: MIN_NEIGHBOR_INTERVAL_SECS,
   max_interval_secs: MAX_NEIGHBOR_INTERVAL_SECS,
 };
@@ -62,6 +64,8 @@ describe('parseDiscoveryForm', () => {
         l3_interval_secs: 3600,
         arp_enabled: false,
         arp_interval_secs: 21600,
+        routing_enabled: true,
+        routing_interval_secs: 3600,
       },
     });
   });
@@ -107,6 +111,7 @@ describe('parseDiscoveryForm', () => {
       neighbors: { enabled: true, intervalSecs: secs },
       l3: { enabled: true, intervalSecs: secs },
       arp: { enabled: false, intervalSecs: secs },
+      routing: { enabled: true, intervalSecs: secs },
     };
   }
 

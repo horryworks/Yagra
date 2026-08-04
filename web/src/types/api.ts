@@ -763,7 +763,15 @@ export type TopologyLinkSummary = components['schemas']['TopologyLinkSummary'];
  *  a new backend variant is missing from *both*, so parity passes while the map renders a raw key.
  *  `i18nEnumKeys.test.ts` iterates this, which only works if the union exists at runtime
  *  (extensibility.md §4). Ordered strongest-first, matching the server's rank. */
-export const LINK_SOURCES = ['manual', 'lldp', 'cdp', 'l3_subnet'] as const;
+export const LINK_SOURCES = [
+  'manual',
+  'lldp',
+  'cdp',
+  'ospf',
+  'route',
+  'bgp',
+  'l3_subnet',
+] as const;
 export type LinkSource = (typeof LINK_SOURCES)[number];
 
 /** An operator decision recorded against a link (`GET /api/v1/topology/link-overrides`). */

@@ -23020,6 +23020,9 @@
           "manual",
           "lldp",
           "cdp",
+          "ospf",
+          "route",
+          "bgp",
           "l3_subnet"
         ]
       },
@@ -23970,6 +23973,22 @@
             "type": "integer",
             "format": "int32",
             "description": "Smallest cadence this deployment accepts, in seconds.",
+            "minimum": 0
+          },
+          "routing_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether routing-adjacency collection is issued at all. Omitted on update leaves it unchanged.\n\nOn unless an operator turns it off. This is what finds the links that share no subnet — a\npoint-to-point `/32`, an unnumbered OSPF link, an eBGP session across a segment — which the\nshared-subnet rule structurally cannot see. The tables it reads are sized by the device's own\npeering mesh, and the routing table itself is never walked: it is probed one destination at a\ntime."
+          },
+          "routing_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How often each SNMP node's routing adjacency is collected, in seconds. Omitted on update\nleaves it unchanged.",
             "minimum": 0
           }
         }
@@ -27668,6 +27687,18 @@
             "description": "Adjacency rows whose management address matched more than one node, so no link could be\nattributed without guessing which.",
             "minimum": 0
           },
+          "bgp_links": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Links produced from a BGP peering session.",
+            "minimum": 0
+          },
+          "bgp_peers_not_adjacent": {
+            "type": "integer",
+            "format": "int32",
+            "description": "BGP peers that matched a monitored node but sit on no network the reporting node terminates,\nso the session is not evidence of a link between them. The normal reading is iBGP between\nloopbacks; a number that stays at zero on a network running iBGP means the reporting node's\ninterface addresses have not been observed.",
+            "minimum": 0
+          },
           "cdp_links": {
             "type": "integer",
             "format": "int32",
@@ -27692,10 +27723,22 @@
             "description": "Links produced from an LLDP adjacency.",
             "minimum": 0
           },
+          "ospf_links": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Links produced from an OSPF neighbour relationship.",
+            "minimum": 0
+          },
           "oversized_segments": {
             "type": "integer",
             "format": "int32",
             "description": "Segments with more than two members where no member could be identified as routing for the\nothers, so no link was drawn.",
+            "minimum": 0
+          },
+          "route_links": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Links produced from a connected host route — the point-to-point links that share no subnet.",
             "minimum": 0
           },
           "subnet_prefix_mismatch": {
@@ -27720,6 +27763,12 @@
             "type": "integer",
             "format": "int32",
             "description": "LLDP rows whose management address matched no monitored node.",
+            "minimum": 0
+          },
+          "unmatched_routing_peers": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Routing adjacencies whose peer address matched no monitored node.",
             "minimum": 0
           }
         }

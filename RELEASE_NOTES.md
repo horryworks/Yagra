@@ -11,6 +11,29 @@
 ## Unreleased
 
 ### New Features
+- **The network map now finds the links that share no subnet.** Until now a link was derived from
+  two devices holding an address in the same prefix, which structurally cannot see a point-to-point
+  `/32` (a PPPoE `Dialer`, a tunnel endpoint), an unnumbered OSPF link, or a peering across a
+  segment whose addressing has not been collected. Yagra now also reads each device's **OSPF
+  neighbours and BGP peers**, and asks its routing table about specific destinations — so those
+  links appear on the map with `OSPF neighbor`, `BGP peer` or `Connected route` as their evidence.
+  A link seen both ways is still one link carrying both.
+  - **On by default**, at the same hourly cadence as the other two automatic walks, and switchable
+    at Settings ▸ System settings ▸ Discovery walks. Unlike the ARP walk, the tables it reads are
+    sized by the device's own peering mesh, not by the network.
+  - **The routing table is never walked.** A router carrying a full table has hundreds of thousands
+    of routes, so Yagra asks about one destination at a time — and only a device that holds a host
+    address of its own is asked at all, capped at 64 destinations. On a fleet of ordinary devices
+    this issues no route queries whatsoever.
+  - **A down session still draws its link.** A BGP session in `active` is a link with a fault, and
+    that is usually the thing being investigated — making the topology disappear in step with the
+    outage it exists to explain would be exactly backwards.
+  - **An iBGP session between loopbacks does not become a link.** A BGP peer is only treated as
+    adjacent when it sits on a network the reporting device terminates, so a route reflector does
+    not acquire a false star to every client it peers with. The count of peers declined this way is
+    reported alongside the map's other diagnostics.
+  - Known limits, stated rather than half-answered: BGP4-MIB is IPv4-only, so **IPv6 BGP peers are
+    out of scope**; OSPF collection is OSPFv2; and virtual links (`ospfVirtNbrTable`) are not read.
 - **Yagra can now tell you what is on your network that it is not watching.** Turn on the new
   **ARP / IPv6 neighbor cache** walk (Settings ▸ System settings ▸ Discovery walks) and every
   monitored router reports the hosts it has actually spoken to. Anything not already in the

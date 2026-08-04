@@ -183,6 +183,10 @@
         "arp": {
           "name": "ARP / IPv6 neighbor cache",
           "help": "Which hosts each router has actually spoken to — the only source that can name a device nobody has added yet. Off by default: this reads a table sized by the network rather than by the device, so it is the one walk that costs a busy switch measurable work. Results appear under Nodes ▸ Discovery."
+        },
+        "routing": {
+          "name": "Routing adjacency (OSPF / BGP / routes)",
+          "help": "Which devices are peered or directly routed to each other — the links that share no subnet, such as a point-to-point /32, an unnumbered OSPF link, or an eBGP session. The routing table is never walked: it is asked about one destination at a time."
         }
       },
       "cadence": {

@@ -16,6 +16,7 @@
 use chrono::{DateTime, Utc};
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
+use std::net::IpAddr;
 use uuid::Uuid;
 use yagra_common::{L3Snapshot, NodeId};
 
@@ -121,6 +122,49 @@ impl L3Repo {
         Ok(row.try_get("w")?)
     }
 
+    /// Every node's host-route addresses (`/32`, `/128`) — the destinations Increment 4's route
+    /// probes ask about, and the nodes worth asking (ADR-043).
+    ///
+    /// This is why Increment 1 stores host routes at all: they are excluded from forming a
+    /// *shared-subnet* edge, never from being recorded, precisely so this query can find them.
+    ///
+    /// The prefix filter runs in SQL so the cost scales with the fleet's point-to-point interfaces
+    /// rather than with its whole addressing, and it is deliberately loose — `IN (32, 128)` also
+    /// admits a v6 `/32`, which the family check below rejects. Two narrow rules rather than one
+    /// clever one: SQL cannot see the address family here and Rust cannot avoid the scan.
+    pub async fn host_addresses(
+        &self,
+    ) -> anyhow::Result<std::collections::BTreeMap<NodeId, std::collections::BTreeSet<IpAddr>>>
+    {
+        let rows = sqlx::query(
+            "SELECT node_id, a->>'ip' AS ip, (a->>'prefix_len')::INT AS prefix_len \
+             FROM node_l3, \
+                  jsonb_array_elements(coalesce(addresses->'addresses', '[]'::jsonb)) a \
+             WHERE (a->>'prefix_len')::INT IN (32, 128)",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out: std::collections::BTreeMap<NodeId, std::collections::BTreeSet<IpAddr>> =
+            std::collections::BTreeMap::new();
+        for row in rows {
+            let node_id: Uuid = row.try_get("node_id")?;
+            let Some(ip) = row
+                .try_get::<Option<String>, _>("ip")?
+                .and_then(|s| s.parse::<IpAddr>().ok())
+            else {
+                continue;
+            };
+            if row.try_get::<Option<i32>, _>("prefix_len")?
+                != Some(i32::from(yagra_common::host_prefix_len(ip)))
+            {
+                continue;
+            }
+            out.entry(NodeId(node_id)).or_default().insert(ip);
+        }
+        Ok(out)
+    }
+
     /// Drop history rows older than `retention_secs`. Returns how many were removed.
     pub async fn prune_changes(&self, retention_secs: i64) -> anyhow::Result<u64> {
         let res =
@@ -206,5 +250,14 @@ mod tests {
     #[test]
     fn an_observation_watermark_exists_for_the_derivation_trigger() {
         assert!(SRC.contains("SELECT max(last_seen) AS w FROM node_l3"));
+    }
+
+    /// The host-route filter runs in SQL. Pulling every address into core to find tens of host
+    /// routes would make the route-probe plan cost scale with the fleet's addressing rather than
+    /// with its point-to-point interfaces — on a 50,000-node fleet, a million JSONB elements per
+    /// refresh instead of a filtered scan.
+    #[test]
+    fn the_host_route_filter_runs_in_sql() {
+        assert!(production_source().contains("(a->>'prefix_len')::INT IN (32, 128)"));
     }
 }

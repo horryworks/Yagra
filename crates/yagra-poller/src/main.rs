@@ -28,6 +28,7 @@ mod limiter;
 mod listeners;
 mod location;
 mod neighbors;
+mod routing;
 mod store_forward;
 mod worker;
 mod working_set;

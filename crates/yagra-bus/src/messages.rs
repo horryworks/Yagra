@@ -31,7 +31,7 @@ use uuid::Uuid;
 use yagra_common::{
     ArpColumn, ArpSummary, DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth,
     HttpMethod, IfIndex, InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind,
-    NeighborColumn, NeighborSet, NodeId, SeriesKey,
+    NeighborColumn, NeighborSet, NodeId, RoutingColumn, RoutingSnapshot, SeriesKey,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -370,6 +370,48 @@ impl PollJob {
             node_id,
             target,
             check: CheckSpec::SnmpV3Arp(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v2c routing-adjacency job (ADR-043 Increment 4).
+    #[must_use]
+    pub fn snmp_routing(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpRoutingCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpRouting(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v3 (USM) routing-adjacency job (ADR-043 Increment 4).
+    #[must_use]
+    pub fn snmp_v3_routing(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3RoutingCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3Routing(check),
             interval_secs,
             credential_ref: None,
             probe_identity: false,
@@ -784,6 +826,20 @@ pub enum CheckSpec {
     /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpArp`], following the same pairing as every other
     /// v2c/v3 pair here.
     SnmpV3Arp(SnmpV3ArpCheck),
+    /// SNMP v2c collection of routing adjacency (ADR-043 Increment 4): the links that share no
+    /// subnet, and therefore the ones Increment 1's derivation structurally cannot see.
+    ///
+    /// Two shapes in one check, because they answer one question and a device that speaks either
+    /// speaks both on the same cadence. `columns` is walked (`bgpPeerState`, `ospfNbrState` — both
+    /// indexed by the peer's address, which is why the *instance* walker is used); `route_probes`
+    /// is not a walk at all but a list of pre-built subtree roots, one per destination, because
+    /// `inetCidrRouteTable` runs to hundreds of thousands of rows on a core router and a bounded
+    /// walk of it would return the numerically-first routes rather than the interesting ones. The
+    /// result is **observational** ([`PollResult::observational`]).
+    SnmpRouting(SnmpRoutingCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpRouting`], following the same pairing as every
+    /// other v2c/v3 pair here.
+    SnmpV3Routing(SnmpV3RoutingCheck),
 }
 
 /// ICMP echo parameters.
@@ -1131,6 +1187,88 @@ pub struct SnmpV3ArpCheck {
     pub timeout_ms: u32,
 }
 
+/// SNMP v2c routing-adjacency parameters (ADR-043 Increment 4).
+///
+/// Carries a **pre-built** probe list rather than a list of addresses, so the OID grammar of
+/// `inetCidrRouteTable`'s index stays a fact core owns — the same reason every other check here is
+/// sent its column OIDs instead of deriving them poller-side. It also means a poller needs no
+/// knowledge of `InetAddress` index encoding to run the probe.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpRoutingCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Adjacency columns to walk, keeping raw instance indices — both tables carry the peer's
+    /// address in the row *index*, so a folded index would destroy the answer.
+    #[serde(default)]
+    pub columns: Vec<SnmpRoutingColumn>,
+    /// Targeted route probes: subtree roots that each cover the routes to exactly one destination.
+    /// Empty is the normal case — only a node holding a host address of its own is asked to probe.
+    #[serde(default)]
+    pub route_probes: Vec<SnmpRouteProbe>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) routing-adjacency parameters — the v3 analogue of [`SnmpRoutingCheck`]. Auth/priv
+/// keys are resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the
+/// secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3RoutingCheck {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// Adjacency columns to walk.
+    #[serde(default)]
+    pub columns: Vec<SnmpRoutingColumn>,
+    /// Targeted route probes — see [`SnmpRoutingCheck::route_probes`].
+    #[serde(default)]
+    pub route_probes: Vec<SnmpRouteProbe>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// One routing-adjacency column to walk: which field it carries and the column base OID.
+/// Relational metadata (PostgreSQL), never a TSDB label — the same tier as [`SnmpArpColumn`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpRoutingColumn {
+    /// Which routing attribute this column carries.
+    pub field: RoutingColumn,
+    /// Column base OID, e.g. `1.3.6.1.2.1.15.3.1.2` (bgpPeerState).
+    pub oid: String,
+}
+
+/// One targeted route probe: walk this subtree, and whatever it returns describes the route to
+/// `target`.
+///
+/// `oid` is the column base with the destination's index prefix already appended, so the subtree it
+/// roots contains every route to that destination and nothing else. `target` is carried alongside
+/// rather than decoded back out of the OID — the poller has the answer already, and re-deriving it
+/// would be a second implementation of the encoding core just performed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpRouteProbe {
+    /// Which routing attribute the probed column carries.
+    pub field: RoutingColumn,
+    /// The subtree root to walk: `<column base>.<destType>.<addrLen>.<address octets>`.
+    pub oid: String,
+    /// The destination this probe asks about.
+    pub target: IpAddr,
+}
+
 /// The row budget an N-1 core that predates the field is assumed to have meant.
 const fn default_arp_max_rows() -> u32 {
     // `MAX_ARP_WALK_ROWS`, restated as a `u32` literal because `yagra_common`'s constant is a
@@ -1321,6 +1459,13 @@ pub struct PollResult {
     /// `None` and `Some(empty summary)` mean different things, exactly as for `neighbors` and `l3`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arp: Option<ArpSummary>,
+    /// The routing adjacencies observed on this poll (routing walks only, ADR-043 Increment 4).
+    /// Same tier as `arp` again — relational metadata, **never** a TSDB label.
+    ///
+    /// `None` and `Some(empty snapshot)` mean different things, exactly as for `neighbors`, `l3`
+    /// and `arp`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing: Option<RoutingSnapshot>,
     /// This result carries **observations only** and makes no claim about the node's reachability.
     ///
     /// Core skips the alert engine entirely for such results. That is not a nicety: `outcome` feeds
@@ -2454,6 +2599,7 @@ mod tests {
             neighbors: None,
             l3: None,
             arp: None,
+            routing: None,
             observational: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
@@ -2629,6 +2775,72 @@ mod tests {
         assert!(wire.contains(r#""kind":"snmp_arp""#), "{wire}");
         let wire3 = serde_json::to_string(&CheckSpec::SnmpV3Arp(v3)).unwrap();
         assert!(wire3.contains(r#""kind":"snmp_v3_arp""#), "{wire3}");
+    }
+
+    /// A result from an N-1 poller carries no routing snapshot, and one that does still round-trips.
+    #[test]
+    fn a_poll_result_without_routing_is_byte_identical_to_today() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "some_future_field": 42
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.routing.is_none());
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("\"routing\""), "{wire}");
+
+        // `None` vs `Some(empty)` survives the wire as two different answers, for the fourth time
+        // and the same reason: core writes nothing for the first and replaces the stored snapshot
+        // for the second.
+        let mut with = result;
+        with.routing = Some(yagra_common::RoutingSnapshot::default());
+        with.observational = true;
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert_eq!(back.routing, Some(yagra_common::RoutingSnapshot::default()));
+        assert!(back.observational);
+    }
+
+    /// A routing check from an N-1 core (or one that gains a field later) still decodes, and an
+    /// absent probe list means "probe nothing" rather than a panic or an unbounded walk.
+    #[test]
+    fn a_routing_check_tolerates_missing_and_unknown_fields() {
+        let v2c: SnmpRoutingCheck =
+            serde_json::from_str(r#"{"community":"public","future":1}"#).unwrap();
+        assert!(v2c.columns.is_empty());
+        assert!(v2c.route_probes.is_empty());
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+
+        let v3: SnmpV3RoutingCheck =
+            serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
+        assert!(v3.auth_key.is_none() && v3.columns.is_empty() && v3.route_probes.is_empty());
+
+        // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
+        let wire = serde_json::to_string(&CheckSpec::SnmpRouting(v2c)).unwrap();
+        assert!(wire.contains(r#""kind":"snmp_routing""#), "{wire}");
+        let wire3 = serde_json::to_string(&CheckSpec::SnmpV3Routing(v3)).unwrap();
+        assert!(wire3.contains(r#""kind":"snmp_v3_routing""#), "{wire3}");
+    }
+
+    /// A probe carries the destination it asks about alongside the OID that encodes it, and both
+    /// survive the wire. Losing `target` would leave the poller with rows it cannot attribute.
+    #[test]
+    fn a_route_probe_round_trips_with_its_target() {
+        let probe = SnmpRouteProbe {
+            field: RoutingColumn::InetCidrRouteType,
+            oid: yagra_common::route_probe_oid(
+                "1.3.6.1.2.1.4.24.7.1.8",
+                "133.123.189.109".parse().unwrap(),
+            ),
+            target: "133.123.189.109".parse().unwrap(),
+        };
+        let back: SnmpRouteProbe =
+            serde_json::from_str(&serde_json::to_string(&probe).unwrap()).unwrap();
+        assert_eq!(back, probe);
+        assert!(back.oid.ends_with(".1.4.133.123.189.109"), "{}", back.oid);
     }
 
     /// A neighbour check from an N-1 core (or one that gains a field later) still decodes.

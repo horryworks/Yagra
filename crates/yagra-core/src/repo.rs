@@ -1349,7 +1349,8 @@ impl NodeRepo {
         let Ok(Some(row)) = sqlx::query(
             "SELECT neighbor_discovery_enabled, neighbor_interval_secs, \
                     l3_discovery_enabled, l3_interval_secs, \
-                    arp_discovery_enabled, arp_interval_secs \
+                    arp_discovery_enabled, arp_interval_secs, \
+                    routing_discovery_enabled, routing_interval_secs \
              FROM app_settings WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
@@ -1385,6 +1386,16 @@ impl NodeRepo {
                 .ok()
                 .and_then(|v| u32::try_from(v).ok())
                 .unwrap_or(fallback.arp_interval_secs),
+            // Falls back to `true` mid-upgrade, before migration 0071 has run — the "keep
+            // collecting" direction the two cheap walks use, not the ARP one's "do not start".
+            routing_enabled: row
+                .try_get::<bool, _>("routing_discovery_enabled")
+                .unwrap_or(fallback.routing_enabled),
+            routing_interval_secs: row
+                .try_get::<i32, _>("routing_interval_secs")
+                .ok()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(fallback.routing_interval_secs),
         }
     }
 
@@ -1395,12 +1406,14 @@ impl NodeRepo {
             "INSERT INTO app_settings \
                  (id, neighbor_discovery_enabled, neighbor_interval_secs, \
                   l3_discovery_enabled, l3_interval_secs, \
-                  arp_discovery_enabled, arp_interval_secs, updated_at) \
-             VALUES (TRUE, $1, $2, $3, $4, $5, $6, now()) \
+                  arp_discovery_enabled, arp_interval_secs, \
+                  routing_discovery_enabled, routing_interval_secs, updated_at) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, now()) \
              ON CONFLICT (id) DO UPDATE SET neighbor_discovery_enabled = $1, \
                  neighbor_interval_secs = $2, l3_discovery_enabled = $3, \
                  l3_interval_secs = $4, arp_discovery_enabled = $5, \
-                 arp_interval_secs = $6, updated_at = now()",
+                 arp_interval_secs = $6, routing_discovery_enabled = $7, \
+                 routing_interval_secs = $8, updated_at = now()",
         )
         .bind(s.neighbors_enabled)
         .bind(i32::try_from(s.neighbors_interval_secs).unwrap_or(i32::MAX))
@@ -1408,6 +1421,8 @@ impl NodeRepo {
         .bind(i32::try_from(s.l3_interval_secs).unwrap_or(i32::MAX))
         .bind(s.arp_enabled)
         .bind(i32::try_from(s.arp_interval_secs).unwrap_or(i32::MAX))
+        .bind(s.routing_enabled)
+        .bind(i32::try_from(s.routing_interval_secs).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())
