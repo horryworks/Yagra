@@ -7,12 +7,39 @@
 # single `cargo build --bin yagra-core --bin yagra-poller` compiles the shared graph once; on the
 # serialized CI matrix the poller image build then reuses the cached build stage and only assembles
 # its runtime layer.
+#
+# ── Where the binaries come from: BIN_SRC ──────────────────────────────────────────────────────
+# This file has TWO ways to obtain the two binaries, selected by `BIN_SRC`, and exactly one set of
+# runtime stages consuming whichever won. BuildKit prunes the stage that is not selected, so the
+# unused one is never evaluated — its `COPY` may reference paths that do not exist in the context.
+#
+#   BIN_SRC=build (default) — compile inside the image, from a full repo-root context. This is the
+#     `/release` path and CI's: reproducible, self-contained, `--profile release`.
+#
+#   BIN_SRC=prebuilt — take binaries `scripts/flash-build.sh` already compiled outside, in a
+#     container off THIS FILE's `toolchain` stage. That script runs fmt/clippy/build as ONE compile
+#     against one persistent target directory, where the flash path previously compiled the
+#     workspace three times over (host clippy at `dev`, in-image build at `ci-fast`, host
+#     `cargo test` at `dev` — three target dirs, two toolchains, nothing shared).
+#
+#     **Its context is the directory holding the two binaries, NOT the repo root** — so the flash
+#     image build ships ~150 MB of binary instead of the repo, and reads it off ext4 rather than
+#     across the 9p bridge. That is why the `prebuilt` stage's COPY names them at the context root.
+#
+# The runtime stages are shared on purpose: a second Dockerfile for the fast path would be two
+# copies of the wkhtmltopdf layer, the uid/gid pinning and the healthcheck, drifting apart silently.
+# `toolchain` is split out for the same reason — `flash-build.sh` builds *that stage* as its builder
+# image, so the base pin and the mold install cannot diverge from what the release path uses.
+ARG BIN_SRC=build
 
+# ── toolchain — the compiler environment, shared by the in-image build and flash-build.sh ──
 # Pin the build base to bookworm so the binary's glibc matches the bookworm runtimes below.
 # `rust:1.90-slim` is a moving tag that has rolled to Debian trixie (glibc 2.39); building there
 # while the runtimes are `debian:bookworm-slim` (glibc 2.36) yields a binary that fails at startup
-# with `GLIBC_2.39 not found`. Keep all three on bookworm.
-FROM rust:1.90-slim-bookworm AS build
+# with `GLIBC_2.39 not found`. Keep all three on bookworm. This is also why the flash path compiles
+# in a container rather than on the host: a binary built against the dev box's libc would be a
+# `GLIBC_x.yz not found` crash loop the moment it landed on the runtime image.
+FROM rust:1.90-slim-bookworm AS toolchain
 WORKDIR /app
 
 # mold linker (S2): linking is the serial tail of every Rust build and is repeated on every CI run.
@@ -24,9 +51,21 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"
 
+# ── flash-toolchain — `toolchain` plus clippy, for scripts/flash-build.sh ──
+# The slim rust image ships no clippy component ("'cargo-clippy' is not installed for the toolchain
+# '1.90.0-x86_64-unknown-linux-gnu'"), and the release path's build stage has no use for one — it
+# compiles, it does not lint. Keeping the component in its own stage means the image `/release`
+# builds carries no lint tooling and its layers do not move, while flash-build.sh still gets its
+# compiler environment from the same base and cannot drift off the bookworm pin.
+FROM toolchain AS flash-toolchain
+RUN rustup component add clippy
+
+# ── build — compile in-image (BIN_SRC=build; the release path) ──
+FROM toolchain AS build
+
 # Compile profile (S1): `release` (default) is fully optimized and is what `/release` (v* tags)
-# publishes. `/flashdeploy` and CI's main/PR validation builds override it to `ci-fast` so the dev
-# cycle stays short. See [profile.ci-fast] in the workspace Cargo.toml. `release` → target/release,
+# publishes. `/flashdeploy` and CI's PR validation builds override it to `ci-fast` so the dev cycle
+# stays short. See [profile.ci-fast] in the workspace Cargo.toml. `release` → target/release,
 # a custom profile → target/<name>, so the copy path is parameterized by the profile name.
 ARG CARGO_PROFILE=release
 
@@ -75,6 +114,31 @@ RUN --mount=type=cache,target=/app/target \
     && cp target/${CARGO_PROFILE}/yagra-core /app/yagra-core \
     && cp target/${CARGO_PROFILE}/yagra-poller /app/yagra-poller
 
+# ── prebuilt — take binaries compiled outside by scripts/flash-build.sh (BIN_SRC=prebuilt) ──
+#
+# The context for this path is the OUTPUT directory of that script (two files), not the repo — see
+# the BIN_SRC note at the top. Running it against the repo root fails loudly on the COPY below,
+# which is the desired outcome rather than a silent wrong image.
+#
+# `--chmod=0755` is load-bearing, not tidiness: the binaries are produced inside a container and
+# land on a bind-mounted host directory, and the exec bit does not survive every host filesystem
+# faithfully. A binary copied in 0644 produces `permission denied` at container start, which reads
+# as a broken build rather than a lost mode bit. (This is the same reason web.Dockerfile chmods its
+# entrypoint script.)
+#
+# busybox rather than scratch because this stage has to `RUN echo` the two provenance markers to
+# the same paths the `build` stage writes them to — the runtime stages below copy them from
+# whichever stage won, and must not know which that was.
+FROM busybox:stable AS prebuilt
+ARG SOURCE_REF=unknown
+ARG CARGO_PROFILE=ci-fast
+RUN echo "${SOURCE_REF}" > /etc/yagra-source-ref \
+ && echo "${CARGO_PROFILE}" > /etc/yagra-build-profile
+COPY --chmod=0755 yagra-core yagra-poller /app/
+
+# ── The selector. BuildKit builds only the stage this resolves to. ──
+FROM ${BIN_SRC} AS bins
+
 # ── Yagra-core — Core/API runtime ──
 FROM debian:bookworm-slim AS core
 # Report PDF export shells out to `wkhtmltopdf` (Reports → Export → PDF). Install the official
@@ -116,9 +180,9 @@ RUN apt-get update \
 RUN groupadd -r -g 10001 yagra \
  && useradd -r -u 10001 -g 10001 yagra \
  && install -d -o yagra -g yagra -m 0750 /var/lib/yagra/tls
-COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
-COPY --from=build /etc/yagra-build-profile /etc/yagra-build-profile
-COPY --from=build /app/yagra-core /usr/local/bin/yagra-core
+COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
+COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
+COPY --from=bins /app/yagra-core /usr/local/bin/yagra-core
 USER yagra
 EXPOSE 8080
 # Liveness: the binary probes its own /healthz (dependency-free — the slim runtime has no curl/wget).
@@ -144,9 +208,9 @@ RUN useradd -r -u 10002 yagra \
  && apt-get install -y --no-install-recommends libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
  && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer
-COPY --from=build /etc/yagra-source-ref /etc/yagra-source-ref
-COPY --from=build /etc/yagra-build-profile /etc/yagra-build-profile
-COPY --from=build /app/yagra-poller /usr/local/bin/yagra-poller
+COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
+COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
+COPY --from=bins /app/yagra-poller /usr/local/bin/yagra-poller
 # File capability: grants CAP_NET_RAW (effective+permitted) on exec without root.
 RUN setcap cap_net_raw+ep /usr/local/bin/yagra-poller
 USER yagra

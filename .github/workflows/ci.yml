@@ -1,8 +1,9 @@
-# Continuous integration: validate the workspace on every push / PR. The `images` job builds the
-# Docker images so build breakage — including the Dockerfile's pinned Rust version (MSRV) — is
-# caught here. It publishes to GHCR on a **v* release tag only**: development builds never reach
-# the registry at all (see the tag-computation step). CI does NOT deploy: see the note where the
-# `deploy` job used to be, at the bottom of this file.
+# Continuous integration: validate the workspace on every **pull request** and every **v* tag**.
+# Pushes to `main` are deliberately NOT a trigger — see the long note above `on:` below. The
+# `images` job builds the Docker images so build breakage — including the Dockerfile's pinned Rust
+# version (MSRV) — is caught here. It publishes to GHCR on a **v* release tag only**: development
+# builds never reach the registry at all (see the tag-computation step). CI does NOT deploy: see
+# the note where the `deploy` job used to be, at the bottom of this file.
 #
 # Compute runs on SELF-HOSTED runners (label `yagra-build`) to avoid GitHub-hosted Actions-minute
 # billing — the repo and images (GHCR) stay on GitHub, only the execution is local. A runner host
@@ -11,19 +12,39 @@
 
 name: ci
 
+# **There is deliberately no `branches: [main]` trigger.** It was removed because it was pure
+# contention with no gate behind it: `/flashdeploy` ships every main push to the test server, does
+# not wait for CI's verdict, and runs its own fmt/clippy/build/test on this same host — so a main
+# push started a second full compile of the same commit on the same box, competing for the CPU and
+# the shared BuildKit/cargo caches with the deploy that was already underway. Every job it ran was
+# something the flash path had already run locally, and the `images` job was a verbatim repeat of
+# the three images `/flashdeploy` had just built.
+#
+# What still gates what:
+#   * `/flashdeploy`'s local guard (fmt, clippy, the OpenAPI contract, web tests) gates the ship,
+#     and its asynchronous pass (`cargo clippy --all-targets` + `cargo test --workspace`) reports
+#     after the deploy — the same verdict this workflow used to give, minus the queue.
+#   * `pull_request` still runs everything, for contributions that do not come through the flash path.
+#   * `v*` still runs everything and is the only thing that publishes to GHCR.
+#
+# Accepted cost: a push to `main` that does NOT come from `/flashdeploy` (a `/docs` commit, a hand
+# edit) gets no automatic check. `/docs` and `/release` both run `/verify` first, which is why that
+# was judged acceptable rather than papered over with a `[skip ci]` convention.
 on:
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
   workflow_dispatch:
 
-# A release fires two runs at once — the `main` push and the `v*` tag push — and both point at the
-# same commit, so they share `github.sha`. The self-hosted runners share one `~/.cargo` / `~/.rustup`
-# (and one dockerd), so two concurrent cargo builds race on that shared home: registry/target files
-# vanish mid-compile ("No such file or directory", rustc "never executed"). Serialise same-commit
-# runs so the tag run waits for the main run instead of contending. `cancel-in-progress: false`
-# keeps both — neither run is dropped.
+# The self-hosted runners share one `~/.cargo` / `~/.rustup` (and one dockerd), so two concurrent
+# cargo builds race on that shared home: registry/target files vanish mid-compile ("No such file or
+# directory", rustc "never executed"). Serialise same-commit runs rather than letting them contend.
+# `cancel-in-progress: false` keeps both — neither run is dropped.
+#
+# This used to matter most for a release, which fired two runs at once (the `main` push and the
+# `v*` tag push) against the same `github.sha`. With the `main` trigger gone a release fires one
+# run, so this now only covers a re-run or a `workflow_dispatch` racing a tag. Keep it: it costs
+# nothing and the failure it prevents is a corrupted shared cargo home, not a wasted run.
 concurrency:
   group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
@@ -149,9 +170,9 @@ jobs:
       - uses: docker/setup-buildx-action@v4
         with:
           driver: docker
-      # Publish to GHCR on a v* release tag ONLY. main pushes and PRs build without pushing:
-      # development builds reach the test server through `/flashdeploy`'s private registry and
-      # never appear in GHCR, so the package list is the release history and nothing else.
+      # Publish to GHCR on a v* release tag ONLY. PRs build without pushing: development builds
+      # reach the test server through `/flashdeploy`'s private registry and never appear in GHCR,
+      # so the package list is the release history and nothing else.
       - name: Log in to GHCR
         if: startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@v4
@@ -161,8 +182,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       # Image tags.
       #
-      # main / PR — one FIXED local tag, overwritten every run. Nothing is pushed, so a per-commit
-      # tag would only pile images up in the shared runner daemon that nothing ever consumes (it
+      # PR — one FIXED local tag, overwritten every run. Nothing is pushed, so a per-commit tag
+      # would only pile images up in the shared runner daemon that nothing ever consumes (it
       # reached 363 images / 13 GB under the old scheme). The name carries no registry host, so it
       # cannot be pushed anywhere by accident.
       #
@@ -191,9 +212,9 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
       # Compile profile for the Rust images (the web image takes no profile). Only a real release
-      # (`/release` → v* tag → :v<version>) is built fully optimized; main-push and PR validation
-      # builds use the fast-compile `ci-fast` profile so the dev cycle stays short. `/flashdeploy`
-      # builds its own `ci-fast` images outside CI. See [profile.ci-fast] in Cargo.toml.
+      # (`/release` → v* tag → :v<version>) is built fully optimized; PR validation builds use the
+      # fast-compile `ci-fast` profile so the dev cycle stays short. `/flashdeploy` builds its own
+      # `ci-fast` binaries outside CI. See [profile.ci-fast] in Cargo.toml.
       #
       # The profile is also baked into the image as `/etc/yagra-build-profile`, because a release
       # and a flash build of the same commit are different binaries that write the *same*

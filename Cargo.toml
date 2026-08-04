@@ -247,17 +247,27 @@ strip = true
 # than a debug build.
 #
 # Wiring (docker/yagra-rust.Dockerfile `ARG CARGO_PROFILE`): `ci-fast` is used by `/flashdeploy`
-# (which builds the images itself and pushes them to the test server's private registry) and by CI's
-# main/PR validation builds. `--profile release` is used only on a `v*` tag, i.e. by the images
+# (via scripts/flash-build.sh, which compiles the binaries and hands them to the image build) and by
+# CI's PR validation builds. `--profile release` is used only on a `v*` tag, i.e. by the images
 # `/release` publishes to GHCR. So iteration stays fast and shipped releases stay fully optimized.
 # Local `cargo build --release` is unchanged.
 #
 # Which one a running container was built with is readable at `/etc/yagra-build-profile`.
+#
+# `incremental` is ON here and OFF in `release`, which is the reverse of cargo's own defaults for a
+# release-shaped profile — deliberately. Incremental state is per-target-directory and worthless
+# unless that directory survives between builds; `release` is built in-image against a BuildKit
+# cache mount that CI shares with everything else, while `ci-fast` is built by flash-build.sh
+# against a dedicated named volume that persists across runs and belongs to one caller. The flash
+# loop is "change one line, ship it", where the whole cost is re-codegening yagra-core (94k lines,
+# 256 codegen units) — exactly what incremental reuse is for. It costs disk in that volume and a
+# little runtime performance, both of which are the right trade for a test-server binary.
 [profile.ci-fast]
 inherits = "release"
 opt-level = 1
 lto = false
 codegen-units = 256
+incremental = true
 
 # Local vendored patch: snmp2 0.5.0's crypto-rust path fails to compile (E0034,
 # ambiguous `update`) when any crate in the graph enables `hmac/reset` — sqlx-postgres

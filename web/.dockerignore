@@ -1,4 +1,7 @@
 node_modules
-dist
+# `dist` is NOT excluded: docker/web.Dockerfile's WEB_SRC=prebuilt path copies it from the context,
+# so that `/flashdeploy` can ship the bundle its local guard already built instead of building it a
+# second time inside the image. The default (WEB_SRC=build) ignores whatever copy rode along and
+# regenerates it in the image, so a stale local dist/ cannot reach a release.
 .vite
 *.log
