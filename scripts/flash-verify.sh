@@ -16,6 +16,15 @@
 #
 # Tests need no external services — the workspace has no `sqlx::query!` compile-time macros and no
 # `.sqlx` offline directory, which is also why CI ran them with no service containers.
+#
+# ⚠️ **This lints with the PINNED toolchain (1.90), not with whatever `stable` is today.** That is
+# the right call for the compile — the binary that ships is the one that was linted — but it means
+# the lint set differs from CI's in BOTH directions: 1.90 emits some lints newer clippy has since
+# refined away (`clippy::duplicated_attributes` on an inner `#![cfg(test)]` was the first casualty,
+# flagged at 0.1.90 and silent at 0.1.95), and it cannot know about lints added after it. PRs and
+# `v*` tags still run CI at `stable`, which is where the other direction gets caught. Treat a
+# disagreement as a question about which one is right, not as noise to silence: the attribute this
+# found really was doing nothing.
 set -euo pipefail
 
 PROFILE=${PROFILE:-ci-fast}

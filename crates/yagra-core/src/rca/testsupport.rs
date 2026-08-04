@@ -4,8 +4,11 @@
 //! The adapters pin their hosts to constants, so the only way to exercise request shaping end to
 //! end is to point a test-only URL override at a local socket. This is deliberately the same shape
 //! as the fake in `bigquery.rs` — enough to answer `reqwest`, not a general server.
-
-#![cfg(test)]
+//!
+//! No `#![cfg(test)]` here: `rca/mod.rs` already declares this module under `#[cfg(test)]`, so the
+//! inner attribute gated nothing and only duplicated the outer one. clippy 0.1.90 fails the build
+//! on it (`clippy::duplicated_attributes`) while 0.1.95 does not — which is how it surfaced, but
+//! the redundancy was real either way.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
