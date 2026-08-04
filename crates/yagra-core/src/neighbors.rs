@@ -60,6 +60,14 @@ pub struct AdjacencySettings {
     pub l3_enabled: bool,
     /// How often each SNMP node's `ipAddrTable`/`ipAddressTable` are walked.
     pub l3_interval_secs: u32,
+    /// Whether ARP / IPv6-neighbour jobs are scheduled at all (ADR-043 Increment 3).
+    ///
+    /// **Defaults off**, alone among the three. The other two walks read tables sized by the device;
+    /// this one reads a table sized by the network, and it is the only check in ADR-043 that costs a
+    /// busy switch measurable work. An upgrade must not quietly start issuing it.
+    pub arp_enabled: bool,
+    /// How often each SNMP node's `ipNetToPhysicalTable`/`ipNetToMediaTable` are walked.
+    pub arp_interval_secs: u32,
 }
 
 impl Default for AdjacencySettings {
@@ -69,16 +77,19 @@ impl Default for AdjacencySettings {
             neighbors_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
             l3_enabled: true,
             l3_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
+            arp_enabled: false,
+            arp_interval_secs: crate::arp::DEFAULT_ARP_INTERVAL_SECS,
         }
     }
 }
 
 impl AdjacencySettings {
-    /// Whether both cadences are inside the configurable band. The API edge rejects anything else.
+    /// Whether every cadence is inside the configurable band. The API edge rejects anything else.
     #[must_use]
     pub fn in_bounds(&self) -> bool {
         interval_in_bounds(self.neighbors_interval_secs)
             && interval_in_bounds(self.l3_interval_secs)
+            && interval_in_bounds(self.arp_interval_secs)
     }
 }
 
@@ -362,6 +373,20 @@ mod tests {
         // several extra tables on every SNMP node every minute.
         assert_eq!(d.neighbors_interval_secs, 3600);
         assert_eq!(d.l3_interval_secs, 3600);
+    }
+
+    /// The ARP walk is the exception to the two above, and the exception is the point.
+    #[test]
+    fn the_arp_walk_ships_off_and_slower_than_the_others() {
+        let d = AdjacencySettings::default();
+        assert!(
+            !d.arp_enabled,
+            "the one ADR-043 walk that costs a busy device real work must be opt-in — an upgrade \
+             that silently started walking ipNetToPhysicalTable on every switch in a fleet is the \
+             failure this default exists to prevent"
+        );
+        assert!(d.arp_interval_secs > d.l3_interval_secs);
+        assert!(interval_in_bounds(d.arp_interval_secs));
     }
 
     #[test]

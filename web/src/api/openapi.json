@@ -3034,6 +3034,219 @@
         }
       }
     },
+    "/api/v1/discovered-endpoints": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Addresses seen on the network that Yagra does not monitor.",
+        "description": "Built from the ARP / IPv6-neighbour caches of the nodes that *are* monitored, so an endpoint\nappears here only if some monitored router has spoken to it. Requires the ARP walk to be enabled\n(Settings ▸ System settings ▸ Discovery walks); with it off the list is empty, which is an answer\nrather than an outage.\n\n`summary.truncated_nodes > 0` means at least one router's cache exceeded its row budget and this\nlist is a **sample**, not a complete inventory of the segment.",
+        "operationId": "list_discovered_endpoints",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "via_node",
+            "in": "query",
+            "description": "Only endpoints seen by this node.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "include_promoted",
+            "in": "query",
+            "description": "Include endpoints that have since become monitored nodes. Default `false`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "before_last_seen",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One page of unmonitored endpoints, most recently seen first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoveredEndpointPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "before_last_seen and before_id must be given together, and before_last_seen must be RFC 3339",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks View",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovered-endpoints/{id}/import": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Promote a discovered endpoint to a monitored node.",
+        "description": "Builds the same `NewNode` a scan import does and goes through the same writer, so classification\n(`sysDescr` → maker/model) happens on the node's first identity probe exactly as it does for any\nother node — there is no second creation path to keep in step.\n\n`409` means the address is already an inventory node. That is not a failure of the import so much\nas an answer: the endpoint stopped being unmonitored between the list being read and the button\nbeing pressed, and the row is reconciled on the way out so the list stops showing it.",
+        "operationId": "import_discovered_endpoint",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Discovered-endpoint id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportEndpoint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The endpoint is now a monitored node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A binding id that is not a UUID",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such discovered endpoint",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "That address is already a monitored node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/discovery/candidates": {
       "get": {
         "tags": [
@@ -19551,6 +19764,139 @@
           "below"
         ]
       },
+      "DiscoveredEndpointCursor": {
+        "type": "object",
+        "description": "Keyset cursor for the next page.",
+        "required": [
+          "last_seen",
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_seen": {
+            "type": "string"
+          }
+        }
+      },
+      "DiscoveredEndpointPage": {
+        "type": "object",
+        "description": "One page of discovered endpoints, most recently seen first.",
+        "required": [
+          "endpoints",
+          "summary"
+        ],
+        "properties": {
+          "endpoints": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredEndpointRow"
+            }
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DiscoveredEndpointCursor",
+                "description": "Pass back as `before_last_seen`+`before_id`; `null` ⇒ this was the last page."
+              }
+            ]
+          },
+          "summary": {
+            "$ref": "#/components/schemas/DiscoveredEndpointSummary"
+          }
+        }
+      },
+      "DiscoveredEndpointRow": {
+        "type": "object",
+        "description": "One address the fleet has resolved on the wire but does not monitor.",
+        "required": [
+          "id",
+          "ip",
+          "first_seen",
+          "last_seen"
+        ],
+        "properties": {
+          "first_seen": {
+            "type": "string",
+            "description": "When it was first seen anywhere in the fleet (RFC 3339)."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ip": {
+            "type": "string",
+            "description": "The endpoint's address."
+          },
+          "last_seen": {
+            "type": "string",
+            "description": "When it was last confirmed still present (RFC 3339)."
+          },
+          "mac": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Its hardware address, lowercase colon-separated hex; `null` for an incomplete ARP entry."
+          },
+          "promoted_node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node this address became, once it is monitored; `null` while it is still unmonitored."
+          },
+          "via_ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The SNMP ifIndex it was resolved on — the port it is behind.",
+            "minimum": 0
+          },
+          "via_node": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Which monitored node resolved it; `null` once that node has been deleted."
+          }
+        }
+      },
+      "DiscoveredEndpointSummary": {
+        "type": "object",
+        "description": "How much of the fleet's ARP data this list was built from.",
+        "required": [
+          "observed_total",
+          "nodes_reporting",
+          "truncated_nodes"
+        ],
+        "properties": {
+          "nodes_reporting": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many nodes have reported an ARP/ND cache at all."
+          },
+          "observed_total": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total endpoints observed across the fleet, before dedup and before the unmonitored filter."
+          },
+          "truncated_nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many of those hit a cap, making their contribution a sample rather than a total."
+          }
+        }
+      },
       "DiskUsage": {
         "type": "object",
         "description": "Usage of one watched filesystem (or a store-size proxy, e.g. the PostgreSQL database size which\ncore cannot `statvfs`). `size_bytes == 0` means \"total capacity unknown\" — the value is a bare\ngrowing size (used only), not a fraction of a disk.",
@@ -21779,6 +22125,31 @@
           }
         }
       },
+      "ImportEndpoint": {
+        "type": "object",
+        "description": "What to call the endpoint, and what to bind it to, when promoting it to a node.",
+        "properties": {
+          "credential_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Node name. Defaults to the address when omitted or blank."
+          },
+          "profile_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ImportNode": {
         "type": "object",
         "description": "One discovered device the operator chose to add.",
@@ -23547,6 +23918,22 @@
           "interval_secs"
         ],
         "properties": {
+          "arp_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether ARP / IPv6-neighbour walks are issued at all. Omitted on update leaves it unchanged.\n\nOff unless an operator turns it on: this walk reads a table sized by the network rather than\nby the device, and it is the only discovery walk here that costs a busy switch measurable\nwork. What it buys is the only answer nothing else can give — which hosts are on your\nsegments that Yagra is not monitoring."
+          },
+          "arp_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How often each SNMP node's ARP / IPv6-neighbour tables are walked, in seconds. Omitted on\nupdate leaves it unchanged.",
+            "minimum": 0
+          },
           "enabled": {
             "type": "boolean",
             "description": "Whether CDP/LLDP neighbour walks are issued at all."

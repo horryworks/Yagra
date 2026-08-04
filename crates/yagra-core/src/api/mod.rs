@@ -40,7 +40,7 @@ mod collection;
 mod config_bundle;
 mod credentials;
 mod dashboard;
-mod discovery;
+pub(crate) mod discovery;
 mod error;
 pub(crate) mod eventlog;
 mod events;
@@ -164,6 +164,12 @@ pub struct AdminState {
     /// Observed interface addresses per node (ADR-043). Read here to place a poller on a segment
     /// when the shadow preview resolves anchors.
     pub l3: Arc<crate::l3::L3Repo>,
+    /// Observed ARP/ND caches per node (ADR-043 Increment 3). Read here for the coverage line that
+    /// tells an operator whether the endpoint list is complete or a sample.
+    pub arp: Arc<crate::arp::ArpRepo>,
+    /// Endpoints the fleet has seen but does not monitor (ADR-043 Increment 3). Recomputable from
+    /// `arp` **except** for `first_seen`, which is why it is a table and not a view.
+    pub discovered: Arc<crate::arp::DiscoveredRepo>,
     /// The derived connectivity graph (ADR-043) — a cache the leader recomputes, not a source of
     /// truth, so a stale read is a stale map rather than lost data.
     pub topology_links: Arc<crate::topology_links::TopoLinkRepo>,
@@ -620,6 +626,7 @@ mod tests {
             dns_chain: None,
             neighbors: None,
             l3: None,
+            arp: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

@@ -626,6 +626,67 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "IP addresses seen on the network that Yagra does **not** monitor, derived \
+                       from the ARP\\IPv6-neighbour caches of the routers it does. Use this to \
+                       answer \"what is on this segment that we are not watching\". Each row names \
+                       the address, its MAC where known, and which monitored node saw it on which \
+                       ifIndex — so `via_node` plus `via_ifindex` is the port the host is behind. \
+                       `limit` is 1–500 (default 100); page with `before_last_seen` (RFC 3339) and \
+                       `before_id` from `next`, both together or neither. Filter to one router with \
+                       `via_node`. Empty when ARP discovery is switched off, which is the default. \
+                       ⚠️ Check `summary.truncated_nodes`: above zero, at least one router's cache \
+                       exceeded its row budget and this list is a sample, not the whole segment. \
+                       These endpoints are deliberately not topology vertices — they have no \
+                       monitored state — so get_topology will not show them."
+    )]
+    async fn list_discovered_endpoints(
+        &self,
+        Parameters(p): Parameters<DiscoveredEndpointsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.discovered_endpoints_in(p, &scope).await,
+            Err(e) => tool_api_error("list_discovered_endpoints", &e),
+        }
+    }
+
+    async fn discovered_endpoints_in(
+        &self,
+        p: DiscoveredEndpointsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(
+                "list_discovered_endpoints",
+                "endpoint discovery requires live mode",
+            );
+        };
+        let cursor = match crate::api::discovery::endpoint_cursor(
+            p.before_last_seen.as_deref(),
+            p.before_id,
+        ) {
+            Ok(c) => c,
+            Err(e) => return tool_api_error("list_discovered_endpoints", &e),
+        };
+        // The scope reaches the SQL rather than being applied here: the rows carry an address and no
+        // node id, so the only thing that bounds them is the *observing* node's group, and that join
+        // belongs in the one statement both surfaces share.
+        match crate::api::discovery::discovered_endpoint_page(
+            admin,
+            scope,
+            p.via_node,
+            p.include_promoted.unwrap_or(false),
+            cursor,
+            p.limit,
+        )
+        .await
+        {
+            Ok(page) => ok_json("list_discovered_endpoints", &page),
+            Err(e) => tool_api_error("list_discovered_endpoints", &e),
+        }
+    }
+
+    #[tool(
         description = "The folder groups nodes are filed under: id, name, kind, parent (for \
                        rebuilding the tree), and map coordinates. Use this to find the group id \
                        run_analysis takes for scope=\"group\", or to turn a node's `group` field \
@@ -1786,6 +1847,20 @@ struct NeighborsParams {
     before_at: Option<String>,
     /// Keyset cursor: the `id` of the last change you saw. Pair with `before_at`.
     before_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct DiscoveredEndpointsParams {
+    /// Max endpoints to return (1–500, default 100).
+    limit: Option<i64>,
+    /// Only endpoints seen by this monitored node (its UUID).
+    via_node: Option<Uuid>,
+    /// Also include endpoints that have since become monitored nodes (default false).
+    include_promoted: Option<bool>,
+    /// Keyset cursor: the `last_seen` of the last row you saw (RFC 3339). Pair with `before_id`.
+    before_last_seen: Option<String>,
+    /// Keyset cursor: the `id` of the last row you saw. Pair with `before_last_seen`.
+    before_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

@@ -544,8 +544,19 @@ export type NeighborChange = components['schemas']['NeighborChange'];
 /** A page of adjacency history with its keyset cursor (`null` ⇒ no more rows). */
 export type NeighborHistoryPage = components['schemas']['NeighborHistory'];
 
-/** Whether this deployment collects adjacency and how often (`GET /api/v1/settings/neighbors`). */
+/** Whether this deployment runs each discovery walk and how often
+ *  (`GET /api/v1/settings/neighbors`). Named for adjacency because that walk shipped first; it now
+ *  carries the interface-address and ARP pairs too. */
 export type NeighborConfig = components['schemas']['NeighborConfig'];
+
+/** One address a monitored router resolved on the wire that Yagra does not monitor (ADR-043 I3). */
+export type DiscoveredEndpoint = components['schemas']['DiscoveredEndpointRow'];
+
+/** A page of discovered endpoints with its keyset cursor and the fleet coverage line. */
+export type DiscoveredEndpointPage = components['schemas']['DiscoveredEndpointPage'];
+
+/** How many nodes an import created — shared by the scan import and the endpoint promotion. */
+export type ImportResult = components['schemas']['ImportResult'];
 
 /** Which protocol reported an adjacency. Hand-written as an `as const` because the UI iterates it
  *  at runtime (a generated `type` union does not exist at runtime — extensibility §4). */

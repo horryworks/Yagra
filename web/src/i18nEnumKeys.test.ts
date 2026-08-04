@@ -39,6 +39,8 @@ import {
   TOPOLOGY_MODES,
 } from './types/api';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
+import { DISCOVERY_WALKS } from './pages/neighborSettings';
+import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
@@ -383,6 +385,31 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSystem, ja: jaSystem };
     expectKeys('retention subject', locales, 'settings.retention.subject.', RETENTION_SUBJECTS);
     expectKeys('retention field', locales, 'settings.retention.field.', RETENTION_FIELDS);
+  });
+
+  it('every discovery walk has a name and help (system:settings.neighbors.walk.*)', () => {
+    // The card renders one block per walk from `DISCOVERY_WALKS`, so a fourth walk with no strings
+    // gives the operator two raw keys where the control's label and explanation should be — on the
+    // screen that decides whether a fleet-wide SNMP walk is issued at all.
+    const locales = { en: enSystem, ja: jaSystem };
+    for (const walk of DISCOVERY_WALKS) {
+      expectKeys('discovery walk', locales, `settings.neighbors.walk.${walk}.`, [
+        'name',
+        'help',
+      ]);
+    }
+  });
+
+  it('every endpoint coverage state has a string (monitoring:discovery.seen.coverage.*)', () => {
+    // The three states are not shades of the same message: `off` means nobody looked and `complete`
+    // means nothing was found. Rendering a raw key for either — or, worse, having one fall through
+    // to the other's text — is the exact confusion `coverageOf` exists to prevent.
+    expectKeys(
+      'endpoint coverage',
+      { en: enMonitoring, ja: jaMonitoring },
+      'discovery.seen.coverage.',
+      ENDPOINT_COVERAGE,
+    );
   });
 
   it('every scope label state has strings (access:users.scope.* and settings-tokens:scope.*)', () => {

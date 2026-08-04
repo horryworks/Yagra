@@ -165,14 +165,26 @@
       "save": "failed to save setting"
     },
     "neighbors": {
-      "title": "Neighbor discovery",
-      "note": "Record which of this fleet's ports face which devices, using CDP and LLDP, and keep a history of when that changed. Read-only: Yagra never configures a device. Only SNMP devices are walked.",
-      "enabledName": "Collect neighbors",
-      "enabledHelp": "When on, every SNMP node's LLDP and CDP tables are walked on the cadence below. Turning this off stops the walks; everything already recorded is kept.",
+      "title": "Discovery walks",
+      "note": "What Yagra asks SNMP devices about the network around them, so the map and the dependency graph can be derived instead of typed in. All read-only: Yagra never configures a device.",
       "enabledOn": "On",
       "enabledOff": "Off",
       "intervalName": "Walk interval",
-      "intervalHelp": "How often each device is asked who its neighbors are — currently {{cadence}}. Adjacency changes when someone moves a cable, so this is deliberately slow.",
+      "intervalHelp": "How often each device is asked — currently {{cadence}}.",
+      "walk": {
+        "neighbors": {
+          "name": "Neighbors (CDP / LLDP)",
+          "help": "Which of this fleet's ports face which devices, with a history of when that changed. Turning this off stops the walks; everything already recorded is kept."
+        },
+        "l3": {
+          "name": "Interface addresses",
+          "help": "Which IP prefixes each device has a foot in. This is what lets the network map derive links from shared subnets rather than from hand-entered parents."
+        },
+        "arp": {
+          "name": "ARP / IPv6 neighbor cache",
+          "help": "Which hosts each router has actually spoken to — the only source that can name a device nobody has added yet. Off by default: this reads a table sized by the network rather than by the device, so it is the one walk that costs a busy switch measurable work. Results appear under Nodes ▸ Discovery."
+        }
+      },
       "cadence": {
         "hours_one": "every hour",
         "hours_other": "every {{n}} hours",
@@ -183,7 +195,8 @@
       },
       "err": {
         "range": "Enter a whole number of seconds between {{min}} and {{max}}.",
-        "save": "failed to save neighbor discovery settings"
+        "rangeFor": "{{walk}}: enter a whole number of seconds between {{min}} and {{max}}.",
+        "save": "failed to save discovery walk settings"
       }
     },
     "retention": {

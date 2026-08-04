@@ -685,6 +685,36 @@ mod tests {
         };
         assert_no_forbidden_keys(&serde_json::to_value(&ovr).unwrap(), "LinkOverrideList");
 
+        // `list_discovered_endpoints` (ADR-043 I3). Served straight from the REST DTO, so it is the
+        // half of the canary that had already gone wrong once — and this shape is worth checking
+        // twice over: it is the only tool result built from data a *device* volunteered about hosts
+        // nobody registered, and it names a router and a port beside each address.
+        let endpoints = crate::api::discovery::DiscoveredEndpointPage {
+            endpoints: vec![crate::api::discovery::DiscoveredEndpointRow {
+                id: uuid::Uuid::nil(),
+                ip: "192.168.1.50".to_owned(),
+                mac: Some("aa:bb:cc:dd:ee:ff".to_owned()),
+                via_node: Some(node.id.0),
+                via_ifindex: Some(8),
+                first_seen: "2026-08-04T00:00:00Z".to_owned(),
+                last_seen: "2026-08-04T01:00:00Z".to_owned(),
+                promoted_node_id: None,
+            }],
+            next: Some(crate::api::discovery::DiscoveredEndpointCursor {
+                last_seen: "2026-08-04T01:00:00Z".to_owned(),
+                id: uuid::Uuid::nil(),
+            }),
+            summary: crate::api::discovery::DiscoveredEndpointSummary {
+                observed_total: 41,
+                nodes_reporting: 2,
+                truncated_nodes: 0,
+            },
+        };
+        assert_no_forbidden_keys(
+            &serde_json::to_value(&endpoints).unwrap(),
+            "DiscoveredEndpointPage",
+        );
+
         let shadow = crate::api::topology::TopologyShadow {
             mode: crate::topology_mode::TopologyMode::Shadow,
             manual_edges: 1,
@@ -1127,6 +1157,7 @@ mod tests {
         ("get_topology", "TopologyLinkPage"),
         ("get_topology", "LinkOverrideList"),
         ("get_topology", "TopologyShadow"),
+        ("list_discovered_endpoints", "DiscoveredEndpointPage"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
         ("list_analyses", "AnalysisJob"),

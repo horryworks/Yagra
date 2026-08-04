@@ -10,7 +10,13 @@ import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
-import type { CredentialSummary, DiscoveryCandidate, ProfileSummary } from '../types/api';
+import type {
+  CredentialSummary,
+  DiscoveredEndpoint,
+  DiscoveredEndpointPage,
+  DiscoveryCandidate,
+  ProfileSummary,
+} from '../types/api';
 import { expandTargets } from '../lib/cidr';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -18,6 +24,8 @@ import { Button } from '../components/ui/Button';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
+import { EntityName } from '../components/ui/EntityName';
+import { coverageOf, isUnmonitored } from './discoveredEndpoints';
 import './DiscoveryPage.css';
 
 /** Credential kinds that make sense as SNMP scan candidates. */
@@ -333,6 +341,150 @@ export function DiscoveryPage() {
           )}
         </Card>
       )}
+
+      <SeenOnNetworkCard authed={authed} profiles={profiles} creds={creds} />
     </div>
+  );
+}
+
+/** Discovery ▸ Seen on the network (ADR-043 Increment 3).
+ *
+ *  The passive half of discovery: addresses monitored routers have resolved on the wire that Yagra
+ *  does not monitor. It needs no operator action to produce results and no scan to be running — but
+ *  it does need ARP discovery switched on, which it is not by default, so the empty state has to say
+ *  which kind of empty it is. That judgement is `coverageOf` in `discoveredEndpoints.ts`.
+ *
+ *  Importing goes through the same node writer the scan import uses, so classification happens on the
+ *  new node's first identity probe exactly as it does for a scanned device. */
+function SeenOnNetworkCard({
+  authed,
+  profiles,
+  creds,
+}: {
+  authed: boolean;
+  profiles: ProfileSummary[];
+  creds: CredentialSummary[];
+}) {
+  const { t } = useTranslation('monitoring');
+  const [page, setPage] = useState<DiscoveredEndpointPage | null>(null);
+  const [rows, setRows] = useState<Record<string, { profile_id: string; credential_id: string }>>(
+    {},
+  );
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .listDiscoveredEndpoints({ limit: 100 })
+      .then(setPage)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const promote = (e: DiscoveredEndpoint) => {
+    const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
+    setBusyId(e.id);
+    setNote(null);
+    setError(null);
+    api
+      .importDiscoveredEndpoint(e.id, {
+        profile_id: r.profile_id || undefined,
+        credential_id: r.credential_id || undefined,
+      })
+      .then(() => {
+        setNote(t('discovery.seen.imported', { addr: e.ip }));
+        load();
+      })
+      .catch((err: unknown) => setError(errMsg(err, t('discovery.seen.err.import'))))
+      .finally(() => setBusyId(null));
+  };
+
+  const coverage = coverageOf(page?.summary as DiscoveredEndpointPage['summary']);
+  const endpoints = (page?.endpoints ?? []).filter(isUnmonitored);
+
+  return (
+    <Card title={t('discovery.seen.title')}>
+      <p className="sys-setting-help muted">{t('discovery.seen.note')}</p>
+      <p className={coverage === 'sampled' ? 'disco-seen-warn' : 'muted'}>
+        {t(`discovery.seen.coverage.${coverage}`, {
+          observed: page?.summary?.observed_total ?? 0,
+          nodes: page?.summary?.nodes_reporting ?? 0,
+          truncated: page?.summary?.truncated_nodes ?? 0,
+        })}
+      </p>
+      {endpoints.length > 0 && (
+        <div className="disco-seen-table">
+          <div className="disco-seen-head">
+            <div className="disco-h">{t('discovery.seen.cols.address')}</div>
+            <div className="disco-h">{t('discovery.seen.cols.mac')}</div>
+            <div className="disco-h">{t('discovery.seen.cols.seenBy')}</div>
+            <div className="disco-h">{t('discovery.cols.profile')}</div>
+            <div className="disco-h">{t('discovery.cols.credential')}</div>
+            <div className="disco-h" />
+          </div>
+          {endpoints.map((e) => {
+            const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
+            return (
+              <div className="disco-seen-row" key={e.id}>
+                <span className="mono">{e.ip}</span>
+                <span className="mono muted">{e.mac ?? t('discovery.seen.noMac')}</span>
+                <span className="disco-seen-via">
+                  {e.via_node ? (
+                    <EntityName name={e.via_node} id={e.via_node} />
+                  ) : (
+                    <span className="muted">{t('discovery.seen.viaGone')}</span>
+                  )}
+                  {e.via_ifindex != null && (
+                    <span className="muted mono"> · {t('discovery.seen.port', { n: e.via_ifindex })}</span>
+                  )}
+                </span>
+                <Select
+                  value={r.profile_id}
+                  disabled={!authed || busyId != null}
+                  onChange={(ev) =>
+                    setRows((cur) => ({ ...cur, [e.id]: { ...r, profile_id: ev.target.value } }))
+                  }
+                >
+                  <option value="">{t('discovery.none')}</option>
+                  {profiles.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </Select>
+                <Select
+                  value={r.credential_id}
+                  disabled={!authed || busyId != null}
+                  onChange={(ev) =>
+                    setRows((cur) => ({ ...cur, [e.id]: { ...r, credential_id: ev.target.value } }))
+                  }
+                >
+                  <option value="">{t('discovery.none')}</option>
+                  {creds.map((cr) => (
+                    <option key={cr.id} value={cr.id}>
+                      {cr.name}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="primary"
+                  disabled={!authed || busyId != null}
+                  onClick={() => promote(e)}
+                >
+                  {t('discovery.seen.monitor')}
+                </Button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!authed && <p className="muted">{t('discovery.signIn')}</p>}
+      {error && <p className="form-error">{error}</p>}
+      {note && <p className="disco-import-ok">✓ {note}</p>}
+    </Card>
   );
 }

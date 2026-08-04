@@ -15,6 +15,7 @@ mod alerts;
 mod analysis;
 mod api;
 mod apitokens;
+mod arp;
 mod audit;
 mod auth;
 mod authcallout;
@@ -458,6 +459,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let dns_checks = Arc::new(dns_check::DnsCheckRepo::new(repo.pool()));
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
     let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
+    let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
+    let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
     let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
     let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
 
@@ -632,6 +635,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dns_checks: dns_checks.clone(),
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
+        arp: arp_repo.clone(),
+        discovered: discovered_repo.clone(),
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
         pollers: poller_repo.clone(),
@@ -678,6 +683,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         dns_checks,
         neighbors: neighbor_repo.clone(),
         l3: l3_repo.clone(),
+        arp: arp_repo.clone(),
+        discovered: discovered_repo.clone(),
         topology_links: topo_link_repo.clone(),
         link_overrides: link_override_repo.clone(),
         meraki_orgs,
@@ -883,6 +890,8 @@ struct LeaderTasks {
     dns_checks: Arc<dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
+    arp: Arc<arp::ArpRepo>,
+    discovered: Arc<arp::DiscoveredRepo>,
     topology_links: Arc<topology_links::TopoLinkRepo>,
     link_overrides: Arc<link_overrides::LinkOverrideRepo>,
     /// Durable poller inventory — where the pollers are, which is what roots the derived dependency
@@ -967,6 +976,7 @@ impl LeaderTasks {
                 dns: self.dns_checks.clone(),
                 neighbors: self.neighbors.clone(),
                 l3: self.l3.clone(),
+                arp: self.arp.clone(),
             },
             self.history.clone(),
             self.shutdown.clone(),
@@ -1166,6 +1176,10 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
+            run_endpoint_discovery(self.arp.clone(), self.discovered.clone()),
+        );
+        spawn_cancellable(
+            &self.shutdown,
             run_routing_refresh(
                 self.notifier.clone(),
                 self.notifications.clone(),
@@ -1225,6 +1239,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         dns_chain: None,
         neighbors: None,
         l3: None,
+        arp: None,
         observational: false,
         poller_id: None,
         trace_context: Default::default(),
@@ -1392,6 +1407,9 @@ struct MetaRecord {
     /// The interface addresses observed on this poll (L3 walks only, ADR-043). Same tier again.
     /// `None` means no snapshot was observed and nothing is written — never "no addresses".
     l3: Option<yagra_common::L3Snapshot>,
+    /// The ARP/ND cache observed on this poll (ARP walks only, ADR-043 Increment 3). Same tier
+    /// again. `None` means no summary was observed and nothing is written — never "no endpoints".
+    arp: Option<yagra_common::ArpSummary>,
 }
 
 /// One alert-lifecycle transition for the async PG writer's history batch. Never shed — the matcher
@@ -1520,11 +1538,15 @@ fn persist_metrics_and_meta(
     let neighbors = result.neighbors.clone();
     // Interface addresses ride the same shed-able tier, for the same reason again.
     let l3 = result.l3.clone();
+    // And the ARP summary, for the fourth time: an endpoint dropped here is re-observed on the next
+    // walk, and the endpoint table's `last_seen` simply does not advance in the meantime.
+    let arp = result.arp.clone();
     if !interfaces.is_empty()
         || identity.is_some()
         || dns_chain.is_some()
         || neighbors.is_some()
         || l3.is_some()
+        || arp.is_some()
     {
         let rec = MetaRecord {
             node_id: result.node_id.as_uuid(),
@@ -1533,6 +1555,7 @@ fn persist_metrics_and_meta(
             dns_chain,
             neighbors,
             l3,
+            arp,
         };
         match meta_tx.try_send(rec) {
             Ok(()) => {}
@@ -1760,6 +1783,89 @@ async fn run_topology_derivation(
             unmatched_lldp = out.summary.unmatched_lldp_rows,
             oversized_segments = out.summary.oversized_segments,
             "derived the connectivity graph"
+        );
+    }
+}
+
+/// Leader-only loop: turn the fleet's ARP observations into the discovered-endpoint table
+/// (ADR-043 Increment 3).
+///
+/// **Leader-only** for the same reason the derivation is: a whole-fleet read followed by a
+/// whole-table write, idempotent but pure waste if two cores do it.
+///
+/// **Free when nobody opted in.** ARP discovery ships off, so the usual state of this loop is "no
+/// observation watermark ⇒ return before reading anything". That ordering is the point: the
+/// inventory read and the address projection below are the expensive part, and a deployment that
+/// never enabled the walk must not pay for them every five minutes.
+///
+/// **The trigger is the watermark alone**, unlike the derivation, which also watches `config_gen`.
+/// Both were considered; `config_gen` would fire this on every unrelated configuration edit, and the
+/// thing it would catch — a node created by hand, so that an endpoint is no longer unmonitored — is
+/// already handled by [`arp::DiscoveredRepo::reconcile_promotions`], which the sweep runs every pass
+/// and the import handler runs immediately.
+async fn run_endpoint_discovery(arp: Arc<arp::ArpRepo>, discovered: Arc<arp::DiscoveredRepo>) {
+    let mut last_mark: Option<chrono::DateTime<chrono::Utc>> = None;
+    loop {
+        tokio::time::sleep(Duration::from_secs(arp::ENDPOINT_SWEEP_INTERVAL_SECS)).await;
+
+        let Ok(Some(mark)) = arp.observation_watermark().await else {
+            continue;
+        };
+        // `reconcile_promotions` still runs on an unchanged watermark: a node added by hand does
+        // not move it, and an endpoint that quietly became monitored must stop being listed as
+        // unmonitored without waiting for the next ARP walk.
+        if let Err(e) = discovered.reconcile_promotions().await {
+            tracing::warn!(error = %e, "endpoint discovery: reconciling promotions failed");
+        }
+        if last_mark == Some(mark) {
+            metrics::counter!("yagra_endpoint_sweep_skipped_total").increment(1);
+            continue;
+        }
+
+        let started = std::time::Instant::now();
+        let summaries = match arp.all_current().await {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, "endpoint discovery: reading ARP observations failed");
+                continue;
+            }
+        };
+        // A failed address read must **skip the cycle**, never fall back to an empty set: an empty
+        // "known" set means every monitored device's own addresses are reported as unmonitored
+        // endpoints, which is a wrong answer written to a table an operator then reviews.
+        let known = match discovered.known_addresses().await {
+            Ok(set) => set,
+            Err(e) => {
+                tracing::warn!(error = %e, "endpoint discovery: reading known addresses failed");
+                continue;
+            }
+        };
+
+        let found = arp::unmonitored(&summaries, &known);
+        if let Err(e) = discovered.upsert_batch(&found).await {
+            tracing::warn!(error = %e, "endpoint discovery: writing endpoints failed");
+            continue;
+        }
+        // Only prune once the write succeeded, so a failed cycle never ages out a live table.
+        match discovered
+            .prune(
+                arp::DISCOVERED_RETENTION_SECS,
+                arp::MAX_DISCOVERED_ENDPOINTS,
+            )
+            .await
+        {
+            Ok(n) if n > 0 => tracing::info!(removed = n, "pruned discovered endpoints"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(error = %e, "endpoint discovery: pruning failed"),
+        }
+
+        last_mark = Some(mark);
+        metrics::gauge!("yagra_discovered_endpoints_total").set(found.len() as f64);
+        metrics::histogram!("yagra_endpoint_sweep_seconds").record(started.elapsed().as_secs_f64());
+        tracing::debug!(
+            endpoints = found.len(),
+            nodes = summaries.len(),
+            "swept the fleet's ARP observations for unmonitored endpoints"
         );
     }
 }
@@ -2240,6 +2346,7 @@ struct MetaStores {
     dns: Arc<dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
+    arp: Arc<arp::ArpRepo>,
 }
 
 async fn run_pg_writer(
@@ -2317,6 +2424,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         dns,
         neighbors,
         l3,
+        arp,
     } = stores;
     if buf.is_empty() {
         return;
@@ -2327,6 +2435,7 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut dns_rows: Vec<(Uuid, yagra_common::DnsChain)> = Vec::new();
     let mut neighbor_rows: Vec<(Uuid, yagra_common::NeighborSet)> = Vec::new();
     let mut l3_rows: Vec<(Uuid, yagra_common::L3Snapshot)> = Vec::new();
+    let mut arp_rows: Vec<(Uuid, yagra_common::ArpSummary)> = Vec::new();
     for rec in buf.drain(..) {
         for (ifindex, name, alias, speed) in rec.interfaces {
             iface_rows.push((rec.node_id, ifindex, name, alias, speed));
@@ -2342,6 +2451,9 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
         }
         if let Some(snapshot) = rec.l3 {
             l3_rows.push((rec.node_id, snapshot));
+        }
+        if let Some(summary) = rec.arp {
+            arp_rows.push((rec.node_id, summary));
         }
     }
     if !iface_rows.is_empty() {
@@ -2388,6 +2500,18 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     }
     if !l3_rows.is_empty() {
         metrics::counter!("yagra_l3_persisted_total").increment(l3_rows.len() as u64);
+    }
+    // ARP is the one member of this tier whose observations are *not* a sequence — an ARP cache is
+    // current state and the previous read is worthless — but it is still written one statement per
+    // observation, because two summaries in one batch belong to two different nodes and coalescing
+    // buys nothing at the volume an hourly-or-slower walk produces.
+    for (node_id, summary) in &arp_rows {
+        if let Err(e) = arp.record_observation(*node_id, summary).await {
+            tracing::warn!(node = %node_id, error = %e, "ARP observation failed");
+        }
+    }
+    if !arp_rows.is_empty() {
+        metrics::counter!("yagra_arp_persisted_total").increment(arp_rows.len() as u64);
     }
     metrics::counter!("yagra_result_meta_persisted_total").increment(count);
 }
@@ -3399,6 +3523,7 @@ mod tests {
             dns_chain: None,
             neighbors: None,
             l3: None,
+            arp: None,
             observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),
@@ -3476,6 +3601,7 @@ mod tests {
             dns_chain: None,
             neighbors: Some(yagra_common::NeighborSet::default()),
             l3: None,
+            arp: None,
             observational: true,
             poller_id: None,
             trace_context: Default::default(),
@@ -3487,6 +3613,7 @@ mod tests {
             observational: false,
             neighbors: None,
             l3: None,
+            arp: None,
             ..observational_result(node, outcome, at)
         }
     }
@@ -3639,6 +3766,7 @@ mod tests {
             dns_chain: None,
             neighbors: None,
             l3: None,
+            arp: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),

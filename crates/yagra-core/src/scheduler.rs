@@ -16,14 +16,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpCheck, SnmpColumn, SnmpL3Check,
-    SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn, SnmpTableCheck,
-    SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3TableCheck, SyncBus,
+    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpArpCheck, SnmpArpColumn,
+    SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck,
+    SnmpNeighborColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check,
+    SnmpV3NeighborCheck, SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
-    builtin_interface_meta_columns, builtin_l3_columns, builtin_neighbor_columns, CollectionItem,
-    CollectionKind, DnsCheckConfig, HttpAuth, Node, NodeId, NodeKind, NodeRows, ProfileId,
-    UrlCheckConfig,
+    builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
+    builtin_neighbor_columns, CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node,
+    NodeId, NodeKind, NodeRows, ProfileId, UrlCheckConfig,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -330,6 +331,53 @@ pub fn build_snmp_v3_l3_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3L
     }
 }
 
+/// Build the SNMP v2c ARP / IPv6-neighbour check for a node (ADR-043 Increment 3).
+///
+/// Unlike its two siblings this carries a row budget on the wire. The other walks read tables whose
+/// size is a property of the device; this one reads a table whose size is a property of the network,
+/// and a fleet-wide bound is core's decision to make rather than a constant compiled into whichever
+/// poller build happens to be running.
+#[must_use]
+pub fn build_snmp_arp_check(community: &str, timeout_ms: u32) -> SnmpArpCheck {
+    SnmpArpCheck {
+        community: community.to_owned(),
+        columns: arp_columns(),
+        max_rows: arp_max_rows(),
+        timeout_ms,
+    }
+}
+
+/// Build the SNMP v3 (USM) ARP check — the v3 analogue of [`build_snmp_arp_check`].
+#[must_use]
+pub fn build_snmp_v3_arp_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3ArpCheck {
+    SnmpV3ArpCheck {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        columns: arp_columns(),
+        max_rows: arp_max_rows(),
+        timeout_ms,
+    }
+}
+
+fn arp_columns() -> Vec<SnmpArpColumn> {
+    builtin_arp_columns()
+        .into_iter()
+        .map(|(field, oid)| SnmpArpColumn {
+            field,
+            oid: oid.to_owned(),
+        })
+        .collect()
+}
+
+/// The row budget sent on the wire, derived from the one constant that declares it.
+fn arp_max_rows() -> u32 {
+    u32::try_from(yagra_common::MAX_ARP_WALK_ROWS).unwrap_or(u32::MAX)
+}
+
 fn l3_columns() -> Vec<SnmpL3Column> {
     builtin_l3_columns()
         .into_iter()
@@ -369,6 +417,12 @@ pub struct AdjacencyPolicy {
     /// Interface-address cadence in seconds. Same reasoning as the neighbour cadence: addressing
     /// changes on the order of months.
     pub l3_interval_secs: u32,
+    /// Whether ARP / IPv6-neighbour jobs are issued. Off unless an operator turned it on — the one
+    /// walk here that costs the device measurable work.
+    pub arp_enabled: bool,
+    /// ARP cadence in seconds. Slower again than the two above: what it discovers is "which hosts
+    /// exist on my segments", which is an inventory question, not a state one.
+    pub arp_interval_secs: u32,
 }
 
 impl From<AdjacencySettings> for AdjacencyPolicy {
@@ -378,6 +432,8 @@ impl From<AdjacencySettings> for AdjacencyPolicy {
             neighbors_interval_secs: s.neighbors_interval_secs,
             l3_enabled: s.l3_enabled,
             l3_interval_secs: s.l3_interval_secs,
+            arp_enabled: s.arp_enabled,
+            arp_interval_secs: s.arp_interval_secs,
         }
     }
 }
@@ -523,6 +579,16 @@ pub fn assemble_node_jobs(
                 );
                 jobs.push((job, "snmp_l3"));
             }
+            if neighbors.arp_enabled {
+                let job = PollJob::snmp_arp(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_arp_check(community, SNMP_TIMEOUT_MS),
+                    neighbors.arp_interval_secs,
+                );
+                jobs.push((job, "snmp_arp"));
+            }
         }
         Some(SnmpAuth::V3(secret)) => {
             if let Some(check) = build_snmp_v3_check(secret, items, SNMP_TIMEOUT_MS) {
@@ -553,6 +619,16 @@ pub fn assemble_node_jobs(
                     neighbors.l3_interval_secs,
                 );
                 jobs.push((job, "snmp_v3_l3"));
+            }
+            if neighbors.arp_enabled {
+                let job = PollJob::snmp_v3_arp(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_v3_arp_check(secret, SNMP_TIMEOUT_MS),
+                    neighbors.arp_interval_secs,
+                );
+                jobs.push((job, "snmp_v3_arp"));
             }
         }
         None => {}
@@ -1629,6 +1705,75 @@ mod tests {
         };
         let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, neighbors_only);
         assert_eq!(kinds(&jobs), vec!["snmp_table", "snmp_neighbors", "icmp"]);
+    }
+
+    /// ARP discovery is off in the default policy, and that default is what every node gets until an
+    /// operator says otherwise. A regression here would start walking `ipNetToPhysicalTable` on
+    /// every SNMP node in a fleet on the strength of an upgrade.
+    #[test]
+    fn the_arp_walk_is_absent_from_the_default_policy_on_both_protocols() {
+        let items = [item(
+            "if_hc_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            CollectionKind::Table,
+        )];
+        assert!(!AdjacencyPolicy::default().arp_enabled);
+        for (auth, kind) in [
+            (SnmpAuth::V2c("public".to_owned()), "snmp_arp"),
+            (SnmpAuth::V3(v3_secret()), "snmp_v3_arp"),
+        ] {
+            let jobs = assemble_node_jobs(
+                &node("sw"),
+                Some(&auth),
+                &items,
+                None,
+                30,
+                AdjacencyPolicy::default(),
+            );
+            assert!(
+                !kinds(&jobs).contains(&kind),
+                "{kind} must not be issued unless an operator enabled it"
+            );
+        }
+    }
+
+    /// Turned on, it rides its own cadence and carries the columns and the row budget core decides.
+    #[test]
+    fn an_enabled_arp_walk_carries_its_own_cadence_columns_and_row_budget() {
+        let items = [item(
+            "if_hc_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            CollectionKind::Table,
+        )];
+        let policy = AdjacencyPolicy {
+            arp_enabled: true,
+            arp_interval_secs: 21_600,
+            ..AdjacencyPolicy::default()
+        };
+        let jobs = assemble_node_jobs(
+            &node("sw"),
+            Some(&SnmpAuth::V2c("public".to_owned())),
+            &items,
+            None,
+            30,
+            policy,
+        );
+        let arp = jobs.iter().find(|(_, k)| *k == "snmp_arp").expect("issued");
+        assert_eq!(arp.0.interval_secs, 21_600);
+        let CheckSpec::SnmpArp(check) = &arp.0.check else {
+            panic!("wrong variant");
+        };
+        // The budget must reach the wire: a poller that received 0 would collect nothing, silently.
+        assert_eq!(
+            usize::try_from(check.max_rows).unwrap(),
+            yagra_common::MAX_ARP_WALK_ROWS
+        );
+        let sent: Vec<&str> = check.columns.iter().map(|c| c.oid.as_str()).collect();
+        let declared: Vec<&str> = builtin_arp_columns().iter().map(|(_, o)| *o).collect();
+        assert_eq!(
+            sent, declared,
+            "core is the one place the OID set is decided"
+        );
     }
 
     /// The L3 job must carry exactly the columns `yagra-common` declares — core is the one place

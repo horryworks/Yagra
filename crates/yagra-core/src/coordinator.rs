@@ -854,6 +854,8 @@ fn spec_needs_http_auth(spec: &JobSpec) -> bool {
         | CheckSpec::SnmpV3Neighbors(_)
         | CheckSpec::SnmpL3(_)
         | CheckSpec::SnmpV3L3(_)
+        | CheckSpec::SnmpArp(_)
+        | CheckSpec::SnmpV3Arp(_)
         | CheckSpec::Dns(_)
         | CheckSpec::MerakiCollect(_) => false,
     }

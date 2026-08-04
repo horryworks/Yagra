@@ -11,6 +11,29 @@
 ## Unreleased
 
 ### New Features
+- **Yagra can now tell you what is on your network that it is not watching.** Turn on the new
+  **ARP / IPv6 neighbor cache** walk (Settings ▸ System settings ▸ Discovery walks) and every
+  monitored router reports the hosts it has actually spoken to. Anything not already in the
+  inventory appears under **Nodes ▸ Discovery ▸ Seen on the network**, with the address, its MAC,
+  and which device saw it on which port — and a *Monitor* button that turns it into a node through
+  the same import path a subnet scan uses. No scan required; it is a by-product of the polling you
+  already do.
+  - ⚠️ **Off by default, deliberately.** Unlike the other two discovery walks, this one reads a
+    table sized by the *network* rather than by the device — thousands of rows on a campus switch —
+    so an upgrade will not start issuing it against your fleet. The default cadence is six hours.
+  - The list says which kind of empty it is: "no device has reported a cache yet" (nobody looked)
+    reads differently from "0 unmonitored addresses" (nothing to find), and if any router's cache
+    hit its row budget the list declares itself a **sample** rather than a complete answer.
+  - Endpoints are deliberately **not** drawn on the network map. An unmonitored host has no state
+    to show, and a few thousand stateless boxes would bury the nodes that do. Importing one makes it
+    a node, and the ordinary derivation picks it up from there.
+  - New: `GET /api/v1/discovered-endpoints` (keyset-paged, group-scoped through the observing node)
+    and `POST /api/v1/discovered-endpoints/{id}/import`, plus the MCP tool
+    `list_discovered_endpoints`.
+  - Rows age out seven days after they were last seen, and the table is capped fleet-wide.
+- **The interface-address walk finally has a UI.** It has been running since it shipped, but the
+  settings card only ever knew about CDP/LLDP. Settings ▸ System settings now shows all three
+  discovery walks — neighbours, interface addresses and ARP — each with its own switch and cadence.
 - **One box can be excluded from derived suppression entirely.** Tick *Never suppress* against a
   node on **Topology ▸ Dependencies** (or `PUT /api/v1/nodes/{id}/suppression-opt-out`) and its
   alert always stands on its own, whatever the discovered graph says. The node keeps its place in

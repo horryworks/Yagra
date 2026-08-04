@@ -29,9 +29,9 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth, HttpMethod, IfIndex,
-    InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind, NeighborColumn, NeighborSet,
-    NodeId, SeriesKey,
+    ArpColumn, ArpSummary, DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth,
+    HttpMethod, IfIndex, InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind,
+    NeighborColumn, NeighborSet, NodeId, SeriesKey,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -328,6 +328,48 @@ impl PollJob {
             node_id,
             target,
             check: CheckSpec::SnmpV3L3(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v2c ARP / IPv6-neighbour walk job (ADR-043 Increment 3).
+    #[must_use]
+    pub fn snmp_arp(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpArpCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpArp(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v3 (USM) ARP / IPv6-neighbour walk job (ADR-043 Increment 3).
+    #[must_use]
+    pub fn snmp_v3_arp(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3ArpCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3Arp(check),
             interval_secs,
             credential_ref: None,
             probe_identity: false,
@@ -730,6 +772,18 @@ pub enum CheckSpec {
     /// string and v3 carries six USM fields, and folding them would mean one struct with seven
     /// mutually exclusive optional fields plus a poller that re-derives which protocol to speak.
     SnmpV3L3(SnmpV3L3Check),
+    /// SNMP v2c walk of the ARP / IPv6-neighbour cache (ADR-043 Increment 3), on the slowest cadence
+    /// of any check here.
+    ///
+    /// **The only check in ADR-043 that costs the device real work**, which is why it is the only
+    /// one shipped disabled by default: `ipNetToPhysicalTable` is thousands of rows on a campus
+    /// distribution switch, where `ipAddrTable` is tens. `max_rows` bounds it *inside* the paging
+    /// loop rather than after collection. The result is **observational**
+    /// ([`PollResult::observational`]) — an ARP walk says nothing about whether the device is up.
+    SnmpArp(SnmpArpCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpArp`], following the same pairing as every other
+    /// v2c/v3 pair here.
+    SnmpV3Arp(SnmpV3ArpCheck),
 }
 
 /// ICMP echo parameters.
@@ -1022,6 +1076,79 @@ pub struct SnmpV3L3Check {
     pub timeout_ms: u32,
 }
 
+/// SNMP v2c ARP / IPv6-neighbour walk parameters (ADR-043 Increment 3).
+///
+/// Carries `max_rows` on the wire, which none of the other walk checks do. That is deliberate: the
+/// other walks read tables whose size is a property of the device (one row per interface address,
+/// one per LLDP peer), while this one reads a table whose size is a property of the *network* — and
+/// core is where a fleet-wide bound belongs. A poller that receives a value it considers
+/// unreasonable still applies it; the transport's own request ceiling is the backstop.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpArpCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Neighbour-cache columns to walk, keeping raw instance indices — both tables carry the
+    /// address and the ifIndex in the row *index*, so a folded index would destroy the answer.
+    #[serde(default)]
+    pub columns: Vec<SnmpArpColumn>,
+    /// Row budget for the whole walk, enforced while paging.
+    #[serde(default = "default_arp_max_rows")]
+    pub max_rows: u32,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) ARP walk parameters — the v3 analogue of [`SnmpArpCheck`]. Auth/priv keys are
+/// resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the secret
+/// store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3ArpCheck {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// Neighbour-cache columns to walk.
+    #[serde(default)]
+    pub columns: Vec<SnmpArpColumn>,
+    /// Row budget for the whole walk, enforced while paging.
+    #[serde(default = "default_arp_max_rows")]
+    pub max_rows: u32,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// The row budget an N-1 core that predates the field is assumed to have meant.
+const fn default_arp_max_rows() -> u32 {
+    // `MAX_ARP_WALK_ROWS`, restated as a `u32` literal because `yagra_common`'s constant is a
+    // `usize` and this must be a `const fn` serde can name. The round-trip test below pins them
+    // together so the two cannot drift.
+    4096
+}
+
+/// One neighbour-cache column to walk: which field it carries and the column base OID. Relational
+/// metadata (PostgreSQL), never a TSDB label — the same tier as [`SnmpL3Column`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpArpColumn {
+    /// Which neighbour-cache attribute this column carries.
+    pub field: ArpColumn,
+    /// Column base OID, e.g. `1.3.6.1.2.1.4.35.1.4` (ipNetToPhysicalPhysAddress).
+    pub oid: String,
+}
+
 /// One address-table column to walk: which field it carries and the column base OID. Relational
 /// metadata (PostgreSQL), never a TSDB label — the same tier as [`SnmpNeighborColumn`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1183,6 +1310,17 @@ pub struct PollResult {
     /// disappeared" — and, one derivation later, as "every link disappeared".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l3: Option<L3Snapshot>,
+    /// The ARP / IPv6-neighbour cache observed on this poll (ARP walks only, ADR-043 Increment 3).
+    /// Same tier as `l3` again — relational metadata, **never** a TSDB label.
+    ///
+    /// Already aggregated poller-side: a bounded endpoint sample plus per-port totals, not the raw
+    /// table. That is the difference between a few kilobytes and several thousand rows per node per
+    /// cycle on the bus, and the aggregation is deterministic so two pollers reading the same device
+    /// publish the same summary.
+    ///
+    /// `None` and `Some(empty summary)` mean different things, exactly as for `neighbors` and `l3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arp: Option<ArpSummary>,
     /// This result carries **observations only** and makes no claim about the node's reachability.
     ///
     /// Core skips the alert engine entirely for such results. That is not a nicety: `outcome` feeds
@@ -2315,6 +2453,7 @@ mod tests {
             dns_chain: None,
             neighbors: None,
             l3: None,
+            arp: None,
             observational: false,
             poller_id: Some("edge-poller-1".into()),
             trace_context: TraceContext::new(),
@@ -2433,6 +2572,63 @@ mod tests {
         let spec3 = CheckSpec::SnmpV3L3(v3);
         let wire3 = serde_json::to_string(&spec3).unwrap();
         assert!(wire3.contains(r#""kind":"snmp_v3_l3""#), "{wire3}");
+    }
+
+    /// ADR-043 Increment 3's result field, N-1 sensitive in exactly the way `l3` was.
+    #[test]
+    fn an_arp_result_field_tolerates_missing_and_unknown_fields() {
+        let json = r#"{
+            "job_id": "00000000-0000-0000-0000-000000000000",
+            "node_id": "00000000-0000-0000-0000-000000000000",
+            "at_unix_ms": 0,
+            "outcome": "reachable",
+            "some_future_field": 42
+        }"#;
+        let result: PollResult = serde_json::from_str(json).unwrap();
+        assert!(result.arp.is_none());
+
+        // A result that carries no ARP summary is byte-identical to what it was before the field
+        // existed. Note the needle: `"arp"` with quotes, because `at_unix_ms` and `trace_context`
+        // both contain the bare letters.
+        let wire = serde_json::to_string(&result).unwrap();
+        assert!(!wire.contains("\"arp\""), "{wire}");
+
+        // And `None` vs `Some(empty)` survives the wire as two different answers, for the third
+        // time and the same reason: core writes nothing for the first and replaces the stored
+        // summary for the second.
+        let mut with = result;
+        with.arp = Some(yagra_common::ArpSummary::default());
+        with.observational = true;
+        let back: PollResult =
+            serde_json::from_str(&serde_json::to_string(&with).unwrap()).unwrap();
+        assert_eq!(back.arp, Some(yagra_common::ArpSummary::default()));
+        assert!(back.observational);
+    }
+
+    /// An ARP check from an N-1 core (or one that gains a field later) still decodes, and its row
+    /// budget falls back to the value `yagra-common` declares rather than to zero.
+    #[test]
+    fn an_arp_check_tolerates_missing_and_unknown_fields() {
+        let v2c: SnmpArpCheck =
+            serde_json::from_str(r#"{"community":"public","future":1}"#).unwrap();
+        assert!(v2c.columns.is_empty());
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+        // A zero here would mean "walk nothing" and the feature would silently collect no data.
+        assert_eq!(
+            usize::try_from(v2c.max_rows).unwrap(),
+            yagra_common::MAX_ARP_WALK_ROWS,
+            "the wire default must be the constant yagra-common declares"
+        );
+        let v3: SnmpV3ArpCheck =
+            serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
+        assert!(v3.auth_key.is_none() && v3.columns.is_empty());
+        assert_eq!(v3.max_rows, v2c.max_rows);
+
+        // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
+        let wire = serde_json::to_string(&CheckSpec::SnmpArp(v2c)).unwrap();
+        assert!(wire.contains(r#""kind":"snmp_arp""#), "{wire}");
+        let wire3 = serde_json::to_string(&CheckSpec::SnmpV3Arp(v3)).unwrap();
+        assert!(wire3.contains(r#""kind":"snmp_v3_arp""#), "{wire3}");
     }
 
     /// A neighbour check from an N-1 core (or one that gains a field later) still decodes.

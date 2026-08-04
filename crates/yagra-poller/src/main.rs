@@ -20,6 +20,7 @@
 //! legacy job subject. `main` blocks on the worker loop; the local scheduler keeps it running across
 //! bus blips (that continuity is the point of the working-set model).
 
+mod arp;
 mod discovery;
 mod flow;
 mod l3;

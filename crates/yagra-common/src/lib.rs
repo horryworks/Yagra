@@ -9,6 +9,7 @@
 //! ADR-011), counters stored raw with rates derived at query time (ADR-012), and an
 //! explicit, exhaustive node state machine (monitoring-conventions).
 
+pub mod arp;
 pub mod classification;
 pub mod collection;
 pub mod dns_check;
@@ -30,6 +31,10 @@ pub mod topology;
 pub mod trap;
 pub mod url_check;
 
+pub use arp::{
+    builtin_arp_columns, ArpColumn, ArpEntry, ArpInterfaceCount, ArpSummary,
+    MAX_ARP_ENTRIES_PER_NODE, MAX_ARP_WALK_ROWS, METRIC_SNMP_ARP_ENTRY_COUNT,
+};
 pub use classification::{
     builtin_classification_rules, BuiltinClassificationRule, ClassificationRule,
 };

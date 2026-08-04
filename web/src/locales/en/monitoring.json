@@ -223,6 +223,28 @@
   },
   "discovery": {
     "note": "Sweep a subnet for live + SNMP devices, then import the ones you want.",
+    "seen": {
+      "title": "Seen on the network",
+      "note": "Addresses your monitored routers have actually spoken to that Yagra is not monitoring. Nothing here needs a scan — it comes from the ARP and IPv6 neighbor caches of the devices you already have.",
+      "coverage": {
+        "off": "No device has reported an ARP cache yet. Turn on the ARP / IPv6 neighbor cache walk under Settings ▸ System settings ▸ Discovery walks — until then this list is empty because nobody has looked, not because there is nothing to find.",
+        "complete": "{{nodes}} device(s) reporting, {{observed}} address(es) resolved in total.",
+        "sampled": "{{nodes}} device(s) reporting, {{observed}} address(es) resolved — but {{truncated}} of them hit the row budget, so this list is a sample of what is out there, not all of it."
+      },
+      "cols": {
+        "address": "Address",
+        "mac": "MAC",
+        "seenBy": "Seen by"
+      },
+      "noMac": "not resolved",
+      "viaGone": "device removed",
+      "port": "ifIndex {{n}}",
+      "monitor": "Monitor",
+      "imported": "{{addr}} is now a monitored node.",
+      "err": {
+        "import": "failed to start monitoring that endpoint"
+      }
+    },
     "scanTitle": "Scan a subnet",
     "resultsTitle": "Discovered devices",
     "signIn": "Sign in as an admin to run discovery.",

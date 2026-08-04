@@ -22,12 +22,14 @@ import { TextInput } from '../components/ui/Field';
 import type { NeighborConfig, RetentionPolicy, RetentionRow } from '../types/api';
 import {
   describeCadence,
-  isNeighborDirty,
-  neighborFormFrom,
-  parseNeighborForm,
+  discoveryFormFrom,
+  isDiscoveryDirty,
+  parseDiscoveryForm,
+  DISCOVERY_WALKS,
   MAX_NEIGHBOR_INTERVAL_SECS,
   MIN_NEIGHBOR_INTERVAL_SECS,
-  type NeighborForm,
+  type DiscoveryForm,
+  type DiscoveryWalk,
 } from './neighborSettings';
 import {
   bandFor,
@@ -129,14 +131,19 @@ export function SystemSettingsPage() {
   );
 }
 
-/** Settings ▸ System settings ▸ Neighbor discovery (ADR-038).
+/** Settings ▸ System settings ▸ Discovery walks (ADR-038 / ADR-043).
  *
- *  Deployment-wide rather than per node or per profile: the OIDs are fixed standards (LLDP-MIB /
- *  CISCO-CDP-MIB), so there is nothing to tune per device — only whether to walk and how often. */
+ *  Deployment-wide rather than per node or per profile: every OID involved is a fixed standard
+ *  (LLDP-MIB / CISCO-CDP-MIB, RFC 1213 / RFC 4293), so there is nothing to tune per device — only
+ *  whether to walk and how often.
+ *
+ *  Rendered from `DISCOVERY_WALKS` rather than as three near-identical blocks, so a fourth walk is a
+ *  registry entry plus its locale strings. All judgement is in `neighborSettings.ts` — Vitest never
+ *  runs a .tsx (testing.md). */
 function NeighborCard({ authed }: { authed: boolean }) {
   const { t } = useTranslation('system');
   const [saved, setSavedCfg] = useState<NeighborConfig | null>(null);
-  const [form, setForm] = useState<NeighborForm | null>(null);
+  const [form, setForm] = useState<DiscoveryForm | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -146,7 +153,7 @@ function NeighborCard({ authed }: { authed: boolean }) {
       .getNeighborSettings()
       .then((cfg) => {
         setSavedCfg(cfg);
-        setForm(neighborFormFrom(cfg));
+        setForm(discoveryFormFrom(cfg));
       })
       .catch(() => undefined);
   }, []);
@@ -155,14 +162,25 @@ function NeighborCard({ authed }: { authed: boolean }) {
     load();
   }, [load]);
 
+  const patch = (walk: DiscoveryWalk, next: Partial<{ enabled: boolean; intervalSecs: string }>) => {
+    setForm((f) => (f ? { ...f, [walk]: { ...f[walk], ...next } } : f));
+    setOk(false);
+  };
+
   const save = () => {
     if (!form) return;
-    const parsed = parseNeighborForm(form, {
+    const parsed = parseDiscoveryForm(form, {
       min: saved?.min_interval_secs,
       max: saved?.max_interval_secs,
     });
     if (!parsed.ok) {
-      setError(t('settings.neighbors.err.range', { min: parsed.min, max: parsed.max }));
+      setError(
+        t('settings.neighbors.err.rangeFor', {
+          walk: t(`settings.neighbors.walk.${parsed.walk}.name`),
+          min: parsed.min,
+          max: parsed.max,
+        }),
+      );
       setOk(false);
       return;
     }
@@ -179,66 +197,65 @@ function NeighborCard({ authed }: { authed: boolean }) {
       .finally(() => setBusy(false));
   };
 
-  const dirty = saved && form ? isNeighborDirty(form, saved) : false;
+  const dirty = saved && form ? isDiscoveryDirty(form, saved) : false;
 
   return (
     <Card title={t('settings.neighbors.title')}>
       <p className="sys-setting-help muted">{t('settings.neighbors.note')}</p>
-      <div className="sys-setting">
-        <div className="sys-setting-label">
-          <div className="sys-setting-name">{t('settings.neighbors.enabledName')}</div>
-          <div className="sys-setting-help muted">{t('settings.neighbors.enabledHelp')}</div>
-        </div>
-        <div className="sys-setting-control">
-          <label className="sys-setting-toggle">
-            <input
-              type="checkbox"
-              checked={form?.enabled ?? false}
-              disabled={!authed || !form || busy}
-              onChange={(e) => {
-                setForm((f) => (f ? { ...f, enabled: e.target.checked } : f));
-                setOk(false);
-              }}
-            />
-            <span>
-              {form?.enabled
-                ? t('settings.neighbors.enabledOn')
-                : t('settings.neighbors.enabledOff')}
-            </span>
-          </label>
-        </div>
-      </div>
-      <div className="sys-setting">
-        <div className="sys-setting-label">
-          <div className="sys-setting-name">{t('settings.neighbors.intervalName')}</div>
-          <div className="sys-setting-help muted">
-            {t('settings.neighbors.intervalHelp', {
-              cadence: describeCadence(Number(form?.intervalSecs ?? 0), t),
-            })}
+      {DISCOVERY_WALKS.map((walk) => (
+        <div key={walk}>
+          <div className="sys-setting">
+            <div className="sys-setting-label">
+              <div className="sys-setting-name">{t(`settings.neighbors.walk.${walk}.name`)}</div>
+              <div className="sys-setting-help muted">
+                {t(`settings.neighbors.walk.${walk}.help`)}
+              </div>
+            </div>
+            <div className="sys-setting-control">
+              <label className="sys-setting-toggle">
+                <input
+                  type="checkbox"
+                  checked={form?.[walk].enabled ?? false}
+                  disabled={!authed || !form || busy}
+                  onChange={(e) => patch(walk, { enabled: e.target.checked })}
+                />
+                <span>
+                  {form?.[walk].enabled
+                    ? t('settings.neighbors.enabledOn')
+                    : t('settings.neighbors.enabledOff')}
+                </span>
+              </label>
+            </div>
+          </div>
+          <div className="sys-setting">
+            <div className="sys-setting-label">
+              <div className="sys-setting-name">{t('settings.neighbors.intervalName')}</div>
+              <div className="sys-setting-help muted">
+                {t('settings.neighbors.intervalHelp', {
+                  cadence: describeCadence(Number(form?.[walk].intervalSecs ?? 0), t),
+                })}
+              </div>
+            </div>
+            <div className="sys-setting-control">
+              <TextInput
+                className="sys-setting-input"
+                value={form?.[walk].intervalSecs ?? ''}
+                onChange={(e) => patch(walk, { intervalSecs: e.target.value })}
+                inputMode="numeric"
+                disabled={!authed || !form || busy}
+                aria-label={`${t(`settings.neighbors.walk.${walk}.name`)} — ${t('settings.neighbors.intervalName')}`}
+              />
+              <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
+              <span className="sys-setting-band muted">
+                {t('settings.retention.band', {
+                  min: saved?.min_interval_secs ?? MIN_NEIGHBOR_INTERVAL_SECS,
+                  max: saved?.max_interval_secs ?? MAX_NEIGHBOR_INTERVAL_SECS,
+                })}
+              </span>
+            </div>
           </div>
         </div>
-        <div className="sys-setting-control">
-          <TextInput
-            className="sys-setting-input"
-            value={form?.intervalSecs ?? ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              setForm((f) => (f ? { ...f, intervalSecs: v } : f));
-              setOk(false);
-            }}
-            inputMode="numeric"
-            disabled={!authed || !form || busy}
-            aria-label={t('settings.neighbors.intervalName')}
-          />
-          <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
-          <span className="sys-setting-band muted">
-            {t('settings.retention.band', {
-              min: saved?.min_interval_secs ?? MIN_NEIGHBOR_INTERVAL_SECS,
-              max: saved?.max_interval_secs ?? MAX_NEIGHBOR_INTERVAL_SECS,
-            })}
-          </span>
-        </div>
-      </div>
+      ))}
       {authed && (
         <div className="sys-setting-actions">
           <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>

@@ -464,6 +464,21 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/discovered-endpoints",
+        GroupFiltered,
+        // Not folded into `get_topology`: a discovered endpoint is inventory, not graph structure —
+        // it has no edges, deliberately (ADR-043 I3) — so `kind=` would be a switch between two
+        // unrelated answers rather than the same question narrowed, which is the fold criterion.
+        Tool("list_discovered_endpoints"),
+    ),
+    (
+        "POST",
+        "/api/v1/discovered-endpoints/:id/import",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/discovery/candidates",
         ADMIN_CFG,
         PENDING_CONFIG_READ,

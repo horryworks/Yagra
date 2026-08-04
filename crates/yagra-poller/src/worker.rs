@@ -137,6 +137,41 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             });
             execute_l3(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
         }
+        CheckSpec::SnmpArp(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_arp(
+                job,
+                transport,
+                at_unix_ms,
+                &check.columns,
+                check.max_rows,
+                timeout,
+                &walker,
+            )
+            .await
+        }
+        CheckSpec::SnmpV3Arp(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
+                user: check.user.clone(),
+                security_level: check.security_level.clone(),
+                auth_protocol: check.auth_protocol.clone(),
+                auth_key: check.auth_key.clone(),
+                priv_protocol: check.priv_protocol.clone(),
+                priv_key: check.priv_key.clone(),
+            });
+            execute_arp(
+                job,
+                transport,
+                at_unix_ms,
+                &check.columns,
+                check.max_rows,
+                timeout,
+                &walker,
+            )
+            .await
+        }
         CheckSpec::MerakiCollect(_) => {
             // Meraki collects fan out to many results and are dispatched via `execute_meraki` in
             // `run_stream`; `execute` (one job → one result) is never used for them. Guard anyway.
@@ -312,6 +347,7 @@ pub async fn execute_meraki(
             dns_chain: None,
             neighbors: None,
             l3: None,
+            arp: None,
             observational: false,
             poller_id: None,
             trace_context: Default::default(),
@@ -599,6 +635,7 @@ async fn execute_table_walk(
         dns_chain: None,
         neighbors: None,
         l3: None,
+        arp: None,
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
@@ -717,6 +754,68 @@ async fn execute_l3(
             // No snapshot, no count sample: the poll observed nothing, and saying "0 addresses"
             // here would be a claim the walk never made.
             tracing::debug!(job_id = %job.job_id, error = %err, "interface-address walk failed");
+        }
+    }
+    r
+}
+
+/// Execute an ARP / IPv6-neighbour walk (v2c or v3, selected by `walker`) — ADR-043 Increment 3.
+///
+/// Shares the three properties of [`execute_neighbors`] and [`execute_l3`] — observational, `Some`
+/// only when the walk produced rows, `Some(empty)` is a real answer — and adds a fourth that is
+/// specific to this check:
+///
+/// * **The row budget comes from the job**, and the truncation flag is derived from it here rather
+///   than inside the assembler. Only this layer knows how many rows it asked for, so only this
+///   layer can tell a full answer from a walk that ran out — and `truncated` is what stops a
+///   partial read of a large table from being published as the whole picture.
+async fn execute_arp(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    columns: &[yagra_bus::SnmpArpColumn],
+    max_rows: u32,
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let bases: Vec<String> = columns.iter().map(|c| c.oid.clone()).collect();
+    // Core decides the fleet-wide budget, but a core that sent nonsense (or a field an N-1 core
+    // never sent at all) must not turn into "walk the whole table": the transport's own ceiling is
+    // the backstop and this is the floor under it.
+    let budget = usize::try_from(max_rows)
+        .unwrap_or(yagra_common::MAX_ARP_WALK_ROWS)
+        .clamp(1, yagra_common::MAX_ARP_WALK_ROWS);
+    let mut r = result(job, at_unix_ms, CheckOutcome::Reachable, Vec::new());
+    r.observational = true;
+    match walker
+        .walk_instances(transport, job.target, &bases, timeout, budget)
+        .await
+    {
+        Ok(rows) => {
+            // The walk stops *at* the budget, so hitting it exactly is the signal that there was
+            // more table behind it. One row short is a complete answer.
+            let walk_truncated = rows.len() >= budget;
+            let summary = crate::arp::assemble(columns, &rows, walk_truncated);
+            if summary.truncated {
+                metrics::counter!("yagra_arp_rows_truncated_total").increment(1);
+                tracing::warn!(
+                    job_id = %job.job_id,
+                    kept = summary.len(),
+                    observed = summary.observed,
+                    "ARP cache exceeded the walk or sample cap; the excess was dropped"
+                );
+            }
+            r.samples.push(Sample::gauge(
+                yagra_common::METRIC_SNMP_ARP_ENTRY_COUNT,
+                f64::from(summary.observed),
+            ));
+            r.arp = Some(summary);
+        }
+        Err(err) => {
+            // No summary, no count sample: the poll observed nothing, and saying "0 endpoints" here
+            // would be a claim the walk never made — one that would then age every discovered
+            // endpoint behind this router out of the table.
+            tracing::debug!(job_id = %job.job_id, error = %err, "ARP walk failed");
         }
     }
     r
@@ -907,6 +1006,7 @@ fn result(
         dns_chain: None,
         neighbors: None,
         l3: None,
+        arp: None,
         observational: false,
         poller_id: None,
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).

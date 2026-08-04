@@ -19,11 +19,11 @@ pub use messages::{
     DiscoveryCredential, DiscoveryJob, DiscoveryResult, DiscoveryV3, DnsCheck, EventKind, EventMsg,
     FlowBatch, FlowRecord, HeartbeatMsg, HttpCheck, IcmpCheck, JobSpec, MerakiCollectCheck,
     MerakiDeviceRef, NodeJobs, PollJob, PollResult, RawFlowDatagram, RawFlowProto, Sample,
-    SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck,
-    SnmpNeighborColumn, SnmpTableCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck,
-    SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext, WorkingSetDelta, WorkingSetSnapshot,
-    CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_RAW_CAPTURE, HEARTBEAT_SECS, OFFLINE_AFTER_SECS,
-    SNAPSHOT_CHUNK_NODES,
+    SnmpArpCheck, SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn,
+    SnmpNeighborCheck, SnmpNeighborColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check,
+    SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext,
+    WorkingSetDelta, WorkingSetSnapshot, CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_RAW_CAPTURE,
+    HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
 pub use nats::{NatsBus, DEFAULT_POOL, POLLER_QUEUE};

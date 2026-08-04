@@ -164,3 +164,57 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   background: var(--bg-secondary);
   box-shadow: inset -1px 0 0 var(--border-color);
 }
+
+/* ── Seen on the network (ADR-043 Increment 3) ─────────────────────────────────
+   Reuses `.disco-h` for the header cells so the two tables on this page cannot drift on type
+   treatment; only the column template differs, because the columns do. */
+.disco-seen-table {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.disco-seen-head,
+.disco-seen-row {
+  display: grid;
+  grid-template-columns: 1.3fr 1.3fr 1.8fr 1.2fr 1.2fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.disco-seen-row {
+  font-size: var(--font-sm);
+}
+
+.disco-seen-row:last-child {
+  border-bottom: none;
+}
+
+.disco-seen-via {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* The coverage line when at least one router's ARP cache was truncated: the list is a floor, not a
+   total, and that has to read as a caveat rather than as ordinary help text. */
+.disco-seen-warn {
+  color: var(--status-warning);
+  font-size: var(--font-sm);
+}
+
+/* Same horizontal-scroll opt-out the candidates table takes (ui-conventions): this is a matrix-like
+   screen with per-row selects, which do not survive being stacked into cards. */
+html[data-viewport='mobile'] .disco-seen-table {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+html[data-viewport='mobile'] .disco-seen-head,
+html[data-viewport='mobile'] .disco-seen-row {
+  grid-template-columns: 150px 150px 200px 150px 150px 120px;
+  width: max-content;
+}

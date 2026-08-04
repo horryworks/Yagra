@@ -699,6 +699,7 @@ mod tests {
             dns_chain: None,
             neighbors: None,
             l3: None,
+            arp: None,
             observational: false,
             poller_id: Some("edge-1".into()),
             trace_context: Default::default(),

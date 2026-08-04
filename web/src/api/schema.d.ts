@@ -653,6 +653,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/discovered-endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Addresses seen on the network that Yagra does not monitor.
+         * @description Built from the ARP / IPv6-neighbour caches of the nodes that *are* monitored, so an endpoint
+         *     appears here only if some monitored router has spoken to it. Requires the ARP walk to be enabled
+         *     (Settings ▸ System settings ▸ Discovery walks); with it off the list is empty, which is an answer
+         *     rather than an outage.
+         *
+         *     `summary.truncated_nodes > 0` means at least one router's cache exceeded its row budget and this
+         *     list is a **sample**, not a complete inventory of the segment.
+         */
+        get: operations["list_discovered_endpoints"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovered-endpoints/{id}/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Promote a discovered endpoint to a monitored node.
+         * @description Builds the same `NewNode` a scan import does and goes through the same writer, so classification
+         *     (`sysDescr` → maker/model) happens on the node's first identity probe exactly as it does for any
+         *     other node — there is no second creation path to keep in step.
+         *
+         *     `409` means the address is already an inventory node. That is not a failure of the import so much
+         *     as an answer: the endpoint stopped being unmonitored between the list being read and the button
+         *     being pressed, and the row is reconciled on the way out so the list stops showing it.
+         */
+        post: operations["import_discovered_endpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/discovery/candidates": {
         parameters: {
             query?: never;
@@ -4479,6 +4531,64 @@ export interface components {
          * @enum {string}
          */
         Direction: "above" | "below";
+        /** @description Keyset cursor for the next page. */
+        DiscoveredEndpointCursor: {
+            /** Format: uuid */
+            id: string;
+            last_seen: string;
+        };
+        /** @description One page of discovered endpoints, most recently seen first. */
+        DiscoveredEndpointPage: {
+            endpoints: components["schemas"]["DiscoveredEndpointRow"][];
+            next?: null | components["schemas"]["DiscoveredEndpointCursor"];
+            summary: components["schemas"]["DiscoveredEndpointSummary"];
+        };
+        /** @description One address the fleet has resolved on the wire but does not monitor. */
+        DiscoveredEndpointRow: {
+            /** @description When it was first seen anywhere in the fleet (RFC 3339). */
+            first_seen: string;
+            /** Format: uuid */
+            id: string;
+            /** @description The endpoint's address. */
+            ip: string;
+            /** @description When it was last confirmed still present (RFC 3339). */
+            last_seen: string;
+            /** @description Its hardware address, lowercase colon-separated hex; `null` for an incomplete ARP entry. */
+            mac?: string | null;
+            /**
+             * Format: uuid
+             * @description The node this address became, once it is monitored; `null` while it is still unmonitored.
+             */
+            promoted_node_id?: string | null;
+            /**
+             * Format: int32
+             * @description The SNMP ifIndex it was resolved on — the port it is behind.
+             */
+            via_ifindex?: number | null;
+            /**
+             * Format: uuid
+             * @description Which monitored node resolved it; `null` once that node has been deleted.
+             */
+            via_node?: string | null;
+        };
+        /** @description How much of the fleet's ARP data this list was built from. */
+        DiscoveredEndpointSummary: {
+            /**
+             * Format: int64
+             * @description How many nodes have reported an ARP/ND cache at all.
+             */
+            nodes_reporting: number;
+            /**
+             * Format: int64
+             * @description Total endpoints observed across the fleet, before dedup and before the unmonitored filter.
+             */
+            observed_total: number;
+            /**
+             * Format: int64
+             * @description How many of those hit a cap, making their contribution a sample rather than a total.
+             */
+            truncated_nodes: number;
+        };
         /**
          * @description Usage of one watched filesystem (or a store-size proxy, e.g. the PostgreSQL database size which
          *     core cannot `statvfs`). `size_bytes == 0` means "total capacity unknown" — the value is a bare
@@ -5415,6 +5525,13 @@ export interface components {
         ImportDiscovered: {
             nodes: components["schemas"]["ImportNode"][];
         };
+        /** @description What to call the endpoint, and what to bind it to, when promoting it to a node. */
+        ImportEndpoint: {
+            credential_id?: string | null;
+            /** @description Node name. Defaults to the address when omitted or blank. */
+            name?: string | null;
+            profile_id?: string | null;
+        };
         /** @description One discovered device the operator chose to add. */
         ImportNode: {
             address: string;
@@ -6098,6 +6215,21 @@ export interface components {
         };
         /** @description How this deployment discovers connectivity: CDP/LLDP neighbours and interface addresses. */
         NeighborConfig: {
+            /**
+             * @description Whether ARP / IPv6-neighbour walks are issued at all. Omitted on update leaves it unchanged.
+             *
+             *     Off unless an operator turns it on: this walk reads a table sized by the network rather than
+             *     by the device, and it is the only discovery walk here that costs a busy switch measurable
+             *     work. What it buys is the only answer nothing else can give — which hosts are on your
+             *     segments that Yagra is not monitoring.
+             */
+            arp_enabled?: boolean | null;
+            /**
+             * Format: int32
+             * @description How often each SNMP node's ARP / IPv6-neighbour tables are walked, in seconds. Omitted on
+             *     update leaves it unchanged.
+             */
+            arp_interval_secs?: number | null;
             /** @description Whether CDP/LLDP neighbour walks are issued at all. */
             enabled: boolean;
             /**
@@ -10411,6 +10543,151 @@ export interface operations {
             };
             /** @description The layout exceeds the document size cap */
             413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_discovered_endpoints: {
+        parameters: {
+            query?: {
+                limit?: number;
+                /** @description Only endpoints seen by this node. */
+                via_node?: string;
+                /** @description Include endpoints that have since become monitored nodes. Default `false`. */
+                include_promoted?: boolean;
+                before_last_seen?: string;
+                before_id?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description One page of unmonitored endpoints, most recently seen first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DiscoveredEndpointPage"];
+                };
+            };
+            /** @description before_last_seen and before_id must be given together, and before_last_seen must be RFC 3339 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks View */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    import_discovered_endpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Discovered-endpoint id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportEndpoint"];
+            };
+        };
+        responses: {
+            /** @description The endpoint is now a monitored node */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportResult"];
+                };
+            };
+            /** @description A binding id that is not a UUID */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such discovered endpoint */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description That address is already a monitored node */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

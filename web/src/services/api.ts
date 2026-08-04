@@ -130,6 +130,8 @@ import type {
   DnsChainHistoryPage,
   NeighborConfig,
   NeighborHistoryPage,
+  DiscoveredEndpointPage,
+  ImportResult,
   DnsRecordType,
   UserKind,
   UserSummary,
@@ -154,6 +156,7 @@ import type {
   RetentionValues,
   CredentialHealth,
 } from '../types/api';
+import type { DiscoverySettingsBody } from '../pages/neighborSettings';
 import { buildUrl, type Op, type Ok, type OptsArg, type PathsWith } from './typedPaths';
 
 /** Request body to create a collection item (scalar or table). */
@@ -635,9 +638,49 @@ export const api = {
   /** Whether this deployment collects adjacency, how often, and the accepted cadence range. */
   getNeighborSettings: (): Promise<NeighborConfig> => apiGet('/api/v1/settings/neighbors'),
 
-  /** Change whether and how often adjacency is collected (applies from the next sweep). */
-  setNeighborSettings: (body: { enabled: boolean; interval_secs: number }): Promise<void> =>
+  /** Change whether and how often the discovery walks run (applies from the next sweep).
+   *
+   *  Every walk's pair is sent, not just the edited one: the server reads an absent field as "leave
+   *  it", which is what keeps an older client from switching a walk it has never heard of off — and
+   *  what would make this client's saves half-apply if it sent a subset. */
+  setNeighborSettings: (body: DiscoverySettingsBody): Promise<void> =>
     apiPut('/api/v1/settings/neighbors', { body }),
+
+  // ── Endpoints seen on the network (ADR-043 Increment 3) ───────────────────────────
+  /** Addresses monitored routers have resolved on the wire that Yagra does **not** monitor.
+   *
+   *  Empty unless ARP discovery is enabled (Settings ▸ System settings ▸ Discovery walks). Check
+   *  `summary.truncated_nodes`: above zero, at least one router's cache exceeded its row budget and
+   *  the list is a sample rather than the whole segment. */
+  listDiscoveredEndpoints: (
+    opts: {
+      limit?: number;
+      viaNode?: string;
+      includePromoted?: boolean;
+      beforeLastSeen?: string;
+      beforeId?: string;
+    } = {},
+  ): Promise<DiscoveredEndpointPage> => {
+    // Both halves of the cursor or neither — the server refuses a half-specified one rather than
+    // ignoring it, so sending one half would be a 400 rather than a silent restart from page one.
+    const cursor = opts.beforeLastSeen && opts.beforeId;
+    return apiGet('/api/v1/discovered-endpoints', {
+      query: {
+        limit: opts.limit,
+        via_node: opts.viaNode,
+        include_promoted: opts.includePromoted,
+        before_last_seen: cursor ? opts.beforeLastSeen : undefined,
+        before_id: cursor ? opts.beforeId : undefined,
+      },
+    });
+  },
+
+  /** Promote a discovered endpoint to a monitored node. `409` ⇒ the address became a node already. */
+  importDiscoveredEndpoint: (
+    id: string,
+    body: { name?: string; profile_id?: string | null; credential_id?: string | null },
+  ): Promise<ImportResult> =>
+    apiPost('/api/v1/discovered-endpoints/{id}/import', { path: { id }, body }),
 
   // ── Cisco Meraki (read-only Dashboard API monitoring) ──────────────────────────────
   /** List the orgs an API key can access (nothing is persisted). Read-only. */

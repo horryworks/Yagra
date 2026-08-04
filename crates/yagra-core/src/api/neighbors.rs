@@ -2,10 +2,17 @@
 //! CDP/LLDP adjacency: what a node currently sees on its ports, how that changed over time, and
 //! whether this deployment collects it at all (ADR-038).
 //!
-//! The two reads are per node and node-scoped; the settings pair is deployment-wide and admin-only.
-//! They are separate endpoints rather than two more fields on `/api/v1/settings/retention` because
-//! they answer a different question and carry a different justification — retention is "how long is
+//! The two reads are per node and node-scoped; the settings are deployment-wide and admin-only.
+//! They are separate endpoints rather than more fields on `/api/v1/settings/retention` because they
+//! answer a different question and carry a different justification — retention is "how long is
 //! anything kept", this is "is a walk being issued, and how often".
+//!
+//! ⚠️ **`NeighborConfig` now carries three walks, not one**: CDP/LLDP adjacency (ADR-038), interface
+//! addresses (ADR-043) and the ARP/ND cache (ADR-043 Increment 3). The name and its first two field
+//! names describe only the first, and are kept verbatim because renaming them would break every
+//! existing client for no gain. Each later pair is `Option`, where absent means "leave that setting
+//! as it is" — the difference between an additive field and a silent regression for a client that
+//! predates it.
 //!
 //! Nothing here writes to a device, and no response carries a credential: adjacency is descriptive
 //! device data (a chassis id, a port name, a peer's sysDescr), untrusted and rendered as such.
@@ -287,6 +294,18 @@ pub(crate) struct NeighborConfig {
     /// update leaves it unchanged.
     #[serde(default)]
     pub l3_interval_secs: Option<u32>,
+    /// Whether ARP / IPv6-neighbour walks are issued at all. Omitted on update leaves it unchanged.
+    ///
+    /// Off unless an operator turns it on: this walk reads a table sized by the network rather than
+    /// by the device, and it is the only discovery walk here that costs a busy switch measurable
+    /// work. What it buys is the only answer nothing else can give — which hosts are on your
+    /// segments that Yagra is not monitoring.
+    #[serde(default)]
+    pub arp_enabled: Option<bool>,
+    /// How often each SNMP node's ARP / IPv6-neighbour tables are walked, in seconds. Omitted on
+    /// update leaves it unchanged.
+    #[serde(default)]
+    pub arp_interval_secs: Option<u32>,
     /// Smallest cadence this deployment accepts, in seconds.
     #[serde(default)]
     pub min_interval_secs: u32,
@@ -315,6 +334,8 @@ async fn get_adjacency_settings(
         interval_secs: s.neighbors_interval_secs,
         l3_enabled: Some(s.l3_enabled),
         l3_interval_secs: Some(s.l3_interval_secs),
+        arp_enabled: Some(s.arp_enabled),
+        arp_interval_secs: Some(s.arp_interval_secs),
         min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
         max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
     }))
@@ -351,6 +372,8 @@ async fn update_neighbor_settings(
         neighbors_interval_secs: body.interval_secs,
         l3_enabled: body.l3_enabled.unwrap_or(current.l3_enabled),
         l3_interval_secs: body.l3_interval_secs.unwrap_or(current.l3_interval_secs),
+        arp_enabled: body.arp_enabled.unwrap_or(current.arp_enabled),
+        arp_interval_secs: body.arp_interval_secs.unwrap_or(current.arp_interval_secs),
     };
     if !next.in_bounds() {
         return Err(ApiError::bad_request(
@@ -462,7 +485,7 @@ mod tests {
                 .in_bounds(),
                 "{bad} should be rejected as a neighbour cadence"
             );
-            // Both cadences are bounded. Checking only the first would let the L3 one through.
+            // Every cadence is bounded. Checking only the first would let the others through.
             assert!(
                 !AdjacencySettings {
                     l3_interval_secs: bad,
@@ -470,6 +493,14 @@ mod tests {
                 }
                 .in_bounds(),
                 "{bad} should be rejected as an interface-address cadence"
+            );
+            assert!(
+                !AdjacencySettings {
+                    arp_interval_secs: bad,
+                    ..AdjacencySettings::default()
+                }
+                .in_bounds(),
+                "{bad} should be rejected as an ARP cadence"
             );
         }
         for ok in [
@@ -480,10 +511,34 @@ mod tests {
             assert!(AdjacencySettings {
                 neighbors_interval_secs: ok,
                 l3_interval_secs: ok,
+                arp_interval_secs: ok,
                 ..AdjacencySettings::default()
             }
             .in_bounds());
         }
+    }
+
+    /// A client that predates the ARP fields must not switch ARP discovery off — nor, more subtly,
+    /// switch it *on*: the body's `None` means "leave it", and both directions are silent failures
+    /// if that is got wrong.
+    #[test]
+    fn an_absent_field_leaves_the_stored_setting_alone() {
+        let body: NeighborConfig =
+            serde_json::from_str(r#"{"enabled":true,"interval_secs":3600}"#).unwrap();
+        assert_eq!(body.arp_enabled, None);
+        assert_eq!(body.arp_interval_secs, None);
+        assert_eq!(body.l3_enabled, None);
+
+        let current = AdjacencySettings {
+            arp_enabled: true,
+            arp_interval_secs: 7200,
+            ..AdjacencySettings::default()
+        };
+        assert!(body.arp_enabled.unwrap_or(current.arp_enabled));
+        assert_eq!(
+            body.arp_interval_secs.unwrap_or(current.arp_interval_secs),
+            7200
+        );
     }
 
     /// The response advertises the range the server actually enforces, so a UI cannot render a
@@ -495,6 +550,8 @@ mod tests {
             interval_secs: 3600,
             l3_enabled: Some(true),
             l3_interval_secs: Some(3600),
+            arp_enabled: Some(false),
+            arp_interval_secs: Some(21_600),
             min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
             max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
         };
