@@ -94,6 +94,19 @@ async fn credential_health(
     _perm: RequireManageCredentials,
     admin: Admin,
 ) -> ApiResult<Json<CredentialHealth>> {
+    Ok(Json(credential_decrypt_health(&admin).await?))
+}
+
+/// Whether every stored credential still decrypts, shared by `GET /api/v1/credentials/health` and
+/// the MCP `get_system_health(section="credentials")` tool (ADR-042 I3a).
+///
+/// **`ManageCredentials`, and the result carries identity only** — id, name and kind of anything
+/// that failed to open, never a length, a key id, or anything derived from the ciphertext
+/// (ADR-018). That is what makes this exemptible from the "secret material" rule: health and names
+/// are not the secret.
+pub(crate) async fn credential_decrypt_health(
+    admin: &super::AdminState,
+) -> Result<CredentialHealth, ApiError> {
     let report = admin.creds.decrypt_report().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -119,11 +132,11 @@ async fn credential_health(
             "stored credentials cannot be decrypted with the loaded KEK"
         );
     }
-    Ok(Json(CredentialHealth {
+    Ok(CredentialHealth {
         decryptable: total - u32::try_from(failures.len()).unwrap_or(0),
         total,
         failures,
-    }))
+    })
 }
 
 /// Reject a structurally invalid secret for its kind, at the edge.

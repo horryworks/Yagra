@@ -562,7 +562,7 @@ async fn test_forward_destination(
 
 /// The `GET /api/v1/forwarding/status` body.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub(super) struct ForwardingStatus {
+pub(crate) struct ForwardingStatus {
     /// Runtime counters, one entry per running destination.
     destinations: Vec<crate::forward::DestStatus>,
     /// Online pollers that cannot attach the original bytes, so their traffic degrades to rendered.
@@ -590,6 +590,19 @@ async fn forwarding_status(
     State(st): State<ApiState>,
     admin: Admin,
 ) -> ApiResult<Json<ForwardingStatus>> {
+    Ok(Json(forwarding_delivery_status(&st, &admin)))
+}
+
+/// Live forwarding delivery status, shared by `GET /api/v1/forwarding/status` and the MCP
+/// `get_system_health(section="forwarding")` tool (ADR-042 I3a).
+///
+/// `ManageConfig`, not `View` — unlike the rest of the self-health family. It names every
+/// destination a deployment tees to, which is closer to the forwarding *configuration* than to a
+/// health counter, and the ledger records that asymmetry rather than smoothing it over.
+pub(crate) fn forwarding_delivery_status(
+    st: &ApiState,
+    admin: &super::AdminState,
+) -> ForwardingStatus {
     let destinations = admin.forward_handle.status();
     let now = std::time::Instant::now();
     let pollers_without_raw_capture = admin
@@ -601,12 +614,12 @@ async fn forwarding_status(
     let pollers_without_flow_relay = admin
         .coordinator
         .pollers_missing_cap(yagra_bus::CAP_FLOW_RELAY, now);
-    Ok(Json(ForwardingStatus {
+    ForwardingStatus {
         destinations,
         pollers_without_raw_capture,
         pollers_without_flow_relay,
         sending: st.is_leader.load(std::sync::atomic::Ordering::Acquire),
-    }))
+    }
 }
 
 #[cfg(test)]

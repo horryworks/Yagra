@@ -292,6 +292,19 @@ async fn fleet_coverage(
     admin: Admin,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<FleetCoverage>> {
+    Ok(Json(coverage(&st, &admin, &scope).await?))
+}
+
+/// Which nodes are actually being monitored, shared by `GET /api/v1/fleet/coverage` and the MCP
+/// `get_fleet_summary(kind="coverage")` tool (ADR-042 I3a).
+///
+/// Group-filtered rather than refused: unlike the state timeline below, coverage still holds node
+/// ids, so a scoped caller gets their own slice.
+pub(crate) async fn coverage(
+    st: &ApiState,
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+) -> Result<FleetCoverage, ApiError> {
     // `list_nodes` is the unscoped internal scan, so the filter is applied to its result here
     // rather than in SQL. Coverage is an admin's periodic blind-spot check over a response that is
     // bounded either way (the watchlist caps at 50), so the extra pass is not on a hot path.
@@ -315,7 +328,7 @@ async fn fleet_coverage(
         .await
         .into_iter()
         .collect();
-    Ok(Json(coverage_of(nodes, &fresh_ids)))
+    Ok(coverage_of(nodes, &fresh_ids))
 }
 
 // ── State timeline ───────────────────────────────────────────────────────────
@@ -385,6 +398,23 @@ async fn fleet_state_history(
     admin: Admin,
     Query(q): Query<StateHistoryQuery>,
 ) -> ApiResult<Json<FleetStateHistory>> {
+    Ok(Json(state_history(&admin, &scope, q.from, q.to).await?))
+}
+
+/// The fleet state timeline, shared by `GET /api/v1/fleet/state-history` and the MCP
+/// `fleet_state_history` tool (ADR-042 I3a).
+///
+/// ⚠️ **The scope refusal and the 90-day bound are both inside this function, deliberately.** A
+/// second surface that called the repo directly would serve a group-scoped caller the whole fleet's
+/// numbers as if they were their own — the exact failure ADR-014 exists to prevent — and would have
+/// no window bound at all. The refusal goes through `scope::require_fleet_wide` rather than being
+/// spelled out here; `no_handler_spells_the_scope_refusal_by_hand` enforces that.
+pub(crate) async fn state_history(
+    admin: &super::AdminState,
+    scope: &super::scope::NodeScope,
+    from: Option<i64>,
+    to: Option<i64>,
+) -> Result<FleetStateHistory, ApiError> {
     // `node_state_snapshots` stores `(ts, state, count)` — the tally was already computed when the
     // snapshot was written, and no node id survives into the row. So there is nothing to filter and
     // nothing to join: a scoped caller cannot be served a narrower timeline from this table at all.
@@ -392,12 +422,12 @@ async fn fleet_state_history(
     // refuses. Making this scopable means snapshotting per group — a schema and writer change, i.e.
     // a feature rather than a filter.
     super::scope::require_fleet_wide(
-        &scope,
+        scope,
         "the fleet state timeline is stored pre-aggregated with no per-node attribution, so it \
          cannot be narrowed to a group-scoped account",
     )?;
-    let to = q.to.unwrap_or_else(super::now_unix_s);
-    let from = q.from.unwrap_or(to - 24 * 3600);
+    let to = to.unwrap_or_else(super::now_unix_s);
+    let from = from.unwrap_or(to - 24 * 3600);
     if to < from || to - from > MAX_HISTORY_SECS {
         return Err(ApiError::bad_request(
             "invalid_range",
@@ -411,7 +441,7 @@ async fn fleet_state_history(
             "failed to load state history",
         )
     })?;
-    Ok(Json(pivot_state_history(rows)))
+    Ok(pivot_state_history(rows))
 }
 
 #[cfg(test)]

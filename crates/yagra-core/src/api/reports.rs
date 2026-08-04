@@ -416,15 +416,28 @@ async fn list_report_runs(
     State(st): State<ApiState>,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<reports::ReportRun>>> {
-    reports_are_fleet_wide(&scope)?;
+    Ok(Json(report_runs(&st, &scope, q.limit).await?))
+}
+
+/// Saved report runs, newest first — shared by `GET /api/v1/reports/runs` and the MCP
+/// `get_report_runs` tool (ADR-042 I3a).
+///
+/// ⚠️ **Refuses a group-scoped caller**, and the refusal is the first thing it does. Skeleton mode
+/// answers an empty list rather than an error, which is the existing REST behaviour and is
+/// preserved here so both surfaces agree.
+pub(crate) async fn report_runs(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    limit: Option<i64>,
+) -> Result<Vec<reports::ReportRun>, ApiError> {
+    reports_are_fleet_wide(scope)?;
     let Some(admin) = st.admin.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
-    let limit = q.limit.unwrap_or(50).clamp(1, 500);
-    let runs = admin.reports.repo().list_runs(limit).await.map_err(|e| {
+    let limit = limit.unwrap_or(50).clamp(1, 500);
+    admin.reports.repo().list_runs(limit).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list report runs", "failed to list report runs")
-    })?;
-    Ok(Json(runs))
+    })
 }
 
 /// One run with its rendered result (the viewer).
@@ -444,7 +457,17 @@ async fn get_report_run(
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<reports::ReportRunDetail>> {
-    reports_are_fleet_wide(&scope)?;
+    Ok(Json(report_run_detail(&st, &scope, id).await?))
+}
+
+/// One saved run with its rendered result — shared by `GET /api/v1/reports/runs/{id}` and the MCP
+/// `get_report_runs(run_id=…)` tool (ADR-042 I3a). Refuses a group-scoped caller, like the list.
+pub(crate) async fn report_run_detail(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    id: Uuid,
+) -> Result<reports::ReportRunDetail, ApiError> {
+    reports_are_fleet_wide(scope)?;
     let admin = st.admin.as_ref().ok_or_else(|| no_run(id))?;
     admin
         .reports
@@ -454,7 +477,6 @@ async fn get_report_run(
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "get report run", "failed to load report run")
         })?
-        .map(Json)
         .ok_or_else(|| no_run(id))
 }
 

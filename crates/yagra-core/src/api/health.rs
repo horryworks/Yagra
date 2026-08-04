@@ -49,9 +49,15 @@ pub(crate) struct VersionInfo {
     ),
 )]
 async fn version() -> Json<VersionInfo> {
-    Json(VersionInfo {
+    Json(running_version())
+}
+
+/// The running core's build version, shared by `GET /api/v1/version` and the MCP
+/// `get_system_health(section="version")` tool (ADR-042 I3a).
+pub(crate) fn running_version() -> VersionInfo {
+    VersionInfo {
         core: env!("CARGO_PKG_VERSION"),
-    })
+    }
 }
 
 /// Client bootstrap config — no secrets.
@@ -82,6 +88,16 @@ pub(crate) struct ClientConfig {
     ),
 )]
 async fn get_config(State(st): State<ApiState>) -> Json<ClientConfig> {
+    Json(client_config(&st).await)
+}
+
+/// The deployment's feature flags, shared by `GET /api/v1/config` and the MCP
+/// `get_system_health(section="deployment")` tool (ADR-042 I3a).
+///
+/// Unauthenticated over REST by design (the WebUI reads it before it has a token). The MCP tool
+/// still requires `View` — parity is about *which questions can be answered*, and MCP has no
+/// pre-login state to bootstrap, so there is no reason to open a second anonymous surface.
+pub(crate) async fn client_config(st: &ApiState) -> ClientConfig {
     let default_poll_interval_secs = match st.admin.as_ref() {
         Some(admin) => admin
             .repo
@@ -100,14 +116,14 @@ async fn get_config(State(st): State<ApiState>) -> Json<ClientConfig> {
         Some(rca) => rca.available().await,
         None => false,
     };
-    Json(ClientConfig {
+    ClientConfig {
         public_dashboard: st.public_dashboard,
         auth_available: st.admin.is_some(),
         sso_enabled,
         rca_enabled,
         flow_enabled: st.flows.is_some(),
         default_poll_interval_secs,
-    })
+    }
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -218,6 +234,15 @@ async fn system_health(
     _guard: RequireView,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<SystemHealth>> {
+    Ok(Json(system_health_snapshot(&st).await))
+}
+
+/// Per-dependency reachability, shared by `GET /api/v1/system-health` and the MCP
+/// `get_system_health(section="dependencies")` tool (ADR-042 I3a).
+///
+/// Infallible: skeleton mode is reported as a `"degraded"` body naming what is missing, never as an
+/// error. Both surfaces need that — this is the answer you want *while* something is broken.
+pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
     let tsdb = DependencyHealth {
         reachable: st.store.healthy().await,
         detail: "VictoriaMetrics (TSDB)".to_owned(),
@@ -292,14 +317,14 @@ async fn system_health(
     } else {
         "degraded"
     };
-    Ok(Json(SystemHealth {
+    SystemHealth {
         overall: overall.to_owned(),
         postgres,
         tsdb,
         logs,
         flow,
         bus,
-    }))
+    }
 }
 
 #[cfg(test)]

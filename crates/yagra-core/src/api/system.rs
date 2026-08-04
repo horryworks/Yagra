@@ -114,6 +114,15 @@ async fn system_hosts(
     _guard: RequireView,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<SystemHostsResponse>> {
+    Ok(Json(host_inventory(&st)))
+}
+
+/// Core plus every poller reporting host telemetry, shared by `GET /api/v1/system/hosts` and the
+/// MCP `get_system_health(section="hosts")` tool (ADR-042 I3a).
+///
+/// Infallible: core is answering the request, so it can always report itself. Skeleton mode returns
+/// core alone rather than an error.
+pub(crate) fn host_inventory(st: &ApiState) -> SystemHostsResponse {
     let mut hosts = Vec::new();
     let core = st.host_sample.lock().ok().and_then(|g| g.clone());
     hosts.push(host_info("core", "core", None, true, core.as_ref()));
@@ -130,7 +139,7 @@ async fn system_hosts(
             }
         }
     }
-    Ok(Json(SystemHostsResponse { hosts }))
+    SystemHostsResponse { hosts }
 }
 
 /// The watched-filesystem mounts for one instance, or `None` when the instance is unknown (⇒ 404).
@@ -214,12 +223,31 @@ async fn host_metric_range(
     Path(instance): Path<String>,
     Query(q): Query<HostRangeQuery>,
 ) -> ApiResult<Json<HostMetricRange>> {
-    let mounts = host_disk_mounts(&st, &instance).ok_or_else(|| {
+    Ok(Json(
+        host_trends(&st, instance, q.from, q.to, q.step).await?,
+    ))
+}
+
+/// One host's resource trends, shared by `GET /api/v1/system/hosts/:instance/metrics/range` and the
+/// MCP `get_system_health(section="host_trends")` tool (ADR-042 I3a).
+///
+/// ⚠️ **`instance` is resolved against the known set before any selector is built** — `core`, or a
+/// poller the live registry knows; anything else is a 404. Nothing the caller typed reaches a
+/// PromQL selector, and keeping that in the seam is what stops a second surface from interpolating
+/// a raw string. The window defaults and the step clamp live here for the same reason.
+pub(crate) async fn host_trends(
+    st: &ApiState,
+    instance: String,
+    from: Option<i64>,
+    to: Option<i64>,
+    step: Option<u64>,
+) -> Result<HostMetricRange, ApiError> {
+    let mounts = host_disk_mounts(st, &instance).ok_or_else(|| {
         ApiError::not_found("host_not_found", format!("unknown instance {instance:?}"))
     })?;
-    let to = q.to.unwrap_or_else(now_unix_s);
-    let from = q.from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
+    let to = to.unwrap_or_else(now_unix_s);
+    let from = from.unwrap_or(to - DEFAULT_RANGE_SECS);
+    let step = clamp_range_step(from, to, step.unwrap_or(DEFAULT_STEP_SECS), 1);
     let store = &st.store;
     // The six scalar series and each mount's two disk series are independent queries — fan them out
     // concurrently, since this backs a 15s System Health refresh.
@@ -247,7 +275,7 @@ async fn host_metric_range(
         }
     }))
     .await;
-    Ok(Json(HostMetricRange {
+    Ok(HostMetricRange {
         instance,
         cpu_pct,
         load1,
@@ -256,7 +284,7 @@ async fn host_metric_range(
         mem_used_bytes,
         mem_total_bytes,
         disks,
-    }))
+    })
 }
 
 #[cfg(test)]

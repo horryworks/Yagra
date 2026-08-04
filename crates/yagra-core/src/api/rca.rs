@@ -51,7 +51,7 @@ pub(super) fn routes() -> Router<ApiState> {
 
 /// The `POST /api/v1/rca` body.
 #[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct RcaBody {
+pub(crate) struct RcaBody {
     /// The alerting node. May be a symptom of an upstream failure — the context builder follows
     /// `root_cause` to the incident before assembling anything.
     node: Uuid,
@@ -136,9 +136,28 @@ async fn create_rca(
     actor: Actor,
     Json(body): Json<RcaBody>,
 ) -> ApiResult<Json<crate::rca::store::RcaReport>> {
-    // Checked before the provider lookup, so an out-of-scope node reads as "no such node" rather
-    // than leaking whether this deployment has an LLM configured.
-    super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(body.node))?;
+    let username = actor.0.unwrap_or_else(|| "(unknown)".to_owned());
+    Ok(Json(explain_incident(&st, &scope, &body, &username).await?))
+}
+
+/// Generate (or serve from cache) an LLM explanation of one incident — shared by
+/// `POST /api/v1/rca` and the MCP `run_rca` tool (ADR-042 I3a).
+///
+/// ⚠️ **The scope check runs before the provider lookup, and that ordering is a disclosure
+/// property**: an out-of-scope node must read as "no such node" rather than revealing, through the
+/// difference between 404 and 503, whether this deployment has an LLM configured at all.
+///
+/// A *read wearing POST* — it changes no configuration — but it is the one read with an external
+/// side effect (provider egress and token spend), which is why it is `AckAlerts` rather than `View`
+/// on both surfaces and why both surfaces audit it. `username` is the caller's audit identity: the
+/// `Actor` extractor over REST, `McpIdentity.actor` over MCP.
+pub(crate) async fn explain_incident(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    body: &RcaBody,
+    username: &str,
+) -> Result<crate::rca::store::RcaReport, ApiError> {
+    super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(body.node))?;
     let rca = st.rca.as_ref().ok_or_else(ApiError::admin_unavailable)?;
     let req = crate::rca::orchestrator::RcaRequest {
         node: yagra_common::NodeId::from(body.node),
@@ -146,10 +165,9 @@ async fn create_rca(
         window_secs: body.window_secs,
         language: crate::rca::prompt::Language::from_tag(body.language.as_deref().unwrap_or("en")),
         force: body.force,
-        username: actor.0.unwrap_or_else(|| "(unknown)".to_owned()),
+        username: username.to_owned(),
     };
-    let report = rca.explain(&req).await.map_err(|e| rca_error(&e))?;
-    Ok(Json(report))
+    rca.explain(&req).await.map_err(|e| rca_error(&e))
 }
 
 /// The `GET /api/v1/llm/config` body.

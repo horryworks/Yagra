@@ -47,22 +47,36 @@ async fn list_audit(
     admin: Admin,
     Query(q): Query<AuditQuery>,
 ) -> ApiResult<Json<Vec<crate::audit::AuditRow>>> {
+    Ok(Json(
+        audit_page(&admin, q.limit, q.before.as_deref()).await?,
+    ))
+}
+
+/// A page of the audit log, newest first — shared by `GET /api/v1/audit` and the MCP `get_audit`
+/// tool (ADR-042 I3a).
+///
+/// **`ViewAudit`, not `View`.** Also note this goes through `AuditRepo::list`, which is where the
+/// `1..=MAX_LIMIT` clamp lives — a caller that rebuilt the query itself would inherit no bound.
+pub(crate) async fn audit_page(
+    admin: &super::AdminState,
+    limit: Option<i64>,
+    before: Option<&str>,
+) -> Result<Vec<crate::audit::AuditRow>, ApiError> {
     // An unparseable cursor is rejected, not dropped: silently returning the newest page instead of
     // the requested one makes a paging bug look like "you have reached the end".
-    let before = match q.before.as_deref() {
+    let before = match before {
         Some(s) => Some(parse_rfc3339(s).ok_or_else(|| {
             ApiError::bad_request("invalid_cursor", "before must be an RFC 3339 timestamp")
         })?),
         None => None,
     };
-    let rows = admin
+    admin
         .audit
-        .list(q.limit.unwrap_or(crate::audit::DEFAULT_LIMIT), before)
+        .list(limit.unwrap_or(crate::audit::DEFAULT_LIMIT), before)
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "list audit log", "failed to list the audit log")
-        })?;
-    Ok(Json(rows))
+        })
 }
 
 #[cfg(test)]

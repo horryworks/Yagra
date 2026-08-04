@@ -18,7 +18,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::pool_resolver;
-use super::ApiState;
+use super::{AdminState, ApiState};
 use crate::coordinator::PollerView;
 use crate::pollers::PollerRow;
 use crate::poolres::PoolSource;
@@ -82,7 +82,7 @@ async fn poller_health(
 /// One poller in the `GET /api/v1/pollers` response — a merge of the live registry (current
 /// status/telemetry) and the durable inventory (so an offline poller still lists). No secrets.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PollerInfo {
+pub(crate) struct PollerInfo {
     /// Sanitized poller id (stable across restarts).
     id: String,
     /// Pool it serves (live view wins; else the durable row).
@@ -120,7 +120,7 @@ pub(super) struct PollerInfo {
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
 /// and a warning when it has nodes but no live poller (they would go unmonitored).
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PoolSummary {
+pub(crate) struct PoolSummary {
     /// Pool name (`default` for unassigned nodes).
     pool: String,
     /// Non-Meraki nodes assigned to this pool.
@@ -135,7 +135,7 @@ pub(super) struct PoolSummary {
 
 /// The `GET /api/v1/pollers` body: the fleet of pollers + the per-pool summary.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PollersResponse {
+pub(crate) struct PollersResponse {
     pollers: Vec<PollerInfo>,
     pools: Vec<PoolSummary>,
 }
@@ -264,6 +264,17 @@ fn build_pollers_response(
     ),
 )]
 async fn list_pollers(_guard: RequireView, admin: Admin) -> ApiResult<Json<PollersResponse>> {
+    Ok(Json(poller_inventory(&admin).await))
+}
+
+/// The poller fleet and per-pool summary, shared by `GET /api/v1/pollers` and the MCP
+/// `get_system_health(section="pollers")` tool (ADR-042 I3a).
+///
+/// Infallible by construction: every read here degrades to a partial answer rather than failing
+/// (ADR-017), because "which pollers exist" is the question an operator asks *while* something is
+/// broken. Keeping that in the seam is the point — a second surface reimplementing it would be one
+/// `?` away from failing the page the moment the inventory read hiccups.
+pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
     let now = Instant::now();
     // The in-memory registry is the source of truth for liveness (ADR-009).
     let live = admin.coordinator.poller_views(now);
@@ -279,7 +290,7 @@ async fn list_pollers(_guard: RequireView, admin: Admin) -> ApiResult<Json<Polle
     // Effective pool, so a node inheriting from its folder is counted under the pool that actually
     // polls it. A folder-read error degrades to "no inheritance" for the *summary only* — it never
     // reaches the scheduler, so a wrong count here cannot misroute polling.
-    let resolver = pool_resolver(&admin).await;
+    let resolver = pool_resolver(admin).await;
     let mut node_pools: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     match admin.repo.list_nodes().await {
         Ok(nodes) => {
@@ -294,12 +305,12 @@ async fn list_pollers(_guard: RequireView, admin: Admin) -> ApiResult<Json<Polle
         }
         Err(e) => tracing::error!(error = %e, "list nodes for pool summary failed"),
     }
-    Ok(Json(build_pollers_response(inventory, live, node_pools)))
+    build_pollers_response(inventory, live, node_pools)
 }
 
 /// Which poller currently polls a node — the node detail's "Polled by" fact.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PolledBy {
+pub(crate) struct PolledBy {
     /// One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`.
     state: &'static str,
     /// The owning poller; set only in the `assigned` state.
@@ -309,7 +320,7 @@ pub(super) struct PolledBy {
 /// `GET /api/v1/nodes/:id/assignment` — the node's effective pool, where that pool came from, and
 /// which poller currently holds it.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct NodeAssignment {
+pub(crate) struct NodeAssignment {
     /// Effective pool: the node's own, else the nearest ancestor folder's, else the default.
     pool: String,
     pool_source: PoolSource,
@@ -387,6 +398,20 @@ async fn node_assignment(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<NodeAssignment>> {
+    Ok(Json(node_assignment_of(&st, &admin, node_id).await?))
+}
+
+/// One node's effective pool and owning poller, shared by `GET /api/v1/nodes/:id/assignment` and
+/// the MCP `get_node_status(include_assignment=true)` tool (ADR-042 I3a).
+///
+/// **The caller checks visibility first.** This takes an already-authorized node id — REST via the
+/// `VisibleNode` extractor, MCP via `deny_invisible_node` — because the answer names a poller and a
+/// pool, which is inventory an out-of-scope caller must not learn even in the negative.
+pub(crate) async fn node_assignment_of(
+    st: &ApiState,
+    admin: &AdminState,
+    node_id: Uuid,
+) -> Result<NodeAssignment, ApiError> {
     let node = admin
         .repo
         .get_node(node_id)
@@ -399,7 +424,7 @@ async fn node_assignment(
             )
         })?
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
-    let resolved = pool_resolver(&admin).await.resolve(&node);
+    let resolved = pool_resolver(admin).await.resolve(&node);
     let now = Instant::now();
     // Best-effort, like the node detail's own Meraki lookup: a read failure just means the Meraki
     // case below is not special-cased.
@@ -415,12 +440,12 @@ async fn node_assignment(
         admin.coordinator.owner_of(node.id, now),
         admin.coordinator.live_pools(now).contains(&resolved.pool),
     );
-    Ok(Json(NodeAssignment {
+    Ok(NodeAssignment {
         pool: resolved.pool,
         pool_source: resolved.source,
         pool_source_group_id: resolved.group,
         polled_by,
-    }))
+    })
 }
 
 /// Largest node page the poller drill-down returns. A poller in a big pool can hold tens of
@@ -436,14 +461,14 @@ pub(super) struct PollerNodesQuery {
 
 /// One node in the poller drill-down.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PollerNodeRef {
+pub(crate) struct PollerNodeRef {
     id: Uuid,
     name: String,
 }
 
 /// `GET /api/v1/pollers/:id/nodes` body.
 #[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PollerNodesResponse {
+pub(crate) struct PollerNodesResponse {
     poller_id: String,
     /// The pool it serves; `null` unless it is live.
     pool: Option<String>,
@@ -479,35 +504,52 @@ async fn poller_nodes(
     Path(id): Path<String>,
     Query(q): Query<PollerNodesQuery>,
 ) -> ApiResult<Json<PollerNodesResponse>> {
-    let empty = |poller_id: String, state: &'static str| {
-        Json(PollerNodesResponse {
-            poller_id,
-            pool: None,
-            state,
-            total: 0,
-            truncated: false,
-            nodes: Vec::new(),
-        })
+    Ok(Json(
+        poller_nodes_page(&st, &admin, id, q.limit, &scope).await,
+    ))
+}
+
+/// The nodes a poller currently holds, shared by `GET /api/v1/pollers/:id/nodes` and the MCP
+/// `get_system_health(section="poller_nodes")` tool (ADR-042 I3a).
+///
+/// ⚠️ **The scope filter runs before the count, and that ordering is the security property.**
+/// `total` and `truncated` are part of the answer, so deriving them from the poller's full working
+/// set would tell a scoped caller how many nodes it holds outside their scope — the count leaks as
+/// much as the ids would. Keeping this in one function is what stops the second surface from
+/// filtering the page but counting the whole set.
+///
+/// `limit` is clamped here rather than at either edge, so neither surface can ask for more.
+pub(crate) async fn poller_nodes_page(
+    st: &ApiState,
+    admin: &AdminState,
+    id: String,
+    limit: Option<usize>,
+    scope: &super::scope::NodeScope,
+) -> PollerNodesResponse {
+    let empty = |poller_id: String, state: &'static str| PollerNodesResponse {
+        poller_id,
+        pool: None,
+        state,
+        total: 0,
+        truncated: false,
+        nodes: Vec::new(),
     };
     // An HA standby runs no coordinator, so its empty registry would otherwise read as "this poller
     // holds nothing" rather than "this core cannot know".
     if !st.is_leader.load(std::sync::atomic::Ordering::Acquire) {
-        return Ok(empty(id, "unknown"));
+        return empty(id, "unknown");
     }
     let now = Instant::now();
     let Some(owned) = admin.coordinator.published_nodes(&id, now) else {
-        return Ok(empty(id, "offline"));
+        return empty(id, "offline");
     };
-    let limit = q
-        .limit
-        .unwrap_or(POLLER_NODES_MAX)
-        .clamp(1, POLLER_NODES_MAX);
+    let limit = limit.unwrap_or(POLLER_NODES_MAX).clamp(1, POLLER_NODES_MAX);
     // Filter before counting, not after: `total` and `truncated` are part of the answer, so
     // deriving them from the poller's full working set would tell a scoped caller how many nodes it
     // holds outside their scope — the count is as much of a leak as the ids would be.
     let owned: Vec<NodeId> = owned
         .into_iter()
-        .filter(|n| scope.allows_node(&st, *n))
+        .filter(|n| scope.allows_node(st, *n))
         .collect();
     let total = owned.len();
     let truncated = total > limit;
@@ -541,14 +583,14 @@ async fn poller_nodes(
     // Paged by uuid (stable), presented by name (useful).
     nodes.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
     let pool = admin.coordinator.pool_of(&id, now);
-    Ok(Json(PollerNodesResponse {
+    PollerNodesResponse {
         poller_id: id,
         pool,
         state: "assigned",
         total,
         truncated,
         nodes,
-    }))
+    }
 }
 
 /// Recent core↔poller visibility outages (Phase 3, store-and-forward). Newest first, capped. A read
@@ -566,15 +608,21 @@ async fn list_monitoring_gaps(
     _guard: RequireView,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::pollers::MonitoringGapRow>>> {
-    let gaps = admin
+    Ok(Json(monitoring_gaps(&admin).await))
+}
+
+/// Recent core↔poller visibility outages, shared by `GET /api/v1/monitoring-gaps` and the MCP
+/// `get_system_health(section="monitoring_gaps")` tool (ADR-042 I3a). The 200-row cap lives here so
+/// neither surface can ask for the whole history.
+pub(crate) async fn monitoring_gaps(admin: &AdminState) -> Vec<crate::pollers::MonitoringGapRow> {
+    admin
         .pollers
         .list_monitoring_gaps(200)
         .await
         .unwrap_or_else(|e| {
             tracing::warn!(error = %e, "list monitoring gaps failed; returning empty");
             Vec::new()
-        });
-    Ok(Json(gaps))
+        })
 }
 
 /// Remove a decommissioned poller from the durable inventory.

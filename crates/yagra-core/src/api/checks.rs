@@ -806,6 +806,20 @@ async fn get_dns_chain(
     admin: Admin,
     Path(node_id): Path<Uuid>,
 ) -> ApiResult<Json<DnsChainCurrent>> {
+    Ok(Json(dns_chain_current(&admin, node_id).await?))
+}
+
+/// A DNS-monitor node's current resolution chain — shared by
+/// `GET /api/v1/nodes/{node_id}/dns-chain` and the MCP `get_dns_chain` tool (ADR-042 I3a).
+///
+/// **The caller checks node visibility first** (REST via `VisibleNode`, MCP via
+/// `deny_invisible_node`). "No resolution recorded" is a typed 404, which the MCP layer turns into
+/// an `available: false` body rather than a hard error — a node that has simply never resolved is
+/// an answer, not a fault.
+pub(crate) async fn dns_chain_current(
+    admin: &super::AdminState,
+    node_id: Uuid,
+) -> Result<DnsChainCurrent, ApiError> {
     let current = admin
         .dns_checks
         .current_chain(node_id)
@@ -819,13 +833,13 @@ async fn get_dns_chain(
                 format!("no resolution recorded for node {node_id}"),
             )
         })?;
-    Ok(Json(DnsChainCurrent {
+    Ok(DnsChainCurrent {
         chain: current.chain,
         resolved: current.resolved,
         failure_kind: current.failure_kind,
         first_seen: current.first_seen.to_rfc3339(),
         last_seen: current.last_seen.to_rfc3339(),
-    }))
+    })
 }
 
 /// One append-on-change history row.
@@ -856,7 +870,7 @@ pub(crate) struct DnsChainHistory {
 
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
-pub(super) struct DnsHistoryQuery {
+pub(crate) struct DnsHistoryQuery {
     #[serde(default)]
     limit: Option<i64>,
     #[serde(default)]
@@ -906,6 +920,22 @@ async fn list_dns_chain_history(
     Path(node_id): Path<Uuid>,
     Query(q): Query<DnsHistoryQuery>,
 ) -> ApiResult<Json<DnsChainHistory>> {
+    Ok(Json(dns_chain_history(&admin, node_id, &q).await?))
+}
+
+/// One page of a DNS-monitor node's chain changes — shared by
+/// `GET /api/v1/nodes/{node_id}/dns-chain/history` and the MCP `get_dns_chain(history=true)` tool
+/// (ADR-042 I3a).
+///
+/// Takes the query struct rather than loose parts so the **keyset-cursor rule travels with it**:
+/// `DnsHistoryQuery::cursor` rejects a half-specified cursor instead of ignoring it, because
+/// silently restarting from the top makes a client loop over the first page forever while looking
+/// like it is making progress. The limit clamp is here for the same reason.
+pub(crate) async fn dns_chain_history(
+    admin: &super::AdminState,
+    node_id: Uuid,
+    q: &DnsHistoryQuery,
+) -> Result<DnsChainHistory, ApiError> {
     let limit = q
         .limit
         .unwrap_or(DNS_HISTORY_DEFAULT_LIMIT)
@@ -931,7 +961,7 @@ async fn list_dns_chain_history(
             at: r.at.to_rfc3339(),
             id: r.id,
         });
-    Ok(Json(DnsChainHistory {
+    Ok(DnsChainHistory {
         changes: rows
             .into_iter()
             .map(|r| DnsChainChange {
@@ -944,7 +974,7 @@ async fn list_dns_chain_history(
             })
             .collect(),
         next,
-    }))
+    })
 }
 
 #[cfg(test)]
