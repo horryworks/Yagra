@@ -11,6 +11,25 @@
 ## Unreleased
 
 ### New Features
+- **An AI client can now ask whether Yagra itself is healthy.** The MCP surface had no way to see
+  the monitoring system's own state, which matters more than it sounds: with no way to tell that a
+  poller is offline or a store unreachable, a model reads missing data as a healthy quiet and
+  reports that the fleet is fine. Six new tools close that (`/mcp`, off by default):
+  - **`get_system_health(section=…)`** — the poller fleet and per-pool summary, poll-loop counters,
+    which nodes one poller holds, which poller owns one node, recent core↔poller outages,
+    per-store reachability, core/poller host resources and their trends, forwarding delivery
+    status, whether stored credentials still decrypt, the running version, and which optional
+    tiers are enabled.
+  - **`get_report_runs`**, **`get_audit`** (who changed or acknowledged what),
+    **`fleet_state_history`**, **`get_dns_chain`**, and **`run_rca`** — an LLM explanation of one
+    incident, the same one the WebUI's "Explain this incident" produces.
+  - **`get_fleet_summary(kind="coverage")`** answers which nodes have actually reported recently,
+    with a watchlist of the ones that have not.
+  - **Sections require different permissions, matching the WebUI exactly**: most need view,
+    forwarding status needs manage-config, credential health needs manage-credentials, the audit
+    log needs view-audit, and `run_rca` needs ack-alerts. Read-only does not mean
+    readable-by-anyone. Reports and the state timeline refuse a group-scoped token rather than
+    showing it the whole fleet, as the REST endpoints do.
 - **The network map now finds the links that share no subnet.** Until now a link was derived from
   two devices holding an address in the same prefix, which structurally cannot see a point-to-point
   `/32` (a PPPoE `Dialer`, a tunnel endpoint), an unnumbered OSPF link, or a peering across a
@@ -101,6 +120,12 @@
   it would ever be suppressed while the screen showed the feature as on.
 - **`PUT /api/v1/settings/topology`** sets the mode (`manual` / `shadow` / `derived`). There is
   deliberately no matching `GET`: the current mode is part of the `/topology/shadow` response.
+
+### Bug Fixes
+- **A Troubleshoot analysis started over MCP now appears in the audit log.** The identical run
+  started from the WebUI or the REST API was recorded; the one launched through `/mcp` left no
+  trace at all, because auditing is REST middleware that the MCP surface does not pass through. Any
+  deployment with `/mcp` enabled has been under-recording who started analyses.
 
 ### Improvements
 - The **Dependency / root-cause dashboard widget** now lists each root cause with the alerts rolled
