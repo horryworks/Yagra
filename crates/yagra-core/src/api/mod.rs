@@ -291,6 +291,11 @@ pub struct ApiState {
     /// double-do. Whether it actually *works* depends on an operator having configured a provider;
     /// with no config row every RCA endpoint answers 503 and no request leaves the building.
     pub rca: Option<Arc<crate::rca::orchestrator::RcaOrchestrator>>,
+    /// The WebUI's own TLS certificate (ADR-044); `None` in skeleton mode. Present on every core:
+    /// materializing is idempotent and content-addressed, so there is nothing for a standby to
+    /// double-do, and a standby that starts first on a fresh database still has to be able to
+    /// bootstrap one or the web container waits forever.
+    pub webtls: Option<Arc<crate::webtls::WebTlsRepo>>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -545,6 +550,7 @@ mod tests {
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
             rca: None,
+            webtls: None,
         }
     }
 
@@ -578,6 +584,7 @@ mod tests {
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
             rca: None,
+            webtls: None,
         };
         (state, token)
     }
@@ -609,6 +616,7 @@ mod tests {
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: false,
             rca: None,
+            webtls: None,
         };
         (state, token)
     }

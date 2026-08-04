@@ -306,6 +306,7 @@ mod tests {
             oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
             enable_mcp: true,
             rca: None,
+            webtls: None,
         }
     }
 

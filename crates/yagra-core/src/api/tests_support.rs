@@ -36,6 +36,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         oidc_flight: Arc::new(crate::oidc::OidcFlight::new()),
         enable_mcp: false,
         rca: None,
+        webtls: None,
     }
 }
 

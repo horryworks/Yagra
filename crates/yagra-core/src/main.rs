@@ -76,11 +76,14 @@ mod stored_enum;
 mod thresholds;
 mod tls;
 mod token;
+// Storage + volume materialization for the WebUI's certificate (ADR-044). `server_cert` decides
+// what is acceptable; this decides where it lives.
 mod topology_links;
 mod topology_mode;
 mod topology_projection;
 mod url_check;
 mod volatile;
+mod webtls;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -780,6 +783,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Directory login (LDAP/AD, ADR-041): the single configuration row, with the service account's
     // bind password sealed by the same KEK. No in-flight map — there is no redirect leg.
     let ldap = Some(Arc::new(ldap::LdapRepo::new(repo.pool(), kek.clone())));
+    // The WebUI's own TLS certificate (ADR-044). Same KEK as every other secret; the directory is
+    // where the certificate is materialized for nginx to read, and is absent on a deployment that
+    // terminates TLS somewhere else.
+    let webtls = Arc::new(webtls::WebTlsRepo::new(
+        repo.pool(),
+        kek.clone(),
+        std::env::var("YAGRA_TLS_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from),
+    ));
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
@@ -803,7 +817,34 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         oidc_flight,
         enable_mcp: cfg.enable_mcp,
         rca,
+        webtls: Some(webtls.clone()),
     };
+
+    // Establish the certificate BEFORE the listener binds, so "core is healthy" implies the file
+    // nginx is about to open already exists — which is what turns the compose files'
+    // `depends_on: core: {condition: service_healthy}` into a guarantee instead of a race that
+    // usually goes the right way. Deliberately not leader-gated: on a fresh database a standby that
+    // starts first must still be able to bootstrap one, or `web` waits forever for a file the leader
+    // has not been elected to write.
+    let tls_names = webtls::configured_names();
+    webtls.ensure_ready(&tls_names).await;
+    {
+        // Renewal. Also not leader-gated, and safe not to be: the write is content-addressed and
+        // atomic, so two cores producing the same bytes is a no-op, and only a self-signed
+        // certificate is ever replaced.
+        let webtls = webtls.clone();
+        let shutdown_renew = shutdown.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(webtls::RENEWAL_CHECK_INTERVAL);
+            tick.tick().await; // the first tick is immediate, and ensure_ready just ran
+            loop {
+                tokio::select! {
+                    () = shutdown_renew.cancelled() => break,
+                    _ = tick.tick() => webtls.ensure_ready(&tls_names).await,
+                }
+            }
+        });
+    }
 
     if cfg.enable_ha {
         // Standby until the advisory lock is won. The API (incl. `/healthz`) already serves below,
@@ -1288,6 +1329,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         enable_mcp: false,
         // No metadata store ⇒ nowhere to keep a provider config or a report; the RCA endpoints 503.
         rca: None,
+        webtls: None,
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }
