@@ -1196,6 +1196,26 @@ mod tests {
         ),
     ];
 
+    /// The distinct tool names passed as the first argument to `fname(` in `src`.
+    ///
+    /// Tolerates the call being wrapped across lines, which a literal `fname("` needle does not —
+    /// see the note in [`every_typed_tool_result_is_canaried`]. Anything that is not
+    /// `fname(<whitespace>"…"` is skipped rather than guessed at.
+    fn call_sites(src: &str, fname: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for chunk in src.split(&format!("{fname}(")).skip(1) {
+            let rest = chunk.trim_start();
+            let Some(inner) = rest.strip_prefix('"') else {
+                continue;
+            };
+            let name: String = inner.chars().take_while(|c| *c != '"').collect();
+            if !name.is_empty() && !out.contains(&name) {
+                out.push(name);
+            }
+        }
+        out
+    }
+
     /// **Every `ok_json` call site names a type the canary instantiates.**
     ///
     /// Reads `tools.rs` for the call sites rather than the tool declarations, because the risk is
@@ -1207,15 +1227,14 @@ mod tests {
         let dto_src = include_str!("dto.rs");
         // `tools.rs` is a different file, so a literal needle is safe here; the canary-body needles
         // below read this file and are assembled at runtime for the usual reason.
-        let mut sites = Vec::new();
-        for chunk in tools_src.split("ok_json(\"").skip(1) {
-            let name: String = chunk.chars().take_while(|c| *c != '"').collect();
-            if !name.is_empty() && !sites.contains(&name) {
-                sites.push(name);
-            }
-        }
+        //
+        // The tool name is read *after skipping whitespace*, not straight after the paren. The
+        // needle used to be `ok_json("`, which silently missed a call rustfmt had wrapped —
+        // `list_suppressions` was already invisible to it, and since the floor sat exactly on the
+        // count, the next tool written that way would have been skipped without moving it.
+        let sites = call_sites(tools_src, "ok_json");
         assert!(
-            sites.len() >= 19,
+            sites.len() >= 21,
             "only matched {} ok_json call sites; the parser drifted",
             sites.len()
         );
@@ -1260,6 +1279,18 @@ mod tests {
             assert!(
                 !TOOL_RESULT_TYPES.iter().any(|(t, _)| t == tool),
                 "`{tool}` is in both result lists; it can only be one"
+            );
+        }
+
+        // …and the other direction, which nothing checked before: a tool that builds its result
+        // inline must *say* so. Without this, "in neither list" was the quiet way past both halves
+        // of the canary — the exact shape of hole that let `poll_now` return `pool` uncovered.
+        for tool in call_sites(tools_src, "ok_json_value") {
+            assert!(
+                TOOLS_WITH_INLINE_RESULTS.iter().any(|(t, _)| *t == tool),
+                "MCP tool `{tool}` builds its result inline but is not listed in \
+                 TOOLS_WITH_INLINE_RESULTS; add a row saying what it returns and why the canary \
+                 has nothing to hold"
             );
         }
     }
