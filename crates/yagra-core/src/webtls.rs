@@ -117,6 +117,16 @@ pub struct WebTlsView {
     pub key_unreadable: bool,
 }
 
+/// The WebUI certificate's contribution to System Health.
+#[derive(Debug, Clone, Copy)]
+pub struct TlsHealth {
+    /// `false` only when an operator has to act. See [`WebTlsRepo::health`].
+    pub ok: bool,
+    /// Days until expiry; negative once it has passed.
+    pub days: i64,
+    pub source: TlsCertSource,
+}
+
 /// A decrypted row, or the reason there is nothing usable.
 enum Stored {
     /// No row: nothing has ever been generated or imported.
@@ -185,6 +195,33 @@ impl WebTlsRepo {
             materialized,
             key_unreadable,
         }))
+    }
+
+    /// A one-line verdict for System Health, and the gauge value behind it.
+    ///
+    /// Reads only the plaintext metadata columns — no decrypt, no file read — because this is on a
+    /// page that gets polled, unlike [`Self::view`] which answers one operator's deliberate visit.
+    ///
+    /// `ok = false` is reserved for "somebody has to do something": expired, or an **imported**
+    /// certificate inside the renewal window. A self-signed one near expiry is not a problem — it
+    /// renews itself — and reporting it as degraded would teach operators that degraded means
+    /// nothing. Returns `None` when there is no certificate at all, which callers report the way
+    /// they report an unconfigured optional store.
+    pub async fn health(&self) -> anyhow::Result<Option<TlsHealth>> {
+        let Some(row) = sqlx::query(HEALTH_SQL).fetch_optional(&self.pool).await? else {
+            return Ok(None);
+        };
+        let source = TlsCertSource::from_stored(&row.try_get::<String, _>("source")?);
+        let not_after: DateTime<Utc> = row.try_get("not_after")?;
+        let days = (not_after - Utc::now()).num_days();
+        let ok = if days < 0 {
+            false
+        } else if source.may_regenerate() {
+            true
+        } else {
+            days > RENEW_WITHIN_DAYS
+        };
+        Ok(Some(TlsHealth { ok, days, source }))
     }
 
     async fn load(&self) -> anyhow::Result<Stored> {
@@ -299,6 +336,7 @@ impl WebTlsRepo {
     /// not write a certificate takes the API down as well as the UI, and the web container already
     /// fails loudly and specifically on its own. Two clear signals beat one silent one.
     pub async fn ensure_ready(&self, names: &[String]) {
+        self.publish_expiry_gauge().await;
         match self.load().await {
             Ok(Stored::Ready { source, cert }) => {
                 if source.may_regenerate() && cert.expires_within(RENEW_WITHIN_DAYS, Utc::now()) {
@@ -348,6 +386,27 @@ impl WebTlsRepo {
                 }
             }
             Err(e) => tracing::error!(error = %e, "could not read the WebUI TLS certificate"),
+        }
+    }
+
+    /// Publish days-until-expiry so an operator's own Prometheus can alert on it.
+    ///
+    /// Self-observability rather than a Yagra alert: the alert engine is for monitored devices, and
+    /// routing a fact about Yagra's own configuration through it would need a synthetic node. A
+    /// gauge plus the System Health verdict says the same thing through mechanisms that already
+    /// exist. Zero cardinality — one series, no labels.
+    async fn publish_expiry_gauge(&self) {
+        if let Ok(Some(h)) = self.health().await {
+            #[allow(clippy::cast_precision_loss)] // days fits a f64 exactly at any plausible value
+            metrics::gauge!("yagra_web_tls_expires_in_days").set(h.days as f64);
+            if !h.ok {
+                tracing::warn!(
+                    days = h.days,
+                    source = h.source.as_str(),
+                    "the WebUI TLS certificate needs attention — import a replacement at \
+                     Settings ▸ TLS"
+                );
+            }
         }
     }
 
@@ -503,6 +562,10 @@ const VIEW_SQL: &str = "SELECT t.source, t.certificate, t.subject, t.issuer, t.s
      u.username AS imported_by_username \
      FROM web_tls_config t LEFT JOIN users u ON u.id = t.imported_by \
      WHERE t.id = 1";
+
+/// Two plaintext columns, for the polled health check. Kept separate from [`VIEW_SQL`] so the page
+/// that refreshes on a timer never pays for the join or the certificate body.
+const HEALTH_SQL: &str = "SELECT source, not_after FROM web_tls_config WHERE id = 1";
 
 /// Everything [`WebTlsRepo::load`] needs, including the seal.
 ///

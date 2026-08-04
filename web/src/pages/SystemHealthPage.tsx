@@ -86,6 +86,7 @@ function DependencyHealthCard() {
           <DependencyRow name={t('health.deps.logs')} dep={data?.logs} />
           <DependencyRow name={t('health.deps.flow')} dep={data?.flow} />
           <DependencyRow name={t('health.deps.bus')} dep={data?.bus} />
+          <DependencyRow name={t('health.deps.webTls')} dep={data?.web_tls} />
         </ul>
       )}
     </Card>

@@ -135,7 +135,8 @@
       "tsdb": "VictoriaMetrics (TSDB)",
       "logs": "VictoriaLogs (event log)",
       "flow": "ClickHouse (flow store)",
-      "bus": "NATS bus"
+      "bus": "NATS bus",
+      "webTls": "WebUI TLS certificate"
     },
     "cards": {
       "pollLoop": "Poll-loop health",

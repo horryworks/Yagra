@@ -195,6 +195,9 @@ pub(crate) struct SystemHealth {
     flow: DependencyHealth,
     /// NATS — **inferred** from a recent scheduler sweep, not a direct ping.
     bus: DependencyHealth,
+    /// The WebUI's TLS certificate. Reported unhealthy only when someone has to act: it has expired,
+    /// or an imported certificate is inside its last 30 days. A self-signed one renews itself.
+    web_tls: DependencyHealth,
 }
 
 /// Whether the last scheduler sweep is recent enough to treat the bus as healthy.
@@ -307,11 +310,44 @@ pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
         ),
     };
 
+    // The WebUI's own certificate (ADR-044). Here rather than on a page of its own because this is
+    // the one place that already answers "is Yagra itself healthy", and an expired certificate takes
+    // the whole UI down — including the page an operator would use to fix it.
+    //
+    // A self-signed certificate near expiry is deliberately NOT degraded: it renews itself, and
+    // reporting it would teach operators that `degraded` means nothing.
+    let web_tls = match st.webtls.as_ref() {
+        Some(repo) => match repo.health().await {
+            Ok(Some(h)) => DependencyHealth {
+                reachable: h.ok,
+                detail: if h.days < 0 {
+                    format!("WebUI TLS certificate expired {} days ago", -h.days)
+                } else {
+                    format!("WebUI TLS certificate valid for {} more days", h.days)
+                },
+            },
+            // No row yet is a core still finishing its first start, not a fault.
+            Ok(None) => DependencyHealth {
+                reachable: true,
+                detail: "WebUI TLS certificate not established yet".to_owned(),
+            },
+            Err(e) => DependencyHealth {
+                reachable: false,
+                detail: format!("WebUI TLS certificate could not be read: {e}"),
+            },
+        },
+        None => DependencyHealth {
+            reachable: true,
+            detail: "WebUI TLS not managed here (skeleton mode or external termination)".to_owned(),
+        },
+    };
+
     let overall = if postgres.reachable
         && tsdb.reachable
         && logs.reachable
         && flow.reachable
         && bus.reachable
+        && web_tls.reachable
     {
         "ok"
     } else {
@@ -324,6 +360,7 @@ pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
         logs,
         flow,
         bus,
+        web_tls,
     }
 }
 

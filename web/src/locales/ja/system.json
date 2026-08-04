@@ -132,7 +132,8 @@
       "tsdb": "VictoriaMetrics (TSDB)",
       "logs": "VictoriaLogs（イベントログ）",
       "flow": "ClickHouse（フローストア）",
-      "bus": "NATS バス"
+      "bus": "NATS バス",
+      "webTls": "WebUI の TLS 証明書"
     },
     "cards": {
       "pollLoop": "ポールループの健全性",

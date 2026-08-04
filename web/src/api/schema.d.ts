@@ -7646,6 +7646,11 @@ export interface components {
             postgres: components["schemas"]["DependencyHealth"];
             /** @description VictoriaMetrics (TSDB) — `/-/healthy`. */
             tsdb: components["schemas"]["DependencyHealth"];
+            /**
+             * @description The WebUI's TLS certificate. Reported unhealthy only when someone has to act: it has expired,
+             *     or an imported certificate is inside its last 30 days. A self-signed one renews itself.
+             */
+            web_tls: components["schemas"]["DependencyHealth"];
         };
         /** @description Core plus every poller that reports host telemetry. */
         SystemHostsResponse: {
