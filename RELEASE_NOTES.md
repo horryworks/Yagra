@@ -230,6 +230,13 @@
   are now one layer, so the per-release download for `yagra-poller` drops from 10.2 MB to 4.7 MB.
   Most of that is the duplicate going away; the rest is a smaller binary. The image behaves
   identically and raw-socket ICMP is unaffected.
+  - ⚠️ **`yagra-core` moved the other way, and it is only fair to say so**: the release build now
+    uses fat link-time optimization, which grew core's binary from 11.9 to 13 MiB compressed. On
+    top of `codegen-units = 1` there is no duplicate code left for LTO to collapse, so what it adds
+    is inlining across crate boundaries — and inlining duplicates code. The poller's binary went
+    the other way, which is where the "smaller binary" above comes from. Taken together these two
+    changes still subtract about 4.4 MB from an upgrade that pulls both images, but core alone
+    costs a little more than it did.
 - The **Dependency / root-cause dashboard widget** now lists each root cause with the alerts rolled
   up under it, biggest first, instead of an indented parent→child tree. The dependency graph is no
   longer a tree — a node can have two upstreams — and a tree could only have shown one of them.
