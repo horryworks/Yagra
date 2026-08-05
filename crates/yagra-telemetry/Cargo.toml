@@ -11,6 +11,8 @@ repository.workspace = true
 [dependencies]
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Rolling on-disk log files, so the support bundle can carry a previous run's panic (ADR-045).
+tracing-appender = { workspace = true }
 tracing-opentelemetry = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }

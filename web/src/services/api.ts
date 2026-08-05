@@ -158,6 +158,7 @@ import type {
   CredentialHealth,
 } from '../types/api';
 import type { DiscoverySettingsBody } from '../pages/neighborSettings';
+import { filenameFromDisposition } from '../lib/download';
 import { buildUrl, type Op, type Ok, type OptsArg, type PathsWith } from './typedPaths';
 
 /** Request body to create a collection item (scalar or table). */
@@ -276,6 +277,44 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  *  determines it, instead of pushing a union onto every caller that cannot narrow it either. */
 function arm<T>(p: Promise<unknown>): Promise<T> {
   return p as Promise<T>;
+}
+
+/** A file download: the bytes plus the name the server gave them.
+ *
+ *  Two endpoints stream an attachment rather than JSON, so they cannot go through `apiGet` — and
+ *  neither can be a plain anchor `href`, because an anchor carries no `Authorization` header and
+ *  would 401 on any auth-enabled deployment. This is the one implementation of that; the report
+ *  export grew its own first and the support bundle would have been the second copy of the same
+ *  22 lines, differing in a URL (extensibility §3). */
+async function fetchBlob(url: string, fallbackCode: string): Promise<Download> {
+  const headers: Record<string, string> = {};
+  if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  const res = await fetch(`${BASE}${url}`, { headers });
+  if (!res.ok) {
+    let code = fallbackCode;
+    let message = `download failed with status ${res.status}`;
+    try {
+      const body = (await res.json()) as ApiErrorBody;
+      if (body?.error) {
+        code = body.error.code;
+        message = body.error.message;
+      }
+    } catch {
+      // Non-JSON error body — keep the generic message.
+    }
+    throw new ApiError(code, message, res.status);
+  }
+  return {
+    blob: await res.blob(),
+    filename: filenameFromDisposition(res.headers.get('content-disposition')),
+  };
+}
+
+
+/** A downloaded attachment. `filename` is `null` when the server sent no usable one. */
+export interface Download {
+  blob: Blob;
+  filename: string | null;
 }
 
 /** JSON request body init for a mutating call. */
@@ -404,6 +443,16 @@ export const api = {
 
   /** Whether every stored credential can still be decrypted with the loaded KEK (ADR-040). */
   getCredentialHealth: (): Promise<CredentialHealth> => apiGet('/api/v1/credentials/health'),
+
+  /** A diagnostic archive of this deployment's logs and status (ADR-045), for a site nobody can
+   *  reach a shell on. Needs ManageConfig + ManageCredentials + ViewAudit — i.e. Admin. The server
+   *  names the file and refuses the whole export if its redaction scan matches, so a failure here
+   *  is worth showing verbatim. */
+  downloadSupportBundle: (sinceHours?: number): Promise<Download> =>
+    fetchBlob(
+      `/api/v1/system/support-bundle${sinceHours ? `?since_hours=${sinceHours}` : ''}`,
+      'support_bundle_failed',
+    ),
 
   /** This deployment's monitoring configuration as a portable bundle (ADR-040). Admin-only, and it
    *  carries no secrets. */
@@ -937,29 +986,13 @@ export const api = {
 
   /** Download a report run as html|csv|pdf. Fetches with the bearer token (so it works on an
    *  auth-enabled deployment, unlike a plain anchor href) and returns a Blob to save. */
-  exportReportRun: async (id: string, format: 'html' | 'csv' | 'pdf'): Promise<Blob> => {
-    const headers: Record<string, string> = {};
-    if (authToken) headers.Authorization = `Bearer ${authToken}`;
-    const res = await fetch(
-      `${BASE}/api/v1/reports/runs/${encodeURIComponent(id)}/export?format=${format}`,
-      { headers },
-    );
-    if (!res.ok) {
-      let code = 'export_failed';
-      let message = `export failed with status ${res.status}`;
-      try {
-        const body = (await res.json()) as ApiErrorBody;
-        if (body?.error) {
-          code = body.error.code;
-          message = body.error.message;
-        }
-      } catch {
-        // non-JSON body — keep generic
-      }
-      throw new ApiError(code, message, res.status);
-    }
-    return res.blob();
-  },
+  exportReportRun: async (id: string, format: 'html' | 'csv' | 'pdf'): Promise<Blob> =>
+    (
+      await fetchBlob(
+        `/api/v1/reports/runs/${encodeURIComponent(id)}/export?format=${format}`,
+        'export_failed',
+      )
+    ).blob,
 
   /** All report schedules. */
   listReportSchedules: (): Promise<ReportSchedule[]> => apiGet('/api/v1/reports/schedules'),

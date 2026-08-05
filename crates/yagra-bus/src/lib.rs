@@ -27,4 +27,4 @@ pub use messages::{
     OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
-pub use nats::{NatsBus, DEFAULT_POOL, POLLER_QUEUE};
+pub use nats::{redact_url, split_userinfo_password, NatsBus, DEFAULT_POOL, POLLER_QUEUE};

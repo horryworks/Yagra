@@ -3148,6 +3148,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/support-bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A downloadable archive of this deployment's logs and status.
+         * @description Written for a deployment behind an air gap: every entry is text, `MANIFEST.json` lists what is
+         *     carried **and what is deliberately not**, and a redaction scan over the assembled bytes aborts
+         *     the export rather than shipping a secret.
+         */
+        get: operations["support_bundle"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/thresholds": {
         parameters: {
             query?: never;
@@ -20627,6 +20649,68 @@ export interface operations {
             };
             /** @description No such instance — resolved against the known set before any selector is built */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    support_bundle: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Hours of log history to carry. Clamped to `[1, 168]`; the appender's own retention is
+                 *     usually the tighter bound.
+                 */
+                since_hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and core's own rotated log files. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": unknown;
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks any of ManageConfig, ManageCredentials or ViewAudit */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The redaction scan matched, so nothing was released. The rule and the file are named in the log, never the value */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

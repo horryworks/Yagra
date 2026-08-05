@@ -82,6 +82,9 @@ mod server_cert;
 mod sink;
 mod store;
 mod stored_enum;
+// Diagnostic snapshot for a deployment nobody can open a shell on (ADR-045). Named apart from
+// `config_bundle`, which moves configuration *between* deployments; this one describes one.
+mod support_bundle;
 mod thresholds;
 mod tls;
 mod token;
@@ -722,6 +725,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         forward_handle,
         llm: llm_repo,
         config_bundle: Arc::new(config_bundle::ConfigBundleRepo::new(repo.pool().clone())),
+        support: Arc::new(support_bundle::SupportRepo::new(repo.pool().clone())),
     }));
     // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
     // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any
@@ -827,6 +831,8 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         enable_mcp: cfg.enable_mcp,
         rca,
         webtls: Some(webtls.clone()),
+        metrics: Some(metrics.clone()),
+        started: std::time::SystemTime::now(),
     };
 
     // Establish the certificate BEFORE the listener binds, so "core is healthy" implies the file
@@ -1339,6 +1345,8 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // No metadata store ⇒ nowhere to keep a provider config or a report; the RCA endpoints 503.
         rca: None,
         webtls: None,
+        metrics: Some(metrics.clone()),
+        started: std::time::SystemTime::now(),
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }

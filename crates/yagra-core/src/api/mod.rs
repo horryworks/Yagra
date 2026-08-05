@@ -69,6 +69,7 @@ mod retention;
 pub(crate) mod route_table;
 pub(crate) mod scope;
 mod session;
+mod support;
 pub(crate) mod system;
 #[cfg(test)]
 mod tests_support;
@@ -205,6 +206,10 @@ pub struct AdminState {
     /// Configuration bundle export/import (ADR-040 decision 3): move a monitoring configuration
     /// between deployments. Reads and writes many tables in one transaction and carries no secrets.
     pub config_bundle: Arc<crate::config_bundle::ConfigBundleRepo>,
+    /// Read-only PostgreSQL introspection for the support bundle (ADR-045): applied migrations,
+    /// per-table sizes, connection counts. Reads nothing a normal endpoint reads, which is the
+    /// point — the questions a bundle answers are the ones no page asks.
+    pub support: Arc<crate::support_bundle::SupportRepo>,
 }
 
 /// Default range window when `from`/`to` are omitted (seconds).
@@ -297,6 +302,16 @@ pub struct ApiState {
     /// double-do, and a standby that starts first on a fresh database still has to be able to
     /// bootstrap one or the web container waits forever.
     pub webtls: Option<Arc<crate::webtls::WebTlsRepo>>,
+    /// The process's Prometheus registry handle, so the support bundle (ADR-045) can carry the same
+    /// scrape `/metrics` serves. `None` only where there is no recorder to read (the API tests).
+    ///
+    /// Held here rather than fetched over HTTP by the bundle: core asking itself for its own
+    /// `/metrics` would need a URL, a client and a working listener — three things that are broken
+    /// exactly when a bundle is being taken.
+    pub metrics: Option<metrics_exporter_prometheus::PrometheusHandle>,
+    /// When this process started. The bundle reports uptime from it, which is how "did core restart
+    /// while nobody was looking?" is answered from a bundle taken afterwards.
+    pub started: std::time::SystemTime,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -356,6 +371,9 @@ pub fn router(state: ApiState) -> Router {
         .merge(webtls::routes())
         .merge(oidc::routes())
         .merge(system::routes())
+        // The support-bundle download (ADR-045). Its own module because its guard is the union of
+        // three permissions rather than one — see `api/support.rs`.
+        .merge(support::routes())
         .merge(collection::routes())
         .merge(classification::routes())
         // The generated OpenAPI document itself (ADR-035) — unauthenticated, see `api/openapi.rs`.
@@ -553,6 +571,8 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            metrics: None,
+            started: std::time::SystemTime::now(),
         }
     }
 
@@ -587,6 +607,8 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            metrics: None,
+            started: std::time::SystemTime::now(),
         };
         (state, token)
     }
@@ -619,6 +641,8 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            metrics: None,
+            started: std::time::SystemTime::now(),
         };
         (state, token)
     }

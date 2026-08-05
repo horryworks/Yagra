@@ -10,6 +10,44 @@
 
 ## Unreleased
 
+### New Features
+- **Support bundle (Settings ▸ System Health).** One download containing everything needed to
+  diagnose a deployment from outside it: which binary is actually running (image source ref and
+  build profile, not just the version), every system-health section, the allow-listed environment,
+  applied migrations with their checksums, per-table sizes and connection counts, active alerts, the
+  audit tail, core's Prometheus scrape, and core's own rotated log files. Also at
+  `GET /api/v1/system/support-bundle?since_hours=N`.
+  - It is built for a site where nobody can open a shell and data does not leave casually, so the
+    archive is designed to be **reviewed before it is released**: every entry is JSON or plain text,
+    and `MANIFEST.json` lists what is carried **and what is deliberately left out**, with reasons.
+  - Secrets are handled two ways. The environment is carried by an **allow-list** — a deny-list of
+    password-shaped names would miss the credential inside `YAGRA_DATABASE_URL`'s userinfo, which is
+    the one that actually ships. Then every assembled byte is scanned, and a match **aborts the
+    export** rather than redacting it: the strongest rule is the set of literal secret values the
+    core process can see in its own environment, so a credential arriving through an unanticipated
+    path is caught too. A refusal answers `500 support_bundle_redaction_failed` naming the file and
+    the rule, never the value.
+  - It requires **ManageConfig + ManageCredentials + ViewAudit** — all three, so this cannot become
+    a way to read the audit log or the credential report through an endpoint whose name mentions
+    neither. In practice that means Admin.
+- **Core's log is now written to disk as well as stdout.** Hourly JSON-lines files under
+  `YAGRA_LOG_DIR`, `YAGRA_LOG_RETAIN_HOURS` of them (default 48, pruned automatically), on a named
+  volume so they outlive the container. Reading `docker logs` needs a shell on the host, which is
+  exactly what a locked-down deployment does not grant — so a panic or an OOM used to leave nothing
+  retrievable. A support bundle taken *after* a recovery now carries the run that died.
+  - **On by default** in `docker-compose.yml` and `docker-compose.deploy.yml`; set `YAGRA_LOG_DIR`
+    empty in `.env` to turn it off. Writes are non-blocking and drop rather than stall the poll loop,
+    and an unwritable directory degrades to stdout-only with a warning instead of failing startup.
+  - Pollers can opt in the same way (the image has the directory), but no compose file mounts one:
+    the support bundle carries core's logs only. A poller's log body would have to cross the bus to
+    reach one, which is a new bus message rather than a read. Poller heartbeat counters, poll-loop
+    statistics and host resources are in the bundle already.
+
+### Improvements
+- `MANIFEST.json` reports both size caps that can bite — log files dropped for size, and files
+  outside the requested window — because a silently truncated log reads as "nothing was logged",
+  which is a wrong answer rather than a missing one.
+
 ## v0.1.22 — HTTPS by default, a network map that draws itself, and directory sign-in
 
 ### Breaking changes

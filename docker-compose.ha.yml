@@ -50,9 +50,18 @@ services:
       # or `web` waits forever for a file the leader has not been elected to write. The write is
       # content-addressed and atomic, so two cores writing the same bytes is harmless.
       YAGRA_TLS_DIR: /var/lib/yagra/tls
+      YAGRA_LOG_DIR: /var/log/yagra
     ports:
       - "8081:8080"   # standby/leader northbound API on a distinct host port
     volumes:
       - vmdata:/hostfs/vm:ro
       - tlsdata:/var/lib/yagra/tls
+      # ⚠️ Its OWN log volume, not the one `core` uses. Both cores name their files by service
+      # (`yagra-core.<hour>.log`), so a shared directory would have two processes appending to one
+      # file and both pruning it. Separate volumes are also the right answer semantically: a support
+      # bundle describes the core that produced it, and each core answers for itself.
+      - logdata-b:/var/log/yagra
     restart: unless-stopped
+
+volumes:
+  logdata-b:   # core-b's rotated log files (ADR-045) — see the mount comment above

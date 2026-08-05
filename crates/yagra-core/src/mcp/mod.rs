@@ -307,6 +307,8 @@ mod tests {
             enable_mcp: true,
             rca: None,
             webtls: None,
+            metrics: None,
+            started: std::time::SystemTime::now(),
         }
     }
 

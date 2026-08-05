@@ -15889,6 +15889,77 @@
         }
       }
     },
+    "/api/v1/system/support-bundle": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "A downloadable archive of this deployment's logs and status.",
+        "description": "Written for a deployment behind an air gap: every entry is text, `MANIFEST.json` lists what is\ncarried **and what is deliberately not**, and a redaction scan over the assembled bytes aborts\nthe export rather than shipping a secret.",
+        "operationId": "support_bundle",
+        "parameters": [
+          {
+            "name": "since_hours",
+            "in": "query",
+            "description": "Hours of log history to carry. Clamped to `[1, 168]`; the appender's own retention is\nusually the tighter bound.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and core's own rotated log files. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections",
+            "content": {
+              "application/gzip": {}
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks any of ManageConfig, ManageCredentials or ViewAudit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The redaction scan matched, so nothing was released. The rule and the file are named in the log, never the value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Inventory storage is unavailable (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/thresholds": {
       "get": {
         "tags": [

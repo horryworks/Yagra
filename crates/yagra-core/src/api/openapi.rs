@@ -111,6 +111,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::webtls::Doc::openapi(),
         super::oidc::Doc::openapi(),
         super::system::Doc::openapi(),
+        super::support::Doc::openapi(),
         super::collection::Doc::openapi(),
         super::classification::Doc::openapi(),
         super::discovery::Doc::openapi(),

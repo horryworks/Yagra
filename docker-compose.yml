@@ -90,6 +90,10 @@ services:
       # logs an error and raises an event rather than replacing your certificate with a self-signed
       # one. Use docker-compose.deploy.yml, which mounts a persistent KEK, for anything real.
       YAGRA_TLS_DIR: /var/lib/yagra/tls
+      # Core's own log, on disk as well as on stdout (ADR-045) — hourly files, 48 of them, pruned
+      # automatically. Read back by the support bundle at Settings ▸ System Health, which is how a
+      # deployment nobody can open a shell on still hands over a panic from a run that has ended.
+      YAGRA_LOG_DIR: /var/log/yagra
     ports:
       - "8080:8080"   # northbound API
     volumes:
@@ -98,6 +102,8 @@ services:
       - vmdata:/hostfs/vm:ro
       # WebUI TLS certificate (ADR-044) — read-write here, read-only in `web`.
       - tlsdata:/var/lib/yagra/tls
+      # Core's rotated log files (ADR-045) — a named volume so they outlive the container.
+      - logdata:/var/log/yagra
       # Offline IP→ASN dataset (ADR-031 Increment 3) — read-only, from the named `ipasndata` volume
       # the `ipasn-updater` sidecar writes. Uncomment with YAGRA_IPASN_DB above.
       # - ipasndata:/data/ipasn:ro
@@ -324,4 +330,5 @@ volumes:
   chdata:      # ClickHouse flow store (ADR-031)
   pollerbuf:   # store-and-forward result buffer (Phase 3)
   tlsdata:     # WebUI TLS certificate (ADR-044) — core writes it, web reads it; see tls-init
+  logdata:     # core's rotated log files (ADR-045), read back by the support bundle
   # ipasndata: # offline IP→ASN dataset (ADR-031) — uncomment with the ipasn-updater service above

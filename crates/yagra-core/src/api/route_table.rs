@@ -1345,6 +1345,20 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Global("core and poller host metrics, not monitored nodes"),
         Tool("get_system_health"),
     ),
+    (
+        "GET",
+        "/api/v1/system/support-bundle",
+        Global(
+            "a diagnostic snapshot of the deployment itself; it demands ManageConfig + \
+             ManageCredentials + ViewAudit, and a caller holding all three is unscoped by \
+             construction (ADR-014)",
+        ),
+        Exempt(
+            "a gzipped tar has no MCP transport, and every section inside it is already a tool: \
+             get_system_health covers health/*, get_active_alerts covers alerts/, get_audit covers \
+             audit/. What has no tool is the archive, not the answers",
+        ),
+    ),
     ("GET", "/api/v1/thresholds", ADMIN_CFG, PENDING_CONFIG_READ),
     ("POST", "/api/v1/thresholds", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/thresholds/:id", ADMIN_CFG, NO_MCP_WRITE),

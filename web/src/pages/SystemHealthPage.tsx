@@ -15,12 +15,14 @@ import type { TFunction } from 'i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
+import { Button } from '../components/ui/Button';
 import { MetricChart, PALETTE } from '../components/MetricChart/MetricChart';
 import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
-import { useRangeStore } from '../store';
-import { api } from '../services/api';
+import { useAuthStore, useRangeStore } from '../store';
+import { api, errMsg } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
+import { saveBlob } from '../lib/download';
 import { formatBytes, formatUtil, pointsToSeries } from '../lib/format';
 import { alignTo, pctSeries } from '../lib/seriesMath';
 import type {
@@ -314,6 +316,75 @@ function HostResourcesCard() {
   );
 }
 
+/** Log windows offered for a support bundle. Bounded by the appender's own retention in practice,
+ *  so the longest option is a request rather than a promise — a deployment keeping 48 hourly files
+ *  cannot serve a week however this is set. */
+const BUNDLE_WINDOWS = [1, 6, 24, 72] as const;
+
+/** Download a support bundle (ADR-045).
+ *
+ *  Admin-only in the UI because it is Admin-only in the API — the endpoint demands ManageConfig +
+ *  ManageCredentials + ViewAudit, so showing the button to an Operator would be offering a 403.
+ *
+ *  The failure text is shown verbatim rather than replaced by a generic message: the one refusal
+ *  that matters here is the redaction stop, whose message names the file and the rule and is an
+ *  instruction to the operator, not a fault to retry past. */
+function SupportBundleCard() {
+  const { t } = useTranslation('system');
+  const role = useAuthStore((s) => s.role);
+  const [hours, setHours] = useState<number>(6);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<{ file: string; size: string } | null>(null);
+
+  if (role !== 'admin') return null;
+
+  const download = () => {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    api
+      .downloadSupportBundle(hours)
+      .then(({ blob, filename }) => {
+        // The server names the file; the fallback exists only for a proxy that strips the header.
+        const file = filename ?? 'yagra-support.tar.gz';
+        saveBlob(blob, file);
+        setDone({ file, size: formatBytes(blob.size) });
+      })
+      .catch((e: unknown) => setError(errMsg(e, t('health.bundle.err'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Card title={t('health.cards.supportBundle')} className="support-bundle-card">
+      <p className="muted">{t('health.bundle.help')}</p>
+      <p className="muted">{t('health.bundle.contents')}</p>
+      <div className="sb-actions">
+        <label className="sb-window">
+          <span className="muted">{t('health.bundle.window')}</span>
+          <select
+            value={hours}
+            onChange={(e) => setHours(Number(e.target.value))}
+            disabled={busy}
+            aria-label={t('health.bundle.window')}
+          >
+            {BUNDLE_WINDOWS.map((h) => (
+              <option key={h} value={h}>
+                {t('health.bundle.windowHours', { count: h })}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button variant="primary" onClick={download} disabled={busy}>
+          {busy ? t('health.bundle.busy') : t('health.bundle.action')}
+        </Button>
+      </div>
+      {error && <p className="form-error">{error}</p>}
+      {done && <p className="sb-done">{t('health.bundle.done', done)}</p>}
+    </Card>
+  );
+}
+
 export function SystemHealthPage() {
   const { t } = useTranslation('system');
   return (
@@ -336,6 +407,8 @@ export function SystemHealthPage() {
       <Card className="host-resources-card">
         <HostResourcesCard />
       </Card>
+      {/* Last: it is the thing you reach for once the cards above have failed to explain something. */}
+      <SupportBundleCard />
     </div>
   );
 }

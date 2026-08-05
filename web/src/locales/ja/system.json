@@ -138,13 +138,25 @@
     "cards": {
       "pollLoop": "ポールループの健全性",
       "dependency": "依存サービスの健全性",
-      "dataCoverage": "データカバレッジ"
+      "dataCoverage": "データカバレッジ",
+      "supportBundle": "サポートバンドル"
     },
     "metric": {
       "cpu": "CPU",
       "loadAverage": "ロードアベレージ",
       "memory": "メモリ",
       "disk": "ディスク · {{mount}}"
+    },
+    "bundle": {
+      "help": "この配備のビルド来歴・健全性・設定・データベース状態・core 自身のログを 1 つのアーカイブにまとめます。シェルに入れない環境の障害調査用です。",
+      "contents": "中身はすべて JSON かプレーンテキストで、MANIFEST.json に「何を入れたか」と「何を意図的に入れなかったか」の両方が記載されます。秘匿情報の検査に 1 件でも該当した場合は、伏せ字にせず書き出し自体を中止します。送付する前に必ず中身を確認してください。",
+      "window": "ログの対象期間",
+      "windowHours_one": "直近 1 時間",
+      "windowHours_other": "直近 {{count}} 時間",
+      "action": "バンドルをダウンロード",
+      "busy": "収集中…",
+      "done": "{{file}}（{{size}}）をダウンロードしました。",
+      "err": "サポートバンドルを作成できませんでした。"
     }
   },
   "settings": {

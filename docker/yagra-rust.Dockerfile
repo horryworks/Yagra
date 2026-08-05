@@ -179,7 +179,8 @@ RUN apt-get update \
 # every other signal was green.
 RUN groupadd -r -g 10001 yagra \
  && useradd -r -u 10001 -g 10001 yagra \
- && install -d -o yagra -g yagra -m 0750 /var/lib/yagra/tls
+ && install -d -o yagra -g yagra -m 0750 /var/lib/yagra/tls \
+ && install -d -o yagra -g yagra -m 0750 /var/log/yagra
 COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
 COPY --from=bins /app/yagra-core /usr/local/bin/yagra-core
@@ -203,11 +204,17 @@ FROM debian:bookworm-slim AS poller
 # outage outlasts the in-memory ring and the oldest poll results are dropped. It also fixes the
 # mounted case: Docker seeds an empty named volume from the image path, ownership included, whereas
 # a mount point it has to invent itself is root-owned.
+#
+# /var/log/yagra is the same trick for the on-disk log (ADR-045). No compose file mounts it on the
+# poller today — the support bundle carries core's logs, and a poller's log body would have to cross
+# the bus to reach one — but the directory exists so a site that wants it only has to set
+# YAGRA_LOG_DIR and add a volume, rather than discover a permission error at 3am.
 RUN useradd -r -u 10002 yagra \
  && apt-get update \
  && apt-get install -y --no-install-recommends libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
- && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer
+ && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer \
+ && install -d -o yagra -g yagra -m 0750 /var/log/yagra
 COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
 # The binary arrives through a bind mount rather than a COPY, so that placing it and granting it

@@ -163,6 +163,12 @@ regex = "1"
 minijinja = { version = "2", default-features = false, features = ["builtins", "serde", "json", "fuel", "debug", "std_collections"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+# Support bundle (ADR-045): one downloadable archive of logs + status for a deployment nobody can
+# reach a shell on. `tar` + `flate2` rather than `zip` because both are pure Rust with no C
+# toolchain in the way (flate2 defaults to the miniz_oxide backend), and because the archive holds
+# nothing but text — a reviewer has to be able to read every byte before it leaves the site.
+tar = "0.4"
+flate2 = "1"
 # Errors
 thiserror = "2"
 anyhow = "1"
@@ -171,6 +177,11 @@ async-trait = "0.1"
 # Observability (self-monitoring: structured logs + tracing + Prometheus)
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Rolling on-disk log files (`YAGRA_LOG_DIR`, ADR-045). Without it a container's own logs live only
+# in `docker logs`, which needs a shell on the host — the one thing a locked-down production
+# deployment tends not to grant. The support bundle reads these files back, so a panic from the run
+# *before* the current one still reaches a bundle taken after recovery.
+tracing-appender = "0.2"
 # OpenTelemetry distributed tracing (yagra-telemetry). The OTLP exporter goes over
 # HTTP/protobuf via the in-tree reqwest+rustls stack (no tonic/gRPC, no native-TLS/NASM);
 # `rt-tokio` runs the batch span processor on the shared runtime. Version-locked triple:

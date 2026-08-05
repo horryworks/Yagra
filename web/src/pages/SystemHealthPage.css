@@ -114,3 +114,25 @@
   font-size: var(--font-sm);
   margin: 0;
 }
+
+/* Support bundle (ADR-045). A form surface rather than a list, so Card is the right container. */
+.support-bundle-card .sb-actions {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.support-bundle-card .sb-window {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-sm);
+}
+
+.support-bundle-card .sb-done {
+  color: var(--status-ok);
+  font-size: var(--font-sm);
+  margin: 12px 0 0;
+}

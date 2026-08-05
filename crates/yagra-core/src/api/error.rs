@@ -178,6 +178,18 @@ impl ApiError {
         )
     }
 
+    /// `500` with a caller-chosen code, for the rare internal failure a client must be able to
+    /// **distinguish** rather than merely retry.
+    ///
+    /// Deliberately narrow, and not the general-purpose 500: [`ApiError::internal`] exists so that
+    /// a fault reveals nothing, and a code that varies per call site is a channel for revealing
+    /// something. Use it only where the refusal itself is the information — the support bundle's
+    /// redaction stop (ADR-045) is one, because "we found a secret and released nothing" is an
+    /// instruction to the operator, not a transient fault to retry past.
+    pub fn internal_with_code(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, code, message)
+    }
+
     /// Log an internal error and turn it into a `500` that reveals nothing about it. This is the
     /// idiom that replaces the hand-copied `Err(e) => { tracing::error!(…); internal(…) }` arm:
     ///

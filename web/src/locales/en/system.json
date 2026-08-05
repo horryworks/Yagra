@@ -141,13 +141,25 @@
     "cards": {
       "pollLoop": "Poll-loop health",
       "dependency": "Dependency health",
-      "dataCoverage": "Data coverage"
+      "dataCoverage": "Data coverage",
+      "supportBundle": "Support bundle"
     },
     "metric": {
       "cpu": "CPU",
       "loadAverage": "Load average",
       "memory": "Memory",
       "disk": "Disk · {{mount}}"
+    },
+    "bundle": {
+      "help": "One archive of this deployment's build provenance, health, configuration, database state and core's own logs — for diagnosing a site nobody can open a shell on.",
+      "contents": "Everything inside is JSON or plain text, MANIFEST.json lists what is carried and what is deliberately left out, and a redaction scan aborts the export rather than releasing a secret. Read it before sending it anywhere.",
+      "window": "Log window",
+      "windowHours_one": "Last hour",
+      "windowHours_other": "Last {{count}} hours",
+      "action": "Download bundle",
+      "busy": "Collecting…",
+      "done": "Downloaded {{file}} ({{size}}).",
+      "err": "The support bundle could not be produced."
     }
   },
   "settings": {

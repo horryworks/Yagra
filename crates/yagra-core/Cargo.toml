@@ -50,6 +50,10 @@ hmac = { workspace = true }
 data-encoding = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
+# Support-bundle archive (ADR-045). Core-only: the poller produces no bundle — it reports counters
+# over the bus and has no HTTP surface to download one from.
+tar = { workspace = true }
+flate2 = { workspace = true }
 sqlx = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }

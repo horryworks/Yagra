@@ -141,6 +141,15 @@ services:
       OTEL_TRACES_SAMPLER_ARG: ${OTEL_TRACES_SAMPLER_ARG:-}
       # Structured-log level (info so KEK/credential/scheduler events are visible).
       RUST_LOG: ${RUST_LOG:-info}
+      # Core's own log, on disk as well as on stdout (ADR-045). ON by default, and that is the whole
+      # point: `docker logs` needs a shell on this host, which is exactly what a locked-down site
+      # does not grant — so without this a panic or an OOM leaves nothing anybody can retrieve. The
+      # support bundle at Settings ▸ System Health reads these files back over HTTPS, which means a
+      # bundle taken AFTER a recovery still carries the run that died.
+      # Hourly files, YAGRA_LOG_RETAIN_HOURS of them (48 ≈ two days), pruned automatically. Set
+      # YAGRA_LOG_DIR empty in .env to turn it off.
+      YAGRA_LOG_DIR: ${YAGRA_LOG_DIR-/var/log/yagra}
+      YAGRA_LOG_RETAIN_HOURS: ${YAGRA_LOG_RETAIN_HOURS:-48}
       # Signed session tokens (Core HA active/active session substrate, ADR-016 Increment 2a). Mount
       # a shared 32-byte key (same key on every core in an HA set) so a login on one core is accepted
       # on all cores and survives a restart/failover. Unset ⇒ opaque per-process tokens (today's
@@ -167,6 +176,9 @@ services:
       # only writer; the volume is a materialization of the PostgreSQL row, not the source of truth.
       # A Kubernetes deployment materializes through a Secret instead and never sees this volume.
       - tlsdata:/var/lib/yagra/tls
+      # Core's rotated log files (ADR-045). A named volume, so they outlive the container — a log
+      # that dies with the process it was recording is no use for diagnosing why it died.
+      - logdata:/var/log/yagra
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
@@ -417,3 +429,5 @@ volumes:
   tlsdata:   # WebUI TLS certificate (ADR-044) — core writes it, web reads it; see tls-init.
              # A cache of the PostgreSQL row, not the source of truth: deleting it is safe and
              # core rewrites it on the next start.
+  logdata:   # core's rotated log files (ADR-045), read back by the support bundle. Bounded by
+             # YAGRA_LOG_RETAIN_HOURS hourly files; deleting it costs only the retained history.

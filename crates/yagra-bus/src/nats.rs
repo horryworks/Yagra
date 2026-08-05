@@ -31,7 +31,12 @@ pub const POLLER_QUEUE: &str = "pollers";
 /// message. The remote-poller path carries credentials in the URL (`tls://user:pass@host:4222`,
 /// ADR-020), and those must never be logged (security.md). `tls://poller:secret@host:4222` →
 /// `tls://host:4222`; a URL without userinfo is returned unchanged. Display-only, best-effort.
-fn redact_url(url: &str) -> String {
+///
+/// Public because the support bundle (ADR-045) carries connection URLs and must redact them by the
+/// **same** rule — a second implementation of "where does the userinfo end" is exactly the kind of
+/// near-copy that drifts into leaking one (extensibility §3). If a third consumer appears, this and
+/// [`split_userinfo_password`] belong in `yagra-common` next to `host_ip`.
+pub fn redact_url(url: &str) -> String {
     // Only the authority (between `://` and the first `/`, `?` or `#`) can hold userinfo.
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (Some(s), r),
@@ -51,7 +56,11 @@ fn redact_url(url: &str) -> String {
 /// parsing but also returns the password so the poller can re-supply it explicitly alongside its own
 /// id as the username (ADR-030). `tls://poller:secret@host:4222` → (`tls://host:4222`, `Some("secret")`);
 /// a URL with no userinfo (single-node plaintext) → (unchanged, `None`).
-fn split_userinfo_password(url: &str) -> (String, Option<String>) {
+///
+/// Public for the same reason as [`redact_url`], plus one of its own: the support bundle's
+/// fail-closed scan needs the *literal* password so it can prove that exact string appears nowhere
+/// in the archive, which is a stronger check than any pattern.
+pub fn split_userinfo_password(url: &str) -> (String, Option<String>) {
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (Some(s), r),
         None => (None, url),
