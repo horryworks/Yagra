@@ -91,6 +91,17 @@ ring = { workspace = true }
 # `CertifiedKey::keys_match()` does it, which is the same comparison the server would make.
 x509-parser = { workspace = true }
 rcgen = { workspace = true }
+# Optional global allocator — see the workspace Cargo.toml entry for why this is a feature and not
+# a dependency, and for the condition under which it stops being optional.
+mimalloc = { workspace = true, optional = true }
+
+[features]
+# ON by default — it halved core's resident set and stopped it growing, at equal throughput. The
+# measurement is in the workspace Cargo.toml. It stays a feature rather than becoming unconditional
+# so `--no-default-features` remains a one-flag way back to the system allocator, which is what any
+# future comparison needs.
+default = ["mimalloc"]
+mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 tower = { workspace = true }

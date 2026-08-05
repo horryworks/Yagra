@@ -6,7 +6,7 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.21.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.1.22.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -32,7 +32,13 @@ polling**. Users access it through the WebUI.
 > configuration. Received passive data can now be **forwarded onward** — a filtered tee that relays
 > syslog, SNMP traps and flow exports to a SIEM or collector byte-for-byte over UDP/TCP/TLS, or streams
 > normalized rows into **BigQuery** — from one egress point instead of a second export target on every
-> device. HA stores remain a configuration step away, not a rewrite.
+> device. The **WebUI is served over HTTPS by default**, with your own certificate importable from
+> Settings ▸ TLS, and people can sign in with an **LDAP or Active Directory** account alongside SSO
+> and local ones. Yagra also **derives the network map from what devices report** — CDP/LLDP
+> adjacency, shared subnets, OSPF neighbours, BGP peers and connected routes — and can hand **alert
+> suppression** over to that derived graph after showing you exactly which alerts it would change;
+> the same walks surface **hosts on your network that nothing is monitoring**. HA stores remain a
+> configuration step away, not a rewrite.
 
 ## Components
 

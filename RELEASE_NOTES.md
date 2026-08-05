@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.1.22 — HTTPS by default, a network map that draws itself, and directory sign-in
+
 ### Breaking changes
 - **The WebUI is now HTTPS, on port 443, and there is no plain-HTTP listener.** Everything the UI
   carries — the login password, bearer tokens, and device credentials on their way to being
@@ -45,6 +47,11 @@
     untrusted certificate would break every Prometheus scrape and API script at once, with two
     overlapping causes. Once those clients are on the TLS edge with a certificate they trust, set
     **`YAGRA_API_BIND=127.0.0.1`** to take it off the network. Settings ▸ TLS shows the current state.
+  - **If you maintain your own compose file, core's container now has a fixed group as well as a
+    fixed user — both `10001`.** The certificate bundle is written `0640` owned by that group, and
+    the web container joins it with `group_add: ["10001"]` in order to read it. Leave the group to
+    the base image and nginx traverses the directory, is refused the file itself, and the WebUI
+    never comes up while every other signal stays green. The shipped compose files already do this.
 
 ### New Features
 - **Import your own TLS certificate from the WebUI.** Settings ▸ TLS shows what is being served —
@@ -58,6 +65,12 @@
   - The private key is envelope-encrypted at rest like every other secret and is never returned by
     the API. The certificate is downloadable, so you can hand it to a Prometheus `ca_file`, a
     `curl --cacert`, or an operating-system trust store.
+  - **System Health says when it is about to expire.** An expired certificate takes the whole UI
+    down — including the page you would use to fix it — so it is one more row there, and reaches the
+    MCP `get_system_health` tool with it. *Degraded* is reserved for something somebody has to act
+    on: expired, or an **imported** certificate inside its last 30 days. A self-signed one nearing
+    expiry renews itself and is not reported as a problem. The same fact is on the Prometheus
+    endpoint as `yagra_web_tls_expires_in_days`, for your own alerting.
   - This does **not** manage the NATS bus certificate, which the bus reads for itself at startup.
 - **An AI client can now ask whether Yagra itself is healthy.** The MCP surface had no way to see
   the monitoring system's own state, which matters more than it sounds: with no way to tell that a
@@ -78,6 +91,18 @@
     log needs view-audit, and `run_rca` needs ack-alerts. Read-only does not mean
     readable-by-anyone. Reports and the state timeline refuse a group-scoped token rather than
     showing it the whole fleet, as the REST endpoints do.
+- **The Network map now draws the network, not a list of parent links you typed in.** Yagra derives
+  the connectivity graph from what devices report: CDP/LLDP adjacency, and nodes that have an
+  interface address in the same IP subnet. Two nodes sharing a subnet are adjacent as a matter of
+  fact, so a map appears without anyone entering a single link. Each edge carries the evidence
+  behind it — LLDP, CDP, or shared subnet — and the map labels and legends them. Redundant paths are
+  kept rather than collapsed: a server reached through two routers shows both links. **Drawing the
+  map is all this does on its own**; alert suppression keeps following the dependency graph you
+  maintain by hand until you deliberately hand it over, which is the next feature down.
+- **A new read endpoint, `GET /api/v1/topology/links`**, returns that graph in keyset pages, with a
+  `summary` of everything the derivation observed but declined to turn into a link (unmatched
+  neighbours, ambiguous management addresses, segments with no identifiable router). A group-scoped
+  caller sees only links whose **both** endpoints are visible to them.
 - **The network map now finds the links that share no subnet.** Until now a link was derived from
   two devices holding an address in the same prefix, which structurally cannot see a point-to-point
   `/32` (a PPPoE `Dialer`, a tunnel endpoint), an unnumbered OSPF link, or a peering across a
@@ -101,6 +126,9 @@
     reported alongside the map's other diagnostics.
   - Known limits, stated rather than half-answered: BGP4-MIB is IPv4-only, so **IPv6 BGP peers are
     out of scope**; OSPF collection is OSPFv2; and virtual links (`ospfVirtNbrTable`) are not read.
+    One older limit also stands: a segment with more than two members where no member can be
+    identified as routing for the others produces **no** links rather than a guessed one, and is
+    counted in the map's summary instead.
 - **Yagra can now tell you what is on your network that it is not watching.** Turn on the new
   **ARP / IPv6 neighbor cache** walk (Settings ▸ System settings ▸ Discovery walks) and every
   monitored router reports the hosts it has actually spoken to. Anything not already in the
@@ -154,9 +182,10 @@
 - **`GET /api/v1/topology/shadow`** returns the whole comparison: edge counts, the differing edges
   in each direction, the affected active alerts, the nodes acting as graph roots, and any pools
   whose poller could not be placed.
-- **The MCP `get_topology` tool takes two more `kind` values**: `overrides` and `shadow`. Asked
-  whether derived suppression is safe to enable, an AI client can now answer from the same data an
-  operator sees. Existing calls behave exactly as before.
+- **The MCP `get_topology` tool takes a `kind` parameter**: `dependency` (the default, and what
+  every existing call keeps doing), `links` for the connectivity graph, and `overrides` and `shadow`
+  for the operator decisions and the comparison. Asked whether derived suppression is safe to
+  enable, an AI client can now answer from the same data an operator sees.
 - **Pollers report their own interface addresses, and can be given an anchor node.** Direction in
   the derived graph comes from distance to a poller, so Yagra has to know where each poller sits. It
   works that out from the addresses the poller reports — but ⚠️ **a poller running in a container
@@ -168,48 +197,6 @@
   it would ever be suppressed while the screen showed the feature as on.
 - **`PUT /api/v1/settings/topology`** sets the mode (`manual` / `shadow` / `derived`). There is
   deliberately no matching `GET`: the current mode is part of the `/topology/shadow` response.
-
-### Bug Fixes
-- **A Troubleshoot analysis started over MCP now appears in the audit log.** The identical run
-  started from the WebUI or the REST API was recorded; the one launched through `/mcp` left no
-  trace at all, because auditing is REST middleware that the MCP surface does not pass through. Any
-  deployment with `/mcp` enabled has been under-recording who started analyses.
-
-### Improvements
-- The **Dependency / root-cause dashboard widget** now lists each root cause with the alerts rolled
-  up under it, biggest first, instead of an indented parent→child tree. The dependency graph is no
-  longer a tree — a node can have two upstreams — and a tree could only have shown one of them.
-- **The Network map now draws the network, not a list of parent links you typed in.** Yagra derives
-  the connectivity graph from what devices report: CDP/LLDP adjacency, and nodes that have an
-  interface address in the same IP subnet. Two nodes sharing a subnet are adjacent as a matter of
-  fact, so a map appears without anyone entering a single link. Each edge carries the evidence
-  behind it — LLDP, CDP, or shared subnet — and the map labels and legends them. Redundant paths are
-  kept rather than collapsed: a server reached through two routers shows both links. **This changes
-  what the map draws only; alert suppression still follows the dependency graph you maintain by
-  hand, and nothing about it changes in this release.**
-- **A new read endpoint, `GET /api/v1/topology/links`**, returns that graph in keyset pages, with a
-  `summary` of everything the derivation observed but declined to turn into a link (unmatched
-  neighbours, ambiguous management addresses, segments with no identifiable router). A group-scoped
-  caller sees only links whose **both** endpoints are visible to them.
-- **The MCP `get_topology` tool takes a `kind` parameter**: `dependency` (the default, unchanged)
-  or `links` for the connectivity graph. Existing calls behave exactly as before.
-- **Interface addresses are collected and their changes recorded**, the same way CDP/LLDP adjacency
-  already was: one current set per node plus an append-on-change history, visible under
-  **Settings ▸ Data retention** as *Interface address changes*. Collection is on by default at the
-  same hourly cadence, with its own toggle at `PUT /api/v1/settings/neighbors`
-  (`l3_enabled` / `l3_interval_secs`; omitting them leaves those settings unchanged).
-- **LLDP neighbours now carry the peer's management address.** That is what lets an adjacency be
-  matched to a monitored node, and it is why the map can be built from L2 at all. ⚠️ The first poll
-  after upgrading records **one extra neighbour-change row per LLDP-speaking node**, because the
-  recorded set genuinely gained a field. Devices that do not implement LLDP-MIB record nothing new.
-
-  Three things the map deliberately does **not** draw yet, so their absence is not a fault to
-  report: a point-to-point `/32` link (a PPPoE dialer, a tunnel) shares no subnet with its peer, so
-  the shared-subnet rule cannot see it — the addresses are collected and stored, but resolving those
-  peers needs the routing table and is a later increment; an unnumbered interface has no address of
-  its own and is invisible for the same reason; and a segment with more than two members where no
-  member can be identified as routing for the others produces **no** links rather than a guessed
-  one, and is counted in the map's summary instead.
 - **Sign in with an LDAP or Active Directory account.** Configure your directory at
   **Settings ▸ Auth ▸ Directory (LDAP/AD)** and people log in with their corporate credentials at the
   ordinary login form — there is no second button and no separate URL. Yagra searches for the person
@@ -228,6 +215,33 @@
   verify XML signatures itself.
 
 ### Improvements
+- **Yagra-core and Yagra-poller use far less memory, and stop growing.** Both binaries now use the
+  mimalloc allocator instead of the system one. Measured on a 50,000-node deployment over a
+  20-minute window, at identical polling throughput: core's resident set averaged **183 MB instead
+  of 397 MB**, and grew by **6 MB instead of 162 MB** across the window; the poller's stopped
+  creeping upward at all. The old behaviour was not a leak but the system allocator holding on to
+  per-thread arenas it never returned — which meant core's footprint kept climbing for as long as it
+  was watched, and could not be sized with confidence. If you provisioned a host from the previous
+  profile, it will now sit comfortably under it. Building with `--no-default-features` restores the
+  system allocator.
+- **Upgrading a poller now downloads half as much.** The poller image stored its binary twice: once
+  where it was copied in, and again because granting it `CAP_NET_RAW` rewrote the file into a second
+  layer — and both layers change with every release. Placing the binary and granting the capability
+  are now one layer, so the per-release download for `yagra-poller` drops from 10.2 MB to 4.7 MB.
+  Most of that is the duplicate going away; the rest is a smaller binary. The image behaves
+  identically and raw-socket ICMP is unaffected.
+- The **Dependency / root-cause dashboard widget** now lists each root cause with the alerts rolled
+  up under it, biggest first, instead of an indented parent→child tree. The dependency graph is no
+  longer a tree — a node can have two upstreams — and a tree could only have shown one of them.
+- **Interface addresses are collected and their changes recorded**, the same way CDP/LLDP adjacency
+  already was: one current set per node plus an append-on-change history, visible under
+  **Settings ▸ Data retention** as *Interface address changes*. Collection is on by default at the
+  same hourly cadence, with its own toggle at `PUT /api/v1/settings/neighbors`
+  (`l3_enabled` / `l3_interval_secs`; omitting them leaves those settings unchanged).
+- **LLDP neighbours now carry the peer's management address.** That is what lets an adjacency be
+  matched to a monitored node, and it is why the map can be built from L2 at all. ⚠️ The first poll
+  after upgrading records **one extra neighbour-change row per LLDP-speaking node**, because the
+  recorded set genuinely gained a field. Devices that do not implement LLDP-MIB record nothing new.
 - **An API token owned by an LDAP account now expires with its owner's silence**, the same way an
   SSO-owned one already did. A directory disabling somebody is not something Yagra is told about, so
   the owner going quiet is the only signal there is — previously that rule was written for OIDC
@@ -235,6 +249,10 @@
   `YAGRA_PAT_OIDC_IDLE_DAYS` keeps its name and now governs both.
 
 ### Bug Fixes
+- **A Troubleshoot analysis started over MCP now appears in the audit log.** The identical run
+  started from the WebUI or the REST API was recorded; the one launched through `/mcp` left no
+  trace at all, because auditing is REST middleware that the MCP surface does not pass through. Any
+  deployment with `/mcp` enabled has been under-recording who started analyses.
 - **Signing in as a disabled SSO account now answers 401 instead of 500.** The refusal was correct;
   the status code said Yagra had broken.
 - **Resetting the password of an SSO or directory account is now refused** with a message saying so.

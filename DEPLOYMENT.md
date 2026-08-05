@@ -162,7 +162,7 @@ YAGRA_WEB_PORT=443                     # host port for the WebUI (HTTPS)
 
 Open **https://\<host\>/** once it is up. The certificate is self-signed until you import your own at Settings ▸ TLS.
 
-**Upgrading from before v0.2.0?** `YAGRA_WEB_PORT` did not change meaning, but the scheme on it did. If your `.env` still says `3000` you keep port 3000 and it becomes `https://<host>:3000` — `http://` no longer answers there. Delete the line to land on `443`.
+**Upgrading from before v0.1.22?** `YAGRA_WEB_PORT` did not change meaning, but the scheme on it did. If your `.env` still says `3000` you keep port 3000 and it becomes `https://<host>:3000` — `http://` no longer answers there. Delete the line to land on `443`.
 
 **Closing core's API port — do this second, not first.** `YAGRA_API_BIND=127.0.0.1` takes the plaintext API off the LAN, leaving the TLS edge as the only way in. Browsers are unaffected either way (the web container proxies `/api/` and `/mcp` internally), but Prometheus scrapes, webhook senders and API scripts use that port directly. Move them to `https://<host>/api/v1` with a certificate they trust **first**; doing both at once means every machine client fails simultaneously with two overlapping causes.
 

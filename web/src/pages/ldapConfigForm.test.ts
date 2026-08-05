@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -217,6 +218,21 @@ describe('the role-map rows', () => {
     // The API types `role_map` values as bare strings, so a row written by a newer build must not
     // silently widen to something more privileged.
     expect(toRoleMapRows({ NetOps: 'superuser' })[0].role).toBe('viewer');
+  });
+
+  // Nothing stops an operator typing the same group into two rows, and the object being built can
+  // only hold one. Last-wins is the documented choice because it matches the row they edited most
+  // recently — pinned here so a refactor to `??=`/first-wins is a failing test rather than a silent
+  // change to which of two visible rows takes effect.
+  it('let a later row win a duplicate group', () => {
+    expect(
+      fromRoleMapRows(
+        rows([
+          ['NetOps', 'viewer'],
+          ['NetOps', 'admin'],
+        ]),
+      ),
+    ).toEqual({ NetOps: 'admin' });
   });
 
   it('give a new row a key that cannot collide', () => {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 /** The group→role mapping editor's pure half, shared by the OIDC provider dialog and the LDAP
  *  directory card.
  *

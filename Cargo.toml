@@ -36,7 +36,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.21"
+version = "0.1.22"
 edition = "2021"
 rust-version = "1.90"
 license = "AGPL-3.0-only"
@@ -233,15 +233,78 @@ schemars = { version = "1", features = ["uuid1", "chrono04"] }
 # `axum_extras` teaches the `#[utoipa::path]` macro to read `Path`/`Query` extractors; `chrono` and
 # `uuid` map those types to their JSON Schema `format`s instead of an opaque string.
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+# Global allocator for the two long-running binaries (`#[global_allocator]` in each `main.rs`,
+# behind a default-on `mimalloc` feature so there is still a way back).
+#
+# **It was A/B'd on the test server before being adopted — 2026-08-05, 50k synthetic nodes, two
+# 20-minute windows on identical `release` builds differing only in this dependency:**
+#
+#   | | glibc malloc | mimalloc |
+#   |---|---|---|
+#   | core RSS, mean               | 396.6 MiB | **183.4 MiB** |
+#   | core RSS, growth over window | **+162.2 MiB** | **+6.4 MiB** |
+#   | poller RSS, growth           | +17.7 MiB | −0.4 MiB |
+#   | core CPU, mean               | 12.45% | 11.81% |
+#   | poll results ingested        | 63.64/s | 63.67/s |
+#
+# The throughput row is the control: both arms did the same work, so the memory column is not one
+# arm simply running slower. glibc's per-thread arenas grow under this allocation pattern (short
+# buffers churned across dozens of Tokio workers) and are not returned, which is what the +162 MiB
+# is — core's footprint was climbing for as long as it was measured. That is the difference between
+# a process you can size and one you cannot.
+#
+# `default-features = false` drops mimalloc's secure-mode/stats extras; we want the allocator, not
+# its diagnostics. It builds its C sources with `cc`, which the bookworm rust image already has.
+mimalloc = { version = "0.1", default-features = false }
 
+# The profile `/release` publishes to GHCR. Optimize for the running binary, not the build: a
+# release is cut a few times a month and then serves tens of thousands of nodes for weeks.
+#
+# The size/speed trade is narrower than "smaller is slower" suggests, but it is **not** absent —
+# measured, not assumed (see the `lto` note below, where fat LTO cost core 1.1 MiB). `strip` is free
+# on both axes. The settings that clearly trade are `opt-level = "s"/"z"` (rejected — throughput
+# matters at 50k nodes) and `panic = "abort"`.
+#
+# ⚠️ **`panic = "abort"` is deliberately NOT set**, even though it would shrink the binary ~10% and
+# skip landing-pad codegen. Under `unwind`, a panicking Tokio task dies alone and the runtime logs
+# it; under `abort` it takes the whole process with it. One malformed SNMP PDU or one bad slice
+# index in a report renderer would stop monitoring for the entire fleet. That is the wrong failure
+# mode for an NMS regardless of what it saves.
+#
+# `lto = "fat"` — measured before adopting, because the risk was memory, not time. fat LTO at
+# `codegen-units = 1` optimizes across crate boundaries (where a workspace of 14 crates has the most
+# left on the table), but the link step is one process holding the whole program.
+#
+# **Measured 2026-08-05 on the build host (16 cores / 14 GB RAM), building the release images:**
+#   peak single process   4.28 GB (rustc, linking yagra-core) — the ceiling was 70% of RAM, so it fits
+#   peak system in use    5.83 GB of 14 GB
+#   core image build      593 s cold  (thin LTO was 3.5–6.5 min)
+#   binary, gzipped       core 11.9 → 13 MiB, poller 5.1 → 4.7 MiB
+#
+# ⚠️ **fat LTO made core's binary BIGGER, not smaller** — the opposite of the usual claim, and the
+# reason these numbers are written down. On top of `codegen-units = 1` there is no cross-unit
+# duplication left to collapse, so what fat LTO adds is cross-*crate* inlining, and inlining
+# duplicates code. Poller went the other way. Do not repeat "LTO shrinks the binary" about this
+# workspace; it was checked and it is not true here.
+#
+# ⚠️ **The runtime benefit is assumed, not measured.** What was measured is the cost: +1.1 MiB on
+# core's per-release download and roughly double the build time. Keeping it is a judgement — the
+# mechanism is well understood, the cost is small and bounded next to core's 66 MiB wkhtmltopdf
+# layer, and a release is cut a few times a month. If someone wants the benefit measured, the rig is
+# the 50k-node scale harness (`crates/yagra-core/examples/seed_nodes.rs`), and "thin" is a fallback
+# that costs nothing to go back to.
+#
+# Only the *release* profile pays any of this. `ci-fast` below sets `lto = false`, so `/flashdeploy`
+# and PR validation are untouched.
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 1
 strip = true
 
 # Fast-compile profile for development builds — what the test server runs between releases.
 # Inherits `release` but trades runtime optimization for a much faster compile: `codegen-units = 1`
-# + thin LTO is the single biggest cost in an image build (the core release build takes 3.5–6.5 min).
+# + LTO is the single biggest cost in an image build (the core release build was 3.5–6.5 min under
+# thin LTO and is 593 s cold since it went fat — see the note above `[profile.release]`).
 # Splitting codegen back into 256 units and dropping LTO lets rustc parallelize across cores again,
 # and `opt-level = 1` skips the expensive optimization passes while keeping the binary far faster
 # than a debug build.

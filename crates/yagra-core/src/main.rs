@@ -10,6 +10,15 @@
 //! PostgreSQL + NATS + VictoriaMetrics), else an in-memory **skeleton** so a bare
 //! `cargo run` still serves the API.
 
+// Global allocator (default-on `mimalloc` feature; `--no-default-features` gives the system one
+// back). Core allocates short-lived buffers across dozens of Tokio workers for weeks, which is the
+// shape glibc's per-thread arenas handle worst: measured on 50k nodes, its resident set climbed
+// +162 MiB over 20 minutes and kept going, where this one moved +6 MiB at identical throughput.
+// The full comparison is in the workspace Cargo.toml.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod ack;
 mod alerts;
 mod analysis;

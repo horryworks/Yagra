@@ -37,6 +37,16 @@ hostname = { workspace = true }
 socket2 = { workspace = true }
 # Own interface addresses for the heartbeat's `mgmt_addrs` (ADR-043 anchor resolution).
 if-addrs = { workspace = true }
+# Optional global allocator — see the workspace Cargo.toml entry for why this is a feature and not
+# a dependency, and for the condition under which it stops being optional.
+mimalloc = { workspace = true, optional = true }
+
+[features]
+# ON by default — the poller's resident set went from creeping upward to flat under the same load.
+# The measurement is in the workspace Cargo.toml. It stays a feature rather than becoming
+# unconditional so `--no-default-features` remains a one-flag way back to the system allocator.
+default = ["mimalloc"]
+mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 async-trait = { workspace = true }

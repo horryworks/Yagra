@@ -210,8 +210,21 @@ RUN useradd -r -u 10002 yagra \
  && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer
 COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
-COPY --from=bins /app/yagra-poller /usr/local/bin/yagra-poller
-# File capability: grants CAP_NET_RAW (effective+permitted) on exec without root.
-RUN setcap cap_net_raw+ep /usr/local/bin/yagra-poller
+# The binary arrives through a bind mount rather than a COPY, so that placing it and granting it
+# CAP_NET_RAW are ONE layer.
+#
+# The obvious form — `COPY … ` then `RUN setcap …` — stores the binary TWICE: setcap rewrites the
+# file, and a RUN that modifies a file writes the whole file into its own layer. Measured on the
+# published v0.1.20 image: 5.1 MB compressed for the COPY layer and 5.1 MB again for the setcap
+# layer, and *both* change on every release, so every `docker pull` of a new poller release moved
+# 10.2 MB where 5.1 MB was needed. Nothing about the image's behaviour depended on the split.
+#
+# `setcap` in the `bins` stage instead is not an option: the `prebuilt` stage is busybox and has no
+# setcap, so the two BIN_SRC paths would diverge. The mount works for both.
+# `install -m0755` rather than `cp`: the mode is stated instead of inherited from the source through
+# the process umask, the same reason the `prebuilt` stage spells out `COPY --chmod=0755`.
+RUN --mount=type=bind,from=bins,source=/app/yagra-poller,target=/tmp/yagra-poller \
+    install -m0755 /tmp/yagra-poller /usr/local/bin/yagra-poller \
+ && setcap cap_net_raw+ep /usr/local/bin/yagra-poller
 USER yagra
 ENTRYPOINT ["/usr/local/bin/yagra-poller"]

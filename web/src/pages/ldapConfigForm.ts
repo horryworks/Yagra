@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 /** The LDAP/AD directory settings form's pure half (ADR-041).
  *
  *  Mirrors the Rust side deliberately and narrowly: `ldap::validate` is the authority and answers

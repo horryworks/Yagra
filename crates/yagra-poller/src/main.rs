@@ -20,6 +20,14 @@
 //! legacy job subject. `main` blocks on the worker loop; the local scheduler keeps it running across
 //! bus blips (that continuity is the point of the working-set model).
 
+// Global allocator (default-on `mimalloc` feature; `--no-default-features` gives the system one
+// back). Per-poll buffers churned across the worker pool for weeks is the adversarial case for a
+// thread-arena allocator: measured on 50k nodes, the poller's resident set crept upward under
+// glibc's and stayed flat under this one. The full comparison is in the workspace Cargo.toml.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL_ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod arp;
 mod discovery;
 mod flow;

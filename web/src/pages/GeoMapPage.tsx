@@ -25,6 +25,7 @@ import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
 import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
 import { stateColorVar, stateLabel } from '../lib/format';
+import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
 import { useMapPaneStore } from '../store';
 import {
@@ -354,9 +355,13 @@ export function GeoMapPage() {
           >
             <span className="geopage-resize-grip" aria-hidden="true" />
           </div>
-          {/* Never colour alone (ui-conventions.md): the legend names each state in text. */}
+          {/* Never colour alone (ui-conventions.md): the legend names each state in text. Derived
+              from `DISPLAY_ORDER` rather than a local list, because a pin's colour comes from
+              `worstStateFromCounts`, which walks the full `NodeState` union — a hand-written legend
+              drops whichever state nobody remembered (it omitted `maintenance`, so a site whose
+              only non-ok nodes were in a maintenance window drew a colour the legend never named). */}
           <ul className="geopage-legend">
-            {(['ok', 'warning', 'critical', 'unreachable', 'unknown'] as const).map((s) => (
+            {DISPLAY_ORDER.map((s) => (
               <li key={s}>
                 <span className="geopage-swatch" style={{ background: stateColorVar(s) }} />
                 {stateLabel(s)}

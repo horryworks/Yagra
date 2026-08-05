@@ -1853,6 +1853,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.49"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6a45a52f43e1c16f667ccfe4dd8c85b7f7c204fd5e3bf46c5b0db9a5c3c0b8e9"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libredox"
 version = "0.1.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1983,6 +1992,15 @@ dependencies = [
  "rand 0.9.4",
  "rand_xoshiro",
  "sketches-ddsketch",
+]
+
+[[package]]
+name = "mimalloc"
+version = "0.1.52"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d4139bb28d14ad1facf21d5eb8825051b326e172d216b39f6d31df53cc97862"
+dependencies = [
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -4935,7 +4953,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-alert"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "async-trait",
  "serde",
@@ -4948,7 +4966,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-authz"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "data-encoding",
  "nkeys",
@@ -4961,7 +4979,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-bus"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -4979,7 +4997,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-common"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "serde",
  "serde_json",
@@ -4989,7 +5007,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-core"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5003,6 +5021,7 @@ dependencies = [
  "lettre",
  "metrics",
  "metrics-exporter-prometheus",
+ "mimalloc",
  "minijinja",
  "openidconnect",
  "rand 0.8.6",
@@ -5046,14 +5065,14 @@ dependencies = [
 
 [[package]]
 name = "yagra-discovery"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "yagra-common",
 ]
 
 [[package]]
 name = "yagra-forward"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "chrono",
  "regex",
@@ -5069,7 +5088,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-hoststats"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "libc",
  "sysinfo",
@@ -5079,7 +5098,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-ingest"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
@@ -5087,7 +5106,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-poller"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5096,6 +5115,7 @@ dependencies = [
  "if-addrs",
  "metrics",
  "metrics-exporter-prometheus",
+ "mimalloc",
  "rand 0.8.6",
  "serde_json",
  "snmp2",
@@ -5115,7 +5135,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-secrets"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5125,7 +5145,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-telemetry"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -5139,7 +5159,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-topology"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "uuid",
  "yagra-common",
@@ -5147,7 +5167,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-transport"
-version = "0.1.21"
+version = "0.1.22"
 dependencies = [
  "async-trait",
  "csnmp",
