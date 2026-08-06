@@ -47,6 +47,21 @@
 - `MANIFEST.json` reports both size caps that can bite — log files dropped for size, and files
   outside the requested window — because a silently truncated log reads as "nothing was logged",
   which is a wrong answer rather than a missing one.
+- The redaction report carries `secret_literals_skipped_short` beside
+  `secret_literals_enforced`, and `README.txt` interprets the pair in words. On its own, an
+  `enforced` count of zero has three meanings a reviewer cannot tell apart: this deployment holds
+  no secrets in its environment, it holds some that were too short to enforce safely, or the
+  collection broke. The first is a clean bill of health and the third is the strongest rule in the
+  scan silently not running. Found on the first real bundle, where establishing which it was took
+  a shell session on the deployment — the exact work a support bundle exists to remove.
+  - The eight-character floor is **not** lowered: a lab `POSTGRES_PASSWORD=yagra` would forbid the
+    substring `yagra`, which appears in every path and table name in the archive, and the scan
+    would refuse every bundle forever. Counting the declined values is the fix; the README says
+    plainly when the scan has fallen back to pattern matching alone, and what to do about it.
+- `db/connections.json` no longer reports a negative connection age. `now()` is the transaction's
+  start time and the backend running the query sets its own `state_change` after it, so the
+  `active` row reliably came back a few milliseconds below zero — an artefact of measuring from
+  inside, not a fact about the deployment.
 
 ## v0.1.22 — HTTPS by default, a network map that draws itself, and directory sign-in
 

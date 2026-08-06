@@ -194,6 +194,16 @@ pub fn env_snapshot() -> Vec<EnvEntry> {
 pub struct SecretScan {
     /// Exact values that must appear nowhere. Never logged, never put in an error.
     literals: Vec<String>,
+    /// How many candidate secrets were seen and **not** enforced because they were shorter than
+    /// [`MIN_SECRET_LEN`].
+    ///
+    /// Reported in the manifest, and the reason is worth stating: without it, `literals = 0` has
+    /// three meanings a reviewer cannot tell apart — this process holds no secrets, it holds some
+    /// that were too short to enforce safely, or the collection is broken. The first is a clean
+    /// bill of health and the third is a silent failure of the strongest rule in the scan. Found
+    /// on the first real bundle (2026-08-06), where establishing which of the three it was took an
+    /// SSH session into the deployment — exactly the work this artefact exists to remove.
+    skipped_short: usize,
 }
 
 /// Environment-variable name fragments whose value is treated as a secret literal. Matched
@@ -217,8 +227,10 @@ impl SecretScan {
     /// credentials actually reach this process).
     #[must_use]
     pub fn from_env() -> Self {
+        let (literals, skipped_short) = literals_from(std::env::vars());
         Self {
-            literals: literals_from(std::env::vars()),
+            literals,
+            skipped_short,
         }
     }
 
@@ -229,15 +241,15 @@ impl SecretScan {
     pub fn patterns_only() -> Self {
         Self {
             literals: Vec::new(),
+            skipped_short: 0,
         }
     }
 
-    /// How many literal values this scan is enforcing. Reported in the manifest so a reviewer can
-    /// see the check ran with teeth — a zero here on a real deployment means the scan degenerated
-    /// to patterns and the bundle deserves a closer read.
+    /// How many literal values this scan is enforcing, and how many candidates it declined as too
+    /// short. **Read as a pair** — see [`SecretScan::skipped_short`].
     #[must_use]
-    pub fn literal_count(&self) -> usize {
-        self.literals.len()
+    pub fn literal_counts(&self) -> (usize, usize) {
+        (self.literals.len(), self.skipped_short)
     }
 
     /// Scan one entry. `Some(rule)` names the rule that fired; the matched text is deliberately not
@@ -263,7 +275,8 @@ impl SecretScan {
     }
 }
 
-/// The literal secret values implied by a set of environment variables.
+/// The literal secret values implied by a set of environment variables, and how many candidates
+/// were declined for being shorter than [`MIN_SECRET_LEN`].
 ///
 /// Split out from [`SecretScan::from_env`] so it is testable without `std::env::set_var`, which
 /// races every other test in the binary.
@@ -271,27 +284,39 @@ impl SecretScan {
 /// Two sources, and the second is the one that earns the function: a variable whose **name** marks
 /// it secret, and the password inside the userinfo of any URL-shaped value. `YAGRA_DATABASE_URL`
 /// carries a credential under a name no marker list would flag.
-fn literals_from(vars: impl Iterator<Item = (String, String)>) -> Vec<String> {
+///
+/// The skip count exists so that "nothing to enforce" and "something to enforce that we declined"
+/// are distinguishable in the manifest. Counting is the whole fix — **the floor itself must not be
+/// lowered**: a lab `POSTGRES_PASSWORD=yagra` would forbid the substring `yagra`, which is in every
+/// path and table name in the bundle, and the scan would refuse every bundle forever.
+fn literals_from(vars: impl Iterator<Item = (String, String)>) -> (Vec<String>, usize) {
     let mut literals = Vec::new();
+    let mut skipped_short = 0usize;
     for (name, value) in vars {
-        if value.len() < MIN_SECRET_LEN {
-            continue;
-        }
         let upper = name.to_ascii_uppercase();
-        if SECRET_NAME_MARKERS.iter().any(|m| upper.contains(m)) {
-            literals.push(value.clone());
+        let named_secret = SECRET_NAME_MARKERS.iter().any(|m| upper.contains(m));
+        // An empty value is *absence*, not a secret too short to enforce — counting it would
+        // report a skip on every deployment that simply leaves an optional variable unset.
+        if named_secret && !value.is_empty() {
+            if value.len() >= MIN_SECRET_LEN {
+                literals.push(value.clone());
+            } else {
+                skipped_short += 1;
+            }
         }
         if value.contains("://") {
             if let (_, Some(password)) = yagra_bus::split_userinfo_password(&value) {
                 if password.len() >= MIN_SECRET_LEN {
                     literals.push(password);
+                } else if !password.is_empty() {
+                    skipped_short += 1;
                 }
             }
         }
     }
     literals.sort_unstable();
     literals.dedup();
-    literals
+    (literals, skipped_short)
 }
 
 /// Whether the text holds something shaped like a Yagra PAT: the `yat_` prefix followed by enough
@@ -368,6 +393,13 @@ pub struct RedactionReport {
     pub bytes_scanned: usize,
     /// How many literal secret values from this process's environment the scan was enforcing.
     pub secret_literals_enforced: usize,
+    /// How many candidate secrets were declined for being too short to enforce safely.
+    ///
+    /// **Read this next to `secret_literals_enforced`, never alone.** `0 / 0` means this process
+    /// genuinely holds no secrets in its environment; `0 / 2` means it holds two and the scan is
+    /// running on patterns alone, which is a materially weaker check and worth knowing before the
+    /// archive leaves the building.
+    pub secret_literals_skipped_short: usize,
     /// The rules, in the words the manifest publishes to the reviewer.
     pub rules: Vec<&'static str>,
 }
@@ -510,7 +542,8 @@ impl BundleBuilder {
             redaction: RedactionReport {
                 files_scanned: self.files.len(),
                 bytes_scanned,
-                secret_literals_enforced: scan.literal_count(),
+                secret_literals_enforced: scan.literal_counts().0,
+                secret_literals_skipped_short: scan.literal_counts().1,
                 rules: vec![
                     "no value of a secret-named environment variable of the core process",
                     "no password from the userinfo of any URL the core process holds",
@@ -590,6 +623,33 @@ fn readme_text(m: &Manifest) -> String {
          secret value(s) taken from the core process's own environment plus these rules:\n",
         m.redaction.files_scanned, m.redaction.bytes_scanned, m.redaction.secret_literals_enforced
     ));
+    // The two counts are only meaningful together, so the sentence that interprets them is written
+    // here rather than left to the reader. A bare "0" reads as a clean bill of health and can mean
+    // the opposite.
+    s.push_str(&match (
+        m.redaction.secret_literals_enforced,
+        m.redaction.secret_literals_skipped_short,
+    ) {
+        (0, 0) => "  (no literal values to enforce: this core process holds no secrets in its \
+                   environment)\n"
+            .to_owned(),
+        (_, 0) => String::new(),
+        // Line breaks are placed so no phrase straddles one — a reader scanning this paragraph
+        // should be able to take any single line at face value.
+        (0, n) => format!(
+            "  ⚠ {n} secret value(s) in this environment are under {MIN_SECRET_LEN} characters, \
+             so they were NOT\n\
+             \x20   enforced as literals: a short value occurs by chance in ordinary text and \
+             would\n\
+             \x20   refuse every bundle. The strongest rule therefore did not run, and this\n\
+             \x20   archive was checked by pattern matching alone.\n\
+             \x20   Lengthen those secrets to restore it.\n"
+        ),
+        (_, n) => format!(
+            "  ⚠ a further {n} value(s) were too short to enforce as literals (under \
+             {MIN_SECRET_LEN} characters).\n"
+        ),
+    });
     for rule in &m.redaction.rules {
         s.push_str(&format!("  - {rule}\n"));
     }
@@ -799,7 +859,13 @@ impl SupportRepo {
             .map(|r| ConnectionStat {
                 state: r.get("state"),
                 connections: r.get("connections"),
-                longest_seconds: r.get("longest_seconds"),
+                // Clamped at zero. `now()` is the transaction's start time, and the backend running
+                // this very query set its own `state_change` *after* that — so the `active` row
+                // reliably comes back a few milliseconds negative. A negative age is not a fact
+                // about the deployment, it is an artefact of measuring from inside.
+                longest_seconds: r
+                    .get::<Option<f64>, _>("longest_seconds")
+                    .map(|s| s.max(0.0)),
             })
             .collect())
     }
@@ -858,7 +924,13 @@ mod tests {
     fn scan_with(literals: &[&str]) -> SecretScan {
         SecretScan {
             literals: literals.iter().map(|s| (*s).to_owned()).collect(),
+            skipped_short: 0,
         }
+    }
+
+    /// Run `literals_from` over a fixture without touching process state.
+    fn literals_of(vars: &[(&str, &str)]) -> (Vec<String>, usize) {
+        literals_from(vars.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())))
     }
 
     /// The rule that matters most, and the one a pattern list cannot express: a literal secret from
@@ -927,7 +999,7 @@ mod tests {
     /// would be switched off rather than fixed.
     #[test]
     fn literals_come_from_names_and_from_url_userinfo_but_never_from_short_values() {
-        let vars = [
+        let (got, skipped) = literals_of(&[
             ("YAGRA_NATS_POLLER_PASSWORD", "poller-secret-value"),
             (
                 "YAGRA_DATABASE_URL",
@@ -937,8 +1009,7 @@ mod tests {
             ("YAGRA_API_ADDR", "0.0.0.0:8080"),
             // Marked, but too short to enforce without poisoning every bundle.
             ("POSTGRES_PASSWORD", "yagra"),
-        ];
-        let got = literals_from(vars.iter().map(|(k, v)| ((*k).to_owned(), (*v).to_owned())));
+        ]);
         assert!(got.contains(&"poller-secret-value".to_owned()));
         assert!(
             got.contains(&"db-secret-value".to_owned()),
@@ -946,6 +1017,92 @@ mod tests {
         );
         assert!(!got.contains(&"yagra".to_owned()), "too short to enforce");
         assert!(!got.iter().any(|l| l.contains("0.0.0.0")));
+        assert_eq!(skipped, 1, "the declined short secret is counted, not lost");
+    }
+
+    /// The three states of `secret_literals_enforced` must be distinguishable, because a bare `0`
+    /// is the one number in this artefact that can mean its own opposite.
+    ///
+    /// Regression from the first real bundle (2026-08-06): the test deployment reported `0`, and
+    /// establishing whether that meant "no secrets" or "the strongest rule silently did not run"
+    /// required an SSH session into the deployment — exactly the work a support bundle exists to
+    /// remove.
+    #[test]
+    fn an_empty_literal_set_says_whether_there_was_nothing_or_something_declined() {
+        // Nothing to enforce — a genuinely clean environment.
+        assert_eq!(
+            literals_of(&[("YAGRA_API_ADDR", "0.0.0.0:8080")]),
+            (vec![], 0)
+        );
+
+        // Something to enforce, declined: the shape the test server actually produced — a 5-char
+        // database password inside a URL, and an unset admin password beside it.
+        let (literals, skipped) = literals_of(&[
+            (
+                "YAGRA_DATABASE_URL",
+                "postgres://yagra:yagra@postgres/yagra",
+            ),
+            ("YAGRA_ADMIN_PASSWORD", ""),
+        ]);
+        assert!(literals.is_empty());
+        assert_eq!(
+            skipped, 1,
+            "the short URL password counts; the UNSET admin password does not — absence is not a \
+             declined secret, and counting it would report a skip on every default deployment"
+        );
+    }
+
+    /// The README has to interpret the pair, not print it. A reviewer reading `0` needs the
+    /// sentence, and the warning has to be visibly different from the all-clear.
+    #[test]
+    fn the_readme_distinguishes_a_clean_zero_from_a_weakened_scan() {
+        let clean = readme_for(0, 0);
+        assert!(clean.contains("no literal values to enforce"));
+        assert!(!clean.contains('⚠'), "a clean environment gets no warning");
+
+        let weakened = readme_for(0, 2);
+        assert!(weakened.contains('⚠'));
+        assert!(
+            weakened.contains("pattern matching alone"),
+            "it must say what was lost, not just that something was skipped"
+        );
+        assert!(
+            weakened.contains("Lengthen those secrets"),
+            "and what to do"
+        );
+
+        // Enforcing some and declining others is a footnote, not an alarm.
+        let partial = readme_for(3, 1);
+        assert!(partial.contains("a further 1 value(s)"));
+        assert!(!partial.contains("pattern matching alone"));
+    }
+
+    /// Render just the README for a given redaction outcome.
+    fn readme_for(enforced: usize, skipped: usize) -> String {
+        let mut b = BundleBuilder::new(6);
+        b.add_bytes("x.json", "a section", b"{}".to_vec());
+        let mut m = Manifest {
+            format: BUNDLE_FORMAT,
+            version: BUNDLE_VERSION,
+            generated_at: Utc::now(),
+            core_version: "0.0.0",
+            window_hours: 6,
+            files: Vec::new(),
+            omitted: Vec::new(),
+            redaction: RedactionReport {
+                files_scanned: 1,
+                bytes_scanned: 2,
+                secret_literals_enforced: enforced,
+                secret_literals_skipped_short: skipped,
+                rules: vec!["a rule"],
+            },
+        };
+        m.files.push(ManifestFile {
+            path: "x.json".to_owned(),
+            bytes: 2,
+            description: "a section".to_owned(),
+        });
+        readme_text(&m)
     }
 
     /// The allow-list must not acquire a secret by name. `YAGRA_NATS_POLLER_PASSWORD` is the one
@@ -1044,6 +1201,10 @@ mod tests {
             "the standing omissions plus the run's own"
         );
         assert_eq!(m["redaction"]["files_scanned"], 2);
+        // Both halves of the literal count are always present, so a reviewer never has to work out
+        // which meaning a bare zero carries.
+        assert_eq!(m["redaction"]["secret_literals_enforced"], 0);
+        assert_eq!(m["redaction"]["secret_literals_skipped_short"], 0);
     }
 
     /// The manifest describes exactly the entries the archive holds. A file added to one and not
