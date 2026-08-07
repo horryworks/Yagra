@@ -80,6 +80,11 @@ pub(crate) struct ClientConfig {
 
 /// Tells the WebUI whether reads are open and whether login is available, so it can decide up front
 /// whether to gate behind a login screen. Intentionally unauthenticated — see the module doc.
+//
+//  Not to be confused with the MCP `get_config(kind=…)` tool (ADR-042 I3b), which reads the
+//  deployment's *monitoring* configuration and has nothing to do with this route. This one's MCP
+//  counterpart is `get_system_health(section="deployment")`. Two unrelated things sharing a name is
+//  a grep cost (extensibility.md §5); it is kept because both names are right in their own file.
 #[utoipa::path(
     get, path = "/api/v1/config", tag = "health",
     security(()),

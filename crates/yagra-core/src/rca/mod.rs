@@ -26,6 +26,7 @@
 //! * [`store`] — the provider config (sealed credential) and the generated reports.
 //! * [`orchestrator`] — the click-to-report path, and the caps that bound what a click can cost.
 
+pub(crate) mod agent;
 pub(crate) mod answer;
 pub(crate) mod claude;
 pub(crate) mod context;

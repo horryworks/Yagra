@@ -57,6 +57,26 @@ const MIN_WINDOW_SECS: i64 = 600;
 const MAX_WINDOW_SECS: i64 = 86_400;
 /// σ for the timeline's anomaly scorer. The same default the Troubleshoot slider starts at.
 const SENSITIVITY: f64 = 3.0;
+/// Default provider round-trips one explanation may take (`YAGRA_RCA_MAX_TURNS`, ADR-028 WS-G).
+///
+/// **Set it to 1 to get Increment 1 back exactly**: one turn means no tools are offered, so the
+/// request is byte-identical to the single-shot one and no adapter emits a `tools` field. Six is
+/// enough for "look at the alert, check the poller is up, pull the interface series, check what
+/// syslog said, read the threshold, answer" without being enough to wander.
+const DEFAULT_MAX_TURNS: usize = 6;
+/// Default wall-clock ceiling for one whole explanation (`YAGRA_RCA_TASK_BUDGET_SECS`).
+///
+/// The 60s HTTP timeout bounds one *call*; six of them plus tool work does not fit in it, and a
+/// concurrency permit is held for the whole task. This is what stops two slow explanations parking
+/// both slots for ten minutes.
+const DEFAULT_TASK_BUDGET_SECS: u64 = 240;
+/// Total tool output one explanation may accumulate, in characters.
+///
+/// `prompt::MAX_PROMPT_CHARS` bounds the **seed**, and bounded exactly one thing while the call was
+/// single-shot. Tool results are appended after it, so without this a six-turn run could carry six
+/// times `MAX_TOOL_RESULT_CHARS` on top of the seed and walk into the provider's context window —
+/// which fails as a 400 mid-incident rather than as a smaller answer.
+const MAX_TOOL_CHARS_TOTAL: usize = 60_000;
 
 /// Why an explanation was not produced. Each variant maps to one HTTP status at the API edge; the
 /// separation exists so "you are asking too fast" never looks like "the vendor is down".
@@ -105,6 +125,14 @@ pub struct RcaRequest {
     pub force: bool,
     /// Who asked, for the stored report's `created_by`.
     pub username: String,
+    /// What the caller may see (ADR-028 WS-G).
+    ///
+    /// Carried rather than resolved here, because it is the *caller's* scope and the only place it
+    /// can be resolved is the edge that authenticated them. Both edges already had it and threw it
+    /// away after `require_visible_node`; the agent needs it for every tool it runs, and a
+    /// "privileged in-process client" that defaulted to [`NodeScope::All`] would hand a
+    /// group-scoped operator the whole fleet.
+    pub scope: crate::api::scope::NodeScope,
 }
 
 /// A built provider plus the config fingerprint it was built from.
@@ -129,6 +157,8 @@ pub struct RcaOrchestrator {
     recent_starts: Mutex<VecDeque<Instant>>,
     max_per_window: usize,
     cache_secs: i64,
+    max_turns: usize,
+    task_budget: Duration,
     client: Mutex<Option<CachedClient>>,
 }
 
@@ -148,6 +178,17 @@ impl RcaOrchestrator {
             usize::try_from(DEFAULT_CACHE_SECS).unwrap_or(900),
         ))
         .unwrap_or(DEFAULT_CACHE_SECS);
+        // Floored at 1 rather than allowed to be 0: `env_cap` clamps to at least 1, and a zero here
+        // would mean "never call the provider", which is not a configuration anyone wants and would
+        // read as a silent outage.
+        let max_turns = env_cap("YAGRA_RCA_MAX_TURNS", DEFAULT_MAX_TURNS);
+        let task_budget = Duration::from_secs(
+            u64::try_from(env_cap(
+                "YAGRA_RCA_TASK_BUDGET_SECS",
+                usize::try_from(DEFAULT_TASK_BUDGET_SECS).unwrap_or(240),
+            ))
+            .unwrap_or(DEFAULT_TASK_BUDGET_SECS),
+        );
         Self {
             repo,
             nodes,
@@ -159,6 +200,8 @@ impl RcaOrchestrator {
             recent_starts: Mutex::new(VecDeque::new()),
             max_per_window,
             cache_secs,
+            max_turns,
+            task_budget,
             client: Mutex::new(None),
         }
     }
@@ -174,7 +217,11 @@ impl RcaOrchestrator {
     /// # Errors
     /// See [`RcaError`]. Every variant is a clean refusal — nothing here can leave the alert engine
     /// in a different state than it was before the call.
-    pub async fn explain(&self, req: &RcaRequest) -> Result<RcaReport, RcaError> {
+    pub async fn explain(
+        &self,
+        req: &RcaRequest,
+        tools: &super::agent::AgentTools,
+    ) -> Result<RcaReport, RcaError> {
         let config = self.repo.active().await?.ok_or(RcaError::NotConfigured)?;
 
         let window = req
@@ -193,7 +240,14 @@ impl RcaOrchestrator {
             .await
             .map_err(RcaError::NoIncident)?;
 
-        let digest = digest_of(&ctx, &config, req.language);
+        // Whether the model gets tools. One turn means it does not, which is Increment 1 exactly.
+        //
+        // The *retrieval* is what varies between the two modes, not the question, so the seed
+        // context stays deterministic and the digest keeps working — but the two modes must not
+        // share a cache entry, or reopening an incident after an operator changed `max_turns` would
+        // serve an answer built from a different amount of evidence.
+        let agentic = self.max_turns > 1;
+        let digest = digest_of(&ctx, &config, req.language, agentic);
 
         // The cache check comes before admission on purpose: a served-from-store report costs
         // nothing external, so charging it against the rate limit would punish the cheap path.
@@ -213,54 +267,68 @@ impl RcaOrchestrator {
             .map_err(|_| RcaError::TooManyConcurrent(self.max_concurrent))?;
 
         let provider = self.provider_for(&config)?;
-        let request = prompt::render(&ctx, req.language, config.max_output_tokens);
+        let mut request = prompt::render(&ctx, req.language, config.max_output_tokens);
+        if agentic {
+            request.tools = tools.schemas();
+        }
 
-        // Only the shape of the call is traced. The prompt carries hostnames, addresses and syslog
-        // bodies, and the reply carries whatever the model made of them; neither belongs in a log.
-        let started = Instant::now();
-        let result = provider.complete(&request).await;
-        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-        let name = provider.name();
-        metrics::histogram!("yagra_llm_latency_ms", "provider" => name).record(elapsed_ms);
-
-        let response = match result {
-            Ok(r) => {
-                metrics::counter!("yagra_llm_calls_total", "provider" => name, "outcome" => "ok")
-                    .increment(1);
-                if let Some(n) = r.in_tokens {
-                    metrics::counter!("yagra_llm_tokens_total", "provider" => name, "dir" => "in")
-                        .increment(u64::from(n));
-                }
-                if let Some(n) = r.out_tokens {
-                    metrics::counter!("yagra_llm_tokens_total", "provider" => name, "dir" => "out")
-                        .increment(u64::from(n));
-                }
-                r
+        // The turn loop (ADR-028 WS-G). With `agentic == false` it runs exactly once and behaves
+        // identically to Increment 1 — the model is offered no tools, so it cannot ask for one.
+        let deadline = Instant::now() + self.task_budget;
+        let mut transcript: Vec<super::store::ToolTurn> = Vec::new();
+        let mut turn = 0usize;
+        let mut tool_chars = 0usize;
+        let response = loop {
+            let response = self.one_call(provider.as_ref(), &request).await?;
+            turn += 1;
+            let calls = response.tool_calls();
+            if calls.is_empty() {
+                break response;
             }
-            Err(e) => {
-                metrics::counter!("yagra_llm_calls_total", "provider" => name, "outcome" => "error")
-                    .increment(1);
-                metrics::counter!("yagra_llm_errors_total", "provider" => name, "reason" => e.reason())
-                    .increment(1);
-                // An auth failure means the operator has to go fix the settings, so it is worth a
-                // log line; the rest are transient and already counted.
-                if matches!(e, LlmError::Auth(_)) {
-                    tracing::warn!(provider = name, "the LLM provider rejected our credentials");
-                }
-                // A failed call still invalidates a cached client when the cause was auth: the
-                // token may simply have gone stale under a rotated service account.
-                if matches!(e, LlmError::Auth(_)) {
-                    self.forget_client();
-                }
-                return Err(RcaError::Provider(e));
+            // Bounds checked *after* a turn produced calls rather than before the call, so hitting
+            // the ceiling still returns the model's last answer instead of failing the request. A
+            // partial explanation is worth more to an operator than a 502.
+            if turn >= self.max_turns
+                || Instant::now() >= deadline
+                || tool_chars >= MAX_TOOL_CHARS_TOTAL
+            {
+                tracing::info!(
+                    turns = turn,
+                    max = self.max_turns,
+                    tool_chars,
+                    "RCA agent stopped at its budget with tool calls outstanding"
+                );
+                metrics::counter!("yagra_rca_agent_truncated_total").increment(1);
+                break response;
+            }
+            // Replay what the model said, including its calls: a provider that does not see its own
+            // tool_use block rejects the result that follows it.
+            request
+                .messages
+                .push(super::provider::Turn::Assistant(response.parts.clone()));
+            for (id, name, args) in calls {
+                let out = tools.call(name, args.clone(), &req.scope).await;
+                tool_chars += out.chars().count();
+                // Fenced like any other device-supplied text. `search_events` returns syslog bodies
+                // verbatim, and unlike the seed context this arrives *after* the system prompt.
+                request.messages.push(super::provider::Turn::ToolResult {
+                    id: id.to_owned(),
+                    content: prompt::fence_tool_result(&out),
+                });
+                transcript.push(super::store::ToolTurn {
+                    tool: name.to_owned(),
+                    args: args.clone(),
+                    result: out,
+                });
             }
         };
 
-        let answer = answer::parse(&response.text);
+        let answer = answer::parse(&response.text());
         let body = ReportBody {
             answer: answer.clone(),
             evidence: serde_json::to_value(&ctx).map_err(|e| anyhow::anyhow!(e))?,
             language: req.language,
+            transcript,
         };
         let report = self
             .repo
@@ -281,6 +349,55 @@ impl RcaOrchestrator {
         Ok(report)
     }
 
+    /// One provider round-trip, with its metrics and its error handling.
+    ///
+    /// Split out of [`Self::explain`] when the single call became a loop: the counters have to be
+    /// charged per **call**, not per generation, or an eight-turn explanation bills the same as a
+    /// one-turn one in every metric this deployment has.
+    async fn one_call(
+        &self,
+        provider: &dyn LlmProvider,
+        request: &super::provider::LlmRequest,
+    ) -> Result<super::provider::LlmResponse, RcaError> {
+        // Only the shape of the call is traced. The prompt carries hostnames, addresses and syslog
+        // bodies, and the reply carries whatever the model made of them; neither belongs in a log.
+        let started = Instant::now();
+        let result = provider.complete(request).await;
+        let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+        let name = provider.name();
+        metrics::histogram!("yagra_llm_latency_ms", "provider" => name).record(elapsed_ms);
+
+        match result {
+            Ok(r) => {
+                metrics::counter!("yagra_llm_calls_total", "provider" => name, "outcome" => "ok")
+                    .increment(1);
+                if let Some(n) = r.in_tokens {
+                    metrics::counter!("yagra_llm_tokens_total", "provider" => name, "dir" => "in")
+                        .increment(u64::from(n));
+                }
+                if let Some(n) = r.out_tokens {
+                    metrics::counter!("yagra_llm_tokens_total", "provider" => name, "dir" => "out")
+                        .increment(u64::from(n));
+                }
+                Ok(r)
+            }
+            Err(e) => {
+                metrics::counter!("yagra_llm_calls_total", "provider" => name, "outcome" => "error")
+                    .increment(1);
+                metrics::counter!("yagra_llm_errors_total", "provider" => name, "reason" => e.reason())
+                    .increment(1);
+                // An auth failure means the operator has to go fix the settings, so it is worth a
+                // log line; the rest are transient and already counted. It also invalidates the
+                // cached client — the token may simply have gone stale under a rotated account.
+                if matches!(e, LlmError::Auth(_)) {
+                    tracing::warn!(provider = name, "the LLM provider rejected our credentials");
+                    self.forget_client();
+                }
+                Err(RcaError::Provider(e))
+            }
+        }
+    }
+
     /// Send one minimal prompt to the configured provider and report what happened.
     ///
     /// Uses [`RcaRepo::configured`], not `active`: the point of a Test button is validating a
@@ -296,20 +413,20 @@ impl RcaOrchestrator {
             .await?
             .ok_or(RcaError::NotConfigured)?;
         let provider = self.provider_for(&config)?;
-        let request = super::provider::LlmRequest {
-            system: "You are a connectivity test. Reply with exactly: ok".to_owned(),
-            user: "Reply with exactly: ok".to_owned(),
+        let request = super::provider::LlmRequest::single(
+            "You are a connectivity test. Reply with exactly: ok".to_owned(),
+            "Reply with exactly: ok".to_owned(),
             // Small but not tiny: a thinking model draws its reasoning from this same budget, and
             // a two-token ceiling would come back empty and read as a failure.
-            max_output_tokens: 256,
-        };
+            256,
+        );
         let started = Instant::now();
         let name = provider.name();
         match provider.complete(&request).await {
             Ok(r) => {
                 metrics::counter!("yagra_llm_calls_total", "provider" => name, "outcome" => "ok")
                     .increment(1);
-                Ok((started.elapsed().as_millis(), r.text.trim().to_owned()))
+                Ok((started.elapsed().as_millis(), r.text().trim().to_owned()))
             }
             Err(e) => {
                 metrics::counter!("yagra_llm_calls_total", "provider" => name, "outcome" => "error")
@@ -373,7 +490,12 @@ impl RcaOrchestrator {
 /// Provider, model and language are folded in because switching any of them produces a genuinely
 /// different report — serving a Gemini answer to someone who has since moved to Claude would make
 /// the stored `provider` column a lie.
-fn digest_of(ctx: &IncidentContext, config: &ActiveConfig, lang: Language) -> String {
+fn digest_of(
+    ctx: &IncidentContext,
+    config: &ActiveConfig,
+    lang: Language,
+    agentic: bool,
+) -> String {
     let mut h = Sha256::new();
     h.update(ctx.fingerprint().as_bytes());
     h.update(b"\x00");
@@ -382,6 +504,11 @@ fn digest_of(ctx: &IncidentContext, config: &ActiveConfig, lang: Language) -> St
     h.update(config.provider.model.as_bytes());
     h.update(b"\x00");
     h.update(format!("{lang:?}").as_bytes());
+    // ADR-028 WS-G. The seed context is identical in both modes — agentic retrieval adds turns, not
+    // a different question — so without this a deployment that turned tools on would keep serving
+    // pre-tool answers from the cache for fifteen minutes and look like the feature had not shipped.
+    h.update(b"\x00");
+    h.update(if agentic { "agentic" } else { "single" }.as_bytes());
     hex(&h.finalize())
 }
 
@@ -479,11 +606,13 @@ mod tests {
             &ctx(),
             &config(ProviderKind::Claude, "m"),
             Language::English,
+            false,
         );
         let b = digest_of(
             &ctx(),
             &config(ProviderKind::Claude, "m"),
             Language::English,
+            false,
         );
         assert_eq!(a, b);
     }
@@ -499,12 +628,14 @@ mod tests {
             digest_of(
                 &ctx(),
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             ),
             digest_of(
                 &later,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             )
         );
     }
@@ -522,9 +653,46 @@ mod tests {
         let mut b = a.clone();
         b.timeline[0].severity = 4.37; // recomputed over a slightly shifted window
         assert_eq!(
-            digest_of(&a, &config(ProviderKind::Claude, "m"), Language::English),
-            digest_of(&b, &config(ProviderKind::Claude, "m"), Language::English)
+            digest_of(
+                &a,
+                &config(ProviderKind::Claude, "m"),
+                Language::English,
+                false
+            ),
+            digest_of(
+                &b,
+                &config(ProviderKind::Claude, "m"),
+                Language::English,
+                false
+            )
         );
+    }
+
+    /// The two retrieval modes must not share a cache entry (ADR-028 WS-G).
+    ///
+    /// The seed context is identical either way — agentic retrieval adds turns, not a different
+    /// question — so without the mode in the digest, a deployment that turned tools on would keep
+    /// serving pre-tool answers for the whole cache lifetime and look like the feature had not
+    /// shipped. This is the one cache bug the loop could introduce.
+    #[test]
+    fn the_two_retrieval_modes_do_not_share_a_cache_entry() {
+        let c = config(ProviderKind::Claude, "m");
+        assert_ne!(
+            digest_of(&ctx(), &c, Language::English, false),
+            digest_of(&ctx(), &c, Language::English, true),
+        );
+    }
+
+    /// …and each mode is still stable with itself, or the cache never hits at all.
+    #[test]
+    fn a_mode_is_stable_with_itself() {
+        let c = config(ProviderKind::Claude, "m");
+        for agentic in [false, true] {
+            assert_eq!(
+                digest_of(&ctx(), &c, Language::English, agentic),
+                digest_of(&ctx(), &c, Language::English, agentic),
+            );
+        }
     }
 
     #[test]
@@ -541,12 +709,14 @@ mod tests {
             digest_of(
                 &ctx(),
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             ),
             digest_of(
                 &grown,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             )
         );
     }
@@ -563,12 +733,14 @@ mod tests {
             digest_of(
                 &ctx(),
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             ),
             digest_of(
                 &grown,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             )
         );
     }
@@ -579,13 +751,15 @@ mod tests {
             &ctx(),
             &config(ProviderKind::Claude, "m"),
             Language::English,
+            false,
         );
         assert_ne!(
             base,
             digest_of(
                 &ctx(),
                 &config(ProviderKind::Claude, "m2"),
-                Language::English
+                Language::English,
+                false,
             )
         );
         assert_ne!(
@@ -593,7 +767,8 @@ mod tests {
             digest_of(
                 &ctx(),
                 &config(ProviderKind::Gemini, "m"),
-                Language::English
+                Language::English,
+                false,
             )
         );
         assert_ne!(
@@ -601,7 +776,8 @@ mod tests {
             digest_of(
                 &ctx(),
                 &config(ProviderKind::Claude, "m"),
-                Language::Japanese
+                Language::Japanese,
+                false,
             )
         );
     }
@@ -638,12 +814,14 @@ mod tests {
             digest_of(
                 &from_a,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             ),
             digest_of(
                 &from_b,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             )
         );
         // …but the node the operator clicked is named in the prompt, so two *different* symptoms
@@ -653,12 +831,14 @@ mod tests {
             digest_of(
                 &from_a,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             ),
             digest_of(
                 &from_b,
                 &config(ProviderKind::Claude, "m"),
-                Language::English
+                Language::English,
+                false,
             )
         );
     }

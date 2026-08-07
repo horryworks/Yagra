@@ -85,6 +85,21 @@ pub enum NodeScope {
 }
 
 impl NodeScope {
+    /// The scope that sees nothing.
+    ///
+    /// A placeholder for a field that must hold a scope before the real one is resolved — see
+    /// [`crate::rca::orchestrator::RcaRequest::scope`]. It is empty rather than [`Self::All`] for
+    /// the reason `YagraMcp::scope_of`'s fallback is: the value nobody meant to use must be the one
+    /// that shows nothing, because the branch nobody expects to reach is the one that becomes
+    /// reachable without anyone noticing.
+    #[must_use]
+    pub fn sees_nothing() -> Self {
+        NodeScope::Groups(Arc::new(ScopeSet {
+            visible: Vec::new(),
+            breadcrumb: Vec::new(),
+        }))
+    }
+
     /// Whether this scope restricts anything. Handlers use it to keep the unrestricted fast path.
     #[must_use]
     pub fn is_all(&self) -> bool {

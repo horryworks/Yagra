@@ -157,6 +157,10 @@ impl RcaBody {
             ),
             force: self.force,
             username: username.to_owned(),
+            // Overwritten by `explain_incident`, which is the only place that has both the checked
+            // scope and the request. Empty rather than `All` so a path that somehow skipped that
+            // step sees nothing instead of the fleet.
+            scope: super::scope::NodeScope::sees_nothing(),
         }
     }
 }
@@ -175,16 +179,20 @@ impl RcaBody {
 pub(crate) async fn explain_incident(
     st: &ApiState,
     scope: &super::scope::NodeScope,
-    req: crate::rca::orchestrator::RcaRequest,
+    mut req: crate::rca::orchestrator::RcaRequest,
 ) -> Result<crate::rca::store::RcaReport, ApiError> {
     super::scope::require_visible_node(st, scope, req.node)?;
     let rca = st.rca.as_ref().ok_or_else(ApiError::admin_unavailable)?;
-    rca.explain(&req).await.map_err(|e| rca_error(&e))
+    // The agent runs under the scope this function just checked, attached here rather than by each
+    // caller so the two cannot be different (ADR-028 WS-G). Both callers had it and dropped it.
+    req.scope = scope.clone();
+    let tools = crate::rca::agent::AgentTools::new(st.clone());
+    rca.explain(&req, &tools).await.map_err(|e| rca_error(&e))
 }
 
 /// The `GET /api/v1/llm/config` body.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub(super) struct LlmConfigResponse {
+pub(crate) struct LlmConfigResponse {
     /// `null` until a provider has been configured — the normal state of a fresh installation.
     config: Option<crate::rca::store::LlmConfigView>,
     /// Every provider the operator may choose, with its placeholders and its egress warning.
@@ -205,6 +213,14 @@ async fn get_llm_config(
     _guard: RequireManageConfig,
     admin: Admin,
 ) -> ApiResult<Json<LlmConfigResponse>> {
+    Ok(Json(llm_config_view(&admin).await?))
+}
+
+/// The stored provider configuration and the choices — the seam both edges call.
+///
+/// Never the credential: `LlmConfigView` carries `has_api_key`, and a structural test in
+/// `rca/store.rs` fails if a key-shaped field ever appears on it.
+pub(crate) async fn llm_config_view(admin: &super::AdminState) -> ApiResult<LlmConfigResponse> {
     let view = admin.llm.view().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -216,10 +232,10 @@ async fn get_llm_config(
     // to render its empty self, not an error. `providers` ships the choices with their placeholders
     // and their egress warning, so the UI reads the data-boundary classification off the same code
     // the adapters obey instead of restating it.
-    Ok(Json(LlmConfigResponse {
+    Ok(LlmConfigResponse {
         config: view,
         providers: crate::rca::provider_choices(),
-    }))
+    })
 }
 
 /// Create or replace the provider configuration.

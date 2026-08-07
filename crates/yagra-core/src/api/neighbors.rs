@@ -341,8 +341,16 @@ async fn get_adjacency_settings(
     _guard: RequireView,
     admin: Admin,
 ) -> ApiResult<Json<NeighborConfig>> {
+    Ok(Json(adjacency_config(&admin).await))
+}
+
+/// The adjacency-collection settings with the accepted cadence range — the seam both edges call.
+///
+/// The range travels with the values on purpose: a caller that knows the current interval but not
+/// the bounds cannot tell a rejected write from a broken one.
+pub(crate) async fn adjacency_config(admin: &super::AdminState) -> NeighborConfig {
     let s = admin.repo.get_adjacency_settings().await;
-    Ok(Json(NeighborConfig {
+    NeighborConfig {
         enabled: s.neighbors_enabled,
         interval_secs: s.neighbors_interval_secs,
         l3_enabled: Some(s.l3_enabled),
@@ -353,7 +361,7 @@ async fn get_adjacency_settings(
         routing_interval_secs: Some(s.routing_interval_secs),
         min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
         max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
-    }))
+    }
 }
 
 /// Change whether and how often adjacency is collected.

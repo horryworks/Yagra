@@ -224,6 +224,14 @@ async fn list_meraki_orgs(
     _guard: RequireView,
     admin: Admin,
 ) -> ApiResult<Json<Vec<MerakiOrgView>>> {
+    Ok(Json(org_views(&admin).await?))
+}
+
+/// The onboarded organizations as the API exposes them — the seam both edges call.
+///
+/// `meraki_org_view` is what keeps the credential reference off the wire; going through it rather
+/// than the stored row is the whole point of having a seam here.
+pub(crate) async fn org_views(admin: &super::AdminState) -> ApiResult<Vec<MerakiOrgView>> {
     let orgs = admin.meraki_orgs.list().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -231,7 +239,7 @@ async fn list_meraki_orgs(
             "failed to list meraki organizations",
         )
     })?;
-    Ok(Json(orgs.iter().map(meraki_org_view).collect()))
+    Ok(orgs.iter().map(meraki_org_view).collect())
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -509,22 +517,29 @@ async fn list_meraki_networks(
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Vec<MerakiNetworkView>>> {
-    let nets = admin.meraki_orgs.list_networks(id).await.map_err(|e| {
+    Ok(Json(network_views(&admin, id).await?))
+}
+
+/// One org's networks with their monitored flag — the seam both edges call.
+pub(crate) async fn network_views(
+    admin: &super::AdminState,
+    org: Uuid,
+) -> ApiResult<Vec<MerakiNetworkView>> {
+    let nets = admin.meraki_orgs.list_networks(org).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "list meraki networks",
             "failed to list meraki networks",
         )
     })?;
-    Ok(Json(
-        nets.into_iter()
-            .map(|(network_id, name, monitored)| MerakiNetworkView {
-                network_id,
-                name,
-                monitored,
-            })
-            .collect(),
-    ))
+    Ok(nets
+        .into_iter()
+        .map(|(network_id, name, monitored)| MerakiNetworkView {
+            network_id,
+            name,
+            monitored,
+        })
+        .collect())
 }
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -846,8 +861,15 @@ pub(crate) struct MerakiPolling {
     ),
 )]
 async fn get_meraki_polling(_guard: RequireView, admin: Admin) -> ApiResult<Json<MerakiPolling>> {
-    let enabled = admin.repo.get_meraki_polling_enabled().await;
-    Ok(Json(MerakiPolling { enabled }))
+    Ok(Json(polling_switch(&admin).await))
+}
+
+/// The global Meraki kill switch — the seam both edges call. Exists because `MerakiPolling`'s field
+/// is private to this module, and it should stay that way.
+pub(crate) async fn polling_switch(admin: &super::AdminState) -> MerakiPolling {
+    MerakiPolling {
+        enabled: admin.repo.get_meraki_polling_enabled().await,
+    }
 }
 
 /// Set the global kill switch — the one control that instantly halts all Meraki collection without

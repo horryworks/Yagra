@@ -28,8 +28,12 @@
 //! placed in a tool result (ADR-018; enforced structurally in [`dto`] + its canary test).
 
 mod dto;
-mod folded;
-mod tools;
+pub(crate) mod folded;
+// `pub(crate)` since ADR-028 WS-G: the RCA agent calls the tool bodies in-process, which is the
+// reuse `tools.rs`'s module doc has promised since Increment 1. It reaches `*_in(params, &NodeScope)`
+// and `YagraMcp::tool_router()`, never `ToolRouter::call` — rmcp's `RequestContext` needs a `Peer`
+// whose constructor is crate-private, so there is no way to fabricate a session and no reason to.
+pub(crate) mod tools;
 
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
@@ -69,7 +73,11 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     trusting any of the above, check get_system_health — if a poller is offline or a store is \
     unreachable, missing data means missing collection rather than a healthy quiet, and its \
     monitoring_gaps section names the windows where that was true. get_audit says who changed or \
-    acknowledged what. Node ids are UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";
+    acknowledged what. To see how Yagra itself is set up — thresholds, event_rules, \
+    notification_channels, routing_rules, profiles, node_collection, forward_destinations, \
+    report_definitions and the deployment settings — use get_config; its `kind` argument selects \
+    one, and each kind demands the permission the WebUI demands for the same screen. Node ids are \
+    UUIDs; timestamps are RFC 3339 or Unix seconds per tool.";
 
 /// The MCP server handler: holds the shared read state and the macro-generated tool router. Cheap to
 /// clone (the state is all `Arc`s); a fresh instance is created per session by the transport factory.
@@ -242,7 +250,7 @@ mod tests {
         // The same parser the route ledger uses, so there is one definition of "a declared tool".
         let declared = crate::api::route_table::declared_mcp_tools();
         assert!(
-            declared.len() >= 33,
+            declared.len() >= 34,
             "only found {} tool declarations; the parser drifted",
             declared.len()
         );
@@ -260,7 +268,7 @@ mod tests {
             .filter(|w| w.contains('_') && w.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
             .collect();
         assert!(
-            named.len() >= 15,
+            named.len() >= 20,
             "only found {} tool-shaped words in the instructions; the parser drifted",
             named.len()
         );

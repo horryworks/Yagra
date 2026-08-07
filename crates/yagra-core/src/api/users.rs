@@ -544,6 +544,14 @@ pub(crate) struct RoleInfo {
     ),
 )]
 async fn list_roles(_guard: RequireView) -> ApiResult<Json<RolesMatrix>> {
+    Ok(Json(roles_matrix()))
+}
+
+/// The permission catalogue and what each role grants — the seam both edges call.
+///
+/// Pure: it reads no store, because the matrix is the type system's, not the deployment's. Derived
+/// from `Permission::ALL` × `Role::ALL` so a new permission appears without anyone remembering.
+pub(crate) fn roles_matrix() -> RolesMatrix {
     let permissions = Permission::ALL
         .into_iter()
         .map(|p| PermissionInfo {
@@ -566,7 +574,7 @@ async fn list_roles(_guard: RequireView) -> ApiResult<Json<RolesMatrix>> {
                 .collect(),
         })
         .collect();
-    Ok(Json(RolesMatrix { permissions, roles }))
+    RolesMatrix { permissions, roles }
 }
 
 /// The role-vs-privilege matrix.

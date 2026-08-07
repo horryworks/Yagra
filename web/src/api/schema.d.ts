@@ -7129,6 +7129,11 @@ export interface components {
             evidence: components["schemas"]["IncidentContext"];
             /** @description Which language the answer was requested in. */
             language: components["schemas"]["Language"];
+            /**
+             * @description What the model looked up for itself, in order (ADR-028 WS-G). Empty on a single-shot run,
+             *     and on every report written before agentic retrieval existed.
+             */
+            transcript?: components["schemas"]["ToolTurn"][];
         };
         /** @description A report definition (reusable template), as served to the API. */
         ReportDefinition: {
@@ -7819,6 +7824,22 @@ export interface components {
          * @enum {string}
          */
         TokenSurface: "mcp" | "rest";
+        /**
+         * @description One tool the model asked for, and what it was told.
+         *
+         *     Stored for the same reason `evidence` is: an explanation whose reader cannot check what it was
+         *     based on is an assertion. Agentic retrieval makes that worse, not better — the evidence is no
+         *     longer a fixed set somebody chose, so without this nobody can tell whether the model looked at
+         *     the right thing.
+         */
+        ToolTurn: {
+            /** @description The arguments the model chose. */
+            args: Record<string, never>;
+            /** @description What the tool answered, as the model saw it. */
+            result: string;
+            /** @description The tool name, from the agent's allow-list. */
+            tool: string;
+        };
         /** @description One ranked node in a Top-N result. */
         TopEntry: {
             /**
@@ -14159,6 +14180,8 @@ export interface operations {
         parameters: {
             query?: {
                 q?: string;
+                /** @description Maximum entries to return (1–2000, default 2000). */
+                limit?: number;
             };
             header?: never;
             path?: never;
@@ -14166,7 +14189,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Matching catalog entries, or the whole catalog when no term is given */
+            /** @description Matching catalog entries, or the whole catalog when no term is given, capped at `limit` (1–2000, default 2000) */
             200: {
                 headers: {
                     [name: string]: unknown;

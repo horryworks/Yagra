@@ -7675,11 +7675,21 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum entries to return (1–2000, default 2000).",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Matching catalog entries, or the whole catalog when no term is given",
+            "description": "Matching catalog entries, or the whole catalog when no term is given, capped at `limit` (1–2000, default 2000)",
             "content": {
               "application/json": {
                 "schema": {
@@ -26049,6 +26059,13 @@
           "language": {
             "$ref": "#/components/schemas/Language",
             "description": "Which language the answer was requested in."
+          },
+          "transcript": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ToolTurn"
+            },
+            "description": "What the model looked up for itself, in order (ADR-028 WS-G). Empty on a single-shot run,\nand on every report written before agentic retrieval existed."
           }
         }
       },
@@ -27790,6 +27807,29 @@
           "mcp",
           "rest"
         ]
+      },
+      "ToolTurn": {
+        "type": "object",
+        "description": "One tool the model asked for, and what it was told.\n\nStored for the same reason `evidence` is: an explanation whose reader cannot check what it was\nbased on is an assertion. Agentic retrieval makes that worse, not better — the evidence is no\nlonger a fixed set somebody chose, so without this nobody can tell whether the model looked at\nthe right thing.",
+        "required": [
+          "tool",
+          "args",
+          "result"
+        ],
+        "properties": {
+          "args": {
+            "type": "object",
+            "description": "The arguments the model chose."
+          },
+          "result": {
+            "type": "string",
+            "description": "What the tool answered, as the model saw it."
+          },
+          "tool": {
+            "type": "string",
+            "description": "The tool name, from the agent's allow-list."
+          }
+        }
       },
       "TopEntry": {
         "type": "object",

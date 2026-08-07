@@ -11,6 +11,39 @@
 ## Unreleased
 
 ### New Features
+- **The MCP surface can now read Yagra's own configuration — `get_config(kind=…)`.** One tool over
+  28 reads: thresholds, event rules and sources, notification channels and routing rules, profiles
+  and collection templates, a node's collected metrics, classification rules, the MIB catalog, a
+  node's URL/DNS check, discovery candidates and scans, Meraki orgs/networks/polling, forwarding
+  destinations, report definitions and schedules, and the retention / adjacency / LLM / roles /
+  OIDC / LDAP settings. This closes the ADR-042 read-parity backlog: every read the WebUI can reach
+  is now reachable from `/mcp` except the four live SSE streams, which have no subscription
+  transport.
+  - **Read-only does not mean readable-by-anyone.** Each `kind` demands the same permission its REST
+    counterpart does — `manage-users` for OIDC and LDAP, `manage-config` for fourteen of them, and
+    `view` for the rest — so a Viewer is served the role matrix and refused the threshold ruleset
+    from the same tool.
+  - No stored secret is returned. A node's URL check reports **whether** a credential is bound
+    (`has_credential`), never which one; the REST body is unchanged.
+- **The LLM root-cause analysis can now look things up for itself.** Previously it was handed a
+  fixed set of facts — the alert, the dependents, the upstream chain, a signal timeline, recent
+  config changes — and answered in one shot, so it could only reason about what had been decided in
+  advance to include. It now gets the read-only MCP tools and asks: pull the interface series, check
+  whether the poller was even up, read what syslog said, look at the threshold that fired.
+  - **It runs under the caller's own visibility scope**, so a group-scoped operator's analysis
+    cannot read a node they cannot see, and under a **view-only** tool allow-list — the write tools,
+    `run_analysis`, `run_rca` and the audit log are all out of reach, checked per folded *branch*
+    rather than per tool.
+  - **What it looked up is stored with the answer** (`transcript` on the report body) and replayed
+    on both surfaces, for the same reason the evidence always was: an explanation whose reader
+    cannot check what it was based on is an assertion.
+  - Bounded by turns (`YAGRA_RCA_MAX_TURNS`, default 6), wall clock
+    (`YAGRA_RCA_TASK_BUDGET_SECS`, default 240) and total tool output. Hitting a bound returns the
+    model's last answer rather than failing the request. **Set `YAGRA_RCA_MAX_TURNS=1` to get the
+    previous single-shot behaviour back exactly** — no tools are offered and the request sent to the
+    provider is byte-identical to before.
+  - Tool output is device-supplied text and is fenced as such: a syslog line that says "ignore your
+    instructions" arrives inside the same untrusted-output markers a device's `sysDescr` always did.
 - **Support bundle (Settings ▸ System Health).** One download containing everything needed to
   diagnose a deployment from outside it: which binary is actually running (image source ref and
   build profile, not just the version), every system-health section, the allow-listed environment,
@@ -44,6 +77,10 @@
     statistics and host resources are in the bundle already.
 
 ### Improvements
+- **`GET /api/v1/mib-catalog` accepts `limit` and is now bounded.** The query had no row cap on
+  either edge, which was survivable while its only caller was a settings screen and stopped being so
+  once an AI client could ask for the whole table. `limit` is 1–2000 and defaults to 2000, so an
+  existing caller sees no change unless the catalog holds more than that.
 - `MANIFEST.json` reports both size caps that can bite — log files dropped for size, and files
   outside the requested window — because a silently truncated log reads as "nothing was logged",
   which is a wrong answer rather than a missing one.

@@ -7,19 +7,19 @@
 //! model picks worse from a longer list. That fold creates a problem the ADR did not anticipate:
 //! **the endpoints behind one tool do not share a permission.**
 //!
-//! The measured spread across the routes folded here is `View` ×16, `ManageConfig` ×1,
-//! `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and two that are deliberately
-//! unauthenticated over REST. Picking one permission for the whole tool fails in both directions: a
-//! loose choice hands the forwarding topology or the audit log to any viewer, and a strict choice
-//! recreates the very gap ADR-042 exists to close.
+//! The measured spread across the routes folded here is `View` ×28, `ManageConfig` ×15,
+//! `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and two that are
+//! deliberately unauthenticated over REST. Picking one permission for the whole tool fails in both
+//! directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
+//! strict choice recreates the very gap ADR-042 exists to close.
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
-//! anything else. ADR-042 decision 2 declined a `Permission` column on the 237-row ledger because
-//! nothing could check it; that reasoning holds there and not here — over these 21 rows the
+//! anything else. ADR-042 decision 2 declined a `Permission` column on the 243-row ledger because
+//! nothing could check it; that reasoning holds there and not here — over these 49 rows the
 //! permission is a value a test can compare against the REST handler's own extractor, and
 //! [`tests::every_folded_read_demands_what_its_rest_route_demands`] does exactly that.
 //!
-//! The same table drives two more checks, so one edit keeps three things honest:
+//! The same table drives three more checks, so one edit keeps four things honest:
 //! [`tests::every_folded_read_is_claimed_by_its_ledger_line`] (the route exists and the ledger
 //! names this tool) and [`tests::every_folded_result_is_free_of_forbidden_keys`] (the response
 //! schema carries no secret key). The last one reads the **OpenAPI document** rather than a
@@ -64,6 +64,25 @@ pub(crate) struct FoldedRead {
     /// how the `pool` on `run_rca`'s stored evidence was found. Only a genuinely undeclared blob
     /// lands here, and it must say so rather than passing for want of anything to check.
     pub opaque_ok: Option<&'static str>,
+    /// The `mcp/dto.rs` type this branch serves **instead of** the REST body, and why.
+    ///
+    /// `None` is the overwhelming default and the reason the schema walk below is a statement about
+    /// what the tool *sends*: the branch returns the route's own type, so the route's own schema
+    /// describes it. Naming a type here says it does not.
+    ///
+    /// **This is not an ADR-018 exemption and must not become one.** It moves the key check, it
+    /// does not skip it: the named type is declared in `dto.rs`, where
+    /// `the_canary_covers_every_dto_in_this_module` forces an instance into the forbidden-key
+    /// canary. What is lost is the schema walk's reach — every field of every nested type, whether
+    /// or not a sample populates it — which is why the guard also demands that the REST body really
+    /// does carry a banned key, so a stale claim cannot sit here covering a future field.
+    ///
+    /// It exists because ADR-042 I3b found the case the ADR had assumed away: `GET
+    /// /nodes/:node_id/url-check` must keep `credential` on the REST body (the WebUI's edit form
+    /// round-trips it, and a form that cannot prefill the binding clears it on every unrelated
+    /// edit), so "lower it on the MCP side" — the ADR's prescription — left the guard reading a
+    /// schema that still carried the key.
+    pub lowered_to: Option<(&'static str, &'static str)>,
 }
 
 /// The pool exemption, shared by the five reads whose entire subject is poller assignment.
@@ -72,7 +91,7 @@ const POOL_IS_THE_ANSWER: Option<&'static str> = Some(
      rather than inventory noise",
 );
 
-/// Every folded branch ADR-042 I3a ships. **This is also the increment's inventory** — the three
+/// Every folded branch ADR-042 I3a and I3b ship. **This is also each increment's inventory** — the
 /// guards below read it, and the ledger flip in the same increment covers exactly these paths.
 pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     // ── get_system_health(section=…) ─────────────────────────────────────────
@@ -84,6 +103,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: POOL_IS_THE_ANSWER,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -93,6 +113,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -102,6 +123,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -111,6 +133,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: POOL_IS_THE_ANSWER,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -125,6 +148,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         // poller-topology question; this is where the rest of that family lives.
         inventory_ids_ok: POOL_IS_THE_ANSWER,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -134,6 +158,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: POOL_IS_THE_ANSWER,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -143,6 +168,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -152,6 +178,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: POOL_IS_THE_ANSWER,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -161,6 +188,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -172,6 +200,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::ManageConfig),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -181,6 +210,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::ManageCredentials),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -190,6 +220,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: None,
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_system_health",
@@ -199,6 +230,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: None,
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     // ── the single-purpose I3a tools ─────────────────────────────────────────
     FoldedRead {
@@ -209,6 +241,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_report_runs",
@@ -218,6 +251,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_report_runs",
@@ -237,6 +271,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
              decide; no renderer reads credential storage, and the structured result is the reason \
              the run is worth reading",
         ),
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_audit",
@@ -247,6 +282,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::ViewAudit),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_dns_chain",
@@ -256,6 +292,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "get_dns_chain",
@@ -265,6 +302,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
     },
     FoldedRead {
         tool: "run_rca",
@@ -285,6 +323,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
              two surfaces disagree about what the model was shown",
         ),
         opaque_ok: None,
+        lowered_to: None,
     },
     // ── branches folded into tools that already existed ──────────────────────
     FoldedRead {
@@ -295,6 +334,331 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
+        lowered_to: None,
+    },
+    // ── get_config(kind=…) — ADR-042 I3b ─────────────────────────────────────
+    //
+    // The configuration-read family, 28 routes behind one `kind`. This is the block that proves the
+    // module doc's point about permission: it spans `ManageConfig` ×14, `View` ×12 and
+    // `ManageUsers` ×2, and one permission for the tool would either hand the identity-provider
+    // configuration to any viewer or refuse a viewer eleven reads the WebUI already shows them.
+    //
+    // Order matches `ConfigKind::NAMES`, which matches the order the tool's description lists them,
+    // so all three can be read side by side.
+    FoldedRead {
+        tool: "get_config",
+        arg: "thresholds",
+        method: "GET",
+        path: "/api/v1/thresholds",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "event_rules",
+        method: "GET",
+        path: "/api/v1/event-rules",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "event_sources",
+        method: "GET",
+        path: "/api/v1/event-sources",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "notification_channels",
+        method: "GET",
+        path: "/api/v1/notification-channels",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "routing_rules",
+        method: "GET",
+        path: "/api/v1/routing-rules",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "profiles",
+        method: "GET",
+        path: "/api/v1/profiles",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "profile_templates",
+        method: "GET",
+        path: "/api/v1/profiles/:id/templates",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "collection_templates",
+        method: "GET",
+        path: "/api/v1/collection-templates",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "template_items",
+        method: "GET",
+        path: "/api/v1/collection-templates/:id/items",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "node_collection",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/collection",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "classification_rules",
+        method: "GET",
+        path: "/api/v1/classification-rules",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "mib_catalog",
+        method: "GET",
+        path: "/api/v1/mib-catalog",
+        // `View`, not `ManageConfig`: the catalog is reference data the collection editor reads,
+        // and the REST edge has always let any viewer browse it.
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "url_check",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/url-check",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        // The one lowered row on this surface, and the reason the field exists at all. ADR-042
+        // I3b's plan was "drop `credential` on the MCP side", which the walk above cannot see: it
+        // reads the *route's* 200 schema. Lowering it on the REST body instead is not available —
+        // `checkConfigForm.ts` prefills the credential selector from this field and PUTs the whole
+        // config back, and that PUT is a replace, so a form that could not prefill the binding
+        // would clear it every time an operator edited a timeout.
+        lowered_to: Some((
+            "UrlCheckDto",
+            "the REST body must keep `credential` because the WebUI's edit form round-trips the \
+             binding through a replacing PUT; the id is a reference rather than a secret, but it \
+             is one a model can neither resolve nor use, so this surface answers the question it \
+             actually has — whether the probe is authenticated — with has_credential",
+        )),
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "dns_check",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/dns-check",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "discovery_candidates",
+        method: "GET",
+        path: "/api/v1/discovery/candidates",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "discovery_scan",
+        method: "GET",
+        path: "/api/v1/discovery/scan/:id",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "meraki_orgs",
+        method: "GET",
+        path: "/api/v1/meraki/orgs",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "meraki_networks",
+        method: "GET",
+        path: "/api/v1/meraki/orgs/:id/networks",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "meraki_polling",
+        method: "GET",
+        path: "/api/v1/meraki/polling",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "forward_destinations",
+        method: "GET",
+        path: "/api/v1/forwarding/destinations",
+        perm: Some(Permission::ManageConfig),
+        // Not `POOL_IS_THE_ANSWER`: nobody asked this branch which poller owns anything. The
+        // argument is its own, so the sentence is its own.
+        inventory_ids_ok: Some(
+            "`pool` on a forwarding destination is a field of the configuration being read rather \
+             than an inventory tag on a monitored device — it is the operator's restriction of \
+             this tee to one poller pool. A destination reported without it reads as fleet-wide \
+             when only one pool's stream is forwarded, which is a wrong answer, not a redacted one",
+        ),
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "report_definitions",
+        method: "GET",
+        path: "/api/v1/reports/definitions",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        // Not fixable with `#[schema(value_type = ReportSpec)]`, which is the usual answer: that
+        // type is private, `Deserialize`-only and deliberately lenient so a newer WebUI shape stays
+        // readable by an older core (ADR-017), and its `SectionSpec.settings` is itself untyped.
+        // Describing it would freeze a document core does not own and move the blind spot down one
+        // level rather than closing it.
+        opaque_ok: Some(
+            "`spec` is the report document the WebUI owns and core parses leniently so a newer \
+             builder stays compatible with an older core; describing it would freeze a shape core \
+             does not own, and its `settings` is itself untyped. What bounds it is the section \
+             catalog: a spec names section kinds, a range and display settings, and no section \
+             kind reads credential storage",
+        ),
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "report_schedules",
+        method: "GET",
+        path: "/api/v1/reports/schedules",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "retention",
+        method: "GET",
+        path: "/api/v1/settings/retention",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "adjacency_settings",
+        method: "GET",
+        path: "/api/v1/settings/neighbors",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "llm",
+        method: "GET",
+        path: "/api/v1/llm/config",
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "roles",
+        method: "GET",
+        path: "/api/v1/roles",
+        // The shape of the permission model, not anyone's account — hence `View` where the rest of
+        // `api/users.rs` is `ManageUsers`.
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "oidc",
+        method: "GET",
+        path: "/api/v1/settings/oidc",
+        // `ManageUsers`, not `ManageConfig`: an identity provider is account plumbing.
+        perm: Some(Permission::ManageUsers),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "ldap",
+        method: "GET",
+        path: "/api/v1/settings/ldap",
+        perm: Some(Permission::ManageUsers),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
     },
 ];
 
@@ -311,6 +675,20 @@ pub(crate) fn required_permission(tool: &str, arg: &str) -> Permission {
         .unwrap_or_else(|| panic!("no folded read `{tool}`/`{arg}`"))
         .perm
         .unwrap_or(Permission::View)
+}
+
+/// [`required_permission`] for a caller that may be holding **model output** (ADR-028 WS-G).
+///
+/// `None` means no such branch, which the RCA agent must treat as "let the tool refuse it with its
+/// own vocabulary" rather than as an error of its own — the tool's message lists the valid values
+/// and the agent's would not. Separate from [`required_permission`] because that one's panic is
+/// correct where the caller is a `match` this table pins, and is never correct where the caller is
+/// a language model.
+pub(crate) fn permission_of(tool: &str, arg: &str) -> Option<Permission> {
+    FOLDED_READS
+        .iter()
+        .find(|f| f.tool == tool && f.arg == arg)
+        .map(|f| f.perm.unwrap_or(Permission::View))
 }
 
 #[cfg(test)]
@@ -551,7 +929,7 @@ mod tests {
             compared += 1;
         }
         assert!(
-            compared >= 19,
+            compared >= 45,
             "only compared {compared} folded reads against their handlers; the parser drifted"
         );
     }
@@ -608,16 +986,52 @@ mod tests {
                     );
                 }
             }
-            for bad in SECRET_KEYS {
-                assert!(
-                    !keys.contains(*bad),
-                    "folded read `{}`/`{}` ({} {}) returns a field named {bad:?}; a tool must not \
-                     serve it (ADR-018) — give the MCP surface a sanitized DTO",
-                    f.tool,
-                    f.arg,
-                    f.method,
-                    f.path
-                );
+            // The secret rule, in one of two modes. Unlowered — every row but one — the route's own
+            // schema *is* what the tool sends, so a banned key on it is a banned key served. A
+            // lowered row says otherwise, and then the obligation moves to `dto.rs` rather than
+            // lifting: the named type has to exist there, where the instance canary covers it.
+            match f.lowered_to {
+                None => {
+                    for bad in SECRET_KEYS {
+                        assert!(
+                            !keys.contains(*bad),
+                            "folded read `{}`/`{}` ({} {}) returns a field named {bad:?}; a tool \
+                             must not serve it (ADR-018) — give the MCP surface a sanitized DTO \
+                             and name it in `lowered_to`",
+                            f.tool,
+                            f.arg,
+                            f.method,
+                            f.path
+                        );
+                    }
+                }
+                Some((dto, why)) => {
+                    assert!(
+                        why.len() >= 30,
+                        "`{}`/`{}` lowers a key away without a real reason",
+                        f.tool,
+                        f.arg
+                    );
+                    // Load-bearing, same discipline as `inventory_ids_ok`: a claim granted where
+                    // the REST body carries nothing to lower is a stale claim that would silently
+                    // cover a field somebody adds later.
+                    assert!(
+                        SECRET_KEYS.iter().any(|k| keys.contains(*k)),
+                        "`{}`/`{}` names a sanitized DTO, but its REST body carries no \
+                         secret-shaped key; drop `lowered_to` and serve the route's own type",
+                        f.tool,
+                        f.arg
+                    );
+                    // Without this the row would be an assertion about a type nobody checks. With
+                    // it, `dto.rs`'s canary is guaranteed to be the thing that checks it.
+                    assert!(
+                        include_str!("dto.rs").contains(&format!("pub struct {dto}")),
+                        "`{}`/`{}` names `{dto}` as its sanitized result, but mcp/dto.rs declares \
+                         no such type — nothing would then check what this branch returns",
+                        f.tool,
+                        f.arg
+                    );
+                }
             }
             match f.inventory_ids_ok {
                 None => {
@@ -654,7 +1068,7 @@ mod tests {
             checked += 1;
         }
         assert!(
-            checked >= 19,
+            checked >= 45,
             "only walked {checked} folded response schemas; the parser drifted"
         );
     }

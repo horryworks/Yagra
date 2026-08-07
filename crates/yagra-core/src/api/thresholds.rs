@@ -73,7 +73,20 @@ async fn list_thresholds(
     admin: Admin,
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<ThresholdPage>> {
-    let limit = q.limit.unwrap_or(THRESHOLDS_MAX).clamp(1, THRESHOLDS_MAX);
+    Ok(Json(threshold_page(&admin, q.limit).await?))
+}
+
+/// A capped page of rules — the seam both edges call.
+///
+/// The cap and the `truncated` derivation live here rather than in the handler so the MCP tool
+/// cannot serve an uncapped list, and cannot report a complete-looking one either. `truncated` is
+/// the load-bearing half: a silently short ruleset reads as "these are all the rules", which is
+/// exactly the wrong belief to hold about alerting configuration.
+pub(crate) async fn threshold_page(
+    admin: &super::AdminState,
+    limit: Option<i64>,
+) -> ApiResult<ThresholdPage> {
+    let limit = limit.unwrap_or(THRESHOLDS_MAX).clamp(1, THRESHOLDS_MAX);
     let (items, total) = admin.thresholds.list_page(limit).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list thresholds", "failed to list thresholds")
     })?;
@@ -81,11 +94,11 @@ async fn list_thresholds(
     if truncated {
         tracing::info!(total, limit, "threshold list capped to the page limit");
     }
-    Ok(Json(ThresholdPage {
+    Ok(ThresholdPage {
         items,
         total,
         truncated,
-    }))
+    })
 }
 
 /// Whether the built-in catalog declares `metric` a raw counter. Pure (no store) so the

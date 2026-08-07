@@ -177,24 +177,17 @@ const NO_MCP_WRITE: Mcp = Exempt(
      (ADR-042 decision 6)",
 );
 
-/// The admin configuration reads — thresholds, event rules, profiles, templates, classification
-/// rules, the MIB catalog, notification channels, forwarding destinations, Meraki, discovery, and
-/// the OIDC/retention/neighbour settings.
-///
-/// Parity applies to these. **Read-only does not mean readable-by-anyone** — a tool here enforces
-/// the same `Permission` its REST counterpart does.
-///
-/// ⚠️ That permission is **not one value**, and this comment used to say it was. Measured across
-/// the 27: `ManageConfig` ×14, `View` ×12 (Meraki, the MIB catalog, discovery candidates, the DNS
-/// and URL check configs, report definitions and schedules, the neighbour and retention settings)
-/// and `ManageUsers` ×2 (LDAP and OIDC, which are account plumbing rather than monitoring config).
-/// Folding them into one tool with one permission would either hand the identity-provider
-/// configuration to any viewer or refuse a viewer eleven reads the WebUI already shows them. I3b
-/// carries the per-kind table that `mcp/folded.rs` established for I3a.
-const PENDING_CONFIG_READ: Mcp = Pending(
-    "ADR-042 I3b: the configuration-read family has no tools yet; a tool here enforces the same \
-     permission the UI does, which varies per endpoint (ManageConfig / View / ManageUsers)",
-);
+// `PENDING_CONFIG_READ` lived here and is gone: ADR-042 I3b shipped `get_config(kind=…)`, so all 28
+// routes that carried it — thresholds, event rules, profiles, templates, classification rules, the
+// MIB catalog, notification channels, forwarding destinations, Meraki, discovery, the per-node check
+// configs and the OIDC/LDAP/retention/neighbour settings — now name a tool. Deleted rather than kept
+// for the next occasion, same as `PENDING_INFRA` below: a shared `Pending` const outliving its
+// family is how a gap stops being visible as one.
+//
+// The warning it carried survives in `mcp/folded.rs`, which is where it now does work rather than
+// describing work: the permission is **not one value** across this family (`ManageConfig` ×14,
+// `View` ×12, `ManageUsers` ×2), and one permission for the whole tool would either hand the
+// identity-provider configuration to any viewer or refuse a viewer eleven reads the UI shows them.
 
 /// The four SSE streams. Recorded as a gap rather than an exemption on purpose — `/mcp` declares
 /// `enable_tools()` only, so there is no subscription transport, and that is a missing capability
@@ -345,7 +338,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/classification-rules",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -369,7 +362,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/collection-templates",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -387,7 +380,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/collection-templates/:id/items",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -476,7 +469,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/discovery/candidates",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("POST", "/api/v1/discovery/import", ADMIN_CFG, NO_MCP_WRITE),
     ("POST", "/api/v1/discovery/scan", ADMIN_CFG, NO_MCP_WRITE),
@@ -484,14 +477,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/discovery/scan/:id",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("POST", "/api/v1/dns-monitors", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/event-rules",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("POST", "/api/v1/event-rules", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/event-rules/:id", ADMIN_CFG, NO_MCP_WRITE),
@@ -501,7 +494,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/event-sources",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("POST", "/api/v1/event-sources", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -592,7 +585,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/forwarding/destinations",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -630,7 +623,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Global("token-authenticated ingest from a device, not a user-facing read"),
         Exempt("a device posts to this; it is machine-to-machine ingest, not a question anyone asks"),
     ),
-    ("GET", "/api/v1/llm/config", ADMIN_CFG, PENDING_CONFIG_READ),
+    ("GET", "/api/v1/llm/config", ADMIN_CFG, Tool("get_config")),
     ("PUT", "/api/v1/llm/config", ADMIN_CFG, NO_MCP_WRITE),
     ("POST", "/api/v1/llm/test", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -660,7 +653,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     ("POST", "/api/v1/meraki/import", ADMIN_CFG, NO_MCP_WRITE),
-    ("GET", "/api/v1/meraki/orgs", ADMIN_CFG, PENDING_CONFIG_READ),
+    ("GET", "/api/v1/meraki/orgs", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/meraki/orgs", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/meraki/orgs/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -685,7 +678,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/meraki/orgs/:id/networks",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "PUT",
@@ -703,7 +696,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/meraki/polling",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("PUT", "/api/v1/meraki/polling", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -737,7 +730,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("fleet_throughput"),
     ),
     ("GET", "/api/v1/metrics/top", PostFiltered, Tool("top_metrics")),
-    ("GET", "/api/v1/mib-catalog", ADMIN_CFG, PENDING_CONFIG_READ),
+    ("GET", "/api/v1/mib-catalog", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/mib-catalog", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/mib-catalog/:id", ADMIN_CFG, NO_MCP_WRITE),
     ("GET", "/api/v1/monitoring-gaps", INFRA, Tool("get_system_health")),
@@ -805,7 +798,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/collection",
         NodeScoped,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -835,7 +828,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/dns-check",
         NodeScoped,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "PUT",
@@ -968,7 +961,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/nodes/:node_id/url-check",
         NodeScoped,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "PUT",
@@ -1002,7 +995,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/notification-channels",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -1076,7 +1069,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_system_health"),
     ),
     ("GET", "/api/v1/pools", INFRA, Tool("get_system_health")),
-    ("GET", "/api/v1/profiles", ADMIN_CFG, PENDING_CONFIG_READ),
+    ("GET", "/api/v1/profiles", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/profiles", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/profiles/:id", ADMIN_CFG, NO_MCP_WRITE),
     ("PUT", "/api/v1/profiles/:id", ADMIN_CFG, NO_MCP_WRITE),
@@ -1084,7 +1077,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/profiles/:id/templates",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "PUT",
@@ -1105,7 +1098,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/reports/definitions",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -1162,7 +1155,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/reports/schedules",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "POST",
@@ -1195,13 +1188,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/roles",
         DEPLOY_WIDE,
-        Pending("ADR-042 I3: the role/permission matrix; cheap to add, no reason to exempt"),
+        Tool("get_config"),
     ),
     (
         "GET",
         "/api/v1/routing-rules",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("POST", "/api/v1/routing-rules", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -1215,7 +1208,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/settings/ldap",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("PUT", "/api/v1/settings/ldap", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -1228,7 +1221,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/settings/neighbors",
         Global("deployment-wide adjacency-collection policy; it names no node and no group"),
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "PUT",
@@ -1236,10 +1229,10 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),
-    // ⚠️ Write-only, and there is deliberately no `GET` beside it. A configuration read here would
-    // take `PENDING_CONFIG_READ` and raise `MCP_PENDING`, which only moves down. The mode is
-    // already reported by `GET /api/v1/topology/shadow`, which has a tool — so the read exists
-    // without the gap. Adding the symmetric GET "for consistency" would undo that.
+    // ⚠️ Write-only, and there is deliberately no `GET` beside it. The mode is already reported by
+    // `GET /api/v1/topology/shadow`, which has a tool — so the read exists without a second route
+    // to serve it. Adding the symmetric GET "for consistency" would mean either a new `get_config`
+    // kind nobody asked for or a fresh `Pending`, and `MCP_PENDING` only moves down.
     (
         "PUT",
         "/api/v1/settings/topology",
@@ -1250,7 +1243,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/settings/oidc",
         ADMIN_CFG,
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     ("POST", "/api/v1/settings/oidc", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -1264,7 +1257,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/settings/retention",
         Global("deployment-wide retention policy; the same for every group, and it names no node"),
-        PENDING_CONFIG_READ,
+        Tool("get_config"),
     ),
     (
         "PUT",
@@ -1276,9 +1269,10 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/settings/tls",
         ADMIN_CFG,
-        // Written out rather than joining PENDING_CONFIG_READ. The config-read family is deferred
-        // work that ADR-042 I3 will close; this one is a decision, and pretending otherwise would
-        // inflate a gap count that is supposed to mean something.
+        // Written out rather than joining the config-read family, and I3b is why that mattered:
+        // that family was deferred work and this one is a decision. Had it been filed with them it
+        // would now be a `get_config` kind serving the deployment's TLS material, carried in by a
+        // sweep rather than by anyone deciding.
         Exempt(
             "the deployment's own TLS material — the private key never leaves the server, and \
              certificate metadata answers no question about the monitored fleet that a model would \
@@ -1359,7 +1353,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
              audit/. What has no tool is the archive, not the answers",
         ),
     ),
-    ("GET", "/api/v1/thresholds", ADMIN_CFG, PENDING_CONFIG_READ),
+    ("GET", "/api/v1/thresholds", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/thresholds", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/thresholds/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
@@ -1844,13 +1838,20 @@ mod tests {
     /// The number counts **routes**, where the v0.1.20 audit that prompted ADR-042 counted
     /// **capabilities** (~30). One capability is routinely 2–4 routes — neighbours is 2, Meraki is
     /// 3 — so the two figures are not meant to reconcile.
-    const MCP_PENDING: usize = 32;
+    ///
+    /// **Since I3b the remaining four are the `/stream/*` SSE routes, and they are a different kind
+    /// of number.** Every earlier value was a backlog that the next increment would spend down;
+    /// this one is not, because MCP declares `enable_tools()` and there is no subscription
+    /// transport to write a tool against. It stays `Pending` rather than becoming `Exempt` because
+    /// it is a missing capability rather than a decision — but nothing is planned to move it, so a
+    /// reader should not take a non-zero count as work in flight.
+    const MCP_PENDING: usize = 4;
 
     #[test]
     fn every_named_mcp_tool_exists() {
         let tools = declared_mcp_tools();
         assert!(
-            tools.len() >= 33,
+            tools.len() >= 34,
             "only parsed {} #[tool] declarations — the parser drifted",
             tools.len()
         );
@@ -1869,7 +1870,7 @@ mod tests {
         // grew — which is the exact regression the column exists to prevent. Raise it as increments
         // land; it is a floor, so shipping tools never trips it.
         assert!(
-            named >= 48,
+            named >= 100,
             "only {named} ledger lines name a tool — the column is being emptied"
         );
         assert!(

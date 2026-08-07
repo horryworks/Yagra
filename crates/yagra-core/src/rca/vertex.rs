@@ -147,11 +147,7 @@ mod tests {
     use serde_json::json;
 
     fn req() -> LlmRequest {
-        LlmRequest {
-            system: "sys".to_owned(),
-            user: "usr".to_owned(),
-            max_output_tokens: 2048,
-        }
+        LlmRequest::single("sys".to_owned(), "usr".to_owned(), 2048)
     }
 
     #[test]
@@ -239,7 +235,7 @@ mod tests {
             .complete(&req())
             .await
             .unwrap();
-        assert_eq!(out.text, "root cause: power");
+        assert_eq!(out.text(), "root cause: power");
         assert_eq!((out.in_tokens, out.out_tokens), (Some(5), Some(7)));
 
         let reqs = seen.lock().unwrap();
@@ -290,7 +286,7 @@ mod tests {
             .unwrap()
             .with_endpoints(&base, "p", "us-central1", "m");
         assert!(matches!(p.complete(&req()).await, Err(LlmError::Auth(_))));
-        assert_eq!(p.complete(&req()).await.unwrap().text, "ok");
+        assert_eq!(p.complete(&req()).await.unwrap().text(), "ok");
         // Two token requests, not one — the rejected token was not replayed.
         let reqs = seen.lock().unwrap();
         assert_eq!(reqs.iter().filter(|r| r.head.contains("/token")).count(), 2);

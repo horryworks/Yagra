@@ -24,7 +24,7 @@ use serde_json::json;
 
 use super::provider::{
     clip, http_client, status_error, transport_error, LlmError, LlmProvider, LlmRequest,
-    LlmResponse,
+    LlmResponse, Part, Turn,
 };
 
 /// Anthropic's API host. A constant, not a setting — see the module docs on [`super::provider`].
@@ -110,12 +110,52 @@ impl LlmProvider for ClaudeProvider {
 /// Assemble the request body. Split out from the HTTP call so the shape is unit-testable without a
 /// server: the sampling-parameter and `max_tokens` rules in the module docs are what this encodes.
 fn build_body(model: &str, req: &LlmRequest) -> serde_json::Value {
-    json!({
+    let mut body = json!({
         "model": model,
         "max_tokens": req.max_output_tokens,
         "system": req.system,
-        "messages": [{ "role": "user", "content": req.user }],
-    })
+        "messages": req.messages.iter().map(message_of).collect::<Vec<_>>(),
+    });
+    // Omitted entirely when there are none, so a single-shot request is byte-identical to what this
+    // adapter sent before tools existed (ADR-028 WS-G).
+    if !req.tools.is_empty() {
+        body["tools"] = req
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.schema,
+                })
+            })
+            .collect::<Vec<_>>()
+            .into();
+    }
+    body
+}
+
+/// One turn in Anthropic's Messages shape.
+///
+/// A `tool_result` is a **user** message carrying a `tool_result` block — the vendor's spelling, not
+/// a third role — which is why this is a `match` producing `role` rather than a field mapping.
+fn message_of(turn: &Turn) -> serde_json::Value {
+    match turn {
+        Turn::User(text) => json!({ "role": "user", "content": text }),
+        Turn::Assistant(parts) => json!({
+            "role": "assistant",
+            "content": parts.iter().map(|p| match p {
+                Part::Text(t) => json!({ "type": "text", "text": t }),
+                Part::ToolCall { id, name, args } => json!({
+                    "type": "tool_use", "id": id, "name": name, "input": args,
+                }),
+            }).collect::<Vec<_>>(),
+        }),
+        Turn::ToolResult { id, content } => json!({
+            "role": "user",
+            "content": [{ "type": "tool_result", "tool_use_id": id, "content": content }],
+        }),
+    }
 }
 
 #[derive(Deserialize)]
@@ -136,6 +176,14 @@ struct ContentBlock {
     kind: String,
     #[serde(default)]
     text: String,
+    // The `tool_use` fields. Absent on a text block, which is why all three are optional rather
+    // than a separate variant — an unknown block kind must stay ignorable.
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    input: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -164,16 +212,38 @@ fn read_response(payload: MessageResponse) -> Result<LlmResponse, LlmError> {
             payload.stop_details.and_then(|d| d.category),
         ));
     }
-    // A model that thinks emits non-text blocks first; concatenating only the text ones is what
-    // makes this robust to that without the adapter caring whether thinking was on.
-    let text = payload
+    // A model that thinks emits non-text blocks first; keeping only the kinds this adapter
+    // understands is what makes it robust to that without caring whether thinking was on. `tool_use`
+    // joined that set in ADR-028 WS-G — before it, every non-text block was dropped, so a tool call
+    // would have vanished into "returned no text".
+    let parts: Vec<Part> = payload
         .content
         .iter()
-        .filter(|b| b.kind == "text")
-        .map(|b| b.text.as_str())
-        .collect::<Vec<_>>()
-        .join("");
-    if text.trim().is_empty() {
+        .filter_map(|b| match b.kind.as_str() {
+            "text" => Some(Part::Text(b.text.clone())),
+            "tool_use" => match (&b.id, &b.name) {
+                (Some(id), Some(name)) => Some(Part::ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    args: b.input.clone().unwrap_or_else(|| json!({})),
+                }),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    // Blank prose is still malformed on a plain answer — the check Increment 1 shipped, unchanged.
+    // What it no longer catches is a turn that is *only* tool calls, which is the normal middle of
+    // an agent loop rather than an empty reply.
+    let has_calls = parts.iter().any(|p| matches!(p, Part::ToolCall { .. }));
+    let blank_prose = parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Text(t) => Some(t.as_str()),
+            Part::ToolCall { .. } => None,
+        })
+        .all(|t| t.trim().is_empty());
+    if !has_calls && blank_prose {
         return Err(LlmError::Malformed(format!(
             "{SERVICE} returned no text{}",
             match payload.stop_reason.as_deref() {
@@ -188,7 +258,7 @@ fn read_response(payload: MessageResponse) -> Result<LlmResponse, LlmError> {
         .usage
         .map_or((None, None), |u| (u.input_tokens, u.output_tokens));
     Ok(LlmResponse {
-        text,
+        parts,
         in_tokens,
         out_tokens,
     })
@@ -213,14 +283,15 @@ fn error_detail(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rca::provider::ToolDef;
     use serde_json::Value;
 
     fn req() -> LlmRequest {
-        LlmRequest {
-            system: "you are an NMS assistant".to_owned(),
-            user: "explain this incident".to_owned(),
-            max_output_tokens: 4096,
-        }
+        LlmRequest::single(
+            "you are an NMS assistant".to_owned(),
+            "explain this incident".to_owned(),
+            4096,
+        )
     }
 
     fn parse(body: Value) -> Result<LlmResponse, LlmError> {
@@ -243,8 +314,82 @@ mod tests {
             body["messages"][0]["content"],
             json!("explain this incident")
         );
-        // Single-shot: exactly one turn goes over the wire.
+        // Single-shot: exactly one turn goes over the wire, and no `tools` key at all — so a
+        // deployment that never enables agentic retrieval sends the request it always sent.
         assert_eq!(body["messages"].as_array().unwrap().len(), 1);
+        assert!(
+            body.get("tools").is_none(),
+            "tools must be omitted, not empty"
+        );
+    }
+
+    #[test]
+    fn tools_and_a_tool_result_take_anthropics_own_spelling() {
+        // The two vendor rules worth pinning: `input_schema` (not `parameters`), and a tool result
+        // being a **user** message carrying a `tool_result` block rather than a third role.
+        let mut r = req();
+        r.tools = vec![ToolDef {
+            name: "query_metrics".to_owned(),
+            description: "read a metric".to_owned(),
+            schema: json!({"type": "object", "properties": {"node_id": {"type": "string"}}}),
+        }];
+        r.messages.push(Turn::Assistant(vec![Part::ToolCall {
+            id: "toolu_1".to_owned(),
+            name: "query_metrics".to_owned(),
+            args: json!({"node_id": "n1"}),
+        }]));
+        r.messages.push(Turn::ToolResult {
+            id: "toolu_1".to_owned(),
+            content: "{\"points\":[]}".to_owned(),
+        });
+        let body = build_body("claude-opus-5", &r);
+        assert_eq!(body["tools"][0]["name"], json!("query_metrics"));
+        assert_eq!(body["tools"][0]["input_schema"]["type"], json!("object"));
+        assert!(body["tools"][0].get("parameters").is_none());
+
+        assert_eq!(body["messages"][1]["role"], json!("assistant"));
+        assert_eq!(body["messages"][1]["content"][0]["type"], json!("tool_use"));
+        assert_eq!(body["messages"][1]["content"][0]["id"], json!("toolu_1"));
+
+        assert_eq!(body["messages"][2]["role"], json!("user"));
+        assert_eq!(
+            body["messages"][2]["content"][0]["type"],
+            json!("tool_result")
+        );
+        assert_eq!(
+            body["messages"][2]["content"][0]["tool_use_id"],
+            json!("toolu_1")
+        );
+    }
+
+    #[test]
+    fn a_tool_use_block_is_read_rather_than_discarded() {
+        // The regression this whole increment exists to prevent: the reader used to keep only
+        // `kind == "text"`, so a turn that was one tool call came back as "returned no text".
+        let out = parse(json!({
+            "content": [
+                { "type": "text", "text": "let me check" },
+                { "type": "tool_use", "id": "toolu_9", "name": "get_neighbors",
+                  "input": { "node_id": "n1" } }
+            ],
+            "stop_reason": "tool_use",
+        }))
+        .expect("a tool-call turn is a valid answer, not a malformed one");
+        assert_eq!(out.text(), "let me check");
+        let calls = out.tool_calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!((calls[0].0, calls[0].1), ("toolu_9", "get_neighbors"));
+    }
+
+    #[test]
+    fn a_turn_of_only_tool_calls_is_not_an_empty_reply() {
+        let out = parse(json!({
+            "content": [{ "type": "tool_use", "id": "t1", "name": "list_nodes", "input": {} }],
+            "stop_reason": "tool_use",
+        }))
+        .expect("no prose is normal mid-loop");
+        assert!(out.text().is_empty());
+        assert_eq!(out.tool_calls().len(), 1);
     }
 
     #[test]
@@ -283,7 +428,7 @@ mod tests {
             "usage": { "input_tokens": 1200, "output_tokens": 300 },
         }))
         .unwrap();
-        assert_eq!(out.text, "root cause: core-sw-01 lost power");
+        assert_eq!(out.text(), "root cause: core-sw-01 lost power");
         assert_eq!(out.in_tokens, Some(1200));
         assert_eq!(out.out_tokens, Some(300));
     }
@@ -346,7 +491,7 @@ mod tests {
             .complete(&req())
             .await
             .unwrap();
-        assert_eq!(out.text, "hello");
+        assert_eq!(out.text(), "hello");
         let reqs = seen.lock().unwrap();
         let head = &reqs[0].head;
         assert!(head.contains("x-api-key: sk-ant-test"), "{head}");

@@ -307,10 +307,17 @@ impl YagraMcp {
         Parameters(p): Parameters<AlertHistoryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("get_alert_history", &e),
-        };
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.alert_history_in(p, &scope).await,
+            Err(e) => tool_api_error("get_alert_history", &e),
+        }
+    }
+
+    pub(crate) async fn alert_history_in(
+        &self,
+        p: AlertHistoryParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
         let Some(history) = self.state.history.as_ref() else {
             return tool_unavailable("get_alert_history", "alert history requires live mode");
         };
@@ -338,9 +345,7 @@ impl YagraMcp {
             .into_iter()
             .filter(|r| scope.allows_node(&self.state, NodeId::from(r.node)))
             .collect();
-        let names = self
-            .resolve_names(&scope, rows.iter().map(|r| r.node))
-            .await;
+        let names = self.resolve_names(scope, rows.iter().map(|r| r.node)).await;
         let out: Vec<AlertHistoryDto> = rows
             .iter()
             .map(|r| AlertHistoryDto::from_row(r, names.get(&r.node).cloned()))
@@ -359,13 +364,22 @@ impl YagraMcp {
         Parameters(p): Parameters<QueryMetricsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.query_metrics_in(p, &scope).await,
+            Err(e) => tool_api_error("query_metrics", &e),
+        }
+    }
+
+    pub(crate) async fn query_metrics_in(
+        &self,
+        p: QueryMetricsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        // Inside the split, not in the wrapper: a metric name is interpolated into a TSDB query, and
+        // the in-process caller (ADR-028 WS-G) needs the same edge validation the session one gets.
         if !crate::api::is_valid_metric_name(&p.metric) {
             return tool_bad_params("query_metrics", "invalid metric name");
         }
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("query_metrics", &e),
-        };
         // A series is node data. The TSDB has never heard of groups, so this is the only place the
         // question can be asked — and it is the same "no node with that id" a miss gets.
         if !scope.allows_node(&self.state, NodeId::from(p.node_id)) {
@@ -944,10 +958,17 @@ impl YagraMcp {
         Parameters(p): Parameters<TopologyParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("get_topology", &e),
-        };
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.topology_in(p, &scope).await,
+            Err(e) => tool_api_error("get_topology", &e),
+        }
+    }
+
+    pub(crate) async fn topology_in(
+        &self,
+        p: TopologyParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_topology", "topology requires live mode");
         };
@@ -966,7 +987,7 @@ impl YagraMcp {
                     }
                     None => None,
                 };
-                match crate::api::topology::topology_page(&self.state, admin, &scope, after, limit)
+                match crate::api::topology::topology_page(&self.state, admin, scope, after, limit)
                     .await
                 {
                     Ok(page) => ok_json("get_topology", &page),
@@ -984,19 +1005,19 @@ impl YagraMcp {
                     }
                     None => None,
                 };
-                match crate::api::topology::topology_link_page(admin, &scope, after, limit).await {
+                match crate::api::topology::topology_link_page(admin, scope, after, limit).await {
                     Ok(page) => ok_json("get_topology", &page),
                     Err(e) => tool_api_error("get_topology", &e),
                 }
             }
             TopologyKind::Overrides => {
-                match crate::api::topology::link_override_list(&self.state, admin, &scope).await {
+                match crate::api::topology::link_override_list(&self.state, admin, scope).await {
                     Ok(list) => ok_json("get_topology", &list),
                     Err(e) => tool_api_error("get_topology", &e),
                 }
             }
             TopologyKind::Shadow => {
-                match crate::api::topology::topology_shadow(&self.state, admin, &scope).await {
+                match crate::api::topology::topology_shadow(&self.state, admin, scope).await {
                     Ok(s) => ok_json("get_topology", &s),
                     Err(e) => tool_api_error("get_topology", &e),
                 }
@@ -1254,10 +1275,17 @@ impl YagraMcp {
         Parameters(p): Parameters<AnalysisJobIdParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("get_analysis_findings", &e),
-        };
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.analysis_findings_in(p, &scope).await,
+            Err(e) => tool_api_error("get_analysis_findings", &e),
+        }
+    }
+
+    pub(crate) async fn analysis_findings_in(
+        &self,
+        p: AnalysisJobIdParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("get_analysis_findings", "analysis requires live mode");
         };
@@ -1267,13 +1295,12 @@ impl YagraMcp {
         };
         // The run row is the unit of visibility — somebody else's fleet-wide run is not readable
         // just because its id was guessed or came from a shared transcript.
-        if let Err(e) = crate::api::analysis::require_visible_job(&self.state, &scope, &report.job)
-        {
+        if let Err(e) = crate::api::analysis::require_visible_job(&self.state, scope, &report.job) {
             return tool_api_error("get_analysis_findings", &e);
         }
         ok_json_value(
             "get_analysis_findings",
-            self.scoped_report_body(&scope, report),
+            self.scoped_report_body(scope, report),
         )
     }
 
@@ -1350,10 +1377,17 @@ impl YagraMcp {
         Parameters(p): Parameters<EventSearchParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("search_events", &e),
-        };
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.search_events_in(p, &scope).await,
+            Err(e) => tool_api_error("search_events", &e),
+        }
+    }
+
+    pub(crate) async fn search_events_in(
+        &self,
+        p: EventSearchParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("search_events", "event search requires live mode");
         };
@@ -1379,12 +1413,12 @@ impl YagraMcp {
         // Same store routing too, including resolving a node-name term to ids so the name never
         // enters the log store (ADR-011).
         let rows =
-            match crate::api::eventlog::search(&self.state, admin, &scope, &filter, limit).await {
+            match crate::api::eventlog::search(&self.state, admin, scope, &filter, limit).await {
                 Ok(r) => r,
                 Err(e) => return tool_api_error("search_events", &e),
             };
         let names = self
-            .resolve_names(&scope, rows.iter().filter_map(|r| r.node_id))
+            .resolve_names(scope, rows.iter().filter_map(|r| r.node_id))
             .await;
         let out: Vec<EventDto> = rows
             .iter()
@@ -1404,10 +1438,17 @@ impl YagraMcp {
         Parameters(p): Parameters<EventStatsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let scope = match self.scope_of(&ctx).await {
-            Ok(s) => s,
-            Err(e) => return tool_api_error("event_stats", &e),
-        };
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.event_stats_in(p, &scope).await,
+            Err(e) => tool_api_error("event_stats", &e),
+        }
+    }
+
+    pub(crate) async fn event_stats_in(
+        &self,
+        p: EventStatsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
         let Some(admin) = self.state.admin.as_ref() else {
             return tool_unavailable("event_stats", "event stats requires live mode");
         };
@@ -1438,7 +1479,7 @@ impl YagraMcp {
         top_nodes.sort_by_key(|n| std::cmp::Reverse(n.1));
         top_nodes.truncate(20);
         let names = self
-            .resolve_names(&scope, top_nodes.iter().map(|(id, _)| *id))
+            .resolve_names(scope, top_nodes.iter().map(|(id, _)| *id))
             .await;
         let volume: Vec<Value> = top_nodes
             .iter()
@@ -2046,6 +2087,9 @@ impl YagraMcp {
             // The stored report's `created_by`, and the audit actor below — one value for both, as
             // `Actor` is over REST.
             username: identity.actor.clone(),
+            // Set by `explain_incident` from the scope it checks; empty here so a path that skipped
+            // that step would see nothing rather than the fleet.
+            scope: NodeScope::sees_nothing(),
         };
         let result = crate::api::rca::explain_incident(&self.state, &scope, req).await;
         // Audited on both outcomes. A refusal is as interesting as a success here — it is the
@@ -2064,6 +2108,393 @@ impl YagraMcp {
         match result {
             Ok(report) => ok_json(TOOL, &report),
             Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
+        description = "Read Yagra's own configuration — what it is set up to monitor, alert on, \
+                       notify and forward, and how. `kind` is one of: **alerting/notification** — \
+                       thresholds (`limit` 1–500), event_rules, event_sources, \
+                       notification_channels, routing_rules; **collection** — profiles, \
+                       profile_templates (needs `profile_id`), collection_templates, \
+                       template_items (needs `template_id`), node_collection (one node's collected \
+                       metrics — needs `node_id`; `resolved=true` for the effective set the poller \
+                       actually uses), classification_rules, mib_catalog (`search` filters, \
+                       `limit` 1–2000, default 100); **per-node checks** — url_check, dns_check \
+                       (both need `node_id`); **discovery** — discovery_candidates (`limit` 1–50, \
+                       default 10), discovery_scan (needs `scan_id`); **Meraki** — meraki_orgs, \
+                       meraki_networks (needs `org_id`), meraki_polling; **forwarding** — \
+                       forward_destinations; **reports** — report_definitions, report_schedules; \
+                       **deployment settings** — retention, adjacency_settings, llm, roles, oidc, \
+                       ldap. Kinds require different permissions: oidc and ldap need manage-users; \
+                       mib_catalog, url_check, dns_check, discovery_candidates, the three meraki \
+                       kinds, the two report kinds, retention, adjacency_settings and roles need \
+                       view; the rest need manage-config. This reads configuration only — no tool \
+                       changes it. No stored secret is returned: url_check reports whether a \
+                       credential is bound, not which one."
+    )]
+    async fn get_config(
+        &self,
+        Parameters(p): Parameters<ConfigParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        let Some(kind) = ConfigKind::parse(&p.kind) else {
+            return tool_bad_params(
+                "get_config",
+                &format!(
+                    "unknown kind {:?}; must be one of: {}",
+                    p.kind,
+                    ConfigKind::NAMES.join(", ")
+                ),
+            );
+        };
+        // Resolve → authorize → scope → availability, as `get_system_health` does and for the same
+        // reason: the permission check sits above every store lookup so a caller who may not read a
+        // kind cannot infer, from a 403-vs-unavailable, whether this deployment has that subsystem
+        // configured at all.
+        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_config", kind.arg()) {
+            return deny;
+        }
+        let scope = match self.scope_of(&ctx).await {
+            Ok(s) => s,
+            Err(e) => return tool_api_error("get_config", &e),
+        };
+        self.config_in(kind, p, &scope).await
+    }
+
+    async fn config_in(
+        &self,
+        kind: ConfigKind,
+        p: ConfigParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_config";
+
+        // Required-id and scope both run **above** the availability check, which is the ordering
+        // `get_system_health` documents and the reason this prelude exists rather than a guard per
+        // arm: a caller who cannot see a node must get the same answer whether or not this
+        // deployment has a write side, or the 503-vs-unavailable difference is itself a
+        // disclosure. `required_id` is the single source of which kinds take one.
+        let id = match kind.required_id() {
+            None => Uuid::nil(),
+            Some(want) => {
+                let got = match want {
+                    ConfigId::Node => p.node_id,
+                    ConfigId::Template => p.template_id,
+                    ConfigId::Profile => p.profile_id,
+                    ConfigId::Org => p.org_id,
+                    ConfigId::Scan => p.scan_id,
+                };
+                let Some(id) = got else {
+                    return tool_bad_params(
+                        TOOL,
+                        &format!("kind {} needs `{}`", kind.arg(), want.param()),
+                    );
+                };
+                if want == ConfigId::Node {
+                    // The same answer a nonexistent id gets, so the tool cannot confirm that a node
+                    // exists outside the caller's groups.
+                    if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, id) {
+                        return deny;
+                    }
+                }
+                id
+            }
+        };
+        // `id` is `Uuid::nil()` for the 21 kinds that need none, and every arm that reads it is one
+        // `required_id` just validated — so there is no unwrap here and no second copy of the fact.
+        let Some(a) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "reading configuration requires live mode");
+        };
+        match kind {
+            // ── alerting / notification ──────────────────────────────────────
+            ConfigKind::Thresholds => {
+                match crate::api::thresholds::threshold_page(a, p.limit).await {
+                    Ok(page) => ok_json(TOOL, &page),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
+            ConfigKind::EventRules => match a.events.list_rules().await {
+                Ok(rules) => ok_json(TOOL, &rules),
+                Err(e) => tool_error(TOOL, "list event rules", &e),
+            },
+            ConfigKind::EventSources => match a.events.list_sources().await {
+                Ok(sources) => ok_json(TOOL, &sources),
+                Err(e) => tool_error(TOOL, "list event sources", &e),
+            },
+            ConfigKind::NotificationChannels => match a.notifications.list_channels().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list notification channels", &e),
+            },
+            ConfigKind::RoutingRules => match a.notifications.list_rules().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list routing rules", &e),
+            },
+            // ── collection ───────────────────────────────────────────────────
+            ConfigKind::Profiles => match a.repo.list_profiles().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list profiles", &e),
+            },
+            ConfigKind::ProfileTemplates => match a.collection.list_profile_templates(id).await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list profile templates", &e),
+            },
+            ConfigKind::CollectionTemplates => match a.collection.list_templates().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list collection templates", &e),
+            },
+            ConfigKind::TemplateItems => match a.collection.list_template_items(id).await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list template items", &e),
+            },
+            ConfigKind::NodeCollection => {
+                match crate::api::collection::node_collection(a, id, p.resolved.unwrap_or(false))
+                    .await
+                {
+                    Ok(set) => ok_json(TOOL, &set),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
+            ConfigKind::ClassificationRules => match a.classification.list_rules().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list classification rules", &e),
+            },
+            ConfigKind::MibCatalog => {
+                // Default 100 where REST defaults to the 2000 cap: a model asking about one OID
+                // does not want the whole catalog in its context, and `search` is the narrowing
+                // this branch expects to be used with. The *ceiling* is shared (`api::mib`); only
+                // the default differs, which is the `get_topology` precedent.
+                match crate::api::mib::mib_catalog(
+                    a,
+                    p.search.as_deref(),
+                    Some(p.limit.unwrap_or(100)),
+                )
+                .await
+                {
+                    Ok(list) => ok_json(TOOL, &list),
+                    Err(e) => tool_api_error(TOOL, &e),
+                }
+            }
+            // ── per-node checks ──────────────────────────────────────────────
+            ConfigKind::UrlCheck => {
+                use crate::api::checks::CheckKind as _;
+                match crate::api::checks::UrlCheck::load(a, id).await {
+                    Ok(Some(cfg)) => {
+                        ok_json(TOOL, &crate::mcp::dto::UrlCheckDto::from_config(&cfg))
+                    }
+                    Ok(None) => tool_unavailable(TOOL, "that node has no URL check configured"),
+                    Err(e) => tool_error(TOOL, "load url check", &e),
+                }
+            }
+            ConfigKind::DnsCheck => {
+                use crate::api::checks::CheckKind as _;
+                match crate::api::checks::DnsCheck::load(a, id).await {
+                    Ok(Some(cfg)) => ok_json(TOOL, &cfg),
+                    Ok(None) => tool_unavailable(TOOL, "that node has no DNS check configured"),
+                    Err(e) => tool_error(TOOL, "load dns check", &e),
+                }
+            }
+            // ── discovery ────────────────────────────────────────────────────
+            ConfigKind::DiscoveryCandidates => {
+                // `matched_credential_id` stays on these rows, and that is a decision rather than
+                // an oversight: `SECRET_KEYS` is an exact-match rule, so nothing would have caught
+                // it either way. Unlike a URL check's binding — which a model can neither resolve
+                // nor use — *which stored credential answered on an unclassified device* is the
+                // answer to a discovery-triage question, and it names something an operator can
+                // look up in the UI. Different question, different treatment.
+                let limit = p.limit.and_then(|n| usize::try_from(n).ok());
+                ok_json(
+                    TOOL,
+                    &crate::api::discovery::recent_candidates(&self.state, limit),
+                )
+            }
+            ConfigKind::DiscoveryScan => match a.discovery.get(id) {
+                Some(status) => ok_json(TOOL, &status),
+                None => tool_unavailable(TOOL, "no scan with that id"),
+            },
+            // ── Meraki ───────────────────────────────────────────────────────
+            ConfigKind::MerakiOrgs => match crate::api::meraki::org_views(a).await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_api_error(TOOL, &e),
+            },
+            ConfigKind::MerakiNetworks => match crate::api::meraki::network_views(a, id).await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_api_error(TOOL, &e),
+            },
+            ConfigKind::MerakiPolling => {
+                ok_json(TOOL, &crate::api::meraki::polling_switch(a).await)
+            }
+            // ── forwarding ───────────────────────────────────────────────────
+            ConfigKind::ForwardDestinations => match a.forward.list().await {
+                Ok(rows) => ok_json(TOOL, &rows),
+                Err(e) => tool_error(TOOL, "list forward destinations", &e),
+            },
+            // ── reports ──────────────────────────────────────────────────────
+            ConfigKind::ReportDefinitions => match a.reports.repo().list_definitions().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list report definitions", &e),
+            },
+            ConfigKind::ReportSchedules => match a.reports.repo().list_schedules().await {
+                Ok(list) => ok_json(TOOL, &list),
+                Err(e) => tool_error(TOOL, "list report schedules", &e),
+            },
+            // ── deployment settings ──────────────────────────────────────────
+            ConfigKind::Retention => ok_json(
+                TOOL,
+                &crate::api::retention::retention_policy(&self.state, a).await,
+            ),
+            ConfigKind::AdjacencySettings => {
+                ok_json(TOOL, &crate::api::neighbors::adjacency_config(a).await)
+            }
+            ConfigKind::Llm => match crate::api::rca::llm_config_view(a).await {
+                Ok(view) => ok_json(TOOL, &view),
+                Err(e) => tool_api_error(TOOL, &e),
+            },
+            // Pure: the matrix is the type system's, not the deployment's.
+            ConfigKind::Roles => ok_json(TOOL, &crate::api::users::roles_matrix()),
+            ConfigKind::Oidc => match self.state.oidc.as_ref() {
+                Some(oidc) => match oidc.list().await {
+                    Ok(list) => ok_json(TOOL, &list),
+                    Err(e) => tool_error(TOOL, "list oidc providers", &e),
+                },
+                None => tool_unavailable(TOOL, "this deployment persists no SSO configuration"),
+            },
+            ConfigKind::Ldap => match self.state.ldap.as_ref() {
+                Some(ldap) => match ldap.view().await {
+                    Ok(view) => ok_json(TOOL, &view),
+                    Err(e) => tool_error(TOOL, "read ldap config", &e),
+                },
+                None => tool_unavailable(TOOL, "this deployment persists no LDAP configuration"),
+            },
+        }
+    }
+
+    /// Every tool's published name, description and argument schema (ADR-028 WS-G).
+    ///
+    /// Reads the router this instance already holds — `list_all()` touches no `Peer`, no session and
+    /// no transport, which is the fact that made WS-G cheap. It is exposed here rather than in
+    /// `rca/agent.rs` because the router field and the macro-generated constructor are private to
+    /// this module.
+    pub(crate) fn published_tools(&self) -> Vec<rmcp::model::Tool> {
+        self.tool_router.list_all()
+    }
+
+    /// Run one tool by name, in-process, with an already-resolved scope (ADR-028 WS-G).
+    ///
+    /// **This is the wiring the module doc promised.** `ToolRouter::call` is unreachable from here —
+    /// it needs a `RequestContext`, which needs a `Peer`, whose constructor is crate-private in rmcp
+    /// — so the RCA agent dispatches by name to the same `*_in` bodies the `#[tool]` wrappers use.
+    ///
+    /// It lives in this file rather than in `rca/agent.rs` because the arms need the private
+    /// discriminator parsers (`ConfigKind`, `HealthSection`, `fleet_summary_kind`) that are only in
+    /// scope here. **Policy is not here**: which tools an agent may call, and with what permission,
+    /// is `rca::agent`'s to decide — this function runs whatever it is given.
+    ///
+    /// Results come back as `CallToolResult` rather than typed values on purpose. Every byte has
+    /// been through `ok_json`, which is the `dto.rs` sanitization boundary; bypassing it to get a
+    /// typed value would discard the ADR-018 canary coverage for the sake of a shape the caller
+    /// immediately re-serializes anyway.
+    pub(crate) async fn call_in(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        /// Decode the model's arguments, or refuse in the tool's own vocabulary.
+        macro_rules! p {
+            ($t:ty) => {
+                match serde_json::from_value::<$t>(args) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        return tool_bad_params(name, &format!("could not read the arguments: {e}"))
+                    }
+                }
+            };
+        }
+        match name {
+            "get_fleet_summary" => {
+                let p = p!(FleetSummaryParams);
+                match fleet_summary_kind(p.kind.as_deref()) {
+                    Some(FleetSummaryKind::Summary) => self.fleet_summary_in(scope).await,
+                    Some(FleetSummaryKind::Coverage) => self.fleet_coverage_in(scope).await,
+                    None => tool_bad_params(name, "`kind` must be summary or coverage"),
+                }
+            }
+            "list_nodes" => self.list_nodes_in(p!(ListNodesParams), scope).await,
+            "get_node_status" => self.node_status_in(p!(NodeIdParams), scope).await,
+            "get_active_alerts" => self.active_alerts_in(p!(ActiveAlertsParams), scope).await,
+            "get_alert_history" => self.alert_history_in(p!(AlertHistoryParams), scope).await,
+            "query_metrics" => self.query_metrics_in(p!(QueryMetricsParams), scope).await,
+            "get_interface_series" => {
+                self.interface_series_in(p!(InterfaceSeriesParams), scope)
+                    .await
+            }
+            "top_metrics" => self.top_metrics_in(p!(TopMetricsParams), scope).await,
+            "top_interfaces" => self.top_interfaces_in(p!(TopInterfacesParams), scope).await,
+            "fleet_throughput" => {
+                self.fleet_throughput_in(p!(FleetThroughputParams), scope)
+                    .await
+            }
+            "get_neighbors" => self.neighbors_in(p!(NeighborsParams), scope).await,
+            "list_discovered_endpoints" => {
+                self.discovered_endpoints_in(p!(DiscoveredEndpointsParams), scope)
+                    .await
+            }
+            "list_node_groups" => {
+                self.list_node_groups_in(p!(ListNodeGroupsParams), scope)
+                    .await
+            }
+            "list_suppressions" => self.list_suppressions_in(scope).await,
+            "alert_trends" => self.alert_trends_in(p!(AlertTrendsParams), scope).await,
+            "search_analysis_findings" => {
+                self.search_analysis_findings_in(p!(SearchFindingsParams), scope)
+                    .await
+            }
+            "get_topology" => self.topology_in(p!(TopologyParams), scope).await,
+            "top_flows" => self.top_flows_in(p!(TopFlowsParams), scope).await,
+            "flow_fanout" => self.flow_fanout_in(p!(TopFlowsParams), scope).await,
+            "get_analysis_findings" => {
+                self.analysis_findings_in(p!(AnalysisJobIdParams), scope)
+                    .await
+            }
+            "list_analyses" => self.list_analyses_in(p!(ListAnalysesParams), scope).await,
+            "search_events" => self.search_events_in(p!(EventSearchParams), scope).await,
+            "event_stats" => self.event_stats_in(p!(EventStatsParams), scope).await,
+            "fleet_state_history" => self.state_history_in(p!(StateHistoryParams), scope).await,
+            "get_report_runs" => self.report_runs_in(p!(ReportRunsParams), scope).await,
+            "get_dns_chain" => self.dns_chain_in(p!(DnsChainParams), scope).await,
+            "get_system_health" => {
+                let p = p!(SystemHealthParams);
+                match HealthSection::parse(&p.section) {
+                    Some(section) => self.system_health_in(section, p, scope).await,
+                    None => tool_bad_params(
+                        name,
+                        &format!(
+                            "unknown section {:?}; must be one of: {}",
+                            p.section,
+                            HealthSection::NAMES.join(", ")
+                        ),
+                    ),
+                }
+            }
+            "get_config" => {
+                let p = p!(ConfigParams);
+                match ConfigKind::parse(&p.kind) {
+                    Some(kind) => self.config_in(kind, p, scope).await,
+                    None => tool_bad_params(
+                        name,
+                        &format!(
+                            "unknown kind {:?}; must be one of: {}",
+                            p.kind,
+                            ConfigKind::NAMES.join(", ")
+                        ),
+                    ),
+                }
+            }
+            // Not "every tool minus a few": the caller's allow-list decides what reaches here, and
+            // anything it lets through that this table does not know is a wiring mistake rather than
+            // model input.
+            other => tool_bad_params(name, &format!("no in-process tool named {other:?}")),
         }
     }
 
@@ -2290,12 +2721,253 @@ impl HealthSection {
     }
 }
 
+/// The id a [`ConfigKind`] needs, and which parameter carries it.
+///
+/// Named per referent rather than one polymorphic `id`, which is what keeps the 28-branch fold
+/// inside the rule I1 set: no argument's meaning changes with another. `org_id` never means a node.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigId {
+    Node,
+    Template,
+    Profile,
+    Org,
+    Scan,
+}
+
+impl ConfigId {
+    /// The parameter name, as the refusal message and the published schema both spell it.
+    fn param(self) -> &'static str {
+        match self {
+            Self::Node => "node_id",
+            Self::Template => "template_id",
+            Self::Profile => "profile_id",
+            Self::Org => "org_id",
+            Self::Scan => "scan_id",
+        }
+    }
+}
+
+/// Which configuration read `get_config` was asked for (ADR-042 I3b).
+///
+/// Twenty-eight branches behind one `kind`, following [`HealthSection`] rather than becoming
+/// twenty-eight tools. The fold is defensible for the reason `alert_trends` was: no argument's
+/// meaning changes with another. The five ids are named per referent — `node_id`, `template_id`,
+/// `profile_id`, `org_id`, `scan_id` — so none of them ever means two things, which is the rule
+/// I1 rejected `top_metrics` over. A single polymorphic `id` would have broken it.
+///
+/// The other half of the argument is recovery: a caller who mistypes `kind` is handed
+/// [`Self::NAMES`] and can retry. A caller who picks the wrong *tool* is not told the right one
+/// exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfigKind {
+    Thresholds,
+    EventRules,
+    EventSources,
+    NotificationChannels,
+    RoutingRules,
+    Profiles,
+    ProfileTemplates,
+    CollectionTemplates,
+    TemplateItems,
+    NodeCollection,
+    ClassificationRules,
+    MibCatalog,
+    UrlCheck,
+    DnsCheck,
+    DiscoveryCandidates,
+    DiscoveryScan,
+    MerakiOrgs,
+    MerakiNetworks,
+    MerakiPolling,
+    ForwardDestinations,
+    ReportDefinitions,
+    ReportSchedules,
+    Retention,
+    AdjacencySettings,
+    Llm,
+    Roles,
+    Oidc,
+    Ldap,
+}
+
+impl ConfigKind {
+    /// Every accepted `kind` value, in the order the description lists them.
+    ///
+    /// Several names are longer than the REST path's last segment on purpose. `forward_destinations`
+    /// rather than `forwarding` because `get_system_health(section="forwarding")` already publishes
+    /// that word for the delivery status; `adjacency_settings` rather than `neighbors` because
+    /// `get_neighbors` is a live per-node read and this is a deployment-wide policy;
+    /// `report_schedules` rather than `schedules` because `list_analyses(kind="schedules")` has it.
+    /// One word meaning two things across two tools is how a model comes to guess.
+    const NAMES: &'static [&'static str] = &[
+        "thresholds",
+        "event_rules",
+        "event_sources",
+        "notification_channels",
+        "routing_rules",
+        "profiles",
+        "profile_templates",
+        "collection_templates",
+        "template_items",
+        "node_collection",
+        "classification_rules",
+        "mib_catalog",
+        "url_check",
+        "dns_check",
+        "discovery_candidates",
+        "discovery_scan",
+        "meraki_orgs",
+        "meraki_networks",
+        "meraki_polling",
+        "forward_destinations",
+        "report_definitions",
+        "report_schedules",
+        "retention",
+        "adjacency_settings",
+        "llm",
+        "roles",
+        "oidc",
+        "ldap",
+    ];
+
+    /// Exact match, with no default. A `kind` is the whole question here — unlike `get_topology`,
+    /// where one graph is the obvious default — so a caller who omits it or mistypes it is told,
+    /// never quietly served something else.
+    fn parse(s: &str) -> Option<Self> {
+        Some(match s {
+            "thresholds" => Self::Thresholds,
+            "event_rules" => Self::EventRules,
+            "event_sources" => Self::EventSources,
+            "notification_channels" => Self::NotificationChannels,
+            "routing_rules" => Self::RoutingRules,
+            "profiles" => Self::Profiles,
+            "profile_templates" => Self::ProfileTemplates,
+            "collection_templates" => Self::CollectionTemplates,
+            "template_items" => Self::TemplateItems,
+            "node_collection" => Self::NodeCollection,
+            "classification_rules" => Self::ClassificationRules,
+            "mib_catalog" => Self::MibCatalog,
+            "url_check" => Self::UrlCheck,
+            "dns_check" => Self::DnsCheck,
+            "discovery_candidates" => Self::DiscoveryCandidates,
+            "discovery_scan" => Self::DiscoveryScan,
+            "meraki_orgs" => Self::MerakiOrgs,
+            "meraki_networks" => Self::MerakiNetworks,
+            "meraki_polling" => Self::MerakiPolling,
+            "forward_destinations" => Self::ForwardDestinations,
+            "report_definitions" => Self::ReportDefinitions,
+            "report_schedules" => Self::ReportSchedules,
+            "retention" => Self::Retention,
+            "adjacency_settings" => Self::AdjacencySettings,
+            "llm" => Self::Llm,
+            "roles" => Self::Roles,
+            "oidc" => Self::Oidc,
+            "ldap" => Self::Ldap,
+            _ => return None,
+        })
+    }
+
+    /// Which id this kind cannot answer without, if any.
+    ///
+    /// Exhaustive, so a new kind has to state whether it takes one, and **the only place that fact
+    /// is written**: `config_in`'s prelude validates from this and the arms use what it produced,
+    /// rather than each arm carrying its own copy of "this one needs an id".
+    fn required_id(self) -> Option<ConfigId> {
+        match self {
+            Self::NodeCollection | Self::UrlCheck | Self::DnsCheck => Some(ConfigId::Node),
+            Self::TemplateItems => Some(ConfigId::Template),
+            Self::ProfileTemplates => Some(ConfigId::Profile),
+            Self::MerakiNetworks => Some(ConfigId::Org),
+            Self::DiscoveryScan => Some(ConfigId::Scan),
+            Self::Thresholds
+            | Self::EventRules
+            | Self::EventSources
+            | Self::NotificationChannels
+            | Self::RoutingRules
+            | Self::Profiles
+            | Self::CollectionTemplates
+            | Self::ClassificationRules
+            | Self::MibCatalog
+            | Self::DiscoveryCandidates
+            | Self::MerakiOrgs
+            | Self::MerakiPolling
+            | Self::ForwardDestinations
+            | Self::ReportDefinitions
+            | Self::ReportSchedules
+            | Self::Retention
+            | Self::AdjacencySettings
+            | Self::Llm
+            | Self::Roles
+            | Self::Oidc
+            | Self::Ldap => None,
+        }
+    }
+
+    /// The `folded::FOLDED_READS` key for this kind — the string the permission is filed under.
+    fn arg(self) -> &'static str {
+        match self {
+            Self::Thresholds => "thresholds",
+            Self::EventRules => "event_rules",
+            Self::EventSources => "event_sources",
+            Self::NotificationChannels => "notification_channels",
+            Self::RoutingRules => "routing_rules",
+            Self::Profiles => "profiles",
+            Self::ProfileTemplates => "profile_templates",
+            Self::CollectionTemplates => "collection_templates",
+            Self::TemplateItems => "template_items",
+            Self::NodeCollection => "node_collection",
+            Self::ClassificationRules => "classification_rules",
+            Self::MibCatalog => "mib_catalog",
+            Self::UrlCheck => "url_check",
+            Self::DnsCheck => "dns_check",
+            Self::DiscoveryCandidates => "discovery_candidates",
+            Self::DiscoveryScan => "discovery_scan",
+            Self::MerakiOrgs => "meraki_orgs",
+            Self::MerakiNetworks => "meraki_networks",
+            Self::MerakiPolling => "meraki_polling",
+            Self::ForwardDestinations => "forward_destinations",
+            Self::ReportDefinitions => "report_definitions",
+            Self::ReportSchedules => "report_schedules",
+            Self::Retention => "retention",
+            Self::AdjacencySettings => "adjacency_settings",
+            Self::Llm => "llm",
+            Self::Roles => "roles",
+            Self::Oidc => "oidc",
+            Self::Ldap => "ldap",
+        }
+    }
+}
+
 // ── Tool parameter structs (schemas derived for `tools/list`) ─────────────────────────────────────
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct FleetSummaryParams {
     /// `summary` (default) for the state tally, or `coverage` for the monitoring blind-spot view.
     kind: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+struct ConfigParams {
+    /// Which configuration to read. Required; see the tool description for the 28 values.
+    kind: String,
+    /// The node (kind=node_collection | url_check | dns_check).
+    node_id: Option<Uuid>,
+    /// The collection template whose items to list (kind=template_items).
+    template_id: Option<Uuid>,
+    /// The profile whose templates to list (kind=profile_templates).
+    profile_id: Option<Uuid>,
+    /// The Meraki organization whose networks to list (kind=meraki_networks).
+    org_id: Option<Uuid>,
+    /// The discovery scan to report on (kind=discovery_scan).
+    scan_id: Option<Uuid>,
+    /// Return the effective set the poller collects rather than the node's own overrides
+    /// (kind=node_collection; default false).
+    resolved: Option<bool>,
+    /// Case-insensitive substring over metric name / OID / vendor (kind=mib_catalog).
+    search: Option<String>,
+    /// Row cap (kind=thresholds 1–500 default 500; mib_catalog 1–2000 default 100;
+    /// discovery_candidates 1–50 default 10).
+    limit: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -2397,7 +3069,7 @@ struct ActiveAlertsParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct AlertHistoryParams {
+pub(crate) struct AlertHistoryParams {
     /// Max rows to return (1–1000, default 100).
     limit: Option<i64>,
     /// Only rows recorded before this RFC 3339 timestamp (keyset paging).
@@ -2405,7 +3077,7 @@ struct AlertHistoryParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct QueryMetricsParams {
+pub(crate) struct QueryMetricsParams {
     /// The node's UUID.
     node_id: Uuid,
     /// Metric name (e.g. icmp_rtt_ms, cpu_percent, mem_percent).
@@ -2493,7 +3165,7 @@ struct DiscoveredEndpointsParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct TopologyParams {
+pub(crate) struct TopologyParams {
     /// Which view: "dependency" (default), "links", "overrides" or "shadow".
     kind: Option<String>,
     /// Keyset cursor. For kind=dependency this is a node UUID; for kind=links it is the numeric
@@ -2550,7 +3222,7 @@ struct RunAnalysisParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct AnalysisJobIdParams {
+pub(crate) struct AnalysisJobIdParams {
     /// The analysis job's UUID (from run_analysis or list_analyses).
     job_id: Uuid,
 }
@@ -2603,7 +3275,7 @@ struct SearchFindingsParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct EventSearchParams {
+pub(crate) struct EventSearchParams {
     /// Case-insensitive substring over source/message (or a message-only regex when `regex` is true).
     search: Option<String>,
     /// Interpret `search` as a regular expression (message-only) rather than a substring.
@@ -2623,7 +3295,7 @@ struct EventSearchParams {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct EventStatsParams {
+pub(crate) struct EventStatsParams {
     /// Restrict the volume/severity views to one node (UUID).
     node_id: Option<Uuid>,
     /// Window start, Unix seconds (default: 24 hours ago).
@@ -2987,7 +3659,7 @@ mod tests {
         // The load-bearing half: if the parse stops matching, "everything is fine" must not be the
         // answer. There were 17 tools when this was written and 23 after ADR-042 I1.
         assert!(
-            checked >= 33,
+            checked >= 34,
             "only matched {checked} tools; parser drifted"
         );
     }
@@ -3805,6 +4477,120 @@ mod tests {
             .expect("ok result"),
         );
         assert!(version["core"].is_string());
+    }
+
+    // ── get_config(kind=…) — ADR-042 I3b ─────────────────────────────────────
+
+    /// Every kind the description advertises is one the dispatcher accepts, and round-trips to the
+    /// key its permission is filed under. Same reasoning as the health-section version: the
+    /// description ships verbatim, and a kind named there but not parsed has a model reasoning from
+    /// a failure it cannot learn from.
+    #[test]
+    fn every_advertised_config_kind_parses() {
+        for name in ConfigKind::NAMES {
+            let parsed = ConfigKind::parse(name)
+                .unwrap_or_else(|| panic!("kind {name} is advertised but not parsed"));
+            assert_eq!(
+                parsed.arg(),
+                *name,
+                "kind {name} round-trips to a different key, so its permission would be looked up \
+                 under the wrong row"
+            );
+        }
+        assert_eq!(
+            ConfigKind::NAMES.len(),
+            28,
+            "the advertised kind list changed; check the description and folded.rs together"
+        );
+    }
+
+    /// The biconditional the reachability guard cannot express.
+    ///
+    /// `folded::every_folded_branch_is_reachable_from_its_tool` is a bare substring search over this
+    /// file, so a row whose `arg` happens to be a word already quoted somewhere here would pass with
+    /// no arm at all — `schedules`, `credentials`, `forwarding`, `version`, `list` and `history` are
+    /// all already present as literals. Comparing the two *sets* closes that class: a kind with no
+    /// row loses its permission lookup (`required_permission` panics), and a row with no kind is a
+    /// route the ledger claims is served and is not.
+    #[test]
+    fn every_config_kind_has_a_folded_row_and_vice_versa() {
+        let rows: std::collections::BTreeSet<&str> = crate::mcp::folded::FOLDED_READS
+            .iter()
+            .filter(|f| f.tool == "get_config")
+            .map(|f| f.arg)
+            .collect();
+        let kinds: std::collections::BTreeSet<&str> = ConfigKind::NAMES.iter().copied().collect();
+        assert_eq!(
+            rows, kinds,
+            "the `get_config` folded rows and its advertised kinds disagree"
+        );
+    }
+
+    /// A typo is refused, and there is no default to fall back to: unlike `get_topology`, no one
+    /// kind is the obvious question here.
+    #[test]
+    fn an_unknown_config_kind_is_rejected() {
+        assert!(ConfigKind::parse("url-check").is_none(), "parsing is exact");
+        assert!(ConfigKind::parse("Thresholds").is_none());
+        assert!(ConfigKind::parse("forwarding").is_none());
+        assert!(ConfigKind::parse("schedules").is_none());
+        assert!(ConfigKind::parse("").is_none());
+    }
+
+    /// The five kinds that need an id say so rather than answering about something else.
+    #[tokio::test]
+    async fn the_config_kinds_that_need_an_id_refuse_without_one() {
+        let m = mcp();
+        for kind in [
+            ConfigKind::NodeCollection,
+            ConfigKind::UrlCheck,
+            ConfigKind::DnsCheck,
+            ConfigKind::TemplateItems,
+            ConfigKind::ProfileTemplates,
+            ConfigKind::MerakiNetworks,
+            ConfigKind::DiscoveryScan,
+        ] {
+            let r = m
+                .config_in(kind, ConfigParams::default(), &unrestricted())
+                .await;
+            assert!(
+                r.is_err(),
+                "kind {} answered without the id it needs",
+                kind.arg()
+            );
+        }
+    }
+
+    /// The three node-scoped kinds hide a node outside the caller's groups, and hide it the same
+    /// way a nonexistent id is hidden — otherwise the tool is an existence oracle.
+    #[tokio::test]
+    async fn a_per_node_config_kind_hides_a_node_outside_the_scope() {
+        for kind in [
+            ConfigKind::NodeCollection,
+            ConfigKind::UrlCheck,
+            ConfigKind::DnsCheck,
+        ] {
+            let r = mcp()
+                .config_in(
+                    kind,
+                    ConfigParams {
+                        kind: kind.arg().to_owned(),
+                        node_id: Some(Uuid::nil()),
+                        ..Default::default()
+                    },
+                    &sees_nothing(),
+                )
+                .await
+                .unwrap_or_else(|_| panic!("kind {} should answer, not error", kind.arg()));
+            let body = json_of(&r);
+            assert_eq!(
+                body["available"],
+                serde_json::json!(false),
+                "{}",
+                kind.arg()
+            );
+            assert_eq!(body["reason"], "no node with that id", "{}", kind.arg());
+        }
     }
 
     /// A node the caller cannot see answers exactly what a nonexistent one answers.

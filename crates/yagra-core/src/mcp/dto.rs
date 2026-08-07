@@ -434,6 +434,58 @@ fn compact_detail(mut detail: serde_json::Value) -> serde_json::Value {
     detail
 }
 
+/// A node's URL check as this surface serves it: the probe definition, with the bound credential
+/// lowered to a yes/no (ADR-042 I3b).
+///
+/// The field it drops is a [`yagra_common::CredentialId`] *reference*, not a secret value. It is
+/// dropped anyway, for the reason [`NodeSummaryDto`] drops `Node.credential`: ADR-018's guard is a
+/// rule about key names, and an id a model cannot resolve, cannot use, and can only repeat into its
+/// own output is not worth the exception. `has_credential` answers the question a model actually
+/// has — is this probe authenticated — which the id does not. Same shape as `has_secret` /
+/// `has_bind_password` / `has_api_key` elsewhere on this surface.
+///
+/// The REST body keeps `credential`, and must: the WebUI's edit form prefills the credential
+/// selector from it and PUTs the whole config back, and that PUT is a replace, so a form that could
+/// not prefill the binding would clear it every time an operator changed a timeout. `mcp/folded.rs`
+/// records the divergence in `lowered_to`.
+#[derive(Debug, Clone, Serialize)]
+pub struct UrlCheckDto {
+    /// The URL probed.
+    pub url: String,
+    /// Request method.
+    pub method: yagra_common::HttpMethod,
+    /// Which status codes count as healthy.
+    pub expected_status: yagra_common::ExpectedStatus,
+    /// Whether the TLS certificate chain is verified.
+    pub verify_tls: bool,
+    /// Whether 3xx redirects are followed.
+    pub follow_redirects: bool,
+    /// Per-request timeout, in milliseconds.
+    pub timeout_ms: u32,
+    /// Whether an auth credential is bound. Which one is not served (ADR-018).
+    pub has_credential: bool,
+}
+
+impl UrlCheckDto {
+    /// Project a stored URL check onto the sanitized shape.
+    ///
+    /// Field by field rather than `#[serde(flatten)]` on purpose: flatten would carry `credential`
+    /// straight through, and a field added to [`yagra_common::UrlCheckConfig`] later should have to
+    /// be looked at rather than inherited.
+    #[must_use]
+    pub fn from_config(cfg: &yagra_common::UrlCheckConfig) -> Self {
+        Self {
+            url: cfg.url.clone(),
+            method: cfg.method,
+            expected_status: cfg.expected_status.clone(),
+            verify_tls: cfg.verify_tls,
+            follow_redirects: cfg.follow_redirects,
+            timeout_ms: cfg.timeout_ms,
+            has_credential: cfg.credential.is_some(),
+        }
+    }
+}
+
 /// One received passive event (syslog / SNMP trap / webhook), sanitized for AI consumption. Excludes
 /// the internal `pool` (poller-assignment) and `source_id` (event-source id) — the LLM sees the
 /// human-facing shape (source IP, hostname, trap name, message), never internal routing ids.
@@ -592,10 +644,46 @@ mod tests {
         assert!(json.get("profile").is_none());
     }
 
+    /// A URL check with the binding actually set — the only version of this test that proves
+    /// anything. `has_credential: false` would pass with a projection that simply forgot the field.
+    fn sample_url_check_with_credential() -> yagra_common::UrlCheckConfig {
+        let mut cfg = yagra_common::UrlCheckConfig::new("https://api.example.com/health");
+        cfg.credential = Some(CredentialId::from(uuid::Uuid::new_v4()));
+        cfg
+    }
+
+    #[test]
+    fn url_check_dto_omits_the_credential_binding() {
+        let json =
+            serde_json::to_value(UrlCheckDto::from_config(&sample_url_check_with_credential()))
+                .expect("serialize");
+        // The positive half: the binding is reported, as a yes/no…
+        assert_eq!(json["has_credential"], true);
+        assert_eq!(json["url"], "https://api.example.com/health");
+        // …and the negative half: never as the reference itself.
+        assert!(json.get("credential").is_none());
+    }
+
+    #[test]
+    fn a_url_check_without_a_credential_says_so() {
+        let cfg = yagra_common::UrlCheckConfig::new("https://api.example.com/health");
+        let json = serde_json::to_value(UrlCheckDto::from_config(&cfg)).expect("serialize");
+        assert_eq!(json["has_credential"], false);
+    }
+
     #[test]
     fn every_dto_is_free_of_forbidden_keys() {
         // Build one instance of each DTO with representative data and run the canary over each.
         let node = sample_node_with_secret();
+
+        // Built from a config that *does* carry a binding, so the canary sees the case that would
+        // fail rather than the one that trivially passes.
+        assert_no_forbidden_keys(
+            &serde_json::to_value(UrlCheckDto::from_config(&sample_url_check_with_credential()))
+                .unwrap(),
+            "UrlCheck",
+        );
+
         let summary = NodeSummaryDto::from_node(&node, Some(NodeState::Ok));
         assert_inventory_dto_is_clean(&serde_json::to_value(&summary).unwrap(), "NodeSummary");
 
@@ -1116,7 +1204,7 @@ mod tests {
             }
         }
         assert!(
-            checked >= 14,
+            checked >= 15,
             "only found {checked} DTO declarations — the parser drifted"
         );
         assert!(
@@ -1234,7 +1322,7 @@ mod tests {
         // count, the next tool written that way would have been skipped without moving it.
         let sites = call_sites(tools_src, "ok_json");
         assert!(
-            sites.len() >= 21,
+            sites.len() >= 22,
             "only matched {} ok_json call sites; the parser drifted",
             sites.len()
         );

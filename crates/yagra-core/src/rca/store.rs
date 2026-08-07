@@ -117,6 +117,34 @@ pub struct ReportBody {
     pub evidence: serde_json::Value,
     /// Which language the answer was requested in.
     pub language: crate::rca::prompt::Language,
+    /// What the model looked up for itself, in order (ADR-028 WS-G). Empty on a single-shot run,
+    /// and on every report written before agentic retrieval existed.
+    //  `#[serde(default)]` is what makes reading an older row safe — the column is loose `JSONB`
+    //  and a report from v0.1.22 has no such key (ADR-017).
+    #[serde(default)]
+    pub transcript: Vec<ToolTurn>,
+}
+
+/// One tool the model asked for, and what it was told.
+///
+/// Stored for the same reason `evidence` is: an explanation whose reader cannot check what it was
+/// based on is an assertion. Agentic retrieval makes that worse, not better — the evidence is no
+/// longer a fixed set somebody chose, so without this nobody can tell whether the model looked at
+/// the right thing.
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct ToolTurn {
+    /// The tool name, from the agent's allow-list.
+    pub tool: String,
+    /// The arguments the model chose.
+    #[schema(value_type = Object)]
+    pub args: serde_json::Value,
+    /// What the tool answered, as the model saw it.
+    //  A `String` and not a typed value, which does mean the MCP forbidden-key walk sees `type:
+    //  string` and cannot look inside. That is acceptable here and nowhere else: every byte came
+    //  out of `ok_json`, so it has already crossed the `mcp/dto.rs` sanitization boundary, and
+    //  `rca::agent`'s allow-list is pinned to tools that canary covers. Typing it would mean a
+    //  union of twenty-odd result shapes that the UI would then have to match on to render.
+    pub result: String,
 }
 
 /// A row to insert.

@@ -369,11 +369,23 @@ async fn discovery_candidates(
     State(st): State<ApiState>,
     Query(q): Query<CandidatesQuery>,
 ) -> ApiResult<Json<Vec<crate::discovery::Candidate>>> {
+    Ok(Json(recent_candidates(&st, q.limit)))
+}
+
+/// Recent unclassified devices, capped — the seam both edges call.
+///
+/// Skeleton mode returns empty rather than unavailable: with no discovery runner there are
+/// genuinely no candidates, which is an answer.
+pub(crate) fn recent_candidates(
+    st: &ApiState,
+    limit: Option<usize>,
+) -> Vec<crate::discovery::Candidate> {
     let Some(admin) = st.admin.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Vec::new();
     };
-    let limit = q.limit.unwrap_or(10).clamp(1, 50);
-    Ok(Json(admin.discovery.recent_candidates(limit)))
+    admin
+        .discovery
+        .recent_candidates(limit.unwrap_or(10).clamp(1, 50))
 }
 
 // ── Endpoints seen on the network (ADR-043 Increment 3) ─────────────────────

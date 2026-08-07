@@ -142,7 +142,7 @@ pub(super) struct CollectionQuery {
 /// item ids and scope; the resolved view is the poller's effective set and has neither.
 #[derive(Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
-pub(super) enum NodeCollection {
+pub(crate) enum NodeCollection {
     /// Default: the node's own overrides, each with its id and scope.
     Stored(Vec<crate::collection::StoredCollectionItem>),
     /// `?resolved=true`: the effective set after profile defaults, as the poller sees it.
@@ -169,7 +169,23 @@ async fn list_node_collection(
     Path(node_id): Path<Uuid>,
     Query(q): Query<CollectionQuery>,
 ) -> ApiResult<Json<NodeCollection>> {
-    if !q.resolved.unwrap_or(false) {
+    Ok(Json(
+        node_collection(&admin, node_id, q.resolved.unwrap_or(false)).await?,
+    ))
+}
+
+/// A node's collection set — the seam both edges call.
+///
+/// `resolved` picks the arm: `false` is the node's own stored overrides, `true` is the effective
+/// set after profile defaults, which is what the poller actually collects. The two are a `#[serde(untagged)]`
+/// union rather than two functions because the shape depends on an argument, and a caller that
+/// cannot tell them apart is the bug this type exists to prevent.
+pub(crate) async fn node_collection(
+    admin: &super::AdminState,
+    node_id: Uuid,
+    resolved: bool,
+) -> ApiResult<NodeCollection> {
+    if !resolved {
         let list = admin
             .collection
             .list_items("node", node_id)
@@ -181,7 +197,7 @@ async fn list_node_collection(
                     "failed to list collection set",
                 )
             })?;
-        return Ok(Json(NodeCollection::Stored(list)));
+        return Ok(NodeCollection::Stored(list));
     }
     let node = admin
         .repo
@@ -203,9 +219,7 @@ async fn list_node_collection(
                 "failed to resolve collection set",
             )
         })?;
-    Ok(Json(NodeCollection::Resolved(resolve_collection_set(
-        &scoped,
-    ))))
+    Ok(NodeCollection::Resolved(resolve_collection_set(&scoped)))
 }
 
 #[utoipa::path(

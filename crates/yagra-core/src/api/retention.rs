@@ -104,6 +104,14 @@ async fn get_retention(
     admin: Admin,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<RetentionPolicy>> {
+    Ok(Json(retention_policy(&st, &admin).await))
+}
+
+/// The deployment's retention policy — the seam both edges call.
+///
+/// Infallible on purpose: both store probes degrade to `None` (rendered as unknown) rather than
+/// failing, because this is the screen an operator opens precisely to find out what is going on.
+pub(crate) async fn retention_policy(st: &ApiState, admin: &super::AdminState) -> RetentionPolicy {
     let settings = admin.repo.get_retention_settings().await;
     // Ask the two stores that own their own retention what they are actually enforcing. Both are
     // one cheap HTTP GET and both degrade to `None` (rendered as unknown) rather than failing the
@@ -132,16 +140,16 @@ async fn get_retention(
                 unit: row.unit().to_owned(),
                 value: subject.configured(&settings),
                 store_reported,
-                store_configured: store_configured(&st, subject),
+                store_configured: store_configured(st, subject),
                 note: row.note.to_owned(),
             }
         })
         .collect();
 
-    Ok(Json(RetentionPolicy {
+    RetentionPolicy {
         settings: to_values(&settings),
         rows,
-    }))
+    }
 }
 
 /// Update the retention windows. Applies immediately: the PostgreSQL prune loops re-read the policy

@@ -40,18 +40,57 @@ pub(super) fn routes() -> Router<ApiState> {
         )
 }
 
+/// Maximum entries returned by one list call.
+///
+/// Large enough that no hand-curated catalog is ever truncated — the seeded standard + vendor sets
+/// are a few hundred rows — and small enough that an unfiltered request is a query rather than a
+/// table scan delivered to a client.
+pub(crate) const MIB_MAX: i64 = 2000;
+
 /// Free-text search over the catalog.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(super) struct MibQuery {
     q: Option<String>,
+    /// Maximum entries to return (1–2000, default 2000).
+    limit: Option<i64>,
+}
+
+/// List the catalog, filtered and capped.
+///
+/// The seam both edges call, so the blank-term rule and the cap exist once. A clamp on one edge
+/// only is a clamp the other edge does not have (ADR-042 I1) — the MCP tool and this handler differ
+/// in their *default*, which is a choice, not in their ceiling, which is not.
+pub(crate) async fn mib_catalog(
+    admin: &super::AdminState,
+    q: Option<&str>,
+    limit: Option<i64>,
+) -> ApiResult<Vec<crate::mib::MibEntry>> {
+    admin
+        .mib
+        .list(catalog_needle(q), catalog_limit(limit))
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "list mib catalog", "failed to list MIB catalog")
+        })
+}
+
+/// A blank or whitespace-only term means "no filter", not "match the empty string".
+fn catalog_needle(q: Option<&str>) -> Option<&str> {
+    q.map(str::trim).filter(|s| !s.is_empty())
+}
+
+/// The row cap. Its own function so the test exercises the clamp the query actually gets rather
+/// than a copy of the expression, which is how a clamp comes to exist on one edge only.
+fn catalog_limit(limit: Option<i64>) -> i64 {
+    limit.unwrap_or(MIB_MAX).clamp(1, MIB_MAX)
 }
 
 #[utoipa::path(
     get, path = "/api/v1/mib-catalog", tag = "mib",
     params(MibQuery),
     responses(
-        (status = 200, description = "Matching catalog entries, or the whole catalog when no term is given", body = Vec<crate::mib::MibEntry>),
+        (status = 200, description = "Matching catalog entries, or the whole catalog when no term is given, capped at `limit` (1–2000, default 2000)", body = Vec<crate::mib::MibEntry>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -62,12 +101,7 @@ async fn list_mib_catalog(
     admin: Admin,
     Query(q): Query<MibQuery>,
 ) -> ApiResult<Json<Vec<crate::mib::MibEntry>>> {
-    // A blank or whitespace-only term means "no filter", not "match the empty string".
-    let needle = q.q.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let list = admin.mib.list(needle).await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "list mib catalog", "failed to list MIB catalog")
-    })?;
-    Ok(Json(list))
+    Ok(Json(mib_catalog(&admin, q.q.as_deref(), q.limit).await?))
 }
 
 /// Create-entry body for the catalog.
@@ -242,6 +276,27 @@ mod tests {
                 "{method} {path}"
             );
         }
+    }
+
+    #[test]
+    fn the_catalog_limit_is_clamped_to_the_cap_in_both_directions() {
+        // Until ADR-042 I3b this query had no bound at all, on either edge — survivable while the
+        // only caller was a settings screen an operator opened by hand, and not once an MCP tool
+        // could ask for the whole table. `?limit=` is caller-supplied, so zero, negative and
+        // unbounded all have to land inside the cap.
+        assert_eq!(catalog_limit(None), MIB_MAX);
+        assert_eq!(catalog_limit(Some(100)), 100);
+        assert_eq!(catalog_limit(Some(0)), 1);
+        assert_eq!(catalog_limit(Some(-5)), 1);
+        assert_eq!(catalog_limit(Some(i64::MAX)), MIB_MAX);
+    }
+
+    #[test]
+    fn a_blank_search_term_is_no_filter_rather_than_an_empty_match() {
+        assert_eq!(catalog_needle(None), None);
+        assert_eq!(catalog_needle(Some("")), None);
+        assert_eq!(catalog_needle(Some("   ")), None);
+        assert_eq!(catalog_needle(Some("  ifHC  ")), Some("ifHC"));
     }
 
     #[tokio::test]

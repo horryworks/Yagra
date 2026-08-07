@@ -53,8 +53,14 @@ impl MibRepo {
     }
 
     /// List catalog entries, optionally filtered by a case-insensitive substring on the
-    /// metric name / OID / vendor. Ordered by metric name.
-    pub async fn list(&self, q: Option<&str>) -> anyhow::Result<Vec<MibEntry>> {
+    /// metric name / OID / vendor. Ordered by metric name, capped at `limit` rows.
+    ///
+    /// The bound is not optional. This query used to have none on either edge — the REST handler
+    /// passed the term straight through — which was survivable while the only caller was a settings
+    /// screen an operator opened by hand, and stopped being survivable when the catalog became
+    /// reachable from an MCP tool (ADR-042 I3b). The caller clamps; this signature only refuses to
+    /// let anyone forget.
+    pub async fn list(&self, q: Option<&str>, limit: i64) -> anyhow::Result<Vec<MibEntry>> {
         let rows = sqlx::query(
             "SELECT id, metric_name, oid, collection, metric_kind, vendor, description \
              FROM mib_catalog \
@@ -62,9 +68,11 @@ impl MibRepo {
                 OR metric_name ILIKE '%' || $1 || '%' \
                 OR oid ILIKE '%' || $1 || '%' \
                 OR vendor ILIKE '%' || $1 || '%' \
-             ORDER BY metric_name",
+             ORDER BY metric_name \
+             LIMIT $2",
         )
         .bind(q)
+        .bind(limit)
         .fetch_all(&self.pool)
         .await?;
         rows.into_iter()
