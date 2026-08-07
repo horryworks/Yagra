@@ -309,7 +309,8 @@ pub struct EventSeverityCount {
 #[derive(Debug, Clone)]
 pub struct EventSignatureCount {
     pub kind: String,
-    /// The clustering key (trap OID or syslog app-name).
+    /// The clustering key: trap OID, else the device's own event code, else syslog app-name — see
+    /// [`SIGNATURE_TIERS`].
     pub signature: String,
     pub count: i64,
     /// A representative node the signature was seen on (for the finding's node link).
@@ -386,6 +387,34 @@ pub struct PersistRecord {
     pub source_id: Option<Uuid>,
     pub matched_rule_id: Option<Uuid>,
     pub action: EventAction,
+    /// The device's own event code, lifted out of the message text at ingest (see
+    /// [`signature_of`]). Carried here rather than on [`EventMsg`] so both writers derive it from
+    /// one value — PostgreSQL and the log store cannot disagree about a field neither computes.
+    pub signature: Option<String>,
+}
+
+/// Extract the event's vendor signature, counting which pattern answered.
+///
+/// **Why core and not the poller.** The pattern list in `yagra-ingest` grows with every vendor
+/// Yagra meets. Extracting at the edge would make each new pattern wait for a poller rollout across
+/// every remote site before those events cluster; doing it here, a core upgrade is enough. It also
+/// lands on the single confluence of all three sources (syslog and traps from the poller's
+/// listeners, webhooks from the API edge), and adds no [`EventMsg`] field — so this change has no
+/// bus-compatibility surface at all, and an N-1 poller's events get signatures immediately
+/// (ADR-017).
+///
+/// Runs for every kind, traps included: precedence between the signature tiers lives in the read
+/// query ([`SIGNATURE_TIERS`]), so this column keeps exactly one meaning and a later change of
+/// precedence is one edit rather than a rewrite of stored rows. A rendered trap message leads with
+/// a dotted OID and matches no pattern — pinned in `yagra-ingest`'s fixture table.
+fn signature_of(msg: &EventMsg) -> Option<String> {
+    let found = yagra_ingest::extract_signature(&msg.message);
+    metrics::counter!(
+        "yagra_event_signature_total",
+        "pattern" => found.map_or("none", |s| s.pattern.as_str()),
+    )
+    .increment(1);
+    found.map(|s| s.text.to_owned())
 }
 
 impl PersistRecord {
@@ -396,7 +425,36 @@ impl PersistRecord {
     fn is_alert_linked(&self) -> bool {
         self.action.is_alert_linked()
     }
+
+    /// This row's clustering key under [`SIGNATURE_TIERS`] precedence — the in-process equivalent
+    /// of the PostgreSQL `COALESCE` and the LogsQL tier chain.
+    ///
+    /// `#[cfg(test)]` because its only caller is the in-memory [`crate::logstore::LogStore`], which
+    /// is itself test-only. That is exactly why it exists: the fake every analysis test runs against
+    /// must not be able to answer differently from the two real stores, and a third hand-written
+    /// precedence chain inside the fake is how it would.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn signature_key(&self) -> Option<&str> {
+        SIGNATURE_TIER_ACCESSORS
+            .iter()
+            .find_map(|(_, get)| get(self))
+    }
 }
+
+/// How to read each [`SIGNATURE_TIERS`] entry off a record, in the same order.
+///
+/// The names are carried alongside the accessors so `every_signature_tier_has_an_accessor` can pin
+/// the two lists to each other: a tier added to `SIGNATURE_TIERS` and not here would leave the
+/// in-memory store silently one tier behind the stores it stands in for.
+#[cfg(test)]
+type TierAccessor = (&'static str, fn(&PersistRecord) -> Option<&str>);
+#[cfg(test)]
+const SIGNATURE_TIER_ACCESSORS: [TierAccessor; 3] = [
+    ("trap_oid", |r| r.msg.trap_oid.as_deref()),
+    ("signature", |r| r.signature.as_deref()),
+    ("app_name", |r| r.msg.app_name.as_deref()),
+];
 
 /// One planned alert side effect queued for the async action writer (S10): a fire/resolve/suppress
 /// to record in history and forward to the notifier, off the matcher's hot path. `reason` labels a
@@ -627,17 +685,40 @@ fn agg_severity_counts_sql() -> String {
     )
 }
 
-/// Top unmatched signatures, clustered by trap OID else syslog app-name.
-fn agg_unmatched_signatures_sql() -> String {
+/// The clustering key for an unmatched event, **most specific first**.
+///
+/// One list, both backends: the PostgreSQL `COALESCE` below and the LogsQL tier queries in
+/// `logstore.rs` are generated from it, so PostgreSQL and VictoriaLogs cannot answer `rule_gap`
+/// with different groupings — pinned by `the_two_backends_cluster_signatures_in_the_same_order`.
+///
+/// Why this order: a trap OID identifies the event class exactly. `signature` is the device's own
+/// event code, recovered from the message text by `yagra_ingest::extract_signature` for the very
+/// large class of senders whose datagrams parse as neither RFC 3164 nor RFC 5424 and therefore
+/// carry no APP-NAME at all. `app_name` last — it is the coarsest of the three (a daemon name, not
+/// an event class), and it is what rows written before the `signature` column existed still have.
+pub(crate) const SIGNATURE_TIERS: [&str; 3] = ["trap_oid", "signature", "app_name"];
+
+/// `COALESCE(e.trap_oid, e.signature, e.app_name)`, built from [`SIGNATURE_TIERS`].
+fn signature_coalesce_sql() -> String {
+    let cols: Vec<String> = SIGNATURE_TIERS.iter().map(|f| format!("e.{f}")).collect();
+    format!("COALESCE({})", cols.join(", "))
+}
+
+/// Top unmatched signatures, clustered by [`SIGNATURE_TIERS`].
+///
+/// `pub(crate)` only so `logstore::the_two_backends_cluster_signatures_in_the_same_order` can read
+/// it — the same reason [`EVENT_FILTER_WHERE`] is. It is a pure string builder; nothing else calls it.
+pub(crate) fn agg_unmatched_signatures_sql() -> String {
     // NB: PostgreSQL has no min/max aggregate for `uuid`, so pick a representative node via the
     // text form — the canonical lowercase-hyphenated uuid sorts identically to the binary ordering,
     // and NULL node_ids are ignored by the aggregate (sample_node stays optional).
+    let sig = signature_coalesce_sql();
     format!(
-        "SELECT e.kind, COALESCE(e.trap_oid, e.app_name) AS sig, count(*) AS n, \
+        "SELECT e.kind, {sig} AS sig, count(*) AS n, \
                 min(e.node_id::text)::uuid AS sample_node \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} AND e.matched_rule_id IS NULL \
-           AND COALESCE(e.trap_oid, e.app_name) IS NOT NULL \
+           AND {sig} IS NOT NULL \
          GROUP BY e.kind, sig ORDER BY n DESC LIMIT $10"
     )
 }
@@ -920,8 +1001,8 @@ impl EventRepo {
         }
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO events (id, kind, at_unix_ms, source_ip, node_id, source_id, pool, \
-             facility, syslog_severity, hostname, app_name, trap_oid, varbinds, message, \
-             matched_rule_id, action) ",
+             facility, syslog_severity, hostname, app_name, trap_oid, signature, varbinds, \
+             message, matched_rule_id, action) ",
         );
         qb.push_values(records.iter(), |mut b, r| {
             let m = &r.msg;
@@ -942,6 +1023,7 @@ impl EventRepo {
                 .push_bind(m.hostname.clone())
                 .push_bind(m.app_name.clone())
                 .push_bind(m.trap_oid.clone())
+                .push_bind(r.signature.clone())
                 .push_bind(varbinds)
                 .push_bind(m.message.clone())
                 .push_bind(r.matched_rule_id)
@@ -1614,12 +1696,14 @@ impl EventEngine {
         // ADR-024). Non-blocking: under sustained overload we shed the newest event rather than
         // block the matcher — alerts already fired above, so a dropped persist never loses an alert.
         if let Some(tx) = &self.persist_tx {
+            let signature = signature_of(&msg);
             let record = PersistRecord {
                 msg,
                 node_id,
                 source_id: source.as_ref().map(|s| s.source_id),
                 matched_rule_id: planned.matched_rule,
                 action: planned.row_action,
+                signature,
             };
             match tx.try_send(record) {
                 Ok(()) => metrics::counter!("yagra_events_persist_enqueued_total").increment(1),
@@ -2176,6 +2260,54 @@ mod tests {
         assert!(agg_auth_sources_sql().contains("LIMIT $10"));
     }
 
+    /// Every [`SIGNATURE_TIERS`] entry can actually be read off a record.
+    ///
+    /// The two lists exist separately because one names SQL/LogsQL columns and the other reaches
+    /// into Rust structs, and only this pins them together. A tier added to `SIGNATURE_TIERS` and
+    /// not to the accessors would leave the in-memory log store — the fake every analysis test runs
+    /// against — one tier behind the two stores it stands in for, which is the failure mode where
+    /// the tests pass and the deployment is wrong.
+    #[test]
+    fn every_signature_tier_has_an_accessor() {
+        let named: Vec<&str> = SIGNATURE_TIER_ACCESSORS.iter().map(|(n, _)| *n).collect();
+        assert_eq!(named, SIGNATURE_TIERS.to_vec());
+    }
+
+    /// The events INSERT names its columns in one string and binds them positionally elsewhere;
+    /// nothing makes the two agree.
+    ///
+    /// A mismatch is not a compile error and not a crash: the batch insert fails, `flush_persist`
+    /// logs a warning and moves on, and the deployment quietly stops persisting **every** event
+    /// while continuing to alert normally. There is no integration test that runs a real insert, so
+    /// this count is the only thing between that bug and the test server.
+    #[test]
+    fn the_events_insert_binds_every_column_it_names() {
+        let src = include_str!("events.rs");
+        // Scoped to the function body — which is why plain needles are safe here, unlike a
+        // whole-file scan where this test's own text would match itself.
+        let start = src
+            .find("pub async fn insert_events_batch")
+            .expect("insert_events_batch moved or was renamed");
+        let rest = &src[start + 1..];
+        let end = rest
+            .find("\n    pub async fn ")
+            .expect("no following method — the scan window is unbounded");
+        let body = &rest[..end];
+
+        let marker = "INSERT INTO events (";
+        let cols_at = body
+            .find(marker)
+            .expect("the INSERT moved out of this function")
+            + marker.len();
+        let cols_end = cols_at + body[cols_at..].find(')').expect("unterminated column list");
+        let columns = body[cols_at..cols_end].split(',').count();
+        let binds = body.matches("push_bind(").count();
+        assert_eq!(
+            columns, binds,
+            "the INSERT names {columns} columns but binds {binds} values"
+        );
+    }
+
     #[test]
     fn stats_grouped_sql_uses_shared_filter_and_fixed_columns() {
         // Every group reuses the shared filter predicate and only fixed identifiers reach SQL.
@@ -2421,8 +2553,10 @@ mod tests {
     }
 
     fn persist_record(action: EventAction) -> PersistRecord {
+        let msg = syslog_msg("some event body");
         PersistRecord {
-            msg: syslog_msg("some event body"),
+            signature: signature_of(&msg),
+            msg,
             node_id: Some(Uuid::new_v4()),
             source_id: None,
             matched_rule_id: (action != EventAction::None).then(Uuid::new_v4),

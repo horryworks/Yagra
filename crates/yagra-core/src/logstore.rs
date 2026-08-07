@@ -278,6 +278,11 @@ fn record_to_json(r: &PersistRecord) -> Value {
     if let Some(t) = &m.trap_oid {
         obj.insert("trap_oid".into(), json!(t));
     }
+    // The middle signature tier (`crate::events::SIGNATURE_TIERS`). Comes off `PersistRecord`, not
+    // `EventMsg`, so this and the PostgreSQL insert write the same derived value.
+    if let Some(s) = &r.signature {
+        obj.insert("signature".into(), json!(s));
+    }
     if !m.varbinds.is_empty() {
         obj.insert(
             "varbinds".into(),
@@ -461,21 +466,26 @@ fn build_agg_severity_counts_logsql(filter: &EventFilter) -> String {
     )
 }
 
-/// The unmatched-signature query, in **two halves**.
+/// The unmatched-signature query for **one tier** of [`crate::events::SIGNATURE_TIERS`].
 ///
-/// LogsQL has no `COALESCE`, so "trap OID, else app name" cannot be one grouping expression the way
-/// it is in SQL. Two fixed queries merged in Rust beats building one with a pipe trick: the field
-/// list stays literal, and each half is a query a human can paste into VictoriaLogs unchanged.
-fn build_agg_unmatched_signature_logsql(filter: &EventFilter, limit: i64, trap: bool) -> String {
-    let base = build_filter_part(filter, &[]);
-    let cap = limit.clamp(1, 500);
-    if trap {
-        format!("{base} matched:=\"false\" trap_oid:* | stats by (kind, trap_oid) count() as n | sort by (n) desc | limit {cap}")
-    } else {
-        // `-trap_oid:*` is what keeps the two halves disjoint, mirroring COALESCE's precedence:
-        // a row with both fields is counted once, under its trap OID.
-        format!("{base} matched:=\"false\" app_name:* -trap_oid:* | stats by (kind, app_name) count() as n | sort by (n) desc | limit {cap}")
-    }
+/// LogsQL has no `COALESCE`, so "trap OID, else device event code, else app name" cannot be one
+/// grouping expression the way it is in SQL. One fixed query per tier, merged in Rust, beats
+/// building a single query with a pipe trick: the field list stays literal, and each tier is a
+/// query a human can paste into VictoriaLogs unchanged.
+///
+/// Tier *i* negates every **preceding** tier's field (`-trap_oid:*` …), which is what keeps the
+/// queries disjoint and reproduces COALESCE's precedence: a row carrying two of the fields is
+/// counted once, under the more specific one.
+fn build_agg_unmatched_signature_logsql(filter: &EventFilter, limit: i64, tier: usize) -> String {
+    let tiers = crate::events::SIGNATURE_TIERS;
+    let field = tiers[tier];
+    let excluded: String = tiers[..tier].iter().map(|f| format!(" -{f}:*")).collect();
+    format!(
+        "{} matched:=\"false\" {field}:*{excluded} | stats by (kind, {field}) count() as n \
+         | sort by (n) desc | limit {}",
+        build_filter_part(filter, &[]),
+        limit.clamp(1, 500)
+    )
 }
 
 /// `<filter> (<auth signals>) | stats by (source_ip, node_id) count() as n`.
@@ -791,9 +801,8 @@ impl LogStore for VlStore {
         limit: i64,
     ) -> anyhow::Result<Vec<EventSignatureCount>> {
         let mut out: Vec<EventSignatureCount> = Vec::new();
-        for trap in [true, false] {
-            let q = build_agg_unmatched_signature_logsql(filter, limit, trap);
-            let field = if trap { "trap_oid" } else { "app_name" };
+        for (tier, field) in crate::events::SIGNATURE_TIERS.iter().enumerate() {
+            let q = build_agg_unmatched_signature_logsql(filter, limit, tier);
             for line in self.query_lines(&q).await? {
                 let Ok(v) = serde_json::from_str::<Value>(&line) else {
                     continue;
@@ -810,8 +819,8 @@ impl LogStore for VlStore {
                 });
             }
         }
-        // Re-sort across the two halves: each was ordered and capped on its own, so the merge is
-        // only the top-N of the union once it is sorted again.
+        // Re-sort across the tiers: each was ordered and capped on its own, so the merge is only
+        // the top-N of the union once it is sorted again.
         out.sort_by_key(|s| std::cmp::Reverse(s.count));
         out.truncate(limit.clamp(1, 500) as usize);
         Ok(out)
@@ -1134,12 +1143,12 @@ impl LogStore for InMemoryLogStore {
             if r.matched_rule_id.is_some() {
                 continue;
             }
-            // Trap OID first, else app name — the COALESCE precedence, and the same rule the two
-            // LogsQL halves keep disjoint with `-trap_oid:*`.
-            let Some(sig) = r.msg.trap_oid.clone().or_else(|| r.msg.app_name.clone()) else {
+            // `SIGNATURE_TIERS` precedence, applied through the one accessor list — the same rule
+            // the SQL COALESCE and the disjoint LogsQL tiers implement.
+            let Some(sig) = r.signature_key() else {
                 continue;
             };
-            *agg.entry((r.msg.kind.as_str().to_owned(), sig))
+            *agg.entry((r.msg.kind.as_str().to_owned(), sig.to_owned()))
                 .or_insert(0) += 1;
         }
         let mut out: Vec<EventSignatureCount> = agg
@@ -1216,8 +1225,12 @@ mod tests {
     }
 
     fn record(id: Uuid, message: &str, at_unix_ms: i64, action: EventAction) -> PersistRecord {
+        let m = msg(id, message, at_unix_ms);
         PersistRecord {
-            msg: msg(id, message, at_unix_ms),
+            // Derived exactly as `handle_event` derives it, so a fixture cannot carry a signature
+            // the real write path would never have produced for that message.
+            signature: yagra_ingest::extract_signature(&m.message).map(|s| s.text.to_owned()),
+            msg: m,
             node_id: Some(Uuid::from_u128(1)),
             source_id: None,
             matched_rule_id: (action != EventAction::None).then(Uuid::new_v4),
@@ -1425,13 +1438,18 @@ mod tests {
         //    above by composing `build_filter_part` rather than assembling their own filter. That
         //    is the whole reason they were written that way, so it is asserted rather than assumed:
         //    a builder that hand-rolled its clauses would be the one that forgets the restriction.
+        let tiers = 0..crate::events::SIGNATURE_TIERS.len();
         for q in [
             build_agg_counts_by_bucket_logsql(&none_visible, 300),
             build_agg_severity_counts_logsql(&none_visible),
-            build_agg_unmatched_signature_logsql(&none_visible, 20, true),
-            build_agg_unmatched_signature_logsql(&none_visible, 20, false),
             build_agg_auth_sources_logsql(&none_visible, 20),
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            tiers
+                .clone()
+                .map(|t| build_agg_unmatched_signature_logsql(&none_visible, 20, t)),
+        ) {
             assert!(
                 q.contains("node_id:in(\"\")"),
                 "an analytics query must inherit the unsatisfiable empty scope: {q}"
@@ -1440,9 +1458,11 @@ mod tests {
         for q in [
             build_agg_counts_by_bucket_logsql(&scoped, 300),
             build_agg_severity_counts_logsql(&scoped),
-            build_agg_unmatched_signature_logsql(&scoped, 20, true),
             build_agg_auth_sources_logsql(&scoped, 20),
-        ] {
+        ]
+        .into_iter()
+        .chain(tiers.map(|t| build_agg_unmatched_signature_logsql(&scoped, 20, t)))
+        {
             assert!(q.contains(&format!("node_id:in(\"{mine}\")")), "{q}");
         }
     }
@@ -1465,14 +1485,6 @@ mod tests {
                 "stats by (node_id, syslog_severity)",
             ),
             (
-                build_agg_unmatched_signature_logsql(&f, 20, true),
-                "stats by (kind, trap_oid)",
-            ),
-            (
-                build_agg_unmatched_signature_logsql(&f, 20, false),
-                "stats by (kind, app_name)",
-            ),
-            (
                 build_agg_auth_sources_logsql(&f, 20),
                 "stats by (source_ip, node_id)",
             ),
@@ -1481,14 +1493,60 @@ mod tests {
             assert!(q.contains(by), "expected `{by}` in: {q}");
             assert!(q.contains("count() as n"), "{q}");
         }
-        // The two signature halves must be disjoint, or a row carrying both fields is counted
-        // twice — the LogsQL stand-in for SQL's `COALESCE(trap_oid, app_name)` precedence.
-        let app = build_agg_unmatched_signature_logsql(&f, 20, false);
-        assert!(app.contains("-trap_oid:*"), "{app}");
-        // Both halves read unmatched rows only. `rule_gap` over matched events is not a rule gap.
-        for trap in [true, false] {
-            let q = build_agg_unmatched_signature_logsql(&f, 20, trap);
+        for (tier, field) in crate::events::SIGNATURE_TIERS.iter().enumerate() {
+            let q = build_agg_unmatched_signature_logsql(&f, 20, tier);
+            assert!(q.contains(&format!("stats by (kind, {field})")), "{q}");
+            assert!(q.contains("count() as n"), "{q}");
+            // Every tier reads unmatched rows only. `rule_gap` over matched events is not a gap.
             assert!(q.contains("matched:=\"false\""), "{q}");
+        }
+    }
+
+    /// The two backends must cluster `rule_gap` on the same key, in the same order.
+    ///
+    /// PostgreSQL expresses the precedence as one `COALESCE`; LogsQL, which has no `COALESCE`, as
+    /// one query per tier with the preceding tiers negated. Those are different enough mechanisms
+    /// that nothing but this test makes them agree — and disagreeing is not a crash, it is two
+    /// surfaces quietly reporting different rule gaps for the same fleet. Both are generated from
+    /// [`crate::events::SIGNATURE_TIERS`], so this asserts the generation, not a transcription.
+    #[test]
+    fn the_two_backends_cluster_signatures_in_the_same_order() {
+        let tiers = crate::events::SIGNATURE_TIERS;
+        let f = EventFilter::default();
+
+        // PostgreSQL: one COALESCE, tiers in order. Built at runtime from the list — a literal
+        // needle here would be a copy of the thing under test rather than a check of it.
+        let expected = format!(
+            "COALESCE({})",
+            tiers
+                .iter()
+                .map(|t| format!("e.{t}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let sql = crate::events::agg_unmatched_signatures_sql();
+        assert!(sql.contains(&expected), "expected `{expected}` in: {sql}");
+
+        // LogsQL: tier i selects its own field and negates exactly the tiers above it. Anything
+        // less makes the tiers overlap, and a row carrying two of the fields is counted twice.
+        for (tier, field) in tiers.iter().enumerate() {
+            let q = build_agg_unmatched_signature_logsql(&f, 20, tier);
+            assert!(
+                q.contains(&format!("{field}:*")),
+                "tier {tier} must select its own field: {q}"
+            );
+            for higher in &tiers[..tier] {
+                assert!(
+                    q.contains(&format!("-{higher}:*")),
+                    "tier {tier} must exclude the more specific `{higher}`: {q}"
+                );
+            }
+            for lower in &tiers[tier + 1..] {
+                assert!(
+                    !q.contains(&format!("-{lower}:*")),
+                    "tier {tier} must not exclude the coarser `{lower}`: {q}"
+                );
+            }
         }
     }
 
@@ -1582,23 +1640,91 @@ mod tests {
         assert_eq!(got[0].count, 5);
     }
 
-    /// A trap OID wins over an app name on the same row — SQL's `COALESCE` precedence, which the
-    /// two LogsQL halves reproduce with `-trap_oid:*`.
+    /// The regression test for the *second* wall, and the reason this module gained a middle tier.
+    ///
+    /// A Huawei USG emits six figures of syslog a day whose datagrams parse as neither RFC 3164
+    /// (its timestamp carries a year) nor RFC 5424, so `app_name` is NULL — and it is syslog, so
+    /// `trap_oid` is NULL too. Under the old two-tier key every one of those events was unclusterable
+    /// and `rule_gap` returned an empty list, which reads as "no monitoring gaps" rather than "not
+    /// measurable". The message bodies are the real captures from `jpmyj01fw01`.
     #[tokio::test]
-    async fn a_signature_is_counted_once_under_its_trap_oid() {
+    async fn a_device_with_no_app_name_still_clusters_on_its_own_event_code() {
         let store = InMemoryLogStore::default();
-        let mut r = record(Uuid::new_v4(), "trap", 1_000, EventAction::None);
-        r.node_id = Some(Uuid::from_u128(1));
-        r.msg.trap_oid = Some("1.3.6.1.6.3.1.1.5.3".into());
-        r.msg.app_name = Some("also-set".into());
-        store.ingest_batch(&[r]).await;
+        let bodies = [
+            (
+                "Aug  7 2026 15:43:42 jpmyj01fw01 %%01URL/4/FILTER(l):CID=0x814f0420;The URL \
+              filtering policy was matched. (SrcIp=192.168.1.142, DstIp=182.22.31.124)",
+                3,
+            ),
+            (
+                "Aug  7 2026 15:43:41 jpmyj01fw01 %%01POLICY/6/POLICYPERMIT(l):CID=0x814f041e;\
+              vsys=public, protocol=6, source-ip=192.168.1.142",
+                2,
+            ),
+        ];
+        let mut batch = Vec::new();
+        for (body, n) in bodies {
+            for i in 0..n {
+                let mut r = record(Uuid::new_v4(), body, 1_000 + i, EventAction::None);
+                r.node_id = Some(Uuid::from_u128(1));
+                // Exactly what the device gives us: neither of the original two tiers.
+                assert!(r.msg.app_name.is_none() && r.msg.trap_oid.is_none());
+                batch.push(r);
+            }
+        }
+        store.ingest_batch(&batch).await;
 
         let got = store
             .agg_unmatched_signatures(&EventFilter::default(), 20)
             .await
             .unwrap();
-        assert_eq!(got.len(), 1, "counted twice: {got:?}");
-        assert_eq!(got[0].signature, "1.3.6.1.6.3.1.1.5.3");
+        let mut seen: Vec<(&str, i64)> = got.iter().map(|s| (&*s.signature, s.count)).collect();
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            [("POLICY/6/POLICYPERMIT", 2), ("URL/4/FILTER", 3)],
+            "the device's own event codes must cluster: {got:?}"
+        );
+    }
+
+    /// A trap OID wins over an app name on the same row — SQL's `COALESCE` precedence, which the
+    /// LogsQL tiers reproduce by negating the tiers above them.
+    #[tokio::test]
+    async fn a_signature_is_counted_once_under_its_trap_oid() {
+        // A row carrying all three tiers is counted once, under the most specific — and each tier
+        // in turn wins when the ones above it are absent. Together with
+        // `the_two_backends_cluster_signatures_in_the_same_order` (which pins the query builders to
+        // the same list) this covers the precedence end to end.
+        for (drop_above, expected) in [
+            (0, "1.3.6.1.6.3.1.1.5.3"),
+            (1, "URL/4/FILTER"),
+            (2, "also-set"),
+        ] {
+            let store = InMemoryLogStore::default();
+            let mut r = record(
+                Uuid::new_v4(),
+                "%%01URL/4/FILTER(l):body",
+                1_000,
+                EventAction::None,
+            );
+            r.node_id = Some(Uuid::from_u128(1));
+            r.msg.trap_oid = Some("1.3.6.1.6.3.1.1.5.3".into());
+            r.msg.app_name = Some("also-set".into());
+            if drop_above > 0 {
+                r.msg.trap_oid = None;
+            }
+            if drop_above > 1 {
+                r.signature = None;
+            }
+            store.ingest_batch(&[r]).await;
+
+            let got = store
+                .agg_unmatched_signatures(&EventFilter::default(), 20)
+                .await
+                .unwrap();
+            assert_eq!(got.len(), 1, "counted more than once: {got:?}");
+            assert_eq!(got[0].signature, expected);
+        }
     }
 
     /// Severity arrives from VictoriaLogs as a *string* (`record_to_json` writes every numeric

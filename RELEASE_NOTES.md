@@ -118,6 +118,22 @@
     while interface collection is running — so an age-based sweep would erase the names and speeds
     of every interface on a node whose polling was merely paused. Those rows disappear with their
     node. The real fix belongs in the poller and is a separate change.
+- **Unmatched events now cluster on the device's own event code.** The Troubleshoot **Rule gap**
+  analysis (and MCP `event_stats`) grouped events by trap OID, else syslog APP-NAME. A large class
+  of real network gear supplies neither — its timestamp format falls outside both RFC 3164 and
+  RFC 5424, so the datagram parses as raw text and no APP-NAME is extracted — and such a device can
+  emit six figures of events a day while producing **zero** rule-gap findings. "0 gaps" reads as
+  "nothing is unrouted" when it actually meant "not measurable". Yagra now lifts the vendor's own
+  code out of the message at ingest (`%%01URL/4/FILTER(l):` → `URL/4/FILTER`, `%LINEPROTO-5-UPDOWN:`
+  → `LINEPROTO-5-UPDOWN`, a leading `SNMP_TRAP_LINK_DOWN:`) and clusters on it.
+  - The extracted code is always a **verbatim slice of the message**, so a signature named in a
+    finding can be pasted straight into the event search to see the events, and into a `substring`
+    event rule to match them.
+  - Clustering precedence is trap OID → device event code → APP-NAME. Deployments whose devices
+    already send an APP-NAME keep working; a device that sends **both** now clusters on the more
+    specific code, so **an existing rule-gap finding may split into several finer ones**.
+  - Extraction applies to newly received events only — there is no backfill and none is needed, as
+    the analysis reads only unmatched events and those age out within one retention window.
 
 ### Improvements
 - **`GET /api/v1/mib-catalog` accepts `limit` and is now bounded.** The query had no row cap on

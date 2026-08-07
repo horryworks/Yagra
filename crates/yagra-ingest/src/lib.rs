@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Yagra-ingest — passive event parsing for the poller's edge listeners (Phase 2).
 //!
-//! Pure logic only: syslog parsing (RFC 5424 → RFC 3164 → raw fallback), SNMP trap PDU
+//! Pure logic only: syslog parsing (RFC 5424 → RFC 3164 → raw fallback), vendor event-code
+//! extraction for the messages that fit neither RFC (`signature`), SNMP trap PDU
 //! normalization (over the vendored `snmp2` decode types), **traffic-flow decoding (NetFlow
 //! v5/v9, IPFIX and sFlow v5, with the template cache and per-exporter aggregator — ADR-031,
 //! and by volume the largest thing in this crate)**, and a per-source token-bucket rate limiter.
@@ -15,6 +16,7 @@
 
 pub mod flow;
 pub mod ratelimit;
+pub mod signature;
 pub mod syslog;
 pub mod trap;
 
@@ -23,6 +25,9 @@ pub use flow::{
     ExporterBuckets, FlowAggregator, FlowError, FlowTemplates, RawFlow, DEFAULT_FLOW_TOP_N,
 };
 pub use ratelimit::SourceLimiter;
+pub use signature::{
+    extract_signature, Signature, SignaturePattern, SIGNATURE_MAX_CHARS, SIGNATURE_SCAN_CHARS,
+};
 pub use syslog::{parse_syslog, SyslogEvent, SyslogFormat};
 pub use trap::{build_inform_response, parse_trap, TrapError, TrapEvent};
 
