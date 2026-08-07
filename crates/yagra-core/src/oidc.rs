@@ -52,6 +52,25 @@ pub struct GroupsClaims {
 }
 impl AdditionalClaims for GroupsClaims {}
 
+/// What the ID token says about the configured groups claim.
+///
+/// [`GroupsClaims::groups`] answers "which groups", and an empty answer used to be the only one it
+/// could give — which conflated *the IdP says you are in no groups* with *the IdP declined to put
+/// them in this token*. Those need opposite handling: the first legitimately falls back to
+/// `default_role`, the second is missing input and must not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GroupsClaimState {
+    /// The claim is present and usable (possibly an empty list) — read it and map it.
+    Present,
+    /// The claim is absent, and the token says nothing about why.
+    Absent,
+    /// The claim was **not delivered in this token even though the groups exist**: either an OIDC
+    /// Core §5.6.2 distributed claim (`_claim_names` / `_claim_sources`), or Entra's `hasgroups`
+    /// marker, both of which appear when a user belongs to more groups than the IdP will inline
+    /// (~200 on Entra). Yagra reads groups from the ID token only, so there is nothing to map.
+    Distributed,
+}
+
 impl GroupsClaims {
     /// Extract the groups from the configured claim (array of strings, or a single string).
     fn groups(&self, claim: &str) -> Vec<String> {
@@ -62,6 +81,44 @@ impl GroupsClaims {
                 .collect(),
             Some(serde_json::Value::String(s)) => vec![s.clone()],
             _ => Vec::new(),
+        }
+    }
+
+    /// Whether the configured groups claim is usable, absent, or distributed elsewhere.
+    ///
+    /// `Present` wins whenever the claim actually carries values: real data beats a marker, and a
+    /// token that somehow has both is one we can answer from. The two `Distributed` signals are
+    /// deliberately narrow — each must be *about this claim*, or an unrelated absence would be
+    /// reported as an overage and lock the user out:
+    ///
+    /// - `_claim_names` is checked for **this claim's** key, not for being non-empty.
+    /// - `hasgroups` is Entra's marker for the `groups` claim specifically, so it is honoured only
+    ///   when that is the claim being read. An operator mapping roles from a `roles` claim gets
+    ///   `Absent` (and therefore the existing `default_role` behaviour), which is correct: nothing
+    ///   in the token says anything about `roles`.
+    #[must_use]
+    pub fn groups_state(&self, claim: &str) -> GroupsClaimState {
+        if matches!(
+            self.extra.get(claim),
+            Some(serde_json::Value::Array(_) | serde_json::Value::String(_))
+        ) {
+            return GroupsClaimState::Present;
+        }
+        let named = self
+            .extra
+            .get("_claim_names")
+            .and_then(serde_json::Value::as_object)
+            .is_some_and(|names| names.contains_key(claim));
+        let has_groups = claim == "groups"
+            && self
+                .extra
+                .get("hasgroups")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+        if named || has_groups {
+            GroupsClaimState::Distributed
+        } else {
+            GroupsClaimState::Absent
         }
     }
 }
@@ -171,6 +228,23 @@ pub struct OidcLogin {
     pub subject: String,
     pub username: String,
     pub role: Role,
+}
+
+/// Why an OIDC login did not complete.
+///
+/// The API edge answers every variant with the same 401 (`api/oidc.rs` explains why), so this exists
+/// to pick the **audit action**, not the response. Only the one case an admin cannot otherwise
+/// diagnose is named; everything else stays `Other`.
+#[derive(Debug, thiserror::Error)]
+pub enum OidcError {
+    /// The IdP delivered the groups claim out-of-band (group overage). Refusing here is the point:
+    /// without it [`resolve_role`] sees an empty group list and falls back to `default_role`, which
+    /// silently *changes* the user's role rather than failing — an admin quietly becoming a viewer,
+    /// or, where the default is `Admin`, a quiet escalation.
+    #[error("the IdP distributed the `{claim}` claim (group overage); Yagra reads groups from the ID token only")]
+    GroupOverage { username: String, claim: String },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
 }
 
 // ── Role mapping ────────────────────────────────────────────────────────────────────────────────
@@ -302,15 +376,23 @@ pub async fn begin_authorize(
     Ok(url.to_string())
 }
 
-/// Complete an OIDC login: validate `state`, exchange `code` (with PKCE), verify the ID token
-/// (signature/iss/aud/exp/nonce, done by the crate), and resolve the account + role. `state` is
-/// one-shot. Returns an error (denied) if no group maps to a role.
-pub async fn complete_callback(
+/// The identity an ID token yields once it has been verified, before any role mapping.
+struct VerifiedIdentity {
+    subject: String,
+    username: String,
+    groups: Vec<String>,
+    groups_state: GroupsClaimState,
+}
+
+/// Everything up to and including ID-token verification. Split out from [`complete_callback`] so
+/// that the role decision — the only part with its own typed failure — is not buried among a dozen
+/// `?`s whose errors are all the same "the handshake did not complete".
+async fn verify_id_token(
     cfg: &OidcProviderConfig,
     flight: &OidcFlight,
     code: &str,
     state: &str,
-) -> anyhow::Result<OidcLogin> {
+) -> anyhow::Result<VerifiedIdentity> {
     let pending = flight
         .take(state, Instant::now())
         .ok_or_else(|| anyhow::anyhow!("unknown or expired authorization state"))?;
@@ -342,14 +424,44 @@ pub async fn complete_callback(
         .map(|u| u.as_str().to_owned())
         .or_else(|| claims.email().map(|e| e.as_str().to_owned()))
         .unwrap_or_else(|| subject.clone());
-    let groups = claims.additional_claims().groups(&cfg.groups_claim);
-
-    let role = resolve_role(&groups, &cfg.role_map, cfg.default_role).ok_or_else(|| {
-        anyhow::anyhow!("no IdP group maps to a Yagra role (login denied by role_map)")
-    })?;
-    Ok(OidcLogin {
+    Ok(VerifiedIdentity {
         subject,
         username,
+        groups: claims.additional_claims().groups(&cfg.groups_claim),
+        groups_state: claims.additional_claims().groups_state(&cfg.groups_claim),
+    })
+}
+
+/// Complete an OIDC login: validate `state`, exchange `code` (with PKCE), verify the ID token
+/// (signature/iss/aud/exp/nonce, done by the crate), and resolve the account + role. `state` is
+/// one-shot. Returns an error (denied) if no group maps to a role, or if the IdP did not deliver
+/// the groups claim in the token at all.
+pub async fn complete_callback(
+    cfg: &OidcProviderConfig,
+    flight: &OidcFlight,
+    code: &str,
+    state: &str,
+) -> Result<OidcLogin, OidcError> {
+    let id = verify_id_token(cfg, flight, code, state).await?;
+
+    // Ordered before `resolve_role` on purpose: its `.or(default_role)` cannot distinguish "no
+    // groups" from "the groups were not in the token", so once we reach it the overage is
+    // indistinguishable from a legitimate empty claim.
+    if id.groups_state == GroupsClaimState::Distributed {
+        return Err(OidcError::GroupOverage {
+            username: id.username,
+            claim: cfg.groups_claim.clone(),
+        });
+    }
+
+    let role = resolve_role(&id.groups, &cfg.role_map, cfg.default_role).ok_or_else(|| {
+        OidcError::Other(anyhow::anyhow!(
+            "no IdP group maps to a Yagra role (login denied by role_map)"
+        ))
+    })?;
+    Ok(OidcLogin {
+        subject: id.subject,
+        username: id.username,
         role,
     })
 }
@@ -708,5 +820,126 @@ mod tests {
         // …or absent.
         let none: GroupsClaims = serde_json::from_str(r#"{"sub":"x"}"#).unwrap();
         assert!(none.groups("groups").is_empty());
+    }
+
+    // ── Group overage (ADR-010) ─────────────────────────────────────────────────────────────────
+    //
+    // ⚠️ These fixtures are **derived from OIDC Core §5.6.2 and Microsoft's documented shape, not
+    // captured from a real tenant** — nobody here has an Entra directory with a >200-group user.
+    // What they pin is this module's decision table, which is the part that can be wrong in a way a
+    // real tenant would not reveal until someone was locked out.
+
+    fn claims(json: &str) -> GroupsClaims {
+        serde_json::from_str(json).expect("fixture parses")
+    }
+
+    #[test]
+    fn groups_state_reads_a_usable_claim_as_present() {
+        assert_eq!(
+            claims(r#"{"groups":["a"]}"#).groups_state("groups"),
+            GroupsClaimState::Present
+        );
+        assert_eq!(
+            claims(r#"{"groups":"noc"}"#).groups_state("groups"),
+            GroupsClaimState::Present
+        );
+        // An explicitly empty list is a real answer — the IdP says "no groups", which is exactly
+        // the case `default_role` exists for. It must not read as an overage.
+        assert_eq!(
+            claims(r#"{"groups":[]}"#).groups_state("groups"),
+            GroupsClaimState::Present
+        );
+        assert_eq!(
+            claims(r#"{"sub":"x"}"#).groups_state("groups"),
+            GroupsClaimState::Absent
+        );
+    }
+
+    #[test]
+    fn groups_state_detects_both_overage_markers() {
+        // OIDC Core §5.6.2: the claim moves into `_claim_names`, keyed by claim name.
+        let distributed = claims(
+            r#"{"sub":"x","_claim_names":{"groups":"src1"},
+                "_claim_sources":{"src1":{"endpoint":"https://graph.microsoft.com/v1.0/users/1/getMemberObjects"}}}"#,
+        );
+        assert_eq!(
+            distributed.groups_state("groups"),
+            GroupsClaimState::Distributed
+        );
+        // Entra's own marker, which it emits instead in some flows.
+        assert_eq!(
+            claims(r#"{"sub":"x","hasgroups":true}"#).groups_state("groups"),
+            GroupsClaimState::Distributed
+        );
+        // A real claim wins over a stray marker: we have the data, so answer from it.
+        assert_eq!(
+            claims(r#"{"groups":["a"],"hasgroups":true}"#).groups_state("groups"),
+            GroupsClaimState::Present
+        );
+    }
+
+    // The false-positive direction, which is the dangerous one: `Distributed` refuses the login, so
+    // a marker about some *other* claim must not be read as an overage of the configured one — that
+    // would lock out a working deployment.
+    #[test]
+    fn an_overage_marker_for_a_different_claim_is_not_this_claims_overage() {
+        let other = claims(r#"{"sub":"x","_claim_names":{"roles":"src1"}}"#);
+        assert_eq!(other.groups_state("groups"), GroupsClaimState::Absent);
+        // `hasgroups` is Entra's marker for the `groups` claim specifically. An operator mapping a
+        // custom claim gets `Absent` — nothing in the token says anything about `roles`.
+        assert_eq!(
+            claims(r#"{"sub":"x","hasgroups":true}"#).groups_state("roles"),
+            GroupsClaimState::Absent
+        );
+        // …and it still fires for a custom claim named in `_claim_names`, which *is* about it.
+        assert_eq!(
+            claims(r#"{"sub":"x","_claim_names":{"roles":"src1"}}"#).groups_state("roles"),
+            GroupsClaimState::Distributed
+        );
+        // `hasgroups: false` is not a marker at all.
+        assert_eq!(
+            claims(r#"{"sub":"x","hasgroups":false}"#).groups_state("groups"),
+            GroupsClaimState::Absent
+        );
+    }
+
+    // The whole point of the feature, stated as an invariant: with a `default_role` configured —
+    // the configuration that made this silent — an overage must never resolve to it. `resolve_role`
+    // itself cannot tell the difference, which is why the caller checks the state first.
+    #[test]
+    fn a_distributed_groups_claim_never_reaches_the_default_role() {
+        let overage = claims(r#"{"sub":"x","_claim_names":{"groups":"src1"}}"#);
+        assert_eq!(
+            overage.groups_state("groups"),
+            GroupsClaimState::Distributed
+        );
+
+        // What `resolve_role` would have done with the same token, for every default worth having:
+        // the silent role change this refusal exists to prevent, including a silent *escalation*.
+        let m = map(&[("net-admins", Role::Admin)]);
+        let groups = overage.groups("groups");
+        assert!(groups.is_empty());
+        assert_eq!(
+            resolve_role(&groups, &m, Some(Role::Viewer)),
+            Some(Role::Viewer)
+        );
+        assert_eq!(
+            resolve_role(&groups, &m, Some(Role::Admin)),
+            Some(Role::Admin)
+        );
+    }
+
+    // `resolve_role` is shared with LDAP (ADR-041 decision 2), so the overage work must be
+    // invisible to it: the detection lives in `GroupsClaims`, which the LDAP path never constructs.
+    #[test]
+    fn ldap_role_resolution_is_unchanged() {
+        let m = map(&[("cn=netops,ou=g,dc=x", Role::Operator)]);
+        let groups = vec!["cn=netops,ou=g,dc=x".to_owned()];
+        assert_eq!(resolve_role(&groups, &m, None), Some(Role::Operator));
+        assert_eq!(
+            resolve_role(&[], &m, Some(Role::Viewer)),
+            Some(Role::Viewer)
+        );
+        assert_eq!(resolve_role(&[], &m, None), None);
     }
 }

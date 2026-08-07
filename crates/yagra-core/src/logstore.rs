@@ -23,8 +23,8 @@ use uuid::Uuid;
 use yagra_common::trap_oid_name;
 
 use crate::events::{
-    EventAction, EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket,
-    PersistRecord,
+    EventAction, EventAuthSource, EventBucketCount, EventFilter, EventRow, EventSeverityCount,
+    EventSignatureCount, EventStatBucket, EventStatGroup, EventTimeBucket, PersistRecord,
 };
 use yagra_bus::EventKind;
 
@@ -93,7 +93,100 @@ pub trait LogStore: Send + Sync {
         bucket_secs: i64,
         split_kind: bool,
     ) -> anyhow::Result<Vec<EventTimeBucket>>;
+
+    // ── Troubleshoot analytics (ADR-022) ────────────────────────────────────────────────────────
+    //
+    // Twins of the `EventRepo` aggregates of the same name. They exist because the analyses were
+    // reading PostgreSQL directly, and PostgreSQL holds only the alert-linked subset once a log
+    // store is configured (ADR-024) — so `rule_gap`, whose entire job is finding *unmatched* events,
+    // was structurally guaranteed to return nothing on exactly the deployments that need it.
+    //
+    // No `name_node_ids` parameter, unlike `search`/`stats_*`: none of these is driven by a free-text
+    // term, so the additive widening set has no meaning here. Omitting it makes the additive /
+    // subtractive confusion `EventFilter::visible_node_ids` warns about unreachable on this path.
+
+    /// Per-(node, time-bucket) event counts. Events with no node are excluded (`event_storm`
+    /// attributes a storm to a device).
+    async fn agg_counts_by_bucket(
+        &self,
+        filter: &EventFilter,
+        bucket_secs: i64,
+    ) -> anyhow::Result<Vec<EventBucketCount>>;
+
+    /// Per-(node, syslog-severity) counts over syslog events (`severity_shift`).
+    async fn agg_severity_counts(
+        &self,
+        filter: &EventFilter,
+    ) -> anyhow::Result<Vec<EventSeverityCount>>;
+
+    /// Top unmatched signatures — trap OID, else syslog app-name (`rule_gap`).
+    ///
+    /// **`sample_node` is always `None` here**, and that is a permitted per-backend difference
+    /// rather than an omission: LogsQL has no `min(uuid)`, and after the group scope became a
+    /// store-side restriction the representative node is only used to *link* the finding, which
+    /// `run_rule_gap` already renders as "fleet" when absent. Pinned by
+    /// `the_log_store_signature_path_reports_no_sample_node` so it is not "fixed" into a scan.
+    async fn agg_unmatched_signatures(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventSignatureCount>>;
+
+    /// Authentication-failure volume by (source IP, node) — `auth_probe`.
+    async fn agg_auth_sources(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventAuthSource>>;
 }
+
+// ─── Which store answers an event aggregate (ADR-022 Increment 2) ─────────────────────
+//
+// One home for the branch, because there are two callers — the Troubleshoot analyses and the MCP
+// `event_stats` tool — and a second copy of "ask the log store, else PostgreSQL" is a second place
+// someone can forget to change. Both callers reach the stores only through here.
+//
+// A log-store failure propagates. Falling back to PostgreSQL would answer from the alert-linked
+// subset with nothing to say so, which is exactly the defect this module's twins exist to fix; a
+// visibly failed job is better than a quietly partial answer.
+
+macro_rules! route_agg {
+    ($(#[$m:meta])* $name:ident -> $out:ty, $log:ident, $pg:ident $(, $arg:ident : $ty:ty)*) => {
+        $(#[$m])*
+        pub(crate) async fn $name(
+            logs: Option<&std::sync::Arc<dyn LogStore>>,
+            events: &crate::events::EventRepo,
+            filter: &EventFilter,
+            $($arg: $ty),*
+        ) -> anyhow::Result<Vec<$out>> {
+            match logs {
+                Some(l) => l.$log(filter $(, $arg)*).await,
+                None => events.$pg(filter $(, $arg)*).await,
+            }
+        }
+    };
+}
+
+route_agg!(
+    /// Per-(node, bucket) event counts — `event_storm`, and MCP `event_stats`' volume section.
+    route_counts_by_bucket -> EventBucketCount,
+    agg_counts_by_bucket, event_counts_by_bucket, bucket_secs: i64
+);
+route_agg!(
+    /// Per-(node, severity) counts — `severity_shift`, and MCP `event_stats`' severity mix.
+    route_severity_counts -> EventSeverityCount,
+    agg_severity_counts, event_severity_counts
+);
+route_agg!(
+    /// Top unmatched signatures — `rule_gap`, and MCP `event_stats`' rule-gap section.
+    route_unmatched_signatures -> EventSignatureCount,
+    agg_unmatched_signatures, event_unmatched_signatures, limit: i64
+);
+route_agg!(
+    /// Auth-failure sources — `auth_probe`.
+    route_auth_sources -> EventAuthSource,
+    agg_auth_sources, event_auth_sources, limit: i64
+);
 
 // ─── VictoriaLogs (live) ──────────────────────────────────────────────────────────────
 
@@ -344,6 +437,87 @@ fn build_stats_series_logsql(
     )
 }
 
+// ── Troubleshoot analytics builders (ADR-022) ───────────────────────────────────────────────────
+//
+// Every `stats by (...)` field list below is a literal. That is the same discipline
+// `stats_group_fields` keeps and for the same reason: a field name must never be able to arrive
+// from a request. `every_analytics_query_groups_by_literal_fields` pins it.
+
+/// `<filter> node_id:* | stats by (_time:Ns, node_id) count() as n`.
+fn build_agg_counts_by_bucket_logsql(filter: &EventFilter, bucket_secs: i64) -> String {
+    let b = bucket_secs.clamp(1, 86_400);
+    format!(
+        "{} node_id:* | stats by (_time:{b}s, node_id) count() as n | sort by (_time) asc",
+        build_filter_part(filter, &[])
+    )
+}
+
+/// `<filter> kind:="syslog" syslog_severity:* | stats by (node_id, syslog_severity) count() as n`.
+fn build_agg_severity_counts_logsql(filter: &EventFilter) -> String {
+    format!(
+        "{} kind:=\"syslog\" node_id:* syslog_severity:* \
+         | stats by (node_id, syslog_severity) count() as n",
+        build_filter_part(filter, &[])
+    )
+}
+
+/// The unmatched-signature query, in **two halves**.
+///
+/// LogsQL has no `COALESCE`, so "trap OID, else app name" cannot be one grouping expression the way
+/// it is in SQL. Two fixed queries merged in Rust beats building one with a pipe trick: the field
+/// list stays literal, and each half is a query a human can paste into VictoriaLogs unchanged.
+fn build_agg_unmatched_signature_logsql(filter: &EventFilter, limit: i64, trap: bool) -> String {
+    let base = build_filter_part(filter, &[]);
+    let cap = limit.clamp(1, 500);
+    if trap {
+        format!("{base} matched:=\"false\" trap_oid:* | stats by (kind, trap_oid) count() as n | sort by (n) desc | limit {cap}")
+    } else {
+        // `-trap_oid:*` is what keeps the two halves disjoint, mirroring COALESCE's precedence:
+        // a row with both fields is counted once, under its trap OID.
+        format!("{base} matched:=\"false\" app_name:* -trap_oid:* | stats by (kind, app_name) count() as n | sort by (n) desc | limit {cap}")
+    }
+}
+
+/// `<filter> (<auth signals>) | stats by (source_ip, node_id) count() as n`.
+///
+/// ⚠️ The phrases use `i("…")`, which `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`
+/// measures at ~40× a plain phrase. It is bought deliberately here and must not be upgraded to
+/// `~"(?i)…"` (~300×, which hit VictoriaLogs' 30s query ceiling on real syslog and was reverted the
+/// day it shipped): unlike the Events page, whose range defaults to unbounded, `run_auth_probe`'s
+/// window is always bounded, always explicitly requested, and admission-controlled by the analysis
+/// semaphore and per-minute cap. Case-insensitivity is worth 40× on a bounded window; substring
+/// matching is not worth 300× on any window.
+fn build_agg_auth_sources_logsql(filter: &EventFilter, limit: i64) -> String {
+    let mut ors = vec![format!(
+        "trap_oid:={}",
+        logsql_quote(crate::events::AUTH_FAILURE_TRAP_OID)
+    )];
+    ors.extend(
+        crate::events::AUTH_FAILURE_PHRASES
+            .iter()
+            .map(|p| format!("_msg:i({})", logsql_quote(p))),
+    );
+    format!(
+        "{} ({}) | stats by (source_ip, node_id) count() as n | sort by (n) desc | limit {}",
+        build_filter_part(filter, &[]),
+        ors.join(" OR "),
+        limit.clamp(1, 500)
+    )
+}
+
+/// Read a field VictoriaLogs stores as a string back into an `i64`.
+fn vl_i64(v: &Value, key: &str) -> Option<i64> {
+    v.get(key).and_then(Value::as_str)?.parse().ok()
+}
+
+/// Read a VictoriaLogs field as a non-empty string.
+fn vl_str(v: &Value, key: &str) -> Option<String> {
+    v.get(key)
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .filter(|s| !s.is_empty())
+}
+
 /// Parse one LogsQL categorical stats result line into an [`EventStatBucket`]. VL returns grouped
 /// field values + the `n` count (numbers as strings).
 fn parse_stat_grouped_row(line: &str, group: EventStatGroup) -> Option<EventStatBucket> {
@@ -562,6 +736,106 @@ impl LogStore for VlStore {
             .iter()
             .filter_map(|l| parse_stat_time_row(l, split_kind));
         Ok(fold_time_buckets(parsed, split_kind))
+    }
+
+    async fn agg_counts_by_bucket(
+        &self,
+        filter: &EventFilter,
+        bucket_secs: i64,
+    ) -> anyhow::Result<Vec<EventBucketCount>> {
+        let lines = self
+            .query_lines(&build_agg_counts_by_bucket_logsql(filter, bucket_secs))
+            .await?;
+        Ok(lines
+            .iter()
+            .filter_map(|l| {
+                let v: Value = serde_json::from_str(l).ok()?;
+                Some(EventBucketCount {
+                    // `node_id:*` already excluded unattributed events; a row whose id will not
+                    // parse is dropped rather than attributed to a nil UUID.
+                    node_id: vl_str(&v, "node_id").and_then(|s| Uuid::parse_str(&s).ok())?,
+                    // VL reports the bucket as an RFC 3339 `_time`; the DTO wants epoch seconds.
+                    bucket_start_s: vl_str(&v, "_time")
+                        .and_then(|t| DateTime::parse_from_rfc3339(&t).ok())
+                        .map(|t| t.timestamp())?,
+                    count: vl_i64(&v, "n").unwrap_or(0),
+                })
+            })
+            .collect())
+    }
+
+    async fn agg_severity_counts(
+        &self,
+        filter: &EventFilter,
+    ) -> anyhow::Result<Vec<EventSeverityCount>> {
+        let lines = self
+            .query_lines(&build_agg_severity_counts_logsql(filter))
+            .await?;
+        Ok(lines
+            .iter()
+            .filter_map(|l| {
+                let v: Value = serde_json::from_str(l).ok()?;
+                Some(EventSeverityCount {
+                    node_id: vl_str(&v, "node_id").and_then(|s| Uuid::parse_str(&s).ok())?,
+                    // Written as a string by `record_to_json`, like every other numeric field.
+                    severity: i16::try_from(vl_i64(&v, "syslog_severity")?).ok()?,
+                    count: vl_i64(&v, "n").unwrap_or(0),
+                })
+            })
+            .collect())
+    }
+
+    async fn agg_unmatched_signatures(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventSignatureCount>> {
+        let mut out: Vec<EventSignatureCount> = Vec::new();
+        for trap in [true, false] {
+            let q = build_agg_unmatched_signature_logsql(filter, limit, trap);
+            let field = if trap { "trap_oid" } else { "app_name" };
+            for line in self.query_lines(&q).await? {
+                let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                    continue;
+                };
+                let Some(signature) = vl_str(&v, field) else {
+                    continue;
+                };
+                out.push(EventSignatureCount {
+                    kind: vl_str(&v, "kind").unwrap_or_default(),
+                    signature,
+                    count: vl_i64(&v, "n").unwrap_or(0),
+                    // See the trait doc: no `min(uuid)` in LogsQL, and the caller renders `None`.
+                    sample_node: None,
+                });
+            }
+        }
+        // Re-sort across the two halves: each was ordered and capped on its own, so the merge is
+        // only the top-N of the union once it is sorted again.
+        out.sort_by_key(|s| std::cmp::Reverse(s.count));
+        out.truncate(limit.clamp(1, 500) as usize);
+        Ok(out)
+    }
+
+    async fn agg_auth_sources(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventAuthSource>> {
+        let lines = self
+            .query_lines(&build_agg_auth_sources_logsql(filter, limit))
+            .await?;
+        Ok(lines
+            .iter()
+            .filter_map(|l| {
+                let v: Value = serde_json::from_str(l).ok()?;
+                Some(EventAuthSource {
+                    source_ip: vl_str(&v, "source_ip"),
+                    node_id: vl_str(&v, "node_id").and_then(|s| Uuid::parse_str(&s).ok()),
+                    count: vl_i64(&v, "n").unwrap_or(0),
+                })
+            })
+            .collect())
     }
 }
 
@@ -792,6 +1066,127 @@ impl LogStore for InMemoryLogStore {
                 (bucket_ms, kind, 1_i64)
             });
         Ok(fold_time_buckets(rows, split_kind))
+    }
+
+    // The analytics twins. Each reuses `record_matches`, so the fake inherits exactly the filter
+    // semantics the two real backends are pinned to — including the empty-visible-set rule, which
+    // is what `both_backends_restrict_to_the_same_visible_node_set` extends over these four.
+
+    async fn agg_counts_by_bucket(
+        &self,
+        filter: &EventFilter,
+        bucket_secs: i64,
+    ) -> anyhow::Result<Vec<EventBucketCount>> {
+        use std::collections::HashMap;
+        let b = bucket_secs.max(1);
+        let guard = self.records.lock().expect("log fake mutex poisoned");
+        let mut agg: HashMap<(Uuid, i64), i64> = HashMap::new();
+        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+            let Some(node) = r.node_id else { continue };
+            *agg.entry((node, (r.msg.at_unix_ms / 1000 / b) * b))
+                .or_insert(0) += 1;
+        }
+        Ok(agg
+            .into_iter()
+            .map(|((node_id, bucket_start_s), count)| EventBucketCount {
+                node_id,
+                bucket_start_s,
+                count,
+            })
+            .collect())
+    }
+
+    async fn agg_severity_counts(
+        &self,
+        filter: &EventFilter,
+    ) -> anyhow::Result<Vec<EventSeverityCount>> {
+        use std::collections::HashMap;
+        let guard = self.records.lock().expect("log fake mutex poisoned");
+        let mut agg: HashMap<(Uuid, i16), i64> = HashMap::new();
+        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+            if r.msg.kind != yagra_bus::EventKind::Syslog {
+                continue;
+            }
+            let (Some(node), Some(sev)) = (r.node_id, r.msg.syslog_severity) else {
+                continue;
+            };
+            *agg.entry((node, i16::from(sev))).or_insert(0) += 1;
+        }
+        Ok(agg
+            .into_iter()
+            .map(|((node_id, severity), count)| EventSeverityCount {
+                node_id,
+                severity,
+                count,
+            })
+            .collect())
+    }
+
+    async fn agg_unmatched_signatures(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventSignatureCount>> {
+        use std::collections::HashMap;
+        let guard = self.records.lock().expect("log fake mutex poisoned");
+        let mut agg: HashMap<(String, String), i64> = HashMap::new();
+        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+            if r.matched_rule_id.is_some() {
+                continue;
+            }
+            // Trap OID first, else app name — the COALESCE precedence, and the same rule the two
+            // LogsQL halves keep disjoint with `-trap_oid:*`.
+            let Some(sig) = r.msg.trap_oid.clone().or_else(|| r.msg.app_name.clone()) else {
+                continue;
+            };
+            *agg.entry((r.msg.kind.as_str().to_owned(), sig))
+                .or_insert(0) += 1;
+        }
+        let mut out: Vec<EventSignatureCount> = agg
+            .into_iter()
+            .map(|((kind, signature), count)| EventSignatureCount {
+                kind,
+                signature,
+                count,
+                sample_node: None,
+            })
+            .collect();
+        out.sort_by_key(|s| std::cmp::Reverse(s.count));
+        out.truncate(limit.clamp(1, 500) as usize);
+        Ok(out)
+    }
+
+    async fn agg_auth_sources(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventAuthSource>> {
+        use std::collections::HashMap;
+        let guard = self.records.lock().expect("log fake mutex poisoned");
+        let mut agg: HashMap<(Option<String>, Option<Uuid>), i64> = HashMap::new();
+        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+            let lower = r.msg.message.to_lowercase();
+            let is_auth = r.msg.trap_oid.as_deref() == Some(crate::events::AUTH_FAILURE_TRAP_OID)
+                || crate::events::AUTH_FAILURE_PHRASES
+                    .iter()
+                    .any(|p| lower.contains(p));
+            if !is_auth {
+                continue;
+            }
+            *agg.entry((r.msg.source_ip.map(|i| i.to_string()), r.node_id))
+                .or_insert(0) += 1;
+        }
+        let mut out: Vec<EventAuthSource> = agg
+            .into_iter()
+            .map(|((source_ip, node_id), count)| EventAuthSource {
+                source_ip,
+                node_id,
+                count,
+            })
+            .collect();
+        out.sort_by_key(|s| std::cmp::Reverse(s.count));
+        out.truncate(limit.clamp(1, 500) as usize);
+        Ok(out)
     }
 }
 
@@ -1025,6 +1420,215 @@ mod tests {
             "an empty scope must emit an unsatisfiable filter, never no filter: {q}"
         );
         assert!(!q.contains('*'), "and must not fall back to match-all: {q}");
+
+        // 4. The four Troubleshoot analytics builders (ADR-022 Increment 2) inherit all of the
+        //    above by composing `build_filter_part` rather than assembling their own filter. That
+        //    is the whole reason they were written that way, so it is asserted rather than assumed:
+        //    a builder that hand-rolled its clauses would be the one that forgets the restriction.
+        for q in [
+            build_agg_counts_by_bucket_logsql(&none_visible, 300),
+            build_agg_severity_counts_logsql(&none_visible),
+            build_agg_unmatched_signature_logsql(&none_visible, 20, true),
+            build_agg_unmatched_signature_logsql(&none_visible, 20, false),
+            build_agg_auth_sources_logsql(&none_visible, 20),
+        ] {
+            assert!(
+                q.contains("node_id:in(\"\")"),
+                "an analytics query must inherit the unsatisfiable empty scope: {q}"
+            );
+        }
+        for q in [
+            build_agg_counts_by_bucket_logsql(&scoped, 300),
+            build_agg_severity_counts_logsql(&scoped),
+            build_agg_unmatched_signature_logsql(&scoped, 20, true),
+            build_agg_auth_sources_logsql(&scoped, 20),
+        ] {
+            assert!(q.contains(&format!("node_id:in(\"{mine}\")")), "{q}");
+        }
+    }
+
+    /// Every analytics `stats by (...)` names literal fields.
+    ///
+    /// The same discipline `stats_group_fields` keeps, extended over the four new builders: a field
+    /// name must never be able to arrive from a request. Checked by asserting the exact field list
+    /// of each, so adding an interpolated one fails here rather than reaching VictoriaLogs.
+    #[test]
+    fn every_analytics_query_groups_by_literal_fields() {
+        let f = EventFilter::default();
+        let cases = [
+            (
+                build_agg_counts_by_bucket_logsql(&f, 300),
+                "stats by (_time:300s, node_id)",
+            ),
+            (
+                build_agg_severity_counts_logsql(&f),
+                "stats by (node_id, syslog_severity)",
+            ),
+            (
+                build_agg_unmatched_signature_logsql(&f, 20, true),
+                "stats by (kind, trap_oid)",
+            ),
+            (
+                build_agg_unmatched_signature_logsql(&f, 20, false),
+                "stats by (kind, app_name)",
+            ),
+            (
+                build_agg_auth_sources_logsql(&f, 20),
+                "stats by (source_ip, node_id)",
+            ),
+        ];
+        for (q, by) in cases {
+            assert!(q.contains(by), "expected `{by}` in: {q}");
+            assert!(q.contains("count() as n"), "{q}");
+        }
+        // The two signature halves must be disjoint, or a row carrying both fields is counted
+        // twice — the LogsQL stand-in for SQL's `COALESCE(trap_oid, app_name)` precedence.
+        let app = build_agg_unmatched_signature_logsql(&f, 20, false);
+        assert!(app.contains("-trap_oid:*"), "{app}");
+        // Both halves read unmatched rows only. `rule_gap` over matched events is not a rule gap.
+        for trap in [true, false] {
+            let q = build_agg_unmatched_signature_logsql(&f, 20, trap);
+            assert!(q.contains("matched:=\"false\""), "{q}");
+        }
+    }
+
+    /// ⚠️ `auth_probe` is the one analytics query that buys case-insensitive matching, and the
+    /// price is measured: `i("term")` is ~40× a plain phrase, while `~"(?i)term"` is ~300× and hit
+    /// VictoriaLogs' 30s ceiling on real syslog (it shipped and was reverted the same day,
+    /// 285f58a → 0497fc2). The purchase is defensible only because `run_auth_probe`'s window is
+    /// always bounded and admission-controlled, unlike the Events page's unbounded default.
+    ///
+    /// So: phrases, never a regex scan. Same shape as
+    /// `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`, which guards the search path.
+    #[test]
+    fn auth_probe_uses_a_case_insensitive_phrase_not_a_regex_scan() {
+        let q = build_agg_auth_sources_logsql(&EventFilter::default(), 20);
+        assert!(q.contains("_msg:i("), "expected phrase filters: {q}");
+        assert!(
+            !q.contains("_msg:~"),
+            "a regex scan here is ~300× and reaches VictoriaLogs' query ceiling: {q}"
+        );
+        // The vocabulary is shared with the SQL side, so both ask the same question.
+        for p in crate::events::AUTH_FAILURE_PHRASES {
+            assert!(q.contains(p), "{p} missing from: {q}");
+        }
+        assert!(q.contains(crate::events::AUTH_FAILURE_TRAP_OID), "{q}");
+    }
+
+    /// The permitted per-backend difference, written down with its reason so it is a design rather
+    /// than a bug: LogsQL has no `min(uuid)`, so the log-store path reports no representative node.
+    /// After the group scope became a store-side restriction that field only *labels* a finding,
+    /// and `run_rule_gap` already renders its absence as "fleet".
+    #[tokio::test]
+    async fn the_log_store_signature_path_reports_no_sample_node() {
+        let store = InMemoryLogStore::default();
+        let node = Uuid::from_u128(7);
+        let mut r = record(Uuid::new_v4(), "unmatched thing", 1_000, EventAction::None);
+        r.node_id = Some(node);
+        r.msg.app_name = Some("sshd".into());
+        store.ingest_batch(&[r]).await;
+
+        let got = store
+            .agg_unmatched_signatures(&EventFilter::default(), 20)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].signature, "sshd");
+        assert!(
+            got[0].sample_node.is_none(),
+            "the log-store path deliberately carries no representative node"
+        );
+    }
+
+    /// The regression test for the worst symptom this increment fixes.
+    ///
+    /// With a log store configured, PostgreSQL keeps only alert-linked rows — so an unmatched event
+    /// never reaches it, and `rule_gap`, whose entire purpose is finding high-volume *unmatched*
+    /// events, was structurally guaranteed to return nothing on exactly the deployments that
+    /// generate enough syslog to need it.
+    #[tokio::test]
+    async fn unmatched_signatures_are_readable_when_the_log_store_is_on() {
+        let store = InMemoryLogStore::default();
+        let mut batch = Vec::new();
+        for i in 0..5 {
+            let mut r = record(
+                Uuid::new_v4(),
+                "no rule matches me",
+                1_000 + i,
+                EventAction::None,
+            );
+            r.node_id = Some(Uuid::from_u128(1));
+            r.msg.app_name = Some("noisy-daemon".into());
+            batch.push(r);
+        }
+        // One matched row, which must NOT be counted as a gap.
+        let mut matched = record(Uuid::new_v4(), "handled", 2_000, EventAction::Fired);
+        matched.node_id = Some(Uuid::from_u128(1));
+        matched.msg.app_name = Some("handled-daemon".into());
+        matched.matched_rule_id = Some(Uuid::from_u128(99));
+        batch.push(matched);
+        store.ingest_batch(&batch).await;
+
+        let got = store
+            .agg_unmatched_signatures(&EventFilter::default(), 20)
+            .await
+            .unwrap();
+        assert_eq!(
+            got.len(),
+            1,
+            "only the unmatched signature is a gap: {got:?}"
+        );
+        assert_eq!(got[0].signature, "noisy-daemon");
+        assert_eq!(got[0].count, 5);
+    }
+
+    /// A trap OID wins over an app name on the same row — SQL's `COALESCE` precedence, which the
+    /// two LogsQL halves reproduce with `-trap_oid:*`.
+    #[tokio::test]
+    async fn a_signature_is_counted_once_under_its_trap_oid() {
+        let store = InMemoryLogStore::default();
+        let mut r = record(Uuid::new_v4(), "trap", 1_000, EventAction::None);
+        r.node_id = Some(Uuid::from_u128(1));
+        r.msg.trap_oid = Some("1.3.6.1.6.3.1.1.5.3".into());
+        r.msg.app_name = Some("also-set".into());
+        store.ingest_batch(&[r]).await;
+
+        let got = store
+            .agg_unmatched_signatures(&EventFilter::default(), 20)
+            .await
+            .unwrap();
+        assert_eq!(got.len(), 1, "counted twice: {got:?}");
+        assert_eq!(got[0].signature, "1.3.6.1.6.3.1.1.5.3");
+    }
+
+    /// Severity arrives from VictoriaLogs as a *string* (`record_to_json` writes every numeric
+    /// field that way), so the read-back has a conversion the SQL path does not.
+    #[tokio::test]
+    async fn severity_counts_round_trip_through_the_log_store() {
+        let store = InMemoryLogStore::default();
+        let node = Uuid::from_u128(3);
+        for (sev, n) in [(3u8, 2), (6u8, 1)] {
+            for i in 0..n {
+                let mut r = record(
+                    Uuid::new_v4(),
+                    "msg",
+                    1_000 + i64::from(i),
+                    EventAction::None,
+                );
+                r.node_id = Some(node);
+                r.msg.syslog_severity = Some(sev);
+                store.ingest_batch(&[r]).await;
+            }
+        }
+        let mut got = store
+            .agg_severity_counts(&EventFilter::default())
+            .await
+            .unwrap();
+        got.sort_by_key(|s| s.severity);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert_eq!((got[0].severity, got[0].count), (3, 2));
+        assert_eq!((got[1].severity, got[1].count), (6, 1));
+        assert!(got.iter().all(|s| s.node_id == node));
     }
 
     #[test]

@@ -530,10 +530,59 @@ pub(crate) const EVENT_FILTER_WHERE: &str = "($1::bigint IS NULL OR e.at_unix_ms
           OR ($8::boolean = TRUE AND e.message ~* $7)) \
      AND ($9::uuid[] IS NULL OR e.node_id = ANY($9))";
 
+/// The SNMP `authenticationFailure` trap OID (RFC 3418), the unambiguous half of the auth signal.
+pub(crate) const AUTH_FAILURE_TRAP_OID: &str = "1.3.6.1.6.3.1.1.5.5";
+
+/// Message phrases that mark an authentication failure in free-text syslog.
+///
+/// Shared by both backends so `auth_probe` asks the same question of PostgreSQL and VictoriaLogs.
+/// The two still match them *differently* — SQL `ILIKE '%…%'` reaches inside a token, LogsQL
+/// `i("…")` matches adjacent whole tokens case-insensitively — which is the same permitted axis the
+/// free-text search documents, for the same measured reason. Keeping the phrases in one place at
+/// least means the two never disagree about *what* they are looking for.
+pub(crate) const AUTH_FAILURE_PHRASES: [&str; 4] = [
+    "authentication fail",
+    "auth failure",
+    "login fail",
+    "failed password",
+];
+
+/// The auth-signal predicate for the SQL side, built from the shared vocabulary above. Phrases are
+/// compile-time constants, never request input, so interpolation here introduces no injection path.
+fn auth_signal_predicate() -> String {
+    let mut parts = vec![format!("e.trap_oid = '{AUTH_FAILURE_TRAP_OID}'")];
+    parts.extend(
+        AUTH_FAILURE_PHRASES
+            .iter()
+            .map(|p| format!("e.message ILIKE '%{p}%'")),
+    );
+    parts.join(" OR ")
+}
+
 /// A time bound as the epoch milliseconds [`EVENT_FILTER_WHERE`] compares against. One helper so
 /// the three bounds can never be bound in different units.
 fn ms_bound(at: Option<DateTime<Utc>>) -> Option<i64> {
     at.map(|t| t.timestamp_millis())
+}
+
+/// Bind `$1..=$9` of [`EVENT_FILTER_WHERE`] onto a query, in the one order that matches it.
+///
+/// One helper because the sequence is positional and silent when wrong: swapping `$5` and `$6`
+/// still compiles, still runs, and just answers a different question. Every consumer of the shared
+/// predicate binds through here so there is a single place the order is stated.
+fn bind_event_filter<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    filter: &'q EventFilter,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    q.bind(ms_bound(filter.before))
+        .bind(ms_bound(filter.since))
+        .bind(ms_bound(filter.until))
+        .bind(filter.kind.as_deref())
+        .bind(filter.node_id)
+        .bind(filter.matched)
+        .bind(filter.search.as_deref())
+        .bind(filter.regex)
+        .bind(filter.visible_node_ids.as_deref())
 }
 
 /// Build the keyset-paged event-list SQL. Binds are $1..=$9 (filter) + $10 (page size).
@@ -549,6 +598,58 @@ fn list_events_sql() -> String {
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} \
          ORDER BY e.at_unix_ms DESC LIMIT $10"
+    )
+}
+
+// ── Troubleshoot analytics SQL (ADR-022) ────────────────────────────────────────────────────────
+// Extracted like the two `/events/stats` builders so the shared predicate and the group-scope bind
+// are assertable without a database — see `the_analytics_aggregates_share_the_event_filter_predicate`.
+// Every one binds $1..=$9 (the filter) plus $10 where it needs a cap or a bucket width.
+
+/// Per-(node, bucket) event counts. Uncorrelated events are excluded — a storm has a device.
+fn agg_counts_by_bucket_sql() -> String {
+    format!(
+        "SELECT e.node_id, (e.at_unix_ms / 1000 / $10) * $10 AS bucket, count(*) AS n \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE} AND e.node_id IS NOT NULL \
+         GROUP BY e.node_id, bucket"
+    )
+}
+
+/// Per-(node, syslog-severity) counts over syslog events.
+fn agg_severity_counts_sql() -> String {
+    format!(
+        "SELECT e.node_id, e.syslog_severity, count(*) AS n \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE} AND e.kind = 'syslog' AND e.node_id IS NOT NULL \
+           AND e.syslog_severity IS NOT NULL \
+         GROUP BY e.node_id, e.syslog_severity"
+    )
+}
+
+/// Top unmatched signatures, clustered by trap OID else syslog app-name.
+fn agg_unmatched_signatures_sql() -> String {
+    // NB: PostgreSQL has no min/max aggregate for `uuid`, so pick a representative node via the
+    // text form — the canonical lowercase-hyphenated uuid sorts identically to the binary ordering,
+    // and NULL node_ids are ignored by the aggregate (sample_node stays optional).
+    format!(
+        "SELECT e.kind, COALESCE(e.trap_oid, e.app_name) AS sig, count(*) AS n, \
+                min(e.node_id::text)::uuid AS sample_node \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE} AND e.matched_rule_id IS NULL \
+           AND COALESCE(e.trap_oid, e.app_name) IS NOT NULL \
+         GROUP BY e.kind, sig ORDER BY n DESC LIMIT $10"
+    )
+}
+
+/// Authentication-failure volume by (source IP, node).
+fn agg_auth_sources_sql() -> String {
+    let auth = auth_signal_predicate();
+    format!(
+        "SELECT host(e.source_ip) AS src, e.node_id, count(*) AS n \
+         FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
+         WHERE {EVENT_FILTER_WHERE} AND ({auth}) \
+         GROUP BY src, e.node_id ORDER BY n DESC LIMIT $10"
     )
 }
 
@@ -857,16 +958,7 @@ impl EventRepo {
         filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
-        let rows = sqlx::query(&list_events_sql())
-            .bind(ms_bound(filter.before))
-            .bind(ms_bound(filter.since))
-            .bind(ms_bound(filter.until))
-            .bind(filter.kind.as_deref())
-            .bind(filter.node_id)
-            .bind(filter.matched)
-            .bind(filter.search.as_deref())
-            .bind(filter.regex)
-            .bind(filter.visible_node_ids.as_deref())
+        let rows = bind_event_filter(sqlx::query(&list_events_sql()), filter)
             .bind(limit.clamp(1, 500))
             .fetch_all(&self.pool)
             .await?;
@@ -903,31 +995,27 @@ impl EventRepo {
 
     // ── Troubleshoot analytics (ADR-022 event/flow increment) ──
     // Read-only aggregates over `events` for the passive-monitoring analyses. All are parameterized
-    // (never string-interpolated) and windowed by `at_unix_ms`. NB: when the VictoriaLogs log store
-    // is enabled, PostgreSQL retains only alert-linked rows (ADR-024) — so the count-based analyses
-    // (`event_storm`/`severity_shift`/`rule_gap`) then see the alert-linked subset, while `event_flap`
-    // keys on fired/cleared rows (always alert-linked, hence complete). Analyses note this in-summary.
+    // (never string-interpolated) and take the shared [`EventFilter`], so the window, the group
+    // scope (ADR-014) and the time basis are the same ones `/events` and `/events/stats` use.
+    //
+    // ⚠️ These answer about **PostgreSQL**, which holds only alert-linked rows once a log store is
+    // configured (ADR-024). That is why each has a `LogStore` twin of the same name and why the
+    // analyses reach both through a router rather than calling either directly — see
+    // `analysis.rs`'s `agg_*` methods. `event_flap_stats` is the exception, and deliberately: every
+    // action it counts is alert-linked, so PostgreSQL is complete for it either way.
 
-    /// Per-(node, time-bucket) event counts across `[from_ms, to_ms]`. Uncorrelated events (no node)
-    /// are excluded — an event storm is attributed to a device.
+    /// Per-(node, time-bucket) event counts. Uncorrelated events (no node) are excluded — an event
+    /// storm is attributed to a device.
     pub async fn event_counts_by_bucket(
         &self,
-        from_ms: i64,
-        to_ms: i64,
+        filter: &EventFilter,
         bucket_secs: i64,
     ) -> anyhow::Result<Vec<EventBucketCount>> {
         let b = bucket_secs.max(1);
-        let rows = sqlx::query(
-            "SELECT node_id, (at_unix_ms / 1000 / $3) * $3 AS bucket, count(*) AS n \
-             FROM events \
-             WHERE node_id IS NOT NULL AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
-             GROUP BY node_id, bucket",
-        )
-        .bind(from_ms)
-        .bind(to_ms)
-        .bind(b)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = bind_event_filter(sqlx::query(&agg_counts_by_bucket_sql()), filter)
+            .bind(b)
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(EventBucketCount {
@@ -941,6 +1029,15 @@ impl EventRepo {
 
     /// Fire/clear churn per (node, rule) across `[from_ms, to_ms]` — the raw material for
     /// `event_flap` (repeated linkDown/linkUp, BGP session churn). Only alert-linked rows.
+    ///
+    /// **The one analytics aggregate with no `LogStore` twin, and that is correct rather than an
+    /// omission**: it requires `matched_rule_id IS NOT NULL` and counts only `fired`/`refreshed`/
+    /// `cleared`, every one of which satisfies [`EventAction::is_alert_linked`] — the same
+    /// predicate `flush_persist` keeps. PostgreSQL is therefore complete for this question whether
+    /// or not a log store is configured. Pinned by `event_flap_only_counts_rows_postgresql_keeps`,
+    /// so nobody "completes the set" by giving it a twin it does not need. It also keeps the
+    /// `from_ms`/`to_ms` signature for the same reason: no scope push-down is needed where the
+    /// caller already restricts by node.
     pub async fn event_flap_stats(
         &self,
         from_ms: i64,
@@ -972,23 +1069,14 @@ impl EventRepo {
             .collect()
     }
 
-    /// Per-(node, syslog-severity) counts across `[from_ms, to_ms]` — the input to `severity_shift`.
+    /// Per-(node, syslog-severity) counts — the input to `severity_shift`.
     pub async fn event_severity_counts(
         &self,
-        from_ms: i64,
-        to_ms: i64,
+        filter: &EventFilter,
     ) -> anyhow::Result<Vec<EventSeverityCount>> {
-        let rows = sqlx::query(
-            "SELECT node_id, syslog_severity, count(*) AS n \
-             FROM events \
-             WHERE kind = 'syslog' AND node_id IS NOT NULL AND syslog_severity IS NOT NULL \
-               AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
-             GROUP BY node_id, syslog_severity",
-        )
-        .bind(from_ms)
-        .bind(to_ms)
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = bind_event_filter(sqlx::query(&agg_severity_counts_sql()), filter)
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(EventSeverityCount {
@@ -1000,30 +1088,17 @@ impl EventRepo {
             .collect()
     }
 
-    /// Top unmatched-event signatures (trap OID or syslog app-name) across `[from_ms, to_ms]` —
-    /// the coverage gaps `rule_gap` surfaces. Unmatched rows only.
+    /// Top unmatched-event signatures (trap OID or syslog app-name) — the coverage gaps `rule_gap`
+    /// surfaces. Unmatched rows only.
     pub async fn event_unmatched_signatures(
         &self,
-        from_ms: i64,
-        to_ms: i64,
+        filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventSignatureCount>> {
-        let rows = sqlx::query(
-            // NB: PostgreSQL has no min/max aggregate for `uuid`, so pick a representative node via
-            // the text form — the canonical lowercase-hyphenated uuid sorts identically to the binary
-            // ordering, and NULL node_ids are ignored by the aggregate (sample_node stays optional).
-            "SELECT kind, COALESCE(trap_oid, app_name) AS sig, count(*) AS n, \
-                    min(node_id::text)::uuid AS sample_node \
-             FROM events \
-             WHERE matched_rule_id IS NULL AND COALESCE(trap_oid, app_name) IS NOT NULL \
-               AND at_unix_ms >= $1 AND at_unix_ms <= $2 \
-             GROUP BY kind, sig ORDER BY n DESC LIMIT $3",
-        )
-        .bind(from_ms)
-        .bind(to_ms)
-        .bind(limit.clamp(1, 500))
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = bind_event_filter(sqlx::query(&agg_unmatched_signatures_sql()), filter)
+            .bind(limit.clamp(1, 500))
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(EventSignatureCount {
@@ -1036,30 +1111,17 @@ impl EventRepo {
             .collect()
     }
 
-    /// Authentication-signal volume grouped by source across `[from_ms, to_ms]` — the input to
-    /// `auth_probe` (authenticationFailure traps + auth-failure syslog).
+    /// Authentication-signal volume grouped by source — the input to `auth_probe`
+    /// (authenticationFailure traps + auth-failure syslog).
     pub async fn event_auth_sources(
         &self,
-        from_ms: i64,
-        to_ms: i64,
+        filter: &EventFilter,
         limit: i64,
     ) -> anyhow::Result<Vec<EventAuthSource>> {
-        let rows = sqlx::query(
-            "SELECT host(source_ip) AS src, node_id, count(*) AS n \
-             FROM events \
-             WHERE at_unix_ms >= $1 AND at_unix_ms <= $2 \
-               AND (trap_oid = '1.3.6.1.6.3.1.1.5.5' \
-                    OR message ILIKE '%authentication fail%' \
-                    OR message ILIKE '%auth failure%' \
-                    OR message ILIKE '%login fail%' \
-                    OR message ILIKE '%failed password%') \
-             GROUP BY src, node_id ORDER BY n DESC LIMIT $3",
-        )
-        .bind(from_ms)
-        .bind(to_ms)
-        .bind(limit.clamp(1, 500))
-        .fetch_all(&self.pool)
-        .await?;
+        let rows = bind_event_filter(sqlx::query(&agg_auth_sources_sql()), filter)
+            .bind(limit.clamp(1, 500))
+            .fetch_all(&self.pool)
+            .await?;
         rows.into_iter()
             .map(|row| {
                 Ok(EventAuthSource {
@@ -1086,16 +1148,7 @@ impl EventRepo {
         limit: i64,
     ) -> anyhow::Result<Vec<EventStatBucket>> {
         let sql = stats_grouped_sql(group);
-        let rows = sqlx::query(&sql)
-            .bind(ms_bound(filter.before))
-            .bind(ms_bound(filter.since))
-            .bind(ms_bound(filter.until))
-            .bind(filter.kind.as_deref())
-            .bind(filter.node_id)
-            .bind(filter.matched)
-            .bind(filter.search.as_deref())
-            .bind(filter.regex)
-            .bind(filter.visible_node_ids.as_deref())
+        let rows = bind_event_filter(sqlx::query(&sql), filter)
             .bind(limit.clamp(1, 500))
             .fetch_all(&self.pool)
             .await?;
@@ -1151,16 +1204,7 @@ impl EventRepo {
     ) -> anyhow::Result<Vec<EventTimeBucket>> {
         let b = bucket_secs.clamp(1, 86_400);
         let sql = stats_series_sql(split_kind);
-        let rows = sqlx::query(&sql)
-            .bind(ms_bound(filter.before))
-            .bind(ms_bound(filter.since))
-            .bind(ms_bound(filter.until))
-            .bind(filter.kind.as_deref())
-            .bind(filter.node_id)
-            .bind(filter.matched)
-            .bind(filter.search.as_deref())
-            .bind(filter.regex)
-            .bind(filter.visible_node_ids.as_deref())
+        let rows = bind_event_filter(sqlx::query(&sql), filter)
             .bind(b)
             .fetch_all(&self.pool)
             .await?;
@@ -2047,6 +2091,89 @@ mod tests {
             .with_timezone(&Utc);
         assert_eq!(ms_bound(Some(t)), Some(t.timestamp_millis()));
         assert_eq!(ms_bound(None), None);
+    }
+
+    /// Why `event_flap_stats` has no `LogStore` twin, stated as an invariant rather than a comment.
+    ///
+    /// The other four analytics aggregates were answering from the alert-linked subset whenever a
+    /// log store was configured. This one was not, and the reason is that every action it counts is
+    /// alert-linked — so PostgreSQL is complete for it. If a future action stops satisfying that,
+    /// this fails and the twin becomes necessary.
+    #[test]
+    fn event_flap_only_counts_rows_postgresql_keeps() {
+        // The actions the SQL counts, read off the statement itself so the two cannot drift.
+        let sql = "count(*) FILTER (WHERE e.action IN ('fired','refreshed')) AS fires, \
+                   count(*) FILTER (WHERE e.action = 'cleared') AS clears";
+        for action in [
+            EventAction::Fired,
+            EventAction::Refreshed,
+            EventAction::Cleared,
+        ] {
+            assert!(
+                sql.contains(&format!("'{}'", action.as_str())),
+                "{action:?} is no longer counted by event_flap_stats"
+            );
+            assert!(
+                action.is_alert_linked(),
+                "{action:?} is counted by event_flap_stats but PostgreSQL does not keep it when a \
+                 log store is configured — event_flap now needs a LogStore twin"
+            );
+        }
+        // …and the actions it does *not* count are exactly the ones PostgreSQL may drop.
+        for action in [EventAction::None, EventAction::Info] {
+            assert!(!action.is_alert_linked());
+            assert!(!sql.contains(&format!("'{}'", action.as_str())));
+        }
+    }
+
+    /// The auth vocabulary is shared with the LogsQL side, so it must be usable there: an empty
+    /// phrase would match everything, and a quote would need escaping the LogsQL builder does not
+    /// do for a constant.
+    #[test]
+    fn the_auth_signal_vocabulary_is_shared_and_usable_by_both_backends() {
+        let sql = auth_signal_predicate();
+        assert!(sql.contains(AUTH_FAILURE_TRAP_OID));
+        for p in AUTH_FAILURE_PHRASES {
+            assert!(!p.trim().is_empty(), "an empty phrase matches everything");
+            assert!(
+                !p.contains('"') && !p.contains('\\'),
+                "unquotable phrase: {p}"
+            );
+            assert_eq!(p, p.to_lowercase(), "phrases are matched lowercased: {p}");
+            assert!(sql.contains(p), "{p} missing from the SQL predicate");
+        }
+        // ILIKE, not LIKE: the SQL side is case-insensitive, matching `i(...)` on the LogsQL side.
+        assert!(sql.contains("ILIKE"), "{sql}");
+    }
+
+    /// The four analytics aggregates that gained a log-store twin read through the **shared**
+    /// predicate, so the window, the time basis and — the part that matters — the group scope are
+    /// the same ones `/events` applies.
+    ///
+    /// Before this they took raw `from_ms`/`to_ms` and had no scope clause at all, which is how
+    /// `rule_gap` and `auth_probe` ended up restricting after the grouping instead of before it.
+    #[test]
+    fn the_analytics_aggregates_share_the_event_filter_predicate() {
+        for sql in [
+            agg_counts_by_bucket_sql(),
+            agg_severity_counts_sql(),
+            agg_unmatched_signatures_sql(),
+            agg_auth_sources_sql(),
+        ] {
+            assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
+            // `$9` is the group-scope bind. Losing it is the fail-open direction — a scoped caller
+            // would silently get fleet-wide counts.
+            assert!(sql.contains("$9::uuid[]"), "{sql}");
+            // Event time, not `recorded_at`: the axis both backends were unified on.
+            assert!(
+                sql.contains("at_unix_ms") || sql.contains(EVENT_FILTER_WHERE),
+                "{sql}"
+            );
+            assert!(sql.contains("count(*) AS n"), "{sql}");
+        }
+        // The two capped ones take their cap as the bind after the filter, like the stats builders.
+        assert!(agg_unmatched_signatures_sql().contains("LIMIT $10"));
+        assert!(agg_auth_sources_sql().contains("LIMIT $10"));
     }
 
     #[test]

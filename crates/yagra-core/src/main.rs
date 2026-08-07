@@ -578,12 +578,21 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // `flows` (None when the flow tier is off), and `ipasn` are shared with the API/ingest paths.
     let analysis = Arc::new(analysis::AnalysisRunner::new(
         analysis_repo.clone(),
-        store.clone(),
-        repo.clone(),
-        group_repo.clone(),
-        events_repo.clone(),
-        flows.clone(),
-        ipasn.clone(),
+        analysis::AnalysisSeams {
+            store: store.clone(),
+            nodes: repo.clone(),
+            groups: group_repo.clone(),
+            events: events_repo.clone(),
+            logs: logs.clone(),
+            flows: flows.clone(),
+            ipasn: ipasn.clone(),
+            topo: topology_projection::TopologySources {
+                links: topo_link_repo.clone(),
+                pollers: poller_repo.clone(),
+                l3: l3_repo.clone(),
+                nodes: repo.clone(),
+            },
+        },
     ));
 
     // Reports (Dashboard → Reports): a TSDB+PostgreSQL-read background generator in core (mirrors the
@@ -607,6 +616,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let forward_store = Arc::new(forward_store::ForwardStore::new(repo.pool(), kek.clone()));
     let (forward_handle, forward_runner) = forward::prepare(forward_store.clone());
 
+    // AI-assisted RCA store (ADR-029). Built here rather than beside the orchestrator below because
+    // two things need it: `AdminState` (Settings ▸ AI, on every core) and the leader's retention
+    // loop (`retention::Subject::RcaReports`, leader-only like every other prune).
+    let llm_repo = Arc::new(rca::store::RcaRepo::new(repo.pool(), kek.clone()));
+
     // `is_leader` drives `/readyz` and the `yagra_core_is_leader` gauge. With HA off this core is
     // always the leader (ready); with HA on it flips true only once the advisory lock is won.
     let is_leader = Arc::new(AtomicBool::new(!cfg.enable_ha));
@@ -620,6 +634,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // On a standby none of this runs, which is why the event-webhook/close API handlers 503 rather
     // than enqueue to an undrained channel.
     let leader_tasks = LeaderTasks {
+        llm: llm_repo.clone(),
         shutdown: shutdown.clone(),
         bus: bus.clone(),
         coordinator: coordinator.clone(),
@@ -672,7 +687,6 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // plus one outbound call, so there is nothing for a standby to double-do. With no config row
     // (the default) the orchestrator answers 503 and nothing leaves the building.
     let audit_repo = Arc::new(AuditRepo::new(repo.pool()));
-    let llm_repo = Arc::new(rca::store::RcaRepo::new(repo.pool(), kek.clone()));
     let rca = Some(Arc::new(rca::orchestrator::RcaOrchestrator::new(
         llm_repo.clone(),
         repo.clone(),
@@ -962,8 +976,11 @@ struct LeaderTasks {
     topology_links: Arc<topology_links::TopoLinkRepo>,
     link_overrides: Arc<link_overrides::LinkOverrideRepo>,
     /// Durable poller inventory — where the pollers are, which is what roots the derived dependency
-    /// graph (ADR-043 I2).
+    /// graph (ADR-043 I2). Also the home of `monitoring_gaps`, which the retention loop prunes.
     pollers: Arc<PollerRepo>,
+    /// Generated LLM root-cause reports — held only so the retention loop can prune them
+    /// (`retention::Subject::RcaReports`); generating one is not a leader task.
+    llm: Arc<rca::store::RcaRepo>,
     forward_handle: forward::ForwardHandle,
     /// The forwarding dispatcher itself (moved — leader-only so a standby never double-sends).
     forward_runner: Option<forward::ForwardRunner>,
@@ -1222,15 +1239,18 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
-            run_fleet_health_timeline(
-                self.repo.clone(),
-                self.alerts.clone(),
-                self.history.clone(),
-                self.events_repo.clone(),
-                self.dns_checks.clone(),
-                self.neighbors.clone(),
-                self.l3.clone(),
-            ),
+            run_fleet_health_timeline(TimelineSources {
+                repo: self.repo.clone(),
+                alerts: self.alerts.clone(),
+                history: self.history.clone(),
+                events_repo: self.events_repo.clone(),
+                dns_checks: self.dns_checks.clone(),
+                neighbors: self.neighbors.clone(),
+                l3: self.l3.clone(),
+                analyses: self.analysis_repo.clone(),
+                rca_reports: self.llm.clone(),
+                pollers: self.pollers.clone(),
+            }),
         );
         spawn_cancellable(
             &self.shutdown,
@@ -1705,7 +1725,12 @@ async fn run_alert_config_refresh(
 /// dashboard can chart "degrading vs recovering" over time, and prune old state snapshots + alert
 /// history + events past the retention window (the only place these tables are trimmed). Runs until
 /// the shutdown token drops it. Spawned in `leader_work` (see `run_live`).
-async fn run_fleet_health_timeline(
+/// Everything [`run_fleet_health_timeline`] snapshots or prunes.
+///
+/// A struct rather than a tenth parameter: `clippy::too_many_arguments` is a design signal, not a
+/// lint to silence (coding-conventions), and this loop is where every PostgreSQL retention subject
+/// bottoms out — so it grows every time ADR-040 gains a row.
+struct TimelineSources {
     repo: Arc<NodeRepo>,
     alerts: Arc<AlertManager>,
     history: Arc<AlertHistoryStore>,
@@ -1713,7 +1738,24 @@ async fn run_fleet_health_timeline(
     dns_checks: Arc<dns_check::DnsCheckRepo>,
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
-) {
+    analyses: Arc<analysis::AnalysisRepo>,
+    rca_reports: Arc<rca::store::RcaRepo>,
+    pollers: Arc<PollerRepo>,
+}
+
+async fn run_fleet_health_timeline(sources: TimelineSources) {
+    let TimelineSources {
+        repo,
+        alerts,
+        history,
+        events_repo,
+        dns_checks,
+        neighbors,
+        l3,
+        analyses,
+        rca_reports,
+        pollers,
+    } = sources;
     const SNAPSHOT_SECS: u64 = 300;
     loop {
         tokio::time::sleep(Duration::from_secs(SNAPSHOT_SECS)).await;
@@ -1762,6 +1804,22 @@ async fn run_fleet_health_timeline(
         // a network nobody is re-subnetting writes nothing.
         if let Err(e) = l3.prune_changes(alert_linked_secs).await {
             tracing::warn!(error = %e, "prune interface-address history failed");
+        }
+        // Monitoring gaps go on the alert-linked window too (`retention::Subject::MonitoringGaps`)
+        // — a gap explains an absence of alerts, so outliving the alert history would leave a
+        // window nothing can be read against.
+        if let Err(e) = pollers.prune_monitoring_gaps(alert_linked_secs).await {
+            tracing::warn!(error = %e, "prune monitoring gaps failed");
+        }
+        // Diagnostic artefacts get their own window (`retention::Subject::AnalysisRuns` /
+        // `RcaReports`): both are reproducible by asking again, unlike everything above. Analysis
+        // findings need no prune of their own — they cascade from the job.
+        let diagnostic_secs = retention.diagnostic_secs();
+        if let Err(e) = analyses.prune_jobs(diagnostic_secs).await {
+            tracing::warn!(error = %e, "prune analysis runs failed");
+        }
+        if let Err(e) = rca_reports.prune_reports(diagnostic_secs).await {
+            tracing::warn!(error = %e, "prune RCA reports failed");
         }
     }
 }

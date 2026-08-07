@@ -42,6 +42,14 @@ pub const DEFAULT_REPORT_RUN_DAYS: u32 = 90;
 /// ClickHouse flow records and their 5-minute rollup (ADR-031, the loss-tolerant tier).
 pub const DEFAULT_FLOW_DAYS: u32 = 30;
 
+/// On-demand diagnostic artefacts: Troubleshoot analysis runs with their findings (ADR-022) and
+/// generated LLM root-cause reports (ADR-029). One number over two subjects because they are the
+/// same *class* — a diagnosis someone asked for, reproducible by asking again — and splitting them
+/// would be two knobs nobody could tell apart. Deliberately not [`DEFAULT_REPORT_RUN_DAYS`]: that
+/// control is labelled "Report runs", and a window's name must not silently govern a second kind of
+/// data.
+pub const DEFAULT_DIAGNOSTIC_DAYS: u32 = 90;
+
 /// Lower bound for any day-denominated window. Zero would mean "delete on write".
 pub const MIN_RETENTION_DAYS: u32 = 1;
 /// Upper bound (~10 years), matching the clamp `config::parse_retention_days` already applied.
@@ -79,6 +87,7 @@ pub struct RetentionSettings {
     pub unmatched_event_hours: u32,
     pub report_run_days: u32,
     pub flow_days: u32,
+    pub diagnostic_days: u32,
 }
 
 impl Default for RetentionSettings {
@@ -88,6 +97,7 @@ impl Default for RetentionSettings {
             unmatched_event_hours: DEFAULT_UNMATCHED_EVENT_HOURS,
             report_run_days: DEFAULT_REPORT_RUN_DAYS,
             flow_days: DEFAULT_FLOW_DAYS,
+            diagnostic_days: DEFAULT_DIAGNOSTIC_DAYS,
         }
     }
 }
@@ -111,6 +121,12 @@ impl RetentionSettings {
         i64::from(self.report_run_days) * SECS_PER_DAY
     }
 
+    /// Seconds for the diagnostic-artefact window.
+    #[must_use]
+    pub fn diagnostic_secs(&self) -> i64 {
+        i64::from(self.diagnostic_days) * SECS_PER_DAY
+    }
+
     /// Whether every field is inside its configurable band. The API edge rejects anything else.
     #[must_use]
     pub fn in_bounds(&self) -> bool {
@@ -118,6 +134,7 @@ impl RetentionSettings {
             && hours_in_bounds(self.unmatched_event_hours)
             && days_in_bounds(self.report_run_days)
             && days_in_bounds(self.flow_days)
+            && days_in_bounds(self.diagnostic_days)
     }
 }
 
@@ -158,10 +175,14 @@ pub enum Subject {
     L3Changes,
     EventsMatched,
     EventsUnmatched,
+    MonitoringGaps,
     ReportRuns,
+    AnalysisRuns,
+    RcaReports,
     FlowRecords,
     EventLogStore,
     Metrics,
+    Interfaces,
     AuditLog,
 }
 
@@ -198,6 +219,7 @@ pub enum Field {
     UnmatchedEventHours,
     ReportRunDays,
     FlowDays,
+    DiagnosticDays,
     StoreOwned,
     Unlimited,
 }
@@ -237,6 +259,7 @@ impl Field {
             Field::UnmatchedEventHours => "unmatched_event_hours",
             Field::ReportRunDays => "report_run_days",
             Field::FlowDays => "flow_days",
+            Field::DiagnosticDays => "diagnostic_days",
             Field::StoreOwned => "store_owned",
             Field::Unlimited => "unlimited",
         }
@@ -252,13 +275,19 @@ pub struct Row {
     pub enforcement: Enforcement,
     pub tunable: Tunable,
     pub field: Field,
+    /// The PostgreSQL table a [`Enforcement::PgPrune`] row deletes from, and `None` for every other
+    /// enforcement. Not part of the API DTO — it exists so the module doc's claim ("this module
+    /// declares the table, and every prune site implements it") is something a test can check
+    /// rather than something a reader has to take on trust. Four subjects had no prune at all when
+    /// this was added, which is what a declaration nothing verifies is worth.
+    pub pruned_from: Option<&'static str>,
     /// Operator-facing note. For a read-only row this names the knob that does change it.
     pub note: &'static str,
 }
 
 impl Subject {
     /// Every subject, in the order the UI and the ADR table present them.
-    pub const ALL: [Subject; 12] = [
+    pub const ALL: [Subject; 16] = [
         Subject::AlertHistory,
         Subject::NodeStateSnapshots,
         Subject::DnsChainChanges,
@@ -266,10 +295,14 @@ impl Subject {
         Subject::L3Changes,
         Subject::EventsMatched,
         Subject::EventsUnmatched,
+        Subject::MonitoringGaps,
         Subject::ReportRuns,
+        Subject::AnalysisRuns,
+        Subject::RcaReports,
         Subject::FlowRecords,
         Subject::EventLogStore,
         Subject::Metrics,
+        Subject::Interfaces,
         Subject::AuditLog,
     ];
 
@@ -285,10 +318,14 @@ impl Subject {
             Subject::L3Changes => "l3_changes",
             Subject::EventsMatched => "events_matched",
             Subject::EventsUnmatched => "events_unmatched",
+            Subject::MonitoringGaps => "monitoring_gaps",
             Subject::ReportRuns => "report_runs",
+            Subject::AnalysisRuns => "analysis_runs",
+            Subject::RcaReports => "rca_reports",
             Subject::FlowRecords => "flow_records",
             Subject::EventLogStore => "event_log_store",
             Subject::Metrics => "metrics",
+            Subject::Interfaces => "interfaces",
             Subject::AuditLog => "audit_log",
         }
     }
@@ -303,6 +340,7 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
+                pruned_from: Some("alert_history"),
                 note: "Fired/cleared alert records, including the metric snapshot taken at fire time.",
             },
             Subject::NodeStateSnapshots => Row {
@@ -311,6 +349,7 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
+                pruned_from: Some("node_state_snapshots"),
                 note: "Five-minute fleet state counts behind the dashboard's degrading/recovering chart.",
             },
             Subject::DnsChainChanges => Row {
@@ -319,6 +358,7 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
+                pruned_from: Some("dns_chain_changes"),
                 note: "Append-on-change DNS resolution chains; a healthy fleet writes almost nothing here.",
             },
             Subject::NeighborChanges => Row {
@@ -327,6 +367,7 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
+                pruned_from: Some("node_neighbor_changes"),
                 note: "Append-on-change CDP/LLDP adjacency; a rack that nobody is repatching writes nothing here.",
             },
             Subject::L3Changes => Row {
@@ -335,6 +376,7 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
+                pruned_from: Some("node_l3_changes"),
                 note: "Append-on-change interface addressing; a network nobody is re-subnetting writes nothing here.",
             },
             Subject::EventsMatched => Row {
@@ -343,6 +385,7 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::AlertLinkedDays,
+                pruned_from: Some("events"),
                 note: "Passive events that matched a rule, so they are linked to alert history.",
             },
             Subject::EventsUnmatched => Row {
@@ -351,7 +394,17 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::UnmatchedEventHours,
+                pruned_from: Some("events"),
                 note: "Passive events that matched no rule, kept as rule-authoring material. Not written at all when a log store is configured.",
+            },
+            Subject::MonitoringGaps => Row {
+                subject: self,
+                store: "PostgreSQL",
+                enforcement: Enforcement::PgPrune,
+                tunable: Tunable::Settings,
+                field: Field::AlertLinkedDays,
+                pruned_from: Some("monitoring_gaps"),
+                note: "Windows in which a poller was offline, so its nodes were unmonitored. On the alert-linked window deliberately: a gap explains why no alert fired, and is only readable beside the history it explains.",
             },
             Subject::ReportRuns => Row {
                 subject: self,
@@ -359,7 +412,26 @@ impl Subject {
                 enforcement: Enforcement::PgPrune,
                 tunable: Tunable::Settings,
                 field: Field::ReportRunDays,
+                pruned_from: Some("report_runs"),
                 note: "Generated report artefacts. Regenerable from their definition.",
+            },
+            Subject::AnalysisRuns => Row {
+                subject: self,
+                store: "PostgreSQL",
+                enforcement: Enforcement::PgPrune,
+                tunable: Tunable::Settings,
+                field: Field::DiagnosticDays,
+                pruned_from: Some("analysis_jobs"),
+                note: "Troubleshoot analysis runs and their findings. Regenerable by running the analysis again; scheduled analyses write here on a cadence.",
+            },
+            Subject::RcaReports => Row {
+                subject: self,
+                store: "PostgreSQL",
+                enforcement: Enforcement::PgPrune,
+                tunable: Tunable::Settings,
+                field: Field::DiagnosticDays,
+                pruned_from: Some("rca_reports"),
+                note: "Generated AI root-cause reports. Regenerable, but at the cost of another LLM call — lower this only if you are willing to pay for a re-run.",
             },
             Subject::FlowRecords => Row {
                 subject: self,
@@ -367,6 +439,7 @@ impl Subject {
                 enforcement: Enforcement::StoreTtl,
                 tunable: Tunable::Settings,
                 field: Field::FlowDays,
+                pruned_from: None,
                 note: "Traffic-flow records and their 5-minute rollup. Applied as a table TTL; lowering it deletes existing rows.",
             },
             Subject::EventLogStore => Row {
@@ -375,6 +448,7 @@ impl Subject {
                 enforcement: Enforcement::StoreFlag,
                 tunable: Tunable::StoreFlagReadOnly,
                 field: Field::StoreOwned,
+                pruned_from: None,
                 note: "Set by the victorialogs container's -retentionPeriod flag; change it in the compose file and recreate that container.",
             },
             Subject::Metrics => Row {
@@ -383,7 +457,17 @@ impl Subject {
                 enforcement: Enforcement::StoreFlag,
                 tunable: Tunable::StoreFlagReadOnly,
                 field: Field::StoreOwned,
+                pruned_from: None,
                 note: "Set by the victoriametrics container's --retentionPeriod flag; change it in the compose file and recreate that container.",
+            },
+            Subject::Interfaces => Row {
+                subject: self,
+                store: "PostgreSQL",
+                enforcement: Enforcement::Unlimited,
+                tunable: Tunable::ByDecision,
+                field: Field::Unlimited,
+                pruned_from: None,
+                note: "The (node, ifIndex) → name/alias/speed map every interface graph is joined against. Kept until its node is deleted: an orphan row is a stale identity, not old data, and ageing it out would erase the labels of a node whose interface collection is merely paused.",
             },
             Subject::AuditLog => Row {
                 subject: self,
@@ -391,6 +475,7 @@ impl Subject {
                 enforcement: Enforcement::Unlimited,
                 tunable: Tunable::ByDecision,
                 field: Field::Unlimited,
+                pruned_from: None,
                 note: "Kept indefinitely by decision (ADR-040): who changed what must not be swept away as a side effect of tidying logs.",
             },
         }
@@ -406,6 +491,7 @@ impl Subject {
             Field::UnmatchedEventHours => Some(s.unmatched_event_hours),
             Field::ReportRunDays => Some(s.report_run_days),
             Field::FlowDays => Some(s.flow_days),
+            Field::DiagnosticDays => Some(s.diagnostic_days),
             Field::StoreOwned | Field::Unlimited => None,
         }
     }
@@ -417,7 +503,10 @@ impl Row {
     pub const fn unit(&self) -> &'static str {
         match self.field {
             Field::UnmatchedEventHours => "hours",
-            Field::AlertLinkedDays | Field::ReportRunDays | Field::FlowDays => "days",
+            Field::AlertLinkedDays
+            | Field::ReportRunDays
+            | Field::FlowDays
+            | Field::DiagnosticDays => "days",
             Field::StoreOwned | Field::Unlimited => "",
         }
     }
@@ -446,10 +535,14 @@ mod tests {
             Subject::L3Changes,
             Subject::EventsMatched,
             Subject::EventsUnmatched,
+            Subject::MonitoringGaps,
             Subject::ReportRuns,
+            Subject::AnalysisRuns,
+            Subject::RcaReports,
             Subject::FlowRecords,
             Subject::EventLogStore,
             Subject::Metrics,
+            Subject::Interfaces,
             Subject::AuditLog,
         ];
         assert_eq!(counted, named.len(), "ALL is missing a subject");
@@ -475,6 +568,7 @@ mod tests {
                     | Field::UnmatchedEventHours
                     | Field::ReportRunDays
                     | Field::FlowDays
+                    | Field::DiagnosticDays
             );
             match row.tunable {
                 Tunable::Settings => assert!(
@@ -504,8 +598,16 @@ mod tests {
         }
     }
 
-    /// ADR-040 decision (2): only a store flag is read-only, and only the audit log is unlimited.
-    /// Both directions, so a new row cannot quietly join either group.
+    /// The subjects Yagra keeps forever, each for its own written reason. Named rather than derived
+    /// so that joining this group stays a deliberate act: "unlimited" is the one enforcement that
+    /// looks like an oversight and behaves like a policy, and the honest failure of the *previous*
+    /// version of this test was that it hard-coded `AuditLog` as the only member, so the first
+    /// legitimate second member (see [`Subject::Interfaces`]) could only be added by weakening the
+    /// assertion. Widening this list is fine; deleting the list is not.
+    const UNLIMITED_BY_DECISION: [Subject; 2] = [Subject::Interfaces, Subject::AuditLog];
+
+    /// ADR-040 decision (2): only a store flag is read-only, and only a declared subject is
+    /// unlimited. Both directions, so a new row cannot quietly join either group.
     #[test]
     fn enforcement_and_tunability_agree() {
         for s in Subject::ALL {
@@ -518,8 +620,73 @@ mod tests {
             );
             assert_eq!(
                 row.enforcement == Enforcement::Unlimited,
-                s == Subject::AuditLog,
-                "{}: the audit log is the only unlimited subject",
+                UNLIMITED_BY_DECISION.contains(&s),
+                "{}: kept forever iff it is declared so on purpose",
+                s.as_str()
+            );
+        }
+    }
+
+    /// Every file that implements a retention prune. Only the haystack for the test below — a file
+    /// missing here can only make the search *fail* (loudly, naming the subject), never pass, which
+    /// is the safe direction for a hand-maintained list.
+    const PRUNE_SITES: [&str; 10] = [
+        include_str!("history.rs"),
+        include_str!("repo.rs"),
+        include_str!("dns_check.rs"),
+        include_str!("neighbors.rs"),
+        include_str!("l3.rs"),
+        include_str!("events.rs"),
+        include_str!("pollers.rs"),
+        include_str!("reports.rs"),
+        include_str!("analysis.rs"),
+        include_str!("rca/store.rs"),
+    ];
+
+    /// The module doc claims "this module declares the table, and every prune site implements it".
+    /// Nothing checked the second half, and four subjects' worth of tables (`analysis_jobs`,
+    /// `analysis_findings` via its cascade, `monitoring_gaps`, `rca_reports`) grew without bound
+    /// while the policy read as complete. So: a `PgPrune` row must name a table, and some file must
+    /// actually delete from it.
+    ///
+    /// The needles are built at runtime from the rows rather than written as literals — a literal
+    /// needle in a test whose crate it also searches matches itself and passes forever.
+    #[test]
+    fn every_pg_pruned_subject_names_a_table_something_deletes_from() {
+        let mut checked = 0;
+        for s in Subject::ALL {
+            let row = s.row();
+            assert_eq!(
+                row.enforcement == Enforcement::PgPrune,
+                row.pruned_from.is_some(),
+                "{}: a table is named iff Yagra is the one deleting from it",
+                s.as_str()
+            );
+            let Some(table) = row.pruned_from else {
+                continue;
+            };
+            let needle = format!("DELETE FROM {table}");
+            assert!(
+                PRUNE_SITES.iter().any(|src| src.contains(&needle)),
+                "{}: declares retention on `{table}` but nothing deletes from it",
+                s.as_str()
+            );
+            checked += 1;
+        }
+        // A floor, so "the search stopped matching" cannot masquerade as "everything is fine".
+        assert!(checked >= 11, "only {checked} pruned subjects were checked");
+    }
+
+    /// An unlimited row is a decision, so it has to read like one — a note that does not say *why*
+    /// nothing prunes this table is indistinguishable from a table someone forgot.
+    #[test]
+    fn an_unlimited_row_explains_why_it_is_kept() {
+        for s in UNLIMITED_BY_DECISION {
+            let row = s.row();
+            assert_eq!(row.enforcement, Enforcement::Unlimited);
+            assert!(
+                row.note.contains("Kept indefinitely") || row.note.contains("Kept until"),
+                "{}: an unlimited row must say what bounds it, if anything does",
                 s.as_str()
             );
         }
@@ -591,6 +758,7 @@ mod tests {
         assert_eq!(d.unmatched_event_secs(), 86_400);
         assert_eq!(d.report_run_secs(), 90 * 86_400);
         assert_eq!(d.flow_days, 30);
+        assert_eq!(d.diagnostic_secs(), 90 * 86_400);
     }
 
     #[test]
@@ -612,6 +780,10 @@ mod tests {
                 flow_days: 0,
                 ..Default::default()
             },
+            RetentionSettings {
+                diagnostic_days: MAX_RETENTION_DAYS + 1,
+                ..Default::default()
+            },
         ] {
             assert!(!bad.in_bounds(), "{bad:?} should be out of bounds");
         }
@@ -626,6 +798,7 @@ mod tests {
             Field::UnmatchedEventHours,
             Field::ReportRunDays,
             Field::FlowDays,
+            Field::DiagnosticDays,
             Field::StoreOwned,
             Field::Unlimited,
         ];

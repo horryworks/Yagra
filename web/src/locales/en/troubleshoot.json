@@ -599,6 +599,8 @@
       "signals_one": "{{count}} signal",
       "signals_other": "{{count}} signals",
       "began": "began {{time}}",
+      "peers_one": "{{count}} neighbour",
+      "peers_other": "{{count}} neighbours",
       "lane": {
         "metric": "Metric",
         "event": "Events",

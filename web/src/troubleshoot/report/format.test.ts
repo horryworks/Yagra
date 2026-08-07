@@ -13,6 +13,7 @@ import {
   groupByRule,
   humanDays,
   maxDetail,
+  peerCountOf,
   ratioBucket,
   scanPattern,
   sevOf,
@@ -241,5 +242,23 @@ describe('splitNotices', () => {
 
   it('handles an empty result set', () => {
     expect(splitNotices([])).toEqual({ findings: [], notices: [] });
+  });
+});
+
+describe('peerCountOf', () => {
+  // Additive payload: a finding written before the neighbour expansion has no `peer_count` at all,
+  // and 0 is exactly what its absence meant. It must never read as "unknown" or throw.
+  it('answers zero for a finding from before the expansion', () => {
+    expect(peerCountOf({})).toBe(0);
+    expect(peerCountOf({ detail: null })).toBe(0);
+    expect(peerCountOf({ detail: { timeline: [] } })).toBe(0);
+  });
+
+  it('reads a real peer count and rejects nonsense', () => {
+    expect(peerCountOf({ detail: { peer_count: 2 } })).toBe(2);
+    expect(peerCountOf({ detail: { peer_count: 0 } })).toBe(0);
+    expect(peerCountOf({ detail: { peer_count: -1 } })).toBe(0);
+    expect(peerCountOf({ detail: { peer_count: 'two' } })).toBe(0);
+    expect(peerCountOf({ detail: { peer_count: Number.NaN } })).toBe(0);
   });
 });

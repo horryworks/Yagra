@@ -26566,6 +26566,12 @@
             "description": "Days to keep alert history, node-state snapshots, DNS chain changes and matched events.",
             "minimum": 0
           },
+          "diagnostic_days": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Days to keep on-demand diagnostics: Troubleshoot analysis runs with their findings, and\ngenerated AI root-cause reports. Optional — omitting it sets the default (90).",
+            "minimum": 0
+          },
           "flow_days": {
             "type": "integer",
             "format": "int32",

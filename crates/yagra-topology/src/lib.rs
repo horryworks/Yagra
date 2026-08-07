@@ -49,6 +49,16 @@ impl Topology {
         self.parents.get(&node).cloned().unwrap_or_default()
     }
 
+    /// This node's direct children. Empty for a leaf, and for a node the graph has never heard of.
+    ///
+    /// The mirror of [`Self::parents_of`], and deliberately **not** [`Self::descendants`]: a
+    /// one-hop neighbourhood is what a diagnostic wants (ADR-022's incident correlation), whereas
+    /// the transitive subtree of a core switch is most of the fleet.
+    #[must_use]
+    pub fn children_of(&self, node: NodeId) -> BTreeSet<NodeId> {
+        self.children.get(&node).cloned().unwrap_or_default()
+    }
+
     /// How many child→parent edges the graph holds.
     #[must_use]
     pub fn edge_count(&self) -> usize {
@@ -219,6 +229,38 @@ mod tests {
         topo.add_dependency(b, a);
         assert_eq!(topo.descendants(a), down_set(&[b]));
         assert_eq!(topo.descendants(b), down_set(&[a]));
+    }
+
+    /// `children_of` is the mirror of `parents_of` and must stay **one hop**, unlike `descendants`.
+    /// The distinction is the whole reason it exists: ADR-022's incident correlation wants a node's
+    /// immediate neighbourhood, and the transitive subtree of a core switch is most of the fleet.
+    #[test]
+    fn children_of_mirrors_parents_of_and_stays_one_hop() {
+        let (gp, p, c1, c2) = (NodeId::new(), NodeId::new(), NodeId::new(), NodeId::new());
+        let mut topo = Topology::new();
+        topo.add_dependency(p, gp);
+        topo.add_dependency(c1, p);
+        topo.add_dependency(c2, p);
+
+        assert_eq!(topo.children_of(p), down_set(&[c1, c2]));
+        assert_eq!(topo.parents_of(p), down_set(&[gp]));
+        // One hop: gp's children are {p}, not {p, c1, c2} — that is what `descendants` is for.
+        assert_eq!(topo.children_of(gp), down_set(&[p]));
+        assert_eq!(topo.descendants(gp), down_set(&[p, c1, c2]));
+        // A leaf and an unknown node both answer empty rather than panicking.
+        assert!(topo.children_of(c1).is_empty());
+        assert!(topo.children_of(NodeId::new()).is_empty());
+    }
+
+    #[test]
+    fn children_of_is_cycle_safe() {
+        // a → b → a: one hop each way, and no traversal to loop on.
+        let (a, b) = (NodeId::new(), NodeId::new());
+        let mut topo = Topology::new();
+        topo.add_dependency(a, b);
+        topo.add_dependency(b, a);
+        assert_eq!(topo.children_of(a), down_set(&[b]));
+        assert_eq!(topo.children_of(b), down_set(&[a]));
     }
 
     #[test]

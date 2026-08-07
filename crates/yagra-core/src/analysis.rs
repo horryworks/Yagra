@@ -25,12 +25,17 @@ use tokio::sync::{broadcast, Semaphore};
 use uuid::Uuid;
 use yagra_common::{NodeId, SeriesKey};
 
-use crate::events::{EventAction, EventFilter, EventRepo, EventRow, EventSeverityCount};
+use crate::events::{
+    EventAction, EventAuthSource, EventBucketCount, EventFilter, EventRepo, EventRow,
+    EventSeverityCount, EventSignatureCount,
+};
 use crate::flowstore::{AsDir, FlowQuery, FlowSeriesQuery, FlowStore};
 use crate::groups::{group_subtree, GroupRepo};
 use crate::ipasn::IpAsnHandle;
+use crate::logstore::LogStore;
 use crate::repo::NodeRepo;
 use crate::store::{MetricPoint, MetricStore};
+use yagra_topology::Topology;
 
 /// Broadcast buffer for the job-status SSE stream (matches the alert engine's sizing intent).
 const EVENT_BUFFER: usize = 256;
@@ -699,6 +704,22 @@ impl AnalysisRepo {
         Ok(())
     }
 
+    /// Drop analysis runs older than `retention_secs`, and with them their findings.
+    ///
+    /// `retention::Subject::AnalysisRuns`. Migration 0026 shipped this table with "no auto-trim
+    /// yet" written into it, and 0059 later added *scheduled* analyses — so the table nothing
+    /// pruned became one that fills on a cadence. `analysis_findings` needs no statement of its
+    /// own: it is `ON DELETE CASCADE` from here, which is also why the cascade never fired before.
+    pub async fn prune_jobs(&self, retention_secs: i64) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM analysis_jobs WHERE created_at < now() - make_interval(secs => $1)",
+        )
+        .bind(retention_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Insert a batch of findings for a job.
     async fn insert_findings(&self, job_id: Uuid, findings: &[NewFinding]) -> anyhow::Result<()> {
         for f in findings {
@@ -977,12 +998,22 @@ pub struct AnalysisRunner {
     /// Group hierarchy — to expand a "group" scope to the group + its descendant subgroups.
     groups: Arc<GroupRepo>,
     /// Passive-event store (ADR-024) — read by the `event_*` analyses and `incident_correlate`.
+    ///
+    /// ⚠️ **Never read directly from a `run_*`.** Once `logs` is `Some`, this holds only the
+    /// alert-linked subset, so an analysis that counts events must go through the `agg_*` routers
+    /// below. `every_event_analysis_reads_through_the_store_router` enforces it.
     events: Arc<EventRepo>,
+    /// The event log store (ADR-024), `None` when VictoriaLogs is not configured. `Some` means
+    /// PostgreSQL is a subset and the `agg_*` routers must ask this instead.
+    logs: Option<Arc<dyn LogStore>>,
     /// Flow store (ClickHouse, ADR-031), `None` when the flow tier is off — the `flow_*`/`traffic_*`/
     /// `talker_*`/`new_destination`/`scan`/`saturation` analyses no-op with an info finding then.
     flows: Option<Arc<dyn FlowStore>>,
     /// IP→ASN table handle for resolving AS names in flow findings (`new_destination`).
     ipasn: IpAsnHandle,
+    /// Connectivity graph sources — `incident_correlate` expands an incident to a node's directly
+    /// linked neighbours (ADR-022 Increment 2, on the graph ADR-043 derives).
+    topo: crate::topology_projection::TopologySources,
     tx: broadcast::Sender<JobFrame>,
     cancels: Mutex<std::collections::HashMap<Uuid, Arc<AtomicBool>>>,
     /// Concurrency cap (ADR-028 Increment 2 WS-A): a permit is held for each running job's lifetime.
@@ -995,17 +1026,38 @@ pub struct AnalysisRunner {
     max_per_window: usize,
 }
 
+/// The stores an [`AnalysisRunner`] reads.
+///
+/// A struct rather than more parameters: `new` was already at the `clippy::too_many_arguments`
+/// threshold, and that lint is a design signal rather than something to silence
+/// (coding-conventions). Same shape as [`crate::topology_projection::TopologySources`].
+pub struct AnalysisSeams {
+    pub store: Arc<dyn MetricStore>,
+    pub nodes: Arc<NodeRepo>,
+    pub groups: Arc<GroupRepo>,
+    pub events: Arc<EventRepo>,
+    /// The event log store (ADR-024). `Some` ⇒ PostgreSQL holds only alert-linked rows, so the
+    /// count-based aggregates must be read from here or they answer about a subset.
+    pub logs: Option<Arc<dyn LogStore>>,
+    pub flows: Option<Arc<dyn FlowStore>>,
+    pub ipasn: IpAsnHandle,
+    /// The connectivity graph, for `incident_correlate`'s neighbour expansion (ADR-043 → ADR-022).
+    pub topo: crate::topology_projection::TopologySources,
+}
+
 impl AnalysisRunner {
     #[must_use]
-    pub fn new(
-        repo: Arc<AnalysisRepo>,
-        store: Arc<dyn MetricStore>,
-        nodes: Arc<NodeRepo>,
-        groups: Arc<GroupRepo>,
-        events: Arc<EventRepo>,
-        flows: Option<Arc<dyn FlowStore>>,
-        ipasn: IpAsnHandle,
-    ) -> Self {
+    pub fn new(repo: Arc<AnalysisRepo>, seams: AnalysisSeams) -> Self {
+        let AnalysisSeams {
+            store,
+            nodes,
+            groups,
+            events,
+            logs,
+            flows,
+            ipasn,
+            topo,
+        } = seams;
         let (tx, _) = broadcast::channel(EVENT_BUFFER);
         let max_concurrent = env_cap("YAGRA_ANALYSIS_MAX_CONCURRENT", DEFAULT_MAX_CONCURRENT);
         let max_per_window = env_cap("YAGRA_ANALYSIS_RATE_PER_MIN", DEFAULT_RATE_PER_MIN);
@@ -1015,8 +1067,10 @@ impl AnalysisRunner {
             nodes,
             groups,
             events,
+            logs,
             flows,
             ipasn,
+            topo,
             tx,
             cancels: Mutex::new(std::collections::HashMap::new()),
             slots: Arc::new(Semaphore::new(max_concurrent)),
@@ -1024,6 +1078,72 @@ impl AnalysisRunner {
             recent_starts: Mutex::new(VecDeque::new()),
             max_per_window,
         }
+    }
+
+    /// The [`EventFilter`] an event analysis reads through: the job's time window, plus its
+    /// authorized node set pushed down to the store.
+    ///
+    /// `None` for an `All`-scope job because there is nothing to restrict *to* — the whole fleet is
+    /// the answer, and materialising up to 100k ids (the `exhaustive` node cap) into an `IN` list
+    /// to say "everything" would be slower and mean the same thing.
+    ///
+    /// The push-down is not only an optimisation. `rule_gap` and `auth_probe` used to group
+    /// fleet-wide and then drop a group whose *representative* node was out of scope, so a
+    /// signature genuinely occurring inside the caller's group vanished whenever some node outside
+    /// it happened to sort lower. Restricting before the grouping removes the question.
+    fn scoped_window(params: &JobParams, node_ids: &[Uuid], from_s: i64, to_s: i64) -> EventFilter {
+        EventFilter {
+            since: DateTime::from_timestamp(from_s, 0),
+            until: DateTime::from_timestamp(to_s, 0),
+            visible_node_ids: match params.scope_kind {
+                ScopeKind::All => None,
+                ScopeKind::Group | ScopeKind::Node => Some(node_ids.to_vec()),
+            },
+            ..Default::default()
+        }
+    }
+
+    // ── Passive-event aggregates (ADR-022 Increment 2) ──────────────────────────────────────────
+    //
+    // The only way a `run_*` may reach an event store. The store choice itself lives in
+    // `logstore::route_*` — shared with the MCP `event_stats` tool, which had the same defect.
+
+    async fn agg_counts_by_bucket(
+        &self,
+        filter: &EventFilter,
+        bucket_secs: i64,
+    ) -> anyhow::Result<Vec<EventBucketCount>> {
+        crate::logstore::route_counts_by_bucket(
+            self.logs.as_ref(),
+            &self.events,
+            filter,
+            bucket_secs,
+        )
+        .await
+    }
+
+    async fn agg_severity_counts(
+        &self,
+        filter: &EventFilter,
+    ) -> anyhow::Result<Vec<EventSeverityCount>> {
+        crate::logstore::route_severity_counts(self.logs.as_ref(), &self.events, filter).await
+    }
+
+    async fn agg_unmatched_signatures(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventSignatureCount>> {
+        crate::logstore::route_unmatched_signatures(self.logs.as_ref(), &self.events, filter, limit)
+            .await
+    }
+
+    async fn agg_auth_sources(
+        &self,
+        filter: &EventFilter,
+        limit: i64,
+    ) -> anyhow::Result<Vec<EventAuthSource>> {
+        crate::logstore::route_auth_sources(self.logs.as_ref(), &self.events, filter, limit).await
     }
 
     /// Record a creation against the sliding-window rate limit. `Err(RateLimited)` when the window is
@@ -1653,10 +1773,12 @@ impl AnalysisRunner {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
+        let window = Self::scoped_window(params, node_ids, from, to);
         let rows = self
-            .events
-            .event_counts_by_bucket(from * 1000, to * 1000, EVENT_BUCKET_SECS)
+            .agg_counts_by_bucket(&window, EVENT_BUCKET_SECS)
             .await?;
+        // The store restricts to the caller's scope; this fold additionally honours `node_cap`,
+        // which bounds how many nodes a `quick`/`standard` run scores at all.
         let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
         // node → (baseline bucket counts, recent bucket counts with their bucket time).
         let mut per_node: HashMap<Uuid, StormBuckets> = HashMap::new();
@@ -1774,16 +1896,16 @@ impl AnalysisRunner {
             return Ok(None);
         }
         let baseline = self
-            .events
-            .event_severity_counts(from * 1000, recent_cutoff * 1000)
+            .agg_severity_counts(&Self::scoped_window(params, node_ids, from, recent_cutoff))
             .await?;
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
         let recent = self
-            .events
-            .event_severity_counts(recent_cutoff * 1000, to * 1000)
+            .agg_severity_counts(&Self::scoped_window(params, node_ids, recent_cutoff, to))
             .await?;
+        // As in `run_event_storm`: the store applies the caller's scope, this fold applies
+        // `node_cap`.
         let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
         let base_frac = severity_high_fractions(&baseline, &scope);
         let recent_frac = severity_high_fractions(&recent, &scope);
@@ -1835,17 +1957,16 @@ impl AnalysisRunner {
             return Ok(None);
         }
         let sigs = self
-            .events
-            .event_unmatched_signatures(from * 1000, to * 1000, 200)
+            .agg_unmatched_signatures(&Self::scoped_window(params, node_ids, from, to), 200)
             .await?;
-        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
-        let all_scope = params.scope_kind == ScopeKind::All;
+        // No sample-node scope filter here any more: the store already restricted, and filtering on
+        // the representative node dropped signatures that *did* occur inside the caller's group
+        // whenever some out-of-group node sorted lower. On the log-store path `sample_node` is
+        // `None` for every row anyway (LogsQL has no `min(uuid)`), which that filter would have
+        // read as "out of scope" and discarded wholesale.
         let mut findings: Vec<NewFinding> = Vec::new();
         for s in sigs {
             if s.count < RULE_GAP_FLOOR {
-                continue;
-            }
-            if !all_scope && !s.sample_node.is_some_and(|n| scope.contains(&n)) {
                 continue;
             }
             let score = gap_score(s.count);
@@ -1889,17 +2010,14 @@ impl AnalysisRunner {
             return Ok(None);
         }
         let sources = self
-            .events
-            .event_auth_sources(from * 1000, to * 1000, 100)
+            .agg_auth_sources(&Self::scoped_window(params, node_ids, from, to), 100)
             .await?;
-        let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
-        let all_scope = params.scope_kind == ScopeKind::All;
+        // Same as `run_rule_gap`: the store restricted, so no post-filter on the correlated node.
+        // The old one also hid every auth source that mapped to no inventory node at all — which is
+        // precisely what an external prober looks like.
         let mut findings: Vec<NewFinding> = Vec::new();
         for s in sources {
             if s.count < AUTH_FLOOR {
-                continue;
-            }
-            if !all_scope && !s.node_id.is_some_and(|n| scope.contains(&n)) {
                 continue;
             }
             let score = auth_score(s.count);
@@ -2360,6 +2478,24 @@ impl AnalysisRunner {
         let from = to - window;
         let nodes = &node_ids[..node_ids.len().min(INCIDENT_NODE_CAP)];
         let total = nodes.len().max(1);
+
+        // The one-hop neighbourhood, built once per job rather than per node.
+        //
+        // ⚠️ **Scope rule**: a neighbour may be consulted, scored or named only if it is itself in
+        // the job's resolved node set, which was checked against the launching principal at create
+        // time. This is the direct analogue of `TopoLinkRepo::list_page`'s "both endpoints visible"
+        // rule — one visible end still tells a scoped operator that a node exists outside their
+        // scope. The weaker "consult anything, name only what is visible" leaks by inference: the
+        // finding's score, its signal count, and whether it is emitted at all would move with data
+        // the caller cannot see.
+        let authorized: HashSet<Uuid> = node_ids.iter().copied().collect();
+        let neighbours = self.incident_neighbourhood(&authorized).await;
+
+        // Memoized signal fetch: each `incident_signals` call is one TSDB read plus one event query
+        // plus one ClickHouse query, so a naive expansion would multiply the job's I/O by the fan-out
+        // (20 nodes × 4 peers = up to 100 fetches instead of 20). Bounded by `INCIDENT_NODE_CAP`
+        // distinct nodes overall.
+        let mut cache: HashMap<Uuid, Vec<IncidentSignal>> = HashMap::new();
         let mut findings: Vec<NewFinding> = Vec::new();
         for (i, node) in nodes.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
@@ -2371,28 +2507,70 @@ impl AnalysisRunner {
                 "Assembling incident timeline…",
             )
             .await;
-            let mut signals = self
-                .incident_signals(
-                    *node,
-                    from,
-                    to,
-                    params.window_secs.max(600),
-                    params.sensitivity.max(2.0),
-                )
-                .await;
-            // Cross-signal evidence required: ≥2 signals across ≥2 kinds.
-            let kinds: HashSet<&str> = signals.iter().map(|s| s.kind).collect();
-            if signals.len() < 2 || kinds.len() < 2 {
+            let own = self.signals_for(&mut cache, *node, params, from, to).await;
+            // A node never gets a finding purely from its neighbours: it must show something of its
+            // own. This keeps the pre-expansion behaviour as the floor.
+            if own.is_empty() {
                 continue;
             }
-            signals.sort_by_key(|s| s.at_s);
-            let score = signals.iter().map(|s| s.severity).fold(0.0, f64::max);
-            let earliest = signals.first().map_or(to, |s| s.at_s);
-            let timeline: Vec<serde_json::Value> = signals
+
+            // Corroborating peers, most severe first, capped.
+            let mut peers: Vec<(Uuid, &'static str, Vec<IncidentSignal>)> = Vec::new();
+            for (peer, relation) in neighbours.get(node).into_iter().flatten() {
+                if cancel.load(Ordering::Relaxed) {
+                    return Ok(None);
+                }
+                let sigs = self.signals_for(&mut cache, *peer, params, from, to).await;
+                if sigs.is_empty() || !signals_coincide(&own, &sigs, NEIGHBOUR_COINCIDENCE_SECS) {
+                    continue;
+                }
+                peers.push((*peer, relation, sigs));
+            }
+            peers.sort_by(|a, b| {
+                peak_severity(&b.2)
+                    .partial_cmp(&peak_severity(&a.2))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            peers.truncate(NEIGHBOUR_CAP);
+
+            // Cross-signal evidence required: ≥2 signals across ≥2 kinds. A corroborating peer's
+            // signals count toward both — that is what the expansion buys, and why an outage that
+            // only shows one kind of symptom locally can now be recognised.
+            let mut all: Vec<(Option<Uuid>, &IncidentSignal)> =
+                own.iter().map(|s| (None, s)).collect();
+            for (peer, _, sigs) in &peers {
+                all.extend(sigs.iter().map(|s| (Some(*peer), s)));
+            }
+            let kinds: HashSet<&str> = all.iter().map(|(_, s)| s.kind).collect();
+            if all.len() < 2 || kinds.len() < 2 {
+                continue;
+            }
+            all.sort_by_key(|(_, s)| s.at_s);
+            let score = all.iter().map(|(_, s)| s.severity).fold(0.0, f64::max);
+            let earliest = all.first().map_or(to, |(_, s)| s.at_s);
+            // The subject's own entries carry no `node_id`/`node_name`, so the shape stays purely
+            // additive and `format.ts::timelineOf` renders old and new findings unchanged.
+            let timeline: Vec<serde_json::Value> = all
                 .iter()
-                .map(|s| {
-                    serde_json::json!({
+                .map(|(peer, s)| {
+                    let mut v = serde_json::json!({
                         "at": s.at_s, "kind": s.kind, "label": s.label, "severity": s.severity,
+                    });
+                    if let (Some(p), Some(obj)) = (peer, v.as_object_mut()) {
+                        obj.insert("node_id".into(), serde_json::json!(p));
+                        obj.insert("node_name".into(), serde_json::json!(name_lookup(names, p)));
+                    }
+                    v
+                })
+                .collect();
+            let peer_rows: Vec<serde_json::Value> = peers
+                .iter()
+                .map(|(p, relation, sigs)| {
+                    serde_json::json!({
+                        "node_id": p,
+                        "node_name": name_lookup(names, p),
+                        "relation": relation,
+                        "signals": sigs.len(),
                     })
                 })
                 .collect();
@@ -2404,13 +2582,85 @@ impl AnalysisRunner {
                 metric: "incident".to_owned(),
                 kind: "incident_correlate".to_owned(),
                 when_label: rel_label(earliest, to),
-                duration: format!("{} signals", signals.len()),
-                detail: serde_json::json!({ "timeline": timeline }),
+                duration: format!("{} signals", all.len()),
+                detail: serde_json::json!({
+                    "timeline": timeline,
+                    "peers": peer_rows,
+                    "peer_count": peer_rows.len(),
+                }),
             });
         }
         finalize(&mut findings);
         let summary = format!("{} correlated incidents", findings.len());
         Ok(Some((findings, summary)))
+    }
+
+    /// One-hop neighbours per node, restricted to `authorized`, labelled upstream/downstream.
+    ///
+    /// **Not gated on [`crate::topology_mode::TopologyMode`], deliberately.** That gate exists
+    /// because a wrong derived edge *suppresses a real outage*, and silence is unrecoverable;
+    /// `incident_correlate` suppresses nothing, so a wrong edge here only adds a peer to a
+    /// diagnostic — the noisy direction. Gating on it would ship this dead on every default
+    /// deployment (`manual` is the default and is where upgrades land), which is the "built it and
+    /// nobody used it" failure ADR-043 exists to fix. `topology_mode.rs` says the same thing from
+    /// the other side: nothing outside the read endpoint should branch on the mode.
+    ///
+    /// Both graphs are unioned, so a hand-authored `parent_id` counts as an edge alongside a
+    /// derived one. A node with the "never suppress" opt-out gets no parents from
+    /// [`crate::topology_projection::derived_topology`], and that is kept rather than worked
+    /// around: "do not reason about this node's upstream" is an operator statement.
+    async fn incident_neighbourhood(
+        &self,
+        authorized: &HashSet<Uuid>,
+    ) -> HashMap<Uuid, Vec<(Uuid, &'static str)>> {
+        let nodes = match self.nodes.list_nodes().await {
+            Ok(n) => n,
+            Err(e) => {
+                // Degrade to no expansion rather than failing the job: single-node correlation is
+                // exactly the behaviour this analysis had before, so it is a safe floor.
+                tracing::warn!(error = %e, "incident correlation: reading the inventory failed");
+                return HashMap::new();
+            }
+        };
+        let (derived, _) = crate::topology_projection::derived_topology(&self.topo, &nodes).await;
+        let manual = crate::topology_projection::manual_topology(&nodes);
+        one_hop_neighbours(&derived, &manual, authorized)
+    }
+
+    /// `incident_signals` for one node, memoized for the job.
+    ///
+    /// Two things this buys. Each call is one TSDB read plus one event query plus one ClickHouse
+    /// query, and a node is typically both a subject and some other subject's neighbour — so
+    /// without the cache the expansion multiplies the job's I/O by the fan-out. And the cache is
+    /// also the bound: at most [`INCIDENT_CACHE_CAP`] distinct nodes are ever fetched, so a hub
+    /// with a hundred links cannot turn a bounded job into an unbounded one. A node past the cap
+    /// contributes no signals rather than being fetched — the same direction as every other cap
+    /// here, less evidence rather than a longer job.
+    async fn signals_for(
+        &self,
+        cache: &mut HashMap<Uuid, Vec<IncidentSignal>>,
+        node: Uuid,
+        params: &JobParams,
+        from: i64,
+        to: i64,
+    ) -> Vec<IncidentSignal> {
+        if let Some(hit) = cache.get(&node) {
+            return hit.clone();
+        }
+        if cache.len() >= INCIDENT_CACHE_CAP {
+            return Vec::new();
+        }
+        let sigs = self
+            .incident_signals(
+                node,
+                from,
+                to,
+                params.window_secs.max(600),
+                params.sensitivity.max(2.0),
+            )
+            .await;
+        cache.insert(node, sigs.clone());
+        sigs
     }
 
     /// Assemble one node's cross-signal timeline over `[from_s, to_s]`: a reachability metric
@@ -2448,17 +2698,19 @@ impl AnalysisRunner {
                 });
             }
         }
-        // 2) Passive events on the node.
+        // 2) Passive events on the node. Read through the log store when one is configured: with
+        // ADR-024 on, PostgreSQL holds only the alert-linked subset, so a timeline built from it
+        // showed the events that had already alerted and nothing that led up to them.
         let filter = EventFilter {
             since: DateTime::from_timestamp(from_s, 0),
             node_id: Some(node),
             ..Default::default()
         };
-        let events = self
-            .events
-            .list_events(&filter, 20)
-            .await
-            .unwrap_or_default();
+        let events = match self.logs.as_ref() {
+            Some(logs) => logs.search(&filter, &[], 20).await,
+            None => self.events.list_events(&filter, 20).await,
+        }
+        .unwrap_or_default();
         for e in events.iter().take(INCIDENT_EVENT_CAP) {
             signals.push(IncidentSignal {
                 at_s: e.at_unix_ms / 1000,
@@ -2853,6 +3105,78 @@ const TALKER_FLOOR: u64 = 1_000_000;
 const DEST_FLOOR: u64 = 500_000;
 /// Hard node cap for the per-node multi-store incident correlation.
 const INCIDENT_NODE_CAP: usize = 20;
+/// Distinct nodes whose signals one incident job may fetch, subjects and neighbours together.
+///
+/// [`INCIDENT_NODE_CAP`] subjects each expanding to [`NEIGHBOUR_CAP`] peers is the worst case, and
+/// this is what stops that arithmetic from being unbounded when the graph is dense.
+const INCIDENT_CACHE_CAP: usize = INCIDENT_NODE_CAP * (NEIGHBOUR_CAP + 1);
+/// How close a neighbour's signal must land to one of the subject's to count as corroboration.
+///
+/// One [`EVENT_BUCKET_SECS`], because that is already the resolution at which this codebase treats
+/// passive events as contemporaneous. Wider would let a chatty upstream corroborate anything.
+const NEIGHBOUR_COINCIDENCE_SECS: i64 = EVENT_BUCKET_SECS;
+/// Most neighbours carried on one incident finding, after sorting by peak severity.
+///
+/// A core switch can have hundreds of links; an incident report naming hundreds of peers is not a
+/// report. ⚠️ This number is a guess until the derivation runs against a real multi-vendor fleet —
+/// the lab cannot verify a single derived edge (ADR-043).
+const NEIGHBOUR_CAP: usize = 4;
+
+/// Whether a peer's signals corroborate the subject's: at least one peer signal lands within
+/// `window_s` of a subject signal.
+///
+/// Pure, so the correlation rule is testable without any store — the rest of `incident_correlate`
+/// needs three of them. Coincidence is required rather than mere adjacency in the graph: without
+/// it, one noisy upstream manufactures an incident for every quiet device hanging off it.
+fn peak_severity(signals: &[IncidentSignal]) -> f64 {
+    signals.iter().map(|s| s.severity).fold(0.0, f64::max)
+}
+
+/// The one-hop neighbourhood of every authorized node, from the union of the two graphs.
+///
+/// ⚠️ **The scope rule lives here, and it is the security-relevant part of the expansion**: a peer
+/// appears only if it is itself in `authorized`. Pure, so that rule is testable without a database
+/// — which is the point, because the failure it prevents is silent. See
+/// `incident_neighbourhood` for why both graphs are unioned and why the topology mode is not a gate.
+fn one_hop_neighbours(
+    derived: &Topology,
+    manual: &Topology,
+    authorized: &HashSet<Uuid>,
+) -> HashMap<Uuid, Vec<(Uuid, &'static str)>> {
+    let mut out: HashMap<Uuid, Vec<(Uuid, &'static str)>> = HashMap::new();
+    for &node in authorized {
+        let id = NodeId::from(node);
+        let mut seen: HashSet<Uuid> = HashSet::new();
+        let mut peers: Vec<(Uuid, &'static str)> = Vec::new();
+        // Upstream first, so a node that is somehow both keeps the more useful label.
+        for (set, relation) in [
+            (derived.parents_of(id), "upstream"),
+            (manual.parents_of(id), "upstream"),
+            (derived.children_of(id), "downstream"),
+            (manual.children_of(id), "downstream"),
+        ] {
+            for peer in set {
+                let peer = peer.as_uuid();
+                if peer != node && authorized.contains(&peer) && seen.insert(peer) {
+                    peers.push((peer, relation));
+                }
+            }
+        }
+        if !peers.is_empty() {
+            out.insert(node, peers);
+        }
+    }
+    out
+}
+
+/// Whether a peer's signals corroborate the subject's: at least one peer signal lands within
+/// `window_s` of a subject signal.
+fn signals_coincide(subject: &[IncidentSignal], peer: &[IncidentSignal], window_s: i64) -> bool {
+    subject.iter().any(|s| {
+        peer.iter()
+            .any(|p| (p.at_s - s.at_s).abs() <= window_s.max(0))
+    })
+}
 
 /// Per-node split of event-bucket counts for `event_storm`: (baseline counts, recent (bucket, count)).
 type StormBuckets = (Vec<f64>, Vec<(i64, f64)>);
@@ -3328,6 +3652,250 @@ mod tests {
                 }
             );
         }
+    }
+
+    // ── incident_correlate neighbour expansion (ADR-022 Increment 2) ────────────────────────────
+
+    fn sig(at_s: i64, kind: &'static str, severity: f64) -> IncidentSignal {
+        IncidentSignal {
+            at_s,
+            severity,
+            kind,
+            label: "x".to_owned(),
+        }
+    }
+
+    /// Coincidence is what stops a chatty upstream from manufacturing an incident for every quiet
+    /// device hanging off it — adjacency in the graph alone is not evidence.
+    #[test]
+    fn signals_coincide_only_within_the_window() {
+        let subject = [sig(1_000, "metric", 1.0)];
+        assert!(signals_coincide(&subject, &[sig(1_100, "event", 1.0)], 300));
+        assert!(signals_coincide(&subject, &[sig(900, "event", 1.0)], 300));
+        // Exactly at the boundary counts; one second past it does not.
+        assert!(signals_coincide(&subject, &[sig(1_300, "event", 1.0)], 300));
+        assert!(!signals_coincide(
+            &subject,
+            &[sig(1_301, "event", 1.0)],
+            300
+        ));
+        assert!(!signals_coincide(
+            &subject,
+            &[sig(9_999, "event", 1.0)],
+            300
+        ));
+        // Either side empty is no corroboration, never a vacuous yes.
+        assert!(!signals_coincide(&subject, &[], 300));
+        assert!(!signals_coincide(&[], &[sig(1_000, "event", 1.0)], 300));
+        // Any pair inside the window is enough, not every pair.
+        assert!(signals_coincide(
+            &subject,
+            &[sig(9_999, "event", 1.0), sig(1_050, "event", 1.0)],
+            300
+        ));
+    }
+
+    /// **The security test.** A neighbour is consulted, scored and named only if it is itself in
+    /// the job's authorized node set.
+    ///
+    /// The weaker rule — consult anything, name only what is visible — leaks by inference: the
+    /// finding's score, its signal count, and whether it is emitted at all would move with data the
+    /// caller cannot see. This is the analogue of `TopoLinkRepo::list_page`'s "both endpoints
+    /// visible", and `ScopeKind::Group` is an inventory-folder subtree, never a topology
+    /// neighbourhood — so a peer is not in scope merely by being adjacent.
+    #[test]
+    fn a_neighbour_outside_the_job_scope_is_never_consulted() {
+        let (mine, theirs) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut derived = Topology::new();
+        // `theirs` is `mine`'s upstream, but the caller cannot see it.
+        derived.add_dependency(NodeId::from(mine), NodeId::from(theirs));
+
+        let authorized: HashSet<Uuid> = [mine].into_iter().collect();
+        let n = one_hop_neighbours(&derived, &Topology::new(), &authorized);
+        assert!(
+            !n.contains_key(&mine),
+            "an out-of-scope neighbour must not appear at all: {n:?}"
+        );
+
+        // …and with both endpoints authorized, the edge is used and labelled from the subject's
+        // point of view.
+        let authorized: HashSet<Uuid> = [mine, theirs].into_iter().collect();
+        let n = one_hop_neighbours(&derived, &Topology::new(), &authorized);
+        assert_eq!(
+            n.get(&mine).map(Vec::as_slice),
+            Some(&[(theirs, "upstream")][..])
+        );
+        assert_eq!(
+            n.get(&theirs).map(Vec::as_slice),
+            Some(&[(mine, "downstream")][..])
+        );
+    }
+
+    /// The manual graph counts as evidence alongside the derived one, and a node appearing in both
+    /// is listed once. This is what makes the expansion useful on a deployment still in `manual`
+    /// topology mode — which is the default, and where upgrades land.
+    #[test]
+    fn hand_authored_and_derived_edges_are_unioned_without_duplicates() {
+        let (child, parent) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let mut derived = Topology::new();
+        derived.add_dependency(NodeId::from(child), NodeId::from(parent));
+        let mut manual = Topology::new();
+        manual.add_dependency(NodeId::from(child), NodeId::from(parent));
+
+        let authorized: HashSet<Uuid> = [child, parent].into_iter().collect();
+        let n = one_hop_neighbours(&derived, &manual, &authorized);
+        assert_eq!(n[&child], vec![(parent, "upstream")], "listed twice");
+
+        // A manual-only edge still counts, so the feature is not dead in `manual` mode.
+        let n = one_hop_neighbours(&Topology::new(), &manual, &authorized);
+        assert_eq!(n[&child], vec![(parent, "upstream")]);
+    }
+
+    /// A self-edge is not a neighbour, and a node with no edges gets no entry at all (rather than
+    /// an empty vector the caller would have to distinguish).
+    #[test]
+    fn a_node_is_not_its_own_neighbour() {
+        let a = Uuid::from_u128(1);
+        let mut topo = Topology::new();
+        topo.add_dependency(NodeId::from(a), NodeId::from(a));
+        let authorized: HashSet<Uuid> = [a].into_iter().collect();
+        assert!(one_hop_neighbours(&topo, &Topology::new(), &authorized).is_empty());
+        assert!(one_hop_neighbours(&Topology::new(), &Topology::new(), &authorized).is_empty());
+    }
+
+    /// The fan-out bound. Twenty subjects each expanding to four peers is the worst case, and the
+    /// cache cap is what keeps `incident_signals`' three-store fetch from multiplying by it.
+    #[test]
+    fn the_incident_cache_bounds_the_worst_case_fan_out() {
+        // Every subject fits, plus room for each one's peers.
+        assert_eq!(INCIDENT_CACHE_CAP, INCIDENT_NODE_CAP * (NEIGHBOUR_CAP + 1));
+        // One event bucket: the resolution at which this codebase already treats passive events as
+        // contemporaneous. Widening it would let an unrelated upstream corroborate anything.
+        assert_eq!(NEIGHBOUR_COINCIDENCE_SECS, EVENT_BUCKET_SECS);
+    }
+
+    /// No `run_*` may read an event aggregate straight off `self.events`.
+    ///
+    /// This is the guard for the defect ADR-022 Increment 2 fixes. With a log store configured,
+    /// PostgreSQL holds only alert-linked rows (ADR-024), so `self.events.event_*` answers about a
+    /// subset — and `rule_gap`, which looks for *unmatched* events, about the empty set. Only the
+    /// four `agg_*` routers may touch a store; every analysis goes through them.
+    ///
+    /// Same shape as `needs_flow_tier_matches_…` above, including the runtime-built needles: a
+    /// literal `self.events.event_counts_by_bucket` written here would match itself in the file and
+    /// pass forever.
+    #[test]
+    fn every_event_analysis_reads_through_the_store_router() {
+        /// Whether a trimmed line opens a function, under any visibility spelling.
+        fn is_fn_definition(t: &str) -> bool {
+            let rest = t
+                .strip_prefix("pub(crate) ")
+                .or_else(|| t.strip_prefix("pub(super) "))
+                .or_else(|| t.strip_prefix("pub "))
+                .unwrap_or(t);
+            let rest = rest.strip_prefix("async ").unwrap_or(rest);
+            rest.starts_with("fn ")
+        }
+
+        let src = include_str!("analysis.rs");
+        // The aggregates that have a log-store twin. `event_flap_stats` is deliberately absent:
+        // every action it counts is alert-linked, so PostgreSQL is complete for it (pinned by
+        // `events::tests::event_flap_only_counts_rows_postgresql_keeps`).
+        let routed = [
+            "event_counts_by_bucket",
+            "event_severity_counts",
+            "event_unmatched_signatures",
+            "event_auth_sources",
+        ];
+        let direct: Vec<String> = routed
+            .iter()
+            .map(|m| format!("{}{}", "self.events.", m))
+            .collect();
+
+        let mut offenders: Vec<String> = Vec::new();
+        let mut bodies_seen = 0usize;
+        let mut current_fn: Option<String> = None;
+        for line in src.lines() {
+            let t = line.trim();
+            if let Some(rest) = t.strip_prefix("async fn run_") {
+                current_fn = rest.split('(').next().map(|f| format!("run_{f}"));
+                bodies_seen += 1;
+            } else if is_fn_definition(t) {
+                // Left the `run_*` body. Every visibility spelling counts as a boundary, not just
+                // a bare `async fn` — `pub(crate) async fn incident_signals` sits between two
+                // `run_*` bodies, and missing it would attribute its lines to the previous one.
+                current_fn = None;
+            }
+            if let Some(f) = &current_fn {
+                if direct.iter().any(|n| line.contains(n.as_str())) {
+                    offenders.push(format!("{f}: {}", t.trim()));
+                }
+            }
+        }
+        assert!(
+            bodies_seen >= 15,
+            "the source scan stopped matching `run_*` bodies (saw {bodies_seen})"
+        );
+        assert!(
+            offenders.is_empty(),
+            "these analyses read PostgreSQL directly and will answer from the alert-linked subset \
+             when a log store is configured — route them through the `agg_*` helpers: {offenders:#?}"
+        );
+    }
+
+    /// The push-down is what makes a group-scoped `rule_gap` correct.
+    ///
+    /// Before it, the analysis grouped fleet-wide and then kept a signature only if its
+    /// *representative* node (the alphabetically smallest UUID) was in scope — so a signature
+    /// genuinely occurring inside the caller's group disappeared whenever some out-of-group node
+    /// sorted lower. Asserted on the filter rather than end-to-end because building a scoped run
+    /// needs a database; what can be wrong here is which nodes reach the store.
+    #[test]
+    fn a_scoped_analysis_restricts_at_the_store_not_by_a_representative_node() {
+        let in_group = Uuid::from_u128(0xFFFF);
+        let scoped = JobParams {
+            tool: AnalysisTool::RuleGap,
+            scope_kind: ScopeKind::Group,
+            scope_id: None,
+            scope_label: String::new(),
+            window_secs: 3600,
+            baseline_secs: 86_400,
+            sensitivity: 3.0,
+            depth: "standard".to_owned(),
+            family: "all".to_owned(),
+            notify: false,
+        };
+        let f = AnalysisRunner::scoped_window(&scoped, &[in_group], 100, 200);
+        assert_eq!(
+            f.visible_node_ids.as_deref(),
+            Some(&[in_group][..]),
+            "a scoped job must restrict at the store"
+        );
+        assert_eq!(f.since.map(|t| t.timestamp()), Some(100));
+        assert_eq!(f.until.map(|t| t.timestamp()), Some(200));
+
+        // An `All`-scope job restricts to nothing rather than materialising the fleet into an
+        // `IN` list that means "everything".
+        let all = JobParams {
+            tool: AnalysisTool::RuleGap,
+            scope_kind: ScopeKind::All,
+            scope_id: None,
+            scope_label: String::new(),
+            window_secs: 3600,
+            baseline_secs: 86_400,
+            sensitivity: 3.0,
+            depth: "standard".to_owned(),
+            family: "all".to_owned(),
+            notify: false,
+        };
+        assert!(AnalysisRunner::scoped_window(&all, &[in_group], 100, 200)
+            .visible_node_ids
+            .is_none());
+
+        // An empty scope must stay `Some(vec![])` — "no visible nodes", which both backends match
+        // nothing for. Collapsing it to `None` is the fail-open inversion.
+        let empty = AnalysisRunner::scoped_window(&scoped, &[], 100, 200);
+        assert_eq!(empty.visible_node_ids.as_deref(), Some(&[][..]));
     }
 
     #[test]

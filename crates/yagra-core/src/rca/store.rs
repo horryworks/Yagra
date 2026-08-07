@@ -355,6 +355,22 @@ impl RcaRepo {
         row.as_ref().map(row_to_report).transpose()
     }
 
+    /// Drop generated reports older than `retention_secs`.
+    ///
+    /// `retention::Subject::RcaReports`. Each row carries a full JSONB body, and nothing pruned
+    /// them before. Note what pruning costs here that it does not cost elsewhere: this table is
+    /// also the digest cache [`Self::latest_for_digest`] reads, so deleting a row means the next
+    /// question about that evidence is answered by another (billed) LLM call rather than a lookup.
+    pub async fn prune_reports(&self, retention_secs: i64) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM rca_reports WHERE generated_at < now() - make_interval(secs => $1)",
+        )
+        .bind(retention_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Insert a generated report and return it as stored.
     pub async fn insert(&self, new: &NewReport<'_>) -> anyhow::Result<RcaReport> {
         let id = Uuid::new_v4();

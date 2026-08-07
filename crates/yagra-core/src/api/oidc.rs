@@ -110,6 +110,14 @@ async fn oidc_authorize(State(st): State<ApiState>, oidc: Oidc) -> ApiResult<Jso
     Ok(Json(AuthorizeUrl { authorize_url: url }))
 }
 
+/// Audit action for a completed or refused SSO login.
+const AUDIT_OIDC: &str = "auth.oidc";
+/// Audit action for the one refusal that carries a diagnosis: the IdP delivered the groups claim
+/// out-of-band. A **suffix** of [`AUDIT_OIDC`] on purpose — the LDAP path set the precedent
+/// (`auth.login.ldap_unavailable` beside `auth.login`), and it keeps a prefix query over the
+/// existing action finding the new rows.
+const AUDIT_OIDC_OVERAGE: &str = "auth.oidc.group_overage";
+
 /// OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct OidcCallbackBody {
@@ -141,13 +149,42 @@ async fn oidc_callback(
             .await
         {
             Ok(login) => login,
-            Err(e) => {
-                // Bad or expired state, code-exchange failure, ID-token validation failure, and "no
-                // group maps to a role" all land here and all answer the same thing. Which one it
-                // was stays server-side: the difference is exactly what an attacker probing the
-                // callback would want to learn.
+            // Bad or expired state, code-exchange failure, ID-token validation failure, and "no
+            // group maps to a role" all land here and all answer the same thing. Which one it
+            // was stays server-side: the difference is exactly what an attacker probing the
+            // callback would want to learn.
+            Err(crate::oidc::OidcError::Other(e)) => {
                 tracing::warn!(error = %e, "OIDC login rejected");
-                audit_record(&admin.audit, "(oidc)", "auth.oidc", 401).await;
+                audit_record(&admin.audit, "(oidc)", AUDIT_OIDC, 401).await;
+                return Err(ApiError::unauthorized_with(
+                    "oidc_denied",
+                    "SSO login could not be completed",
+                ));
+            }
+            // Group overage is the one refusal an admin cannot diagnose from the outside: before
+            // this branch existed it was not a refusal at all — the groups read as empty and the
+            // login silently took `default_role`. The client still gets the identical 401, but the
+            // audit log gets its own action *and the real username*, because "an admin quietly
+            // became a viewer" is unactionable without knowing which admin.
+            //
+            // Naming the user here does not help a prober: reaching this point requires a code
+            // exchange plus an ID token whose signature, issuer, audience, expiry and nonce all
+            // verified against the configured IdP. Nobody arrives here by guessing.
+            Err(crate::oidc::OidcError::GroupOverage { username, claim }) => {
+                // The remediation belongs in the log, where an admin is actually looking. Note what
+                // is *not* logged: `_claim_sources` carries a Graph URL embedding the user's
+                // directory object id, so the claim name is as far as this goes.
+                tracing::warn!(
+                    user = %username,
+                    claim = %claim,
+                    "SSO login refused: the IdP delivered the groups claim out-of-band (group \
+                     overage). Yagra reads groups from the ID token only — configure the app \
+                     registration to emit only the groups assigned to it, or use a group-filtering \
+                     claim."
+                );
+                metrics::counter!("yagra_oidc_login_total", "result" => "group_overage")
+                    .increment(1);
+                audit_record(&admin.audit, &username, AUDIT_OIDC_OVERAGE, 401).await;
                 return Err(ApiError::unauthorized_with(
                     "oidc_denied",
                     "SSO login could not be completed",
@@ -190,7 +227,7 @@ async fn oidc_callback(
                 }
                 crate::auth::ExternalUpsert::Ok(..) => unreachable!("matched above"),
             }
-            audit_record(&admin.audit, &login.username, "auth.oidc", 401).await;
+            audit_record(&admin.audit, &login.username, AUDIT_OIDC, 401).await;
             return Err(ApiError::unauthorized_with(
                 "oidc_denied",
                 "SSO login could not be completed",
@@ -199,7 +236,7 @@ async fn oidc_callback(
     };
     let role = principal.role;
     let token = st.sessions.issue(user_id, principal, &login.username);
-    audit_record(&admin.audit, &login.username, "auth.oidc", 200).await;
+    audit_record(&admin.audit, &login.username, AUDIT_OIDC, 200).await;
     Ok(Json(OidcSession { token, role }))
 }
 
@@ -380,6 +417,15 @@ mod tests {
             .await
             .unwrap()
             .status()
+    }
+
+    // The overage refusal gets its own audit action so an admin can find it, but an existing
+    // prefix query over the SSO action must keep matching it — that is why it is a suffix and not a
+    // sibling like `auth.oidc_group_overage`.
+    #[test]
+    fn the_overage_audit_action_extends_the_sso_action() {
+        assert!(AUDIT_OIDC_OVERAGE.starts_with(AUDIT_OIDC));
+        assert_ne!(AUDIT_OIDC_OVERAGE, AUDIT_OIDC);
     }
 
     #[tokio::test]

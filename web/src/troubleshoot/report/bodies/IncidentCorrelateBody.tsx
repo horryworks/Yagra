@@ -25,12 +25,13 @@ import {
   IncidentTimeline,
   LANES,
   laneOf,
+  signalLabel,
   signalTone,
   type Lane,
   type TimelineSignal,
 } from '../IncidentTimeline';
 import { Chips, EmptyList, ReportToolbar } from '../kit';
-import { sevOf, sortCommon } from '../format';
+import { peerCountOf, sevOf, sortCommon } from '../format';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
@@ -74,6 +75,9 @@ function IncidentCard({ finding }: { finding: AnalysisFinding }) {
   if (!signals.length) return null;
   const from = signals[0].at;
   const to = signals[signals.length - 1].at;
+  // Reported beside the signal count, not folded into it: that count now includes a corroborating
+  // neighbour's signals, so without this the card would overstate how much happened on this node.
+  const peers = peerCountOf(finding);
 
   return (
     <div className={`tsr-incident sev-${sevOf(finding)}`}>
@@ -84,6 +88,9 @@ function IncidentCard({ finding }: { finding: AnalysisFinding }) {
         </span>
         <span className="tsr-incident-meta">
           {t('report.incident_correlate.signals', { count: signals.length })} ·{' '}
+          {peers > 0 && (
+            <>{t('report.incident_correlate.peers', { count: peers })} ·{' '}</>
+          )}
           {t('report.incident_correlate.began', { time: relTime(from * 1000) })}
         </span>
       </div>
@@ -103,7 +110,7 @@ function IncidentCard({ finding }: { finding: AnalysisFinding }) {
             </span>
             <span className="tsr-signal-time mono">{formatTimestamp(s.at * 1000)}</span>
             {/* Technical identifiers from the engine — rendered verbatim in mono, not localized. */}
-            <span className="tsr-signal-label mono">{s.label}</span>
+            <span className="tsr-signal-label mono">{signalLabel(s)}</span>
           </li>
         ))}
       </ol>

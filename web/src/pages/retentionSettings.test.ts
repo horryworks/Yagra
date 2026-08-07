@@ -21,6 +21,7 @@ const saved: RetentionValues = {
   unmatched_event_hours: 24,
   report_run_days: 90,
   flow_days: 30,
+  diagnostic_days: 90,
 };
 
 function form(over: Partial<RetentionForm> = {}): RetentionForm {
@@ -128,6 +129,7 @@ describe('parseRetentionForm', () => {
       unmatched_event_hours: String(MAX_HOURS),
       report_run_days: String(MAX_DAYS),
       flow_days: '1',
+      diagnostic_days: String(MAX_DAYS),
     });
     expect(r.ok).toBe(true);
   });

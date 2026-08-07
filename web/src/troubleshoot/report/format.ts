@@ -303,3 +303,15 @@ export function splitNotices<T extends { kind: string }>(
     notices: rows.filter((f) => f.kind === 'info'),
   };
 }
+
+/** How many topology neighbours corroborated an incident (ADR-022 Increment 2).
+ *
+ *  Defensive on purpose, and additive: a finding written before the neighbour expansion has no
+ *  `peer_count` key at all and answers 0, which is exactly what it meant. Reported separately from
+ *  the signal count because that count now *includes* peers — an incident whose evidence is mostly
+ *  a neighbour's reads very differently from one confined to the node, and the card would otherwise
+ *  claim more local activity than there was. */
+export function peerCountOf(f: { detail?: unknown }): number {
+  const raw = (f.detail as { peer_count?: unknown } | null | undefined)?.peer_count;
+  return typeof raw === 'number' && Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0;
+}

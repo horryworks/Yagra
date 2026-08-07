@@ -583,6 +583,8 @@
       "mix": "インシデント全体のシグナル構成",
       "signals_other": "{{count}} 件のシグナル",
       "began": "{{time}}に開始",
+      "peers_one": "隣接 {{count}} 台",
+      "peers_other": "隣接 {{count}} 台",
       "lane": {
         "metric": "メトリクス",
         "event": "イベント",

@@ -226,7 +226,8 @@
         "alert_linked_days": "アラート連動データ",
         "unmatched_event_hours": "未マッチイベント",
         "report_run_days": "レポート実行",
-        "flow_days": "トラフィックフロー"
+        "flow_days": "トラフィックフロー",
+        "diagnostic_days": "診断データ"
       },
       "subject": {
         "alert_history": "アラート履歴",
@@ -240,7 +241,11 @@
         "metrics": "メトリクス",
         "audit_log": "監査ログ",
         "neighbor_changes": "隣接の変更",
-        "l3_changes": "インタフェースアドレスの変更"
+        "l3_changes": "インタフェースアドレスの変更",
+        "monitoring_gaps": "監視の空白",
+        "analysis_runs": "解析の実行",
+        "rca_reports": "AI 根本原因レポート",
+        "interfaces": "インタフェース対応表"
       },
       "err": {
         "range": "{{name}}: {{min}}〜{{max}} の範囲で整数を入力してください。",

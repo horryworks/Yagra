@@ -232,7 +232,8 @@
         "alert_linked_days": "Alert-linked data",
         "unmatched_event_hours": "Unmatched events",
         "report_run_days": "Report runs",
-        "flow_days": "Traffic flows"
+        "flow_days": "Traffic flows",
+        "diagnostic_days": "Diagnostic data"
       },
       "subject": {
         "alert_history": "Alert history",
@@ -246,7 +247,11 @@
         "metrics": "Metrics",
         "audit_log": "Audit log",
         "neighbor_changes": "Neighbor changes",
-        "l3_changes": "Interface address changes"
+        "l3_changes": "Interface address changes",
+        "monitoring_gaps": "Monitoring gaps",
+        "analysis_runs": "Analysis runs",
+        "rca_reports": "AI root-cause reports",
+        "interfaces": "Interface map"
       },
       "err": {
         "range": "{{name}}: enter a whole number between {{min}} and {{max}}.",

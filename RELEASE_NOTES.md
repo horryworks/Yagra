@@ -76,6 +76,49 @@
     reach one, which is a new bus message rather than a read. Poller heartbeat counters, poll-loop
     statistics and host resources are in the bundle already.
 
+- **Troubleshoot's passive-event analyses read the event log store when one is configured.** They
+  had been reading PostgreSQL directly, which holds only alert-linked rows once VictoriaLogs is
+  enabled (ADR-024) — so they were answering about the subset of events that had *already* alerted.
+  `rule_gap` was the extreme case: its entire purpose is finding high-volume **unmatched** events,
+  and unmatched events never reach PostgreSQL on a log-store deployment, so it was structurally
+  guaranteed to return nothing on exactly the deployments that generate enough syslog to need it.
+  - `event_storm`, `severity_shift`, `auth_probe` and `incident_correlate`'s event lane now count
+    the full firehose rather than the alert-linked subset. The MCP `event_stats` tool, which was
+    built from three of the same queries, inherits the corrected answer.
+  - `event_flap` is unchanged and was already complete: every action it counts is alert-linked, so
+    PostgreSQL keeps all of them either way. That is now pinned by a test rather than a comment.
+  - A log-store failure fails the analysis rather than falling back to PostgreSQL. Falling back
+    would answer from the subset again with nothing to say so, which is the defect being fixed.
+- **`incident_correlate` now correlates across topology neighbours.** An incident is assembled from
+  a node *and* its directly-linked upstream/downstream peers when their signals coincide in time
+  (within five minutes), so a failed uplink reads as one incident with its downstream peers named
+  instead of a row of unrelated single-node findings. Each finding lists the corroborating
+  neighbours, and a peer's entries in the timeline are labelled with the node they came from.
+  - It uses the auto-derived connectivity graph **and** hand-authored parents, regardless of the
+    topology mode. The mode gate exists because a wrong derived edge would *suppress* a real alert
+    and silence is unrecoverable; a diagnostic that names an extra peer only errs toward noise. So
+    this works on a deployment still in `manual` mode, which is the default.
+  - A node still needs a signal of its own to produce a finding — neighbours corroborate, they do
+    not manufacture. Peers are capped per finding, and a node whose alerts are opted out of
+    suppression is not reasoned about as anyone's upstream.
+  - An incident spanning two devices produces a finding on each, naming the other. Both devices are
+    affected, and the per-node attribution keeps the report's node counts honest.
+- **Four previously unbounded tables now declare a retention policy (ADR-040).** Troubleshoot
+  analysis runs and their findings, generated AI root-cause reports, and monitoring-gap records are
+  pruned on a schedule; the interface map is declared kept-until-node-deletion, with its reason. The
+  first three had grown without limit since they were introduced — migration 0026 says "no auto-trim
+  yet" in as many words, and scheduled analyses have been writing to that table on a cadence since.
+  - A new **Diagnostic data** window (default 90 days) in Settings ▸ System settings covers analysis
+    runs and RCA reports. It is deliberately separate from "Report runs": a window's *name* must not
+    silently govern a second kind of data.
+  - Monitoring gaps follow the alert-linked window instead, because a gap explains an absence of
+    alerts and is only readable beside the history it explains.
+  - The interface map is **not** pruned by age, and the reason is in the policy table: an orphaned
+    `(node, ifIndex)` row is a stale identity rather than old data, and `last_seen` only advances
+    while interface collection is running — so an age-based sweep would erase the names and speeds
+    of every interface on a node whose polling was merely paused. Those rows disappear with their
+    node. The real fix belongs in the poller and is a separate change.
+
 ### Improvements
 - **`GET /api/v1/mib-catalog` accepts `limit` and is now bounded.** The query had no row cap on
   either edge, which was survivable while its only caller was a settings screen and stopped being so
@@ -99,6 +142,31 @@
   start time and the backend running the query sets its own `state_change` after it, so the
   `active` row reliably came back a few milliseconds below zero — an artefact of measuring from
   inside, not a fact about the deployment.
+- **A group-scoped `rule_gap` or `auth_probe` restricts at the store rather than afterwards.** Both
+  used to group fleet-wide and then keep a row only if its *representative* node was in scope, so a
+  signature genuinely occurring inside your group vanished whenever some node outside it happened to
+  sort lower. `auth_probe` additionally hid every auth-failure source that mapped to no inventory
+  node — which is exactly what an external prober looks like. **Expect more rows than before**; the
+  extra ones were always yours.
+- `PUT /api/v1/settings/retention` gained `diagnostic_days`. It is optional, so a client sending the
+  previous four-field body keeps working — but note that such a body is a full replace and therefore
+  resets this window to the default (90). The WebUI always sends every field.
+
+### Security
+- **An OIDC login is now refused when the IdP delivers the groups claim out-of-band** — Microsoft
+  Entra's "group overage", where a user in more than roughly 200 groups gets `_claim_names` /
+  `_claim_sources` (or `hasgroups`) *instead of* their groups. Yagra reads groups from the ID token
+  only, so it previously saw an empty group list and fell through to the provider's `default_role`.
+  That is a **silent role change**, not a failure: an administrator signed in as whatever the
+  default was, and where the default is Admin, a user who should have been a viewer signed in as an
+  administrator. Neither left any trace an operator could find.
+  - The client still receives the same generic 401 as every other SSO refusal — the callback
+    deliberately does not tell a stranger which step failed. The audit log records
+    `auth.oidc.group_overage` **with the username** (reaching this branch requires a verified ID
+    token, so there is no prober to help), and the core log names the claim and the remediation.
+  - ⚠️ **If your tenant relies on this fallback, affected users will stop being able to sign in.**
+    Configure the app registration to emit only the groups assigned to it, or use a group-filtering
+    claim. LDAP role mapping is unchanged.
 
 ## v0.1.22 — HTTPS by default, a network map that draws itself, and directory sign-in
 

@@ -199,6 +199,22 @@ impl PollerRepo {
         Ok(())
     }
 
+    /// Drop recorded gaps older than `retention_secs`.
+    ///
+    /// `retention::Subject::MonitoringGaps`, on the **alert-linked** window rather than a window of
+    /// its own: a gap says "no alert fired here because monitoring was blind", which is only
+    /// readable beside the alert history it explains. A poller that flaps writes one row per
+    /// transition, so before this nothing bounded the table.
+    pub async fn prune_monitoring_gaps(&self, retention_secs: i64) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM monitoring_gaps WHERE recorded_at < now() - make_interval(secs => $1)",
+        )
+        .bind(retention_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
     /// The most recent monitoring gaps, newest first (capped). Powers the Pollers page's "Recent
     /// monitoring gaps" section.
     pub async fn list_monitoring_gaps(&self, limit: i64) -> anyhow::Result<Vec<MonitoringGapRow>> {

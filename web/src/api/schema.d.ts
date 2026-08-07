@@ -7315,6 +7315,12 @@ export interface components {
             alert_linked_days: number;
             /**
              * Format: int32
+             * @description Days to keep on-demand diagnostics: Troubleshoot analysis runs with their findings, and
+             *     generated AI root-cause reports. Optional — omitting it sets the default (90).
+             */
+            diagnostic_days?: number;
+            /**
+             * Format: int32
              * @description Days to keep traffic-flow records, applied as a ClickHouse table TTL.
              */
             flow_days: number;

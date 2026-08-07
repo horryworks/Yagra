@@ -48,6 +48,18 @@ pub(crate) struct RetentionValues {
     pub report_run_days: u32,
     /// Days to keep traffic-flow records, applied as a ClickHouse table TTL.
     pub flow_days: u32,
+    /// Days to keep on-demand diagnostics: Troubleshoot analysis runs with their findings, and
+    /// generated AI root-cause reports. Optional — omitting it sets the default (90).
+    // Defaulted because it was added after the first release of this endpoint: without it, a client
+    // still sending the original four-field body would start getting a 400. The cost of the default
+    // is the other direction and is documented in the release notes — a full-replace PUT from an
+    // old client silently resets this window to 90.
+    #[serde(default = "default_diagnostic_days")]
+    pub diagnostic_days: u32,
+}
+
+fn default_diagnostic_days() -> u32 {
+    retention::DEFAULT_DIAGNOSTIC_DAYS
 }
 
 /// One line of the retention table.
@@ -177,6 +189,7 @@ async fn update_retention(
         unmatched_event_hours: body.unmatched_event_hours,
         report_run_days: body.report_run_days,
         flow_days: body.flow_days,
+        diagnostic_days: body.diagnostic_days,
     };
     if !next.in_bounds() {
         return Err(ApiError::bad_request(
@@ -235,7 +248,13 @@ fn store_configured(st: &ApiState, subject: Subject) -> bool {
         | Subject::L3Changes
         | Subject::EventsMatched
         | Subject::EventsUnmatched
+        | Subject::MonitoringGaps
         | Subject::ReportRuns
+        | Subject::AnalysisRuns
+        // Rows even when the LLM is unconfigured: the table can still hold reports generated
+        // before it was switched off, and they are pruned on the same window either way.
+        | Subject::RcaReports
+        | Subject::Interfaces
         | Subject::AuditLog
         | Subject::Metrics => true,
     }
@@ -247,6 +266,7 @@ fn to_values(s: &RetentionSettings) -> RetentionValues {
         unmatched_event_hours: s.unmatched_event_hours,
         report_run_days: s.report_run_days,
         flow_days: s.flow_days,
+        diagnostic_days: s.diagnostic_days,
     }
 }
 
@@ -293,11 +313,28 @@ mod tests {
         // public_dashboard opens reads only; a write guard stays shut.
         let resp = app(public_state())
             .oneshot(put_body(
-                r#"{"alert_linked_days":90,"unmatched_event_hours":24,"report_run_days":90,"flow_days":30}"#,
+                r#"{"alert_linked_days":90,"unmatched_event_hours":24,"report_run_days":90,"flow_days":30,"diagnostic_days":90}"#,
             ))
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    /// `diagnostic_days` landed after this endpoint shipped, so a client written against the
+    /// original four-field body must keep working (ADR-017). The cost is stated rather than hidden:
+    /// such a client's full-replace PUT resets the window to the default, which is why the release
+    /// notes call it out instead of the code pretending the field is free.
+    #[test]
+    fn an_older_clients_body_still_parses_and_takes_the_default() {
+        let old = r#"{"alert_linked_days":30,"unmatched_event_hours":6,"report_run_days":45,"flow_days":14}"#;
+        let v: RetentionValues = serde_json::from_str(old).expect("an N-1 body must still parse");
+        assert_eq!(v.alert_linked_days, 30);
+        assert_eq!(v.diagnostic_days, retention::DEFAULT_DIAGNOSTIC_DAYS);
+
+        // …and an explicit value is honoured, so the default is a fallback and not an override.
+        let new = r#"{"alert_linked_days":30,"unmatched_event_hours":6,"report_run_days":45,"flow_days":14,"diagnostic_days":7}"#;
+        let v: RetentionValues = serde_json::from_str(new).unwrap();
+        assert_eq!(v.diagnostic_days, 7);
     }
 
     /// The bounds live in `retention`, and this is the contract the UI branches on: an out-of-range

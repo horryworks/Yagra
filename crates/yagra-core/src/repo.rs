@@ -1288,7 +1288,7 @@ impl NodeRepo {
         let fallback = RetentionSettings::default();
         let Ok(Some(row)) = sqlx::query(
             "SELECT alert_linked_retention_days, unmatched_event_retention_hours, \
-                    report_run_retention_days, flow_retention_days \
+                    report_run_retention_days, flow_retention_days, diagnostic_retention_days \
              FROM app_settings WHERE id = TRUE",
         )
         .fetch_optional(&self.pool)
@@ -1310,6 +1310,7 @@ impl NodeRepo {
             ),
             report_run_days: read("report_run_retention_days", fallback.report_run_days),
             flow_days: read("flow_retention_days", fallback.flow_days),
+            diagnostic_days: read("diagnostic_retention_days", fallback.diagnostic_days),
         }
     }
 
@@ -1319,16 +1320,17 @@ impl NodeRepo {
         sqlx::query(
             "INSERT INTO app_settings (id, alert_linked_retention_days, \
                  unmatched_event_retention_hours, report_run_retention_days, \
-                 flow_retention_days, updated_at) \
-             VALUES (TRUE, $1, $2, $3, $4, now()) \
+                 flow_retention_days, diagnostic_retention_days, updated_at) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, now()) \
              ON CONFLICT (id) DO UPDATE SET alert_linked_retention_days = $1, \
                  unmatched_event_retention_hours = $2, report_run_retention_days = $3, \
-                 flow_retention_days = $4, updated_at = now()",
+                 flow_retention_days = $4, diagnostic_retention_days = $5, updated_at = now()",
         )
         .bind(i32::try_from(s.alert_linked_days).unwrap_or(i32::MAX))
         .bind(i32::try_from(s.unmatched_event_hours).unwrap_or(i32::MAX))
         .bind(i32::try_from(s.report_run_days).unwrap_or(i32::MAX))
         .bind(i32::try_from(s.flow_days).unwrap_or(i32::MAX))
+        .bind(i32::try_from(s.diagnostic_days).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())

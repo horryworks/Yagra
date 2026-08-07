@@ -29,7 +29,7 @@
 //! marker that the question was asked — and `every_tool_takes_a_request_context` fails if a new one
 //! does not take it.
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 // The module (not just the trait) — the `JsonSchema` derive expands to `schemars::…` paths, so the
@@ -1454,12 +1454,26 @@ impl YagraMcp {
         };
         let to_s = p.to.unwrap_or_else(|| Utc::now().timestamp());
         let from_s = p.from.unwrap_or(to_s - 86_400);
-        let (from_ms, to_ms) = (from_s.saturating_mul(1000), to_s.saturating_mul(1000));
+        // The window, as the shared event filter. Scope stays a post-filter below rather than a
+        // push-down (see the comment there), so `visible_node_ids` is deliberately left unset —
+        // changing MCP's scope semantics is a separate decision from fixing which store answers.
+        let window = crate::events::EventFilter {
+            since: DateTime::from_timestamp(from_s, 0),
+            until: DateTime::from_timestamp(to_s, 0),
+            ..Default::default()
+        };
         // Volume: sum per-node hourly buckets over the window.
-        let buckets = match admin
-            .events
-            .event_counts_by_bucket(from_ms, to_ms, 3600)
-            .await
+        //
+        // Through the log store when one is configured (ADR-024): PostgreSQL keeps only alert-linked
+        // rows there, so answering from it reported the events that had already alerted as if they
+        // were the whole passive-event volume.
+        let buckets = match crate::logstore::route_counts_by_bucket(
+            self.state.logs.as_ref(),
+            &admin.events,
+            &window,
+            3600,
+        )
+        .await
         {
             Ok(b) => b,
             Err(e) => return tool_error("event_stats", "event volume", &e),
@@ -1488,11 +1502,13 @@ impl YagraMcp {
             })
             .collect();
         // Severity mix.
-        let sev = admin
-            .events
-            .event_severity_counts(from_ms, to_ms)
-            .await
-            .unwrap_or_default();
+        let sev = crate::logstore::route_severity_counts(
+            self.state.logs.as_ref(),
+            &admin.events,
+            &window,
+        )
+        .await
+        .unwrap_or_default();
         let mut sev_mix: BTreeMap<i16, i64> = BTreeMap::new();
         for s in &sev {
             if p.node_id.is_none_or(|n| n == s.node_id)
@@ -1510,11 +1526,14 @@ impl YagraMcp {
         // rather than served: a rule-gap ranking over the whole fleet, handed to an account that
         // sees seven nodes, reads as a fact about those seven.
         let (unmatched, note) = if scope.is_all() {
-            let sigs = admin
-                .events
-                .event_unmatched_signatures(from_ms, to_ms, 20)
-                .await
-                .unwrap_or_default();
+            let sigs = crate::logstore::route_unmatched_signatures(
+                self.state.logs.as_ref(),
+                &admin.events,
+                &window,
+                20,
+            )
+            .await
+            .unwrap_or_default();
             let rows: Vec<Value> = sigs
                 .iter()
                 .map(|s| {

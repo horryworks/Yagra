@@ -20,6 +20,25 @@ export interface TimelineSignal {
   label: string;
   /** 0–100 float — NOT a severity string. Mirrors the backend's `severity_for` thresholds. */
   severity: number;
+  /**
+   * The neighbour this signal came from, when the incident was corroborated across a topology
+   * link (ADR-022 Increment 2). **Absent for the subject's own signals**, which is what keeps the
+   * payload additive: a finding written before the expansion has no such key anywhere, and reads
+   * exactly as it did.
+   */
+  node_id?: string;
+  node_name?: string;
+}
+
+/**
+ * How a signal reads in a list or a tooltip.
+ *
+ * A corroborating neighbour's signal is prefixed with its node, because an unattributed one is
+ * actively misleading: the timeline would show more activity than the subject actually had, and an
+ * operator would read another device's flow shift as this device's.
+ */
+export function signalLabel(s: Pick<TimelineSignal, 'label' | 'node_name'>): string {
+  return s.node_name ? `${s.node_name}: ${s.label}` : s.label;
 }
 
 export type Lane = 'metric' | 'event' | 'flow' | 'other';
@@ -178,7 +197,7 @@ export function IncidentTimeline({
           cy={s.y}
           r={s.r}
         >
-          <title>{s.label}</title>
+          <title>{signalLabel(s)}</title>
         </circle>
       ))}
       <text className="tsr-tl-axis" x={PAD_L} y={m.h - 4}>

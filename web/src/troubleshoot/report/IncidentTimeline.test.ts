@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildIncidentTimeline,
+  signalLabel,
   signalTone,
   type TimelineSignal,
 } from './IncidentTimeline';
@@ -94,5 +95,22 @@ describe('buildIncidentTimeline', () => {
     const one = buildIncidentTimeline([s(1, 'metric')])!;
     const three = buildIncidentTimeline([s(1, 'metric'), s(2, 'event'), s(3, 'flow')])!;
     expect(three.h).toBeGreaterThan(one.h);
+  });
+});
+
+describe('signalLabel', () => {
+  // A finding written before the neighbour expansion (ADR-022 Increment 2) carries no node on any
+  // timeline entry, and must read exactly as it did — the payload is additive, not versioned.
+  it('leaves the subject own signals untouched', () => {
+    expect(signalLabel({ label: 'icmp_rtt_ms spike' })).toBe('icmp_rtt_ms spike');
+    expect(signalLabel({ label: 'icmp_rtt_ms spike', node_name: undefined })).toBe(
+      'icmp_rtt_ms spike',
+    );
+  });
+
+  // The misleading case this exists to prevent: an unattributed neighbour signal reads as the
+  // subject own activity, so an operator sees another device traffic shift as this one.
+  it('attributes a corroborating neighbour signal to its node', () => {
+    expect(signalLabel({ label: 'linkDown', node_name: 'core-sw-01' })).toBe('core-sw-01: linkDown');
   });
 });

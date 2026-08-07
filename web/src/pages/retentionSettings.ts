@@ -15,12 +15,13 @@ export const MAX_DAYS = 3650;
 export const MIN_HOURS = 1;
 export const MAX_HOURS = 8760;
 
-/** The four editable windows, keyed the way the API names them. */
+/** The editable windows, keyed the way the API names them. */
 export const RETENTION_FIELDS = [
   'alert_linked_days',
   'unmatched_event_hours',
   'report_run_days',
   'flow_days',
+  'diagnostic_days',
 ] as const;
 export type RetentionField = (typeof RETENTION_FIELDS)[number];
 
@@ -39,10 +40,14 @@ export const RETENTION_SUBJECTS = [
   'l3_changes',
   'events_matched',
   'events_unmatched',
+  'monitoring_gaps',
   'report_runs',
+  'analysis_runs',
+  'rca_reports',
   'flow_records',
   'event_log_store',
   'metrics',
+  'interfaces',
   'audit_log',
 ] as const;
 export type RetentionSubject = (typeof RETENTION_SUBJECTS)[number];
@@ -123,7 +128,7 @@ export type ParseResult =
  * Validate the form and produce the request body.
  *
  * Reports the *first offending field* rather than a generic "check your input", because the card
- * has four inputs with two different units and "enter a number between 1 and 3650" next to an
+ * has several inputs with two different units and "enter a number between 1 and 3650" next to an
  * hours field would be actively misleading.
  */
 export function parseRetentionForm(form: RetentionForm): ParseResult {
@@ -146,6 +151,7 @@ export function formFromValues(values: RetentionValues): RetentionForm {
     unmatched_event_hours: String(values.unmatched_event_hours),
     report_run_days: String(values.report_run_days),
     flow_days: String(values.flow_days),
+    diagnostic_days: String(values.diagnostic_days),
   };
 }
 
