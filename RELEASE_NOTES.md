@@ -127,8 +127,14 @@
   code out of the message at ingest (`%%01URL/4/FILTER(l):` → `URL/4/FILTER`, `%LINEPROTO-5-UPDOWN:`
   → `LINEPROTO-5-UPDOWN`, a leading `SNMP_TRAP_LINK_DOWN:`) and clusters on it.
   - The extracted code is always a **verbatim slice of the message**, so a signature named in a
-    finding can be pasted straight into the event search to see the events, and into a `substring`
-    event rule to match them.
+    finding can be pasted straight into a `substring` event rule and will match the events — which
+    is the action a rule gap exists to prompt. Rules are matched in-process against the message
+    text, so this holds on every deployment.
+  - ⚠️ Free-text **search** for a whole signature is *not* guaranteed on a VictoriaLogs deployment.
+    LogsQL matches whole tokens, so a vendor prefix that runs into the code — `%%01ATK/4/…`
+    tokenizes with `01ATK`, not `ATK` — will not match on the leading segment. Search the
+    distinctive tail instead (`FIREWALLATCK`). PostgreSQL-only deployments match on substrings and
+    are unaffected; this is the same backend difference already documented for plain search terms.
   - Clustering precedence is trap OID → device event code → APP-NAME. Deployments whose devices
     already send an APP-NAME keep working; a device that sends **both** now clusters on the more
     specific code, so **an existing rule-gap finding may split into several finer ones**.
