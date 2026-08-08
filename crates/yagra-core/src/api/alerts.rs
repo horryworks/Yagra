@@ -91,12 +91,17 @@ fn decorate_alerts(alerts: Vec<Alert>, acks: &HashMap<AckKey, AckView>) -> Vec<A
     alerts
         .into_iter()
         .map(|alert| {
-            let key: AckKey = (
-                alert.node.as_uuid(),
-                alert.check.as_uuid(),
-                alert.severity.as_str().to_owned(),
-            );
-            let acked = acks.get(&key).cloned();
+            // An ack is keyed by node, so an alert with a non-node subject can carry none. It does
+            // not reach here today (`list_alerts` filters it out), and joining `None` is the
+            // truthful answer if it ever does.
+            let acked = alert.node().and_then(|node| {
+                let key: AckKey = (
+                    node.as_uuid(),
+                    alert.check.as_uuid(),
+                    alert.severity.as_str().to_owned(),
+                );
+                acks.get(&key).cloned()
+            });
             ActiveAlertView { alert, acked }
         })
         .collect()
@@ -199,7 +204,11 @@ async fn list_alerts(
         .alerts
         .active_alerts()
         .into_iter()
-        .filter(|a| scope.allows_node(&st, a.node))
+        // Node subjects only. A pool-coverage alert is about Yagra's own polling, has no node to
+        // resolve a visibility group from, and is delivered over the notification channels instead
+        // — serving it here would put a row on the Alerts page that no group-scoped operator could
+        // see and that cannot be acked. Widening this is Increment 2, with the scope rule.
+        .filter(|a| a.node().is_some_and(|node| scope.allows_node(&st, node)))
         .collect();
     Json(decorate_alerts(alerts, &acks))
 }
@@ -701,7 +710,7 @@ mod tests {
         let node = NodeId::from(Uuid::from_u128(1));
         let check = yagra_common::CheckId::from(Uuid::from_u128(2));
         let acked_alert = Alert {
-            node,
+            subject: yagra_alert::Subject::Node(node),
             check,
             severity: Severity::Critical,
             state: NodeState::Critical,
@@ -712,7 +721,7 @@ mod tests {
             breach: None,
         };
         let other = Alert {
-            node: NodeId::from(Uuid::from_u128(9)),
+            subject: yagra_alert::Subject::Node(NodeId::from(Uuid::from_u128(9))),
             check: yagra_common::CheckId::from(Uuid::from_u128(8)),
             severity: Severity::Warning,
             state: NodeState::Warning,

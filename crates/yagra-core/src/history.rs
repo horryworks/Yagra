@@ -10,7 +10,17 @@ use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::{Direction, NodeState, Severity};
+use yagra_common::{Direction, NodeId, NodeState, Severity};
+
+/// Count an alert dropped from the history because its subject is not a node.
+///
+/// `alert_history` is keyed by node id in its schema, its scope predicate and its readers, so a
+/// non-node subject has nowhere to go until that column becomes a subject (Increment 2). Counted
+/// rather than logged per occurrence: pool-coverage alerts recur on a tick, and a warning per tick
+/// is how a real signal gets tuned out. A non-zero value means History is not the whole story.
+fn non_node_skipped() {
+    metrics::counter!("yagra_alert_history_non_node_skipped_total").increment(1);
+}
 
 /// One alert-history row for the API.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -66,7 +76,13 @@ impl AlertHistoryStore {
 
     /// Append a fire (`resolved=false`) or recovery (`resolved=true`) record. Captures the
     /// metric (and numeric breach detail, if a threshold check) so the history is human-readable.
+    ///
+    /// An alert whose subject is not a node is **not recorded** and is not an error.
     pub async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
+        let Some(node) = alert.node() else {
+            non_node_skipped();
+            return Ok(());
+        };
         let (metric, value, threshold, direction) = breach_columns(alert);
         sqlx::query(
             "INSERT INTO alert_history \
@@ -75,7 +91,7 @@ impl AlertHistoryStore {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(Uuid::new_v4())
-        .bind(alert.node.as_uuid())
+        .bind(node.as_uuid())
         .bind(alert.check.as_uuid())
         .bind(alert.severity.as_str())
         .bind(alert.state.as_str())
@@ -94,8 +110,20 @@ impl AlertHistoryStore {
     /// ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot path; a DB
     /// hiccup must not stop alerting. 11 columns × the writer's batch cap stays well under Postgres'
     /// 65535-parameter ceiling. Returns rows inserted.
+    ///
+    /// Alerts whose subject is not a node are dropped from the batch rather than binding a NULL:
+    /// `alert_history.node` is `NOT NULL` and `recent()`/`top_nodes_by_fires()` decode it into a
+    /// bare `Uuid`, so one NULL row would fail the decode for a whole page — a 500 on the History
+    /// screen for every row, not just that one — and would break an N-1 rollback besides.
     pub async fn record_batch(&self, records: &[(Alert, bool)]) -> anyhow::Result<u64> {
-        if records.is_empty() {
+        let rows: Vec<(&Alert, NodeId, bool)> = records
+            .iter()
+            .filter_map(|(alert, resolved)| Some((alert, alert.node()?, *resolved)))
+            .collect();
+        if rows.len() < records.len() {
+            non_node_skipped();
+        }
+        if rows.is_empty() {
             return Ok(0);
         }
         let mut qb = sqlx::QueryBuilder::new(
@@ -103,15 +131,15 @@ impl AlertHistoryStore {
              (id, node, check_id, severity, state, at_unix_ms, resolved, \
               metric, observed_value, threshold_value, direction) ",
         );
-        qb.push_values(records.iter(), |mut b, (alert, resolved)| {
+        qb.push_values(rows, |mut b, (alert, node, resolved)| {
             let (metric, value, threshold, direction) = breach_columns(alert);
             b.push_bind(Uuid::new_v4())
-                .push_bind(alert.node.as_uuid())
+                .push_bind(node.as_uuid())
                 .push_bind(alert.check.as_uuid())
                 .push_bind(alert.severity.as_str())
                 .push_bind(alert.state.as_str())
                 .push_bind(alert.at_unix_ms)
-                .push_bind(*resolved)
+                .push_bind(resolved)
                 .push_bind(metric)
                 .push_bind(value)
                 .push_bind(threshold)
@@ -272,7 +300,7 @@ mod tests {
 
     fn alert(metric: &str, breach: Option<Breach>) -> Alert {
         Alert {
-            node: NodeId::new(),
+            subject: yagra_alert::Subject::Node(NodeId::new()),
             check: CheckId::from(Uuid::new_v4()),
             severity: Severity::Critical,
             state: NodeState::Critical,

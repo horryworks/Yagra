@@ -11,6 +11,26 @@
 ## Unreleased
 
 ### New Features
+- **Yagra now alerts when a poller pool stops having a poller.** This was monitoring's own blind
+  spot. The alert engine reasons about poll results, so when a pool loses its last live poller
+  there is nothing for it to reason about: the scheduler falls back to publishing jobs on a subject
+  nothing is subscribed to, plain NATS discards them, and the nodes drift to *unknown* rather than
+  *down*. An entire site stops being monitored and every dashboard stays calm. Until now the
+  condition was visible only to someone already looking at Settings ▸ Pollers.
+  - Delivered over your configured notification channels at **critical** severity, so an existing
+    `critical → PagerDuty` routing rule reaches it, and closed automatically when a poller returns.
+  - **A pool must be uncovered for five minutes before it notifies** — a poller announces its own
+    departure, so an ordinary rolling restart raises the condition instantly and the debounce is
+    what stops that paging anyone. Tune or disable it with
+    `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` (default `300`, `0` = off).
+  - Two new gauges regardless of that setting: `yagra_pools_without_live_poller` (unlabelled — the
+    one to alert on, or to drive a scale-up from) and `yagra_pool_nodes_without_live_poller{pool}`,
+    which reports `0` for a healthy pool rather than disappearing.
+  - Meraki-managed nodes are excluded, as they are from the Pollers page: core's org collector
+    polls them, so they do not depend on a pool.
+  - **It is a notification, not a row on the Alerts page.** It cannot be acknowledged or muted, and
+    it does not appear in alert history, `GET /api/v1/alerts` or the live stream — those are all
+    keyed by node, and this alert is about a pool. Nothing about existing node alerts changes.
 - **The MCP surface can now read Yagra's own configuration — `get_config(kind=…)`.** One tool over
   28 reads: thresholds, event rules and sources, notification channels and routing rules, profiles
   and collection templates, a node's collected metrics, classification rules, the MIB catalog, a

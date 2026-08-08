@@ -35,7 +35,7 @@ use tokio::sync::broadcast;
 use uuid::Uuid;
 use yagra_alert::CheckState;
 use yagra_alert::{
-    Alert, Breach, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
+    Alert, Breach, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy, Subject,
 };
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
@@ -218,9 +218,22 @@ struct CheckSpec<'a> {
 /// stable dedup identity across restarts. Also used by the event pipeline (`events.rs`)
 /// with `event:<rule-id>` names, keeping event alerts in the same identity space.
 pub(crate) fn check_id(node: NodeId, name: &str) -> CheckId {
+    subject_check_id(&Subject::Node(node), name)
+}
+
+/// Deterministic check id for any alert subject.
+///
+/// The hashed string is `"{subject}:{name}"`, and [`Subject`]'s `Display` is what keeps the two
+/// namespaces apart: a node renders as a bare UUID, a pool as `pool:<name>`.
+//
+// The discriminating prefix has to sit on the *subject* side, never the name side: `name` is
+// operator-authored free text on the mute path (`mutes.check_name`) and is any metric a poller
+// emits on the threshold path, so a prefix there would be forgeable. A `NodeId` renders as a bare
+// hyphenated UUID and contains no `:`, so no node can impersonate a pool or vice versa.
+pub(crate) fn subject_check_id(subject: &Subject, name: &str) -> CheckId {
     CheckId::from(Uuid::new_v5(
         &Uuid::NAMESPACE_OID,
-        format!("{node}:{name}").as_bytes(),
+        format!("{subject}:{name}").as_bytes(),
     ))
 }
 
@@ -320,11 +333,15 @@ impl AlertManager {
     /// state and any active alert on it (so a reachable node breaching a threshold reads
     /// `warning`/`critical`, not `ok`). Nodes the engine has never observed are absent —
     /// the caller maps those to `unknown` (or a store-derived fallback).
+    ///
+    /// Alerts whose subject is not a node (pool-coverage alerts) are skipped: they belong to no
+    /// node's display state.
     #[must_use]
     pub fn node_states(&self) -> HashMap<NodeId, NodeState> {
         let mut out = self.live.lock().expect("live mutex poisoned").clone();
         for alert in self.active.lock().expect("alerts mutex poisoned").values() {
-            out.entry(alert.node)
+            let Some(node) = alert.node() else { continue };
+            out.entry(node)
                 .and_modify(|s| {
                     if severity_rank(alert.state) > severity_rank(*s) {
                         *s = alert.state;
@@ -351,7 +368,7 @@ impl AlertManager {
             .lock()
             .expect("alerts mutex poisoned")
             .values()
-            .filter(|a| a.node == node)
+            .filter(|a| a.subject.is_node(node))
             .fold(base, |acc, alert| match acc {
                 Some(s) if severity_rank(s) >= severity_rank(alert.state) => Some(s),
                 _ => Some(alert.state),
@@ -379,7 +396,7 @@ impl AlertManager {
             .lock()
             .expect("alerts mutex poisoned")
             .values()
-            .filter(|a| a.node == node)
+            .filter(|a| a.subject.is_node(node))
             .cloned()
             .collect()
     }
@@ -565,7 +582,7 @@ impl AlertManager {
             None
         };
 
-        let mut actions = match t.to_alert(node, check, at_unix_ms, root_cause) {
+        let mut actions = match t.to_alert(Subject::Node(node), check, at_unix_ms, root_cause) {
             Some(mut alert) => {
                 // Tag the alert with what it measured so the history log / notification is
                 // human-readable. The crossed bound depends on the committed severity, now known.
@@ -645,18 +662,23 @@ impl AlertManager {
             let active = self.active.lock().expect("alerts mutex poisoned");
             active
                 .values()
-                .filter(|a| a.metric == LIVENESS && affected.contains(&a.node))
+                // Node subjects only: the dependency graph is a graph of nodes, so a
+                // pool-coverage alert has no ancestor to be attributed to.
+                .filter(|a| a.metric == LIVENESS && a.node().is_some_and(|n| affected.contains(&n)))
                 .cloned()
                 .collect()
         };
         let mut actions = Vec::new();
         for alert in candidates {
+            let Some(alert_node) = alert.node() else {
+                continue;
+            };
             let new_rc = self
                 .config
                 .read()
                 .expect("config rwlock poisoned")
                 .topology
-                .root_cause(alert.node, &down);
+                .root_cause(alert_node, &down);
             if new_rc == alert.root_cause {
                 continue; // attribution unchanged
             }
@@ -743,10 +765,66 @@ impl AlertManager {
         Some(NotifyAction::Resolve(prev))
     }
 
+    /// Raise the coverage alert for a poller pool that has nodes and no live poller.
+    ///
+    /// Built on [`Self::raise_event_alert`] because that path is already subject-agnostic — keyed
+    /// by `CheckId`, no dwell (the caller owns its own debounce), and `root_cause: None`, which is
+    /// correct here for a stronger reason than for an event alert: the dependency graph has no pool
+    /// vertices, so there is nothing this could be attributed to.
+    ///
+    /// `Critical` because an entire site's monitoring has stopped, which is a strictly larger blast
+    /// radius than one device being down — and because an existing `critical → PagerDuty` routing
+    /// rule is what ADR-009 asks this to reach.
+    pub fn raise_pool_coverage_alert(&self, pool: &str, at_unix_ms: i64) -> Option<NotifyAction> {
+        let subject = Subject::Pool(pool.to_owned());
+        let check = subject_check_id(&subject, crate::pool_coverage::COVERAGE_METRIC);
+        self.raise_event_alert(Alert {
+            subject,
+            check,
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms,
+            root_cause: None,
+            flapping: false,
+            metric: crate::pool_coverage::COVERAGE_METRIC.to_owned(),
+            breach: Some(Breach {
+                value: 0.0,
+                threshold: Some(1.0),
+                direction: Direction::Below,
+            }),
+        })
+    }
+
+    /// Resolve a pool's coverage alert. `None` if it was not active.
+    pub fn resolve_pool_coverage_alert(&self, pool: &str) -> Option<NotifyAction> {
+        self.resolve_event_alert(subject_check_id(
+            &Subject::Pool(pool.to_owned()),
+            crate::pool_coverage::COVERAGE_METRIC,
+        ))
+    }
+
     fn broadcast(&self, alert: &Alert, resolved: bool) {
-        // Wire shape the WebUI consumes (Alert fields + a `resolved` flag).
-        let event = serde_json::json!({
-            "node": alert.node,
+        self.send_frame(alert, "resolved", resolved.into());
+    }
+
+    /// Send one alert frame to the SSE fan-out, with the lifecycle key that distinguishes it.
+    ///
+    /// Alerts whose subject is not a node are **not** broadcast: [`StreamFrame`] carries a
+    /// `NodeId` so `api/alerts.rs` can scope-filter per subscriber, and a pool has none to put
+    /// there. Coverage alerts reach operators over the notification channels instead.
+    //
+    // Giving the stream a subject means changing `web/src/services/sse.ts`, whose frame-validity
+    // gate is `typeof obj.node === 'string'` — a silent dead feed if it is got wrong. That belongs
+    // with the rest of the wire widening (Increment 2), not here.
+    //
+    // One builder on purpose: this was two hand-written copies of the same object differing only
+    // in the lifecycle key, and the object is the contract the WebUI parses — so a field added to
+    // one and not the other was a live-feed bug with nothing to compile against.
+    fn send_frame(&self, alert: &Alert, lifecycle: &str, value: serde_json::Value) {
+        let Some(node) = alert.node() else { return };
+        // Wire shape the WebUI consumes (Alert fields + one lifecycle key).
+        let mut event = serde_json::json!({
+            "node": alert.subject,
             "check": alert.check,
             "severity": alert.severity,
             "state": alert.state,
@@ -755,10 +833,10 @@ impl AlertManager {
             "flapping": alert.flapping,
             "metric": alert.metric,
             "breach": alert.breach,
-            "resolved": resolved,
         });
+        event[lifecycle] = value;
         // Fire-and-forget: no subscribers is not an error.
-        let _ = self.tx.send((alert.node, Arc::from(event.to_string())));
+        let _ = self.tx.send((node, Arc::from(event.to_string())));
     }
 
     /// Broadcast an inbound ack-state change for one alert so subscribers update the read-only
@@ -776,23 +854,13 @@ impl AlertManager {
     ) {
         let active = self.active.lock().expect("alerts mutex poisoned");
         let Some(alert) = active.values().find(|a| {
-            a.node.as_uuid() == node && a.check.as_uuid() == check && a.severity == severity
+            a.subject.node().is_some_and(|n| n.as_uuid() == node)
+                && a.check.as_uuid() == check
+                && a.severity == severity
         }) else {
             return;
         };
-        let event = serde_json::json!({
-            "node": alert.node,
-            "check": alert.check,
-            "severity": alert.severity,
-            "state": alert.state,
-            "at_unix_ms": alert.at_unix_ms,
-            "root_cause": alert.root_cause,
-            "flapping": alert.flapping,
-            "metric": alert.metric,
-            "breach": alert.breach,
-            "acked": acked,
-        });
-        let _ = self.tx.send((alert.node, Arc::from(event.to_string())));
+        self.send_frame(alert, "acked", acked.unwrap_or(serde_json::Value::Null));
     }
 
     /// Push a frame onto the alert stream directly, for tests of the stream *plumbing*.
@@ -893,7 +961,15 @@ impl NotifyChannel for WebhookChannel {
 /// operator correlating what Yagra sent with what the vendor shows needs the same string, and two
 /// spellings of it would drift.
 pub(crate) fn dedup_string(key: &yagra_alert::DedupKey) -> String {
-    format!("yagra:{}:{}:{}", key.node, key.check, key.severity.as_str())
+    // `Subject`'s Display renders a node as a bare UUID, so a node alert's dedup string is
+    // byte-identical to what it was before subjects existed — an incident opened by an older
+    // core still closes. A pool renders as `pool:<name>`.
+    format!(
+        "yagra:{}:{}:{}",
+        key.subject,
+        key.check,
+        key.severity.as_str()
+    )
 }
 
 /// The hardened outbound client shared by the vendor channels: bounded timeout, **no
@@ -996,7 +1072,7 @@ fn pagerduty_body(
             serde_json::from_str(&notification.payload).unwrap_or(serde_json::Value::Null);
         body["payload"] = serde_json::json!({
             "summary": truncate_chars(&notification.summary, 1024),
-            "source": notification.dedup_key.node.to_string(),
+            "source": notification.dedup_key.subject.to_string(),
             "severity": notification.severity.as_str(),
             "custom_details": details,
         });
@@ -1095,14 +1171,34 @@ fn jsm_create_body(notification: &Notification) -> serde_json::Value {
     })
 }
 
-/// The JSM/Opsgenie close-by-alias URL (alias chars are UUID hex/dashes/colons — all
-/// valid in a path segment, no encoding needed).
+/// The JSM/Opsgenie close-by-alias URL.
+///
+/// The alias is percent-encoded as one path segment. A node alias is UUID hex, dashes and
+/// colons, none of which that encoding touches — so the URL is byte-identical to the one an
+/// older core built, and an incident opened before this change still closes.
+//
+// It stopped being safe to interpolate raw once a pool subject entered the alias: a pool name is
+// operator-authored free text and may hold a space or a `/`, which would silently address the
+// wrong resource or produce an unparseable URL — and a close that never lands is the dangling
+// incident `Dispatcher::dispatch_resolve` exists to prevent. `Url::path_segments_mut` is the url
+// crate reqwest already carries; no new dependency.
 fn jsm_close_url(api_url: &str, notification: &Notification) -> String {
-    format!(
-        "{}/alerts/{}/close?identifierType=alias",
-        api_url,
-        dedup_string(&notification.dedup_key)
-    )
+    let alias = dedup_string(&notification.dedup_key);
+    let encoded = reqwest::Url::parse(api_url)
+        .ok()
+        .and_then(|mut url| {
+            url.path_segments_mut().ok()?.pop_if_empty().push(&alias);
+            Some(url)
+        })
+        .and_then(|url| {
+            url.path_segments()?
+                .next_back()
+                .map(std::borrow::ToOwned::to_owned)
+        })
+        // A non-base or unparseable `api_url` is a misconfiguration the delivery guard already
+        // rejects; fall back to the raw alias rather than dropping the close.
+        .unwrap_or(alias);
+    format!("{api_url}/alerts/{encoded}/close?identifierType=alias")
 }
 
 /// Clip to at most `max` characters on a char boundary (vendor field limits).
@@ -1261,11 +1357,18 @@ impl ActiveMute {
 }
 
 /// Whether an alert is covered by any active mute (separate fn for unit testing).
+///
+/// A mute names a node, so an alert with a non-node subject is never muted — a pool-coverage
+/// alert cannot be silenced from the UI in this increment. That is a gap, not a decision: giving
+/// a mute a pool target belongs with the rest of the scope-and-surface work (Increment 2).
 #[must_use]
 fn mute_matches(mutes: &[ActiveMute], alert: &Alert) -> bool {
+    let Some(node) = alert.node() else {
+        return false;
+    };
     mutes
         .iter()
-        .any(|m| m.node == alert.node && m.check.is_none_or(|c| c == alert.check))
+        .any(|m| m.node == node && m.check.is_none_or(|c| c == alert.check))
 }
 
 /// A channel's notification-template override plus the one thing rendering needs to know about
@@ -1412,6 +1515,12 @@ impl Notifier {
         if !self.any_templates.load(Ordering::Relaxed) {
             return None;
         }
+        // An alert with a non-node subject gets the built-in wording, never a template. The
+        // published template vocabulary is node-shaped — `node_id`, `node_name`, `node_address`,
+        // `group`, `profile` — and rendering an operator's "Node {{ node_name }} is down" against
+        // a poller pool produces a notification that reads as a device outage. Widening the
+        // vocabulary (`subject_kind`/`subject_name`) is additive and belongs with Increment 2.
+        alert.node()?;
         let source = self
             .facts
             .read()
@@ -1449,13 +1558,13 @@ impl Notifier {
                 // cause's own alert — root_cause: None — is what notifies). It still fired
                 // for the UI/history; only the duplicate notification is suppressed.
                 if let Some(root) = alert.root_cause {
-                    tracing::debug!(node = %alert.node, %root, "suppressing downstream alert notification (rolled up under root cause)");
+                    tracing::debug!(subject = %alert.subject, %root, "suppressing downstream alert notification (rolled up under root cause)");
                     return;
                 }
                 // Muted: the operator asked for silence on this node/check until the mute
                 // expires. The alert itself stays live in the UI/history.
                 if mute_matches(&routes.mutes, &alert) {
-                    tracing::debug!(node = %alert.node, "suppressing muted alert notification");
+                    tracing::debug!(subject = %alert.subject, "suppressing muted alert notification");
                     return;
                 }
                 let notification = builtin_notification(&alert, NotifyEvent::Fire);
@@ -1476,13 +1585,13 @@ impl Notifier {
                 } = &mut *routes;
                 if let Some(d) = default.as_mut() {
                     let outcome = d.dispatch(notification.clone()).await;
-                    tracing::info!(?outcome, node = %alert.node, route = "default", "alert notification dispatched");
+                    tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert notification dispatched");
                 }
                 for id in matched {
                     if let Some(d) = channels.get_mut(&id) {
                         let n = for_channel(id, overrides, facts.as_ref(), &notification);
                         let outcome = d.dispatch(n).await;
-                        tracing::info!(?outcome, node = %alert.node, channel = %id, "alert notification dispatched");
+                        tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert notification dispatched");
                     }
                 }
             }
@@ -1521,7 +1630,7 @@ impl Notifier {
                 } = &mut *routes;
                 if let Some(d) = default.as_mut() {
                     let outcome = d.dispatch_resolve(notification.clone()).await;
-                    tracing::info!(?outcome, node = %alert.node, route = "default", "alert resolve dispatched");
+                    tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert resolve dispatched");
                 }
                 let ids: Vec<Uuid> = channels.keys().copied().collect();
                 for id in ids {
@@ -1529,7 +1638,7 @@ impl Notifier {
                         if matched.contains(&id) {
                             let n = for_channel(id, overrides, facts.as_ref(), &notification);
                             let outcome = d.dispatch_resolve(n).await;
-                            tracing::info!(?outcome, node = %alert.node, channel = %id, "alert resolve dispatched");
+                            tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert resolve dispatched");
                         } else {
                             d.mark_resolved(&key);
                         }
@@ -1560,7 +1669,7 @@ impl Notifier {
                 } = &mut *routes;
                 if let Some(d) = default.as_mut() {
                     let outcome = d.dispatch_resolve(notification.clone()).await;
-                    tracing::info!(?outcome, node = %alert.node, route = "default", "downstream alert rolled up (incident closed)");
+                    tracing::info!(?outcome, subject = %alert.subject, route = "default", "downstream alert rolled up (incident closed)");
                 }
                 let ids: Vec<Uuid> = channels.keys().copied().collect();
                 for id in ids {
@@ -1568,7 +1677,7 @@ impl Notifier {
                         if matched.contains(&id) {
                             let n = for_channel(id, overrides, facts.as_ref(), &notification);
                             let outcome = d.dispatch_resolve(n).await;
-                            tracing::info!(?outcome, node = %alert.node, channel = %id, "downstream alert rolled up (incident closed)");
+                            tracing::info!(?outcome, subject = %alert.subject, channel = %id, "downstream alert rolled up (incident closed)");
                         } else {
                             d.mark_resolved(&key);
                         }
@@ -1588,11 +1697,23 @@ impl Notifier {
 /// spell it out at three separate call sites inside `handle`, which is how two of them would
 /// eventually stop agreeing.
 pub(crate) fn builtin_notification(alert: &Alert, event: NotifyEvent) -> Notification {
-    let summary = match event {
-        NotifyEvent::Fire => format!("node {} is {}", alert.node, alert.state),
-        NotifyEvent::Resolve => format!("resolved: node {} recovered", alert.node),
-        NotifyEvent::Suppress => {
-            format!("rolled up: node {} suppressed under upstream", alert.node)
+    let summary = match (&alert.subject, event) {
+        (Subject::Node(node), NotifyEvent::Fire) => format!("node {node} is {}", alert.state),
+        (Subject::Node(node), NotifyEvent::Resolve) => format!("resolved: node {node} recovered"),
+        (Subject::Node(node), NotifyEvent::Suppress) => {
+            format!("rolled up: node {node} suppressed under upstream")
+        }
+        (Subject::Pool(pool), NotifyEvent::Fire) => {
+            format!("poller pool \"{pool}\" has no live poller — its nodes are not being monitored")
+        }
+        (Subject::Pool(pool), NotifyEvent::Resolve) => {
+            format!("resolved: poller pool \"{pool}\" has a live poller again")
+        }
+        // Unreachable today — a pool alert is raised through `raise_event_alert`, which sets
+        // `root_cause: None`, and the dependency graph a roll-up walks is a graph of nodes. Spelled
+        // out anyway so a future suppression path cannot silently emit node-shaped wording.
+        (Subject::Pool(pool), NotifyEvent::Suppress) => {
+            format!("rolled up: poller pool \"{pool}\" suppressed")
         }
     };
     let payload = serde_json::to_string(alert).unwrap_or_else(|_| "{}".to_owned());
@@ -1872,7 +1993,7 @@ mod tests {
 
     fn vendor_notification(severity: Severity) -> Notification {
         let alert = Alert {
-            node: NodeId::from(Uuid::nil()),
+            subject: Subject::Node(NodeId::from(Uuid::nil())),
             check: yagra_common::CheckId::from(Uuid::nil()),
             severity,
             state: NodeState::Critical,
@@ -2431,7 +2552,7 @@ mod tests {
         let node = NodeId::new();
         let other = NodeId::new();
         let alert = Alert {
-            node,
+            subject: Subject::Node(node),
             check: check_id(node, "icmp_rtt_ms"),
             severity: Severity::Critical,
             state: NodeState::Critical,
@@ -2536,7 +2657,7 @@ mod tests {
         let child_fire = child_actions
             .iter()
             .find_map(|a| match a {
-                NotifyAction::Fire(al) if al.node == child => Some(al.clone()),
+                NotifyAction::Fire(al) if al.subject.is_node(child) => Some(al.clone()),
                 _ => None,
             })
             .expect("child fires standalone");
@@ -2548,14 +2669,14 @@ mod tests {
         assert!(
             parent_actions.iter().any(|a| matches!(
                 a,
-                NotifyAction::Fire(al) if al.node == parent && al.root_cause.is_none()
+                NotifyAction::Fire(al) if al.subject.is_node(parent) && al.root_cause.is_none()
             )),
             "parent fires as the root cause"
         );
         let suppressed = parent_actions
             .iter()
             .find_map(|a| match a {
-                NotifyAction::Suppress(al) if al.node == child => Some(al.clone()),
+                NotifyAction::Suppress(al) if al.subject.is_node(child) => Some(al.clone()),
                 _ => None,
             })
             .expect("child rolled up under the parent");
@@ -2565,7 +2686,7 @@ mod tests {
         let child_active = mgr
             .active_alerts()
             .into_iter()
-            .find(|a| a.node == child)
+            .find(|a| a.subject.is_node(child))
             .expect("child still active");
         assert_eq!(child_active.root_cause, Some(parent));
     }
@@ -2596,7 +2717,7 @@ mod tests {
         let child_active = mgr
             .active_alerts()
             .into_iter()
-            .find(|a| a.node == child)
+            .find(|a| a.subject.is_node(child))
             .expect("child active");
         assert_eq!(child_active.root_cause, Some(parent));
 
@@ -2605,14 +2726,14 @@ mod tests {
         assert!(
             recovery.iter().any(|a| matches!(
                 a,
-                NotifyAction::Fire(al) if al.node == child && al.root_cause.is_none()
+                NotifyAction::Fire(al) if al.subject.is_node(child) && al.root_cause.is_none()
             )),
             "child re-pages standalone once its upstream is back"
         );
         let child_active = mgr
             .active_alerts()
             .into_iter()
-            .find(|a| a.node == child)
+            .find(|a| a.subject.is_node(child))
             .expect("child still active");
         assert_eq!(child_active.root_cause, None);
     }
@@ -2644,7 +2765,7 @@ mod tests {
         let c_active = mgr
             .active_alerts()
             .into_iter()
-            .find(|a| a.node == child)
+            .find(|a| a.subject.is_node(child))
             .expect("child active");
         assert_eq!(c_active.root_cause, Some(parent));
 
@@ -2654,7 +2775,7 @@ mod tests {
         let c_active = mgr
             .active_alerts()
             .into_iter()
-            .find(|a| a.node == child)
+            .find(|a| a.subject.is_node(child))
             .expect("child still active");
         assert_eq!(
             c_active.root_cause,
@@ -2664,7 +2785,7 @@ mod tests {
         let p_active = mgr
             .active_alerts()
             .into_iter()
-            .find(|a| a.node == parent)
+            .find(|a| a.subject.is_node(parent))
             .expect("parent still active");
         assert_eq!(p_active.root_cause, Some(gp));
     }
@@ -2683,7 +2804,7 @@ mod tests {
         // Subscribe *after* the fire so only the ack event is observed.
         let mut rx = mgr.subscribe();
         mgr.broadcast_acked(
-            alert.node.as_uuid(),
+            alert.node().unwrap().as_uuid(),
             alert.check.as_uuid(),
             alert.severity,
             Some(serde_json::json!({ "by": "pd-user", "source": "pagerduty" })),
@@ -2739,5 +2860,157 @@ mod tests {
             None,
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    /// Every check id in the field was derived from `"{node-uuid}:{name}"`. Introducing `Subject`
+    /// must not have moved a single one, or every active alert would re-fire as a new identity and
+    /// every open PagerDuty/JSM incident would be orphaned on the next resolve.
+    #[test]
+    fn a_node_check_id_is_unchanged_by_the_subject_split() {
+        let node = NodeId::from(Uuid::from_u128(0x5eed));
+        for name in [LIVENESS, "icmp_rtt_ms", "event:abc"] {
+            let expected = CheckId::from(Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("{node}:{name}").as_bytes(),
+            ));
+            assert_eq!(check_id(node, name), expected, "check id moved for {name}");
+            assert_eq!(subject_check_id(&Subject::Node(node), name), expected);
+        }
+    }
+
+    #[test]
+    fn a_pool_can_never_collide_with_a_node_in_the_check_namespace() {
+        // A pool name is operator free text, so it may be spelled exactly like a node id. The
+        // `pool:` prefix sits on the subject, which is why that cannot forge a node's identity.
+        let node = NodeId::new();
+        assert_ne!(
+            subject_check_id(&Subject::Pool(node.to_string()), LIVENESS),
+            subject_check_id(&Subject::Node(node), LIVENESS),
+        );
+    }
+
+    #[test]
+    fn a_node_dedup_string_is_unchanged_by_the_subject_split() {
+        // The vendor-facing identity: PagerDuty's `dedup_key` and JSM's `alias`. A change here
+        // silently orphans every incident opened by a previous release.
+        let node = NodeId::from(Uuid::from_u128(7));
+        let check = CheckId::from(Uuid::from_u128(8));
+        let key = yagra_alert::DedupKey {
+            subject: Subject::Node(node),
+            check,
+            severity: Severity::Critical,
+        };
+        assert_eq!(dedup_string(&key), format!("yagra:{node}:{check}:critical"));
+    }
+
+    /// A pool name may contain a space or a slash, which would break the close-by-alias URL. A
+    /// close that never lands is the dangling incident the resolve path exists to prevent.
+    #[test]
+    fn the_jsm_close_url_encodes_a_pool_name_and_leaves_a_node_alias_alone() {
+        let notification = |subject: Subject| Notification {
+            dedup_key: yagra_alert::DedupKey {
+                subject,
+                check: CheckId::from(Uuid::from_u128(2)),
+                severity: Severity::Critical,
+            },
+            severity: Severity::Critical,
+            summary: String::new(),
+            payload: String::new(),
+        };
+        let node = NodeId::from(Uuid::from_u128(1));
+        let url = jsm_close_url("https://api.example/v2", &notification(Subject::Node(node)));
+        assert!(
+            url.contains(&format!("yagra:{node}:")) && !url.contains('%'),
+            "a node alias must be byte-identical to what an older core sent: {url}"
+        );
+
+        let url = jsm_close_url(
+            "https://api.example/v2",
+            &notification(Subject::Pool("tokyo dc/2".to_owned())),
+        );
+        assert!(
+            url.contains("tokyo%20dc%2F2"),
+            "pool name not encoded: {url}"
+        );
+    }
+
+    /// The Increment 1 exclusion, pinned. A pool-coverage alert is delivered over the notification
+    /// channels only — it must not appear in any node-keyed view, or it rolls into some node's
+    /// display state and shows up on a page it does not belong to.
+    #[test]
+    fn a_pool_coverage_alert_stays_out_of_every_node_keyed_view() {
+        let mgr = AlertManager::new();
+        let node = NodeId::new();
+        assert!(mgr
+            .raise_pool_coverage_alert("tokyo", 1_000)
+            .is_some_and(|a| matches!(a, NotifyAction::Fire(_))));
+
+        assert!(mgr.node_states().is_empty(), "no node's display state");
+        assert!(mgr.node_state(node).is_none());
+        assert!(mgr.alerts_for(node).is_empty());
+        assert!(mgr.node_state_counts().is_empty());
+        // It *is* active, so a second raise dedups and a resolve can find it.
+        assert_eq!(mgr.active_alerts().len(), 1);
+        assert!(mgr.raise_pool_coverage_alert("tokyo", 2_000).is_none());
+        assert!(mgr
+            .resolve_pool_coverage_alert("tokyo")
+            .is_some_and(|a| matches!(a, NotifyAction::Resolve(_))));
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_pool_coverage_alert_is_not_broadcast_on_the_alert_stream() {
+        // `StreamFrame` carries a NodeId so `api/alerts.rs` can scope-filter per subscriber; there
+        // is nothing to put there for a pool, and `web/src/services/sse.ts` gates frame validity on
+        // `typeof obj.node === 'string'`. Sending one would be a silently dead live feed.
+        let mgr = AlertManager::new();
+        let mut rx = mgr.subscribe();
+        mgr.raise_pool_coverage_alert("tokyo", 1_000);
+        mgr.resolve_pool_coverage_alert("tokyo");
+        assert!(rx.try_recv().is_err(), "no frame for a non-node subject");
+    }
+
+    #[test]
+    fn a_pool_coverage_alert_cannot_be_muted_by_a_node_mute() {
+        // Documented gap rather than a decision — a mute names a node. Pinned so the behaviour is
+        // deliberate rather than discovered.
+        let alert = match mgr_alert() {
+            NotifyAction::Fire(a) => a,
+            other => panic!("expected a fire, got {other:?}"),
+        };
+        let mutes = vec![ActiveMute::new(Uuid::from_u128(1), None)];
+        assert!(!mute_matches(&mutes, &alert));
+    }
+
+    fn mgr_alert() -> NotifyAction {
+        AlertManager::new()
+            .raise_pool_coverage_alert("tokyo", 1_000)
+            .expect("a fresh manager raises")
+    }
+
+    #[test]
+    fn the_built_in_wording_for_a_pool_names_the_pool_and_not_a_node() {
+        let alert = match mgr_alert() {
+            NotifyAction::Fire(a) => a,
+            other => panic!("expected a fire, got {other:?}"),
+        };
+        for (event, expected) in [
+            (
+                NotifyEvent::Fire,
+                "poller pool \"tokyo\" has no live poller",
+            ),
+            (
+                NotifyEvent::Resolve,
+                "resolved: poller pool \"tokyo\" has a live poller again",
+            ),
+        ] {
+            let n = builtin_notification(&alert, event);
+            assert!(n.summary.starts_with(expected), "got {:?}", n.summary);
+            assert!(
+                !n.summary.contains("node "),
+                "a pool must not be described as a node: {:?}",
+                n.summary
+            );
+        }
     }
 }

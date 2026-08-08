@@ -125,8 +125,9 @@ pub(crate) async fn topology_page(
     // node → upstream root cause (from active, suppressed alerts).
     let mut root_causes: HashMap<NodeId, Uuid> = HashMap::new();
     for a in st.alerts.active_alerts() {
-        if let Some(cause) = a.root_cause {
-            root_causes.entry(a.node).or_insert_with(|| cause.as_uuid());
+        // Node subjects only — this map keys the topology graph, which has no pool vertices.
+        if let (Some(node), Some(cause)) = (a.node(), a.root_cause) {
+            root_causes.entry(node).or_insert_with(|| cause.as_uuid());
         }
     }
     // Batch the coarse fallback probe for this page's unobserved nodes: a single TSDB query rather
@@ -701,24 +702,30 @@ pub(crate) async fn topology_shadow(
     let mut would_suppress = Vec::new();
     let mut would_unsuppress = Vec::new();
     for alert in st.alerts.active_alerts() {
-        if !visible(alert.node) {
+        // Node subjects only: suppression is a statement about the dependency graph, and a
+        // pool-coverage alert is not a vertex in it (nor is it ever suppressed — it is raised
+        // with `root_cause: None`).
+        let Some(alert_node) = alert.node() else {
+            continue;
+        };
+        if !visible(alert_node) {
             continue;
         }
-        let m = manual.is_suppressed(alert.node, &down);
-        let d = derived.is_suppressed(alert.node, &down);
+        let m = manual.is_suppressed(alert_node, &down);
+        let d = derived.is_suppressed(alert_node, &down);
         if d && !m {
             would_suppress.push(ShadowAlert {
-                node_id: alert.node.as_uuid(),
+                node_id: alert_node.as_uuid(),
                 root_cause: derived
-                    .root_cause(alert.node, &down)
+                    .root_cause(alert_node, &down)
                     .filter(|c| visible(*c))
                     .map(|c| c.as_uuid()),
             });
         } else if m && !d {
             would_unsuppress.push(ShadowAlert {
-                node_id: alert.node.as_uuid(),
+                node_id: alert_node.as_uuid(),
                 root_cause: manual
-                    .root_cause(alert.node, &down)
+                    .root_cause(alert_node, &down)
                     .filter(|c| visible(*c))
                     .map(|c| c.as_uuid()),
             });

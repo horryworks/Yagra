@@ -139,7 +139,12 @@ impl YagraMcp {
                 .alerts
                 .active_alerts()
                 .iter()
-                .filter(|a| scope.allows_node(&self.state, a.node))
+                // Node subjects only, matching `GET /api/v1/alerts` — the tally an operator sees
+                // in the WebUI and the tally a model is told must be the same number.
+                .filter(|a| {
+                    a.node()
+                        .is_some_and(|node| scope.allows_node(&self.state, node))
+                })
                 .count(),
             metrics_healthy: self.state.store.healthy().await,
             flow_tier_enabled: self.state.flows.is_some(),
@@ -244,7 +249,7 @@ impl YagraMcp {
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
-                .map(|a| AlertDto::from_alert(a, Some(node.name.clone())))
+                .filter_map(|a| AlertDto::from_alert(a, Some(node.name.clone())))
                 .collect(),
             interfaces: interfaces.iter().map(InterfaceDto::from_meta).collect(),
         };
@@ -275,10 +280,14 @@ impl YagraMcp {
         let mut alerts = self.state.alerts.active_alerts();
         // Filtered before the severity cut and the truncation, so a scoped caller's `limit` is
         // spent on rows they can see rather than on rows that are about to be dropped.
-        alerts.retain(|a| scope.allows_node(&self.state, a.node));
+        // Node subjects only, matching `GET /api/v1/alerts` (see its filter for why).
+        alerts.retain(|a| {
+            a.node()
+                .is_some_and(|node| scope.allows_node(&self.state, node))
+        });
         if let Some(node_id) = p.node_id {
             let nid = NodeId::from(node_id);
-            alerts.retain(|a| a.node == nid);
+            alerts.retain(|a| a.subject.is_node(nid));
         }
         if let Some(min) = p.min_severity.as_deref() {
             let min_rank = severity_rank(min);
@@ -288,11 +297,14 @@ impl YagraMcp {
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
         alerts.truncate(limit);
         let names = self
-            .resolve_names(scope, alerts.iter().map(|a| a.node.0))
+            .resolve_names(scope, alerts.iter().filter_map(|a| Some(a.node()?.0)))
             .await;
         let out: Vec<AlertDto> = alerts
             .iter()
-            .map(|a| AlertDto::from_alert(a, names.get(&a.node.0).cloned()))
+            .filter_map(|a| {
+                let name = a.node().and_then(|n| names.get(&n.0).cloned());
+                AlertDto::from_alert(a, name)
+            })
             .collect();
         ok_json("get_active_alerts", &out)
     }

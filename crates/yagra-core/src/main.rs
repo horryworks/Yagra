@@ -64,6 +64,7 @@ mod oidc;
 // distribution and consumes the ring / Redis mirror / durable inventory below.
 mod coordinator;
 mod pollers;
+mod pool_coverage;
 /// Effective poll-pool resolution (node > ancestor folder > default).
 mod poolres;
 mod ratelimit;
@@ -1277,6 +1278,17 @@ impl LeaderTasks {
                 self.group_repo.clone(),
             ),
         );
+        spawn_cancellable(
+            &self.shutdown,
+            run_pool_coverage_watch(
+                self.coordinator.clone(),
+                self.repo.clone(),
+                self.meraki_devices.clone(),
+                self.group_repo.clone(),
+                self.alerts.clone(),
+                self.notifier.clone(),
+            ),
+        );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
         spawn_cancellable(
             &self.shutdown,
@@ -2035,6 +2047,82 @@ async fn run_routing_refresh(
         tokio::time::sleep(Duration::from_secs(30)).await;
         load_routing(&notifier, &notifications).await;
         load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
+    }
+}
+
+/// Leader-only loop: alert when a poller pool has nodes but no live poller (ADR-009's blind spot).
+///
+/// **Leader-only is a correctness requirement, not an optimization.** A standby core runs no
+/// coordinator — `run_heartbeat_consumer` is spawned here in `leader_work` — so its registry is
+/// permanently empty and it would read *every* pool as dark and page for the whole fleet. This is
+/// the same hazard `api/pollers.rs::resolve_polled_by` guards with an `is_leader` check.
+///
+/// **The node scan is generation-gated** (ADR-026, the idiom `SweepCache` already uses): pool
+/// membership is config-derived and `audit_mw` bumps `config_gen` on every config mutation, so an
+/// unchanged generation means the counts are identical and a steady-state tick costs one in-memory
+/// registry read. Without that this would scan the node table every 30 seconds, which at 50,000
+/// nodes is not affordable.
+async fn run_pool_coverage_watch(
+    coordinator: Arc<Coordinator>,
+    repo: Arc<NodeRepo>,
+    meraki: Arc<meraki::MerakiDeviceRepo>,
+    groups: Arc<groups::GroupRepo>,
+    alerts: Arc<AlertManager>,
+    notifier: Arc<Notifier>,
+) {
+    let mut watch = pool_coverage::CoverageWatch::from_env();
+    if watch.disabled() {
+        tracing::info!(
+            env = pool_coverage::RAISE_AFTER_ENV,
+            "poller-pool coverage notifications are disabled; gauges still published"
+        );
+    }
+    let mut cached: Option<(u64, HashMap<String, usize>)> = None;
+    loop {
+        tokio::time::sleep(pool_coverage::WATCH_TICK).await;
+
+        let generation = config_gen::current();
+        if cached.as_ref().is_none_or(|(gen, _)| *gen != generation) {
+            let counts = pool_coverage::node_counts_by_pool(&repo, &meraki, &groups).await;
+            // An empty map means "no pool has any nodes", which silently disables the whole check.
+            // `node_counts_by_pool` already degrades on a read error, so only a genuinely empty
+            // inventory produces one legitimately — keep the previous answer when we had one
+            // rather than letting a bad read look like a healthy fleet.
+            if counts.is_empty() && cached.is_some() {
+                tracing::warn!("pool coverage: node counts came back empty; keeping the last set");
+            } else {
+                cached = Some((generation, counts));
+            }
+        }
+        let Some((_, node_pools)) = cached.as_ref() else {
+            continue;
+        };
+
+        let coverage =
+            pool_coverage::coverage(&coordinator.poller_views(Instant::now()), node_pools);
+        pool_coverage::publish_gauges(&coverage);
+
+        for event in watch.observe(&coverage, Instant::now()) {
+            let action = match event {
+                pool_coverage::CoverageEvent::Raise { pool, nodes } => {
+                    tracing::warn!(
+                        pool = %pool,
+                        nodes,
+                        "poller pool has nodes but no live poller — they are not being monitored"
+                    );
+                    pool_coverage::count_notification("raise");
+                    alerts.raise_pool_coverage_alert(&pool, pool_coverage::now_unix_ms())
+                }
+                pool_coverage::CoverageEvent::Clear { pool } => {
+                    tracing::info!(pool = %pool, "poller pool has a live poller again");
+                    pool_coverage::count_notification("clear");
+                    alerts.resolve_pool_coverage_alert(&pool)
+                }
+            };
+            if let Some(action) = action {
+                notifier.handle(action).await;
+            }
+        }
     }
 }
 

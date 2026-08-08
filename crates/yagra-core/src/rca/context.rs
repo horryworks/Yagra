@@ -275,7 +275,7 @@ pub async fn gather(
     let active = src.alerts.active_alerts();
     let asked = active
         .iter()
-        .find(|a| a.node == node && a.check == check)
+        .find(|a| a.subject.is_node(node) && a.check == check)
         .cloned();
 
     // Rule 1: hop to the cause. The alert's own `root_cause` is what dependency suppression already
@@ -293,7 +293,7 @@ pub async fn gather(
     // The alert to describe is the root's own. If the hop happened, the symptom alert we started
     // from is only used to say which node the operator clicked.
     let root_alert = if asked_about_symptom {
-        active.iter().find(|a| a.node == root_id).cloned()
+        active.iter().find(|a| a.subject.is_node(root_id)).cloned()
     } else {
         asked.clone()
     };
@@ -374,7 +374,10 @@ fn alert_facts(a: &Alert, asked_about: Option<String>) -> AlertFacts {
 /// Resolve the names of every node carrying an active alert, in one query rather than one per
 /// dependent — a cascade can be thousands of alerts and this runs on an operator's click.
 async fn names_of(src: &Sources<'_>, active: &[Alert]) -> BTreeMap<Uuid, String> {
-    let mut ids: Vec<Uuid> = active.iter().map(|a| uuid_of(a.node)).collect();
+    let mut ids: Vec<Uuid> = active
+        .iter()
+        .filter_map(|a| Some(uuid_of(a.node()?)))
+        .collect();
     ids.sort_unstable();
     ids.dedup();
     // Unrestricted: `active` is the alert set this RCA was already authorized to explain, so the
@@ -400,14 +403,17 @@ fn roll_up_dependents(
     let mut seen: Vec<NodeId> = Vec::new();
     let mut total = 0;
     for a in active.iter().filter(|a| a.root_cause == Some(root)) {
+        // Node subjects only: a dependent is a node rolled up under `root`, and only nodes are
+        // vertices in the dependency graph that produced `root_cause`.
+        let Some(node) = a.node() else { continue };
         // One entry per node, not per check — a node with three failing checks is one dependent.
-        if seen.contains(&a.node) {
+        if seen.contains(&node) {
             continue;
         }
-        seen.push(a.node);
+        seen.push(node);
         total += 1;
         if named.len() < MAX_NAMED_DEPENDENTS {
-            let id = uuid_of(a.node);
+            let id = uuid_of(node);
             named.push(names.get(&id).cloned().unwrap_or_else(|| id.to_string()));
         }
     }
@@ -482,7 +488,7 @@ mod tests {
 
     fn an_alert(node: NodeId, root: Option<NodeId>) -> Alert {
         Alert {
-            node,
+            subject: yagra_alert::Subject::Node(node),
             check: CheckId::from(Uuid::from_u128(99)),
             severity: Severity::Critical,
             state: NodeState::Unreachable,

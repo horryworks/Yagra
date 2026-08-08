@@ -101,19 +101,26 @@ impl AlertFactsSource for CachedNodeFacts {
 /// `metric` deliberately drops the liveness sentinel: `__liveness__` is an internal check name, not
 /// a metric, and printing it into an operator's inbox is the same mistake `rca/prompt.rs` avoids
 /// when building an LLM prompt. An up/down alert simply leaves `metric` undefined.
+//
+// An alert with a non-node subject does not reach here — `Notifier::context` returns `None` for
+// one, so it is served the built-in wording. This function still renders something truthful for
+// that case (the subject's own string, e.g. `pool:tokyo`) rather than a nil UUID, because the
+// alternative to a defined answer is a plausible wrong one if that gate is ever moved.
 #[must_use]
 pub fn context_for(
     alert: &Alert,
     event: NotifyEvent,
     resolved: &HashMap<Uuid, NodeFacts>,
 ) -> AlertFacts {
-    let node_id = alert.node.as_uuid();
-    let node = resolved.get(&node_id);
+    let node_id = alert
+        .node()
+        .map_or_else(|| alert.subject.to_string(), |n| n.as_uuid().to_string());
+    let node = alert.node().and_then(|n| resolved.get(&n.as_uuid()));
     let root = alert.root_cause.map(|r| r.as_uuid());
     AlertFacts {
         event,
-        node_id: node_id.to_string(),
-        node_name: node.map_or_else(|| node_id.to_string(), |f| f.name.clone()),
+        node_name: node.map_or_else(|| node_id.clone(), |f| f.name.clone()),
+        node_id,
         node_address: node.map(|f| f.address.clone()),
         group: node.and_then(|f| f.group.clone()),
         profile: node.and_then(|f| f.profile.clone()),
@@ -161,7 +168,7 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
         .parse()
         .expect("sample root-cause id is a uuid");
     let alert = Alert {
-        node: yagra_common::NodeId::from(node),
+        subject: yagra_alert::Subject::Node(yagra_common::NodeId::from(node)),
         check: yagra_common::CheckId::from(
             declared
                 .check_id
@@ -208,9 +215,12 @@ pub fn preview_sample() -> (Alert, HashMap<Uuid, NodeFacts>) {
 }
 
 /// Every node id one alert's context needs resolved — itself, plus its root cause when rolled up.
+///
+/// An alert with a non-node subject contributes no id of its own, so a fleet-wide fact lookup is
+/// not made for something no node row can answer.
 #[must_use]
 pub fn node_ids_for(alert: &Alert) -> Vec<Uuid> {
-    let mut ids = vec![alert.node.as_uuid()];
+    let mut ids: Vec<Uuid> = alert.node().map(|n| n.as_uuid()).into_iter().collect();
     if let Some(root) = alert.root_cause {
         ids.push(root.as_uuid());
     }
@@ -269,7 +279,7 @@ pub(crate) mod tests {
 
     pub(crate) fn threshold_alert(node: NodeId) -> Alert {
         Alert {
-            node,
+            subject: yagra_alert::Subject::Node(node),
             check: CheckId::new(),
             severity: Severity::Critical,
             state: NodeState::Critical,

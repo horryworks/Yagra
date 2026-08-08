@@ -106,10 +106,14 @@ pub struct AlertDto {
 
 impl AlertDto {
     /// Build from an active alert and an optional resolved node name.
+    ///
+    /// `None` for an alert whose subject is not a node: this DTO is keyed by `node_id`, and a nil
+    /// or invented UUID would be a plausible wrong answer for a model to reason from. Callers
+    /// already restrict to node subjects, so dropping here is belt-and-braces.
     #[must_use]
-    pub fn from_alert(alert: &Alert, node_name: Option<String>) -> Self {
-        Self {
-            node_id: alert.node.0,
+    pub fn from_alert(alert: &Alert, node_name: Option<String>) -> Option<Self> {
+        Some(Self {
+            node_id: alert.node()?.0,
             check_id: alert.check.0,
             node_name,
             severity: alert.severity.as_str().to_owned(),
@@ -123,7 +127,7 @@ impl AlertDto {
                 threshold: b.threshold,
                 direction: b.direction.as_str().to_owned(),
             }),
-        }
+        })
     }
 }
 

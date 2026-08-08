@@ -19,7 +19,7 @@ mod hysteresis;
 use flapping::FlapDetector;
 use hysteresis::DwellTracker;
 
-pub use alert::{Alert, Breach, DedupKey};
+pub use alert::{Alert, Breach, DedupKey, Subject};
 pub use notify::{
     DispatchOutcome, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
 };
@@ -44,13 +44,13 @@ impl Transition {
     #[must_use]
     pub fn to_alert(
         self,
-        node: NodeId,
+        subject: Subject,
         check: CheckId,
         at_unix_ms: i64,
         root_cause: Option<NodeId>,
     ) -> Option<Alert> {
         self.state.severity().map(|severity| Alert {
-            node,
+            subject,
             check,
             severity,
             state: self.state,
@@ -124,7 +124,9 @@ mod tests {
         let node = NodeId::new();
         let check = CheckId::new();
         let t = cs.observe(NodeState::Unreachable, 0).unwrap();
-        let alert = t.to_alert(node, check, 0, Some(NodeId::new())).unwrap();
+        let alert = t
+            .to_alert(Subject::Node(node), check, 0, Some(NodeId::new()))
+            .unwrap();
         assert_eq!(alert.severity, Severity::Critical);
         assert!(alert.root_cause.is_some());
     }
@@ -134,7 +136,10 @@ mod tests {
         let mut cs = CheckState::new(NodeState::Critical, 1, 60_000, 5);
         let t = cs.observe(NodeState::Ok, 0).unwrap();
         assert_eq!(t.state, NodeState::Ok);
-        assert_eq!(t.to_alert(NodeId::new(), CheckId::new(), 0, None), None);
+        assert_eq!(
+            t.to_alert(Subject::Node(NodeId::new()), CheckId::new(), 0, None),
+            None
+        );
     }
 
     #[test]

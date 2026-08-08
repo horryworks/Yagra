@@ -1805,7 +1805,7 @@ impl EventEngine {
                 _ => NodeState::Warning,
             };
             let alert = Alert {
-                node: node_id,
+                subject: yagra_alert::Subject::Node(node_id),
                 check,
                 severity: rule.severity,
                 state,
@@ -2630,7 +2630,7 @@ mod tests {
     fn test_alert(node: Uuid, severity: Severity) -> Alert {
         let node_id = NodeId::from(node);
         Alert {
-            node: node_id,
+            subject: yagra_alert::Subject::Node(node_id),
             check: check_id(node_id, "event:test"),
             severity,
             state: NodeState::Warning,
@@ -2973,7 +2973,7 @@ mod tests {
         let node = NodeId::from(Uuid::new_v4());
         let check = check_id(node, "event:test");
         let alert = Alert {
-            node,
+            subject: yagra_alert::Subject::Node(node),
             check,
             severity: Severity::Warning,
             state: NodeState::Warning,

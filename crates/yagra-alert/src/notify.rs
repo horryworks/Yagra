@@ -134,7 +134,7 @@ impl<C: NotifyChannel> Dispatcher<C> {
         }
         match self.deliver_with_retry(&notification, false).await {
             Ok(attempts) => {
-                self.active.insert(notification.dedup_key);
+                self.active.insert(notification.dedup_key.clone());
                 DispatchOutcome::Delivered { attempts }
             }
             Err(attempts) => DispatchOutcome::Failed { attempts },
@@ -210,7 +210,7 @@ mod tests {
 
     fn notification() -> Notification {
         let alert = Alert {
-            node: NodeId::new(),
+            subject: crate::alert::Subject::Node(NodeId::new()),
             check: CheckId::new(),
             severity: Severity::Critical,
             state: NodeState::Critical,

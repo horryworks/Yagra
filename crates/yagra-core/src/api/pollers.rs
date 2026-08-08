@@ -211,42 +211,21 @@ fn build_pollers_response(
         })
         .collect();
 
-    // Online pollers per pool (an offline poller can't serve work, so it doesn't count).
-    let mut live_per_pool: HashMap<String, usize> = HashMap::new();
-    for v in live.iter().filter(|v| v.online) {
-        *live_per_pool.entry(v.pool.clone()).or_insert(0) += 1;
-    }
-
-    // Report pools that have nodes ∪ pools that have a live poller (so a poller registered but not
-    // yet assigned any work still shows up — with no warning).
-    let mut pool_names: Vec<String> = node_pools
-        .keys()
-        .cloned()
-        .chain(live_per_pool.keys().cloned())
-        .collect();
-    pool_names.sort_unstable();
-    pool_names.dedup();
-
-    let pools = pool_names
-        .iter()
-        .map(|name| {
-            let nodes = node_pools.get(name).copied().unwrap_or(0);
-            let live_pollers = live_per_pool.get(name).copied().unwrap_or(0);
-            PoolSummary {
-                pool: name.clone(),
-                nodes,
-                live_pollers,
-                mode: if live_pollers > 0 {
-                    "working_set"
-                } else {
-                    "legacy"
-                },
-                warning: if nodes > 0 && live_pollers == 0 {
-                    Some("nodes_without_live_poller")
-                } else {
-                    None
-                },
-            }
+    // The pool arithmetic lives in `pool_coverage`, which is also what the leader-side watch loop
+    // notifies from — so the pill this endpoint renders and the page an operator receives are the
+    // same judgement rather than two spellings of it.
+    let pools = crate::pool_coverage::coverage(&live, &node_pools)
+        .into_iter()
+        .map(|c| PoolSummary {
+            mode: if c.live_pollers > 0 {
+                "working_set"
+            } else {
+                "legacy"
+            },
+            warning: c.is_uncovered().then_some("nodes_without_live_poller"),
+            pool: c.pool,
+            nodes: c.nodes,
+            live_pollers: c.live_pollers,
         })
         .collect();
 
@@ -284,27 +263,14 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
         tracing::warn!(error = %e, "poller inventory list failed; showing live view only");
         Vec::new()
     });
-    // Meraki-managed nodes are excluded — the org collector owns them, not a pool poller (this
-    // mirrors the scheduler). Degrade to an empty summary on a read error.
-    let meraki_ids = admin.meraki_devices.node_ids().await.unwrap_or_default();
-    // Effective pool, so a node inheriting from its folder is counted under the pool that actually
-    // polls it. A folder-read error degrades to "no inheritance" for the *summary only* — it never
-    // reaches the scheduler, so a wrong count here cannot misroute polling.
-    let resolver = pool_resolver(admin).await;
-    let mut node_pools: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    match admin.repo.list_nodes().await {
-        Ok(nodes) => {
-            for n in nodes {
-                if meraki_ids.contains(&n.id.as_uuid()) {
-                    continue;
-                }
-                *node_pools
-                    .entry(resolver.resolve_pool(&n).to_owned())
-                    .or_insert(0) += 1;
-            }
-        }
-        Err(e) => tracing::error!(error = %e, "list nodes for pool summary failed"),
-    }
+    // Non-Meraki nodes by effective pool. Shared with the coverage watch loop so the exclusion and
+    // the folder inheritance are decided once (see `pool_coverage::node_counts_by_pool`).
+    let node_pools = crate::pool_coverage::node_counts_by_pool(
+        &admin.repo,
+        &admin.meraki_devices,
+        &admin.groups,
+    )
+    .await;
     build_pollers_response(inventory, live, node_pools)
 }
 
@@ -907,6 +873,60 @@ mod tests {
             (w.nodes, w.live_pollers, w.mode, w.warning),
             (0, 1, "working_set", None)
         );
+    }
+
+    /// The pill and the page must be the same judgement.
+    ///
+    /// This endpoint's `warning` and the leader-side notification loop both answer "does this pool
+    /// have nodes and no live poller". Two spellings of that would eventually disagree, and the
+    /// failure mode is the worst kind: Settings ▸ Pollers showing a warning nobody was paged for,
+    /// or a page for a pool the UI calls healthy. So `PoolCoverage::is_uncovered` is the only
+    /// definition, and this pins the derivation to it.
+    #[test]
+    fn the_pool_warning_is_exactly_the_coverage_conditions_answer() {
+        let live = vec![
+            live_view("p1", "default", true),
+            live_view("p-off", "legacy-pool", false),
+            live_view("p-wait", "waiting", true),
+        ];
+        let mut node_pools = std::collections::HashMap::new();
+        node_pools.insert("default".to_owned(), 10usize);
+        node_pools.insert("legacy-pool".to_owned(), 4usize);
+        node_pools.insert("empty-and-unserved".to_owned(), 0usize);
+
+        let coverage = crate::pool_coverage::coverage(&live, &node_pools);
+        let resp = build_pollers_response(Vec::new(), live.clone(), node_pools);
+
+        assert_eq!(
+            resp.pools.len(),
+            coverage.len(),
+            "both sides report the same pools"
+        );
+        for (summary, cov) in resp.pools.iter().zip(&coverage) {
+            assert_eq!(summary.pool, cov.pool);
+            assert_eq!(summary.nodes, cov.nodes);
+            assert_eq!(summary.live_pollers, cov.live_pollers);
+            assert_eq!(
+                summary.warning.is_some(),
+                cov.is_uncovered(),
+                "pool {} disagrees between the pill and the coverage condition",
+                summary.pool
+            );
+        }
+        assert!(
+            coverage.iter().any(PoolCoverageExt::uncovered),
+            "the fixture must actually exercise the uncovered branch"
+        );
+    }
+
+    /// Local alias so the assertion above reads as a predicate over the fixture.
+    trait PoolCoverageExt {
+        fn uncovered(&self) -> bool;
+    }
+    impl PoolCoverageExt for crate::pool_coverage::PoolCoverage {
+        fn uncovered(&self) -> bool {
+            self.is_uncovered()
+        }
     }
 
     async fn status_of(st: ApiState, method: &str, path: &str, token: Option<&str>) -> StatusCode {
