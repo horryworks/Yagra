@@ -11,7 +11,7 @@
 // /api/v1/topology/shadow for the comparison. Kept live via the node-state SSE stream
 // (`useNodeStates`, S14). All judgement lives in `topologyDiff.ts` — Vitest never runs a `.tsx`.
 
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
@@ -114,15 +114,21 @@ export function DependencyPage() {
 
   const optedOut = useMemo(() => new Set(shadow?.opted_out ?? []), [shadow]);
 
-  const toggleOptOut = async (id: string, next: boolean) => {
-    setModeError(null);
-    try {
-      await api.setNodeSuppressionOptOut(id, next);
-      setRefreshNonce((v) => v + 1);
-    } catch (e) {
-      setModeError(errMsg(e, t('dependency.optOutFailed')));
-    }
-  };
+  // Memoized so the columns `useMemo` below can depend on it honestly. Behaviour is unchanged
+  // either way — `t` is its only unstable capture and was already a dependency there — but a
+  // silenced exhaustive-deps warning is one nobody re-reads when a real capture is added later.
+  const toggleOptOut = useCallback(
+    async (id: string, next: boolean) => {
+      setModeError(null);
+      try {
+        await api.setNodeSuppressionOptOut(id, next);
+        setRefreshNonce((v) => v + 1);
+      } catch (e) {
+        setModeError(errMsg(e, t('dependency.optOutFailed')));
+      }
+    },
+    [t],
+  );
 
   const changeMode = async (next: TopologyMode) => {
     setModeBusy(true);
@@ -242,7 +248,7 @@ export function DependencyPage() {
           ) : null,
       },
     ],
-    [authed, comparing, diffs, mode, nameOf, optedOut, t],
+    [authed, comparing, diffs, mode, nameOf, optedOut, t, toggleOptOut],
   );
 
   return (

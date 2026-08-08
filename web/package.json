@@ -1,7 +1,7 @@
 {
   "name": "yagra-web",
   "private": true,
-  "version": "0.1.22",
+  "version": "0.1.23",
   "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Yagra-web — WebUI (React + TypeScript).",
@@ -27,6 +27,12 @@
     "react-router-dom": "^7.18.1",
     "uplot": "^1.6.31",
     "zustand": "^5.0.0"
+  },
+  "overridesReason": {
+    "js-yaml": "GHSA-5p4m-2wfm-xmqj hits 4.0.0-4.3.0; 4.3.1 is the patch in the same major. Reached only via openapi-typescript -> @redocly/openapi-core@^1.34 (dev-only, `npm run generate:api`), and openapi-typescript 7.13.0 is already latest, so no bump resolves it. Drop this once it picks up @redocly/openapi-core 2.x."
+  },
+  "overrides": {
+    "js-yaml": "^4.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",

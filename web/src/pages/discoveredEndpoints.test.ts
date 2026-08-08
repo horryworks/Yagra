@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { coverageOf, isUnmonitored, rollupByPort, ENDPOINT_COVERAGE } from './discoveredEndpoints';
+import { coverageOf, isUnmonitored, ENDPOINT_COVERAGE } from './discoveredEndpoints';
 import type { DiscoveredEndpoint } from '../types/api';
 
 function endpoint(over: Partial<DiscoveredEndpoint> = {}): DiscoveredEndpoint {
@@ -55,38 +55,6 @@ describe('coverageOf', () => {
     ]) {
       expect(ENDPOINT_COVERAGE).toContain(coverageOf(s));
     }
-  });
-});
-
-describe('rollupByPort', () => {
-  it('counts per (node, ifindex) and puts the busiest port first', () => {
-    const rows = rollupByPort([
-      endpoint({ id: 'a', ip: '10.0.0.1', via_node: 'n1', via_ifindex: 8 }),
-      endpoint({ id: 'b', ip: '10.0.0.2', via_node: 'n1', via_ifindex: 8 }),
-      endpoint({ id: 'c', ip: '10.0.0.3', via_node: 'n1', via_ifindex: 3 }),
-      endpoint({ id: 'd', ip: '10.0.0.4', via_node: 'n2', via_ifindex: 8 }),
-    ]);
-    expect(rows[0]).toEqual({ viaNode: 'n1', ifindex: 8, count: 2 });
-    expect(rows).toHaveLength(3);
-  });
-
-  it('is stable under input order, so the list does not shuffle between refreshes', () => {
-    const list = [
-      endpoint({ id: 'a', ip: '10.0.0.1', via_node: 'n2', via_ifindex: 1 }),
-      endpoint({ id: 'b', ip: '10.0.0.2', via_node: 'n1', via_ifindex: 1 }),
-      endpoint({ id: 'c', ip: '10.0.0.3', via_node: 'n1', via_ifindex: 2 }),
-    ];
-    expect(rollupByPort(list)).toEqual(rollupByPort([...list].reverse()));
-  });
-
-  it('keeps an endpoint whose observing node was deleted rather than dropping it', () => {
-    // `via_node` goes null when the router is removed; the host is still on the network.
-    const rows = rollupByPort([endpoint({ via_node: null, via_ifindex: null })]);
-    expect(rows).toEqual([{ viaNode: null, ifindex: null, count: 1 }]);
-  });
-
-  it('is empty for an empty page', () => {
-    expect(rollupByPort([])).toEqual([]);
   });
 });
 

@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Pure scope helpers used by ScopePicker — split out so the filtering and label logic is unit-
+// Pure scope helpers used by ScopePicker — split out so the label and default-input logic is unit-
 // testable without a DOM (the repo has no React test renderer; tests target pure functions).
 //
 // i18n: the label builders take the caller's `t` (troubleshoot ns) rather than resolving at module
 // load, so they follow the active language (see rules — a module-load `t()` would freeze one lang).
 
 import type { TFunction } from 'i18next';
-import type { AnalysisJobInput, AnalysisToolKey, NodeSummary } from '../types/api';
+import type { AnalysisJobInput, AnalysisToolKey } from '../types/api';
 
 /** Quick-run defaults (the split-button "Run on all nodes" path + the drawer's initial state). */
 export const DEFAULT_WINDOW_SECS = 7 * 86_400;
@@ -44,15 +44,6 @@ export interface ScopeValue {
  *  a module-level const so the "All nodes" label follows the active language. */
 export function allScope(t: TFunction): ScopeValue {
   return { kind: 'all', id: null, label: t('troubleshoot:scope.all') };
-}
-
-/** Case-insensitive substring match of nodes by name OR address (operators search by both). */
-export function filterNodes(nodes: NodeSummary[], query: string): NodeSummary[] {
-  const q = query.trim().toLowerCase();
-  if (!q) return nodes;
-  return nodes.filter(
-    (n) => n.name.toLowerCase().includes(q) || n.address.toLowerCase().includes(q),
-  );
 }
 
 /** Scope label for a group (recursive — a group scope covers its subtree, ADR-022). */

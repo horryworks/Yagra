@@ -13,12 +13,9 @@ import {
   calendarMatrix,
   countsTotal,
   densifyTimeBuckets,
-  downCount,
   flowTrendSeries,
-  percentHealthy,
   pinRollupFromCounts,
   type StateCounts,
-  stateCounts,
   topLevelRollup,
   topLevelRollupFromCounts,
   trailingIso,
@@ -65,16 +62,6 @@ describe('state roll-ups', () => {
     expect(worstState([])).toBe('ok');
   });
 
-  it('counts states and down/healthy derivations', () => {
-    const nodes = [node('a', 'ok'), node('b', 'critical'), node('c', 'unreachable'), node('d', 'ok')];
-    const c = stateCounts(nodes);
-    expect(c.ok).toBe(2);
-    expect(c.critical).toBe(1);
-    expect(c.unreachable).toBe(1);
-    expect(downCount(nodes)).toBe(2); // critical + unreachable
-    expect(percentHealthy(nodes)).toBe(50);
-    expect(percentHealthy([])).toBe(0);
-  });
 });
 
 describe('bucketAlertsByHour', () => {

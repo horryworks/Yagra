@@ -155,13 +155,6 @@ impl NatsBus {
         })
     }
 
-    /// Route published jobs to a specific pool's subject (defaults to [`DEFAULT_POOL`]).
-    #[must_use]
-    pub fn with_pool(mut self, pool: &str) -> Self {
-        self.job_subject = subjects::jobs_for_pool(pool);
-        self
-    }
-
     /// A clone of the underlying NATS client, for control-plane traffic that doesn't fit the [`Bus`]
     /// job/result seam — specifically core's Auth Callout responder, which request-replies on the
     /// NATS system subject `$SYS.REQ.USER.AUTH` (ADR-030). `async_nats::Client` is a cheap Arc handle.

@@ -76,13 +76,6 @@ export function classifyNodes(
   });
 }
 
-/** Per-verdict counts, with every verdict present so a tally never has a missing key. */
-export function verdictCounts(rows: DiffRow[]): Record<DiffVerdict, number> {
-  const out = Object.fromEntries(DIFF_VERDICTS.map((v) => [v, 0])) as Record<DiffVerdict, number>;
-  for (const r of rows) out[r.verdict] += 1;
-  return out;
-}
-
 /**
  * Whether the deployment may move to `derived`.
  *

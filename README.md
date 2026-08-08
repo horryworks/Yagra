@@ -6,7 +6,7 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
-> Status: **v0.1.22.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.1.23.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -27,9 +27,10 @@ polling**. Users access it through the WebUI.
 > and **remote pollers on an exposed bus can be scoped to their own pool's credentials** (opt-in),
 > narrowing what a compromised poller can reach. **AI assistants can now query Yagra through a built-in,
 > opt-in MCP tool surface** at `/mcp` — mostly read-only status, metrics, flow, and event queries plus
-> on-demand Troubleshoot analyses, alongside a few audited write actions (acknowledge an alert, open a
-> maintenance window, poll now); it is authenticated by API token and cannot change device
-> configuration. Received passive data can now be **forwarded onward** — a filtered tee that relays
+> on-demand Troubleshoot analyses and **Yagra's own configuration**, each section demanding the same
+> permission the matching WebUI screen does, alongside a few audited write actions (acknowledge an
+> alert, open a maintenance window, poll now); it is authenticated by API token and cannot change
+> device configuration. Received passive data can now be **forwarded onward** — a filtered tee that relays
 > syslog, SNMP traps and flow exports to a SIEM or collector byte-for-byte over UDP/TCP/TLS, or streams
 > normalized rows into **BigQuery** — from one egress point instead of a second export target on every
 > device. The **WebUI is served over HTTPS by default**, with your own certificate importable from
@@ -37,8 +38,15 @@ polling**. Users access it through the WebUI.
 > and local ones. Yagra also **derives the network map from what devices report** — CDP/LLDP
 > adjacency, shared subnets, OSPF neighbours, BGP peers and connected routes — and can hand **alert
 > suppression** over to that derived graph after showing you exactly which alerts it would change;
-> the same walks surface **hosts on your network that nothing is monitoring**. HA stores remain a
-> configuration step away, not a rewrite.
+> the same walks surface **hosts on your network that nothing is monitoring**. Yagra now also
+> **watches its own coverage**: a poller pool that still has nodes but no live poller raises a
+> critical alert, instead of letting a whole site drift quietly to *unknown* while every dashboard
+> stays calm. For deployments nobody can open a shell on, Settings ▸ System Health produces a
+> **downloadable support bundle** — health sections, applied migrations, the allow-listed
+> environment and core's own rotated logs, scanned for secrets before it is written. And the **LLM
+> root-cause explanation now investigates rather than guesses**, calling the read-only MCP tools
+> under the caller's own visibility scope and storing what it looked up beside its answer. HA stores
+> remain a configuration step away, not a rewrite.
 
 ## Components
 

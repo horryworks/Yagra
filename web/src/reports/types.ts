@@ -2,12 +2,7 @@
 // Frontend helpers for the report document (spec). The backend stores `spec` opaquely and the
 // WebUI owns the shape (same contract as the dashboard layout) — these helpers build/sanitize it.
 
-import type {
-  ReportSchedule,
-  ReportSectionDef,
-  ReportSectionInstance,
-  ReportSpec,
-} from '../types/api';
+import type { ReportSectionDef, ReportSectionInstance, ReportSpec } from '../types/api';
 
 /** Time-range presets for a report window. `labelKey` resolves in the reports namespace (this is a
  *  non-component module, so it stores i18n keys instead of resolving them at module load). */
@@ -65,13 +60,3 @@ export function sanitizeSpec(spec: ReportSpec | undefined | null): ReportSpec {
   return { version: 1, params: { range_secs: range }, sections };
 }
 
-/** Title for a section kind from the catalog (falls back to the raw kind). */
-export function sectionTitle(defs: ReportSectionDef[], kind: string): string {
-  return defs.find((d) => d.kind === kind)?.title ?? kind;
-}
-
-/** Whether a schedule is the cheapest "next run is soon" — for sorting display (unused stub kept
- *  small; the list is server-ordered by next_run_at). */
-export function isScheduleDue(s: ReportSchedule, now = Date.now()): boolean {
-  return s.enabled && s.next_run_ms <= now;
-}

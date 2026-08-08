@@ -10,6 +10,36 @@
 
 ## Unreleased
 
+## v0.1.23 — An alert for monitoring's own blind spot, a support bundle, and an RCA that investigates
+
+### Breaking changes
+- **An alert's `node` field is now its *subject*, and is no longer always a UUID.** For a
+  poller-pool alert it reads `pool:<name>`. This affects `GET /api/v1/alerts`, `GET
+  /api/v1/alerts/history`, the `/api/v1/stream/alerts` frames and the MCP alert tools. Every
+  response carrying an alert now also carries `subject_kind` (`node` | `pool`) and, for a named
+  subject, `subject_name` — **branch on `subject_kind` before treating `node` as a node id.**
+  - On history rows and in the MCP DTOs, `node` / `node_id` is `null` for a non-node subject rather
+    than a made-up UUID.
+  - `POST /api/v1/alerts/ack` now takes **either** `node` (unchanged) **or** `subject`, the alert's
+    flat subject form. `node` is no longer required; sending neither is a `400 invalid_subject`.
+  - Node-oriented aggregates are unaffected and stay node-only: `/api/v1/alerts/top-nodes` and
+    `/api/v1/alerts/transitions` never report a pool.
+- **Four previously unbounded tables now declare a retention policy (ADR-040).** Troubleshoot
+  analysis runs and their findings, generated AI root-cause reports, and monitoring-gap records are
+  pruned on a schedule; the interface map is declared kept-until-node-deletion, with its reason. The
+  first three had grown without limit since they were introduced — migration 0026 says "no auto-trim
+  yet" in as many words, and scheduled analyses have been writing to that table on a cadence since.
+  - A new **Diagnostic data** window (default 90 days) in Settings ▸ System settings covers analysis
+    runs and RCA reports. It is deliberately separate from "Report runs": a window's *name* must not
+    silently govern a second kind of data.
+  - Monitoring gaps follow the alert-linked window instead, because a gap explains an absence of
+    alerts and is only readable beside the history it explains.
+  - The interface map is **not** pruned by age, and the reason is in the policy table: an orphaned
+    `(node, ifIndex)` row is a stale identity rather than old data, and `last_seen` only advances
+    while interface collection is running — so an age-based sweep would erase the names and speeds
+    of every interface on a node whose polling was merely paused. Those rows disappear with their
+    node. The real fix belongs in the poller and is a separate change.
+
 ### New Features
 - **Yagra now alerts when a poller pool stops having a poller.** This was monitoring's own blind
   spot. The alert engine reasons about poll results, so when a pool loses its last live poller
@@ -36,19 +66,6 @@
     person whose site went dark. Pools holding no node they can see stay invisible to them.
   - Two things it is deliberately *not*: it never rolls into a node's displayed state (it belongs
     to no node), and it cannot be muted — a mute names a node.
-
-### Breaking changes
-- **An alert's `node` field is now its *subject*, and is no longer always a UUID.** For a
-  poller-pool alert it reads `pool:<name>`. This affects `GET /api/v1/alerts`, `GET
-  /api/v1/alerts/history`, the `/api/v1/stream/alerts` frames and the MCP alert tools. Every
-  response carrying an alert now also carries `subject_kind` (`node` | `pool`) and, for a named
-  subject, `subject_name` — **branch on `subject_kind` before treating `node` as a node id.**
-  - On history rows and in the MCP DTOs, `node` / `node_id` is `null` for a non-node subject rather
-    than a made-up UUID.
-  - `POST /api/v1/alerts/ack` now takes **either** `node` (unchanged) **or** `subject`, the alert's
-    flat subject form. `node` is no longer required; sending neither is a `400 invalid_subject`.
-  - Node-oriented aggregates are unaffected and stay node-only: `/api/v1/alerts/top-nodes` and
-    `/api/v1/alerts/transitions` never report a pool.
 - **The MCP surface can now read Yagra's own configuration — `get_config(kind=…)`.** One tool over
   28 reads: thresholds, event rules and sources, notification channels and routing rules, profiles
   and collection templates, a node's collected metrics, classification rules, the MIB catalog, a
@@ -113,20 +130,6 @@
     the support bundle carries core's logs only. A poller's log body would have to cross the bus to
     reach one, which is a new bus message rather than a read. Poller heartbeat counters, poll-loop
     statistics and host resources are in the bundle already.
-
-- **Troubleshoot's passive-event analyses read the event log store when one is configured.** They
-  had been reading PostgreSQL directly, which holds only alert-linked rows once VictoriaLogs is
-  enabled (ADR-024) — so they were answering about the subset of events that had *already* alerted.
-  `rule_gap` was the extreme case: its entire purpose is finding high-volume **unmatched** events,
-  and unmatched events never reach PostgreSQL on a log-store deployment, so it was structurally
-  guaranteed to return nothing on exactly the deployments that generate enough syslog to need it.
-  - `event_storm`, `severity_shift`, `auth_probe` and `incident_correlate`'s event lane now count
-    the full firehose rather than the alert-linked subset. The MCP `event_stats` tool, which was
-    built from three of the same queries, inherits the corrected answer.
-  - `event_flap` is unchanged and was already complete: every action it counts is alert-linked, so
-    PostgreSQL keeps all of them either way. That is now pinned by a test rather than a comment.
-  - A log-store failure fails the analysis rather than falling back to PostgreSQL. Falling back
-    would answer from the subset again with nothing to say so, which is the defect being fixed.
 - **`incident_correlate` now correlates across topology neighbours.** An incident is assembled from
   a node *and* its directly-linked upstream/downstream peers when their signals coincide in time
   (within five minutes), so a failed uplink reads as one incident with its downstream peers named
@@ -141,21 +144,21 @@
     suppression is not reasoned about as anyone's upstream.
   - An incident spanning two devices produces a finding on each, naming the other. Both devices are
     affected, and the per-node attribution keeps the report's node counts honest.
-- **Four previously unbounded tables now declare a retention policy (ADR-040).** Troubleshoot
-  analysis runs and their findings, generated AI root-cause reports, and monitoring-gap records are
-  pruned on a schedule; the interface map is declared kept-until-node-deletion, with its reason. The
-  first three had grown without limit since they were introduced — migration 0026 says "no auto-trim
-  yet" in as many words, and scheduled analyses have been writing to that table on a cadence since.
-  - A new **Diagnostic data** window (default 90 days) in Settings ▸ System settings covers analysis
-    runs and RCA reports. It is deliberately separate from "Report runs": a window's *name* must not
-    silently govern a second kind of data.
-  - Monitoring gaps follow the alert-linked window instead, because a gap explains an absence of
-    alerts and is only readable beside the history it explains.
-  - The interface map is **not** pruned by age, and the reason is in the policy table: an orphaned
-    `(node, ifIndex)` row is a stale identity rather than old data, and `last_seen` only advances
-    while interface collection is running — so an age-based sweep would erase the names and speeds
-    of every interface on a node whose polling was merely paused. Those rows disappear with their
-    node. The real fix belongs in the poller and is a separate change.
+
+### Improvements
+- **Troubleshoot's passive-event analyses read the event log store when one is configured.** They
+  had been reading PostgreSQL directly, which holds only alert-linked rows once VictoriaLogs is
+  enabled (ADR-024) — so they were answering about the subset of events that had *already* alerted.
+  `rule_gap` was the extreme case: its entire purpose is finding high-volume **unmatched** events,
+  and unmatched events never reach PostgreSQL on a log-store deployment, so it was structurally
+  guaranteed to return nothing on exactly the deployments that generate enough syslog to need it.
+  - `event_storm`, `severity_shift`, `auth_probe` and `incident_correlate`'s event lane now count
+    the full firehose rather than the alert-linked subset. The MCP `event_stats` tool, which was
+    built from three of the same queries, inherits the corrected answer.
+  - `event_flap` is unchanged and was already complete: every action it counts is alert-linked, so
+    PostgreSQL keeps all of them either way. That is now pinned by a test rather than a comment.
+  - A log-store failure fails the analysis rather than falling back to PostgreSQL. Falling back
+    would answer from the subset again with nothing to say so, which is the defect being fixed.
 - **Unmatched events now cluster on the device's own event code.** The Troubleshoot **Rule gap**
   analysis (and MCP `event_stats`) grouped events by trap OID, else syslog APP-NAME. A large class
   of real network gear supplies neither — its timestamp format falls outside both RFC 3164 and
@@ -178,8 +181,6 @@
     specific code, so **an existing rule-gap finding may split into several finer ones**.
   - Extraction applies to newly received events only — there is no backfill and none is needed, as
     the analysis reads only unmatched events and those age out within one retention window.
-
-### Improvements
 - **`GET /api/v1/mib-catalog` accepts `limit` and is now bounded.** The query had no row cap on
   either edge, which was survivable while its only caller was a settings screen and stopped being so
   once an AI client could ask for the whole table. `limit` is 1–2000 and defaults to 2000, so an
@@ -198,10 +199,6 @@
     substring `yagra`, which appears in every path and table name in the archive, and the scan
     would refuse every bundle forever. Counting the declined values is the fix; the README says
     plainly when the scan has fallen back to pattern matching alone, and what to do about it.
-- `db/connections.json` no longer reports a negative connection age. `now()` is the transaction's
-  start time and the backend running the query sets its own `state_change` after it, so the
-  `active` row reliably came back a few milliseconds below zero — an artefact of measuring from
-  inside, not a fact about the deployment.
 - **A group-scoped `rule_gap` or `auth_probe` restricts at the store rather than afterwards.** Both
   used to group fleet-wide and then keep a row only if its *representative* node was in scope, so a
   signature genuinely occurring inside your group vanished whenever some node outside it happened to
@@ -211,6 +208,12 @@
 - `PUT /api/v1/settings/retention` gained `diagnostic_days`. It is optional, so a client sending the
   previous four-field body keeps working — but note that such a body is a full replace and therefore
   resets this window to the default (90). The WebUI always sends every field.
+
+### Bug Fixes
+- `db/connections.json` no longer reports a negative connection age. `now()` is the transaction's
+  start time and the backend running the query sets its own `state_change` after it, so the
+  `active` row reliably came back a few milliseconds below zero — an artefact of measuring from
+  inside, not a fact about the deployment.
 
 ### Security
 - **An OIDC login is now refused when the IdP delivers the groups claim out-of-band** — Microsoft

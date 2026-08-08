@@ -14,8 +14,9 @@ import { usePrefsStore, type UiMode } from '../prefs';
  *  a CSS custom property can't be used inside an `@media` condition (tokens.css / ui-conventions.md). */
 export const MOBILE_BP = 768;
 
+// Touch affordances are decided in CSS via `@media (hover: none)` (ui-conventions.md, channel 2),
+// so there is deliberately no JS-side coarse-pointer hook to keep in sync with it.
 const mobileQuery = `(max-width: ${MOBILE_BP - 1}px)`;
-const coarseQuery = '(hover: none)';
 
 /** A tiny matchMedia → useSyncExternalStore adapter (one shared MediaQueryList per query). Degrades
  *  to a constant `false` when there is no `window`/`matchMedia` (SSR, the Vitest node env). */
@@ -40,17 +41,10 @@ function mediaStore(query: string) {
 }
 
 const mobile = mediaStore(mobileQuery);
-const coarse = mediaStore(coarseQuery);
 
 /** True when the viewport is narrower than the mobile boundary. `false` without matchMedia. */
 export function useIsMobileViewport(): boolean {
   return useSyncExternalStore(mobile.subscribe, mobile.get, () => false);
-}
-
-/** True on a coarse (touch) pointer — for touch-affordance decisions that are independent of the
- *  layout mode (a touch laptop in forced-desktop view still wants touch-reachable controls). */
-export function useIsCoarsePointer(): boolean {
-  return useSyncExternalStore(coarse.subscribe, coarse.get, () => false);
 }
 
 /** The pure layout-mode decision: `desktop` pref forces desktop; `auto` follows the viewport. */

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { alertSubject, hasNodeActions, subjectNodeId } from './alertSubject';
+import { alertSubject, subjectNodeId } from './alertSubject';
 
 const NODE = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 
@@ -32,11 +32,13 @@ describe('alertSubject', () => {
     });
   });
 
-  it('offers the node actions only where they would work', () => {
+  it('gates the node actions on a resolvable node, which is what the page checks', () => {
     // Mute names a node and RCA takes a node id, so both fail server-side for a pool subject.
-    expect(hasNodeActions({ node: NODE, subject_kind: 'node' })).toBe(true);
-    expect(hasNodeActions({ node: 'pool:tokyo', subject_kind: 'pool', subject_name: 'tokyo' })).toBe(
-      false,
-    );
+    // `ActiveAlertsPage` gates on `subjectNodeId(a) === null` — it needs the id anyway, so this
+    // asserts the predicate the page actually uses rather than a second one alongside it.
+    expect(subjectNodeId({ node: NODE, subject_kind: 'node' })).not.toBeNull();
+    expect(
+      subjectNodeId({ node: 'pool:tokyo', subject_kind: 'pool', subject_name: 'tokyo' }),
+    ).toBeNull();
   });
 });

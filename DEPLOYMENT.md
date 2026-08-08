@@ -392,6 +392,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_SMTP_HOST` / `_FROM` / `_TO` | unset ⇒ email off | Env-configured SMTP alert channel. All three are required — the channel is skipped unless every one is set and `_FROM`/`_TO` parse as mailboxes |
 | `YAGRA_SMTP_PORT` | `465` (implicit TLS) | SMTP port |
 | `YAGRA_SMTP_USER` / `_PASS` | unset ⇒ no auth | SMTP credentials; applied only when **both** are set |
+| `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` | `300` | How long a poller pool must hold nodes with **no live poller** before it raises a critical alert. A poller announces its own departure, so a rolling restart trips the condition instantly — this debounce is what stops that paging anyone. `0` disables the alert; the gauges are exported either way |
 | **Traffic flow & AS enrichment** | | |
 | `YAGRA_FLOW_RETENTION_DAYS` | `30` (clamp 1–3650) | Flow retention in days. **Seeds a brand-new deployment only** — afterwards Settings ▸ System settings ▸ Data retention is authoritative |
 | `YAGRA_IPASN_DB` | unset ⇒ enrichment off | Path to an offline iptoasn.com TSV for flow IP→ASN enrichment |
@@ -410,6 +411,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_RCA_MAX_CONCURRENT` | `2` | Max simultaneous LLM root-cause generations (billed external calls) |
 | `YAGRA_RCA_RATE_PER_MIN` | `10` | Max new root-cause generations per minute |
 | `YAGRA_RCA_CACHE_SECS` | `900` | RCA report cache lifetime (seconds); `force` bypasses the cache but not the caps |
+| `YAGRA_RCA_MAX_TURNS` | `6` | How many tool-calling turns an LLM root-cause analysis may take before it must answer. **`1` restores the pre-v0.1.23 single-shot behaviour exactly** — no tools are offered and the provider request is byte-identical to before |
+| `YAGRA_RCA_TASK_BUDGET_SECS` | `240` | Wall-clock ceiling for one root-cause analysis including its tool calls. Hitting it returns the model's last answer rather than failing the request |
 | **NATS Auth Callout (per-poller bus credentials)** | | |
 | `YAGRA_NATS_CALLOUT_SEED_FILE` | unset ⇒ callout off | Path to the mounted NATS account nkey seed; core then mints per-poller scoped bus users |
 | `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | NATS account minted poller users are placed into (must match the server's `auth_callout` account) |
@@ -418,6 +421,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_DISK_WATCH_PATHS` | `/=root` | Filesystems host self-metrics report capacity for (comma-separated `path` or `path=alias`); read by core **and** poller |
 | `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for OpenTelemetry trace export (falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`) |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | Trace sampler; use `parentbased_traceidratio` + arg (e.g. `0.01`) at scale |
+| `YAGRA_LOG_DIR` | unset ⇒ stdout only | Directory for hourly-rotated JSON-lines log files, written **in addition to** stdout. Exists for deployments where nobody can reach `docker logs`, so a panic or OOM would otherwise leave no retrievable trace; the support bundle reads these files back over HTTP. Set in `docker-compose.yml` and `docker-compose.deploy.yml` — clear it in `.env` to turn it off. Writes are non-blocking and drop rather than stall the poll loop; an unwritable directory degrades to stdout-only with a warning instead of failing startup |
+| `YAGRA_LOG_RETAIN_HOURS` | `48` | Hourly log files kept in `YAGRA_LOG_DIR`, pruned automatically, so an unattended deployment cannot fill its volume with its own logs |
 | `RUST_LOG` | `info` | Log level (e.g. `info,yagra_core=debug`) |
 
 ### Yagra-poller

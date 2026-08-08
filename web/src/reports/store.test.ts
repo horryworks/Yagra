@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { beforeEach, describe, expect, it } from 'vitest';
-import { generatingCount, useReportRunsStore } from './store';
+import { useReportRunsStore } from './store';
 import type { ReportRun } from '../types/api';
 
 function run(over: Partial<ReportRun>): ReportRun {
@@ -66,21 +66,5 @@ describe('report runs store', () => {
     store.setRuns([run({ id: 'a' }), run({ id: 'b' })]);
     store.removeRun('a');
     expect(useReportRunsStore.getState().runs.map((r) => r.id)).toEqual(['b']);
-  });
-});
-
-describe('generatingCount', () => {
-  it('counts only running or queued runs', () => {
-    const runs = [
-      run({ id: 'a', state: 'running' }),
-      run({ id: 'b', state: 'queued' }),
-      run({ id: 'c', state: 'succeeded' }),
-      run({ id: 'd', state: 'failed' }),
-    ];
-    expect(generatingCount(runs)).toBe(2);
-  });
-
-  it('is zero when nothing is in flight', () => {
-    expect(generatingCount([run({ state: 'succeeded' }), run({ state: 'failed' })])).toBe(0);
   });
 });

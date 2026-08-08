@@ -383,6 +383,7 @@ export RUST_LOG=info
 | `YAGRA_SMTP_HOST` / `_FROM` / `_TO` | 未設定 ⇒ メール無効 | 環境変数による SMTP アラートチャネル。3 つとも必須で、いずれかが欠けるか `_FROM`/`_TO` がメールアドレスとして解釈できない場合はチャネルを作りません |
 | `YAGRA_SMTP_PORT` | `465`（暗黙 TLS） | SMTP ポート |
 | `YAGRA_SMTP_USER` / `_PASS` | 未設定 ⇒ 認証なし | SMTP 認証情報。**両方**設定されたときのみ適用 |
+| `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` | `300` | ノードが残っているのに**生存ポーラーが 0 台**の状態がこの秒数続いたら critical アラートを上げる。ポーラーは終了時に自ら離脱を通知するため、ローリング再起動でも条件は即座に成立する — このデバウンスが「誰も呼び出さない」ためのもの。`0` でアラート無効（ゲージはどちらでも出力される） |
 | **トラフィックフローと IP→ASN 補完** | | |
 | `YAGRA_FLOW_RETENTION_DAYS` | `30`（1–3650 にクランプ） | フローの保持期間（日数）。**新規デプロイの初回起動時のみシード** — 以後は 設定 ▸ システム設定 ▸ データ保持期間 が正 |
 | `YAGRA_IPASN_DB` | 未設定 ⇒ 補完無効 | フローの IP→ASN 補完に使うオフライン iptoasn.com TSV へのパス |
@@ -401,6 +402,8 @@ export RUST_LOG=info
 | `YAGRA_RCA_MAX_CONCURRENT` | `2` | 同時実行できる LLM 根本原因分析の上限（課金される外部呼び出し） |
 | `YAGRA_RCA_RATE_PER_MIN` | `10` | 毎分受け付ける新規根本原因分析の上限 |
 | `YAGRA_RCA_CACHE_SECS` | `900` | RCA レポートのキャッシュ寿命（秒）。`force` はキャッシュを迂回するが上限は迂回しない |
+| `YAGRA_RCA_MAX_TURNS` | `6` | LLM 根本原因分析が回答に至るまでに使えるツール呼び出しのターン数上限。**`1` にすると v0.1.23 以前の単発動作に完全に戻る** — ツールは一切提示されず、プロバイダへのリクエストは以前とバイト単位で同一 |
+| `YAGRA_RCA_TASK_BUDGET_SECS` | `240` | 1 回の根本原因分析（ツール呼び出し込み）の実時間上限。到達した場合はリクエストを失敗させず、モデルの最後の回答を返す |
 | **NATS Auth Callout（ポーラごとのバス資格情報）** | | |
 | `YAGRA_NATS_CALLOUT_SEED_FILE` | 未設定 ⇒ callout 無効 | マウントした NATS アカウント nkey シードへのパス。設定すると core がポーラごとにスコープしたバスユーザを発行 |
 | `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | 発行したポーラユーザを配置する NATS アカウント（サーバの `auth_callout` アカウントと一致必須） |
@@ -409,6 +412,8 @@ export RUST_LOG=info
 | `YAGRA_DISK_WATCH_PATHS` | `/=root` | ホスト自己メトリクスが容量を報告するファイルシステム（カンマ区切りの `path` または `path=alias`）。core と poller の**両方**が読む |
 | `YAGRA_OTEL_ENDPOINT` | 未設定 ⇒ ログのみ | OpenTelemetry トレース送出先の OTLP/HTTP エンドポイント（`OTEL_EXPORTER_OTLP_ENDPOINT` にフォールバック） |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | トレースサンプラ。大規模時は `parentbased_traceidratio` + 引数（例 `0.01`）を使用 |
+| `YAGRA_LOG_DIR` | 未設定 ⇒ stdout のみ | 1 時間ごとにローテートする JSON Lines ログの出力先ディレクトリ。stdout の**代わりではなく追加**で書く。`docker logs` に手が届かない環境向けで、これが無いとパニックや OOM の痕跡が一切残らない。サポートバンドルはこのファイルを HTTP 経由で読み戻す。`docker-compose.yml` / `docker-compose.deploy.yml` で既定設定済み — `.env` で空にすれば無効化。書き込みはノンブロッキングでポーリングループを止めず落とす。ディレクトリが書けない場合は起動失敗ではなく警告のうえ stdout のみに縮退 |
+| `YAGRA_LOG_RETAIN_HOURS` | `48` | `YAGRA_LOG_DIR` に保持する時間別ログファイル数。自動で刈られるので、無人環境が自分のログでボリュームを埋めることはない |
 | `RUST_LOG` | `info` | ログレベル（例 `info,yagra_core=debug`） |
 
 ### Yagra-poller

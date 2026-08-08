@@ -11,7 +11,7 @@ import type {
   TopologyNode,
 } from '../../types/api';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
-import { HARD_DOWN_STATES, SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
+import { SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
 
 /** The worst (most severe) state in a set, or `ok` when empty. Used for site/region tiles. */
 export function worstState(states: NodeState[]): NodeState {
@@ -38,24 +38,10 @@ export function countsTotal(c: StateCounts): number {
   return SEVERITY_ORDER.reduce((n, s) => n + (c[s] ?? 0), 0);
 }
 
-/** Count nodes by state. */
-export function stateCounts(nodes: NodeSummary[]): Record<NodeState, number> {
-  const counts = emptyStateCounts();
-  for (const n of nodes) counts[n.state] += 1;
-  return counts;
-}
-
-/** Nodes considered "down" for the KPI tile: the shared hard-down set only. */
-export function downCount(nodes: NodeSummary[]): number {
-  return nodes.reduce((n, x) => (HARD_DOWN_STATES.includes(x.state) ? n + 1 : n), 0);
-}
-
-/** Percent of nodes in `ok`, rounded; 0 when there are no nodes. */
-export function percentHealthy(nodes: NodeSummary[]): number {
-  if (nodes.length === 0) return 0;
-  const ok = nodes.reduce((n, x) => (x.state === 'ok' ? n + 1 : n), 0);
-  return Math.round((ok / nodes.length) * 100);
-}
+// Removed: `stateCounts` / `downCount` / `percentHealthy`, which tallied a client-side
+// `NodeSummary[]`. The widgets read the server's `fleet/group-summary` rollup instead (it is the
+// only shape that works at fleet scale), so `fleet.tsx` folds `HARD_DOWN_STATES` over
+// `summary.states` directly and none of the three had a caller left.
 
 /** One hour bucket of alert-history "opened" events. `t` is the bucket's start (Unix ms). */
 export interface HourBucket {

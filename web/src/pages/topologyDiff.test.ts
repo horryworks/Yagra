@@ -1,12 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, it, expect } from 'vitest';
-import {
-  classifyNodes,
-  verdictCounts,
-  canEnableDerived,
-  DIFF_VERDICTS,
-  type DiffVerdict,
-} from './topologyDiff';
+import { classifyNodes, canEnableDerived } from './topologyDiff';
 
 const edge = (child: string, parent: string) => ({ child, parent });
 
@@ -82,29 +76,6 @@ describe('classifyNodes', () => {
   it('tolerates a response with the difference lists absent', () => {
     const rows = classifyNodes({} as never, ['a'], new Set());
     expect(rows[0].verdict).toBe('unmodelled');
-  });
-});
-
-describe('verdictCounts', () => {
-  it('includes every verdict even at zero, so a tally never has a missing key', () => {
-    const counts = verdictCounts([
-      { nodeId: 'a', verdict: 'agree', manualOnly: [], derivedOnly: [] },
-      { nodeId: 'b', verdict: 'agree', manualOnly: [], derivedOnly: [] },
-    ]);
-    expect(Object.keys(counts).sort()).toEqual([...DIFF_VERDICTS].sort());
-    expect(counts.agree).toBe(2);
-    expect(counts.only_derived).toBe(0);
-  });
-
-  it('counts each row exactly once across the verdicts', () => {
-    const rows = DIFF_VERDICTS.map((v: DiffVerdict, i) => ({
-      nodeId: String(i),
-      verdict: v,
-      manualOnly: [],
-      derivedOnly: [],
-    }));
-    const counts = verdictCounts(rows);
-    expect(Object.values(counts).reduce((a, b) => a + b, 0)).toBe(rows.length);
   });
 });
 

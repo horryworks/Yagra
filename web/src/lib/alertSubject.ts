@@ -43,19 +43,16 @@ export function alertSubject(a: HasSubject): AlertSubject {
   return { kind: 'node', nodeId: a.node ?? '' };
 }
 
-/** The node this alert is about, or `null` when it is about something else. */
+/**
+ * The node this alert is about, or `null` when it is about something else.
+ *
+ * `null` is also the gate for the per-alert node actions (Mute, Explain): both are node-scoped
+ * server-side — a mute names a node and RCA takes a node id — so offering them on a pool alert
+ * would render a control that can only fail, and `ui-conventions` treats a permanently broken
+ * affordance as a promise the UI cannot keep. Callers need the id anyway, so they branch on this
+ * rather than on a separate boolean.
+ */
 export function subjectNodeId(a: HasSubject): string | null {
   const s = alertSubject(a);
   return s.kind === 'node' ? s.nodeId : null;
-}
-
-/**
- * Whether the per-alert node actions (Mute, Explain) apply.
- *
- * Both are node-scoped server-side — a mute names a node and RCA takes a node id — so offering
- * them on a pool alert would render a control that can only fail. `ui-conventions`: a permanently
- * broken affordance is a promise the UI cannot keep.
- */
-export function hasNodeActions(a: HasSubject): boolean {
-  return subjectNodeId(a) !== null;
 }

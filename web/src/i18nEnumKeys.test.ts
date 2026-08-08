@@ -55,6 +55,9 @@ import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 import { BUNDLE_TABLES } from './pages/configBundle';
 import { RETENTION_FIELDS, RETENTION_SUBJECTS } from './pages/retentionSettings';
+import { EXPECTED_STATUS_MODES } from './components/NodeDetail/checkConfigForm';
+import { EXPIRY_CHOICES } from './pages/tokenForm';
+import { EXPIRY_LEVELS } from './pages/tlsSettingsForm';
 
 import enAccess from './locales/en/access.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
@@ -305,6 +308,38 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSettingsTokens, ja: jaSettingsTokens },
       'state.',
       ['active', 'revoked', 'expired', 'no-owner', 'owner-disabled'],
+    );
+  });
+
+  it('every expected-status mode has a label (nodes:checkEdit.statusMode.*)', () => {
+    // `expected_status_mode` is a backend field: the HTTP check's status matcher. The dialog
+    // renders `checkEdit.statusMode.${m}` from the runtime array, so a mode added on the Rust side
+    // and mirrored here without strings ships as a raw key in both locales.
+    expectKeys(
+      'expected status mode',
+      { en: enNodes, ja: jaNodes },
+      'checkEdit.statusMode.',
+      EXPECTED_STATUS_MODES,
+    );
+  });
+
+  it('every token expiry choice has a label (settings-tokens:expiry.*)', () => {
+    expectKeys(
+      'token expiry choice',
+      { en: enSettingsTokens, ja: jaSettingsTokens },
+      'expiry.',
+      EXPIRY_CHOICES,
+    );
+  });
+
+  it('every certificate expiry level has a label (settings-tls:expiry.*)', () => {
+    // Same `expiry.` leaf as the token page, but a different namespace and a different set —
+    // pinning only one of them would leave the other free to drift.
+    expectKeys(
+      'certificate expiry level',
+      { en: enSettingsTls, ja: jaSettingsTls },
+      'expiry.',
+      EXPIRY_LEVELS,
     );
   });
 

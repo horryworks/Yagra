@@ -546,13 +546,6 @@ impl FakeTransport {
         self
     }
 
-    /// Set the canned raw-instance walk rows this fake returns.
-    #[must_use]
-    pub fn with_snmp_instances(mut self, rows: Vec<SnmpInstanceRow>) -> Self {
-        self.snmp_instances = rows;
-        self
-    }
-
     /// Set the canned HTTP probe this fake returns.
     #[must_use]
     pub fn with_http(mut self, probe: HttpProbe) -> Self {
