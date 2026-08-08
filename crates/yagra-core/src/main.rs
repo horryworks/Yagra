@@ -1287,6 +1287,7 @@ impl LeaderTasks {
                 self.group_repo.clone(),
                 self.alerts.clone(),
                 self.notifier.clone(),
+                self.history.clone(),
             ),
         );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).
@@ -2070,6 +2071,7 @@ async fn run_pool_coverage_watch(
     groups: Arc<groups::GroupRepo>,
     alerts: Arc<AlertManager>,
     notifier: Arc<Notifier>,
+    history: Arc<AlertHistoryStore>,
 ) {
     let mut watch = pool_coverage::CoverageWatch::from_env();
     if watch.disabled() {
@@ -2120,10 +2122,32 @@ async fn run_pool_coverage_watch(
                     alerts.resolve_pool_coverage_alert(&pool)
                 }
             };
-            if let Some(action) = action {
-                notifier.handle(action).await;
+            let Some(action) = action else { continue };
+            // Persist before notifying, and write **inline** rather than through the batch
+            // channel: that channel exists to keep the poll-result hot path off the database, and
+            // this loop is a 30-second tick that emits at most one row per pool per debounce. A
+            // failure here is logged and the notification still goes out — an operator being paged
+            // matters more than the row, and the row is what History reads afterwards.
+            if let Some(alert) = coverage_alert_of(&action) {
+                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
+                if let Err(e) = history.record(alert, resolved).await {
+                    tracing::warn!(error = %e, "recording a pool-coverage transition failed");
+                }
             }
+            notifier.handle(action).await;
         }
+    }
+}
+
+/// The alert inside a coverage action, for the history write.
+///
+/// `Suppress` is unreachable here — dependency suppression is a property of the node graph and a
+/// pool is not in it — but it is spelled out rather than caught by a wildcard so a new action
+/// variant has to decide what History should do with it.
+fn coverage_alert_of(action: &crate::alerts::NotifyAction) -> Option<&Alert> {
+    match action {
+        crate::alerts::NotifyAction::Fire(a) | crate::alerts::NotifyAction::Resolve(a) => Some(a),
+        crate::alerts::NotifyAction::Suppress(_) => None,
     }
 }
 
@@ -3683,6 +3707,59 @@ mod tests {
 
     /// This file's own source, for the structural assertion below.
     const SRC: &str = include_str!("main.rs");
+
+    /// **A coverage transition is written to History, not only notified.**
+    ///
+    /// ⚠️ Found on real hardware, not by a test: Increment 1 deliberately kept pool alerts out of
+    /// `alert_history`, so the watch loop was wired to the notifier alone. Increment 2 opened the
+    /// store to every subject — and nothing in the type system connected the two, so the alert
+    /// raised, paged, and left no row. The gauges and the log line all looked correct.
+    ///
+    /// Structural because the loop's body is a 30-second tick around a real database; the
+    /// behaviour a unit test *can* reach is `coverage_alert_of`, tested below.
+    #[test]
+    fn a_pool_coverage_transition_reaches_the_history_store() {
+        let production = SRC
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        let watch = production
+            .split("async fn run_pool_coverage_watch")
+            .nth(1)
+            .expect("the watch loop exists");
+        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        assert!(
+            body.contains("history.record("),
+            "the coverage watch notifies without recording — the alert pages and History stays \
+             empty, which is exactly what shipped in Increment 1"
+        );
+        assert!(
+            body.contains("notifier.handle("),
+            "…and it must still notify"
+        );
+    }
+
+    #[test]
+    fn every_notify_action_decides_what_history_does_with_it() {
+        use yagra_alert::{Alert, Breach, Subject};
+        let alert = Alert {
+            subject: Subject::Pool("tokyo".to_owned()),
+            check: yagra_common::CheckId::from(Uuid::nil()),
+            severity: yagra_common::Severity::Critical,
+            state: yagra_common::NodeState::Unreachable,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: "live_pollers".to_owned(),
+            breach: None::<Breach>,
+        };
+        // A fire and a resolve are both rows; the two are told apart by `resolved`, which the
+        // caller derives from the same action.
+        assert!(coverage_alert_of(&crate::alerts::NotifyAction::Fire(alert.clone())).is_some());
+        assert!(coverage_alert_of(&crate::alerts::NotifyAction::Resolve(alert.clone())).is_some());
+        // Suppression is a property of the node dependency graph, which a pool is not in.
+        assert!(coverage_alert_of(&crate::alerts::NotifyAction::Suppress(alert)).is_none());
+    }
 
     /// **In shadow mode the alert engine receives the manual graph, and nothing else.**
     ///

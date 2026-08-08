@@ -130,6 +130,11 @@ services:
       # Optional: alert Webhook + SNMP v2c community (left unset = disabled).
       YAGRA_WEBHOOK_URL: ${YAGRA_WEBHOOK_URL:-}
       YAGRA_SNMP_COMMUNITY: ${YAGRA_SNMP_COMMUNITY:-}
+      # How long a poller pool must have nodes but no live poller before Yagra alerts on it
+      # (ADR-009's self-monitoring blind spot; default 300s). A poller announces its own departure,
+      # so an ordinary rolling restart raises the condition instantly — this debounce is what stops
+      # that paging anyone. `0` disables the alert; the gauges still publish either way.
+      YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS: ${YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS:-}
       # Optional: route Meraki cloud polling to a specific poller pool (default "default").
       # Only relevant once you run pool-scoped remote pollers (docker-compose.poller.yml).
       # YAGRA_MERAKI_POOL: ${YAGRA_MERAKI_POOL:-default}
