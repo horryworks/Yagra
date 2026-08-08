@@ -8,6 +8,7 @@
 
 use sqlx::types::Json;
 use sqlx::{PgPool, Row};
+use std::collections::HashSet;
 use uuid::Uuid;
 use yagra_common::url_check::{ExpectedStatus, HttpMethod, UrlCheckConfig};
 use yagra_common::CredentialId;
@@ -75,6 +76,22 @@ impl UrlCheckRepo {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Every node that has a URL check.
+    ///
+    /// Preloaded once per scheduler sweep so the sweep never adds a per-node round trip at fleet
+    /// scale — the same trick [`crate::dns_check::DnsCheckRepo::node_ids`] and
+    /// `MerakiDeviceRepo::node_ids` exist for. Until this landed the URL lookup ran unconditionally
+    /// for every node on every sweep (50k nodes ⇒ 50k round trips a round), which the scheduler's
+    /// own doc comment had been carrying as a named debt.
+    pub async fn node_ids(&self) -> anyhow::Result<HashSet<Uuid>> {
+        let rows = sqlx::query("SELECT node_id FROM url_checks")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| r.try_get::<Uuid, _>("node_id").map_err(Into::into))
+            .collect()
     }
 
     /// Delete a node's URL check. Returns whether a row was removed.

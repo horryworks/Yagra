@@ -97,5 +97,6 @@ pub use topology::{
 pub use trap::trap_oid_name;
 pub use url_check::{
     host_ip, is_ssrf_blocked, ExpectedStatus, HttpAuth, HttpMethod, UrlCheckConfig,
-    HTTP_AUTH_SCHEMES, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
+    HTTP_AUTH_SCHEMES, METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP,
+    METRIC_SSL_CERT_DAYS_TO_EXPIRY,
 };

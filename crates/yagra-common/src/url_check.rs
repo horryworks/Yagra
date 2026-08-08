@@ -21,6 +21,20 @@ use std::net::{IpAddr, Ipv6Addr};
 pub const METRIC_HTTP_UP: &str = "http_up";
 /// Stable TSDB metric: the HTTP status code observed (diagnostic/display only — no threshold).
 pub const METRIC_HTTP_STATUS_CODE: &str = "http_status_code";
+/// Stable TSDB metric: how long the endpoint took to answer, in milliseconds.
+///
+/// **This is time-to-response-*headers*, not time-to-body-complete.** The probe never reads the
+/// response body (`reqwest`'s `send()` resolves once the headers are in), so the measurement covers
+/// DNS + TCP + TLS handshake + request + first response byte. Body matching (ADR-047 Inc.2) will
+/// start reading the body — **keep this measured at the same point** rather than letting it grow to
+/// include the read, or the same metric name silently changes meaning for every existing series.
+///
+/// Emitted **only when the endpoint answered**. See the poller's HTTP arm for why an unreachable
+/// probe writes no sample here (it would be a timeout duration, not a response time).
+///
+/// No default threshold is seeded — response latency varies far too much between environments, the
+/// same call ADR-033 made for `dns_resolve_ms`.
+pub const METRIC_HTTP_RESPONSE_TIME_MS: &str = "http_response_time_ms";
 /// Stable TSDB metric: days until the TLS server certificate's `notAfter` (HTTPS only).
 pub const METRIC_SSL_CERT_DAYS_TO_EXPIRY: &str = "ssl_cert_days_to_expiry";
 

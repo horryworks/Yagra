@@ -180,9 +180,12 @@ export function OverviewTab({
   );
 }
 
-/** URL-monitor health: availability (`http_up`), the last HTTP status code, and (for HTTPS) the
- *  TLS certificate's days-to-expiry. Mirrors the Device-health card layout; self-refreshes. Shown
- *  only for URL-monitor nodes (the caller guards on `node.url_check`). */
+/** URL-monitor health: availability (`http_up`), the last HTTP status code, the response time, and
+ *  (for HTTPS) the TLS certificate's days-to-expiry. Mirrors the Device-health card layout;
+ *  self-refreshes. Shown only for URL-monitor nodes (the caller guards on `node.url_check`).
+ *
+ *  The response time is time-to-response-headers, not time-to-body-complete — the probe never reads
+ *  the body. The label says so, because "response time" otherwise reads as the whole transfer. */
 function UrlHealth({
   nodeId,
   url,
@@ -199,7 +202,12 @@ function UrlHealth({
   const [up, setUp] = useState<number | null>(null);
   const [statusCode, setStatusCode] = useState<number | null>(null);
   const [certDays, setCertDays] = useState<number | null>(null);
+  const [responseMs, setResponseMs] = useState<number | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+  const [responseSeries, setResponseSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
     values: [],
   });
@@ -214,13 +222,21 @@ function UrlHealth({
         api.getNodeMetric(nodeId, 'http_status_code'),
         api.getNodeMetric(nodeId, 'ssl_cert_days_to_expiry'),
         api.getNodeMetricRange(nodeId, 'http_status_code', { from, to }),
-      ]).then(([u, s, c, r]) => {
+        api.getNodeMetric(nodeId, 'http_response_time_ms'),
+        api.getNodeMetricRange(nodeId, 'http_response_time_ms', { from, to }),
+      ]).then(([u, s, c, r, rt, rtr]) => {
         if (cancelled) return;
         setUp(u.status === 'fulfilled' ? u.value.value : null);
         setStatusCode(s.status === 'fulfilled' ? s.value.value : null);
         setCertDays(c.status === 'fulfilled' ? c.value.value : null);
         setSeries(
           r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
+        );
+        setResponseMs(rt.status === 'fulfilled' ? rt.value.value : null);
+        setResponseSeries(
+          rtr.status === 'fulfilled'
+            ? pointsToSeries(rtr.value.points)
+            : { timestamps: [], values: [] },
         );
         setWin([from, to]);
       });
@@ -273,6 +289,26 @@ function UrlHealth({
             />
           )}
         </div>
+        {/* Absent while the endpoint is unreachable — the poller writes no response time when
+            there was no response, so the card disappears rather than showing the timeout. */}
+        {responseMs != null && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.responseTime')}</span>
+              <span className="nd-health-metric-value">{Math.round(responseMs)} ms</span>
+            </div>
+            {responseSeries.timestamps.length > 0 && (
+              <MetricChart
+                title=""
+                timestamps={responseSeries.timestamps}
+                values={responseSeries.values}
+                yFormat={(v) => `${Math.round(v)} ms`}
+                legendFormat={(v) => `${Math.round(v)} ms`}
+                xRange={win ?? undefined}
+              />
+            )}
+          </div>
+        )}
         {certDays != null && (
           <div className="nd-health-metric">
             <div className="nd-health-metric-head">

@@ -3030,11 +3030,15 @@ async fn run_scheduler(
                 // exceed the poll interval. Bounded so the DB connection pool isn't overwhelmed.
                 const SWEEP_BUILD_CONCURRENCY: usize = 16;
 
-                // DNS monitors are a per-node-kind lookup, so preload their ids once per sweep and
-                // let the dispatcher skip the query for every node that isn't one — the same reason
-                // Meraki ids are preloaded above. Without this the sweep would pay one extra round
-                // trip per node per round at fleet scale.
-                let dns_nodes = Arc::new(dispatcher.dns_node_ids().await);
+                // URL and DNS monitors each live in their own 1:1 side table, so resolving a node's
+                // kind means a query per table. Preload both id sets once per sweep and let the
+                // dispatcher skip the query for every node that isn't one — the same reason Meraki
+                // ids are preloaded above. Without this the sweep pays one extra round trip per
+                // node per table per round at fleet scale.
+                let monitor_ids = Arc::new((
+                    dispatcher.url_node_ids().await,
+                    dispatcher.dns_node_ids().await,
+                ));
 
                 for (pool, members) in groups {
                     if scheduler::pool_uses_working_set(&pool, &live) {
@@ -3049,15 +3053,19 @@ async fn run_scheduler(
                         let desired: HashMap<_, _> = futures::stream::iter(members)
                             .map(|(node, secs)| {
                                 let dispatcher = dispatcher.clone();
-                                let dns_nodes = dns_nodes.clone();
+                                let monitor_ids = monitor_ids.clone();
                                 // Cheap: scalars plus one `Arc` to the shared route-probe plan.
                                 let neighbors = neighbors.clone();
                                 async move {
+                                    let (url_ids, dns_ids) = monitor_ids.as_ref();
                                     let specs = dispatcher
                                         .build_node_specs(
                                             &node,
                                             secs,
-                                            Some(dns_nodes.as_ref()),
+                                            scheduler::MonitorHints {
+                                                url: Some(url_ids),
+                                                dns: Some(dns_ids),
+                                            },
                                             &neighbors,
                                         )
                                         .await;
@@ -3087,7 +3095,10 @@ async fn run_scheduler(
                                 .build_scheduled_jobs_hinted(
                                     node,
                                     *secs,
-                                    Some(dns_nodes.as_ref()),
+                                    scheduler::MonitorHints {
+                                        url: Some(&monitor_ids.0),
+                                        dns: Some(&monitor_ids.1),
+                                    },
                                     &neighbors,
                                 )
                                 .await

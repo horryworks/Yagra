@@ -22,8 +22,8 @@ use yagra_bus::{
 };
 use yagra_common::{
     DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT,
-    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_STATUS_CODE,
-    METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
+    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_RESPONSE_TIME_MS,
+    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -234,6 +234,23 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                         vec![Sample::gauge(METRIC_HTTP_UP, if up { 1.0 } else { 0.0 })];
                     if let Some(code) = probe.status_code {
                         samples.push(Sample::gauge(METRIC_HTTP_STATUS_CODE, f64::from(code)));
+                    }
+                    // Only when the endpoint actually answered. The transport fills
+                    // `response_time_ms` on the failure path too, but that value is time-to-
+                    // timeout/connect-failure, not a response time: emitting it would draw a
+                    // "slow response" at the timeout value for the whole outage, and a
+                    // response-time threshold would then page for the same incident `http_up`
+                    // already covers.
+                    //
+                    // Deliberately unlike the DNS arm below, which emits `dns_resolve_ms` even
+                    // when the name does not resolve — there the failure value is how long the
+                    // resolver took to *answer* NXDOMAIN/SERVFAIL, a real measurement. Do not
+                    // "align" the two.
+                    if probe.reachable {
+                        samples.push(Sample::gauge(
+                            METRIC_HTTP_RESPONSE_TIME_MS,
+                            probe.response_time_ms,
+                        ));
                     }
                     if let Some(days) = probe.cert_days_to_expiry {
                         samples.push(Sample::gauge(METRIC_SSL_CERT_DAYS_TO_EXPIRY, days));
@@ -2048,6 +2065,12 @@ mod tests {
             .samples
             .iter()
             .any(|s| s.metric == METRIC_SSL_CERT_DAYS_TO_EXPIRY && s.value == 45.0));
+        // The transport has always measured this; for a long time nothing turned it into a sample,
+        // so a URL monitor could say whether the endpoint was up but never whether it was slow.
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_RESPONSE_TIME_MS && s.value == 12.0));
     }
 
     #[tokio::test]
@@ -2070,11 +2093,28 @@ mod tests {
             .samples
             .iter()
             .any(|s| s.metric == METRIC_HTTP_STATUS_CODE && s.value == 500.0));
+        // The endpoint answered — it just answered wrongly — so the response time is a real
+        // measurement and must still be recorded. The gate below is on *reachability*, not on
+        // `http_up`; conflating the two would blind the latency series for every monitor whose
+        // expected-status check is failing, which is exactly when latency is worth seeing.
+        assert!(r
+            .samples
+            .iter()
+            .any(|s| s.metric == METRIC_HTTP_RESPONSE_TIME_MS && s.value == 8.0));
     }
 
     #[tokio::test]
     async fn http_down_and_unreachable_when_no_response() {
-        let t = FakeTransport::unreachable(); // http probe: reachable=false, no status
+        use yagra_transport::HttpProbe;
+        // A timeout: the transport still fills `response_time_ms` (elapsed until it gave up), so
+        // this fake carries the realistic 5000 ms rather than the plain `unreachable()` fake's 0.0
+        // — otherwise dropping the reachability gate would emit a 0.0 nobody would notice.
+        let t = FakeTransport::unreachable().with_http(HttpProbe {
+            reachable: false,
+            status_code: None,
+            response_time_ms: 5000.0,
+            cert_days_to_expiry: None,
+        });
         let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
         assert!(r
@@ -2085,6 +2125,15 @@ mod tests {
             .samples
             .iter()
             .any(|s| s.metric == METRIC_HTTP_STATUS_CODE));
+        // No response, no response time. Emitting the timeout duration would draw a flat "slow
+        // response" line for the whole outage and let a latency threshold page for the same
+        // incident `http_up` already covers.
+        assert!(
+            !r.samples
+                .iter()
+                .any(|s| s.metric == METRIC_HTTP_RESPONSE_TIME_MS),
+            "an unreachable endpoint must not report a response time"
+        );
     }
 
     // ── DNS name-resolution monitoring (ADR-033) ────────────────────────────────────

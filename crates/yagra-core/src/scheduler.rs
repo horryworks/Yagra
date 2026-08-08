@@ -605,6 +605,39 @@ impl<'a> SpecialMonitor<'a> {
     }
 }
 
+/// The sweep's once-per-round preloaded id sets, one per single-purpose monitor kind.
+///
+/// Each kind lives in its own 1:1 side table, so resolving a node's kind means a query against
+/// every one of them — at 50k nodes that is 50k round trips *per table* per round for the 99.9% of
+/// the fleet that are ordinary devices. The sweep loads the ids once and hands them down; a node
+/// absent from the set is known not to be that kind, and its lookup is skipped.
+///
+/// ⚠️ `None` and an **empty set** mean different things and must not be conflated.
+/// `None` = "no hint was preloaded" ⇒ query directly (the on-demand single-node path).
+/// `Some(∅)` = "there are no monitors of this kind at all" ⇒ skip every lookup.
+/// [`Default`] is both-`None`, which is exactly the on-demand behaviour.
+///
+/// This is one struct rather than one `Option<&HashSet<Uuid>>` parameter per kind because the
+/// second kind already made the parameter list ambiguous at the call sites, and a third would make
+/// it worse — see `extensibility.md` §3.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MonitorHints<'a> {
+    /// Nodes carrying a `url_checks` row, or `None` for "not preloaded".
+    pub url: Option<&'a HashSet<Uuid>>,
+    /// Nodes carrying a `dns_checks` row, or `None` for "not preloaded".
+    pub dns: Option<&'a HashSet<Uuid>>,
+}
+
+/// Whether a per-node side-table lookup is worth paying for, given the sweep's preloaded id set.
+///
+/// One function rather than the `is_none_or` idiom written at each call site: the whole failure
+/// mode is silent (get it backwards and a monitor is never polled, or every node queries every
+/// table again), and inline it is untestable — `build_scheduled_jobs_hinted` needs a live database.
+#[must_use]
+fn hint_admits(hint: Option<&HashSet<Uuid>>, node: Uuid) -> bool {
+    hint.is_none_or(|ids| ids.contains(&node))
+}
+
 /// Assemble every poll job for one node from its already-resolved SNMP auth + collection set:
 /// an ICMP liveness job always, plus the SNMP scalar/table (v2c) or scalar (v3) jobs the set
 /// calls for. Each job is tagged with a short kind label for logging. Pure (no I/O) — the async
@@ -909,11 +942,23 @@ impl PollDispatcher {
     /// Every node that is a DNS monitor, for the periodic scheduler to preload once per sweep.
     ///
     /// Without this the sweep would need a `dns_checks` lookup per node per round — the exact
-    /// per-node round trip the Meraki path already avoids (and which the `url_checks` lookup below
-    /// still pays; a known debt, out of scope here). DNS monitors are few, so the set is tiny.
+    /// per-node round trip the Meraki path already avoids. DNS monitors are few, so the set is tiny.
+    ///
+    /// ⚠️ On failure this yields an **empty** set, which [`MonitorHints`] reads as "there are no DNS
+    /// monitors", not as "no hint" — so a failed preload costs one sweep's DNS jobs rather than
+    /// silently reverting to 50k per-node queries. The warning says so.
     pub async fn dns_node_ids(&self) -> HashSet<Uuid> {
         self.dns_checks.node_ids().await.unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "dns-check id preload failed; falling back to per-node lookups");
+            tracing::warn!(error = %e, "dns-check id preload failed; DNS monitors are skipped for this sweep");
+            HashSet::new()
+        })
+    }
+
+    /// Every node that is a URL monitor, for the periodic scheduler to preload once per sweep.
+    /// The [`Self::dns_node_ids`] twin — see it for the empty-set-on-failure semantics.
+    pub async fn url_node_ids(&self) -> HashSet<Uuid> {
+        self.url_checks.node_ids().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "url-check id preload failed; URL monitors are skipped for this sweep");
             HashSet::new()
         })
     }
@@ -949,7 +994,9 @@ impl PollDispatcher {
         }
         // One node, one settings read — this path is an operator action, not the sweep.
         let neighbors = self.adjacency_policy().await;
-        self.build_scheduled_jobs_hinted(node, interval_secs, None, &neighbors)
+        // Default = every hint `None` = look every side table up directly. Correct here: one node,
+        // and preloading a fleet-wide id set to serve it would cost far more than it saves.
+        self.build_scheduled_jobs_hinted(node, interval_secs, MonitorHints::default(), &neighbors)
             .await
     }
 
@@ -962,25 +1009,33 @@ impl PollDispatcher {
     /// `neighbors` is resolved by the caller — once per sweep, or once per action on the on-demand
     /// path — so this never reads settings per node.
     ///
-    /// `dns_hint` is what keeps this from adding a second per-node round trip to every sweep: when
-    /// it is present, only nodes in it are looked up, so the 99.9% of the fleet that are ordinary
-    /// devices cost nothing. `None` (the on-demand "poll now" path, a single node) falls back to
-    /// querying directly.
+    /// `hints` is what keeps this from adding a per-node round trip *per monitor kind* to every
+    /// sweep: when a kind's set is present, only nodes in it are looked up, so the 99.9% of the
+    /// fleet that are ordinary devices cost nothing. [`MonitorHints::default`] (the on-demand
+    /// "poll now" path, a single node) falls back to querying directly.
     pub async fn build_scheduled_jobs_hinted(
         &self,
         node: &Node,
         interval_secs: u32,
-        dns_hint: Option<&HashSet<Uuid>>,
+        hints: MonitorHints<'_>,
         neighbors: &AdjacencyPolicy,
     ) -> Vec<(PollJob, &'static str)> {
         let node_uuid = node.id.as_uuid();
-        let url = self.url_checks.get(node_uuid).await.unwrap_or_else(|e| {
-            tracing::warn!(node = %node.id, error = %e, "url-check load failed; treating as non-URL node");
+        // Both side-table lookups are hint-gated. The URL one was not, for a long time: it ran
+        // unconditionally for every node on every sweep while the DNS one beside it was already
+        // short-circuited, so a 50k fleet paid 50k `url_checks` queries a round to find the handful
+        // of URL monitors. Note the gate has to wrap the lookup itself — the ordering here is the
+        // fix, and passing a hint without moving the query would have changed nothing.
+        let url = if hint_admits(hints.url, node_uuid) {
+            self.url_checks.get(node_uuid).await.unwrap_or_else(|e| {
+                tracing::warn!(node = %node.id, error = %e, "url-check load failed; treating as non-URL node");
+                None
+            })
+        } else {
             None
-        });
-        // The DNS lookup is skipped for the 99.9% of the fleet the sweep's hint says are not DNS
-        // monitors, and skipped entirely once URL has already won — `resolve` would discard it.
-        let dns = if url.is_none() && dns_hint.is_none_or(|ids| ids.contains(&node_uuid)) {
+        };
+        // Skipped entirely once URL has already won — `resolve` would discard it.
+        let dns = if url.is_none() && hint_admits(hints.dns, node_uuid) {
             self.dns_checks.get(node_uuid).await.unwrap_or_else(|e| {
                 tracing::warn!(node = %node.id, error = %e, "dns-check load failed; treating as non-DNS node");
                 None
@@ -1018,16 +1073,16 @@ impl PollDispatcher {
     /// skipped). The per-dispatch `job_id` is dropped here; the poller stamps a fresh one each time
     /// it schedules the spec locally.
     ///
-    /// `dns_hint` is the sweep's preloaded DNS-monitor id set — see
-    /// [`Self::build_scheduled_jobs_hinted`] for why it matters at fleet scale.
+    /// `hints` carries the sweep's preloaded per-kind monitor id sets — see
+    /// [`Self::build_scheduled_jobs_hinted`] for why they matter at fleet scale.
     pub async fn build_node_specs(
         &self,
         node: &Node,
         interval_secs: u32,
-        dns_hint: Option<&HashSet<Uuid>>,
+        hints: MonitorHints<'_>,
         neighbors: &AdjacencyPolicy,
     ) -> Vec<JobSpec> {
-        self.build_scheduled_jobs_hinted(node, interval_secs, dns_hint, neighbors)
+        self.build_scheduled_jobs_hinted(node, interval_secs, hints, neighbors)
             .await
             .iter()
             .map(|(job, _kind)| JobSpec::from_job(job))
@@ -1601,6 +1656,41 @@ mod tests {
             Some(SpecialMonitor::Dns(_))
         ));
         assert!(SpecialMonitor::resolve(None, None).is_none());
+    }
+
+    #[test]
+    fn a_missing_hint_admits_every_node_but_an_empty_hint_admits_none() {
+        // The only way to get `hint_admits` wrong, and both directions are silent in production:
+        // read `None` as "nothing to poll" and the on-demand "poll now" path stops finding any
+        // URL/DNS monitor; read an empty set as "no hint" and every node queries every side table
+        // again, which is the 50k-round-trips-a-sweep debt this exists to close.
+        let id = Uuid::new_v4();
+        let other = Uuid::new_v4();
+
+        assert!(hint_admits(None, id), "no hint must fall back to querying");
+
+        let empty: HashSet<Uuid> = HashSet::new();
+        assert!(
+            !hint_admits(Some(&empty), id),
+            "an empty preload means there are no monitors of this kind, not that we don't know"
+        );
+
+        let one: HashSet<Uuid> = [id].into_iter().collect();
+        assert!(hint_admits(Some(&one), id));
+        assert!(!hint_admits(Some(&one), other));
+    }
+
+    #[test]
+    fn the_default_hints_query_every_side_table() {
+        // `build_node_jobs` (the operator's "poll now", one node) passes the default. If a kind
+        // ever defaulted to `Some(∅)` that path would silently stop polling monitors of that kind
+        // — and it is the path an operator uses precisely when they suspect something is wrong.
+        let hints = MonitorHints::default();
+        assert!(hints.url.is_none());
+        assert!(hints.dns.is_none());
+        let id = Uuid::new_v4();
+        assert!(hint_admits(hints.url, id));
+        assert!(hint_admits(hints.dns, id));
     }
 
     #[test]

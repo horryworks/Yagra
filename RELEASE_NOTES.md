@@ -10,6 +10,25 @@
 
 ## Unreleased
 
+### New Features
+- **URL monitors now record how long the endpoint took to answer**, as the new `http_response_time_ms`
+  gauge, shown on the node's Overview and available to thresholds like any other metric. Until now a
+  URL monitor could say whether an endpoint was up but nothing about whether it was slow — the
+  probe has always measured this and simply discarded it. Two things worth knowing:
+  - It is time to the response **headers**, not to a completed body: the probe does not read the
+    response body.
+  - **Nothing is recorded when the endpoint did not answer.** A timeout would otherwise appear as a
+    flat "slow response" for the whole outage, and a latency threshold would page for the same
+    incident `http_up` already covers.
+  - No default threshold is seeded — response latency varies too much between environments for one
+    to be right. Set one per profile, group or node.
+
+### Improvements
+- **The scheduler no longer queries `url_checks` once per node per sweep.** URL-monitor ids are now
+  preloaded once a round, the way DNS monitors already were, so a fleet of tens of thousands of
+  ordinary devices stops paying one database round trip each, every polling round, to discover it
+  has no URL check.
+
 ## v0.1.23 — An alert for monitoring's own blind spot, a support bundle, and an RCA that investigates
 
 ### Breaking changes

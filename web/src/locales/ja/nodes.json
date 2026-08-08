@@ -193,6 +193,7 @@
     "up": "アップ",
     "down": "ダウン",
     "noResponse": "応答はまだありません…",
+    "responseTime": "応答時間 (ヘッダまで)",
     "tlsCertificate": "TLS証明書",
     "merakiIdentity": "{{productType}} · シリアル {{serial}}",
     "online": "オンライン",

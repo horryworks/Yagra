@@ -193,6 +193,7 @@
     "up": "Up",
     "down": "Down",
     "noResponse": "No response yet…",
+    "responseTime": "Response time (to headers)",
     "tlsCertificate": "TLS certificate",
     "merakiIdentity": "{{productType}} · serial {{serial}}",
     "online": "Online",
