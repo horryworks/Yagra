@@ -493,6 +493,7 @@ mod tests {
                 status_code: None,
                 response_time_ms: 0.0,
                 cert_days_to_expiry: None,
+                body: None,
             })
         }
 
@@ -798,6 +799,7 @@ mod tests {
                     status_code: None,
                     response_time_ms: 0.0,
                     cert_days_to_expiry: None,
+                    body: None,
                 })
             }
 

@@ -336,6 +336,23 @@ pub struct UrlCheckRow {
     pub timeout_ms: i32,
     #[serde(default)]
     pub credential_id: Option<Uuid>,
+    // Defaulted so a bundle exported before these fields existed still imports.
+    /// The monitor's response-body keyword rule, if it has one.
+    #[serde(default)]
+    pub body_match: Option<serde_json::Value>,
+    /// The monitor's JSON extraction rules, if it has any.
+    #[serde(default)]
+    pub json_extract: Option<serde_json::Value>,
+    /// How many bytes of the response body the monitor reads.
+    #[serde(default = "default_bundle_body_max_bytes")]
+    pub body_max_bytes: i32,
+}
+
+/// The column default, restated for a bundle written before the column existed. Not the Rust
+/// constant cast inline at each use: an older bundle importing as `0` would fail the CHECK and take
+/// the whole import down with it.
+const fn default_bundle_body_max_bytes() -> i32 {
+    65_536
 }
 
 /// A DNS monitor's configuration (1:1 with its node).
@@ -771,7 +788,7 @@ impl ConfigBundleRepo {
         let mut url_checks = Vec::new();
         for row in sqlx::query(
             "SELECT node_id, url, method, expected_status, verify_tls, follow_redirects, \
-                    timeout_ms, credential_id \
+                    timeout_ms, credential_id, body_match, json_extract, body_max_bytes \
              FROM url_checks ORDER BY node_id",
         )
         .fetch_all(&mut *conn)
@@ -786,6 +803,9 @@ impl ConfigBundleRepo {
                 follow_redirects: row.try_get("follow_redirects")?,
                 timeout_ms: row.try_get("timeout_ms")?,
                 credential_id: row.try_get("credential_id")?,
+                body_match: row.try_get("body_match")?,
+                json_extract: row.try_get("json_extract")?,
+                body_max_bytes: row.try_get("body_max_bytes")?,
             });
         }
         cap("url_checks", url_checks.len())?;
@@ -1359,13 +1379,16 @@ impl ConfigBundleRepo {
             );
             sqlx::query(
                 "INSERT INTO url_checks (node_id, url, method, expected_status, verify_tls, \
-                                         follow_redirects, timeout_ms, credential_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                                         follow_redirects, timeout_ms, credential_id, body_match, \
+                                         json_extract, body_max_bytes) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
                  ON CONFLICT (node_id) DO UPDATE SET url = EXCLUDED.url, \
                      method = EXCLUDED.method, expected_status = EXCLUDED.expected_status, \
                      verify_tls = EXCLUDED.verify_tls, \
                      follow_redirects = EXCLUDED.follow_redirects, \
                      timeout_ms = EXCLUDED.timeout_ms, credential_id = EXCLUDED.credential_id, \
+                     body_match = EXCLUDED.body_match, json_extract = EXCLUDED.json_extract, \
+                     body_max_bytes = EXCLUDED.body_max_bytes, \
                      updated_at = now()",
             )
             .bind(u.node_id)
@@ -1376,6 +1399,9 @@ impl ConfigBundleRepo {
             .bind(u.follow_redirects)
             .bind(u.timeout_ms)
             .bind(credential)
+            .bind(&u.body_match)
+            .bind(&u.json_extract)
+            .bind(u.body_max_bytes)
             .execute(&mut *tx)
             .await?;
             bump(c, &mut seen, u.node_id);

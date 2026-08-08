@@ -137,6 +137,13 @@ pub struct HttpProbeSpec {
     pub follow_redirects: bool,
     /// Credentials to present, already decrypted by core. `None` ⇒ an anonymous probe.
     pub auth: Option<HttpAuth>,
+    /// Read at most this many bytes of the response body; `None` — the default for a monitor with
+    /// no content rule — means **do not read the body at all** (ADR-047 Inc.2).
+    ///
+    /// Whether the captured prefix satisfies anything is decided poller-side, like the expected
+    /// status: this layer reports raw observations (ADR-012). What it decides is only *how much* to
+    /// pull, so one oversized page cannot cost a poller unbounded memory.
+    pub body_capture_bytes: Option<u32>,
 }
 
 /// What a DNS name-resolution probe needs from the job (ADR-033). The poller maps a
@@ -170,6 +177,44 @@ pub struct HttpProbe {
     /// Days until the TLS server certificate expires (HTTPS only); `None` for plain HTTP or
     /// if the certificate couldn't be read.
     pub cert_days_to_expiry: Option<f64>,
+    /// The prefix of the response body, when [`HttpProbeSpec::body_capture_bytes`] asked for one.
+    /// `None` means the body was never read — not that it was empty.
+    pub body: Option<BodyCapture>,
+}
+
+/// As much of a response body as the probe was allowed to read, and whether that was all of it.
+///
+/// **Deliberately does not derive `Debug`.** It rides inside [`HttpProbe`], which does derive it,
+/// so a single `tracing::debug!(?probe)` would print up to a megabyte of a monitored endpoint's
+/// response — which may hold session data, personal data, or a token the page happened to render.
+/// The manual impl below reports the shape and never the content, exactly as
+/// [`yagra_common::HttpAuth`] does for credentials.
+#[derive(Clone, PartialEq, Eq)]
+pub struct BodyCapture {
+    /// The captured bytes as text, decoded lossily.
+    ///
+    /// Lossy on purpose: the cut lands on a byte boundary, so a multi-byte character straddling it
+    /// becomes a replacement character. That is harmless for substring matching and is strictly
+    /// better than discarding a whole capture over its last character. A body that is not text at
+    /// all (an image, a binary blob) decodes to nonsense and simply matches nothing — which is the
+    /// honest answer for a keyword rule pointed at a binary endpoint.
+    pub text: String,
+    /// `true` when the body was longer than the budget, **or** when reading it failed part-way.
+    /// Both mean the same thing to a rule: bytes exist that were not examined, so an absent keyword
+    /// proves nothing (see `yagra_common::BodyMatch::satisfied_by`).
+    pub truncated: bool,
+}
+
+impl std::fmt::Debug for BodyCapture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The length and the truncation flag are the diagnostic facts — they answer "did the budget
+        // stop us", which is the only question a log line here is ever asked. The bytes are not.
+        f.debug_struct("BodyCapture")
+            .field("len", &self.text.len())
+            .field("truncated", &self.truncated)
+            .field("text", &"<not logged>")
+            .finish()
+    }
 }
 
 /// What one Cisco Meraki org-scoped collect needs (the non-secret request shape plus the resolved
@@ -494,6 +539,7 @@ impl FakeTransport {
                 status_code: Some(200),
                 response_time_ms: rtt_ms,
                 cert_days_to_expiry: None,
+                body: None,
             },
             meraki: Vec::new(),
             dns: fake_dns_chain(true),
@@ -519,6 +565,7 @@ impl FakeTransport {
                 status_code: None,
                 response_time_ms: 0.0,
                 cert_days_to_expiry: None,
+                body: None,
             },
             meraki: Vec::new(),
             dns: fake_dns_chain(false),

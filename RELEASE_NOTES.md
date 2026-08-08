@@ -22,8 +22,56 @@
     incident `http_up` already covers.
   - No default threshold is seeded — response latency varies too much between environments for one
     to be right. Set one per profile, group or node.
+- **URL monitors can now check the response body for a keyword.** A monitor may require that the
+  body *contains* a keyword, or that it *does not* — the case that catches an endpoint answering
+  `200` while its body says the service is broken, which availability monitoring structurally cannot
+  see. Configure it on the node's URL-monitor dialog; it also rides on `PUT
+  /api/v1/nodes/{id}/url-check` as the optional `body_match` object (`pattern`, `mode`, `max_bytes`)
+  and is reported by the MCP `get_config` surface. What it reports:
+  - `http_body_match` — `1` satisfied, `0` not. A `below 0.5` critical threshold is seeded on the
+    built-in URL profile, so a rule alerts without a second configuration step. Existing monitors
+    are unaffected: the metric is emitted only for a monitor that carries a rule.
+  - `http_body_truncated` — diagnostic, `1` when the body outgrew the read budget.
+  - **A body larger than the read budget reports "not satisfied", never "satisfied".** Truncating
+    silently would let a `must not contain` rule report healthy about a page whose error text sits
+    past the cut. Raise `max_bytes` (default 65536, up to 1048576) if a legitimate keyword is
+    landing beyond it.
+  - Matching is plain, **case-sensitive** substring matching — not a regular expression.
+  - `GET`/`POST` only; a body rule on a `HEAD` monitor is refused (`body_match_needs_body`), because
+    a HEAD response has no body and the rule could never be satisfied.
+  - **Rolling upgrades:** a poller that has not been upgraded is not sent a content-checked monitor
+    at all, and the withheld count is recorded on `yagra_specs_withheld_total{cap="http-body"}`. An
+    older poller would drop the rule, never read the body, and report `http_up = 1` — a green
+    dashboard for the exact outage the rule was guarding against — so the check pauses rather than
+    reporting a result it did not compute. The same gate `http-auth` already uses.
+- **URL monitors can now record numbers out of a JSON response body**, under metric names the
+  operator chooses — a queue depth, a replication lag, a worker count. Configure up to 8 per monitor
+  on the URL-monitor dialog, or as the `json_extract` array on `PUT
+  /api/v1/nodes/{id}/url-check` (`metric` + `path`); the extracted values appear on the node's
+  Overview and can carry thresholds like any other metric.
+  - The path is **dot-separated and names exactly one value** — `data.queue.depth`,
+    `items.0.value` (`items[0].value` is accepted and means the same). It is deliberately *not*
+    JSONPath: a rule that could select many values would need a reduction nobody asked for.
+  - Numbers, booleans (`true` → 1) and quoted numbers (`"42"`) are recorded. **Anything else
+    records nothing for that poll — never a zero**, because a zero is indistinguishable from the
+    value genuinely being zero. The same applies when the body is not valid JSON or was truncated.
+  - A metric name must be a valid TSDB name and **may not be one the monitor already reports**
+    (`http_up`, `http_status_code`, `http_response_time_ms`, `ssl_cert_days_to_expiry`,
+    `http_body_match`, `http_body_truncated`) — that would overwrite the node's own availability
+    series. Two rules may not write the same name.
+  - Unlike the keyword check, extraction is **not** withheld from an older poller: it would record
+    nothing (a visibly absent series) rather than a wrong reading, and withholding would stop the
+    whole monitor including `http_up`.
+- **`body_max_bytes` is a property of the monitor**, not of the keyword rule — one body, one read,
+  one budget, shared by the keyword check and extraction. Default 65536, range 1024–1048576.
+- `http_response_time_ms` still measures time to the response **headers** even when a body feature
+  is configured, so the metric means the same thing on every monitor.
 
 ### Improvements
+- **The Japanese UI copy was swept end to end.** It had accumulated two spellings for the same
+  terms, English sentence structure carried through the translation, and notation that drifted
+  between screens. Wording changed on most screens; no behaviour did. The conventions are now
+  written down so new strings stay consistent.
 - **The scheduler no longer queries `url_checks` once per node per sweep.** URL-monitor ids are now
   preloaded once a round, the way DNS monitors already were, so a fleet of tens of thousands of
   ordinary devices stops paying one database round trip each, every polling round, to discover it

@@ -24,6 +24,11 @@ const urlDraft = (over: Partial<UrlCheckDraft> = {}): UrlCheckDraft => ({
   followRedirects: true,
   timeoutMs: '5000',
   credentialId: '',
+  bodyMatchEnabled: false,
+  bodyPattern: '',
+  bodyMode: 'contains',
+  bodyMaxBytes: '65536',
+  extracts: [],
   ...over,
 });
 
@@ -76,8 +81,46 @@ describe('urlDraftFrom', () => {
       follow_redirects: false,
       timeout_ms: 1234,
       credential: null,
+      body_match: null,
+      json_extract: [],
+      body_max_bytes: 65536,
     };
     expect(body(urlBodyFrom(urlDraftFrom(cfg)))).toEqual(cfg);
+  });
+
+  it('reads a stored body rule back into the form, and its absence as "off"', () => {
+    const off = urlDraftFrom({ url: 'https://a.test' });
+    expect(off.bodyMatchEnabled).toBe(false);
+    // The inputs still carry usable defaults while the rule is off, so switching it on presents a
+    // form rather than blank boxes whose meaning the operator has to guess.
+    expect(off).toMatchObject({ bodyMode: 'contains', bodyMaxBytes: '65536', bodyPattern: '' });
+
+    const on = urlDraftFrom({
+      url: 'https://a.test',
+      body_match: { pattern: 'Database unavailable', mode: 'not_contains' },
+      body_max_bytes: 4096,
+    });
+    expect(on).toMatchObject({
+      bodyMatchEnabled: true,
+      bodyPattern: 'Database unavailable',
+      bodyMode: 'not_contains',
+      bodyMaxBytes: '4096',
+    });
+  });
+
+  it('reads stored extraction rules back as editable rows', () => {
+    expect(urlDraftFrom({ url: 'https://a.test' }).extracts).toEqual([]);
+    const d = urlDraftFrom({
+      url: 'https://a.test',
+      json_extract: [
+        { metric: 'queue_depth', path: 'data.queue.depth' },
+        { metric: 'workers', path: 'workers.active' },
+      ],
+    });
+    expect(d.extracts).toEqual([
+      { metric: 'queue_depth', path: 'data.queue.depth' },
+      { metric: 'workers', path: 'workers.active' },
+    ]);
   });
 });
 
@@ -88,9 +131,12 @@ describe('urlBodyFrom', () => {
     const b = body(urlBodyFrom(urlDraft({ verifyTls: false })));
     expect(Object.keys(b).sort()).toEqual(
       [
+        'body_match',
+        'body_max_bytes',
         'credential',
         'expected_status',
         'follow_redirects',
+        'json_extract',
         'method',
         'timeout_ms',
         'url',
@@ -225,5 +271,127 @@ describe('urlBodyFrom credential binding (regression)', () => {
     expect(draft.credentialId).toBe('cred-9');
     const body = urlBodyFrom(draft);
     expect('body' in body && body.body.credential).toBe('cred-9');
+  });
+});
+
+describe('urlBodyFrom body keyword rule (ADR-047 Inc.2)', () => {
+  it('sends null when the rule is off, so a stored rule can be removed', () => {
+    // The PUT is a replace. If "off" omitted the field instead, turning a content check *off*
+    // would be impossible through the only endpoint that edits it — it would keep polling with a
+    // rule the operator can no longer see in the form.
+    expect(body(urlBodyFrom(urlDraft())).body_match).toBeNull();
+    // And a filled-in pattern still sends null while the toggle is off: what the boxes hold is not
+    // what is configured.
+    expect(body(urlBodyFrom(urlDraft({ bodyPattern: 'ok' }))).body_match).toBeNull();
+  });
+
+  it('builds the rule from its fields, trimming the keyword', () => {
+    const b = body(
+      urlBodyFrom(
+        urlDraft({
+          bodyMatchEnabled: true,
+          bodyPattern: '  "status":"ok"  ',
+          bodyMode: 'not_contains',
+          bodyMaxBytes: '4096',
+        }),
+      ),
+    );
+    expect(b.body_match).toEqual({ pattern: '"status":"ok"', mode: 'not_contains' });
+    // The budget belongs to the monitor, not to the rule — one body, one read, one budget.
+    expect(b.body_max_bytes).toBe(4096);
+  });
+
+  it('refuses an empty keyword', () => {
+    // Every string contains "", so `contains` would always pass and `not_contains` always fail —
+    // a monitor that has stopped reporting on anything real while still looking configured.
+    for (const bodyPattern of ['', '   ']) {
+      expect(urlBodyFrom(urlDraft({ bodyMatchEnabled: true, bodyPattern }))).toEqual({
+        error: 'bodyPatternRequired',
+      });
+    }
+  });
+
+  it('refuses a read budget outside the accepted range', () => {
+    for (const bodyMaxBytes of ['0', '512', '2097152', '', 'abc']) {
+      expect(urlBodyFrom(urlDraft({ bodyMaxBytes }))).toEqual({ error: 'bodyMaxBytes' });
+    }
+    // The boundaries themselves are accepted.
+    for (const bodyMaxBytes of ['1024', '1048576']) {
+      expect(body(urlBodyFrom(urlDraft({ bodyMaxBytes }))).body_max_bytes).toBe(
+        Number(bodyMaxBytes),
+      );
+    }
+  });
+
+  it('refuses a body rule on a HEAD request', () => {
+    // A HEAD response has no body, so the rule could never be satisfied and the monitor would
+    // alert forever — indistinguishable from a real outage.
+    expect(
+      urlBodyFrom(urlDraft({ method: 'HEAD', bodyMatchEnabled: true, bodyPattern: 'ok' })),
+    ).toEqual({ error: 'bodyMatchNeedsBody' });
+    // Extraction on HEAD is refused for the same reason.
+    expect(
+      urlBodyFrom(
+        urlDraft({ method: 'HEAD', extracts: [{ metric: 'q', path: 'queue.depth' }] }),
+      ),
+    ).toEqual({ error: 'bodyMatchNeedsBody' });
+    // HEAD is still fine with neither — this must not have broken plain liveness monitors.
+    expect(body(urlBodyFrom(urlDraft({ method: 'HEAD' }))).body_match).toBeNull();
+  });
+});
+
+describe('urlBodyFrom JSON extraction (ADR-047 Inc.3)', () => {
+  const withRows = (...rows: { metric: string; path: string }[]) =>
+    urlBodyFrom(urlDraft({ extracts: rows }));
+
+  it('sends the rules it was given, trimmed', () => {
+    const b = body(withRows({ metric: '  queue_depth ', path: '  data.queue.depth ' }));
+    expect(b.json_extract).toEqual([{ metric: 'queue_depth', path: 'data.queue.depth' }]);
+  });
+
+  it('drops a row the operator left completely blank', () => {
+    // What "add rule" leaves behind when someone changes their mind. Rejecting it would make the
+    // dialog unsavable for a reason the operator cannot see.
+    const b = body(withRows({ metric: '', path: '' }, { metric: 'q', path: 'queue.depth' }));
+    expect(b.json_extract).toEqual([{ metric: 'q', path: 'queue.depth' }]);
+    expect(body(urlBodyFrom(urlDraft())).json_extract).toEqual([]);
+  });
+
+  it('refuses a half-filled row rather than silently dropping it', () => {
+    // The dangerous sibling of the case above: dropping this would discard a rule the operator
+    // believes they configured, and nothing would ever be recorded for it.
+    expect(withRows({ metric: 'q', path: '' })).toEqual({ error: 'extractPathRequired' });
+    expect(withRows({ metric: '', path: 'queue.depth' })).toEqual({
+      error: 'extractMetricRequired',
+    });
+  });
+
+  it('refuses a metric name the TSDB could not be queried for', () => {
+    for (const metric of ['1queue', 'has space', 'has-dash', 'dot.ted', 'q!']) {
+      expect(withRows({ metric, path: 'a.b' })).toEqual({ error: 'extractMetricName' });
+    }
+    expect(body(withRows({ metric: 'ns:queue_1', path: 'a.b' })).json_extract).toHaveLength(1);
+  });
+
+  it('refuses a name the monitor already reports', () => {
+    // The specific hazard: this would overwrite the node's own availability series with a number
+    // out of the monitored service's JSON.
+    for (const metric of ['http_up', 'http_status_code', 'http_body_match']) {
+      expect(withRows({ metric, path: 'a.b' })).toEqual({ error: 'extractMetricReserved' });
+    }
+  });
+
+  it('refuses two rules writing the same series', () => {
+    // Otherwise the recorded value depends on rule order, which is not something an operator
+    // should have to reason about.
+    expect(withRows({ metric: 'q', path: 'a' }, { metric: 'q', path: 'b' })).toEqual({
+      error: 'extractMetricDuplicate',
+    });
+  });
+
+  it('caps how many rules one monitor may carry', () => {
+    const many = Array.from({ length: 9 }, (_, i) => ({ metric: `m${i}`, path: 'a.b' }));
+    expect(urlBodyFrom(urlDraft({ extracts: many }))).toEqual({ error: 'tooManyExtracts' });
+    expect(body(urlBodyFrom(urlDraft({ extracts: many.slice(0, 8) }))).json_extract).toHaveLength(8);
   });
 });

@@ -1755,6 +1755,25 @@ impl NodeRepo {
                     Some(7.0),
                     1i32,
                 ),
+                // ADR-047 Inc.2. Seeded — unlike `http_response_time_ms`, which has no defensible
+                // default — because this is a 0/1 gauge whose only sane bound is the same 0.5, and
+                // because a content rule an operator configured must alert without a second step.
+                //
+                // It is inert until someone configures a rule: the poller emits this metric only
+                // for a monitor that carries one, so adding the row to an existing deployment
+                // produces no samples and therefore no alerts on any monitor as it stands today.
+                //
+                // Offsets are explicit and this one is appended — the ids are stable and
+                // ON CONFLICT DO NOTHING, so reusing or reordering one would shadow an operator's
+                // edited row rather than update it (see `seed_ids`).
+                (
+                    2usize,
+                    "http_body_match",
+                    "below",
+                    None::<f64>,
+                    Some(0.5),
+                    2i32,
+                ),
             ];
             for (offset, metric, direction, warning, critical, dwell) in defaults {
                 sqlx::query(

@@ -11,6 +11,12 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 uuid = { workspace = true }
+# Runtime (not just derive): a URL monitor's JSON extraction rules resolve a path into a
+# `serde_json::Value` (ADR-047 Inc.3). That logic lives beside its type here, next to
+# `ExpectedStatus::matches` and `BodyMatch::satisfied_by`, rather than in the poller — it is a
+# property of the rule, not of the polling loop. No new weight anywhere: every binary that depends
+# on this crate already links serde_json.
+serde_json = { workspace = true }
 # Shared types cross the northbound API boundary (node state, severity, classification rules), so
 # they carry their own JSON Schema for the OpenAPI document (ADR-035) rather than being re-described
 # in `yagra-core`. Derive-only — nothing here knows about HTTP.

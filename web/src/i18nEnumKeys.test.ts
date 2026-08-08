@@ -55,7 +55,10 @@ import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 import { BUNDLE_TABLES } from './pages/configBundle';
 import { RETENTION_FIELDS, RETENTION_SUBJECTS } from './pages/retentionSettings';
-import { EXPECTED_STATUS_MODES } from './components/NodeDetail/checkConfigForm';
+import {
+  BODY_MATCH_MODES,
+  EXPECTED_STATUS_MODES,
+} from './components/NodeDetail/checkConfigForm';
 import { EXPIRY_CHOICES } from './pages/tokenForm';
 import { EXPIRY_LEVELS } from './pages/tlsSettingsForm';
 
@@ -320,6 +323,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enNodes, ja: jaNodes },
       'checkEdit.statusMode.',
       EXPECTED_STATUS_MODES,
+    );
+  });
+
+  it('every body-match mode has a label (nodes:checkEdit.bodyMode.*)', () => {
+    // Mirrors Rust's `BodyMatchMode` (ADR-047 Inc.2). Same failure as above and the reason this
+    // file exists: EN/JA parity passes when a variant is missing from *both*, so only iterating
+    // the runtime array catches a mode that renders as `checkEdit.bodyMode.regex`.
+    expectKeys(
+      'body match mode',
+      { en: enNodes, ja: jaNodes },
+      'checkEdit.bodyMode.',
+      BODY_MATCH_MODES,
     );
   });
 

@@ -47,6 +47,7 @@ import {
   type ResolvedMetric,
 } from './metricCards';
 import { certTone, httpToneVar } from './healthTone';
+import { formatExtractedValue } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
 import { CheckConfigActions } from './CheckConfigActions';
@@ -143,6 +144,9 @@ export function OverviewTab({
         <UrlHealth
           nodeId={node.id}
           url={node.url_check.url}
+          // The monitor's own rules are the only thing that knows which operator-named metrics
+          // exist — they are not in any allowlist, by design (ADR-047 Inc.3).
+          extracts={node.url_check.json_extract ?? []}
           actions={
             canEdit ? (
               <CheckConfigActions
@@ -189,10 +193,12 @@ export function OverviewTab({
 function UrlHealth({
   nodeId,
   url,
+  extracts,
   actions,
 }: {
   nodeId: string;
   url: string;
+  extracts: { metric: string; path: string }[];
   actions?: React.ReactNode;
 }) {
   const { t } = useTranslation('nodes');
@@ -211,7 +217,16 @@ function UrlHealth({
     timestamps: [],
     values: [],
   });
+  const [bodyMatch, setBodyMatch] = useState<number | null>(null);
+  const [bodyTruncated, setBodyTruncated] = useState<number | null>(null);
+  // Keyed by metric name — a rule whose path found nothing records no sample at all, so a missing
+  // entry here is the honest "no reading", not a zero (ADR-047 決定 3).
+  const [extracted, setExtracted] = useState<Record<string, number>>({});
   const [win, setWin] = useState<[number, number] | null>(null);
+
+  // The rule list drives the fetch, so it must be a stable dependency rather than a new array
+  // identity on every render — otherwise the effect re-runs forever.
+  const extractNames = extracts.map((e) => e.metric).join(' ');
 
   useEffect(() => {
     let cancelled = false;
@@ -224,7 +239,9 @@ function UrlHealth({
         api.getNodeMetricRange(nodeId, 'http_status_code', { from, to }),
         api.getNodeMetric(nodeId, 'http_response_time_ms'),
         api.getNodeMetricRange(nodeId, 'http_response_time_ms', { from, to }),
-      ]).then(([u, s, c, r, rt, rtr]) => {
+        api.getNodeMetric(nodeId, 'http_body_match'),
+        api.getNodeMetric(nodeId, 'http_body_truncated'),
+      ]).then(([u, s, c, r, rt, rtr, bm, bt]) => {
         if (cancelled) return;
         setUp(u.status === 'fulfilled' ? u.value.value : null);
         setStatusCode(s.status === 'fulfilled' ? s.value.value : null);
@@ -238,14 +255,31 @@ function UrlHealth({
             ? pointsToSeries(rtr.value.points)
             : { timestamps: [], values: [] },
         );
+        setBodyMatch(bm.status === 'fulfilled' ? bm.value.value : null);
+        setBodyTruncated(bt.status === 'fulfilled' ? bt.value.value : null);
         setWin([from, to]);
       });
+      const names = extractNames === '' ? [] : extractNames.split(' ');
+      if (names.length > 0) {
+        void Promise.allSettled(names.map((m) => api.getNodeMetric(nodeId, m))).then((rs) => {
+          if (cancelled) return;
+          const next: Record<string, number> = {};
+          rs.forEach((r, i) => {
+            // A rule that has never produced a sample simply has no key — the card is then absent
+            // rather than showing a 0 the monitor never observed.
+            if (r.status === 'fulfilled' && r.value.value != null) next[names[i]] = r.value.value;
+          });
+          setExtracted(next);
+        });
+      } else {
+        setExtracted({});
+      }
     };
     load();
     return () => {
       cancelled = true;
     };
-  }, [nodeId, range, tick]);
+  }, [nodeId, range, tick, extractNames]);
 
   const code = statusCode == null ? null : Math.round(statusCode);
   const availabilityTone: 'up' | 'critical' = up === 1 ? 'up' : 'critical';
@@ -308,6 +342,47 @@ function UrlHealth({
               />
             )}
           </div>
+        )}
+        {/* Only for a monitor that carries a content rule — the poller emits nothing otherwise.
+            A 0 has two causes and the operator needs to know which: the keyword really was
+            wrong, or the page outgrew its read budget so the rule could not be decided. The
+            truncation line is the only thing that tells them apart. */}
+        {bodyMatch != null && (
+          <div className="nd-health-metric">
+            <div className="nd-health-metric-head">
+              <span className="nd-health-metric-label">{t('overview.bodyMatch')}</span>
+              <span
+                className="nd-health-metric-value"
+                style={{ color: httpToneVar(bodyMatch === 1 ? 'up' : 'critical') }}
+              >
+                {bodyMatch === 1 ? t('overview.bodyMatchOk') : t('overview.bodyMatchFailed')}
+              </span>
+            </div>
+            {bodyTruncated === 1 && (
+              <div className="nd-url-status-line">
+                <span className="nd-muted">{t('overview.bodyTruncated')}</span>
+              </div>
+            )}
+          </div>
+        )}
+        {/* Operator-named values lifted out of the JSON body. The label is the metric name the
+            operator chose — there is nothing to translate, and inventing a prettier one would
+            hide the string they have to type into a threshold. A rule with no reading yet is
+            simply absent (the poller records nothing rather than a zero). */}
+        {extracts.map((e) =>
+          extracted[e.metric] == null ? null : (
+            <div className="nd-health-metric" key={e.metric}>
+              <div className="nd-health-metric-head">
+                <span className="nd-health-metric-label mono">{e.metric}</span>
+                <span className="nd-health-metric-value">
+                  {formatExtractedValue(extracted[e.metric])}
+                </span>
+              </div>
+              <div className="nd-url-status-line">
+                <span className="nd-muted mono">{e.path}</span>
+              </div>
+            </div>
+          ),
         )}
         {certDays != null && (
           <div className="nd-health-metric">

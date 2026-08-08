@@ -22,8 +22,9 @@ use yagra_bus::{
 };
 use yagra_common::{
     DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT,
-    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_RESPONSE_TIME_MS,
-    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
+    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_BODY_MATCH,
+    METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE,
+    METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -221,6 +222,9 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                 verify_tls: http.verify_tls,
                 follow_redirects: http.follow_redirects,
                 auth: http.auth.clone(),
+                // A monitor with neither body feature never reads the body — the budget is asked
+                // for only when there is something to decide with it.
+                body_capture_bytes: http.body_capture_bytes(),
             };
             match transport.probe_http(&spec, timeout).await {
                 Ok(probe) => {
@@ -254,6 +258,76 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                     }
                     if let Some(days) = probe.cert_days_to_expiry {
                         samples.push(Sample::gauge(METRIC_SSL_CERT_DAYS_TO_EXPIRY, days));
+                    }
+                    // The content rule, when the monitor carries one and the endpoint answered.
+                    // Deliberately NOT folded into `http_up`: that gauge's meaning is liveness +
+                    // status, and widening it here would retroactively change what every existing
+                    // `http_up` series meant.
+                    if let (Some(rule), true) = (http.body_match.as_ref(), probe.reachable) {
+                        // `None` = we could not decide: the body outgrew the budget (or a read
+                        // failed) and the keyword was not in the prefix. Reported as 0 — the same
+                        // value as a genuine violation, because the one thing it must never do is
+                        // read as healthy (ADR-047 決定 3). `http_body_truncated` is what tells the
+                        // two apart afterwards.
+                        let verdict = probe
+                            .body
+                            .as_ref()
+                            .and_then(|b| rule.satisfied_by(&b.text, b.truncated));
+                        if verdict.is_none() {
+                            tracing::warn!(
+                                job_id = %job.job_id,
+                                url = %http.url,
+                                max_bytes = http.body_max_bytes,
+                                "url monitor body rule could not be decided within its byte budget; \
+                                 reporting it as unsatisfied"
+                            );
+                        }
+                        samples.push(Sample::gauge(
+                            METRIC_HTTP_BODY_MATCH,
+                            if verdict == Some(true) { 1.0 } else { 0.0 },
+                        ));
+                        if let Some(body) = probe.body.as_ref() {
+                            samples.push(Sample::gauge(
+                                METRIC_HTTP_BODY_TRUNCATED,
+                                if body.truncated { 1.0 } else { 0.0 },
+                            ));
+                        }
+                    }
+                    // Operator-named values lifted out of a JSON body (ADR-047 Inc.3). Parsed once
+                    // for the whole rule set — a document big enough to matter should not be
+                    // re-parsed per rule.
+                    //
+                    // A truncated body is almost always invalid JSON and so yields nothing, which
+                    // is the correct answer rather than a special case: half a document cannot be
+                    // read reliably, and every failure here records **no sample**. Writing 0 would
+                    // be indistinguishable from the value genuinely being 0 (ADR-047 決定 3).
+                    if !http.json_extract.is_empty() && probe.reachable {
+                        match probe
+                            .body
+                            .as_ref()
+                            .and_then(|b| serde_json::from_str::<serde_json::Value>(&b.text).ok())
+                        {
+                            Some(doc) => {
+                                for rule in &http.json_extract {
+                                    match rule.extract(&doc) {
+                                        Some(v) => samples.push(Sample::gauge(&rule.metric, v)),
+                                        None => tracing::debug!(
+                                            job_id = %job.job_id,
+                                            metric = %rule.metric,
+                                            path = %rule.path,
+                                            "url monitor json path yielded no usable number; recording no sample"
+                                        ),
+                                    }
+                                }
+                            }
+                            None => tracing::warn!(
+                                job_id = %job.job_id,
+                                url = %http.url,
+                                truncated = probe.body.as_ref().is_some_and(|b| b.truncated),
+                                rules = http.json_extract.len(),
+                                "url monitor response body is not valid JSON; recording no extracted metrics"
+                            ),
+                        }
                     }
                     let outcome = if probe.reachable {
                         CheckOutcome::Reachable
@@ -2039,6 +2113,9 @@ mod tests {
             follow_redirects: true,
             timeout_ms: 5000,
             auth: None,
+            body_match: None,
+            json_extract: Vec::new(),
+            body_max_bytes: yagra_common::DEFAULT_BODY_MAX_BYTES,
         }
     }
 
@@ -2050,6 +2127,7 @@ mod tests {
             status_code: Some(200),
             response_time_ms: 12.0,
             cert_days_to_expiry: Some(45.0),
+            body: None,
         });
         let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Reachable);
@@ -2082,6 +2160,7 @@ mod tests {
             status_code: Some(500),
             response_time_ms: 8.0,
             cert_days_to_expiry: None,
+            body: None,
         });
         let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Reachable);
@@ -2114,6 +2193,7 @@ mod tests {
             status_code: None,
             response_time_ms: 5000.0,
             cert_days_to_expiry: None,
+            body: None,
         });
         let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
@@ -2133,6 +2213,265 @@ mod tests {
                 .iter()
                 .any(|s| s.metric == METRIC_HTTP_RESPONSE_TIME_MS),
             "an unreachable endpoint must not report a response time"
+        );
+    }
+
+    // ── URL body keyword matching (ADR-047 Increment 2) ─────────────────────────────
+
+    /// A reachable 200 whose body is `text`, captured whole or cut short.
+    fn http_probe_with_body(text: &str, truncated: bool) -> yagra_transport::HttpProbe {
+        yagra_transport::HttpProbe {
+            reachable: true,
+            status_code: Some(200),
+            response_time_ms: 12.0,
+            cert_days_to_expiry: None,
+            body: Some(yagra_transport::BodyCapture {
+                text: text.to_owned(),
+                truncated,
+            }),
+        }
+    }
+
+    fn http_check_matching(url: &str, rule: yagra_common::BodyMatch) -> yagra_bus::HttpCheck {
+        let mut check = http_check(url);
+        check.body_match = Some(rule);
+        check
+    }
+
+    fn sample(r: &PollResult, metric: &str) -> Option<f64> {
+        r.samples
+            .iter()
+            .find(|s| s.metric == metric)
+            .map(|s| s.value)
+    }
+
+    #[tokio::test]
+    async fn a_monitor_with_no_rule_asks_for_no_body_and_reports_no_match_gauge() {
+        // The default for every URL monitor that existed before this increment. It must stay
+        // byte-identical: no body read (so `http_response_time_ms` keeps meaning the same thing)
+        // and no new series appearing on monitors nobody reconfigured.
+        let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body("anything", false));
+        let r = execute(&http_job(http_check("https://example.com/")), &t, 1_000).await;
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_MATCH), None);
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_TRUNCATED), None);
+    }
+
+    #[tokio::test]
+    async fn a_satisfied_rule_reports_one_and_an_untruncated_read() {
+        let t = FakeTransport::reachable(0.0)
+            .with_http(http_probe_with_body(r#"{"status":"ok"}"#, false));
+        let rule = yagra_common::BodyMatch::contains(r#""status":"ok""#);
+        let r = execute(
+            &http_job(http_check_matching("https://example.com/health", rule)),
+            &t,
+            1_000,
+        )
+        .await;
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_MATCH), Some(1.0));
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_TRUNCATED), Some(0.0));
+        // The content rule is its own gauge: a green body must not have altered availability, and
+        // a failing one (below) must not silently redefine what `http_up` has always meant.
+        assert_eq!(sample(&r, METRIC_HTTP_UP), Some(1.0));
+    }
+
+    #[tokio::test]
+    async fn a_two_hundred_whose_body_says_it_is_broken_is_caught_without_touching_http_up() {
+        // The whole point of the feature: the endpoint answers 200, so `http_up` is 1 and always
+        // was — only the body says the service is down.
+        let t = FakeTransport::reachable(0.0)
+            .with_http(http_probe_with_body("<h1>Database unavailable</h1>", false));
+        let rule = yagra_common::BodyMatch {
+            pattern: "Database unavailable".to_owned(),
+            mode: yagra_common::BodyMatchMode::NotContains,
+        };
+        let r = execute(
+            &http_job(http_check_matching("https://example.com/", rule)),
+            &t,
+            1_000,
+        )
+        .await;
+        assert_eq!(sample(&r, METRIC_HTTP_UP), Some(1.0));
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_MATCH), Some(0.0));
+        assert_eq!(
+            r.outcome,
+            CheckOutcome::Reachable,
+            "a content failure is not a liveness failure — the endpoint answered"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_undecidable_rule_reports_zero_and_says_the_body_was_truncated() {
+        // The budget ran out before the keyword appeared. Reporting 1 here would be the silent lie
+        // ADR-047 決定 3 forbids; reporting 0 alerts, and the truncation gauge is what tells the
+        // operator it was the budget rather than the keyword.
+        let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body("<html>…", true));
+        let rule = yagra_common::BodyMatch::contains("healthy");
+        let r = execute(
+            &http_job(http_check_matching("https://example.com/", rule)),
+            &t,
+            1_000,
+        )
+        .await;
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_MATCH), Some(0.0));
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_TRUNCATED), Some(1.0));
+
+        // And the direction that would otherwise go unnoticed: a `not_contains` rule must NOT read
+        // as satisfied just because the forbidden text was past the cut.
+        let quiet = yagra_common::BodyMatch {
+            pattern: "unavailable".to_owned(),
+            mode: yagra_common::BodyMatchMode::NotContains,
+        };
+        let r = execute(
+            &http_job(http_check_matching("https://example.com/", quiet)),
+            &t,
+            1_000,
+        )
+        .await;
+        assert_eq!(
+            sample(&r, METRIC_HTTP_BODY_MATCH),
+            Some(0.0),
+            "a truncated body must never report a satisfied not_contains rule"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_endpoint_reports_no_body_verdict_at_all() {
+        // There is no body to judge, and emitting 0 would double-page for the outage `http_up`
+        // already covers — the same reasoning as the response-time gate above.
+        let t = FakeTransport::unreachable().with_http(yagra_transport::HttpProbe {
+            reachable: false,
+            status_code: None,
+            response_time_ms: 5000.0,
+            cert_days_to_expiry: None,
+            body: None,
+        });
+        let rule = yagra_common::BodyMatch::contains("ok");
+        let r = execute(
+            &http_job(http_check_matching("https://example.com/", rule)),
+            &t,
+            1_000,
+        )
+        .await;
+        assert_eq!(sample(&r, METRIC_HTTP_UP), Some(0.0));
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_MATCH), None);
+        assert_eq!(sample(&r, METRIC_HTTP_BODY_TRUNCATED), None);
+    }
+
+    // ── URL JSON extraction (ADR-047 Increment 3) ───────────────────────────────────
+
+    fn http_check_extracting(url: &str, rules: &[(&str, &str)]) -> yagra_bus::HttpCheck {
+        let mut check = http_check(url);
+        check.json_extract = rules
+            .iter()
+            .map(|(metric, path)| yagra_common::JsonExtract {
+                metric: (*metric).to_owned(),
+                path: (*path).to_owned(),
+            })
+            .collect();
+        check
+    }
+
+    const HEALTH_JSON: &str = r#"{"queue":{"depth":42,"lag_s":1.5},"healthy":true,"note":"fine"}"#;
+
+    #[tokio::test]
+    async fn every_rule_records_its_value_under_the_operators_own_metric_name() {
+        let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body(HEALTH_JSON, false));
+        let check = http_check_extracting(
+            "https://example.com/health",
+            &[
+                ("queue_depth", "queue.depth"),
+                ("queue_lag_seconds", "queue.lag_s"),
+                ("service_healthy", "healthy"),
+            ],
+        );
+        let r = execute(&http_job(check), &t, 1_000).await;
+        assert_eq!(sample(&r, "queue_depth"), Some(42.0));
+        assert_eq!(sample(&r, "queue_lag_seconds"), Some(1.5));
+        // A boolean health flag becomes a 0/1 gauge — which wants the same 0.5 threshold bound as
+        // every other boolean here (migration 0030's trap).
+        assert_eq!(sample(&r, "service_healthy"), Some(1.0));
+        // Extraction is additive: it must not disturb what the monitor already reported.
+        assert_eq!(sample(&r, METRIC_HTTP_UP), Some(1.0));
+        assert_eq!(sample(&r, METRIC_HTTP_RESPONSE_TIME_MS), Some(12.0));
+    }
+
+    #[tokio::test]
+    async fn a_rule_that_finds_nothing_records_nothing_rather_than_zero() {
+        // The ADR-047 決定 3 rule, and the reason `extract` returns an Option: a `0` here would be
+        // indistinguishable from the queue genuinely being empty, so a "queue is fine" dashboard
+        // would be showing the absence of a reading.
+        let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body(HEALTH_JSON, false));
+        let check = http_check_extracting(
+            "https://example.com/health",
+            &[
+                ("missing_key", "queue.nope"),
+                ("not_a_number", "note"),
+                ("good", "queue.depth"),
+            ],
+        );
+        let r = execute(&http_job(check), &t, 1_000).await;
+        assert_eq!(sample(&r, "missing_key"), None);
+        assert_eq!(sample(&r, "not_a_number"), None);
+        // One failing rule must not suppress its siblings.
+        assert_eq!(sample(&r, "good"), Some(42.0));
+    }
+
+    #[tokio::test]
+    async fn a_body_that_is_not_json_records_no_extracted_metrics() {
+        let t = FakeTransport::reachable(0.0)
+            .with_http(http_probe_with_body("<html>not json</html>", false));
+        let check =
+            http_check_extracting("https://example.com/", &[("queue_depth", "queue.depth")]);
+        let r = execute(&http_job(check), &t, 1_000).await;
+        assert_eq!(sample(&r, "queue_depth"), None);
+        // Availability is untouched: an HTML page is a perfectly reachable endpoint.
+        assert_eq!(sample(&r, METRIC_HTTP_UP), Some(1.0));
+    }
+
+    #[tokio::test]
+    async fn a_truncated_body_records_no_extracted_metrics() {
+        // Half a JSON document does not parse, so this falls out of the parse rather than needing a
+        // special case — but it is worth pinning, because the alternative (parsing a prefix
+        // leniently) would record numbers from a document we never saw the end of.
+        let cut = &HEALTH_JSON[..30];
+        let t = FakeTransport::reachable(0.0).with_http(http_probe_with_body(cut, true));
+        let check =
+            http_check_extracting("https://example.com/", &[("queue_depth", "queue.depth")]);
+        let r = execute(&http_job(check), &t, 1_000).await;
+        assert_eq!(sample(&r, "queue_depth"), None);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_endpoint_records_no_extracted_metrics() {
+        let t = FakeTransport::unreachable().with_http(yagra_transport::HttpProbe {
+            reachable: false,
+            status_code: None,
+            response_time_ms: 5000.0,
+            cert_days_to_expiry: None,
+            body: None,
+        });
+        let check =
+            http_check_extracting("https://example.com/", &[("queue_depth", "queue.depth")]);
+        let r = execute(&http_job(check), &t, 1_000).await;
+        assert_eq!(sample(&r, "queue_depth"), None);
+        assert_eq!(sample(&r, METRIC_HTTP_UP), Some(0.0));
+    }
+
+    #[tokio::test]
+    async fn extraction_alone_still_opens_the_body() {
+        // The budget moved off `BodyMatch` so that a monitor with only extraction has an answer to
+        // "how much do I read". If that regressed, the transport would be asked for no body and
+        // every rule would silently record nothing.
+        let check = http_check_extracting("https://example.com/", &[("q", "queue.depth")]);
+        assert!(check.body_match.is_none());
+        assert_eq!(
+            check.body_capture_bytes(),
+            Some(yagra_common::DEFAULT_BODY_MAX_BYTES)
+        );
+        assert_eq!(
+            http_check("https://example.com/").body_capture_bytes(),
+            None,
+            "neither feature ⇒ the transport never reads the body"
         );
     }
 

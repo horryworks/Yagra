@@ -490,6 +490,12 @@ export type ExpectedStatus = components['schemas']['ExpectedStatus'];
  *  create; the rest default server-side. */
 export type UrlCheckConfig = components['schemas']['UrlCheckConfig'];
 
+/** A URL monitor's response-body keyword rule. Absent ⇒ the probe never reads the body at all. */
+export type BodyMatch = components['schemas']['BodyMatch'];
+
+/** One number a URL monitor lifts out of a JSON response body and records under its own name. */
+export type JsonExtract = components['schemas']['JsonExtract'];
+
 /** Which record type a DNS monitor resolves to. */
 export type DnsRecordType = components['schemas']['DnsRecordType'];
 

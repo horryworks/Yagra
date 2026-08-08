@@ -3932,6 +3932,23 @@ export interface components {
             authorize_url: string;
         };
         /**
+         * @description A keyword rule applied to a URL monitor's response body.
+         *
+         *     When present, the monitor reports `http_body_match` (`1` satisfied / `0` not) in addition to
+         *     `http_up`. How much of the body is read is [`UrlCheckConfig::body_max_bytes`].
+         */
+        BodyMatch: {
+            /** @description Whether the keyword must be present or absent (default: present). */
+            mode?: components["schemas"]["BodyMatchMode"];
+            /** @description The keyword to look for. Matched as plain, case-sensitive text — not a regular expression. */
+            pattern: string;
+        };
+        /**
+         * @description Whether the keyword must be present or absent for the body to be considered healthy.
+         * @enum {string}
+         */
+        BodyMatchMode: "contains" | "not_contains";
+        /**
          * @description Numeric breach detail for a threshold alert (absent for a liveness up/down alert).
          *     Carried for the history log + notification payload — not part of alert identity.
          */
@@ -5771,6 +5788,22 @@ export interface components {
              * @description bits/sec for throughput metrics, errors|discards per second otherwise.
              */
             value: number;
+        };
+        /** @description One number to lift out of a JSON response body and record as a metric. */
+        JsonExtract: {
+            /**
+             * @description The metric name to record the value under, e.g. `queue_depth`. Must match
+             *     `[A-Za-z_:][A-Za-z0-9_:]*` and must not be one of the names the monitor already emits.
+             */
+            metric: string;
+            /**
+             * @description Dot-separated path to the value, e.g. `data.queue.depth` or `items.0.value`. Array elements
+             *     are indexed by number; `items[0].value` is accepted and means the same thing.
+             *
+             *     Not a JSONPath expression: the path names exactly one location, so the rule always produces
+             *     either one number or nothing.
+             */
+            path: string;
         };
         /**
          * @description What language the answer should be written in.
@@ -8159,11 +8192,25 @@ export interface components {
          *     `credential` is a reference; core resolves/inlines the decrypted value (ADR-018/020).
          */
         UrlCheckConfig: {
+            body_match?: null | components["schemas"]["BodyMatch"];
+            /**
+             * Format: int32
+             * @description How many bytes of the response body to read (default 65536, range 1024–1048576). Applies to
+             *     both `body_match` and `json_extract`; the body is not read at all unless one of them is set.
+             */
+            body_max_bytes?: number;
             credential?: null | components["schemas"]["CredentialId"];
             /** @description Which status codes count as healthy (default: any 2xx). */
             expected_status?: components["schemas"]["ExpectedStatus"];
             /** @description Follow 3xx redirects (default `true`). */
             follow_redirects?: boolean;
+            /**
+             * @description Values to lift out of a JSON response body and record as operator-named metrics.
+             *
+             *     Each rule adds one gauge per poll. A rule whose path is missing, or whose value is not a
+             *     number, records **nothing** for that poll rather than a zero.
+             */
+            json_extract?: components["schemas"]["JsonExtract"][];
             /** @description Request method (default `GET`). */
             method?: components["schemas"]["HttpMethod"];
             /**
@@ -8178,10 +8225,19 @@ export interface components {
         };
         /** @description A URL / HTTP endpoint monitor's configuration (1:1 with its node). */
         UrlCheckRow: {
+            /** @description The monitor's response-body keyword rule, if it has one. */
+            body_match?: unknown;
+            /**
+             * Format: int32
+             * @description How many bytes of the response body the monitor reads.
+             */
+            body_max_bytes?: number;
             /** Format: uuid */
             credential_id?: string | null;
             expected_status: unknown;
             follow_redirects: boolean;
+            /** @description The monitor's JSON extraction rules, if it has any. */
+            json_extract?: unknown;
             method: string;
             /** Format: uuid */
             node_id: string;

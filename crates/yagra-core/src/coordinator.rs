@@ -35,7 +35,7 @@ use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
 use yagra_bus::{
     CheckSpec, HeartbeatMsg, JobSpec, NodeJobs, SyncBus, SyncMsg, SyncRequest, WorkingSetDelta,
-    WorkingSetSnapshot, CAP_HTTP_AUTH, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
+    WorkingSetSnapshot, CAP_HTTP_AUTH, CAP_HTTP_BODY, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 use yagra_common::{HostSample, NodeId};
 
@@ -536,28 +536,32 @@ impl Coordinator {
                 if let Some(owner) = ring.assign(*node) {
                     assign_map.insert(node.as_uuid(), owner.to_owned());
                     if let Some(set) = targets.get_mut(owner) {
-                        // Withhold a spec its assigned poller cannot honour. Today that is only an
-                        // authenticated URL check: an N-1 poller drops the unknown `auth` field and
-                        // probes anonymously, the endpoint answers 401, and `http_up` goes to 0 —
-                        // a page for a healthy service, purely because a rolling upgrade was in
-                        // progress. Withholding produces a monitoring gap instead, which is
-                        // recoverable and does not wake anyone.
-                        let capable = poller_has_cap(&st, owner, CAP_HTTP_AUTH);
+                        // Withhold a spec its assigned poller cannot honour. Every entry in
+                        // `spec_required_caps` exists because an N-1 poller drops the field it does
+                        // not know and then reports a *confident wrong answer* — a 401 read as an
+                        // outage, or a page it never read reported as content-checked. Withholding
+                        // produces a monitoring gap instead, which is recoverable and wakes no one.
                         let kept: Vec<JobSpec> = specs
                             .iter()
-                            .filter(|s| capable || !spec_needs_http_auth(s))
+                            .filter(|s| {
+                                let Some(missing) = spec_required_caps(s)
+                                    .into_iter()
+                                    .find(|cap| !poller_has_cap(&st, owner, cap))
+                                else {
+                                    return true;
+                                };
+                                tracing::warn!(
+                                    poller = %owner,
+                                    node = %node,
+                                    cap = missing,
+                                    "poller does not advertise this capability; withholding the check that needs it until the poller is upgraded"
+                                );
+                                metrics::counter!("yagra_specs_withheld_total", "cap" => missing)
+                                    .increment(1);
+                                false
+                            })
                             .cloned()
                             .collect();
-                        if kept.len() != specs.len() {
-                            tracing::warn!(
-                                poller = %owner,
-                                node = %node,
-                                withheld = specs.len() - kept.len(),
-                                "poller does not advertise http-auth; withholding authenticated URL check until it is upgraded"
-                            );
-                            metrics::counter!("yagra_specs_withheld_total", "cap" => CAP_HTTP_AUTH)
-                                .increment((specs.len() - kept.len()) as u64);
-                        }
                         // An empty set still registers the node as assigned, so the sweep does not
                         // treat it as unowned and hand it to a second poller.
                         set.insert(*node, kept);
@@ -841,10 +845,28 @@ fn poller_has_cap(st: &CoordState, poller: &str, cap: &str) -> bool {
         .is_some_and(|e| e.caps.iter().any(|c| c == cap))
 }
 
-/// Whether this spec carries credentials a poller must understand to poll correctly.
-fn spec_needs_http_auth(spec: &JobSpec) -> bool {
+/// The capability tokens `spec` requires of the poller that will run it — empty when any poller can.
+///
+/// The test for belonging here is not "is this field new". It is: **would a poller that silently
+/// ignored the field produce an answer indistinguishable from a correct one?** Dropping `auth`
+/// turns a healthy service into a 401 read as an outage; dropping `body_match` turns a page nobody
+/// read into a passing content check. Both are confident and both are wrong, which is why they are
+/// gated while every other `#[serde(default)]` field on the bus is not — those degrade visibly.
+///
+/// Allocation-free for the overwhelming majority of specs (`Vec::new()` does not allocate), which
+/// matters because this runs for every spec of every node on every publish.
+fn spec_required_caps(spec: &JobSpec) -> Vec<&'static str> {
     match &spec.check {
-        CheckSpec::Http(http) => http.auth.is_some(),
+        CheckSpec::Http(http) => {
+            let mut caps = Vec::new();
+            if http.auth.is_some() {
+                caps.push(CAP_HTTP_AUTH);
+            }
+            if http.body_match.is_some() {
+                caps.push(CAP_HTTP_BODY);
+            }
+            caps
+        }
         CheckSpec::Icmp(_)
         | CheckSpec::Snmp(_)
         | CheckSpec::SnmpTable(_)
@@ -859,7 +881,7 @@ fn spec_needs_http_auth(spec: &JobSpec) -> bool {
         | CheckSpec::SnmpRouting(_)
         | CheckSpec::SnmpV3Routing(_)
         | CheckSpec::Dns(_)
-        | CheckSpec::MerakiCollect(_) => false,
+        | CheckSpec::MerakiCollect(_) => Vec::new(),
     }
 }
 
@@ -1615,6 +1637,112 @@ mod tests {
         let extra = vec![icmp_spec(node(1), 30), icmp_spec(node(2), 30)];
         assert_ne!(specs_fingerprint(&a), specs_fingerprint(&extra));
         assert_ne!(specs_fingerprint(&a), specs_fingerprint(&[]));
+    }
+
+    /// A URL job spec, optionally carrying credentials and/or a body rule.
+    fn http_spec(n: NodeId, auth: bool, body: bool) -> JobSpec {
+        let job = PollJob::http(
+            Uuid::nil(),
+            n,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::HttpCheck {
+                url: "https://example.test/health".to_owned(),
+                method: yagra_common::HttpMethod::Get,
+                expected_status: yagra_common::ExpectedStatus::TwoXx,
+                verify_tls: true,
+                follow_redirects: true,
+                timeout_ms: 5000,
+                auth: auth.then(|| yagra_common::HttpAuth::Bearer {
+                    token: "tok".to_owned(),
+                }),
+                body_match: body.then(|| yagra_common::BodyMatch::contains("ok")),
+                json_extract: Vec::new(),
+                body_max_bytes: yagra_common::DEFAULT_BODY_MAX_BYTES,
+            },
+            60,
+        );
+        JobSpec::from_job(&job)
+    }
+
+    #[test]
+    fn only_the_fields_an_old_poller_would_answer_wrongly_about_demand_a_capability() {
+        // The gate is not "this field is new" — it is "an N-1 poller that dropped this field would
+        // report something confidently wrong". A plain URL check must stay ungated, or a fleet
+        // mid-upgrade would stop polling monitors it can poll perfectly well.
+        let n = node(1);
+        assert!(spec_required_caps(&http_spec(n, false, false)).is_empty());
+        assert!(spec_required_caps(&icmp_spec(n, 30)).is_empty());
+
+        assert_eq!(
+            spec_required_caps(&http_spec(n, true, false)),
+            [CAP_HTTP_AUTH]
+        );
+        assert_eq!(
+            spec_required_caps(&http_spec(n, false, true)),
+            [CAP_HTTP_BODY]
+        );
+        // Both, independently: a monitor may carry either and a poller may advertise either, so
+        // one missing capability must not excuse the other.
+        assert_eq!(
+            spec_required_caps(&http_spec(n, true, true)),
+            [CAP_HTTP_AUTH, CAP_HTTP_BODY]
+        );
+
+        // ⚠️ JSON extraction reads the body too, and is deliberately NOT gated. An old poller drops
+        // the field and records no sample — an absent series, which is visible — where dropping
+        // `body_match` produces a green result it never computed. Withholding here would stop the
+        // whole monitor, taking `http_up` with it: a total loss of availability monitoring traded
+        // for one missing extra metric. If someone "fixes" this asymmetry, that is what breaks.
+        let mut extracting = http_spec(n, false, false);
+        if let CheckSpec::Http(http) = &mut extracting.check {
+            http.json_extract = vec![yagra_common::JsonExtract {
+                metric: "queue_depth".to_owned(),
+                path: "queue.depth".to_owned(),
+            }];
+        }
+        assert!(
+            spec_required_caps(&extracting).is_empty(),
+            "extraction must not withhold the monitor from an older poller"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_poller_without_http_body_is_not_sent_the_content_checked_monitor() {
+        // The failure this prevents is the quiet one: an old poller never reads the body and
+        // reports `http_up = 1`, which looks exactly like "the content rule passed". Better to
+        // publish nothing for that spec and leave a gap someone can see.
+        let (coord, bus, _stats) = coordinator();
+        let mut rx = bus.subscribe_sync();
+        let now = t0();
+        let mut hb = heartbeat("p-old", "default", Uuid::new_v4());
+        hb.caps = vec![CAP_HTTP_AUTH.to_owned()]; // understands auth, not bodies
+        coord.observe_heartbeat(hb, now).await;
+
+        let n = node(1);
+        let mut desired = HashMap::new();
+        desired.insert(n, vec![http_spec(n, false, true), icmp_spec(n, 30)]);
+        coord.reconcile_pool("default", desired, now).await;
+
+        let published: Vec<JobSpec> = drain_syncs(&mut rx, "p-old")
+            .into_iter()
+            .flat_map(|m| match m {
+                SyncMsg::SnapshotChunk(s) => s.nodes,
+                SyncMsg::Delta(d) => d.upserts,
+            })
+            .flat_map(|nj| nj.specs)
+            .collect();
+        assert!(
+            published
+                .iter()
+                .all(|s| !matches!(&s.check, CheckSpec::Http(h) if h.body_match.is_some())),
+            "the content-checked spec must be withheld"
+        );
+        assert!(
+            published
+                .iter()
+                .any(|s| matches!(&s.check, CheckSpec::Icmp(_))),
+            "withholding one spec must not withhold the node's other work"
+        );
     }
 
     #[tokio::test]

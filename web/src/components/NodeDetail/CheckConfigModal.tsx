@@ -18,12 +18,18 @@ import {
   dnsDraftFrom,
   urlBodyFrom,
   urlDraftFrom,
+  BODY_MATCH_MODES,
   EXPECTED_STATUS_MODES,
   type DnsCheckDraft,
+  type JsonExtractDraft,
   type UrlCheckDraft,
 } from './checkConfigForm';
 
 const HTTP_METHODS = ['GET', 'HEAD', 'POST'] as const;
+
+/** Mirrors `yagra_common::MAX_JSON_EXTRACTS` — hides "add" once the server would refuse the next
+ *  row anyway. The form's own validation is what actually reports it. */
+const MAX_EXTRACT_ROWS = 8;
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME'] as const;
 
 /** Credential kinds a URL monitor can present. `http_auth` is the current kind; `api_token`
@@ -80,6 +86,21 @@ export function UrlCheckModal({
   }, []);
   const set = <K extends keyof UrlCheckDraft>(k: K, v: UrlCheckDraft[K]) =>
     setD((prev) => ({ ...prev, [k]: v }));
+
+  // Extraction rows are a list, so they need their own three edits rather than `set`.
+  const setExtract = (i: number, patch: Partial<JsonExtractDraft>) =>
+    setD((prev) => ({
+      ...prev,
+      extracts: prev.extracts.map((row, j) => (j === i ? { ...row, ...patch } : row)),
+    }));
+  const addExtract = () =>
+    setD((prev) => ({ ...prev, extracts: [...prev.extracts, { metric: '', path: '' }] }));
+  const removeExtract = (i: number) =>
+    setD((prev) => ({ ...prev, extracts: prev.extracts.filter((_, j) => j !== i) }));
+
+  // The read budget only means anything when something reads the body, so it is shown only then —
+  // one budget shared by both features, which is why this is not asked twice.
+  const readsBody = d.bodyMatchEnabled || d.extracts.length > 0;
 
   const save = () => {
     const built = urlBodyFrom(d);
@@ -210,6 +231,79 @@ export function UrlCheckModal({
           trip, and says *why* rather than just refusing. */}
       {d.credentialId !== '' && !d.verifyTls && (
         <FieldHint error>{t('checkEdit.credentialNeedsTls')}</FieldHint>
+      )}
+      <label className="nd-check-toggle">
+        <input
+          type="checkbox"
+          checked={d.bodyMatchEnabled}
+          onChange={(e) => set('bodyMatchEnabled', e.target.checked)}
+        />
+        <span>{t('checkEdit.bodyMatch')}</span>
+      </label>
+      <FieldHint>{t('checkEdit.bodyMatchHint')}</FieldHint>
+      {d.bodyMatchEnabled && (
+        <>
+          <Row label={t('checkEdit.bodyMode')}>
+            <Select
+              value={d.bodyMode}
+              onChange={(e) => set('bodyMode', e.target.value as UrlCheckDraft['bodyMode'])}
+            >
+              {BODY_MATCH_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {t(`checkEdit.bodyMode.${m}`)}
+                </option>
+              ))}
+            </Select>
+          </Row>
+          <Row
+            label={t('checkEdit.bodyPattern')}
+            required
+            hint={t('checkEdit.bodyPatternHint')}
+          >
+            <TextInput
+              value={d.bodyPattern}
+              placeholder={'"status":"ok"'}
+              onChange={(e) => set('bodyPattern', e.target.value)}
+            />
+          </Row>
+        </>
+      )}
+      <Row label={t('checkEdit.jsonExtract')} hint={t('checkEdit.jsonExtractHint')}>
+        <div className="nd-extract-rows">
+          {d.extracts.map((row, i) => (
+            <div className="nd-extract-row" key={i}>
+              <TextInput
+                value={row.metric}
+                placeholder={t('checkEdit.extractMetricPlaceholder')}
+                aria-label={t('checkEdit.extractMetric')}
+                onChange={(e) => setExtract(i, { metric: e.target.value })}
+              />
+              <TextInput
+                value={row.path}
+                placeholder="data.queue.depth"
+                aria-label={t('checkEdit.extractPath')}
+                onChange={(e) => setExtract(i, { path: e.target.value })}
+              />
+              <Button onClick={() => removeExtract(i)}>{t('common:actions.remove')}</Button>
+            </div>
+          ))}
+          {d.extracts.length < MAX_EXTRACT_ROWS && (
+            <Button onClick={addExtract}>{t('checkEdit.extractAdd')}</Button>
+          )}
+        </div>
+      </Row>
+      {readsBody && (
+        <>
+          <Row label={t('checkEdit.bodyMaxBytes')} hint={t('checkEdit.bodyMaxBytesHint')}>
+            <TextInput
+              value={d.bodyMaxBytes}
+              inputMode="numeric"
+              onChange={(e) => set('bodyMaxBytes', e.target.value)}
+            />
+          </Row>
+          {/* Refused server-side too; saying it here says why before a round trip. */}
+          {d.method === 'HEAD' && <FieldHint error>{t('checkEdit.bodyMatchNeedsBody')}</FieldHint>}
+        </>
       )}
       {error && <p className="form-error">{error}</p>}
     </Modal>

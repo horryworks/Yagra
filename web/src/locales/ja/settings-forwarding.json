@@ -3,9 +3,9 @@
   "unavailable": "転送の管理には管理者ロールが必要です。",
   "signInPrompt": "転送先を管理するにはサインインしてください。",
   "empty": "転送先がまだありません。現在、何も中継していません。",
-  "count_one": "件の転送先",
-  "count_other": "件の転送先",
-  "securityNote": "転送されたメッセージは Yagra の外へ出ます。syslog 本文には資格情報が含まれることがあります。信頼できるコレクタへ、信頼できる経路でのみ送ってください。",
+  "count_one": "転送先",
+  "count_other": "転送先",
+  "securityNote": "転送したメッセージは Yagra の外へ出ます。syslog の本文には認証情報が含まれることがあります。信頼できるコレクタへ、信頼できる経路でのみ送ってください。",
 
   "add": {
     "button": "転送先を追加",
@@ -14,7 +14,7 @@
   "edit": { "title": "転送先の編集" },
   "delete": {
     "title": "転送先の削除",
-    "confirm": "「{{name}}」を削除しますか? 以後この宛先へは何も転送されません。"
+    "confirm": "「{{name}}」を削除しますか？以後、この宛先へは何も転送しません。"
   },
 
   "cols": {
@@ -69,7 +69,7 @@
     "targetTable": "BigQuery テーブル",
     "targetTablePlaceholder": "my-project.analytics.yagra_events",
     "targetTableHint": "project.dataset.table 形式。データセットは事前に作成しておいてください — データセットのリージョンは後から変更できないため、Yagra 側では作成しません。テーブルは日単位パーティション付きで自動作成されます。",
-    "pool": "ポーラプール",
+    "pool": "ポーラープール",
     "poolPlaceholder": "全プール",
     "fidelity": "忠実度",
     "fidelityHint": "「原本」は受信したデータグラムをそのまま中継します。「復元品」はパース済みフィールドから組み立て直すため、RFC 5424 の構造化データ・非 UTF-8 バイト・4096 文字を超える本文・33 個目以降の varbind が失われます。",
@@ -79,7 +79,7 @@
     "serviceAccount": "サービスアカウント鍵",
     "serviceAccountPlaceholder": "空欄にするとインスタンス自身の ID (Workload Identity) を使います",
     "serviceAccountKept": "鍵は保存済み — 空欄のままで維持",
-    "serviceAccountHint": "BigQuery データ編集者ロールを持つサービスアカウントの JSON 鍵ファイルを貼り付けてください。暗号化して保存され、以後表示されません。core を Google Cloud 上で Workload Identity 付きで動かしている場合は空欄にしてください — 資格情報を一切保存しない、より安全な方法です。",
+    "serviceAccountHint": "BigQuery データ編集者ロールを持つサービスアカウントの JSON 鍵ファイルを貼り付けてください。暗号化して保存し、以後は表示しません。core を Google Cloud 上で Workload Identity 付きで動かしている場合は、空欄のままにしてください — 認証情報を一切保存せずに済む、より安全な方法です。",
     "caCert": "CA 証明書",
     "caCertPlaceholder": "-----BEGIN CERTIFICATE-----",
     "caCertHint": "任意。コレクタの証明書に署名した CA がシステムの信頼ストアに無い場合、その PEM 証明書を貼り付けてください。コレクタの証明書検証は常に行われ、無効化する手段はありません。",
@@ -111,7 +111,7 @@
 
   "valuePlaceholder": {
     "source_ip": "10.0.0.0/8, 192.168.1.5",
-    "severity": "4 (warning 以上)",
+    "severity": "4（warning 以上）",
     "facility": "23",
     "trap_oid": "1.3.6.1.6.3.1.1.5.",
     "message": "LINEPROTO-5-",
@@ -146,8 +146,8 @@
     "emptyHint": "条件なし — ストリーム全体を転送します。",
     "flowAnyRecord": "フローのデータグラムは複数のレコードをまとめて運びます。いずれか 1 つのレコードが条件に一致すれば、データグラム全体を転送します — 一致しなかったレコードも一緒に流れます。エクスポートを別のデータグラムに再エンコードしない限り、レコード単位で取り除くことはできません。厳密な絞り込みが必要なら、同じストリームを BigQuery へ送ってください。",
     "flowPerRecord": "フローレコードは 1 件ずつ判定され、一致したものだけが行になります。",
-    "count_one": "{{count}} 条件 ({{mode}})",
-    "count_other": "{{count}} 条件 ({{mode}})",
+    "count_one": "条件 {{count}} 件（{{mode}}）",
+    "count_other": "条件 {{count}} 件（{{mode}}）",
     "mode": {
       "all": "すべて一致",
       "any": "いずれか一致"
@@ -169,8 +169,8 @@
   },
 
   "warn": {
-    "noRawCapture": "次のポーラはまだ原本のバイト列を送らないため、「原本」設定の宛先でも復元品になります: {{pollers}}。アップグレード後に原本が届くようになります。",
-    "noFlowRelay": "次のポーラはまだフローデータグラムを中継しないため、そのポーラが受信したエクスポータからは何も転送されません: {{pollers}}。アップグレードすると中継が始まります。",
+    "noRawCapture": "次のポーラーはまだ原本のバイト列を送らないため、「原本」設定の宛先でも復元品になります: {{pollers}}。アップグレードすると原本が届くようになります。",
+    "noFlowRelay": "次のポーラーはまだフローデータグラムを中継しないため、そのポーラーが受信したエクスポーターからは何も転送されません: {{pollers}}。アップグレードすると中継が始まります。",
     "standby": "この core はスタンバイです。ここで転送先を編集できますが、実際の送出はアクティブな core が行います。"
   },
 

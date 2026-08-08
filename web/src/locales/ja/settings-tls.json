@@ -8,11 +8,11 @@
   "source": {
     "self_signed": "自己署名",
     "imported": "取り込み済み",
-    "unknown": "未知"
+    "unknown": "不明"
   },
   "sourceHint": {
     "self_signed": "Yagra が生成し、自動更新します。自分の証明書を取り込むまでブラウザは警告を出します。",
-    "imported": "運用者が取り込んだ証明書です。Yagra が独断で差し替えることはありません。",
+    "imported": "オペレーターが取り込んだ証明書です。Yagra が独断で差し替えることはありません。",
     "unknown": "新しいバージョンの Yagra が書き込んだ値です。取り込み済みと同じ扱いになり、自動では差し替えません。"
   },
 
@@ -24,7 +24,7 @@
     "validity": "有効期間",
     "validityRange": "{{from}} 〜 {{to}}",
     "fingerprint": "SHA-256 フィンガープリント",
-    "fingerprintHint": "ブラウザが表示する値と見比べると、このサーバに繋がっていることを確認できます。",
+    "fingerprintHint": "ブラウザが表示する値と見比べると、このサーバーに繋がっていることを確認できます。",
     "keyAlgorithm": "鍵",
     "importedAt": "適用日時",
     "importedBy": "実行者: {{user}}",
@@ -41,7 +41,7 @@
   },
 
   "warning": {
-    "notMaterialized": "保存はされましたが、Web サーバがまだ読み込んでいません。通常は数秒で解消します。解消しない場合は core のログに理由が出ています。",
+    "notMaterialized": "保存はできましたが、Web サーバーがまだ読み込んでいません。通常は数秒で解消します。解消しない場合は、core のログに理由が出ています。",
     "keyUnreadable": "秘密鍵を復号できなくなっています（暗号鍵が変わったか失われました）。取り込み直すまで、この証明書の更新も再配信もできません。KEK ファイルが残っていれば復元してください。",
     "apiPortPublic": "Yagra の API ポートが平文 HTTP でネットワークから到達可能なままです。ブラウザは使いませんが、Prometheus・webhook 送信元・スクリプトが使っている可能性があります。それらをすべて、信頼できる証明書のあるこの HTTPS アドレスへ移し終えたら、YAGRA_API_BIND=127.0.0.1 で閉じてください。",
     "apiPortPublicTitle": "暗号化されたアドレスだけが入口ではありません"
@@ -52,10 +52,10 @@
     "intro": "証明書チェーンと秘密鍵を PEM 形式で貼り付けるか、ファイルを選択してください。組み合わせが正しいかを確認してから適用します。",
     "certificate": "証明書チェーン",
     "certificatePlaceholder": "-----BEGIN CERTIFICATE-----",
-    "certificateHint": "サーバ証明書を先頭に、続けて中間証明書を並べます。",
+    "certificateHint": "サーバー証明書を先頭に、続けて中間証明書を並べます。",
     "privateKey": "秘密鍵",
     "privateKeyPlaceholder": "-----BEGIN PRIVATE KEY-----",
-    "privateKeyHint": "パスフレーズ無しのものが必要です。暗号化して保存され、二度と表示されません。",
+    "privateKeyHint": "パスフレーズ無しの鍵が必要です。暗号化して保存し、二度と表示しません。",
     "chooseFile": "ファイルを選択…",
     "submit": "取り込んで適用",
     "submitting": "取り込み中…",
@@ -72,7 +72,7 @@
 
   "regenerate": {
     "heading": "自己署名証明書を再生成",
-    "intro": "発行者ではなく「名前が違う」という警告が出るときに使います。Yagra はアクセスに使うアドレスを知り得ないため、ここに指定しない限り生成される証明書はループバックとサーバ自身のホスト名しか含みません。",
+    "intro": "発行者ではなく「名前が違う」という警告が出るときに使います。Yagra はアクセスに使うアドレスを知り得ないため、ここに指定しない限り生成される証明書はループバックとサーバー自身のホスト名しか含みません。",
     "names": "ホスト名と IP アドレス",
     "namesPlaceholder": "yagra.example.net, 10.0.0.5",
     "namesHint": "改行またはカンマ区切り。空欄なら既定値を使います。",

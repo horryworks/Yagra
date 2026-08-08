@@ -85,7 +85,12 @@ pub(crate) async fn probe_http(
 
     let started = Instant::now();
     match req.send().await {
-        Ok(resp) => {
+        Ok(mut resp) => {
+            // ⚠️ Measured here and nowhere else. `send()` resolves once the headers are in, so this
+            // is time-to-response-headers — the documented meaning of `http_response_time_ms`. The
+            // optional body read below happens *after* the stopwatch on purpose: letting it grow to
+            // include the read would silently redefine the metric for every existing series, and
+            // only for the monitors that happen to carry a content rule.
             let response_time_ms = started.elapsed().as_secs_f64() * 1000.0;
             let status_code = Some(resp.status().as_u16());
             let cert_days_to_expiry = resp
@@ -93,11 +98,16 @@ pub(crate) async fn probe_http(
                 .get::<reqwest::tls::TlsInfo>()
                 .and_then(reqwest::tls::TlsInfo::peer_certificate)
                 .and_then(cert_days_to_expiry);
+            let body = match spec.body_capture_bytes {
+                Some(cap) => Some(capture_body(&mut resp, cap as usize).await),
+                None => None,
+            };
             Ok(HttpProbe {
                 reachable: true,
                 status_code,
                 response_time_ms,
                 cert_days_to_expiry,
+                body,
             })
         }
         Err(e) => {
@@ -109,9 +119,64 @@ pub(crate) async fn probe_http(
                 status_code: None,
                 response_time_ms: started.elapsed().as_secs_f64() * 1000.0,
                 cert_days_to_expiry: None,
+                body: None,
             })
         }
     }
+}
+
+/// Read at most `cap` bytes of `resp`'s body, reporting whether anything was left unread.
+///
+/// Streamed chunk by chunk rather than `resp.bytes()`, which would buffer the *whole* response
+/// before any limit could apply — the exact shape that turns one misconfigured monitor pointed at a
+/// large download into a poller OOM. The request-level timeout still covers this read, so a body
+/// that stops arriving cannot hang the worker.
+///
+/// A read error mid-body is reported as `truncated`, not as a failure: the headers already arrived,
+/// the status is real, and "bytes exist that we did not examine" is exactly what a partial read
+/// means to a keyword rule.
+async fn capture_body(resp: &mut reqwest::Response, cap: usize) -> crate::BodyCapture {
+    let mut buf: Vec<u8> = Vec::new();
+    let mut truncated = false;
+    loop {
+        match resp.chunk().await {
+            Ok(Some(chunk)) => {
+                if fill_capped(&mut buf, &chunk, cap) {
+                    truncated = true;
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(e) => {
+                tracing::debug!(error = %e, "http probe body read did not complete");
+                truncated = true;
+                break;
+            }
+        }
+    }
+    crate::BodyCapture {
+        text: String::from_utf8_lossy(&buf).into_owned(),
+        truncated,
+    }
+}
+
+/// Append as much of `chunk` to `buf` as `cap` allows. Returns `true` when the budget stopped it —
+/// i.e. bytes exist that were not captured.
+///
+/// Split out from the read loop because it is the whole judgement: a real `reqwest::Response` is
+/// not constructible in a unit test, so leaving this arithmetic inline would leave the off-by-one
+/// untested. Pure, so it is.
+fn fill_capped(buf: &mut Vec<u8>, chunk: &[u8], cap: usize) -> bool {
+    let room = cap.saturating_sub(buf.len());
+    if chunk.len() >= room {
+        buf.extend_from_slice(&chunk[..room]);
+        // `>=` rather than `>`: a chunk that exactly fills the budget leaves us unable to tell
+        // whether more follows, so the capture counts as incomplete. Erring toward "indeterminate"
+        // is the safe direction — see `yagra_common::BodyMatch::satisfied_by`.
+        return true;
+    }
+    buf.extend_from_slice(chunk);
+    false
 }
 
 /// One of the four static probe-client variants (`follow_redirects` × `verify_tls`), built once and
@@ -245,6 +310,7 @@ mod tests {
             verify_tls: true,
             follow_redirects: true,
             auth: None,
+            body_capture_bytes: None,
         };
         let err = probe_http(&spec, Duration::from_millis(500)).await;
         assert!(matches!(err, Err(TransportError::Io(_))));
@@ -259,6 +325,7 @@ mod tests {
             verify_tls: true,
             follow_redirects: true,
             auth: None,
+            body_capture_bytes: None,
         };
         let err = probe_http(&spec, Duration::from_millis(500)).await;
         assert!(matches!(err, Err(TransportError::Io(_))));
@@ -272,6 +339,7 @@ mod tests {
             verify_tls: true,
             follow_redirects: true,
             auth: None,
+            body_capture_bytes: None,
         };
         let err = probe_http(&spec, Duration::from_millis(500)).await;
         assert!(matches!(err, Err(TransportError::Io(_))));
@@ -280,6 +348,73 @@ mod tests {
     #[test]
     fn unparseable_cert_yields_none() {
         assert_eq!(cert_days_to_expiry(b"not a cert"), None);
+    }
+
+    #[test]
+    fn a_body_under_the_budget_is_captured_whole_and_not_marked_truncated() {
+        // The common case, and the one a false `truncated` would break: every keyword rule would
+        // go permanently indeterminate, which reads as "0" on the gauge and pages for nothing.
+        let mut buf = Vec::new();
+        assert!(!fill_capped(&mut buf, b"hello ", 64));
+        assert!(!fill_capped(&mut buf, b"world", 64));
+        assert_eq!(buf, b"hello world");
+    }
+
+    #[test]
+    fn a_body_over_the_budget_stops_at_the_cap_and_reports_truncation() {
+        let mut buf = Vec::new();
+        assert!(!fill_capped(&mut buf, b"1234", 8));
+        // This chunk overruns: keep the 4 bytes that fit, and say bytes went unexamined.
+        assert!(fill_capped(&mut buf, b"56789abc", 8));
+        assert_eq!(buf, b"12345678");
+
+        // A chunk that lands exactly on the budget also counts as truncated — we cannot see
+        // whether more follows, and guessing "that was all" is the direction that lies.
+        let mut exact = Vec::new();
+        assert!(fill_capped(&mut exact, b"12345678", 8));
+        assert_eq!(exact, b"12345678");
+
+        // Already full: nothing more is taken, and it stays truncated.
+        let mut full = b"12345678".to_vec();
+        assert!(fill_capped(&mut full, b"more", 8));
+        assert_eq!(full, b"12345678");
+    }
+
+    #[test]
+    fn a_captured_body_never_prints_itself() {
+        // `HttpProbe` derives Debug and now carries the response body, so one `debug!(?probe)`
+        // would dump up to a megabyte of a monitored endpoint's page — which may hold session
+        // data, personal data, or a token the page rendered. Same trap `HttpAuth` already has a
+        // manual impl for; this is the test that keeps a future `#[derive(Debug)]` from reopening it.
+        let probe = HttpProbe {
+            reachable: true,
+            status_code: Some(200),
+            response_time_ms: 5.0,
+            cert_days_to_expiry: None,
+            body: Some(crate::BodyCapture {
+                text: "session=hunter2; user=alice".to_owned(),
+                truncated: true,
+            }),
+        };
+        let shown = format!("{probe:?}");
+        assert!(!shown.contains("hunter2"), "body content must not print");
+        assert!(!shown.contains("alice"));
+        // The diagnostic facts still survive — they are the only thing such a log line is asked.
+        assert!(shown.contains("truncated: true"));
+        assert!(shown.contains("len: 27"));
+    }
+
+    #[test]
+    fn a_cut_multibyte_character_degrades_to_a_replacement_rather_than_losing_the_capture() {
+        // The cut lands on a byte boundary, so the capture must survive a split character —
+        // discarding the whole body over its last byte would make a rule undecidable at random.
+        let mut buf = Vec::new();
+        assert!(fill_capped(&mut buf, "ok日".as_bytes(), 3)); // "ok" + the first byte of 日
+        let text = String::from_utf8_lossy(&buf);
+        assert!(
+            text.starts_with("ok"),
+            "the readable prefix survives: {text}"
+        );
     }
 
     #[test]

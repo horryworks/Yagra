@@ -122,6 +122,13 @@ pub fn build_http_check(cfg: &UrlCheckConfig, auth: Option<HttpAuth>) -> HttpChe
         follow_redirects: cfg.follow_redirects,
         timeout_ms: cfg.timeout_ms,
         auth,
+        // Carried through unchanged — they hold no secret, so unlike `auth` there is nothing for
+        // core to resolve. `body_match`'s presence is what makes the coordinator demand
+        // `CAP_HTTP_BODY` of whichever poller the spec lands on; `json_extract`'s deliberately
+        // does not (see `spec_required_caps`).
+        body_match: cfg.body_match.clone(),
+        json_extract: cfg.json_extract.clone(),
+        body_max_bytes: cfg.body_max_bytes,
     }
 }
 

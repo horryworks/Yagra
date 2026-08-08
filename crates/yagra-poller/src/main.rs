@@ -442,6 +442,10 @@ async fn run_heartbeat_loop<B>(
                 // authenticated URL check from this poller rather than let it probe anonymously and
                 // report the resulting 401 as an outage.
                 yagra_bus::CAP_HTTP_AUTH.to_owned(),
+                // This build reads a URL check's response body and applies `HttpCheck::body_match`.
+                // Without the claim core withholds every content-checked monitor rather than let
+                // this poller report `http_up = 1` for a page it never looked at.
+                yagra_bus::CAP_HTTP_BODY.to_owned(),
             ],
             host: Some(host_collector.sample()),
             leaving,

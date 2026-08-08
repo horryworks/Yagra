@@ -1,8 +1,8 @@
 {
-  "note": "外部 IdP(OIDC)を設定すると、組織の SSO で Yagra にサインインできます。ローカルアカウントも併用できます。",
+  "note": "外部 IdP (OIDC) を設定すると、組織の SSO で Yagra にサインインできます。ローカルアカウントも併用できます。",
   "unavailable": "認証設定には管理者アカウントが必要です。",
   "empty": "IdP が未設定です。追加すると SSO サインインが有効になります。",
-  "mappedGroups_other": "{{count}} 個のグループをロールにマッピング",
+  "mappedGroups_other": "グループ {{count}} 件をロールに対応づけ",
   "badge": {
     "enabled": "有効",
     "disabled": "無効"
@@ -15,28 +15,28 @@
   },
   "delete": {
     "title": "プロバイダを削除",
-    "confirm": "SSO プロバイダ「{{name}}」を削除しますか?SSO でサインインするユーザーはサインインできなくなります。"
+    "confirm": "SSO プロバイダ「{{name}}」を削除しますか？SSO を使っているユーザーはサインインできなくなります。"
   },
   "field": {
     "name": "表示名",
     "issuer": "Issuer URL",
-    "issuerHint": "プロバイダのベース URL。discovery は {issuer}/.well-known/openid-configuration を参照します。",
+    "issuerHint": "プロバイダのベース URL です。ディスカバリは {issuer}/.well-known/openid-configuration を参照します。",
     "clientId": "クライアント ID",
     "replaceSecret": "クライアントシークレットを差し替える",
     "clientSecret": "クライアントシークレット",
-    "clientSecretHint": "保存時に暗号化され、再表示されません。",
+    "clientSecretHint": "保存時に暗号化し、以後は表示しません。",
     "redirectUri": "リダイレクト URI",
     "redirectUriHint": "この URL をそのまま IdP の許可リダイレクトとして登録してください。",
     "scopes": "スコープ",
     "groupsClaim": "グループクレーム",
-    "groupsClaimHint": "ユーザーのグループを含む ID トークンのクレーム名(既定: groups)。",
-    "roleMap": "グループ → ロール マッピング",
-    "roleMapHint": "IdP のグループ名を Yagra のロールにマッピングします。最も高いロールが優先されます。",
+    "groupsClaimHint": "ユーザーのグループが入っている ID トークンのクレーム名です（既定: groups）。",
+    "roleMap": "グループ → ロールの対応づけ",
+    "roleMapHint": "IdP のグループ名を Yagra のロールに対応づけます。複数一致した場合は、最も高いロールを採用します。",
     "groupPlaceholder": "idp-group-name",
-    "addMapping": "マッピングを追加",
+    "addMapping": "対応づけを追加",
     "defaultRole": "既定ロール",
-    "defaultRoleNone": "なし — マッピングが無ければ拒否",
-    "defaultRoleHint": "どのマッピングにも一致しないユーザーのロール。",
+    "defaultRoleNone": "なし — 対応づけが無ければ拒否",
+    "defaultRoleHint": "どの対応づけにも一致しなかったユーザーに与えるロールです。",
     "enabled": "有効"
   },
   "err": {
@@ -60,7 +60,7 @@
       "bindDn": "サービスアカウントの DN",
       "bindPassword": "サービスアカウントのパスワード",
       "replacePassword": "パスワードを変更",
-      "replacePasswordHint": "パスワードは保存済みです。変更する場合のみチェックしてください。触らなければ保存済みの値が維持されます。",
+      "replacePasswordHint": "パスワードは保存済みです。変えるときだけチェックしてください。触らなければ保存済みの値をそのまま使います。",
       "userBaseDn": "ユーザー検索のベース DN",
       "userFilter": "ユーザー検索フィルタ",
       "usernameAttribute": "ユーザー名の属性",
@@ -74,10 +74,10 @@
     },
     "test": {
       "run": "テスト",
-      "saveFirst": "テストは保存済みの設定に対して行われます。先に保存してください。",
+      "saveFirst": "テストは保存済みの設定に対して実行します。先に保存してください。",
       "usernamePlaceholder": "照会するユーザー名（任意）",
       "dn": "エントリ",
-      "username": "解決されたユーザー名",
+      "username": "解決したユーザー名",
       "groups": "グループ",
       "role": "このアカウントは {{role}} としてサインインします。",
       "denied": "このアカウントは拒否されます — どのグループもロールに対応しておらず、既定ロールもありません。"
@@ -97,7 +97,7 @@
       "userFilter": "ユーザー検索フィルタには {username} が必要です。無いとベース DN 配下の全エントリに一致します。",
       "groupPair": "グループ検索にはベース DN とフィルタの両方が必要です（どちらも空にするか、両方設定してください）。",
       "groupFilter": "グループ検索フィルタには {user_dn}（または {username}）が必要です。",
-      "noMapping": "有効化するにはグループマッピングか既定ロールが少なくとも 1 つ必要です。無いと全てのログインが拒否されます。",
+      "noMapping": "有効にするには、グループの対応づけか既定ロールが少なくとも 1 つ必要です。無いとすべてのログインが拒否されます。",
       "save": "ディレクトリ設定を保存できませんでした。",
       "test": "ディレクトリをテストできませんでした。"
     }

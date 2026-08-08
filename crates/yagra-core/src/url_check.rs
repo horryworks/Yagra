@@ -10,7 +10,9 @@ use sqlx::types::Json;
 use sqlx::{PgPool, Row};
 use std::collections::HashSet;
 use uuid::Uuid;
-use yagra_common::url_check::{ExpectedStatus, HttpMethod, UrlCheckConfig};
+use yagra_common::url_check::{
+    BodyMatch, ExpectedStatus, HttpMethod, JsonExtract, UrlCheckConfig, DEFAULT_BODY_MAX_BYTES,
+};
 use yagra_common::CredentialId;
 
 /// PostgreSQL-backed store for per-node URL-check configs.
@@ -28,7 +30,7 @@ impl UrlCheckRepo {
     pub async fn get(&self, node_id: Uuid) -> anyhow::Result<Option<UrlCheckConfig>> {
         let row = sqlx::query(
             "SELECT url, method, expected_status, verify_tls, follow_redirects, timeout_ms, \
-                    credential_id \
+                    credential_id, body_match, json_extract, body_max_bytes \
              FROM url_checks WHERE node_id = $1",
         )
         .bind(node_id)
@@ -41,6 +43,9 @@ impl UrlCheckRepo {
         let expected: Json<ExpectedStatus> = row.try_get("expected_status")?;
         let timeout_ms: i32 = row.try_get("timeout_ms")?;
         let credential_id: Option<Uuid> = row.try_get("credential_id")?;
+        let body_match: Option<Json<BodyMatch>> = row.try_get("body_match")?;
+        let json_extract: Option<Json<Vec<JsonExtract>>> = row.try_get("json_extract")?;
+        let body_max_bytes: i32 = row.try_get("body_max_bytes")?;
         Ok(Some(UrlCheckConfig {
             url: row.try_get("url")?,
             method: HttpMethod::from_token(&method).unwrap_or_default(),
@@ -49,6 +54,11 @@ impl UrlCheckRepo {
             follow_redirects: row.try_get("follow_redirects")?,
             timeout_ms: u32::try_from(timeout_ms).unwrap_or(5000),
             credential: credential_id.map(CredentialId::from),
+            body_match: body_match.map(|j| j.0),
+            json_extract: json_extract.map(|j| j.0).unwrap_or_default(),
+            // Same i32↔u32 shape as `timeout_ms` above, and the same documented fallback on both
+            // sides of the round trip so a clamped write reads back as what was stored.
+            body_max_bytes: u32::try_from(body_max_bytes).unwrap_or(DEFAULT_BODY_MAX_BYTES),
         }))
     }
 
@@ -57,13 +67,15 @@ impl UrlCheckRepo {
         sqlx::query(
             "INSERT INTO url_checks \
                 (node_id, url, method, expected_status, verify_tls, follow_redirects, timeout_ms, \
-                 credential_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 credential_id, body_match, json_extract, body_max_bytes) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) \
              ON CONFLICT (node_id) DO UPDATE SET \
                 url = EXCLUDED.url, method = EXCLUDED.method, \
                 expected_status = EXCLUDED.expected_status, verify_tls = EXCLUDED.verify_tls, \
                 follow_redirects = EXCLUDED.follow_redirects, timeout_ms = EXCLUDED.timeout_ms, \
-                credential_id = EXCLUDED.credential_id, updated_at = now()",
+                credential_id = EXCLUDED.credential_id, body_match = EXCLUDED.body_match, \
+                json_extract = EXCLUDED.json_extract, \
+                body_max_bytes = EXCLUDED.body_max_bytes, updated_at = now()",
         )
         .bind(node_id)
         .bind(&cfg.url)
@@ -73,6 +85,14 @@ impl UrlCheckRepo {
         .bind(cfg.follow_redirects)
         .bind(i32::try_from(cfg.timeout_ms).unwrap_or(5000))
         .bind(cfg.credential.map(|c| c.as_uuid()))
+        // The PUT is a replace, so an absent rule must clear a stored one — `None` binds SQL NULL
+        // and the upsert copies it over. Skipping the bind when there is no rule would make
+        // "remove the content check" impossible through the only endpoint that edits it.
+        .bind(cfg.body_match.as_ref().map(Json))
+        // An empty rule set stores SQL NULL rather than `[]`, so "no extraction" has one
+        // representation in the column instead of two that read the same.
+        .bind((!cfg.json_extract.is_empty()).then_some(Json(&cfg.json_extract)))
+        .bind(i32::try_from(cfg.body_max_bytes).unwrap_or(DEFAULT_BODY_MAX_BYTES as i32))
         .execute(&self.pool)
         .await?;
         Ok(())

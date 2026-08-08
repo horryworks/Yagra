@@ -1,6 +1,6 @@
 {
   "categories": {
-    "router": "ルーター",
+    "router": "ルータ",
     "l3-switch": "L3 スイッチ",
     "l2-switch": "L2 スイッチ",
     "firewall": "ファイアウォール",
@@ -14,8 +14,8 @@
     "printer": "プリンター",
     "generic-snmp": "汎用 SNMP",
     "ping-only": "Ping のみ",
-    "url-check": "URL / HTTPエンドポイント",
-    "dns-check": "DNS監視"
+    "url-check": "URL / HTTP エンドポイント",
+    "dns-check": "DNS 監視"
   },
   "enum": {
     "scalar": "スカラー",
@@ -25,19 +25,19 @@
     "counter": "カウンタ"
   },
   "shared": {
-    "trySearch": "検索条件を変えてお試しください。",
+    "trySearch": "別の条件で検索してみてください。",
     "optional": "任意",
     "colActions": "操作",
     "metricsCount_other": "メトリクス {{count}} 件"
   },
   "profiles": {
-    "note": "デバイスクラス単位のバケット（役割 × ベンダー）。ここにメトリクスセットを紐付けると、ノードはプロファイル経由で継承します。",
+    "note": "役割 × ベンダーでデバイスを区分します。ここにメトリクスセットを紐付けると、ノードはプロファイル経由でそれを引き継ぎます。",
     "unavailable": "スケルトンモードではプロファイル管理は利用できません（メタデータストアなし）。",
     "searchPlaceholder": "名前・ベンダー・役割で検索…",
     "searchAria": "プロファイルを検索",
     "addProfile": "プロファイルを追加",
     "otherGroup": "その他",
-    "defaultInterval": "デフォルト",
+    "defaultInterval": "既定",
     "hideSets": "セットを隠す",
     "editProfile": "プロファイルを編集",
     "deleteProfile": "プロファイルを削除",
@@ -50,19 +50,19 @@
     "empty": {
       "none": "プロファイルがありません",
       "noMatch": "一致するプロファイルがありません",
-      "noneSub": "デバイスクラスのプロファイルを追加してください（例：「Cisco Catalyst スイッチ」）。"
+      "noneSub": "デバイスクラスのプロファイルを追加してください（例: 「Cisco Catalyst スイッチ」）。"
     },
     "modal": {
       "addTitle": "デバイスプロファイルを追加",
       "editTitle": "デバイスプロファイルを編集",
-      "namePlaceholder": "例：Cisco Catalyst スイッチ",
+      "namePlaceholder": "例: Cisco Catalyst スイッチ",
       "role": "役割",
       "pollInterval": "ポーリング間隔（秒）",
-      "pollIntervalPlaceholder": "空欄でシステムのデフォルトを使用",
-      "pollIntervalHint": "このプロファイルを使うノードのシステムデフォルトを上書きします。10〜3600 秒。空欄でデフォルトを継承します。"
+      "pollIntervalPlaceholder": "空欄ならシステムの既定値を使用",
+      "pollIntervalHint": "このプロファイルを使うノードについて、システムの既定値を上書きします。10〜3600 秒で指定してください。空欄なら既定値を引き継ぎます。"
     },
     "delete": {
-      "confirm": "プロファイル <strong>{{name}}</strong> を削除しますか？使用中のノードは動作を続けますが、このクラスの収集デフォルトを失います。"
+      "confirm": "プロファイル <strong>{{name}}</strong> を削除しますか？使用中のノードは動き続けますが、このクラス用の収集の既定値が無くなります。"
     },
     "templates": {
       "empty": "メトリクスセットがまだありません。先に作成してください。"
@@ -76,7 +76,7 @@
     }
   },
   "rules": {
-    "note": "検出デバイスの sysObjectID / sysDescr をデバイスプロファイルへマッピングします。ディスカバリはインポート時に一致を事前選択します。",
+    "note": "検出したデバイスの sysObjectID / sysDescr を、デバイスプロファイルに対応づけます。ディスカバリはインポート時に、一致したプロファイルをあらかじめ選んでおきます。",
     "unavailable": "スケルトンモードでは分類ルール管理は利用できません（メタデータストアなし）。",
     "searchPlaceholder": "シグネチャ・プロファイル・メーカーで検索…",
     "searchAria": "分類ルールを検索",
@@ -96,7 +96,7 @@
     "empty": {
       "none": "分類ルールがありません",
       "noMatch": "一致するルールがありません",
-      "noneSub": "sysObjectID プレフィックスまたは sysDescr パターンをプロファイルへマッピングするルールを追加してください。"
+      "noneSub": "sysObjectID のプレフィックスか sysDescr のパターンをプロファイルに対応づけるルールを追加してください。"
     },
     "modal": {
       "addTitle": "分類ルールを追加",
@@ -104,11 +104,11 @@
       "deleteTitle": "分類ルールを削除",
       "chooseProfile": "（プロファイルを選択）",
       "oidPrefix": "sysObjectID プレフィックス",
-      "oidPrefixPlaceholder": "例：1.3.6.1.4.1.9.",
-      "oidPrefixHint": "権威的 — sysDescr より優先されます。末尾をドットにすると 1.3…9. が …91 に誤って一致しません。sysDescr 正規表現と組み合わせて 1 つのベンダーを NOS 単位で分割できます。",
+      "oidPrefixPlaceholder": "例: 1.3.6.1.4.1.9.",
+      "oidPrefixHint": "こちらが優先されます（sysDescr より強い）。末尾をドットで終えると、1.3…9. が …91 に誤って一致しません。sysDescr の正規表現と組み合わせると、同じベンダーを NOS ごとに分けられます。",
       "descrRegex": "sysDescr 正規表現",
-      "descrRegexPlaceholder": "例：(?i)cisco|ios",
-      "descrRegexHintBoth": "プレフィックスを指定すると両方が一致する必要があります（ベンダー + NOS）。単独の場合は sysDescr に直接一致します。",
+      "descrRegexPlaceholder": "例: (?i)cisco|ios",
+      "descrRegexHintBoth": "プレフィックスも指定した場合は、両方に一致する必要があります（ベンダー + NOS）。これだけを指定した場合は、sysDescr にそのまま照合します。",
       "matcherRequired": "sysObjectID プレフィックスまたは sysDescr 正規表現を指定してください。",
       "priorityHint": "小さいほど先に評価されます。",
       "maker": "メーカー",
@@ -116,7 +116,7 @@
       "enabledLabel": "有効"
     },
     "delete": {
-      "confirm": "ルール <m>{{sig}}</m> → <strong>{{profile}}</strong> のマッピングを削除しますか？ディスカバリは一致するデバイスにこのプロファイルを提案しなくなります（インポート済みのノードには影響しません）。"
+      "confirm": "<m>{{sig}}</m> → <strong>{{profile}}</strong> の対応づけを削除しますか？以後ディスカバリは、一致したデバイスにこのプロファイルを提案しなくなります（インポート済みのノードはそのままです）。"
     },
     "err": {
       "update": "ルールの更新に失敗しました",
@@ -125,7 +125,7 @@
     }
   },
   "sets": {
-    "note": "再利用可能なメトリクスの束。デバイスプロファイルに紐付けると、1 つ編集するだけで使用中のすべてのプロファイルに反映されます。",
+    "note": "使い回せるメトリクスの束です。デバイスプロファイルに紐付けておけば、束を 1 か所直すだけで、使っているすべてのプロファイルに反映されます。",
     "unavailable": "スケルトンモードではメトリクスセットは利用できません（メタデータストアなし）。",
     "searchPlaceholder": "名前または説明で検索…",
     "searchAria": "メトリクスセットを検索",
@@ -140,15 +140,15 @@
     "empty": {
       "none": "メトリクスセットがありません",
       "noMatch": "一致するメトリクスセットがありません",
-      "noneSub": "再利用可能なメトリクスの束を追加してください（例：「標準インターフェース」）。"
+      "noneSub": "使い回せるメトリクスの束を追加してください（例: 「標準インターフェース」）。"
     },
     "modal": {
       "addSubmit": "セットを追加",
-      "namePlaceholder": "例：標準インターフェース",
+      "namePlaceholder": "例: 標準インターフェース",
       "descPlaceholder": "任意"
     },
     "delete": {
-      "confirm": "メトリクスセット <strong>{{name}}</strong> を削除しますか？紐付けているプロファイルはこの束のメトリクスを失います。"
+      "confirm": "メトリクスセット <strong>{{name}}</strong> を削除しますか？紐付けていたプロファイルからは、この束のメトリクスが無くなります。"
     },
     "err": {
       "create": "テンプレートの作成に失敗しました",
@@ -167,7 +167,7 @@
     "pickerSearchPlaceholder": "MIB カタログを名前 / OID / ベンダーで検索…",
     "noCatalogMatch": "一致するカタログエントリがありません。",
     "emptyTemplate": "このセットにはまだメトリクスがありません。",
-    "emptyNode": "ノード固有のメトリクスはありません。プロファイルのメトリクスセット / 組み込みデフォルトが引き続き適用されます。",
+    "emptyNode": "ノード固有のメトリクスはありません。プロファイルのメトリクスセットと組み込みの既定値は、そのまま適用されます。",
     "cols": {
       "metric": "メトリクス",
       "oid": "OID",
@@ -181,7 +181,7 @@
     }
   },
   "mib": {
-    "note": "厳選された OID カタログ。収集エディタで OID を入力する代わりに名前でメトリクスを選べます。",
+    "note": "あらかじめ整理した OID のカタログです。収集エディタでは OID を打ち込まず、名前でメトリクスを選べます。",
     "unavailable": "スケルトンモードでは MIB カタログは利用できません。",
     "searchPlaceholder": "メトリクス / OID / ベンダーで検索…",
     "searchAria": "MIB カタログを検索",
@@ -208,7 +208,7 @@
       "metricKind": "メトリクス種別",
       "vendor": "ベンダー",
       "vendorPlaceholder": "ベンダー（任意）",
-      "vendorHint": "標準（非ベンダー）OID の場合は空欄にします。"
+      "vendorHint": "ベンダー固有でない標準 OID なら、空欄のままにしてください。"
     },
     "delete": {
       "confirm": "カタログエントリ <strong>{{name}}</strong> を削除しますか？名前で参照している収集はカタログから解決できなくなります。この操作は取り消せません。"
@@ -219,14 +219,14 @@
     }
   },
   "discovery": {
-    "note": "サブネットを掃引して稼働中 + SNMP デバイスを検出し、必要なものをインポートします。",
+    "note": "サブネットを掃引して、稼働中の機器と SNMP が応答する機器を洗い出し、必要なものだけインポートします。",
     "seen": {
       "title": "ネットワーク上で観測された端点",
       "note": "監視中のルータが実際に通信した相手のうち、Yagra が監視していないアドレスです。スキャンは不要で、すでに登録済みの機器の ARP / IPv6 近隣キャッシュから得られます。",
       "coverage": {
         "off": "ARP キャッシュを報告した機器がまだありません。設定 ▸ システム設定 ▸ ネットワーク探索の走査 で「ARP / IPv6 近隣キャッシュ」を有効にしてください。それまでこの一覧が空なのは「対象が無い」からではなく「誰も見ていない」からです。",
-        "complete": "{{nodes}} 台が報告、合計 {{observed}} 件のアドレスを解決しています。",
-        "sampled": "{{nodes}} 台が報告、合計 {{observed}} 件のアドレスを解決していますが、うち {{truncated}} 台が行数上限に達しました。この一覧は全体ではなく標本です。"
+        "complete": "{{nodes}} 台が報告中。合計 {{observed}} 件のアドレスを把握しています。",
+        "sampled": "{{nodes}} 台が報告中で、合計 {{observed}} 件のアドレスを把握しています。ただし {{truncated}} 台が行数の上限に達したため、この一覧は全体ではなく一部です。"
       },
       "cols": {
         "address": "アドレス",
@@ -269,9 +269,9 @@
       "credential": "認証情報"
     },
     "msg": {
-      "scanningCount_other": "{{count}} 件のアドレスをスキャン中…",
+      "scanningCount_other": "アドレス {{count}} 件をスキャン中…",
       "scanComplete_other": "スキャン完了 — デバイス {{count}} 台を検出しました。",
-      "scanningProgress": "スキャン中… {{probed}}/{{total}} 件のアドレスをプローブ済み",
+      "scanningProgress": "スキャン中… アドレス {{probed}}/{{total}} 件を確認済み",
       "nowAt": " — 現在 {{addr}}",
       "imported_other": "ノード {{count}} 台をインポートしました — まもなくポーリングを開始します。"
     },

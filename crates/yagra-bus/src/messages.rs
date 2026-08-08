@@ -57,6 +57,20 @@ pub const CAP_FLOW_RELAY: &str = "flow-relay";
 /// upgrading pollers must not require the operator to notice.
 pub const CAP_HTTP_AUTH: &str = "http-auth";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can read a URL check's
+/// response body and apply a keyword rule to it ([`HttpCheck::body_match`], ADR-047 Inc.2).
+///
+/// The failure mode is the *inverse* of [`CAP_HTTP_AUTH`]'s and worse. A poller that does not
+/// understand `body_match` drops the field, never reads the body, and reports `http_up = 1` — which
+/// is byte-identical to "the content rule passed". The operator configured a check for the page
+/// that returns 200 while saying `Database unavailable`, and gets a green dashboard for exactly the
+/// outage they were guarding against. So core withholds such a monitor from a poller that has not
+/// claimed this, producing a visible gap instead of an invisible false OK.
+///
+/// Separate from [`CAP_HTTP_AUTH`] because the two are independent: a monitor may carry either,
+/// both, or neither, and a fleet mid-upgrade can advertise one without the other.
+pub const CAP_HTTP_BODY: &str = "http-body";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -926,10 +940,45 @@ pub struct HttpCheck {
     /// advertise [`CAP_HTTP_AUTH`] — see that constant.
     #[serde(default)]
     pub auth: Option<HttpAuth>,
+    /// Keyword rule to apply to the response body, if the monitor has one (ADR-047 Inc.2).
+    ///
+    /// A field rather than a new [`CheckSpec`] variant for the same reason `auth` is one: this is a
+    /// parameter of the same HTTP probe, and a variant would duplicate the seven fields above it.
+    /// Gated on [`CAP_HTTP_BODY`], because an N-1 poller drops it and reports a green result it
+    /// never computed.
+    #[serde(default)]
+    pub body_match: Option<yagra_common::BodyMatch>,
+    /// Values to lift out of a JSON response body as operator-named gauges (ADR-047 Inc.3).
+    ///
+    /// **Not** capability-gated, unlike `body_match`: a poller that drops this records no sample,
+    /// so the failure is a visibly absent series rather than a wrong reading. See
+    /// `coordinator::spec_required_caps` for why withholding would be the worse trade here.
+    #[serde(default)]
+    pub json_extract: Vec<yagra_common::JsonExtract>,
+    /// How many bytes of the response body the poller may read, for whichever of the two body
+    /// features is configured.
+    #[serde(default = "default_body_max_bytes")]
+    pub body_max_bytes: u32,
+}
+
+impl HttpCheck {
+    /// How much of the response body to capture, or `None` to skip reading it entirely.
+    ///
+    /// The rule lives here, at its only point of use, rather than beside the stored config as well:
+    /// "does anything need the body" is one fact, and a second copy would disagree the first time a
+    /// third body-reading feature lands.
+    #[must_use]
+    pub fn body_capture_bytes(&self) -> Option<u32> {
+        (self.body_match.is_some() || !self.json_extract.is_empty()).then_some(self.body_max_bytes)
+    }
 }
 
 const fn default_http_timeout_ms() -> u32 {
     5000
+}
+
+const fn default_body_max_bytes() -> u32 {
+    yagra_common::DEFAULT_BODY_MAX_BYTES
 }
 
 /// SNMP v2c check parameters. The community is the resolved credential, inlined by core
@@ -2983,6 +3032,10 @@ mod tests {
         let check: HttpCheck = serde_json::from_str(json).unwrap();
         assert!(check.auth.is_none());
         assert!(
+            check.body_match.is_none(),
+            "an absent body_match must read as 'do not read the body'"
+        );
+        assert!(
             check.verify_tls,
             "an absent verify_tls must not read as disabled"
         );
@@ -2998,11 +3051,73 @@ mod tests {
             auth: Some(HttpAuth::Bearer {
                 token: "tok".into(),
             }),
+            body_match: Some(yagra_common::BodyMatch {
+                pattern: "\"status\":\"ok\"".into(),
+                mode: yagra_common::BodyMatchMode::NotContains,
+            }),
+            json_extract: vec![yagra_common::JsonExtract {
+                metric: "queue_depth".into(),
+                path: "data.queue.depth".into(),
+            }],
+            body_max_bytes: 4096,
         };
         let wire = serde_json::to_string(&with_auth).unwrap();
         assert!(wire.contains("\"scheme\":\"bearer\""));
+        assert!(wire.contains("\"mode\":\"not_contains\""));
         let back: HttpCheck = serde_json::from_str(&wire).unwrap();
         assert_eq!(back.auth, with_auth.auth);
+        assert_eq!(back.body_match, with_auth.body_match);
+        assert_eq!(back.json_extract, with_auth.json_extract);
+        assert_eq!(back.body_max_bytes, 4096);
+
+        // The N-1 case for both body features: a rule carrying only a pattern is the shape an older
+        // core (or a hand-written job) sends, and it must land on the documented defaults rather
+        // than failing the decode and taking the spec with it.
+        let bare: HttpCheck = serde_json::from_str(
+            r#"{"url":"https://example.test/","body_match":{"pattern":"ok"}}"#,
+        )
+        .unwrap();
+        let rule = bare.body_match.as_ref().expect("rule decoded");
+        assert_eq!(rule.mode, yagra_common::BodyMatchMode::Contains);
+        assert_eq!(bare.body_max_bytes, yagra_common::DEFAULT_BODY_MAX_BYTES);
+        assert!(bare.json_extract.is_empty());
+    }
+
+    #[test]
+    fn the_body_is_read_only_when_a_feature_needs_it() {
+        // The one place that decides whether a poll pays for a body read. A monitor with neither
+        // feature must behave exactly as it did before ADR-047 Inc.2 — that is what keeps
+        // `http_response_time_ms` measured at the response headers for every monitor.
+        let plain = HttpCheck {
+            url: "https://example.test/".into(),
+            method: HttpMethod::Get,
+            expected_status: ExpectedStatus::TwoXx,
+            verify_tls: true,
+            follow_redirects: true,
+            timeout_ms: 5000,
+            auth: None,
+            body_match: None,
+            json_extract: Vec::new(),
+            body_max_bytes: 4096,
+        };
+        assert_eq!(plain.body_capture_bytes(), None);
+
+        let matching = HttpCheck {
+            body_match: Some(yagra_common::BodyMatch::contains("ok")),
+            ..plain.clone()
+        };
+        assert_eq!(matching.body_capture_bytes(), Some(4096));
+
+        // Extraction alone must also open the body — it was the second feature to need it, and the
+        // budget moved off `BodyMatch` precisely so this case has an answer.
+        let extracting = HttpCheck {
+            json_extract: vec![yagra_common::JsonExtract {
+                metric: "queue_depth".into(),
+                path: "queue.depth".into(),
+            }],
+            ..plain
+        };
+        assert_eq!(extracting.body_capture_bytes(), Some(4096));
     }
 
     #[test]
@@ -3024,6 +3139,9 @@ mod tests {
                     username: "probe".into(),
                     password: "hunter2".into(),
                 }),
+                body_match: None,
+                json_extract: Vec::new(),
+                body_max_bytes: yagra_common::DEFAULT_BODY_MAX_BYTES,
             },
             60,
         );

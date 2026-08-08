@@ -170,6 +170,8 @@ impl CheckKind for UrlCheck {
                 "a monitor that presents credentials must verify TLS",
             ));
         }
+        validate_body_match(&cfg)?;
+        validate_json_extract(&cfg)?;
         Ok(cfg)
     }
 
@@ -635,6 +637,142 @@ fn validate_monitor_url(url: &str) -> Result<reqwest::Url, ApiError> {
         }
     }
     Ok(parsed)
+}
+
+/// Validate an operator-supplied body keyword rule (ADR-047 Increment 2). `None` ⇒ nothing to check.
+///
+/// Every bound here is enforced *only* here: the migration deliberately carries no CHECK on the
+/// document's contents, so this is the single place the shape is decided rather than a second copy
+/// that drifts from the DB's.
+fn validate_body_match(cfg: &UrlCheckConfig) -> Result<(), ApiError> {
+    let Some(rule) = &cfg.body_match else {
+        return Ok(());
+    };
+    if rule.pattern.trim().is_empty() {
+        // An empty pattern is contained by every string, so `contains` would always pass and
+        // `not_contains` would always fail. Either way the monitor stops reporting on reality.
+        return Err(ApiError::bad_request(
+            "body_match_pattern_required",
+            "a body rule needs a keyword to look for",
+        ));
+    }
+    if rule.pattern.chars().count() > yagra_common::BODY_PATTERN_MAX_LEN {
+        return Err(ApiError::bad_request(
+            "body_match_pattern_too_long",
+            format!(
+                "a body keyword may be at most {} characters",
+                yagra_common::BODY_PATTERN_MAX_LEN
+            ),
+        ));
+    }
+    if cfg.method == yagra_common::HttpMethod::Head {
+        // A HEAD response has no body by definition, so the rule could never be decided — the
+        // poller would report it unsatisfied forever. Refusing here says why; accepting it would
+        // hand the operator a monitor that alerts continuously and looks like a real outage.
+        return Err(ApiError::bad_request(
+            "body_match_needs_body",
+            "a HEAD request returns no body — use GET or POST to match on content",
+        ));
+    }
+    Ok(())
+}
+
+/// Validate the operator-supplied JSON extraction rules (ADR-047 Increment 3).
+///
+/// The read budget is checked here rather than inside [`validate_body_match`] because it belongs to
+/// the monitor, not to either feature — and it is validated unconditionally, so a budget stored
+/// today is already sane when a rule is added tomorrow.
+fn validate_json_extract(cfg: &UrlCheckConfig) -> Result<(), ApiError> {
+    if !yagra_common::BODY_MAX_BYTES_RANGE.contains(&cfg.body_max_bytes) {
+        return Err(ApiError::bad_request(
+            "body_max_bytes",
+            format!(
+                "the body read budget must be between {} and {} bytes",
+                yagra_common::BODY_MAX_BYTES_RANGE.start(),
+                yagra_common::BODY_MAX_BYTES_RANGE.end()
+            ),
+        ));
+    }
+    if cfg.json_extract.is_empty() {
+        return Ok(());
+    }
+    if cfg.json_extract.len() > yagra_common::MAX_JSON_EXTRACTS {
+        // Each rule is a new series per node. An unbounded list on an operator-editable object is
+        // how a thin-label model (ADR-011) gets widened without anyone deciding to.
+        return Err(ApiError::bad_request(
+            "too_many_json_extracts",
+            format!(
+                "a monitor may carry at most {} extraction rules",
+                yagra_common::MAX_JSON_EXTRACTS
+            ),
+        ));
+    }
+    if cfg.method == yagra_common::HttpMethod::Head {
+        return Err(ApiError::bad_request(
+            "body_match_needs_body",
+            "a HEAD request returns no body — use GET or POST to extract from it",
+        ));
+    }
+    let reserved = yagra_common::url_monitor_reserved_metrics();
+    let mut seen: Vec<&str> = Vec::with_capacity(cfg.json_extract.len());
+    for rule in &cfg.json_extract {
+        if !yagra_common::is_valid_metric_name(&rule.metric) {
+            // Shared with every other edge where a metric name enters series identity: a name that
+            // fails this would be written and then be unqueryable, which surfaces much later as
+            // "the extraction is broken" rather than as the naming mistake it was.
+            return Err(ApiError::bad_request(
+                "invalid_metric_name",
+                format!("{:?} is not a valid metric name", rule.metric),
+            ));
+        }
+        if rule.metric.chars().count() > yagra_common::METRIC_NAME_MAX_LEN {
+            return Err(ApiError::bad_request(
+                "metric_name_too_long",
+                format!(
+                    "a metric name may be at most {} characters",
+                    yagra_common::METRIC_NAME_MAX_LEN
+                ),
+            ));
+        }
+        if reserved.contains(&rule.metric.as_str()) {
+            // The specific hazard: an extraction named `http_up` would overwrite the node's own
+            // availability series with an arbitrary number out of a JSON body — monitoring
+            // reporting whatever the monitored service felt like saying.
+            return Err(ApiError::bad_request(
+                "reserved_metric_name",
+                format!(
+                    "{:?} is a metric this monitor already reports — choose another name",
+                    rule.metric
+                ),
+            ));
+        }
+        if seen.contains(&rule.metric.as_str()) {
+            // Two rules writing one series would make the value depend on rule order, which is not
+            // a thing an operator should have to know about.
+            return Err(ApiError::bad_request(
+                "duplicate_metric_name",
+                format!("{:?} is used by more than one extraction rule", rule.metric),
+            ));
+        }
+        seen.push(&rule.metric);
+        let path = rule.path.trim();
+        if path.is_empty() {
+            return Err(ApiError::bad_request(
+                "json_path_required",
+                "an extraction rule needs a path to the value",
+            ));
+        }
+        if path.chars().count() > yagra_common::JSON_PATH_MAX_LEN {
+            return Err(ApiError::bad_request(
+                "json_path_too_long",
+                format!(
+                    "an extraction path may be at most {} characters",
+                    yagra_common::JSON_PATH_MAX_LEN
+                ),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Best-effort resolve a URL's host to a single management IP for the node's `address` column.

@@ -266,6 +266,25 @@
   cursor: pointer;
 }
 
+/* JSON-extraction rows: metric name, path, and the button that drops the row. Stacks on mobile so
+   neither input collapses below a usable width. */
+.nd-extract-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.nd-extract-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+html[data-viewport='mobile'] .nd-extract-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 /* ---------------- Overview ---------------- */
 .nd-overview {
   padding: 16px 20px 22px;

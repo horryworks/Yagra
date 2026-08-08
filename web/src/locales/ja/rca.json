@@ -15,7 +15,7 @@
     "raw": "モデルの回答"
   },
 
-  "rawNote": "モデルが想定した構造で回答しなかったため、回答をそのまま表示しています。",
+  "rawNote": "モデルが想定した形式で回答しなかったため、回答をそのまま表示しています。",
 
   "confidence": {
     "label": "確信度",
@@ -39,7 +39,7 @@
     "alertLine": "{{severity}} / {{metric}}（{{at}}）",
     "alertLineLiveness": "{{severity}} — ノード到達不能（{{at}}）",
     "flapping": "フラッピング",
-    "breach": "実測 {{value}}、閾値 {{threshold}}（{{direction}}）",
+    "breach": "実測 {{value}}、しきい値 {{threshold}}（{{direction}}）",
     "dependents": "従属アラート",
     "dependentsMore": "ほか {{count}} 件",
     "upstream": "上流チェーン",
@@ -59,7 +59,7 @@
     "notConfigured": "AI プロバイダが未設定です。設定 ▸ AI 分析 で設定してください。",
     "misconfigured": "AI プロバイダは設定済みですが利用できません: {{message}}",
     "rateLimited": "同時実行が多すぎます。1 分ほど置いて再試行してください。",
-    "forbidden": "説明の生成には operator ロールが必要です。",
+    "forbidden": "説明を生成するには、オペレーターロールが必要です。",
     "noIncident": "{{message}}",
     "provider": "プロバイダが応答できませんでした: {{message}}",
     "generic": "説明を生成できませんでした。"

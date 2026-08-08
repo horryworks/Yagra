@@ -18330,6 +18330,31 @@
           }
         }
       },
+      "BodyMatch": {
+        "type": "object",
+        "description": "A keyword rule applied to a URL monitor's response body.\n\nWhen present, the monitor reports `http_body_match` (`1` satisfied / `0` not) in addition to\n`http_up`. How much of the body is read is [`UrlCheckConfig::body_max_bytes`].",
+        "required": [
+          "pattern"
+        ],
+        "properties": {
+          "mode": {
+            "$ref": "#/components/schemas/BodyMatchMode",
+            "description": "Whether the keyword must be present or absent (default: present)."
+          },
+          "pattern": {
+            "type": "string",
+            "description": "The keyword to look for. Matched as plain, case-sensitive text — not a regular expression."
+          }
+        }
+      },
+      "BodyMatchMode": {
+        "type": "string",
+        "description": "Whether the keyword must be present or absent for the body to be considered healthy.",
+        "enum": [
+          "contains",
+          "not_contains"
+        ]
+      },
       "Breach": {
         "type": "object",
         "description": "Numeric breach detail for a threshold alert (absent for a liveness up/down alert).\nCarried for the history log + notification payload — not part of alert identity.",
@@ -22892,6 +22917,24 @@
             "type": "number",
             "format": "double",
             "description": "bits/sec for throughput metrics, errors|discards per second otherwise."
+          }
+        }
+      },
+      "JsonExtract": {
+        "type": "object",
+        "description": "One number to lift out of a JSON response body and record as a metric.",
+        "required": [
+          "metric",
+          "path"
+        ],
+        "properties": {
+          "metric": {
+            "type": "string",
+            "description": "The metric name to record the value under, e.g. `queue_depth`. Must match\n`[A-Za-z_:][A-Za-z0-9_:]*` and must not be one of the names the monitor already emits."
+          },
+          "path": {
+            "type": "string",
+            "description": "Dot-separated path to the value, e.g. `data.queue.depth` or `items.0.value`. Array elements\nare indexed by number; `items[0].value` is accepted and means the same thing.\n\nNot a JSONPath expression: the path names exactly one location, so the rule always produces\neither one number or nothing."
           }
         }
       },
@@ -28427,6 +28470,23 @@
           "url"
         ],
         "properties": {
+          "body_match": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BodyMatch",
+                "description": "Optional keyword rule applied to the response body."
+              }
+            ]
+          },
+          "body_max_bytes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many bytes of the response body to read (default 65536, range 1024–1048576). Applies to\nboth `body_match` and `json_extract`; the body is not read at all unless one of them is set.",
+            "minimum": 0
+          },
           "credential": {
             "oneOf": [
               {
@@ -28445,6 +28505,13 @@
           "follow_redirects": {
             "type": "boolean",
             "description": "Follow 3xx redirects (default `true`)."
+          },
+          "json_extract": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsonExtract"
+            },
+            "description": "Values to lift out of a JSON response body and record as operator-named metrics.\n\nEach rule adds one gauge per poll. A rule whose path is missing, or whose value is not a\nnumber, records **nothing** for that poll rather than a zero."
           },
           "method": {
             "$ref": "#/components/schemas/HttpMethod",
@@ -28479,6 +28546,14 @@
           "timeout_ms"
         ],
         "properties": {
+          "body_match": {
+            "description": "The monitor's response-body keyword rule, if it has one."
+          },
+          "body_max_bytes": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many bytes of the response body the monitor reads."
+          },
           "credential_id": {
             "type": [
               "string",
@@ -28489,6 +28564,9 @@
           "expected_status": {},
           "follow_redirects": {
             "type": "boolean"
+          },
+          "json_extract": {
+            "description": "The monitor's JSON extraction rules, if it has any."
           },
           "method": {
             "type": "string"

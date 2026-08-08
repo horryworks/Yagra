@@ -3,7 +3,7 @@
   "noRows": "データがありません。",
   "copy": {
     "copied": "コピーしました",
-    "copyId": "IDをコピー"
+    "copyId": "ID をコピー"
   },
   "form": {
     "required": "必須"
@@ -23,8 +23,8 @@
     "loading": "ノードを読み込み中…",
     "noMatch": "一致するノードがありません。",
     "listAria": "ノード",
-    "more": "他 {{count}} 件 — 入力して絞り込み",
-    "capped": "先頭 {{count}} 件を表示 — 入力して絞り込み"
+    "more": "ほか {{count}} 件 — 入力を続けると絞り込めます",
+    "capped": "先頭 {{count}} 件を表示中 — 入力を続けると絞り込めます"
   },
   "range": {
     "timeRange": "期間",
@@ -36,7 +36,7 @@
   "credPicker": {
     "placeholder": "保存済み認証情報を選択…",
     "remove": "{{name}} を削除",
-    "empty": "保存済みのSNMP認証情報がありません。",
+    "empty": "保存済みの SNMP 認証情報がありません。",
     "manage": "認証情報を管理"
   },
   "actions": {
@@ -60,8 +60,8 @@
     "operator": "オペレーター",
     "admin": "管理者"
   },
-  "resultCount": "全 {{total}} {{noun}}中 <b>{{shown}}</b> 件",
-  "resultCountNoTotal": "<b>{{shown}}</b> {{noun}}",
+  "resultCount": "{{noun}} {{total}} 件中 <b>{{shown}}</b> 件",
+  "resultCountNoTotal": "{{noun}} <b>{{shown}}</b> 件",
   "noun": {
     "node_other": "ノード",
     "alert_other": "アラート",
@@ -75,7 +75,7 @@
     "poller_other": "ポーラー",
     "window_other": "ウィンドウ",
     "mute_other": "ミュート",
-    "result_other": "件",
+    "result_other": "結果",
     "item_other": "項目"
   }
 }

@@ -483,6 +483,16 @@ pub struct UrlCheckDto {
     pub timeout_ms: u32,
     /// Whether an auth credential is bound. Which one is not served (ADR-018).
     pub has_credential: bool,
+    /// The response-body keyword rule, if the monitor has one (ADR-047 Inc.2).
+    ///
+    /// Served in full, unlike the credential: the keyword and the mode are what an AI client needs
+    /// to explain why `http_body_match` is 0, and neither is secret material.
+    pub body_match: Option<yagra_common::BodyMatch>,
+    /// The JSON extraction rules, if any (ADR-047 Inc.3). These name metrics the monitor reports,
+    /// so without them a client sees a series it has no way to explain.
+    pub json_extract: Vec<yagra_common::JsonExtract>,
+    /// How many bytes of the response body the monitor reads.
+    pub body_max_bytes: u32,
 }
 
 impl UrlCheckDto {
@@ -501,6 +511,9 @@ impl UrlCheckDto {
             follow_redirects: cfg.follow_redirects,
             timeout_ms: cfg.timeout_ms,
             has_credential: cfg.credential.is_some(),
+            body_match: cfg.body_match.clone(),
+            json_extract: cfg.json_extract.clone(),
+            body_max_bytes: cfg.body_max_bytes,
         }
     }
 }
