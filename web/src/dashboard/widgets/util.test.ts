@@ -84,6 +84,7 @@ describe('bucketAlertsByHour', () => {
     const now = 100 * HOUR + 123;
     const row = (offsetHours: number, resolved = false): AlertHistoryRow => ({
       node: 'n',
+      subject_kind: 'node',
       check: 'c',
       severity: 'critical',
       state: 'critical',

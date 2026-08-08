@@ -17,6 +17,51 @@ use yagra_common::{CheckId, Direction, NodeId, NodeState, Severity};
 /// cannot collide in either direction.
 const POOL_PREFIX: &str = "pool:";
 
+/// Namespace for the UUIDv5 identities non-node subjects are stored under.
+///
+/// A fixed literal rather than a derived value so it is `const` and can never move: every row in
+/// `alert_history` and `alert_acks` written for a pool is keyed by a name hashed under this, so
+/// changing it would orphan every stored pool alert and every open acknowledgement. The bytes spell
+/// `YAGRA_SUBJECT_ID`, which is only a mnemonic — nothing reads them back.
+const SUBJECT_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x5941_4752_415f_5355_424a_4543_545f_4944);
+
+/// Which kind of thing an alert is about: a monitored `node`, or a poller `pool` when Yagra is
+/// reporting on its own polling coverage.
+//
+// This doc comment is published verbatim to API clients (ADR-035), so the internal note goes here:
+// the value is both a database column and a JSON field, produced by two different mechanisms, and
+// `every_subject_kind_round_trips_through_its_token_and_through_serde` is what pins them together
+// (`testing.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SubjectKind {
+    /// A monitored node.
+    Node,
+    /// A poller pool.
+    Pool,
+}
+
+impl SubjectKind {
+    /// Every kind, for exhaustive iteration in tests and UI enumerations.
+    pub const ALL: [Self; 2] = [Self::Node, Self::Pool];
+
+    /// The stored/serialized token.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Node => "node",
+            Self::Pool => "pool",
+        }
+    }
+
+    /// Parse a stored token. `None` for anything a newer core may have written.
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == token)
+    }
+}
+
 /// What an alert is about.
 ///
 /// Almost every alert is about a monitored node. Yagra also alerts on its **own** monitoring
@@ -60,6 +105,67 @@ impl Subject {
             Self::Node(_) => None,
         }
     }
+
+    /// Which kind of subject this is.
+    #[must_use]
+    pub const fn kind(&self) -> SubjectKind {
+        match self {
+            Self::Node(_) => SubjectKind::Node,
+            Self::Pool(_) => SubjectKind::Pool,
+        }
+    }
+
+    /// The subject's **name**, for a subject that is named rather than identified. `None` for a
+    /// node, whose name lives in the inventory and is resolved from its id.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Node(_) => None,
+            Self::Pool(p) => Some(p.as_str()),
+        }
+    }
+
+    /// The UUID this subject is **stored** under (`alert_history.node`, `alert_acks.node`).
+    ///
+    /// For a node it is the node id itself, so every existing row and every open acknowledgement
+    /// keeps its identity byte-for-byte. For anything else it is a stable v5 hash of the flat form
+    /// under [`SUBJECT_NAMESPACE`], which buys three things at once:
+    ///
+    ///  - the columns stay `NOT NULL`, so an **N-1 core** rolled back onto this data still decodes
+    ///    every row into its bare `Uuid` and renders the History page instead of failing it (a
+    ///    nullable column would 500 the whole page for one row — ADR-017);
+    ///  - `alert_acks`' primary key `(node, check_id, severity)` needs no rewrite, so this stays an
+    ///    additive migration;
+    ///  - the ack join keeps working for pool alerts without a second key shape.
+    ///
+    /// It is an **identity token, not a node reference**: `subject_kind` is what says whether the
+    /// value names a node, and every read that means "a node" filters on that column rather than
+    /// trusting this one to resolve.
+    #[must_use]
+    pub fn storage_id(&self) -> uuid::Uuid {
+        match self {
+            Self::Node(n) => n.as_uuid(),
+            // Hashed from the flat form (`pool:<name>`), which already namespaces the pool's own
+            // free-text name — see `Display`. Spelled per variant rather than through a wildcard so
+            // a third subject kind has to decide this rather than inheriting it.
+            Self::Pool(_) => uuid::Uuid::new_v5(&SUBJECT_NAMESPACE, self.to_string().as_bytes()),
+        }
+    }
+
+    /// Rebuild a subject from its stored columns.
+    ///
+    /// `None` when the row cannot be read as a subject — an unknown `kind` (a newer core wrote it)
+    /// or a `pool` row with no name. Callers degrade the row rather than failing the page, the same
+    /// way an unrecognised severity token does.
+    #[must_use]
+    pub fn from_storage(kind: SubjectKind, id: uuid::Uuid, name: Option<&str>) -> Option<Self> {
+        match kind {
+            SubjectKind::Node => Some(Self::Node(NodeId::from(id))),
+            SubjectKind::Pool => name
+                .filter(|n| !n.is_empty())
+                .map(|n| Self::Pool(n.to_owned())),
+        }
+    }
 }
 
 impl fmt::Display for Subject {
@@ -96,8 +202,8 @@ impl FromStr for Subject {
 }
 
 // Serialized as a flat string so a node subject is byte-identical to the `NodeId` it replaced.
-// The API contract still documents this field as a `NodeId` (see `Alert::subject`): pool-subject
-// alerts are excluded from every wire surface in this increment.
+// A client that only ever saw node alerts therefore reads exactly what it read before; the
+// `subject_kind` / `subject_name` fields beside it are what let a client tell the two apart.
 impl Serialize for Subject {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
@@ -140,15 +246,15 @@ pub struct Breach {
 /// A single alert produced by the engine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Alert {
-    /// Affected node.
+    /// What the alert is about: a node's UUID, or `pool:<name>` for a poller-pool alert.
     //
-    // The wire name and the documented type stay `node`/`NodeId` on purpose: every alert an API
-    // client can reach is a node alert, because pool-subject alerts are excluded from every wire
-    // surface (see the exclusion list in `yagra-core/src/alerts.rs`). Widening the published
-    // contract belongs with the persistence and scope rules that would make a non-node subject
-    // actually serveable — Increment 2, not here.
+    // The wire name stays `node` and a node subject stays a bare UUID string, so every alert a
+    // client saw before this field became a sum type is byte-identical. What changed is that the
+    // value is no longer *always* a UUID — hence the documented type is now `String`, and every
+    // response carrying an alert also carries a `subject_kind` (and a `subject_name` for a named
+    // subject) beside it so a client branches on the kind instead of guessing from the shape.
     #[serde(rename = "node")]
-    #[schema(value_type = NodeId)]
+    #[schema(value_type = String)]
     pub subject: Subject,
     /// The check that produced it.
     pub check: CheckId,
@@ -288,6 +394,81 @@ mod tests {
         for bad in ["", "not-a-uuid", POOL_PREFIX, "pool"] {
             assert!(bad.parse::<Subject>().is_err(), "{bad:?} must not parse");
         }
+    }
+
+    #[test]
+    fn a_node_subject_is_stored_under_its_own_id() {
+        // Load-bearing for the migration: `alert_history.node` and `alert_acks.node` keep exactly
+        // the values they already hold for every node alert, so no row is re-keyed and no open
+        // acknowledgement is orphaned.
+        let n = NodeId::new();
+        assert_eq!(Subject::Node(n).storage_id(), n.as_uuid());
+    }
+
+    #[test]
+    fn a_pool_storage_id_is_stable_and_distinct_per_pool() {
+        // Stability is what makes a fire and its later resolve/ack agree on one row. Recomputed
+        // rather than asserted against a literal so the test states the property, not the digest —
+        // but the namespace it hashes under must never change, which is why that constant is fixed.
+        let a = Subject::Pool("tokyo".to_owned()).storage_id();
+        assert_eq!(a, Subject::Pool("tokyo".to_owned()).storage_id());
+        assert_ne!(a, Subject::Pool("osaka".to_owned()).storage_id());
+        // …and a pool named like the flat form of another subject does not borrow its id.
+        assert_ne!(a, Subject::Pool("pool:tokyo".to_owned()).storage_id());
+    }
+
+    #[test]
+    fn a_pool_id_cannot_impersonate_the_node_whose_name_it_carries() {
+        // A pool name is operator-authored free text, so it can be spelled as a node's UUID. The
+        // id it is stored under must still not be that node's, or a pool alert would decorate
+        // itself with that node's acknowledgement.
+        let n = NodeId::new();
+        let impostor = Subject::Pool(n.to_string());
+        assert_ne!(impostor.storage_id(), n.as_uuid());
+    }
+
+    #[test]
+    fn a_subject_round_trips_through_its_stored_columns() {
+        for s in [
+            Subject::Node(NodeId::new()),
+            Subject::Pool("tokyo".to_owned()),
+            Subject::Pool("dc 2/edge".to_owned()),
+        ] {
+            let restored = Subject::from_storage(s.kind(), s.storage_id(), s.name());
+            assert_eq!(restored.as_ref(), Some(&s), "{s}");
+        }
+        // A pool row with no name cannot be read back — it degrades rather than inventing one.
+        assert_eq!(
+            Subject::from_storage(SubjectKind::Pool, uuid::Uuid::nil(), None),
+            None
+        );
+        assert_eq!(
+            Subject::from_storage(SubjectKind::Pool, uuid::Uuid::nil(), Some("")),
+            None
+        );
+    }
+
+    #[test]
+    fn every_subject_kind_round_trips_through_its_token_and_through_serde() {
+        // The token is a DB column and the serde tag is a JSON field; they are produced by two
+        // different mechanisms and nothing else makes them agree (`testing.md`).
+        for kind in SubjectKind::ALL {
+            assert_eq!(SubjectKind::from_token(kind.as_str()), Some(kind));
+            assert_eq!(
+                serde_json::to_string(&kind).unwrap(),
+                format!("\"{}\"", kind.as_str())
+            );
+        }
+        assert_eq!(SubjectKind::from_token("cluster"), None);
+    }
+
+    #[test]
+    fn kind_and_name_agree_with_the_variant() {
+        let n = NodeId::new();
+        assert_eq!(Subject::Node(n).kind(), SubjectKind::Node);
+        assert_eq!(Subject::Node(n).name(), None);
+        assert_eq!(Subject::Pool("x".to_owned()).kind(), SubjectKind::Pool);
+        assert_eq!(Subject::Pool("x".to_owned()).name(), Some("x"));
     }
 
     #[test]

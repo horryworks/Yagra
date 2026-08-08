@@ -9,23 +9,30 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_alert::Alert;
-use yagra_common::{Direction, NodeId, NodeState, Severity};
+use yagra_alert::{Alert, Subject, SubjectKind};
+use yagra_common::{Direction, NodeState, Severity};
 
-/// Count an alert dropped from the history because its subject is not a node.
+/// Count a history row dropped on read because its subject could not be reconstructed.
 ///
-/// `alert_history` is keyed by node id in its schema, its scope predicate and its readers, so a
-/// non-node subject has nowhere to go until that column becomes a subject (Increment 2). Counted
-/// rather than logged per occurrence: pool-coverage alerts recur on a tick, and a warning per tick
-/// is how a real signal gets tuned out. A non-zero value means History is not the whole story.
-fn non_node_skipped() {
-    metrics::counter!("yagra_alert_history_non_node_skipped_total").increment(1);
+/// The only way that happens is a `subject_kind` this binary does not know — i.e. a newer core
+/// wrote the row. Dropping the row beats failing the page (the same call the unreadable-severity
+/// fallback makes), but silently dropping it would make History quietly incomplete, so it is
+/// counted. Counted rather than logged per occurrence: a page is up to 1000 rows.
+fn unreadable_subject_skipped() {
+    metrics::counter!("yagra_alert_history_unreadable_subject_total").increment(1);
 }
 
 /// One alert-history row for the API.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AlertHistoryRow {
-    pub node: Uuid,
+    /// The node this transition was about; `null` when the subject is not a node — read
+    /// `subject_kind` first. It is non-null exactly when `subject_kind` is `node`.
+    pub node: Option<Uuid>,
+    /// What the transition was about.
+    pub subject_kind: SubjectKind,
+    /// The subject's name, for a subject identified by name rather than by id (a poller pool).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_name: Option<String>,
     pub check: Uuid,
     pub severity: Severity,
     pub state: NodeState,
@@ -44,6 +51,33 @@ pub struct AlertHistoryRow {
     /// the last row's `recorded_at` as `before` to fetch the next (older) page (matches the audit
     /// log's paging). Distinct from `at_unix_ms` (the event time), which can collide across rows.
     pub recorded_at: String,
+}
+
+impl AlertHistoryRow {
+    /// Project a subject onto the three columns that describe it. The only place the mapping is
+    /// written, so [`Self::subject`] is always its exact inverse for a row this code produced.
+    fn project(subject: &Subject) -> (Option<Uuid>, SubjectKind, Option<String>) {
+        (
+            subject.node().map(|n| n.as_uuid()),
+            subject.kind(),
+            subject.name().map(str::to_owned),
+        )
+    }
+
+    /// The subject this row is about, read back from its stored columns.
+    ///
+    /// The single place the three columns are read as one value, so the ack join and the scope
+    /// filter cannot disagree about what a row is about. `None` only for a row whose columns
+    /// contradict each other, which [`AlertHistoryStore::recent`] cannot produce — it builds every
+    /// row from a subject it already parsed — so in practice this is `Some`.
+    #[must_use]
+    pub fn subject(&self) -> Option<Subject> {
+        Subject::from_storage(
+            self.subject_kind,
+            self.node.unwrap_or_else(Uuid::nil),
+            self.subject_name.as_deref(),
+        )
+    }
 }
 
 /// The four alert fields whose column value is a *decision* rather than a copy: a liveness check
@@ -77,21 +111,20 @@ impl AlertHistoryStore {
     /// Append a fire (`resolved=false`) or recovery (`resolved=true`) record. Captures the
     /// metric (and numeric breach detail, if a threshold check) so the history is human-readable.
     ///
-    /// An alert whose subject is not a node is **not recorded** and is not an error.
+    /// Every subject is recorded. `node` holds the subject's storage identity — the node's own id
+    /// for a node alert — and `subject_kind` is what says which it is (migration 0075).
     pub async fn record(&self, alert: &Alert, resolved: bool) -> anyhow::Result<()> {
-        let Some(node) = alert.node() else {
-            non_node_skipped();
-            return Ok(());
-        };
         let (metric, value, threshold, direction) = breach_columns(alert);
         sqlx::query(
             "INSERT INTO alert_history \
-             (id, node, check_id, severity, state, at_unix_ms, resolved, \
+             (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
               metric, observed_value, threshold_value, direction) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(Uuid::new_v4())
-        .bind(node.as_uuid())
+        .bind(alert.subject.storage_id())
+        .bind(alert.subject.kind().as_str())
+        .bind(alert.subject.name())
         .bind(alert.check.as_uuid())
         .bind(alert.severity.as_str())
         .bind(alert.state.as_str())
@@ -108,38 +141,28 @@ impl AlertHistoryStore {
 
     /// Append a **batch** of fire/resolve records in one multi-row INSERT (the async ingest writer,
     /// ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot path; a DB
-    /// hiccup must not stop alerting. 11 columns × the writer's batch cap stays well under Postgres'
+    /// hiccup must not stop alerting. 13 columns × the writer's batch cap stays well under Postgres'
     /// 65535-parameter ceiling. Returns rows inserted.
-    ///
-    /// Alerts whose subject is not a node are dropped from the batch rather than binding a NULL:
-    /// `alert_history.node` is `NOT NULL` and `recent()`/`top_nodes_by_fires()` decode it into a
-    /// bare `Uuid`, so one NULL row would fail the decode for a whole page — a 500 on the History
-    /// screen for every row, not just that one — and would break an N-1 rollback besides.
     pub async fn record_batch(&self, records: &[(Alert, bool)]) -> anyhow::Result<u64> {
-        let rows: Vec<(&Alert, NodeId, bool)> = records
-            .iter()
-            .filter_map(|(alert, resolved)| Some((alert, alert.node()?, *resolved)))
-            .collect();
-        if rows.len() < records.len() {
-            non_node_skipped();
-        }
-        if rows.is_empty() {
+        if records.is_empty() {
             return Ok(0);
         }
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO alert_history \
-             (id, node, check_id, severity, state, at_unix_ms, resolved, \
+             (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
               metric, observed_value, threshold_value, direction) ",
         );
-        qb.push_values(rows, |mut b, (alert, node, resolved)| {
+        qb.push_values(records, |mut b, (alert, resolved)| {
             let (metric, value, threshold, direction) = breach_columns(alert);
             b.push_bind(Uuid::new_v4())
-                .push_bind(node.as_uuid())
+                .push_bind(alert.subject.storage_id())
+                .push_bind(alert.subject.kind().as_str())
+                .push_bind(alert.subject.name().map(str::to_owned))
                 .push_bind(alert.check.as_uuid())
                 .push_bind(alert.severity.as_str())
                 .push_bind(alert.state.as_str())
                 .push_bind(alert.at_unix_ms)
-                .push_bind(resolved)
+                .push_bind(*resolved)
                 .push_bind(metric)
                 .push_bind(value)
                 .push_bind(threshold)
@@ -156,12 +179,27 @@ impl AlertHistoryStore {
     /// path gives, rather than freezing whatever was true when the alert fired.
     ///
     /// ⚠️ Same parenthesisation trap as `NodeRepo::SCOPE_PREDICATE` — `WHERE {SCOPE} AND a OR b`
-    /// parses as `({SCOPE} AND a) OR b` and lets every `b` row escape the scope.
-    const SCOPE_PREDICATE: &'static str =
-        "($2::uuid[] IS NULL OR node IN (SELECT id FROM nodes WHERE group_id = ANY($2)))";
+    /// parses as `({SCOPE} AND a) OR b` and lets every `b` row escape the scope. The whole
+    /// expression is therefore wrapped, and so is each side of its `OR`.
+    ///
+    /// **A non-node subject is visible to unrestricted callers only.** A pool alert *is* narrowable
+    /// in principle — a scoped operator whose nodes are polled by that pool has every reason to see
+    /// it, and `api/scope.rs::allows_subject` answers exactly that for the in-memory paths — but
+    /// the answer needs effective-pool resolution (own > nearest ancestor folder > default), which
+    /// lives in `poolres.rs` and not in SQL by design (0054). Rather than write a second, weaker
+    /// copy of that resolution as a subquery, the aggregate side fails **closed**: a scoped caller
+    /// sees node rows only. The row still reaches them through `GET /api/v1/alerts` and the live
+    /// stream, which resolve pools properly.
+    const SCOPE_PREDICATE: &'static str = "((subject_kind = 'node' \
+         AND ($2::uuid[] IS NULL OR node IN (SELECT id FROM nodes WHERE group_id = ANY($2)))) \
+         OR (subject_kind <> 'node' AND $2::uuid[] IS NULL))";
 
     /// Nodes with the most alert **fires** (resolved=false) at or after `since_ms` (Unix ms),
     /// highest first. Powers the "Top alerting nodes" widget (chronic offenders).
+    ///
+    /// Node subjects only — the ranking is of *nodes*, and `node` on a pool row is a derived
+    /// identity that resolves to no inventory entry (migration 0075), so an unfiltered `GROUP BY`
+    /// would rank a pool as a node with an unresolvable name.
     pub async fn top_nodes_by_fires(
         &self,
         since_ms: i64,
@@ -169,7 +207,7 @@ impl AlertHistoryStore {
     ) -> anyhow::Result<Vec<(Uuid, i64)>> {
         let rows = sqlx::query(
             "SELECT node, count(*) AS n FROM alert_history \
-             WHERE resolved = false AND at_unix_ms >= $1 \
+             WHERE resolved = false AND at_unix_ms >= $1 AND subject_kind = 'node' \
              GROUP BY node ORDER BY n DESC LIMIT $2",
         )
         .bind(since_ms)
@@ -239,8 +277,8 @@ impl AlertHistoryStore {
         before: Option<DateTime<Utc>>,
     ) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let rows = sqlx::query(
-            "SELECT node, check_id, severity, state, at_unix_ms, resolved, \
-                    metric, observed_value, threshold_value, direction, recorded_at \
+            "SELECT node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
+                    resolved, metric, observed_value, threshold_value, direction, recorded_at \
              FROM alert_history \
              WHERE ($2::timestamptz IS NULL OR recorded_at < $2) \
              ORDER BY recorded_at DESC LIMIT $1",
@@ -249,33 +287,47 @@ impl AlertHistoryStore {
         .bind(before)
         .fetch_all(&self.pool)
         .await?;
-        rows.into_iter()
-            .map(|row| {
-                let recorded_at: DateTime<Utc> = row.try_get("recorded_at")?;
-                Ok(AlertHistoryRow {
-                    node: row.try_get("node")?,
-                    check: row.try_get("check_id")?,
-                    // The column has no CHECK, so an unrecognised token means a newer core wrote
-                    // the row. Degrading beats failing the whole page of history, and `Info` /
-                    // `Unknown` are each the least-assertive member of their set — better to
-                    // under-state one row than to lose the log an operator is reading it from.
-                    severity: Severity::from_token(row.try_get("severity")?)
-                        .unwrap_or(Severity::Info),
-                    state: NodeState::from_token(row.try_get("state")?)
-                        .unwrap_or(NodeState::Unknown),
-                    at_unix_ms: row.try_get("at_unix_ms")?,
-                    resolved: row.try_get("resolved")?,
-                    metric: row.try_get("metric")?,
-                    observed_value: row.try_get("observed_value")?,
-                    threshold_value: row.try_get("threshold_value")?,
-                    direction: row
-                        .try_get::<Option<String>, _>("direction")?
-                        .as_deref()
-                        .and_then(Direction::from_token),
-                    recorded_at: recorded_at.to_rfc3339(),
-                })
-            })
-            .collect()
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            // The subject is read first and as a whole. A row whose `subject_kind` this binary does
+            // not know (a newer core wrote it) is **dropped**, not rendered as whatever its `node`
+            // column happens to hold — for a non-node subject that is a derived identity which
+            // resolves to no inventory entry, so showing it would invent a node.
+            let kind: String = row.try_get("subject_kind")?;
+            let name: Option<String> = row.try_get("subject_ref")?;
+            let id: Uuid = row.try_get("node")?;
+            let Some(subject) = SubjectKind::from_token(&kind)
+                .and_then(|k| Subject::from_storage(k, id, name.as_deref()))
+            else {
+                unreadable_subject_skipped();
+                continue;
+            };
+            let (node, subject_kind, subject_name) = AlertHistoryRow::project(&subject);
+            let recorded_at: DateTime<Utc> = row.try_get("recorded_at")?;
+            out.push(AlertHistoryRow {
+                node,
+                subject_kind,
+                subject_name,
+                check: row.try_get("check_id")?,
+                // The column has no CHECK, so an unrecognised token means a newer core wrote
+                // the row. Degrading beats failing the whole page of history, and `Info` /
+                // `Unknown` are each the least-assertive member of their set — better to
+                // under-state one row than to lose the log an operator is reading it from.
+                severity: Severity::from_token(row.try_get("severity")?).unwrap_or(Severity::Info),
+                state: NodeState::from_token(row.try_get("state")?).unwrap_or(NodeState::Unknown),
+                at_unix_ms: row.try_get("at_unix_ms")?,
+                resolved: row.try_get("resolved")?,
+                metric: row.try_get("metric")?,
+                observed_value: row.try_get("observed_value")?,
+                threshold_value: row.try_get("threshold_value")?,
+                direction: row
+                    .try_get::<Option<String>, _>("direction")?
+                    .as_deref()
+                    .and_then(Direction::from_token),
+                recorded_at: recorded_at.to_rfc3339(),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -394,8 +446,62 @@ mod tests {
         );
         // And the bind list is as long as the column list, so a column added to one without a
         // matching `push_bind` fails here rather than at runtime.
-        assert_eq!(lists[0].matches(',').count() + 1, 11);
-        assert!(src.contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)"));
+        assert_eq!(lists[0].matches(',').count() + 1, 13);
+        assert!(src.contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"));
+    }
+
+    #[test]
+    fn a_node_row_projects_and_reads_back_as_the_same_subject() {
+        // `project` and `subject` are inverses by construction — the ack join and the scope filter
+        // both go through the second, and the writer through the first.
+        for subject in [
+            yagra_alert::Subject::Node(NodeId::new()),
+            yagra_alert::Subject::Pool("tokyo".to_owned()),
+        ] {
+            let (node, subject_kind, subject_name) = AlertHistoryRow::project(&subject);
+            let row = AlertHistoryRow {
+                node,
+                subject_kind,
+                subject_name,
+                check: Uuid::new_v4(),
+                severity: Severity::Critical,
+                state: NodeState::Critical,
+                at_unix_ms: 1,
+                resolved: false,
+                metric: None,
+                observed_value: None,
+                threshold_value: None,
+                direction: None,
+                recorded_at: String::new(),
+            };
+            assert_eq!(row.subject().as_ref(), Some(&subject), "{subject}");
+            // `node` is populated exactly when the subject is a node — that biconditional is what
+            // the WebUI and the scope filter both branch on.
+            assert_eq!(row.node.is_some(), subject.node().is_some(), "{subject}");
+        }
+    }
+
+    #[test]
+    fn the_node_rankings_and_the_scope_predicate_both_name_the_subject_kind() {
+        // Two different failures, one root cause. `top_nodes_by_fires` ranks *nodes*, so a pool
+        // row's derived id must not enter its GROUP BY (it resolves to no inventory entry and
+        // would render as a raw UUID). `SCOPE_PREDICATE` must not let a non-node row past a group
+        // filter it cannot evaluate — the fail-closed side of the trade documented on the const.
+        let src = squash(&production_source());
+        assert!(
+            src.contains(
+                "WHERE resolved = false AND at_unix_ms >= $1 AND subject_kind = 'node' GROUP BY node"
+            ),
+            "the node ranking no longer filters to node subjects"
+        );
+        // The whole predicate is parenthesised and so is each side of its `OR` — it is
+        // interpolated into `… AND {}`, where an unwrapped `OR` would let every non-node row
+        // escape every scope.
+        assert!(src.contains(
+            "((subject_kind = 'node' AND ($2::uuid[] IS NULL OR node IN \
+             (SELECT id FROM nodes WHERE group_id = ANY($2)))) \
+             OR (subject_kind <> 'node' AND $2::uuid[] IS NULL))"
+        ));
     }
 
     #[test]

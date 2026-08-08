@@ -83,9 +83,15 @@ pub struct BreachDto {
 /// An active or historical alert, sanitized. Carries no credential-bearing field.
 #[derive(Debug, Clone, Serialize)]
 pub struct AlertDto {
-    pub node_id: Uuid,
-    /// The check that fired — the third part of an alert's `(node, check, severity)` identity, needed
-    /// to acknowledge it via the `ack_alert` tool.
+    /// The node this alert is about; `null` when it is not about a node — read `subject_kind`
+    /// first. A `pool` alert says Yagra itself has stopped polling that pool's nodes.
+    pub node_id: Option<Uuid>,
+    /// What the alert is about: `node` or `pool`.
+    pub subject_kind: String,
+    /// The subject's name, for a subject identified by name rather than by id (the poller pool).
+    pub subject_name: Option<String>,
+    /// The check that fired — the third part of an alert's `(subject, check, severity)` identity,
+    /// needed to acknowledge it via the `ack_alert` tool.
     pub check_id: Uuid,
     /// Resolved node display name when available (else `None`; the caller keeps the id).
     pub node_name: Option<String>,
@@ -107,13 +113,14 @@ pub struct AlertDto {
 impl AlertDto {
     /// Build from an active alert and an optional resolved node name.
     ///
-    /// `None` for an alert whose subject is not a node: this DTO is keyed by `node_id`, and a nil
-    /// or invented UUID would be a plausible wrong answer for a model to reason from. Callers
-    /// already restrict to node subjects, so dropping here is belt-and-braces.
+    /// A non-node subject reports `node_id: null` rather than an invented UUID: a plausible wrong
+    /// id is the worst answer to give a model, which will happily go and look it up.
     #[must_use]
-    pub fn from_alert(alert: &Alert, node_name: Option<String>) -> Option<Self> {
-        Some(Self {
-            node_id: alert.node()?.0,
+    pub fn from_alert(alert: &Alert, node_name: Option<String>) -> Self {
+        Self {
+            node_id: alert.node().map(|n| n.0),
+            subject_kind: alert.subject.kind().as_str().to_owned(),
+            subject_name: alert.subject.name().map(str::to_owned),
             check_id: alert.check.0,
             node_name,
             severity: alert.severity.as_str().to_owned(),
@@ -127,14 +134,20 @@ impl AlertDto {
                 threshold: b.threshold,
                 direction: b.direction.as_str().to_owned(),
             }),
-        })
+        }
     }
 }
 
 /// One historical alert transition, sanitized (from the alert-history store).
 #[derive(Debug, Clone, Serialize)]
 pub struct AlertHistoryDto {
-    pub node_id: Uuid,
+    /// The node this transition was about; `null` when it was not about a node — read
+    /// `subject_kind` first.
+    pub node_id: Option<Uuid>,
+    /// What the transition was about: `node` or `pool`.
+    pub subject_kind: String,
+    /// The subject's name, for a subject identified by name rather than by id (the poller pool).
+    pub subject_name: Option<String>,
     pub node_name: Option<String>,
     pub severity: String,
     pub state: String,
@@ -155,6 +168,8 @@ impl AlertHistoryDto {
     pub fn from_row(row: &AlertHistoryRow, node_name: Option<String>) -> Self {
         Self {
             node_id: row.node,
+            subject_kind: row.subject_kind.as_str().to_owned(),
+            subject_name: row.subject_name.clone(),
             node_name,
             severity: row.severity.as_str().to_owned(),
             state: row.state.as_str().to_owned(),
@@ -705,7 +720,9 @@ mod tests {
         assert_inventory_dto_is_clean(&serde_json::to_value(&status).unwrap(), "NodeStatus");
 
         let alert = AlertDto {
-            node_id: node.id.0,
+            node_id: Some(node.id.0),
+            subject_kind: "node".to_owned(),
+            subject_name: None,
             check_id: uuid::Uuid::new_v4(),
             node_name: Some("edge-router-1".to_owned()),
             severity: "critical".to_owned(),
@@ -1009,7 +1026,9 @@ mod tests {
 
         let history = AlertHistoryDto::from_row(
             &AlertHistoryRow {
-                node: node.id.0,
+                node: Some(node.id.0),
+                subject_kind: yagra_alert::SubjectKind::Node,
+                subject_name: None,
                 check: uuid::Uuid::new_v4(),
                 severity: yagra_common::Severity::Critical,
                 state: NodeState::Unreachable,

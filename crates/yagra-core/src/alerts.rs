@@ -59,15 +59,20 @@ const DWELL_SAMPLES: u32 = 3;
 /// Flapping detection window and threshold.
 const FLAP_WINDOW_MS: i64 = 600_000;
 const FLAP_THRESHOLD: usize = 5;
-/// One SSE frame: the node it concerns, beside the already-serialized JSON body.
+/// One SSE frame: the subject it concerns, beside the already-serialized JSON body.
 ///
-/// The node id travels *alongside* the payload rather than being parsed back out of it, because the
+/// The subject travels *alongside* the payload rather than being parsed back out of it, because the
 /// only consumer that needs it is the group-scope filter on the stream handler (ADR-014) and
 /// deserializing every frame per subscriber to recover a field the sender already had would be pure
 /// waste. The body stays shared rather than owned: `broadcast` clones the value once **per
 /// receiver**, and a full sweep can emit one node-state frame per node, so with many dashboards open
 /// this is the difference between cloning a pointer and cloning the JSON N times.
-pub type StreamFrame = (NodeId, Arc<str>);
+///
+/// It is a [`Subject`] rather than a `NodeId` so a pool-coverage alert can be streamed at all. The
+/// node-state channel only ever carries `Subject::Node` — a rolled-up display state belongs to a
+/// node by definition — and shares the type so both streams go through one scope filter rather
+/// than two copies of it.
+pub type StreamFrame = (Subject, Arc<str>);
 
 /// SSE broadcast buffer. Sized generously so a briefly-slow subscriber doesn't lag past the
 /// window and miss events; if one does lag, the stream handler logs it and emits a `resync`
@@ -130,6 +135,16 @@ pub struct AlertConfig {
     topology: Topology,
     /// Nodes currently inside an active maintenance window (resolved at refresh time).
     maintenance: BTreeSet<NodeId>,
+    /// Folder groups that have at least one node in each poller pool — what makes a pool-coverage
+    /// alert visible to the group-scoped operator whose site went dark (`api/scope.rs`).
+    ///
+    /// Precomputed here rather than resolved per request because the answer needs each node's
+    /// **effective** pool (own > nearest ancestor folder > default, `poolres.rs`), and doing that
+    /// per SSE frame per subscriber would be a full-fleet walk on the hottest read path. The map is
+    /// small — pools × groups — and is rebuilt with the rest of the snapshot, i.e. only when the
+    /// config generation advances (S6/ADR-026). Ungrouped nodes contribute nothing: a scoped caller
+    /// cannot see them anyway, so a pool that only holds ungrouped nodes stays admin-only.
+    pool_groups: HashMap<String, BTreeSet<Uuid>>,
 }
 
 impl AlertConfig {
@@ -146,6 +161,7 @@ impl AlertConfig {
             node_meta,
             topology: Topology::new(),
             maintenance: BTreeSet::new(),
+            pool_groups: HashMap::new(),
         }
     }
 
@@ -160,6 +176,13 @@ impl AlertConfig {
     #[must_use]
     pub fn with_maintenance(mut self, maintenance: BTreeSet<NodeId>) -> Self {
         self.maintenance = maintenance;
+        self
+    }
+
+    /// Attach the pool → folder-group map used to scope pool-coverage alerts.
+    #[must_use]
+    pub fn with_pool_groups(mut self, pool_groups: HashMap<String, BTreeSet<Uuid>>) -> Self {
+        self.pool_groups = pool_groups;
         self
     }
 
@@ -315,7 +338,9 @@ impl AlertManager {
             "state": state,
             "at_unix_ms": at_unix_ms,
         });
-        let _ = self.node_tx.send((node, Arc::from(event.to_string())));
+        let _ = self
+            .node_tx
+            .send((Subject::Node(node), Arc::from(event.to_string())));
     }
 
     /// Snapshot of currently active alerts.
@@ -729,6 +754,23 @@ impl AlertManager {
             .and_then(|m| m.folder_group)
     }
 
+    /// Whether any node in `pool` sits in one of `visible` — the group-scope question for a
+    /// pool-coverage alert (`api/scope.rs::allows_subject`).
+    ///
+    /// Fail-closed on the two ways this can be empty: a pool the snapshot has never seen (created
+    /// since the last config generation, or holding only ungrouped nodes) answers `false`, so a
+    /// scoped caller is briefly denied rather than briefly shown someone else's site — the same
+    /// rule `allows_node` follows for an unknown node.
+    #[must_use]
+    pub fn pool_is_in_any_group(&self, pool: &str, visible: &[Uuid]) -> bool {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .pool_groups
+            .get(pool)
+            .is_some_and(|groups| visible.iter().any(|g| groups.contains(g)))
+    }
+
     /// Insert an event-rule alert into the active set and broadcast it. Event alerts are
     /// edge-triggered (no `CheckState`/dwell — the rule's min-count/window gate and TTL do
     /// the damping upstream in `events.rs`), so this bypasses `process_check` on purpose.
@@ -809,22 +851,22 @@ impl AlertManager {
 
     /// Send one alert frame to the SSE fan-out, with the lifecycle key that distinguishes it.
     ///
-    /// Alerts whose subject is not a node are **not** broadcast: [`StreamFrame`] carries a
-    /// `NodeId` so `api/alerts.rs` can scope-filter per subscriber, and a pool has none to put
-    /// there. Coverage alerts reach operators over the notification channels instead.
-    //
-    // Giving the stream a subject means changing `web/src/services/sse.ts`, whose frame-validity
-    // gate is `typeof obj.node === 'string'` — a silent dead feed if it is got wrong. That belongs
-    // with the rest of the wire widening (Increment 2), not here.
+    /// Every subject is broadcast. `node` carries the flat subject form — a bare UUID for a node,
+    /// `pool:<name>` otherwise — and `subject_kind`/`subject_name` beside it are what a client
+    /// branches on; `web/src/services/sse.ts` gates frame validity on `node` being a string, so
+    /// that field stays present and stays a string for every subject.
     //
     // One builder on purpose: this was two hand-written copies of the same object differing only
     // in the lifecycle key, and the object is the contract the WebUI parses — so a field added to
     // one and not the other was a live-feed bug with nothing to compile against.
     fn send_frame(&self, alert: &Alert, lifecycle: &str, value: serde_json::Value) {
-        let Some(node) = alert.node() else { return };
-        // Wire shape the WebUI consumes (Alert fields + one lifecycle key).
+        // Wire shape the WebUI consumes (Alert fields + the subject decomposition + one lifecycle
+        // key). Kept in step with `ActiveAlertView` in `api/alerts.rs` — the stream patches the
+        // list that endpoint seeded, so a client parses both with one reader.
         let mut event = serde_json::json!({
             "node": alert.subject,
+            "subject_kind": alert.subject.kind(),
+            "subject_name": alert.subject.name(),
             "check": alert.check,
             "severity": alert.severity,
             "state": alert.state,
@@ -836,27 +878,27 @@ impl AlertManager {
         });
         event[lifecycle] = value;
         // Fire-and-forget: no subscribers is not an error.
-        let _ = self.tx.send((node, Arc::from(event.to_string())));
+        let _ = self
+            .tx
+            .send((alert.subject.clone(), Arc::from(event.to_string())));
     }
 
     /// Broadcast an inbound ack-state change for one alert so subscribers update the read-only
     /// acked indicator live (ADR-015). Finds the matching active alert by its dedup identity
-    /// `(node, check, severity)` and re-sends its wire shape with `acked` attached (the external
+    /// `(subject, check, severity)` and re-sends its wire shape with `acked` attached (the external
     /// tool's view as a JSON value, or `null` when cleared). No `resolved` flag ⇒ the client
     /// treats it as an upsert, not a recovery. If the alert isn't currently active there's
     /// nothing on screen to update, so this is a no-op (History reflects it on next fetch).
     pub fn broadcast_acked(
         &self,
-        node: Uuid,
+        subject: &Subject,
         check: Uuid,
         severity: Severity,
         acked: Option<serde_json::Value>,
     ) {
         let active = self.active.lock().expect("alerts mutex poisoned");
         let Some(alert) = active.values().find(|a| {
-            a.subject.node().is_some_and(|n| n.as_uuid() == node)
-                && a.check.as_uuid() == check
-                && a.severity == severity
+            &a.subject == subject && a.check.as_uuid() == check && a.severity == severity
         }) else {
             return;
         };
@@ -866,12 +908,12 @@ impl AlertManager {
     /// Push a frame onto the alert stream directly, for tests of the stream *plumbing*.
     ///
     /// The SSE scope filter is a property of the transport, not of the alert logic, so its tests
-    /// need to control which node each frame names without first driving a real alert to dwell —
+    /// need to control which subject each frame names without first driving a real alert to dwell —
     /// including naming a node the engine has never observed, which is precisely the fail-closed
     /// case worth covering.
     #[cfg(test)]
-    pub(crate) fn broadcast_test_frame(&self, node: NodeId, body: &str) {
-        let _ = self.tx.send((node, Arc::from(body)));
+    pub(crate) fn broadcast_test_frame(&self, subject: Subject, body: &str) {
+        let _ = self.tx.send((subject, Arc::from(body)));
     }
 }
 
@@ -1515,12 +1557,10 @@ impl Notifier {
         if !self.any_templates.load(Ordering::Relaxed) {
             return None;
         }
-        // An alert with a non-node subject gets the built-in wording, never a template. The
-        // published template vocabulary is node-shaped — `node_id`, `node_name`, `node_address`,
-        // `group`, `profile` — and rendering an operator's "Node {{ node_name }} is down" against
-        // a poller pool produces a notification that reads as a device outage. Widening the
-        // vocabulary (`subject_kind`/`subject_name`) is additive and belongs with Increment 2.
-        alert.node()?;
+        // Every subject renders through a template now. The vocabulary carries `subject_kind` and
+        // an always-present `subject_name` so a template can read correctly for both kinds; a
+        // template written before those existed still renders, because `node_id`/`node_name` fall
+        // back to the subject's own identifier rather than to a nil UUID (`notify_facts`).
         let source = self
             .facts
             .read()
@@ -2151,7 +2191,11 @@ mod tests {
         // First observation commits Ok and emits the initial node-state event.
         mgr.observe(&result(node, CheckOutcome::Reachable, 0));
         let (who, ev) = rx.try_recv().expect("first observe emits state");
-        assert_eq!(who, node, "the frame names the node it concerns");
+        assert_eq!(
+            who,
+            Subject::Node(node),
+            "the frame names the node it concerns"
+        );
         assert!(ev.contains("\"ok\""), "state ok in payload: {ev}");
         assert!(
             ev.contains(&node.as_uuid().to_string()),
@@ -2804,7 +2848,7 @@ mod tests {
         // Subscribe *after* the fire so only the ack event is observed.
         let mut rx = mgr.subscribe();
         mgr.broadcast_acked(
-            alert.node().unwrap().as_uuid(),
+            &alert.subject.clone(),
             alert.check.as_uuid(),
             alert.severity,
             Some(serde_json::json!({ "by": "pd-user", "source": "pagerduty" })),
@@ -2816,7 +2860,11 @@ mod tests {
         // No `resolved` flag ⇒ the client upserts (keeps the alert), it doesn't clear it.
         assert!(v.get("resolved").is_none());
         assert_eq!(v["node"], serde_json::to_value(node).unwrap());
-        assert_eq!(who, node, "the frame names the node it concerns");
+        assert_eq!(
+            who,
+            Subject::Node(node),
+            "the frame names the node it concerns"
+        );
     }
 
     #[test]
@@ -2845,7 +2893,13 @@ mod tests {
         }
         let (who, body) = last.expect("liveness changes emit node-state frames");
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(serde_json::to_value(who.as_uuid()).unwrap(), v["node_id"]);
+        let node_of_frame = who
+            .node()
+            .expect("a node-state frame is always about a node");
+        assert_eq!(
+            serde_json::to_value(node_of_frame.as_uuid()).unwrap(),
+            v["node_id"]
+        );
     }
 
     #[tokio::test]
@@ -2854,7 +2908,7 @@ mod tests {
         let mut rx = mgr.subscribe();
         // No matching active alert ⇒ nothing on screen to update, so no event is sent.
         mgr.broadcast_acked(
-            Uuid::from_u128(1),
+            &Subject::Node(NodeId::from(Uuid::from_u128(1))),
             Uuid::from_u128(2),
             Severity::Critical,
             None,
@@ -2959,15 +3013,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_pool_coverage_alert_is_not_broadcast_on_the_alert_stream() {
-        // `StreamFrame` carries a NodeId so `api/alerts.rs` can scope-filter per subscriber; there
-        // is nothing to put there for a pool, and `web/src/services/sse.ts` gates frame validity on
-        // `typeof obj.node === 'string'`. Sending one would be a silently dead live feed.
+    async fn a_pool_coverage_alert_streams_with_its_subject_decomposed() {
+        // `web/src/services/sse.ts` gates frame validity on `typeof obj.node === 'string'`, so
+        // `node` must stay present and stay a string for *every* subject — getting that wrong is a
+        // silently dead live feed, not a visible error. `subject_kind`/`subject_name` beside it are
+        // what let the client render a pool as a pool rather than as an unresolvable node.
         let mgr = AlertManager::new();
         let mut rx = mgr.subscribe();
         mgr.raise_pool_coverage_alert("tokyo", 1_000);
+
+        let (who, body) = rx.try_recv().expect("a coverage alert reaches the stream");
+        assert_eq!(who, Subject::Pool("tokyo".to_owned()));
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["node"], "pool:tokyo", "the validity gate needs a string");
+        assert_eq!(v["subject_kind"], "pool");
+        assert_eq!(v["subject_name"], "tokyo");
+        assert_eq!(v["resolved"], false);
+
         mgr.resolve_pool_coverage_alert("tokyo");
-        assert!(rx.try_recv().is_err(), "no frame for a non-node subject");
+        let (_, body) = rx.try_recv().expect("the clear reaches it too");
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["resolved"], true);
+    }
+
+    #[test]
+    fn a_pool_alert_is_visible_to_the_scope_that_owns_a_node_in_that_pool() {
+        // The whole reason the subject is a sum type: the operator scoped to the site that went
+        // dark is exactly the person who must see this, and a synthetic node id would have hidden
+        // it from them (and only them). Answered from the config snapshot, so no I/O per frame.
+        let mgr = AlertManager::new();
+        let (mine, theirs) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        mgr.set_config(
+            AlertConfig::new(Vec::new(), HashMap::new()).with_pool_groups(HashMap::from([(
+                "tokyo".to_owned(),
+                BTreeSet::from([mine]),
+            )])),
+        );
+        assert!(mgr.pool_is_in_any_group("tokyo", &[mine]));
+        assert!(mgr.pool_is_in_any_group("tokyo", &[theirs, mine]));
+        assert!(!mgr.pool_is_in_any_group("tokyo", &[theirs]));
+        // Fail-closed on both empties: a pool the snapshot has not seen, and a scope naming no
+        // group at all. Either answering `true` would show one site's outage to another's operator.
+        assert!(!mgr.pool_is_in_any_group("osaka", &[mine]));
+        assert!(!mgr.pool_is_in_any_group("tokyo", &[]));
     }
 
     #[test]

@@ -1710,7 +1710,7 @@ async fn run_alert_config_refresh(
         if base_changed {
             cached_base = Some((
                 generation,
-                load_alert_config_base(&repo, &thresholds, &topo_sources).await,
+                load_alert_config_base(&repo, &thresholds, &group_repo, &topo_sources).await,
             ));
         }
         let base = &cached_base.as_ref().expect("alert base set above").1;
@@ -1719,7 +1719,8 @@ async fn run_alert_config_refresh(
         if base_changed || last_maintenance.as_ref() != Some(&in_maintenance) {
             let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
                 .with_topology(base.topology.clone())
-                .with_maintenance(in_maintenance.clone());
+                .with_maintenance(in_maintenance.clone())
+                .with_pool_groups(base.pool_groups.clone());
             alerts.set_config(config);
             last_maintenance = Some(in_maintenance);
         }
@@ -3444,6 +3445,11 @@ struct AlertConfigBase {
     rules: Vec<thresholds::StoredThreshold>,
     nodes: Vec<yagra_common::Node>,
     meta: HashMap<NodeId, NodeMeta>,
+    /// Folder groups holding at least one node in each **effective** poll pool — what makes a
+    /// pool-coverage alert (ADR-009) visible to the group-scoped operator whose site went dark.
+    /// Built here because this is the one place that already scans the whole fleet, and rebuilt on
+    /// the same config-generation gate so it costs a steady-state refresh nothing.
+    pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>>,
     /// The graph the alert engine suppresses with.
     ///
     /// **This is the only topology in the struct, deliberately.** ADR-043 決定 5's shadow mode does
@@ -3459,6 +3465,7 @@ struct AlertConfigBase {
 async fn load_alert_config_base(
     repo: &NodeRepo,
     thresholds: &ThresholdStore,
+    groups: &groups::GroupRepo,
     topo: &topology_projection::TopologySources,
 ) -> AlertConfigBase {
     let rules = thresholds.list_all().await.unwrap_or_else(|e| {
@@ -3466,8 +3473,26 @@ async fn load_alert_config_base(
         Vec::new()
     });
     let nodes = repo.list_nodes().await.unwrap_or_default();
+    // Folder-pool inheritance (0054). Degrading to `empty()` resolves every node to its own pool
+    // or `default`, which narrows what a scoped operator can see rather than widening it.
+    let pools = match groups.pool_rows().await {
+        Ok(rows) => poolres::PoolResolver::build(rows),
+        Err(e) => {
+            tracing::warn!(error = %e, "loading folder pools failed; scoping pool alerts without inheritance");
+            poolres::PoolResolver::empty()
+        }
+    };
     let mut meta = HashMap::new();
+    let mut pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>> = HashMap::new();
     for node in &nodes {
+        // Ungrouped nodes contribute nothing: a scoped caller cannot see them either way, and
+        // adding a `None` bucket would be the fail-open reading.
+        if let Some(group) = node.group {
+            pool_groups
+                .entry(pools.resolve_pool(node).to_owned())
+                .or_default()
+                .insert(group.as_uuid());
+        }
         meta.insert(
             node.id,
             NodeMeta {
@@ -3493,6 +3518,7 @@ async fn load_alert_config_base(
         rules,
         nodes,
         meta,
+        pool_groups,
         topology,
     }
 }
@@ -3550,11 +3576,12 @@ async fn load_alert_config(
     groups: &groups::GroupRepo,
     topo: &topology_projection::TopologySources,
 ) -> AlertConfig {
-    let base = load_alert_config_base(repo, thresholds, topo).await;
+    let base = load_alert_config_base(repo, thresholds, groups, topo).await;
     let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
     AlertConfig::new(base.rules, base.meta)
         .with_topology(base.topology)
         .with_maintenance(in_maintenance)
+        .with_pool_groups(base.pool_groups)
 }
 
 /// Load the unexpired mutes into the notifier (check ids recomputed from names here). A

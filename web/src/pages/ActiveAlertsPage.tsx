@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { useAlertStream } from '../hooks/useAlertStream';
 import { useAlertStore, useAuthStore } from '../store';
 import { api } from '../services/api';
+import { subjectNodeId } from '../lib/alertSubject';
 import { muteTargetFromAlert, type AlertMuteSeed } from '../lib/suppression';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -64,28 +65,34 @@ export function ActiveAlertsPage() {
       <AlertRows
         actions={
           canSuppress
-            ? (a, nodeName) => (
-                <>
-                  {canExplain && (
+            ? (a, subjectName) => {
+                // Both actions are node-scoped server-side (a mute names a node, RCA takes a node
+                // id), so a pool-coverage alert gets neither rather than a button that only fails.
+                const node = subjectNodeId(a);
+                if (node === null) return null;
+                return (
+                  <>
+                    {canExplain && (
+                      <Button
+                        variant="ghost"
+                        aria-label={t('rca:actionHint')}
+                        title={t('rca:actionHint')}
+                        onClick={() => setExplaining({ node, check: a.check })}
+                      >
+                        {t('rca:action')}
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
-                      aria-label={t('rca:actionHint')}
-                      title={t('rca:actionHint')}
-                      onClick={() => setExplaining({ node: a.node, check: a.check })}
+                      aria-label={t('active.muteHint')}
+                      title={t('active.muteHint')}
+                      onClick={() => setMuting(muteTargetFromAlert(a, node, subjectName))}
                     >
-                      {t('rca:action')}
+                      {t('active.mute')}
                     </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    aria-label={t('active.muteHint')}
-                    title={t('active.muteHint')}
-                    onClick={() => setMuting(muteTargetFromAlert(a, nodeName))}
-                  >
-                    {t('active.mute')}
-                  </Button>
-                </>
-              )
+                  </>
+                );
+              }
             : undefined
         }
       />

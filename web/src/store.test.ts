@@ -6,6 +6,7 @@ import type { Alert } from './types/api';
 function alert(over: Partial<Alert>): Alert {
   return {
     node: 'n1',
+    subject_kind: 'node',
     check: 'c1',
     severity: 'warning',
     state: 'warning',

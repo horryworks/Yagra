@@ -117,9 +117,18 @@ pub fn context_for(
         .map_or_else(|| alert.subject.to_string(), |n| n.as_uuid().to_string());
     let node = alert.node().and_then(|n| resolved.get(&n.as_uuid()));
     let root = alert.root_cause.map(|r| r.as_uuid());
+    let node_name = node.map_or_else(|| node_id.clone(), |f| f.name.clone());
     AlertFacts {
         event,
-        node_name: node.map_or_else(|| node_id.clone(), |f| f.name.clone()),
+        subject_kind: alert.subject.kind().as_str().to_owned(),
+        // A named subject supplies its own name; a node's comes from the inventory, so this is
+        // `node_name` for a node alert and the pool's name for a coverage one. Always present, so
+        // a template written against it reads correctly for both kinds.
+        subject_name: alert
+            .subject
+            .name()
+            .map_or_else(|| node_name.clone(), str::to_owned),
+        node_name,
         node_id,
         node_address: node.map(|f| f.address.clone()),
         group: node.and_then(|f| f.group.clone()),

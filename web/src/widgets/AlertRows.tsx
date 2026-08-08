@@ -21,6 +21,7 @@ import { useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
+import { alertSubject } from '../lib/alertSubject';
 import { alertWhatOf, formatTimestamp, severityColorVar } from '../lib/format';
 import { useViewportMode } from '../lib/viewport';
 import { sortedAlerts, useAlertStore } from '../store';
@@ -73,6 +74,7 @@ function AlertRow({
   v?: VProps;
 }) {
   const { t } = useTranslation('alerts');
+  const subject = alertSubject(a);
   return (
     <div
       className="alertrow"
@@ -82,7 +84,14 @@ function AlertRow({
     >
       <span className="alertrow-dot" style={{ background: severityColorVar(a.severity) }} />
       <span className="alertrow-node">
-        <EntityName name={nodeName(a.node)} id={a.node} />
+        {subject.kind === 'node' ? (
+          <EntityName name={nodeName(subject.nodeId)} id={subject.nodeId} />
+        ) : (
+          // A pool name is already the human-readable thing — there is no inventory row to resolve
+          // it through, and the label is what tells an operator this row is about Yagra's own
+          // polling rather than about a device.
+          <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: subject.name })}</span>
+        )}
       </span>
       {/* The check id is still the handle the API takes (RCA, ack), so keep it recoverable on
           hover even though it is no longer the cell's text. */}
@@ -108,7 +117,11 @@ function AlertRow({
         </span>
       )}
       <span className="alertrow-time muted">{formatTimestamp(a.at_unix_ms)}</span>
-      {actions && <span className="alertrow-actions">{actions(a, nodeName(a.node))}</span>}
+      {actions && (
+        <span className="alertrow-actions">
+          {actions(a, subject.kind === 'node' ? nodeName(subject.nodeId) : subject.name)}
+        </span>
+      )}
     </div>
   );
 }

@@ -23,12 +23,17 @@ const RECONNECT_MS = 3000;
 /** An alert event off the wire: an alert plus a `resolved` flag (fire vs recovery). */
 export type AlertEvent = Alert & { resolved?: boolean };
 
-/** Parse one SSE `data:` payload into an alert event, or return null if malformed. */
+/** Parse one SSE `data:` payload into an alert event, or return null if malformed.
+ *
+ *  `node` carries the alert's *subject* — a node UUID, or `pool:<name>` — and is a string for every
+ *  subject, which is what keeps this validity gate correct. `subject_kind` says which; a frame
+ *  without it came from a core older than the subject split, when every alert was about a node, so
+ *  it is normalized here rather than left for each consumer to default. */
 export function parseAlertEvent(data: string): AlertEvent | null {
   try {
     const obj = JSON.parse(data) as Partial<AlertEvent>;
     if (typeof obj.node === 'string' && typeof obj.severity === 'string') {
-      return obj as AlertEvent;
+      return { ...obj, subject_kind: obj.subject_kind ?? 'node' } as AlertEvent;
     }
     return null;
   } catch {

@@ -3519,7 +3519,7 @@ export interface components {
     schemas: {
         /**
          * @description Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity
-         *     `(node, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
+         *     `(subject, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
          *     middleware records the audit entry.
          */
         AckRequest: {
@@ -3534,13 +3534,22 @@ export interface components {
             by?: string | null;
             /** Format: uuid */
             check: string;
-            /** Format: uuid */
-            node: string;
+            /**
+             * Format: uuid
+             * @description The node the alert is about. Omit it and send `subject` instead for an alert about
+             *     something other than a node (a poller pool). Exactly one of the two is required.
+             */
+            node?: string | null;
             /** @description Optional free-text note from the external tool. */
             note?: string | null;
             severity: components["schemas"]["Severity"];
             /** @description Originating tool: `pagerduty` | `jsm` | `manual` | … */
             source?: string | null;
+            /**
+             * @description The alert's subject in its flat form — a node's UUID, or `pool:<name>`. This is the value
+             *     the alert's own `node` field carries, so an integration can echo back what it received.
+             */
+            subject?: string | null;
         };
         /** @description What an ack call reports back: the new state, and the stored view when acknowledging. */
         AckResult: {
@@ -3564,9 +3573,18 @@ export interface components {
             /** @description Originating tool: `pagerduty` | `jsm` | `manual` | … */
             source: string;
         };
-        /** @description An active alert plus its inbound (read-only) ack state. */
+        /**
+         * @description An active alert plus its inbound (read-only) ack state.
+         *
+         *     `subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a
+         *     node's UUID or `pool:<name>`. The live alert stream emits the same three keys.
+         */
         ActiveAlertView: components["schemas"]["Alert"] & {
             acked?: null | components["schemas"]["AckView"];
+            /** @description What this alert is about: a monitored node, or Yagra's own polling coverage for a pool. */
+            subject_kind: components["schemas"]["SubjectKind"];
+            /** @description The subject's name, for a subject identified by name rather than by id (a poller pool). */
+            subject_name?: string | null;
         };
         /** @description A single alert produced by the engine. */
         Alert: {
@@ -3586,8 +3604,8 @@ export interface components {
              *     not part of alert identity (dedup/grouping ignore it).
              */
             metric: string;
-            /** @description Affected node. */
-            node: components["schemas"]["NodeId"];
+            /** @description What the alert is about: a node's UUID, or `pool:<name>` for a poller-pool alert. */
+            node: string;
             root_cause?: null | components["schemas"]["NodeId"];
             /** @description Severity (derived from the committed state). */
             severity: components["schemas"]["Severity"];
@@ -3626,8 +3644,12 @@ export interface components {
              *     rows recorded before this was captured (legacy) so the WebUI can show "—".
              */
             metric?: string | null;
-            /** Format: uuid */
-            node: string;
+            /**
+             * Format: uuid
+             * @description The node this transition was about; `null` when the subject is not a node — read
+             *     `subject_kind` first. It is non-null exactly when `subject_kind` is `node`.
+             */
+            node?: string | null;
             /**
              * Format: double
              * @description Observed sample value that committed the transition (threshold checks only).
@@ -3642,6 +3664,10 @@ export interface components {
             resolved: boolean;
             severity: components["schemas"]["Severity"];
             state: components["schemas"]["NodeState"];
+            /** @description What the transition was about. */
+            subject_kind: components["schemas"]["SubjectKind"];
+            /** @description The subject's name, for a subject identified by name rather than by id (a poller pool). */
+            subject_name?: string | null;
             /**
              * Format: double
              * @description The bound crossed for the committed severity (threshold checks only).
@@ -7662,6 +7688,12 @@ export interface components {
             scope_level: components["schemas"]["WindowScope"];
             starts_at: string;
         };
+        /**
+         * @description Which kind of thing an alert is about: a monitored `node`, or a poller `pool` when Yagra is
+         *     reporting on its own polling coverage.
+         * @enum {string}
+         */
+        SubjectKind: "node" | "pool";
         /** @description Yagra's own health: the reachability of its backing services. */
         SystemHealth: {
             /** @description NATS — **inferred** from a recent scheduler sweep, not a direct ping. */
@@ -8352,6 +8384,15 @@ export interface operations {
                     "application/json": components["schemas"]["AckResult"];
                 };
             };
+            /** @description Neither `node` nor a readable `subject` was supplied */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
             /** @description No valid bearer token */
             401: {
                 headers: {
@@ -8363,6 +8404,15 @@ export interface operations {
             };
             /** @description Role lacks the alert-acknowledgement permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The subject is outside the caller's group scope */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

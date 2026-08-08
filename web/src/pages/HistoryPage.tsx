@@ -14,6 +14,7 @@ import {
   stateLabel,
 } from '../lib/format';
 import { api } from '../services/api';
+import { alertSubject } from '../lib/alertSubject';
 import type { AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
@@ -82,7 +83,16 @@ export function HistoryPage() {
         key: 'node',
         header: t('history.cols.node'),
         width: '1.4fr',
-        render: (r) => <EntityName name={nodeName(r.node)} id={r.node} />,
+        // A row whose subject is not a node has nothing to resolve through the inventory — see
+        // `lib/alertSubject` for why reading `node` without the kind is the mistake to avoid.
+        render: (r) => {
+          const s = alertSubject(r);
+          return s.kind === 'node' ? (
+            <EntityName name={nodeName(s.nodeId)} id={s.nodeId} />
+          ) : (
+            <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: s.name })}</span>
+          );
+        },
       },
       {
         key: 'what',
@@ -155,7 +165,9 @@ export function HistoryPage() {
       <DataTable
         rows={rows}
         columns={columns}
-        rowKey={(r) => `${r.node}|${r.check}|${r.at_unix_ms}|${r.resolved}`}
+        rowKey={(r) =>
+          `${r.subject_name ?? r.node}|${r.check}|${r.at_unix_ms}|${r.resolved}`
+        }
         onReachEnd={loadMore}
         empty={t('history.empty')}
         loading={loading}

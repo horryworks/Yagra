@@ -249,7 +249,7 @@ impl YagraMcp {
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()
-                .filter_map(|a| AlertDto::from_alert(a, Some(node.name.clone())))
+                .map(|a| AlertDto::from_alert(a, Some(node.name.clone())))
                 .collect(),
             interfaces: interfaces.iter().map(InterfaceDto::from_meta).collect(),
         };
@@ -280,11 +280,7 @@ impl YagraMcp {
         let mut alerts = self.state.alerts.active_alerts();
         // Filtered before the severity cut and the truncation, so a scoped caller's `limit` is
         // spent on rows they can see rather than on rows that are about to be dropped.
-        // Node subjects only, matching `GET /api/v1/alerts` (see its filter for why).
-        alerts.retain(|a| {
-            a.node()
-                .is_some_and(|node| scope.allows_node(&self.state, node))
-        });
+        alerts.retain(|a| scope.allows_subject(&self.state, &a.subject));
         if let Some(node_id) = p.node_id {
             let nid = NodeId::from(node_id);
             alerts.retain(|a| a.subject.is_node(nid));
@@ -301,7 +297,7 @@ impl YagraMcp {
             .await;
         let out: Vec<AlertDto> = alerts
             .iter()
-            .filter_map(|a| {
+            .map(|a| {
                 let name = a.node().and_then(|n| names.get(&n.0).cloned());
                 AlertDto::from_alert(a, name)
             })
@@ -355,12 +351,17 @@ impl YagraMcp {
         // correct answer here — `before` still advances by the oldest row returned.
         let rows: Vec<_> = rows
             .into_iter()
-            .filter(|r| scope.allows_node(&self.state, NodeId::from(r.node)))
+            .filter(|r| {
+                r.subject()
+                    .is_some_and(|s| scope.allows_subject(&self.state, &s))
+            })
             .collect();
-        let names = self.resolve_names(scope, rows.iter().map(|r| r.node)).await;
+        let names = self
+            .resolve_names(scope, rows.iter().filter_map(|r| r.node))
+            .await;
         let out: Vec<AlertHistoryDto> = rows
             .iter()
-            .map(|r| AlertHistoryDto::from_row(r, names.get(&r.node).cloned()))
+            .map(|r| AlertHistoryDto::from_row(r, r.node.and_then(|n| names.get(&n).cloned())))
             .collect();
         ok_json("get_alert_history", &out)
     }
@@ -1609,8 +1610,13 @@ impl YagraMcp {
             source: "mcp".to_owned(),
             note: p.note.clone(),
         });
+        // Node subjects only. The MCP **write** surface is frozen at these three tools (ADR-042
+        // 決定 6), so widening the parameter to accept a pool would be a write-surface change, not
+        // the read parity this rule is about — a pool alert is readable here and acknowledged from
+        // the WebUI or `POST /api/v1/alerts/ack`.
+        let subject = yagra_alert::Subject::Node(NodeId::from(p.node_id));
         if let Err(e) =
-            crate::api::alerts::apply_ack(&self.state, p.node_id, p.check_id, severity, view).await
+            crate::api::alerts::apply_ack(&self.state, &subject, p.check_id, severity, view).await
         {
             return tool_api_error("ack_alert", &e);
         }

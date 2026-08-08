@@ -49,6 +49,7 @@ const mute = (over: Partial<Mute>): Mute => ({
 
 const alert = (over: Partial<Alert>): Alert => ({
   node: 'n1',
+  subject_kind: 'node',
   check: 'c1',
   metric: 'icmp_rtt_ms',
   severity: 'critical',
@@ -59,13 +60,15 @@ const alert = (over: Partial<Alert>): Alert => ({
 });
 
 describe('muteTargetFromAlert', () => {
-  it('always targets the alert’s node, named for display', () => {
-    const seed = muteTargetFromAlert(alert({ node: 'n2' }), 'core-sw-01');
+  it('targets the node it is given, named for display', () => {
+    // The node is a parameter, not `alert.node`: that field is the alert's *subject* and is only
+    // a node id when the subject is one. The caller resolves it via `lib/alertSubject`.
+    const seed = muteTargetFromAlert(alert({ node: 'n2' }), 'n2', 'core-sw-01');
     expect(seed.target).toEqual({ kind: 'node', id: 'n2', name: 'core-sw-01' });
   });
 
   it('pre-fills the metric so the mute matches exactly the check that fired', () => {
-    expect(muteTargetFromAlert(alert({ metric: 'huawei_cpu_usage' }), 'n').metric).toBe(
+    expect(muteTargetFromAlert(alert({ metric: 'huawei_cpu_usage' }), 'n1', 'n').metric).toBe(
       'huawei_cpu_usage',
     );
   });
@@ -75,13 +78,13 @@ describe('muteTargetFromAlert', () => {
   // sentinel and falling back to a whole-node mute — would silence something other than what the
   // operator clicked. The form renders it readably; the seed must stay verbatim.
   it('carries the liveness sentinel through verbatim, not its display text', () => {
-    expect(muteTargetFromAlert(alert({ metric: LIVENESS_METRIC }), 'n').metric).toBe(
+    expect(muteTargetFromAlert(alert({ metric: LIVENESS_METRIC }), 'n1', 'n').metric).toBe(
       LIVENESS_METRIC,
     );
   });
 
   it('seeds a whole-node mute when the alert captured no metric (pre-migration-0036 row)', () => {
-    expect(muteTargetFromAlert(alert({ metric: '' }), 'n').metric).toBeUndefined();
+    expect(muteTargetFromAlert(alert({ metric: '' }), 'n1', 'n').metric).toBeUndefined();
   });
 });
 

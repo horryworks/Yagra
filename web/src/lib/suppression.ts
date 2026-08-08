@@ -32,10 +32,18 @@ export interface AlertMuteSeed {
  *
  * An alert with no captured metric (raised before migration 0036) has no check name to name, so it
  * seeds a whole-node mute — broader than the one alert, but the only thing that can be expressed.
+ *
+ * The node is passed in rather than read off `alert.node`, because that field is the alert's
+ * *subject* and is only a node id when the subject is one (`lib/alertSubject`). A pool-coverage
+ * alert has no node to mute; the caller decides that before offering the action.
  */
-export function muteTargetFromAlert(alert: Alert, nodeName: string): AlertMuteSeed {
+export function muteTargetFromAlert(
+  alert: Alert,
+  nodeId: string,
+  nodeName: string,
+): AlertMuteSeed {
   return {
-    target: { kind: 'node', id: alert.node, name: nodeName },
+    target: { kind: 'node', id: nodeId, name: nodeName },
     metric: alert.metric ? alert.metric : undefined,
   };
 }

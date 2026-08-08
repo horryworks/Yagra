@@ -156,6 +156,39 @@ impl NodeScope {
         }
     }
 
+    /// Whether an alert about `subject` is visible.
+    ///
+    /// A **node** subject resolves the usual way. A **pool** subject — Yagra alerting on its own
+    /// polling coverage (ADR-009) — is visible to a scoped caller when any node they can see is
+    /// polled by that pool, which is precisely the operator the alert is *for*: their site is the
+    /// one that went dark.
+    ///
+    /// ⚠️ This is the whole reason the subject is a sum type rather than a synthetic node id. A
+    /// made-up id would resolve to no folder group, `ScopeSet::allows` is fail-closed, and the
+    /// alert would therefore be hidden from every group-scoped operator while staying visible to
+    /// unrestricted ones — the exact inversion of who needs it. See `yagra_alert::Subject`.
+    #[must_use]
+    pub fn allows_subject(&self, st: &ApiState, subject: &yagra_alert::Subject) -> bool {
+        self.allows_subject_in(&st.alerts, subject)
+    }
+
+    /// [`Self::allows_subject`] against the alert engine directly — see [`Self::allows_node_in`]
+    /// for why the SSE filters need this form.
+    #[must_use]
+    pub fn allows_subject_in(
+        &self,
+        alerts: &crate::alerts::AlertManager,
+        subject: &yagra_alert::Subject,
+    ) -> bool {
+        match self {
+            NodeScope::All => true,
+            NodeScope::Groups(s) => match subject {
+                yagra_alert::Subject::Node(n) => s.allows(alerts.node_folder_group(*n)),
+                yagra_alert::Subject::Pool(p) => alerts.pool_is_in_any_group(p, &s.visible),
+            },
+        }
+    }
+
     /// Whether a *group* row itself may be listed. Visible groups carry membership; breadcrumb
     /// ancestors are listed so the tree has a spine, but nothing beneath them is exposed by that.
     #[must_use]
@@ -546,6 +579,32 @@ mod tests {
         let s = scope_of(&[ghost]);
         assert!(s.allows_group(Some(ghost)));
         assert!(!s.allows_group(Some(ids(1))));
+    }
+
+    #[tokio::test]
+    async fn a_pool_alert_reaches_the_scope_that_owns_a_node_in_that_pool() {
+        // ⚠️ The inversion this whole design exists to avoid: with a synthetic node id the alert
+        // would resolve to no folder group, `ScopeSet::allows` is fail-closed, and the operator
+        // responsible for the site that just went dark would be the one person unable to see it.
+        use yagra_alert::Subject;
+        let st = crate::api::tests_support::public_state();
+        st.alerts.set_config(
+            crate::alerts::AlertConfig::new(Vec::new(), std::collections::HashMap::new())
+                .with_pool_groups(std::collections::HashMap::from([(
+                    "tokyo".to_owned(),
+                    std::collections::BTreeSet::from([ids(2)]),
+                )])),
+        );
+        // Scoped to `tokyo` (ids(1)), whose subtree contains the group holding the pool's nodes.
+        let mine = scope_of(&[ids(1)]);
+        assert!(mine.allows_subject(&st, &Subject::Pool("tokyo".to_owned())));
+        // An unrelated root sees nothing of it …
+        assert!(!scope_of(&[ids(5)]).allows_subject(&st, &Subject::Pool("tokyo".to_owned())));
+        // … nor does a scope with no groups, and nor does a pool the snapshot has never seen.
+        assert!(!scope_of(&[]).allows_subject(&st, &Subject::Pool("tokyo".to_owned())));
+        assert!(!mine.allows_subject(&st, &Subject::Pool("osaka".to_owned())));
+        // Unrestricted sees every subject, as it does for nodes.
+        assert!(NodeScope::All.allows_subject(&st, &Subject::Pool("osaka".to_owned())));
     }
 
     #[test]

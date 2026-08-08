@@ -19,7 +19,7 @@ mod hysteresis;
 use flapping::FlapDetector;
 use hysteresis::DwellTracker;
 
-pub use alert::{Alert, Breach, DedupKey, Subject};
+pub use alert::{Alert, Breach, DedupKey, Subject, SubjectKind};
 pub use notify::{
     DispatchOutcome, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
 };

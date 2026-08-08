@@ -28,9 +28,27 @@
     which reports `0` for a healthy pool rather than disappearing.
   - Meraki-managed nodes are excluded, as they are from the Pollers page: core's org collector
     polls them, so they do not depend on a pool.
-  - **It is a notification, not a row on the Alerts page.** It cannot be acknowledged or muted, and
-    it does not appear in alert history, `GET /api/v1/alerts` or the live stream — those are all
-    keyed by node, and this alert is about a pool. Nothing about existing node alerts changes.
+  - **It is a full alert, not only a notification.** It appears on Active alerts and in alert
+    history, streams live, is acknowledgeable from your incident tool, and renders through your
+    notification templates. Two new template variables come with it — `subject_kind` and an
+    always-present `subject_name` — so a template can read correctly for both a device and a pool.
+  - **A group-scoped operator sees the pools their own nodes are polled by**, which is exactly the
+    person whose site went dark. Pools holding no node they can see stay invisible to them.
+  - Two things it is deliberately *not*: it never rolls into a node's displayed state (it belongs
+    to no node), and it cannot be muted — a mute names a node.
+
+### Breaking changes
+- **An alert's `node` field is now its *subject*, and is no longer always a UUID.** For a
+  poller-pool alert it reads `pool:<name>`. This affects `GET /api/v1/alerts`, `GET
+  /api/v1/alerts/history`, the `/api/v1/stream/alerts` frames and the MCP alert tools. Every
+  response carrying an alert now also carries `subject_kind` (`node` | `pool`) and, for a named
+  subject, `subject_name` — **branch on `subject_kind` before treating `node` as a node id.**
+  - On history rows and in the MCP DTOs, `node` / `node_id` is `null` for a non-node subject rather
+    than a made-up UUID.
+  - `POST /api/v1/alerts/ack` now takes **either** `node` (unchanged) **or** `subject`, the alert's
+    flat subject form. `node` is no longer required; sending neither is a `400 invalid_subject`.
+  - Node-oriented aggregates are unaffected and stay node-only: `/api/v1/alerts/top-nodes` and
+    `/api/v1/alerts/transitions` never report a pool.
 - **The MCP surface can now read Yagra's own configuration — `get_config(kind=…)`.** One tool over
   28 reads: thresholds, event rules and sources, notification channels and routing rules, profiles
   and collection templates, a node's collected metrics, classification rules, the MIB catalog, a

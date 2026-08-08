@@ -7,15 +7,21 @@
 //! Yagra so the Active alerts and History screens can show a read-only "acked" indicator. This is
 //! one-way inbound reflection: Yagra never writes ack back out (no two-way sync).
 //!
-//! Ack is keyed by the alert dedup identity `(node, check, severity)` — the same key the engine
+//! Ack is keyed by the alert dedup identity `(subject, check, severity)` — the same key the engine
 //! dedups on — so it tracks an incident, not a single history transition.
+//!
+//! The subject is stored in the column still named `node`, as its
+//! [`storage_id`](yagra_alert::Subject::storage_id): a node's own id for a node alert (so no
+//! existing acknowledgement moved), a derived one for a pool. Migration 0075 says why that beats a
+//! nullable column, and `subject_kind`/`subject_ref` beside it are what say which it is.
 
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use uuid::Uuid;
+use yagra_alert::Subject;
 
-/// Map key for an ack: the alert dedup identity as `(node, check, severity-string)`.
+/// Map key for an ack: the alert dedup identity as `(subject-storage-id, check, severity-string)`.
 pub type AckKey = (Uuid, Uuid, String);
 
 /// The acknowledgement view attached to an alert / history row in API responses. Carries who
@@ -47,23 +53,27 @@ impl AckRepo {
     /// Upsert the ack for a dedup key (re-ack just refreshes who/when/source/note).
     pub async fn set(
         &self,
-        node: Uuid,
+        subject: &Subject,
         check: Uuid,
         severity: &str,
         view: &AckView,
     ) -> anyhow::Result<()> {
         sqlx::query(
             "INSERT INTO alert_acks \
-             (node, check_id, severity, acked_at_unix_ms, acked_by, source, note) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             (node, subject_kind, subject_ref, check_id, severity, acked_at_unix_ms, acked_by, source, note) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (node, check_id, severity) DO UPDATE SET \
+               subject_kind = EXCLUDED.subject_kind, \
+               subject_ref = EXCLUDED.subject_ref, \
                acked_at_unix_ms = EXCLUDED.acked_at_unix_ms, \
                acked_by = EXCLUDED.acked_by, \
                source = EXCLUDED.source, \
                note = EXCLUDED.note, \
                recorded_at = now()",
         )
-        .bind(node)
+        .bind(subject.storage_id())
+        .bind(subject.kind().as_str())
+        .bind(subject.name())
         .bind(check)
         .bind(severity)
         .bind(view.at_unix_ms)
@@ -76,9 +86,14 @@ impl AckRepo {
     }
 
     /// Clear the ack for a dedup key (the external tool un-acked / the incident closed there).
-    pub async fn clear(&self, node: Uuid, check: Uuid, severity: &str) -> anyhow::Result<()> {
+    pub async fn clear(
+        &self,
+        subject: &Subject,
+        check: Uuid,
+        severity: &str,
+    ) -> anyhow::Result<()> {
         sqlx::query("DELETE FROM alert_acks WHERE node = $1 AND check_id = $2 AND severity = $3")
-            .bind(node)
+            .bind(subject.storage_id())
             .bind(check)
             .bind(severity)
             .execute(&self.pool)
@@ -141,11 +156,32 @@ mod tests {
     }
 
     #[test]
+    fn the_ack_is_stored_under_the_subjects_identity_not_a_node_reference() {
+        // The column is still called `node` (migration 0075 says why), so the one thing that must
+        // not creep back is a call site binding a raw node id: a pool alert would then either fail
+        // to ack or land on whatever node that id names.
+        let src = production_source();
+        assert!(src.contains(".bind(subject.storage_id())"));
+        assert!(src.contains(".bind(subject.kind().as_str())"));
+        for writer in ["pub async fn set(", "pub async fn clear("] {
+            let sig = src.split(writer).nth(1).expect("both writers exist");
+            assert!(
+                sig[..sig.find(')').unwrap_or(sig.len())].contains("subject: &Subject"),
+                "{writer} takes a Subject, never a bare node id"
+            );
+        }
+    }
+
+    #[test]
     fn re_acking_refreshes_the_record_rather_than_failing_or_duplicating() {
         // The external tool re-sends an ack whenever its incident changes, so the write has to be
-        // idempotent: same key ⇒ update who/when/source/note in place.
+        // idempotent: same key ⇒ update who/when/source/note in place. `subject_kind`/`subject_ref`
+        // are refreshed too: a row written before 0075 defaults to `node`, and a re-ack is the
+        // moment that can be corrected.
         let src = production_source();
         for column in [
+            "subject_kind = EXCLUDED.subject_kind",
+            "subject_ref = EXCLUDED.subject_ref",
             "acked_at_unix_ms = EXCLUDED.acked_at_unix_ms",
             "acked_by = EXCLUDED.acked_by",
             "source = EXCLUDED.source",

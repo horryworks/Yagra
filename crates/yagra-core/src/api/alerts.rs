@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use uuid::Uuid;
-use yagra_alert::Alert;
+use yagra_alert::{Alert, SubjectKind};
 use yagra_common::{NodeState, Severity};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -68,10 +68,21 @@ pub(crate) fn routes() -> Router<ApiState> {
 // ── Ack decoration ───────────────────────────────────────────────────────────
 
 /// An active alert plus its inbound (read-only) ack state.
+///
+/// `subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a
+/// node's UUID or `pool:<name>`. The live alert stream emits the same three keys.
+//
+// They are here rather than on `Alert` itself so the alert's own serialized form stays
+// byte-identical for a node subject — the same reason `Subject` serializes flat.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct ActiveAlertView {
     #[serde(flatten)]
     pub alert: Alert,
+    /// What this alert is about: a monitored node, or Yagra's own polling coverage for a pool.
+    pub subject_kind: SubjectKind,
+    /// The subject's name, for a subject identified by name rather than by id (a poller pool).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subject_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acked: Option<AckView>,
 }
@@ -86,23 +97,33 @@ pub(crate) struct AlertHistoryView {
     pub acked: Option<AckView>,
 }
 
+/// The ack map key for one alert identity.
+///
+/// The first component is the subject's **storage id** — a node's own id for a node alert, so
+/// every acknowledgement recorded before the subject split still joins. Written once so the two
+/// decorators and the ack writer cannot key on three different things.
+fn ack_key(subject: &yagra_alert::Subject, check: Uuid, severity: Severity) -> AckKey {
+    (subject.storage_id(), check, severity.as_str().to_owned())
+}
+
 /// Join the ack map into the active-alert list (pure; unit-tested without a DB).
 fn decorate_alerts(alerts: Vec<Alert>, acks: &HashMap<AckKey, AckView>) -> Vec<ActiveAlertView> {
     alerts
         .into_iter()
         .map(|alert| {
-            // An ack is keyed by node, so an alert with a non-node subject can carry none. It does
-            // not reach here today (`list_alerts` filters it out), and joining `None` is the
-            // truthful answer if it ever does.
-            let acked = alert.node().and_then(|node| {
-                let key: AckKey = (
-                    node.as_uuid(),
+            let acked = acks
+                .get(&ack_key(
+                    &alert.subject,
                     alert.check.as_uuid(),
-                    alert.severity.as_str().to_owned(),
-                );
-                acks.get(&key).cloned()
-            });
-            ActiveAlertView { alert, acked }
+                    alert.severity,
+                ))
+                .cloned();
+            ActiveAlertView {
+                subject_kind: alert.subject.kind(),
+                subject_name: alert.subject.name().map(str::to_owned),
+                alert,
+                acked,
+            }
         })
         .collect()
 }
@@ -114,8 +135,9 @@ fn decorate_history(
 ) -> Vec<AlertHistoryView> {
     rows.into_iter()
         .map(|row| {
-            let key: AckKey = (row.node, row.check, row.severity.as_str().to_owned());
-            let acked = acks.get(&key).cloned();
+            let acked = row
+                .subject()
+                .and_then(|s| acks.get(&ack_key(&s, row.check, row.severity)).cloned());
             AlertHistoryView { row, acked }
         })
         .collect()
@@ -141,7 +163,7 @@ async fn ack_map(st: &ApiState) -> HashMap<AckKey, AckView> {
 /// dashboard keeps showing the alert unacknowledged.
 pub(crate) async fn apply_ack(
     st: &ApiState,
-    node: Uuid,
+    subject: &yagra_alert::Subject,
     check: Uuid,
     severity: Severity,
     view: Option<AckView>,
@@ -151,7 +173,7 @@ pub(crate) async fn apply_ack(
     };
     match &view {
         Some(v) => repo
-            .set(node, check, severity.as_str(), v)
+            .set(subject, check, severity.as_str(), v)
             .await
             .map_err(|e| {
                 ApiError::from_internal(
@@ -161,7 +183,7 @@ pub(crate) async fn apply_ack(
                 )
             })?,
         None => repo
-            .clear(node, check, severity.as_str())
+            .clear(subject, check, severity.as_str())
             .await
             .map_err(|e| {
                 ApiError::from_internal(
@@ -174,7 +196,7 @@ pub(crate) async fn apply_ack(
     // The event carries the alert shape plus `acked` and no `resolved`, so a client treats it as
     // an upsert rather than a removal.
     st.alerts.broadcast_acked(
-        node,
+        subject,
         check,
         severity,
         view.as_ref().and_then(|v| serde_json::to_value(v).ok()),
@@ -204,11 +226,7 @@ async fn list_alerts(
         .alerts
         .active_alerts()
         .into_iter()
-        // Node subjects only. A pool-coverage alert is about Yagra's own polling, has no node to
-        // resolve a visibility group from, and is delivered over the notification channels instead
-        // — serving it here would put a row on the Alerts page that no group-scoped operator could
-        // see and that cannot be acked. Widening this is Increment 2, with the scope rule.
-        .filter(|a| a.node().is_some_and(|node| scope.allows_node(&st, node)))
+        .filter(|a| scope.allows_subject(&st, &a.subject))
         .collect();
     Json(decorate_alerts(alerts, &acks))
 }
@@ -262,13 +280,17 @@ async fn list_alert_history(
                 "failed to list alert history",
             )
         })?;
-    // Post-filtered rather than pushed into the query: history rows are keyed by node id, not by
+    // Post-filtered rather than pushed into the query: history rows are keyed by subject id, not by
     // group, and a scoped caller pages by timestamp — so a page may come back short. That is
     // correct (the cursor is the timestamp, so paging still terminates) and is the same trade the
     // TSDB rankings make. A group predicate here would mean joining `nodes` on every history read.
+    //
+    // A row whose subject could not be read at all (a newer core's `subject_kind`) is dropped for
+    // everyone: `recent` already drops those, so `subject()` is `Some` here — but spelling the
+    // `None` case as "not visible" keeps the fail-closed direction if that ever changes.
     let rows = rows
         .into_iter()
-        .filter(|r| scope.allows_node(&st, yagra_common::NodeId::from(r.node)))
+        .filter(|r| r.subject().is_some_and(|s| scope.allows_subject(&st, &s)))
         .collect();
     let acks = ack_map(&st).await;
     Ok(Json(decorate_history(rows, &acks)))
@@ -282,11 +304,18 @@ fn default_acked() -> bool {
 }
 
 /// Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity
-/// `(node, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
+/// `(subject, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request
 /// middleware records the audit entry.
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct AckRequest {
-    node: Uuid,
+    /// The node the alert is about. Omit it and send `subject` instead for an alert about
+    /// something other than a node (a poller pool). Exactly one of the two is required.
+    #[serde(default)]
+    node: Option<Uuid>,
+    /// The alert's subject in its flat form — a node's UUID, or `pool:<name>`. This is the value
+    /// the alert's own `node` field carries, so an integration can echo back what it received.
+    #[serde(default)]
+    subject: Option<String>,
     check: Uuid,
     severity: Severity,
     /// `true` = acked (upsert), `false` = cleared (delete). Defaults to `true`.
@@ -319,8 +348,10 @@ pub(super) struct AckResult {
     request_body = AckRequest,
     responses(
         (status = 200, description = "The ack was recorded (or cleared) and broadcast", body = AckResult),
+        (status = 400, description = "Neither `node` nor a readable `subject` was supplied", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the alert-acknowledgement permission", body = super::error::ErrorBody),
+        (status = 404, description = "The subject is outside the caller's group scope", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no ack store", body = super::error::ErrorBody),
     ),
 )]
@@ -330,7 +361,15 @@ async fn ack_alert(
     State(st): State<ApiState>,
     Json(body): Json<AckRequest>,
 ) -> ApiResult<Json<AckResult>> {
-    super::scope::require_visible_node(&st, &scope, yagra_common::NodeId::from(body.node))?;
+    let subject = ack_subject(body.node, body.subject.as_deref())?;
+    // Same 404-not-403 rule as every other body-named target: the difference between the two would
+    // answer "does this invisible subject currently have an alert with this (check, severity)".
+    if !scope.allows_subject(&st, &subject) {
+        return Err(ApiError::not_found(
+            "subject_not_found",
+            format!("no alert subject {subject}"),
+        ));
+    }
     let view = body.acked.then(|| AckView {
         // The external tool's own timestamp wins when it sends one — its clock is the record of
         // when the human actually acknowledged, which may be well before this request arrives.
@@ -341,11 +380,33 @@ async fn ack_alert(
         source: body.source.unwrap_or_else(|| "external".to_owned()),
         note: body.note,
     });
-    apply_ack(&st, body.node, body.check, body.severity, view.clone()).await?;
+    apply_ack(&st, &subject, body.check, body.severity, view.clone()).await?;
     Ok(Json(AckResult {
         acked: body.acked,
         ack: view,
     }))
+}
+
+/// Resolve an ack request's target from its two spellings.
+///
+/// `node` is the original field and stays the common case; `subject` is what an integration echoes
+/// back for an alert about something else. Pure, so the precedence and the refusal are unit-tested
+/// without a router.
+fn ack_subject(
+    node: Option<Uuid>,
+    subject: Option<&str>,
+) -> Result<yagra_alert::Subject, ApiError> {
+    // `node` wins when both are present: it is the narrower statement, and a caller that sends a
+    // node id cannot have meant a pool.
+    if let Some(node) = node {
+        return Ok(yagra_alert::Subject::Node(yagra_common::NodeId::from(node)));
+    }
+    subject.and_then(|s| s.parse().ok()).ok_or_else(|| {
+        ApiError::bad_request(
+            "invalid_subject",
+            "send `node`, or a `subject` of `<uuid>` or `pool:<name>`",
+        )
+    })
 }
 
 // ── History aggregations ─────────────────────────────────────────────────────
@@ -550,6 +611,11 @@ async fn alert_transitions(
 /// The rows carry a node id, so the scope filter runs after the query; the names come from the
 /// shared batch resolver rather than a second inventory read.
 ///
+/// **Node transitions only.** Every row here is rendered as a node with a resolved name, and a
+/// pool-coverage alert has no node to name — its rows would come back with an unresolvable id.
+/// Those transitions are read on the History screen and the Alerts list instead, both of which
+/// carry the subject.
+///
 /// No clamp here on purpose — `AlertHistory::recent` bounds the limit to 1..=1000 in the store, so
 /// adding a second one would tighten REST's behaviour rather than protect anything.
 pub(crate) async fn recent_transitions(
@@ -572,17 +638,18 @@ pub(crate) async fn recent_transitions(
         })?;
     let rows: Vec<_> = rows
         .into_iter()
-        .filter(|r| scope.allows_node(st, yagra_common::NodeId::from(r.node)))
+        .filter_map(|r| Some((r.node?, r)))
+        .filter(|(node, _)| scope.allows_node(st, yagra_common::NodeId::from(*node)))
         .collect();
-    let names = super::nodes::resolve_node_names(st, scope, rows.iter().map(|r| r.node)).await;
+    let names = super::nodes::resolve_node_names(st, scope, rows.iter().map(|(n, _)| *n)).await;
     Ok(rows
         .into_iter()
-        .map(|r| AlertTransition {
-            node_id: r.node,
+        .map(|(node_id, r)| AlertTransition {
+            node_id,
             name: names
-                .get(&r.node)
+                .get(&node_id)
                 .cloned()
-                .unwrap_or_else(|| r.node.to_string()),
+                .unwrap_or_else(|| node_id.to_string()),
             state: r.state,
             severity: r.severity,
             resolved: r.resolved,
@@ -627,11 +694,11 @@ fn sse_with_resync(
         let (alerts, scope) = (alerts.clone(), scope.clone());
         async move {
             match r {
-                Ok((node, json)) => {
+                Ok((subject, json)) => {
                     let visible = scope.is_all()
                         || alerts
                             .upgrade()
-                            .is_some_and(|a| scope.allows_node_in(&a, node));
+                            .is_some_and(|a| scope.allows_subject_in(&a, &subject));
                     visible.then(|| Ok::<_, Infallible>(Event::default().data(&*json)))
                 }
                 Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
@@ -759,12 +826,100 @@ mod tests {
     }
 
     #[test]
+    fn a_pool_alert_carries_its_subject_and_still_serializes_node_as_a_string() {
+        // Two properties in one shape, because they fail together. `web/src/services/sse.ts` and
+        // the list reader both gate on `node` being a string, so it must stay one for a pool;
+        // `subject_kind`/`subject_name` are what stop the UI resolving that string through the
+        // inventory and showing an operator an unresolvable id instead of their pool.
+        let alert = Alert {
+            subject: yagra_alert::Subject::Pool("tokyo".to_owned()),
+            check: yagra_common::CheckId::from(Uuid::from_u128(3)),
+            severity: Severity::Critical,
+            state: NodeState::Unreachable,
+            at_unix_ms: 1,
+            root_cause: None,
+            flapping: false,
+            metric: "live_pollers".to_string(),
+            breach: None,
+        };
+        let out = decorate_alerts(vec![alert], &HashMap::new());
+        let json = serde_json::to_value(&out[0]).unwrap();
+        assert_eq!(json["node"], "pool:tokyo");
+        assert!(json["node"].is_string());
+        assert_eq!(json["subject_kind"], "pool");
+        assert_eq!(json["subject_name"], "tokyo");
+    }
+
+    #[test]
+    fn a_pool_alerts_ack_does_not_land_on_the_node_whose_name_the_pool_carries() {
+        // A pool name is operator-authored free text, so it can be spelled as a node's UUID. The
+        // ack join keys on the subject's storage id, which is derived for a pool — if it keyed on
+        // the raw name, that pool's alert would wear that node's acknowledgement.
+        let node = Uuid::from_u128(42);
+        let check = Uuid::from_u128(2);
+        let mut acks: HashMap<AckKey, AckView> = HashMap::new();
+        acks.insert(
+            (node, check, "critical".to_owned()),
+            AckView {
+                at_unix_ms: 1,
+                by: "x".to_owned(),
+                source: "pagerduty".to_owned(),
+                note: None,
+            },
+        );
+        let impostor = Alert {
+            subject: yagra_alert::Subject::Pool(node.to_string()),
+            check: yagra_common::CheckId::from(check),
+            severity: Severity::Critical,
+            state: NodeState::Unreachable,
+            at_unix_ms: 1,
+            root_cause: None,
+            flapping: false,
+            metric: "live_pollers".to_string(),
+            breach: None,
+        };
+        assert!(decorate_alerts(vec![impostor], &acks)[0].acked.is_none());
+    }
+
+    #[test]
+    fn an_ack_request_names_its_subject_by_node_or_by_flat_form() {
+        let node = Uuid::from_u128(5);
+        assert_eq!(
+            ack_subject(Some(node), None).unwrap(),
+            yagra_alert::Subject::Node(NodeId::from(node))
+        );
+        assert_eq!(
+            ack_subject(None, Some("pool:tokyo")).unwrap(),
+            yagra_alert::Subject::Pool("tokyo".to_owned())
+        );
+        // A bare UUID in `subject` is the same node — an integration echoing back the alert's own
+        // `node` field must not need to know which spelling to use.
+        assert_eq!(
+            ack_subject(None, Some(&node.to_string())).unwrap(),
+            yagra_alert::Subject::Node(NodeId::from(node))
+        );
+        // `node` wins when both are sent: it is the narrower statement.
+        assert_eq!(
+            ack_subject(Some(node), Some("pool:tokyo")).unwrap(),
+            yagra_alert::Subject::Node(NodeId::from(node))
+        );
+        // Neither, or an unreadable subject, is the caller's bug and gets a typed 400 rather than
+        // a silent ack on some default target.
+        for bad in [None, Some(""), Some("pool:"), Some("nonsense")] {
+            let err = ack_subject(None, bad).expect_err("no target");
+            assert_eq!(err.code(), "invalid_subject", "{bad:?}");
+        }
+    }
+
+    #[test]
     fn decorate_history_shares_ack_across_an_incidents_transitions() {
         use std::collections::HashMap;
         let node = Uuid::from_u128(1);
         let check = Uuid::from_u128(2);
         let fire = AlertHistoryRow {
-            node,
+            node: Some(node),
+            subject_kind: SubjectKind::Node,
+            subject_name: None,
             check,
             severity: Severity::Critical,
             state: NodeState::Critical,
@@ -777,7 +932,9 @@ mod tests {
             recorded_at: "1970-01-01T00:00:10Z".to_owned(),
         };
         let clear = AlertHistoryRow {
-            node,
+            node: Some(node),
+            subject_kind: SubjectKind::Node,
+            subject_name: None,
             check,
             severity: Severity::Critical,
             state: NodeState::Ok,
@@ -790,7 +947,9 @@ mod tests {
             recorded_at: "1970-01-01T00:00:20Z".to_owned(),
         };
         let unrelated = AlertHistoryRow {
-            node: Uuid::from_u128(7),
+            node: Some(Uuid::from_u128(7)),
+            subject_kind: SubjectKind::Node,
+            subject_name: None,
             check,
             severity: Severity::Warning,
             state: NodeState::Warning,
@@ -941,9 +1100,12 @@ mod tests {
         let stream = sse_with_resync(rx, std::sync::Arc::downgrade(&st.alerts), scope, "alert");
 
         // One frame for the visible node, one for a node the engine has never heard of.
-        st.alerts.broadcast_test_frame(mine, "{\"node\":\"mine\"}");
         st.alerts
-            .broadcast_test_frame(NodeId::new(), "{\"node\":\"theirs\"}");
+            .broadcast_test_frame(yagra_alert::Subject::Node(mine), "{\"node\":\"mine\"}");
+        st.alerts.broadcast_test_frame(
+            yagra_alert::Subject::Node(NodeId::new()),
+            "{\"node\":\"theirs\"}",
+        );
 
         let text = wire(stream).await;
         assert!(
@@ -973,8 +1135,10 @@ mod tests {
             crate::api::scope::NodeScope::All,
             "alert",
         );
-        st.alerts.broadcast_test_frame(NodeId::new(), "{\"a\":1}");
-        st.alerts.broadcast_test_frame(NodeId::new(), "{\"b\":2}");
+        st.alerts
+            .broadcast_test_frame(yagra_alert::Subject::Node(NodeId::new()), "{\"a\":1}");
+        st.alerts
+            .broadcast_test_frame(yagra_alert::Subject::Node(NodeId::new()), "{\"b\":2}");
         let text = wire(stream).await;
         assert!(
             text.contains("\"a\":1") && text.contains("\"b\":2"),

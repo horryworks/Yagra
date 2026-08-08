@@ -84,6 +84,16 @@
               }
             }
           },
+          "400": {
+            "description": "Neither `node` nor a readable `subject` was supplied",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No valid bearer token",
             "content": {
@@ -96,6 +106,16 @@
           },
           "403": {
             "description": "Role lacks the alert-acknowledgement permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The subject is outside the caller's group scope",
             "content": {
               "application/json": {
                 "schema": {
@@ -17288,9 +17308,8 @@
     "schemas": {
       "AckRequest": {
         "type": "object",
-        "description": "Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity\n`(node, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request\nmiddleware records the audit entry.",
+        "description": "Inbound ack reflection. An external incident tool mirrors ack state in by the dedup identity\n`(subject, check, severity)`; `acked:false` clears it. `AckAlerts`-gated; the mutating-request\nmiddleware records the audit entry.",
         "required": [
-          "node",
           "check",
           "severity"
         ],
@@ -17319,8 +17338,12 @@
             "format": "uuid"
           },
           "node": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node the alert is about. Omit it and send `subject` instead for an alert about\nsomething other than a node (a poller pool). Exactly one of the two is required."
           },
           "note": {
             "type": [
@@ -17338,6 +17361,13 @@
               "null"
             ],
             "description": "Originating tool: `pagerduty` | `jsm` | `manual` | …"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The alert's subject in its flat form — a node's UUID, or `pool:<name>`. This is the value\nthe alert's own `node` field carries, so an integration can echo back what it received."
           }
         }
       },
@@ -17401,6 +17431,9 @@
           },
           {
             "type": "object",
+            "required": [
+              "subject_kind"
+            ],
             "properties": {
               "acked": {
                 "oneOf": [
@@ -17411,11 +17444,22 @@
                     "$ref": "#/components/schemas/AckView"
                   }
                 ]
+              },
+              "subject_kind": {
+                "$ref": "#/components/schemas/SubjectKind",
+                "description": "What this alert is about: a monitored node, or Yagra's own polling coverage for a pool."
+              },
+              "subject_name": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "The subject's name, for a subject identified by name rather than by id (a poller pool)."
               }
             }
           }
         ],
-        "description": "An active alert plus its inbound (read-only) ack state."
+        "description": "An active alert plus its inbound (read-only) ack state.\n\n`subject_kind` and `subject_name` decompose the alert's `node` field, which carries either a\nnode's UUID or `pool:<name>`. The live alert stream emits the same three keys."
       },
       "Alert": {
         "type": "object",
@@ -17459,8 +17503,8 @@
             "description": "Metric the check measured (e.g. `\"icmp_rtt_ms\"`; the liveness sentinel for up/down).\nCarried for the history log + notification payload so a human can read *what* fired —\nnot part of alert identity (dedup/grouping ignore it)."
           },
           "node": {
-            "$ref": "#/components/schemas/NodeId",
-            "description": "Affected node."
+            "type": "string",
+            "description": "What the alert is about: a node's UUID, or `pool:<name>` for a poller-pool alert."
           },
           "root_cause": {
             "oneOf": [
@@ -17536,7 +17580,7 @@
         "type": "object",
         "description": "One alert-history row for the API.",
         "required": [
-          "node",
+          "subject_kind",
           "check",
           "severity",
           "state",
@@ -17572,8 +17616,12 @@
             "description": "Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel). `None` for\nrows recorded before this was captured (legacy) so the WebUI can show \"—\"."
           },
           "node": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The node this transition was about; `null` when the subject is not a node — read\n`subject_kind` first. It is non-null exactly when `subject_kind` is `node`."
           },
           "observed_value": {
             "type": [
@@ -17595,6 +17643,17 @@
           },
           "state": {
             "$ref": "#/components/schemas/NodeState"
+          },
+          "subject_kind": {
+            "$ref": "#/components/schemas/SubjectKind",
+            "description": "What the transition was about."
+          },
+          "subject_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The subject's name, for a subject identified by name rather than by id (a poller pool)."
           },
           "threshold_value": {
             "type": [
@@ -27444,6 +27503,14 @@
             "type": "string"
           }
         }
+      },
+      "SubjectKind": {
+        "type": "string",
+        "description": "Which kind of thing an alert is about: a monitored `node`, or a poller `pool` when Yagra is\nreporting on its own polling coverage.",
+        "enum": [
+          "node",
+          "pool"
+        ]
       },
       "SystemHealth": {
         "type": "object",

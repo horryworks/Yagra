@@ -97,15 +97,30 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         always_present: true,
     },
     TemplateVariable {
+        name: "subject_kind",
+        description: "What the alert is about: `node`, or `pool` when Yagra is reporting that one \
+                      of its own poller pools has stopped polling its nodes.",
+        always_present: true,
+    },
+    TemplateVariable {
+        name: "subject_name",
+        description: "The subject's name — the node's display name, or the poller pool's name. \
+                      Prefer this over node_name in a template that should read correctly for \
+                      both kinds.",
+        always_present: true,
+    },
+    TemplateVariable {
         name: "node_id",
         description:
             "The node's UUID, which survives a rename and is what an external tool should \
-                      correlate on.",
+                      correlate on. For a non-node subject this is the subject's own identifier \
+                      (`pool:<name>`), never a made-up UUID.",
         always_present: true,
     },
     TemplateVariable {
         name: "node_name",
-        description: "The node's display name. Falls back to the UUID if the name cannot be read.",
+        description: "The node's display name. Falls back to the UUID if the name cannot be read, \
+                      and to the subject's identifier when the alert is not about a node.",
         always_present: true,
     },
     TemplateVariable {
@@ -209,7 +224,13 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
 pub struct AlertFacts {
     /// Lifecycle point (`fire` / `resolve` / `suppress`).
     pub event: NotifyEvent,
-    /// The node's UUID, as text.
+    /// What the alert is about: `node`, or `pool` for one of Yagra's own poller pools (ADR-009).
+    pub subject_kind: String,
+    /// The subject's display name — the node's name, or the pool's. Always present, which is what
+    /// makes it the field a template should use when it must read correctly for both kinds.
+    pub subject_name: String,
+    /// The node's UUID, as text. For a non-node subject this is the subject's own identifier
+    /// (`pool:<name>`) rather than a nil or invented UUID — see `notify_facts::context_for`.
     pub node_id: String,
     /// The node's display name, or the UUID when it could not be resolved.
     pub node_name: String,
@@ -268,6 +289,8 @@ pub struct AlertFacts {
 pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
     AlertFacts {
         event,
+        subject_kind: "node".to_owned(),
+        subject_name: "core-sw-01".to_owned(),
         node_id: "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60".to_owned(),
         node_name: "core-sw-01".to_owned(),
         node_address: Some("192.0.2.11".to_owned()),
