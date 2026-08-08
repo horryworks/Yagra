@@ -267,13 +267,33 @@ pub fn require_visible_node(
     scope: &NodeScope,
     node: NodeId,
 ) -> Result<(), ApiError> {
-    if scope.allows_node(st, node) {
-        Ok(())
-    } else {
-        Err(ApiError::not_found(
+    require_visible_subject(st, scope, &yagra_alert::Subject::Node(node))
+}
+
+/// [`require_visible_node`] for an action whose body names an alert **subject** rather than a node
+/// — an acknowledgement, which since ADR-009 Increment 2 may be about a poller pool.
+///
+/// One function rather than an `if !scope.allows_subject(…)` in the handler, because this refusal
+/// is a rule and not a condition: it must be a 404 (never a 403), and its message must not differ
+/// per call site, or the two spellings become an oracle in themselves. A node subject keeps the
+/// `node_not_found` code it has always answered with, so nothing branching on that changes.
+pub fn require_visible_subject(
+    st: &ApiState,
+    scope: &NodeScope,
+    subject: &yagra_alert::Subject,
+) -> Result<(), ApiError> {
+    if scope.allows_subject(st, subject) {
+        return Ok(());
+    }
+    match subject.node() {
+        Some(node) => Err(ApiError::not_found(
             "node_not_found",
             format!("no node {}", node.as_uuid()),
-        ))
+        )),
+        None => Err(ApiError::not_found(
+            "subject_not_found",
+            format!("no alert subject {subject}"),
+        )),
     }
 }
 
@@ -579,6 +599,25 @@ mod tests {
         let s = scope_of(&[ghost]);
         assert!(s.allows_group(Some(ghost)));
         assert!(!s.allows_group(Some(ids(1))));
+    }
+
+    #[tokio::test]
+    async fn the_body_named_refusal_is_a_404_whose_code_matches_the_subject_kind() {
+        // The refusal lives here rather than in the handler because it is a rule, not a condition:
+        // a 403 would confirm the subject exists, and two spellings of the message would be an
+        // oracle in themselves. A node keeps `node_not_found` so nothing branching on it changes.
+        use yagra_alert::Subject;
+        let st = crate::api::tests_support::public_state();
+        let nothing = scope_of(&[]);
+        let node = Subject::Node(NodeId::new());
+        let err = require_visible_subject(&st, &nothing, &node).expect_err("refused");
+        assert_eq!(err.code(), "node_not_found");
+        let pool = Subject::Pool("tokyo".to_owned());
+        let err = require_visible_subject(&st, &nothing, &pool).expect_err("refused");
+        assert_eq!(err.code(), "subject_not_found");
+        // …and the unrestricted caller passes both.
+        assert!(require_visible_subject(&st, &NodeScope::All, &node).is_ok());
+        assert!(require_visible_subject(&st, &NodeScope::All, &pool).is_ok());
     }
 
     #[tokio::test]

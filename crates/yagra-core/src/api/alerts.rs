@@ -362,14 +362,7 @@ async fn ack_alert(
     Json(body): Json<AckRequest>,
 ) -> ApiResult<Json<AckResult>> {
     let subject = ack_subject(body.node, body.subject.as_deref())?;
-    // Same 404-not-403 rule as every other body-named target: the difference between the two would
-    // answer "does this invisible subject currently have an alert with this (check, severity)".
-    if !scope.allows_subject(&st, &subject) {
-        return Err(ApiError::not_found(
-            "subject_not_found",
-            format!("no alert subject {subject}"),
-        ));
-    }
+    super::scope::require_visible_subject(&st, &scope, &subject)?;
     let view = body.acked.then(|| AckView {
         // The external tool's own timestamp wins when it sends one — its clock is the record of
         // when the human actually acknowledged, which may be well before this request arrives.
