@@ -17,13 +17,13 @@
 //! (ADR-012), which is why the interface endpoints rank by a query-time rate rather than by a
 //! stored gauge.
 
-use super::extract::{RequireView, Scoped, VisibleNode};
+use super::extract::{Admin, RequireView, Scoped, VisibleNode};
 use super::util::Ranked;
 use super::{
     clamp_range_step, is_valid_metric_name, ApiError, ApiResult, ApiState, DEFAULT_RANGE_SECS,
     DEFAULT_RATE_LOOKBACK_SECS, DEFAULT_STEP_SECS,
 };
-use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, TopAgg};
+use crate::store::{DeltaDirection, InterfaceTopMetric, MetricPoint, NodeSeries, TopAgg};
 use axum::{
     extract::{Path, Query, State},
     routing::get,
@@ -31,11 +31,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{IfIndex, NodeId, SeriesKey};
+use yagra_common::{CollectionItem, IfIndex, MetricKind, NodeId, SeriesKey};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
 #[openapi(paths(
+    list_node_metrics,
     get_node_metric,
     get_node_metric_range,
     get_interface_series,
@@ -50,6 +51,7 @@ pub(super) struct Doc;
 /// The metric routes, merged into `/api/v1` by [`super::router`].
 pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
+        .route("/api/v1/nodes/:node_id/metrics", get(list_node_metrics))
         .route(
             "/api/v1/nodes/:node_id/metrics/:metric",
             get(get_node_metric),
@@ -67,6 +69,238 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/metrics/interface-delta", get(interface_delta))
         .route("/api/v1/metrics/interface-heatmap", get(interface_heatmap))
         .route("/api/v1/metrics/throughput-range", get(throughput_range))
+}
+
+// ── One node's metric inventory (ADR-046) ────────────────────────────────────
+
+// The inventory is a join of two sources that each lie on their own (ADR-046 decision 2): the
+// collection set knows what a node is *told* to collect but not whether anything arrived, and the
+// TSDB knows what arrived but not what was asked for. Collapsing the join into "here are some
+// metrics" would make an empty answer mean three different things at once — the misreading ADR-045
+// paid for once already, where a `0` that does not say *why* gets read as "safe".
+//
+// ⚠️ Everything below is a `///` on a `ToSchema` type, which utoipa publishes **verbatim** to API
+// clients and to the public API reference. Design rationale belongs in `//` comments like this one.
+
+/// Whether a metric is configured for collection, has data, or both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MetricStatus {
+    /// Configured for collection, and the TSDB has samples in the window.
+    Ok,
+    /// Configured for collection, but nothing has arrived in the window.
+    NoData,
+    /// Not in the node's collection set, but the TSDB has samples. Normal for metrics that do not
+    /// come from a collection set at all — reachability, the URL and DNS monitors, the neighbour
+    /// count, and values extracted from a monitored JSON response — and otherwise means an item was
+    /// removed while its history remains.
+    Unconfigured,
+}
+
+/// The dimension a metric's series carry, which decides how it can be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum MetricDimension {
+    /// One series per node — read it directly.
+    None,
+    /// One series per interface, each naming an interface this node has. Read those through the
+    /// per-interface series endpoint.
+    Interface,
+    /// One series per table row. Row identity is lost when the values are collected, so these rows
+    /// cannot be named — only aggregated node-wide with `agg=max`.
+    Entity,
+}
+
+/// One metric on one node: what it is, whether it has data, and how it must be read.
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+pub(crate) struct NodeMetricEntry {
+    /// The TSDB metric name.
+    pub metric: String,
+    /// Gauge vs raw counter. A counter's stored value is an odometer reading, so chart it with
+    /// `rate=true` rather than plotting it directly.
+    pub metric_kind: MetricKind,
+    pub dimension: MetricDimension,
+    pub status: MetricStatus,
+    /// How many series share this name on this node — the fan-out behind one entry.
+    pub series_count: u32,
+}
+
+/// Fallback window for the inventory: how far back a metric may have last been seen and still count
+/// as "has data". Wide enough that a slow (hourly) collection set is not reported as missing.
+const DEFAULT_INVENTORY_WINDOW_SECS: u64 = 6 * 3600;
+
+/// Ceiling on the inventory window. `/api/v1/series` widens with the range, so an unbounded window
+/// is an unbounded TSDB scan — the same clamping discipline as [`clamp_range_step`].
+const MAX_INVENTORY_WINDOW_SECS: u64 = 30 * 86_400;
+
+/// How far back the inventory looks when deciding whether a metric has data.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct InventoryQuery {
+    within_secs: Option<u64>,
+}
+
+/// Resolve a metric's kind without re-spelling any catalog.
+///
+/// Order: the node's own resolved collection set, then the built-in catalog (which
+/// [`yagra_common::builtin_metric_kind`] exists to answer without naming its metrics twice), then
+/// gauge.
+///
+/// The gauge fallback is not a guess. `Sample::counter` has **no production call site** — counters
+/// reach the TSDB only by way of a collection item's `metric_kind` — so a metric with no collection
+/// item is a gauge. [`tests::counters_only_ever_arrive_through_a_collection_item`] fails if that
+/// stops being true, because the fallback would then silently start plotting raw counters.
+fn resolve_metric_kind(metric: &str, configured: &[CollectionItem]) -> MetricKind {
+    configured
+        .iter()
+        .find(|i| i.metric_name == metric)
+        .map(|i| i.metric_kind)
+        .or_else(|| yagra_common::builtin_metric_kind(metric))
+        .unwrap_or(MetricKind::Gauge)
+}
+
+/// Join the node's collection set against the series the TSDB actually holds.
+///
+/// Pure, and deliberately so: the handler around it needs a database and cannot be unit-tested,
+/// while every decision worth getting right — the three statuses, the interface/entity split, the
+/// metric-kind fallback — is in here.
+///
+/// `interfaces` is the node's known ifindexes. A metric whose ifindexes all resolve to real
+/// interfaces is [`MetricDimension::Interface`]; one that carries ifindexes which do not is
+/// [`MetricDimension::Entity`], the folded multi-index case whose rows cannot be named.
+fn join_inventory(
+    configured: &[CollectionItem],
+    series: &[NodeSeries],
+    interfaces: &[i32],
+) -> Vec<NodeMetricEntry> {
+    let by_name: std::collections::BTreeMap<&str, &NodeSeries> =
+        series.iter().map(|s| (s.metric.as_str(), s)).collect();
+    let known: std::collections::BTreeSet<i32> = interfaces.iter().copied().collect();
+
+    // BTreeMap so the two sources merge without a second pass and the result is name-ordered.
+    let mut out: std::collections::BTreeMap<&str, NodeMetricEntry> =
+        std::collections::BTreeMap::new();
+    for item in configured {
+        let name = item.metric_name.as_str();
+        let found = by_name.get(name);
+        out.insert(
+            name,
+            NodeMetricEntry {
+                metric: item.metric_name.clone(),
+                metric_kind: item.metric_kind,
+                dimension: found.map_or(
+                    // No data yet, so the TSDB cannot say. The collection kind is the only
+                    // evidence there is: a table walk yields one series per row.
+                    match item.kind {
+                        yagra_common::CollectionKind::Scalar => MetricDimension::None,
+                        yagra_common::CollectionKind::Table => MetricDimension::Entity,
+                    },
+                    |s| dimension_of(s, &known),
+                ),
+                status: if found.is_some() {
+                    MetricStatus::Ok
+                } else {
+                    MetricStatus::NoData
+                },
+                series_count: found.map_or(0, |s| s.series_count),
+            },
+        );
+    }
+    for s in series {
+        out.entry(s.metric.as_str())
+            .or_insert_with(|| NodeMetricEntry {
+                metric: s.metric.clone(),
+                metric_kind: resolve_metric_kind(&s.metric, configured),
+                dimension: dimension_of(s, &known),
+                status: MetricStatus::Unconfigured,
+                series_count: s.series_count,
+            });
+    }
+    out.into_values().collect()
+}
+
+/// A series' dimension, given the node's known interfaces.
+fn dimension_of(s: &NodeSeries, known: &std::collections::BTreeSet<i32>) -> MetricDimension {
+    if !s.has_ifindex {
+        return MetricDimension::None;
+    }
+    // Every ifindex naming a real interface ⇒ per-interface. A metric with an unparseable ifindex
+    // has `has_ifindex` set and an empty list, which lands on Entity — the safe side, since Entity
+    // promises less (node aggregate only, rows unnameable).
+    if !s.ifindexes.is_empty() && s.ifindexes.iter().all(|i| known.contains(i)) {
+        MetricDimension::Interface
+    } else {
+        MetricDimension::Entity
+    }
+}
+
+// Read permission, not config permission, and the split is deliberate: this response carries names,
+// kinds and status, never an OID, an item id or a scope — and withholding the names would protect
+// nothing anyway, since `GET /nodes/:node_id/metrics/:metric` already serves any name a viewer asks
+// for. What `collection.rs`'s ManageConfig guard protects is the OIDs and the ability to edit them.
+/// Every metric this node is configured to collect or has data for, with the status of each.
+///
+/// Answers what there is to look at for a node, including metrics that come from its checks rather
+/// than from a collection set and so appear in no collection listing.
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/metrics", tag = "metrics",
+    params(("node_id" = Uuid, Path, description = "Node id"), InventoryQuery),
+    responses(
+        (status = 200, description = "The node's metrics, name-ordered", body = Vec<NodeMetricEntry>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no write side", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_node_metrics(
+    _perm: RequireView,
+    _visible: VisibleNode,
+    admin: Admin,
+    State(st): State<ApiState>,
+    Path(node_id): Path<Uuid>,
+    Query(q): Query<InventoryQuery>,
+) -> ApiResult<Json<Vec<NodeMetricEntry>>> {
+    Ok(Json(
+        node_metric_inventory(&admin, st.store.as_ref(), node_id, q.within_secs).await?,
+    ))
+}
+
+/// A node's metric inventory — the seam both edges call.
+///
+/// Shared rather than reimplemented for MCP: the inventory *is* a join, and a second copy of it
+/// would be a second set of rules for the three statuses and the interface/entity split. Those
+/// rules are the whole feature; two surfaces answering the same question differently is the bug
+/// ADR-042's parity rule exists to prevent.
+pub(crate) async fn node_metric_inventory(
+    admin: &super::AdminState,
+    store: &dyn crate::store::MetricStore,
+    node_id: Uuid,
+    within_secs: Option<u64>,
+) -> ApiResult<Vec<NodeMetricEntry>> {
+    let within = within_secs
+        .unwrap_or(DEFAULT_INVENTORY_WINDOW_SECS)
+        .clamp(60, MAX_INVENTORY_WINDOW_SECS);
+    // The resolved view, not the node's own overrides: what the poller actually collects is what
+    // the operator is asking about. This is also what 404s an unknown node id.
+    let configured = match super::collection::node_collection(admin, node_id, true).await? {
+        super::collection::NodeCollection::Resolved(items) => items,
+        // Unreachable — `node_collection(_, _, true)` always takes the resolved arm — but the union
+        // is a type, so the impossible branch is stated rather than unwrapped.
+        super::collection::NodeCollection::Stored(_) => Vec::new(),
+    };
+    let interfaces = admin
+        .repo
+        .list_interfaces(node_id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "list interfaces", "failed to load interfaces")
+        })?
+        .into_iter()
+        .map(|i| i.ifindex)
+        .collect::<Vec<i32>>();
+    let series = store.node_series(node_id, within).await;
+    Ok(join_inventory(&configured, &series, &interfaces))
 }
 
 // ── One node's series ────────────────────────────────────────────────────────
@@ -100,6 +334,20 @@ fn invalid_agg(other: &str) -> ApiError {
     ApiError::bad_request(
         "invalid_agg",
         format!("unsupported agg {other:?}; expected 'max'"),
+    )
+}
+
+/// Reject `rate` combined with `agg` — there is no node-max-rate to serve.
+///
+/// A per-entity counter would need its rows differentiated and then collapsed, and the rows of a
+/// folded multi-index table cannot be named in the first place (ADR-046 decision 5). Interface
+/// counters, the case anyone actually wants, are already served per interface and as fleet
+/// throughput. So this is refused at the edge rather than answered with something plausible.
+fn rate_and_agg_together() -> ApiError {
+    ApiError::bad_request(
+        "rate_with_agg",
+        "`rate` and `agg` cannot be combined; a per-entity counter has no node-level rate — read \
+         its interfaces individually instead",
     )
 }
 
@@ -160,15 +408,39 @@ async fn get_node_metric(
     }))
 }
 
-/// Query params for the range endpoint (all optional; sensible defaults applied).
+/// Query params for the range endpoints that take a window and nothing else (interface series,
+/// fleet throughput).
+///
+/// It used to carry `agg` as well, because the node-metric range shared it — and the other two
+/// never read that field. The published contract therefore advertised an aggregation parameter on
+/// two routes that discard it. Splitting [`NodeRangeQuery`] out is what made that visible.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(super) struct RangeQuery {
     from: Option<i64>,
     to: Option<i64>,
     step: Option<u64>,
+}
+
+/// Query params for **the node-metric range only**, which additionally takes `rate`.
+///
+/// Split from [`RangeQuery`] rather than adding a field to it: the interface-series and
+/// throughput-range routes share that type and would ignore `rate`, and a parameter the published
+/// contract advertises on a route that discards it is worse than no parameter at all.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct NodeRangeQuery {
+    from: Option<i64>,
+    to: Option<i64>,
+    step: Option<u64>,
     /// `max` ⇒ node-level aggregate of a per-entity table gauge; absent ⇒ scalar node series.
     agg: Option<String>,
+    // Counters are stored raw and differentiated at query time (ADR-012); plotting the stored
+    // values gives an odometer, and taking `agg=max` of them gives a rising line that looks like
+    // traffic and is not. Without this the WebUI had no way to chart a counter at all.
+    /// `true` ⇒ per-second rate of a counter series instead of its stored values. Cannot be
+    /// combined with `agg`.
+    rate: Option<bool>,
 }
 
 #[utoipa::path(
@@ -176,11 +448,11 @@ pub(super) struct RangeQuery {
     params(
         ("node_id" = Uuid, Path, description = "Node id"),
         ("metric" = String, Path, description = "Metric name — a Prometheus identifier"),
-        RangeQuery,
+        NodeRangeQuery,
     ),
     responses(
         (status = 200, description = "The window's points; empty when the slice has no samples", body = MetricRange),
-        (status = 400, description = "The metric name is not an identifier, or `agg` is unsupported", body = super::error::ErrorBody),
+        (status = 400, description = "The metric name is not an identifier, `agg` is unsupported, or `rate` and `agg` were combined", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
@@ -190,7 +462,7 @@ async fn get_node_metric_range(
     _visible: VisibleNode,
     State(st): State<ApiState>,
     Path((node_id, metric)): Path<(Uuid, String)>,
-    Query(q): Query<RangeQuery>,
+    Query(q): Query<NodeRangeQuery>,
 ) -> ApiResult<Json<MetricRange>> {
     check_metric_name(&metric)?;
     let node = NodeId::from(node_id);
@@ -200,10 +472,22 @@ async fn get_node_metric_range(
     // be turned into an unbounded TSDB response by asking for a one-second step.
     let step = clamp_range_step(from, to, q.step.unwrap_or(DEFAULT_STEP_SECS), 1);
     let key = SeriesKey::node(node, metric.as_str());
-    let points = match q.agg.as_deref() {
-        Some("max") => st.store.aggregate_range(&key, from, to, step).await,
-        Some(other) => return Err(invalid_agg(other)),
-        None => st.store.range(&key, from, to, step).await,
+    let rate = q.rate.unwrap_or(false);
+    if rate && q.agg.is_some() {
+        return Err(rate_and_agg_together());
+    }
+    let points = if rate {
+        // Same lookback rule as the MCP `query_metrics(mode=rate)` branch, so the two surfaces
+        // answer the same question with the same window.
+        st.store
+            .rate_range(&key, from, to, step, step.max(60))
+            .await
+    } else {
+        match q.agg.as_deref() {
+            Some("max") => st.store.aggregate_range(&key, from, to, step).await,
+            Some(other) => return Err(invalid_agg(other)),
+            None => st.store.range(&key, from, to, step).await,
+        }
     };
     // An empty window is a 200 with no points, not a 404: the series exists, this slice of it is
     // simply empty, and a chart renders that as a gap rather than an error.
@@ -899,6 +1183,181 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;
 
+    // ── The metric inventory (ADR-046) ───────────────────────────────────────
+
+    fn item(metric: &str, kind: yagra_common::CollectionKind, mk: MetricKind) -> CollectionItem {
+        CollectionItem {
+            metric_name: metric.to_owned(),
+            oid: "1.3.6.1".to_owned(),
+            kind,
+            metric_kind: mk,
+        }
+    }
+
+    fn scalar_item(metric: &str) -> CollectionItem {
+        item(
+            metric,
+            yagra_common::CollectionKind::Scalar,
+            MetricKind::Gauge,
+        )
+    }
+
+    fn have(metric: &str, ifindexes: &[i32], series_count: u32) -> NodeSeries {
+        NodeSeries {
+            metric: metric.to_owned(),
+            has_ifindex: !ifindexes.is_empty(),
+            series_count,
+            ifindexes: ifindexes.to_vec(),
+        }
+    }
+
+    fn by_name<'a>(rows: &'a [NodeMetricEntry], metric: &str) -> &'a NodeMetricEntry {
+        rows.iter()
+            .find(|r| r.metric == metric)
+            .unwrap_or_else(|| panic!("{metric} missing from {rows:?}"))
+    }
+
+    #[test]
+    fn the_inventory_separates_configured_no_data_from_data_with_no_config() {
+        // The whole point of the join. Before it, "no metrics" meant three different things and the
+        // surface could not tell an operator which one they were looking at.
+        let configured = [scalar_item("configured_and_flowing"), scalar_item("silent")];
+        let series = [
+            have("configured_and_flowing", &[], 1),
+            have("snmp_neighbor_count", &[], 1),
+        ];
+        let rows = join_inventory(&configured, &series, &[]);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(
+            by_name(&rows, "configured_and_flowing").status,
+            MetricStatus::Ok
+        );
+        assert_eq!(by_name(&rows, "silent").status, MetricStatus::NoData);
+        // The ADR-038 leftover: a metric emitted by a check spec has no collection item and would
+        // be invisible to any surface driven by the collection set alone.
+        assert_eq!(
+            by_name(&rows, "snmp_neighbor_count").status,
+            MetricStatus::Unconfigured
+        );
+    }
+
+    #[test]
+    fn an_ifindex_that_names_a_real_interface_is_per_interface_and_one_that_does_not_is_an_entity()
+    {
+        // The distinction the TSDB cannot make: the SNMP walker folds a multi-index table's
+        // instance OID into a synthetic ifindex, so `ifindex` alone does not mean "interface".
+        let series = [
+            have("if_hc_in_octets", &[1, 2, 3], 3),
+            have("huawei_cpu_usage", &[1_913_284_991], 1),
+        ];
+        let rows = join_inventory(&[], &series, &[1, 2, 3]);
+        assert_eq!(
+            by_name(&rows, "if_hc_in_octets").dimension,
+            MetricDimension::Interface
+        );
+        assert_eq!(
+            by_name(&rows, "huawei_cpu_usage").dimension,
+            MetricDimension::Entity
+        );
+    }
+
+    #[test]
+    fn a_partly_unknown_ifindex_set_is_an_entity_not_an_interface() {
+        // Erring the other way would promise a per-interface breakdown for rows that have no
+        // interface — the surface would render names for entities that do not have any.
+        let rows = join_inventory(&[], &[have("mixed", &[1, 999], 2)], &[1]);
+        assert_eq!(rows[0].dimension, MetricDimension::Entity);
+        // And an ifindex label that failed to parse leaves the list empty while the flag stands.
+        let unparseable = NodeSeries {
+            metric: "odd".to_owned(),
+            has_ifindex: true,
+            series_count: 1,
+            ifindexes: Vec::new(),
+        };
+        assert_eq!(
+            join_inventory(&[], &[unparseable], &[1])[0].dimension,
+            MetricDimension::Entity
+        );
+    }
+
+    #[test]
+    fn a_configured_metric_with_no_data_still_states_the_shape_its_collection_kind_implies() {
+        // No series to inspect, so the collection kind is the only evidence: a table walk yields one
+        // series per row. Reporting `none` here would tell the caller to read it as a node scalar.
+        let configured = [
+            scalar_item("scalar_pending"),
+            item(
+                "table_pending",
+                yagra_common::CollectionKind::Table,
+                MetricKind::Gauge,
+            ),
+        ];
+        let rows = join_inventory(&configured, &[], &[]);
+        assert_eq!(
+            by_name(&rows, "scalar_pending").dimension,
+            MetricDimension::None
+        );
+        assert_eq!(
+            by_name(&rows, "table_pending").dimension,
+            MetricDimension::Entity
+        );
+        assert_eq!(by_name(&rows, "table_pending").series_count, 0);
+    }
+
+    #[test]
+    fn an_unconfigured_metric_takes_its_kind_from_the_builtin_catalog_then_falls_back_to_gauge() {
+        let series = [have("if_hc_in_octets", &[], 1), have("http_up", &[], 1)];
+        let rows = join_inventory(&[], &series, &[]);
+        // Removed from a template but still in the TSDB: the catalog still knows it is a counter,
+        // so it is not charted as if the stored odometer reading were the value.
+        assert_eq!(
+            by_name(&rows, "if_hc_in_octets").metric_kind,
+            MetricKind::Counter
+        );
+        assert_eq!(by_name(&rows, "http_up").metric_kind, MetricKind::Gauge);
+    }
+
+    #[test]
+    fn the_node_s_own_item_outranks_the_builtin_catalog_for_metric_kind() {
+        // A node-level override that redefines a catalog name must win, or the inventory would
+        // describe the metric as the catalog does while the poller collects something else.
+        let configured = [item(
+            "if_hc_in_octets",
+            yagra_common::CollectionKind::Scalar,
+            MetricKind::Gauge,
+        )];
+        let rows = join_inventory(&configured, &[have("if_hc_in_octets", &[], 1)], &[]);
+        assert_eq!(rows[0].metric_kind, MetricKind::Gauge);
+    }
+
+    /// The gauge fallback in [`resolve_metric_kind`] is only sound while counters can arrive
+    /// **exclusively** through a collection item's `metric_kind`.
+    ///
+    /// If a poller ever emits a counter some other way, that metric has no collection item, falls
+    /// back to gauge here, and the WebUI plots a raw counter as a value — the ADR-012 accident,
+    /// arrived at through a default rather than a decision. Nothing else would notice.
+    #[test]
+    fn counters_only_ever_arrive_through_a_collection_item() {
+        // `worker.rs` is the only file in the poller that builds a `Sample` at all, and the only
+        // counter it can produce is `kind: col.kind` — copied from the collection column. Every
+        // other sample it emits goes through `Sample::gauge`.
+        let src = include_str!("../../../yagra-poller/src/worker.rs");
+        // Production code only: fixtures below `#[cfg(test)]` may build counters freely. Needles
+        // assembled at runtime so this test's own text cannot satisfy the search.
+        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        let hardcoded = format!("MetricKind::{}", "Counter");
+        assert!(
+            !production.contains(&hardcoded),
+            "the poller now hardcodes a counter kind outside the collection path — a metric with \
+             no collection item would fall back to gauge in `resolve_metric_kind`, and the \
+             inventory would chart a raw counter as if it were a value (the ADR-012 accident, \
+             arrived at through a default rather than a decision)"
+        );
+        // The collection path itself is still there, so the test is not passing because the file
+        // stopped producing counters altogether.
+        assert!(production.contains(&format!("kind: col.{}", "kind")));
+    }
+
     #[test]
     fn a_metric_name_that_is_not_an_identifier_never_reaches_the_selector() {
         // The rejection is the security boundary: this string is interpolated into PromQL, so
@@ -1140,6 +1599,49 @@ mod tests {
             assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
             assert_eq!(body["error"]["code"], code, "{path}");
         }
+    }
+
+    #[tokio::test]
+    async fn combining_rate_and_agg_is_refused_with_its_own_code() {
+        // Not a generic 400: the UI has to be able to tell "you asked for something that does not
+        // exist" apart from "your metric name was rejected".
+        let node = Uuid::nil();
+        let (status, body) = get_json(&format!(
+            "/api/v1/nodes/{node}/metrics/if_hc_in_octets/range?rate=true&agg=max"
+        ))
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "rate_with_agg");
+        // Each on its own is still fine — the refusal is about the pair, not about `rate`.
+        for q in ["rate=true", "agg=max", ""] {
+            let (status, _) = get_json(&format!(
+                "/api/v1/nodes/{node}/metrics/if_hc_in_octets/range?{q}"
+            ))
+            .await;
+            assert_eq!(status, StatusCode::OK, "{q}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_inventory_authenticates_before_it_reports_that_there_is_no_write_side() {
+        // Guard order (`Require*` then `Admin`): an anonymous caller must learn only that it is
+        // unauthenticated, never which subsystems this deployment has configured.
+        let node = Uuid::nil();
+        let resp = router(private_state())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/nodes/{node}/metrics"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        // On a skeleton deployment the read permission is open, so the 503 is what is left — and it
+        // is the *typed* one, so the UI can say "no write side" rather than "something broke".
+        let (status, body) = get_json(&format!("/api/v1/nodes/{node}/metrics")).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(body["error"]["code"], "admin_unavailable");
     }
 
     #[tokio::test]

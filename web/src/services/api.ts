@@ -69,6 +69,7 @@ import type {
   MetricKind,
   MetricRange,
   MetricReading,
+  NodeMetricEntry,
   MetricTopAgg,
   MibCatalogEntry,
   Mute,
@@ -477,15 +478,35 @@ export const api = {
       query: { agg: opts?.agg },
     }),
 
-  /** Time-series window for one node metric (defaults: last hour, 60s step). */
+  /** Time-series window for one node metric (defaults: last hour, 60s step).
+   *
+   *  `rate: true` returns the per-second rate of a counter instead of its stored values — the only
+   *  honest way to chart one (ADR-012). The server refuses `rate` together with `agg`. */
   getNodeMetricRange: (
     nodeId: string,
     metric: string,
-    opts?: { from?: number; to?: number; step?: number; agg?: MetricAgg },
+    opts?: { from?: number; to?: number; step?: number; agg?: MetricAgg; rate?: boolean },
   ): Promise<MetricRange> =>
     apiGet('/api/v1/nodes/{node_id}/metrics/{metric}/range', {
       path: { node_id: nodeId, metric },
-      query: { from: opts?.from, to: opts?.to, step: opts?.step, agg: opts?.agg },
+      query: {
+        from: opts?.from,
+        to: opts?.to,
+        step: opts?.step,
+        agg: opts?.agg,
+        rate: opts?.rate,
+      },
+    }),
+
+  /** Every metric this node collects or has data for, with the status and dimension of each.
+   *
+   *  Read permission, unlike `listNodeCollection` — this returns names, kinds and status, never an
+   *  OID. It is the only source that sees metrics with no collection item at all (reachability, the
+   *  URL/DNS monitors, the neighbour count, extracted JSON values). */
+  listNodeMetrics: (nodeId: string, opts?: { withinSecs?: number }): Promise<NodeMetricEntry[]> =>
+    apiGet('/api/v1/nodes/{node_id}/metrics', {
+      path: { node_id: nodeId },
+      query: { within_secs: opts?.withinSecs },
     }),
 
   /** Fleet-wide Top-N for a metric: the highest-value nodes now (`agg: 'now'`, default) or by

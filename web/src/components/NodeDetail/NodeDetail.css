@@ -932,7 +932,7 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-mhead,
 .nd-coll-mrow {
   display: grid;
-  grid-template-columns: 1.6fr 1fr 120px;
+  grid-template-columns: 1.6fr 1fr 1fr 120px;
   align-items: center;
 }
 
@@ -993,6 +993,83 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-coll-mage {
   color: var(--text-tertiary);
   font-size: var(--font-xs);
+}
+
+/* A metric row plus the chart it expands into — the border lives on the group so an open row and
+   its chart read as one block rather than two. */
+.nd-coll-mgroup {
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.nd-coll-mgroup:last-child {
+  border-bottom: none;
+}
+
+.nd-coll-mgroup .nd-coll-mrow {
+  border-bottom: none;
+}
+
+.nd-coll-mrow.expandable {
+  cursor: pointer;
+}
+
+.nd-coll-mrow.expandable:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+  background: var(--bg-secondary);
+}
+
+.nd-coll-mname {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Reserve the caret's width on every row so the metric names line up whether or not a row can be
+   opened — a ragged left edge reads as two different kinds of thing. */
+.nd-coll-caret {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-right: 1.5px solid var(--text-tertiary);
+  border-bottom: 1.5px solid var(--text-tertiary);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.nd-coll-caret.open {
+  transform: rotate(45deg);
+}
+
+.nd-coll-mshape {
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+}
+
+.nd-coll-mfanout {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+}
+
+.nd-coll-mstatus {
+  font-size: var(--font-xs);
+}
+
+.nd-coll-mstatus.ok {
+  color: var(--status-ok);
+}
+
+.nd-coll-mstatus.no_data {
+  color: var(--status-warning);
+}
+
+.nd-coll-mstatus.unconfigured {
+  color: var(--text-tertiary);
+}
+
+.nd-coll-mchart {
+  padding: 4px 14px 12px;
+  background: var(--bg-secondary);
 }
 
 .nd-coll-editnote {

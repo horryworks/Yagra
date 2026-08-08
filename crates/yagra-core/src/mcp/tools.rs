@@ -440,6 +440,62 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "Which metrics a node actually has, and how each must be read. Call this \
+                       before query_metrics rather than guessing a name. Each entry gives \
+                       `metric_kind` (gauge or counter — a counter's stored value is an odometer, \
+                       so ask query_metrics for mode=rate), `dimension` (none = one series per \
+                       node; interface = one per interface, use get_interface_series; entity = one \
+                       per table row whose identity was lost at collection time, so only a \
+                       node-wide aggregate is meaningful), and `status` (ok = configured and \
+                       flowing; no_data = configured but nothing has arrived; unconfigured = data \
+                       exists with no collection item, which is normal for reachability, URL/DNS \
+                       monitors and neighbour counts). `within_secs` sets how far back a metric \
+                       may have last been seen and still count as having data (default 6 hours)."
+    )]
+    async fn list_node_metrics(
+        &self,
+        Parameters(p): Parameters<NodeMetricsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_node_metrics";
+        if let Some(denied) = self.deny_unless_permitted(&ctx, TOOL, "") {
+            return denied;
+        }
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.list_node_metrics_in(p, &scope).await,
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    async fn list_node_metrics_in(
+        &self,
+        p: NodeMetricsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_node_metrics";
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
+            return deny;
+        }
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "the metric inventory requires live mode");
+        };
+        // Through the same seam the REST handler uses, so the two surfaces cannot come to differ
+        // about what a node collects — the inventory is a join, and a second copy of the join is a
+        // second set of rules for the three statuses.
+        match crate::api::metrics::node_metric_inventory(
+            admin,
+            self.state.store.as_ref(),
+            p.node_id,
+            p.within_secs,
+        )
+        .await
+        {
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
         description = "One interface's traffic history: in/out throughput in bits/sec and in/out \
                        error rates, all on one shared timestamp axis (nulls mark gaps). Give \
                        `node_id` and `ifindex` (from get_node_status's interfaces). `from`/`to` are \
@@ -3111,6 +3167,15 @@ pub(crate) struct AlertHistoryParams {
     limit: Option<i64>,
     /// Only rows recorded before this RFC 3339 timestamp (keyset paging).
     before: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub(crate) struct NodeMetricsParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// How far back a metric may have last been seen and still count as having data, in seconds
+    /// (default 6 hours; clamped).
+    within_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

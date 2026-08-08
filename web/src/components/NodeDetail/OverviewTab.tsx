@@ -32,6 +32,7 @@ import type {
   NodeAssignment,
   NodeDetail,
   NodeGroup,
+  NodeMetricEntry,
   NodeStatus,
   NodeSummary,
 } from '../../types/api';
@@ -40,12 +41,12 @@ import {
   hasAnyHealth,
   METRIC_CARDS,
   resolveHealth,
-  type CollectionItem,
   type MetricCardSpec,
   type ResolvedHealth,
   type ResolvedMem,
   type ResolvedMetric,
 } from './metricCards';
+import { overviewScalars, viewOf } from './metricInventory';
 import { certTone, httpToneVar } from './healthTone';
 import { formatExtractedValue } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
@@ -639,11 +640,14 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let items: CollectionItem[] = [];
+      // The metric inventory, not the collection set: it needs only read permission (the collection
+      // endpoint is ManageConfig, so this whole section used to be invisible to a viewer), and it
+      // reports whether each metric has actually reported rather than only that it was asked for.
+      let items: NodeMetricEntry[] = [];
       try {
-        items = await api.listNodeCollection(nodeId, true);
+        items = await api.listNodeMetrics(nodeId);
       } catch {
-        // admin-only endpoint not permitted → no health card
+        // no inventory (skeleton mode, or the node is gone) → no health card
       }
       if (!cancelled) setHealth(resolveHealth(items));
     })();
@@ -868,11 +872,13 @@ function memPctSeries(
   return { timestamps, values };
 }
 
-/** Scalars always probed for the System card, on top of any configured ones. */
-const BUILTIN_SCALARS = ['snmp_sys_uptime_ticks'];
-
-/** Latest values of the node's scalar SNMP metrics. Hidden when the node has none (e.g. an
- *  ICMP-only node), so it never shows an empty section. */
+/** Latest values of the node's node-level metrics. Hidden when the node has none (e.g. an
+ *  ICMP-only node), so it never shows an empty section.
+ *
+ *  Sourced from the metric inventory, which is what lets this show metrics no collection set
+ *  contains — the neighbour count, the URL/DNS monitor gauges, values extracted from a monitored
+ *  JSON response — and lets a viewer see it at all. `overviewScalars` decides what belongs here:
+ *  counters have no glanceable value, and per-interface metrics have their own tab. */
 function SnmpScalars({ nodeId }: { nodeId: string }) {
   const { t } = useTranslation('nodes');
   const [readings, setReadings] = useState<{ name: string; value: number }[] | null>(null);
@@ -880,24 +886,28 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const names = new Set(BUILTIN_SCALARS);
+      let shown: NodeMetricEntry[] = [];
       try {
-        const items = await api.listNodeCollection(nodeId, true);
-        items.filter((i) => i.kind === 'scalar').forEach((i) => names.add(i.metric_name));
+        shown = overviewScalars(await api.listNodeMetrics(nodeId));
       } catch {
-        // fall back to the built-in scalars
+        // no inventory → nothing to probe; the section hides itself below
       }
-      // Fetch every scalar concurrently (was a per-metric await waterfall — a dozen serial
-      // round-trips on open and on each poll). Order is preserved from `nameList`; a metric with
-      // no reading yet is simply dropped. Matches the sibling loaders (UrlHealth/CpuHealth/…).
-      const nameList = [...names];
+      // Fetch every reading concurrently (was a per-metric await waterfall — a dozen serial
+      // round-trips on open and on each poll). Order is preserved; a metric with no reading yet is
+      // simply dropped. Matches the sibling loaders (UrlHealth/CpuHealth/…).
       const results = await Promise.allSettled(
-        nameList.map((name) => api.getNodeMetric(nodeId, name)),
+        shown.map((e) =>
+          api.getNodeMetric(
+            nodeId,
+            e.metric,
+            viewOf(e).read.kind === 'aggregate' ? { agg: 'max' } : undefined,
+          ),
+        ),
       );
       const out: { name: string; value: number }[] = [];
       results.forEach((res, i) => {
         if (res.status === 'fulfilled') {
-          out.push({ name: nameList[i], value: res.value.value });
+          out.push({ name: shown[i].metric, value: res.value.value });
         }
       });
       if (!cancelled) setReadings(out);

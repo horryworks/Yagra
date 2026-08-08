@@ -305,6 +305,20 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         lowered_to: None,
     },
     FoldedRead {
+        tool: "list_node_metrics",
+        // Single-branch, like `run_rca`: the row is here rather than in `TOOL_RESULT_TYPES` because
+        // this table checks more for less — the permission is compared against the REST handler's
+        // own extractor, and the forbidden-key check walks the response schema in the OpenAPI
+        // document instead of whichever fields one hand-built instance happened to populate.
+        arg: "",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/metrics",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
         tool: "run_rca",
         arg: "",
         // The only non-GET row: a read wearing POST, like `POST /analysis/jobs`. It changes no

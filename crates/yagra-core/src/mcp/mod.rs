@@ -63,7 +63,10 @@ const INSTRUCTIONS: &str = "Yagra network-monitoring MCP. Read tools query live 
     immediate poll (poll_now); each needs an authorized token and is audited. There are still no \
     tools that configure or change network devices, or change Yagra's own configuration. Start with \
     get_fleet_summary, then drill in with list_nodes / get_node_status / get_active_alerts / \
-    query_metrics / search_events. To find what is worst across the fleet use top_metrics (nodes) or \
+    query_metrics / search_events. Metric names differ per device, so call list_node_metrics before \
+    query_metrics rather than guessing one: it says which metrics a node has, whether each is \
+    flowing, and how each must be read. To find what is worst across the fleet use top_metrics \
+    (nodes) or \
     top_interfaces (interfaces); for one link's history use get_interface_series; for what a node is \
     cabled to use get_neighbors; for where things are filed use list_node_groups. Before concluding \
     a fleet is healthy, check list_suppressions — a silenced fleet looks quiet. For how alerting has \

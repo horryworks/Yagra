@@ -4128,9 +4128,7 @@ mod tests {
         ) -> Vec<MetricPoint> {
             Vec::new()
         }
-        async fn node_metric_names(&self, _n: Uuid, _w: u64) -> Vec<String> {
-            Vec::new()
-        }
+        // `node_series` / `node_metric_names`: the trait defaults (empty) are what this fake wants.
     }
 
     fn sample_result() -> Arc<PollResult> {

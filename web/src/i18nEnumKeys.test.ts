@@ -38,6 +38,8 @@ import {
   LINK_SOURCES,
   TOPOLOGY_MODES,
   TLS_CERT_SOURCES,
+  METRIC_STATUSES,
+  METRIC_DIMENSIONS,
 } from './types/api';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
@@ -335,6 +337,30 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enNodes, ja: jaNodes },
       'checkEdit.bodyMode.',
       BODY_MATCH_MODES,
+    );
+  });
+
+  it('every metric status has a label (nodes:collection.status.*)', () => {
+    // Mirrors Rust's `MetricStatus` (ADR-046). The three statuses are the whole reason the metric
+    // inventory joins two sources — a variant rendering as `collection.status.stale` would leave
+    // the operator unable to tell "not configured" from "configured but silent", which is exactly
+    // the ambiguity the join exists to remove.
+    expectKeys(
+      'metric status',
+      { en: enNodes, ja: jaNodes },
+      'collection.status.',
+      METRIC_STATUSES,
+    );
+  });
+
+  it('every metric dimension has a label (nodes:collection.dimension.*)', () => {
+    // Mirrors Rust's `MetricDimension`. This label is what tells an operator that a per-row metric
+    // is being shown as a node maximum rather than as the row they were looking for.
+    expectKeys(
+      'metric dimension',
+      { en: enNodes, ja: jaNodes },
+      'collection.dimension.',
+      METRIC_DIMENSIONS,
     );
   });
 

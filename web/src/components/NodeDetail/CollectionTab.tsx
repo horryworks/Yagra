@@ -1,45 +1,183 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Collection tab of the unified node detail. A read-first status view over what this node collects:
-// a status card (collecting / failing / ICMP-only), the named collection sets it inherits from its
-// device profile, the latest scalar values, and — for admins — the existing CollectionEditor to add
-// or override node-level metrics. "Sets" map to the templates the node's profile attaches
-// (api.listProfileTemplates); per-set interval and per-metric thresholds aren't exposed by the API,
-// so those columns are intentionally omitted rather than faked.
+// Collection tab of the unified node detail: what this node collects, and what it is actually
+// producing. A status card (collecting / failing / ICMP-only), the named collection sets it
+// inherits from its device profile, every metric it has with the status of each — expandable into a
+// chart — and, for admins, the CollectionEditor to add or override node-level metrics.
+//
+// The metric list is driven by the **inventory** (`listNodeMetrics`), not the collection set, and
+// that is the whole point of this screen since ADR-046. The collection set only knows what the node
+// was told to collect: it cannot say whether anything arrived, it needs ManageConfig so a viewer saw
+// nothing at all, and it has never heard of the metrics that come from check specs rather than OIDs
+// — reachability, the URL and DNS monitors, the neighbour count, values extracted from a monitored
+// JSON response. Filtering it to `kind === 'scalar'` on top of that meant an operator who added a
+// vendor table column could watch it collect successfully and never see a number.
+//
+// "Sets" map to the templates the node's profile attaches (api.listProfileTemplates); per-set
+// interval and per-metric thresholds aren't exposed by the API, so those columns are intentionally
+// omitted rather than faked.
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
-import { relativeTime, scalarDisplay } from '../../lib/format';
-import type { CollectionTemplate, NodeDetail } from '../../types/api';
+import { useRangeStore } from '../../store';
+import { formatSi, pointsToSeries, relativeTime, scalarDisplay } from '../../lib/format';
+import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../types/api';
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
+import { MetricChart } from '../MetricChart/MetricChart';
+import { RangeControl, resolveRange, type Range } from './RangeControl';
+import { viewOf } from './metricInventory';
 
 type CollState = 'ok' | 'failing' | 'none';
 
-interface ScalarValue {
-  name: string;
-  display: string;
-  updatedSec: number | null;
-}
-
 interface Loaded {
   sets: CollectionTemplate[];
-  scalars: ScalarValue[];
+  metrics: NodeMetricEntry[];
   profileName: string | null;
   credentialName: string | null;
-  lastPollSec: number | null;
 }
 
 const agoSec = (sec: number | null): string =>
   sec == null ? '—' : relativeTime(new Date(sec * 1000).toISOString());
 
+/** One metric's row: name, status, series fan-out, and — when it expands — its chart. */
+function MetricRow({
+  nodeId,
+  entry,
+  range,
+}: {
+  nodeId: string;
+  entry: NodeMetricEntry;
+  range: Range;
+}) {
+  const { t } = useTranslation('nodes');
+  const [open, setOpen] = useState(false);
+  const view = viewOf(entry);
+  const expandable = view.chart.kind === 'range' || view.chart.kind === 'rate' || view.chart.kind === 'aggregate';
+
+  const [value, setValue] = useState<number | null>(null);
+  const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
+    timestamps: [],
+    values: [],
+  });
+  const [updatedSec, setUpdatedSec] = useState<number | null>(null);
+
+  // The current value loads with the row; the history waits until it is opened. A node with forty
+  // metrics would otherwise issue forty range queries the operator never looked at.
+  useEffect(() => {
+    if (view.read.kind === 'none') return;
+    let cancelled = false;
+    void api
+      .getNodeMetric(nodeId, entry.metric, view.read.kind === 'aggregate' ? { agg: 'max' } : undefined)
+      .then((r) => {
+        if (!cancelled) setValue(r.value);
+      })
+      .catch(() => {
+        // no reading yet — the status column already says why
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, entry.metric, view.read.kind]);
+
+  useEffect(() => {
+    if (!open || !expandable) return;
+    let cancelled = false;
+    const { from, to } = resolveRange(range);
+    void api
+      .getNodeMetricRange(nodeId, entry.metric, {
+        from,
+        to,
+        ...(view.chart.kind === 'aggregate' ? { agg: 'max' as const } : {}),
+        ...(view.chart.kind === 'rate' ? { rate: true } : {}),
+      })
+      .then((r) => {
+        if (cancelled) return;
+        setSeries(pointsToSeries(r.points));
+        setUpdatedSec(r.points.at(-1)?.t ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setSeries({ timestamps: [], values: [] });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, expandable, nodeId, entry.metric, view.chart.kind, range]);
+
+  const display = value == null ? '—' : scalarDisplay(entry.metric, value).value;
+  // The per-second suffix is the honest label for a counter charted as a rate — without it the
+  // axis reads as the counter itself, which is exactly the confusion `rate=true` exists to remove.
+  const yFormat = view.chart.kind === 'rate' ? (v: number) => `${formatSi(v)}/s` : formatSi;
+
+  return (
+    <div className="nd-coll-mgroup">
+      <div
+        className={`nd-coll-mrow${expandable ? ' expandable' : ''}`}
+        onClick={expandable ? () => setOpen((o) => !o) : undefined}
+        role={expandable ? 'button' : undefined}
+        tabIndex={expandable ? 0 : undefined}
+        onKeyDown={
+          expandable
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setOpen((o) => !o);
+                }
+              }
+            : undefined
+        }
+      >
+        <div className="nd-coll-mcell nd-coll-mname">
+          {expandable && <span className={`nd-coll-caret${open ? ' open' : ''}`} aria-hidden />}
+          <span className="mono">{entry.metric}</span>
+        </div>
+        <div className="nd-coll-mcell nd-coll-mshape">
+          {t(`collection.dimension.${entry.dimension}`)}
+          {entry.series_count > 1 && (
+            <span className="nd-coll-mfanout">
+              {t('collection.seriesCount', { count: entry.series_count })}
+            </span>
+          )}
+        </div>
+        <div className="nd-coll-mcell right nd-coll-mval">{display}</div>
+        <div className="nd-coll-mcell right">
+          <span className={`nd-coll-mstatus ${entry.status}`}>
+            {t(`collection.status.${entry.status}`)}
+          </span>
+        </div>
+      </div>
+      {open && expandable && (
+        <div className="nd-coll-mchart">
+          {series.timestamps.length > 0 ? (
+            <>
+              <MetricChart
+                title=""
+                timestamps={series.timestamps}
+                values={series.values}
+                yFormat={yFormat}
+              />
+              <div className="nd-coll-mage">{agoSec(updatedSec)}</div>
+            </>
+          ) : (
+            <p className="nd-muted">{t('overview.noHistory')}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: boolean }) {
   const { t } = useTranslation('nodes');
   const [data, setData] = useState<Loaded | null>(null);
+  // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
+  // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).
+  const range = useRangeStore((s) => s.range);
+  const setRange = useRangeStore((s) => s.setRange);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [sets, profileName, credentialName] = await Promise.all([
+      const [sets, profileName, credentialName, metrics] = await Promise.all([
         node.profile_id
           ? api.listProfileTemplates(node.profile_id).catch(() => [] as CollectionTemplate[])
           : Promise.resolve([] as CollectionTemplate[]),
@@ -55,33 +193,9 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               .then((cs) => cs.find((c) => c.id === node.credential_id)?.name ?? null)
               .catch(() => null)
           : Promise.resolve(null),
+        api.listNodeMetrics(node.id).catch(() => [] as NodeMetricEntry[]),
       ]);
-
-      // Latest scalar values (table metrics are per-interface — shown on the Interfaces tab).
-      let scalarNames: string[] = [];
-      try {
-        const items = await api.listNodeCollection(node.id, true);
-        scalarNames = items.filter((i) => i.kind === 'scalar').map((i) => i.metric_name);
-      } catch {
-        // admin-only endpoint not permitted → no latest-values table
-      }
-      const scalars: ScalarValue[] = [];
-      let lastPollSec: number | null = null;
-      for (const name of scalarNames) {
-        try {
-          const to = Math.floor(Date.now() / 1000);
-          const [latest, range] = await Promise.all([
-            api.getNodeMetric(node.id, name),
-            api.getNodeMetricRange(node.id, name, { from: to - 3600, to }).catch(() => null),
-          ]);
-          const last = range?.points.at(-1)?.t ?? null;
-          if (last != null) lastPollSec = Math.max(lastPollSec ?? 0, last);
-          scalars.push({ name, display: scalarDisplay(name, latest.value).value, updatedSec: last });
-        } catch {
-          // no reading for this metric yet
-        }
-      }
-      if (!cancelled) setData({ sets, scalars, profileName, credentialName, lastPollSec });
+      if (!cancelled) setData({ sets, metrics, profileName, credentialName });
     })();
     return () => {
       cancelled = true;
@@ -89,7 +203,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   }, [node.id, node.profile_id, node.credential_id]);
 
   const hasSnmp = !!node.credential_id;
-  const state: CollState = !hasSnmp ? 'none' : (data && data.scalars.length > 0 ? 'ok' : 'failing');
+  const flowing = data?.metrics.filter((m) => m.status !== 'no_data') ?? [];
+  const state: CollState = !hasSnmp ? 'none' : flowing.length > 0 ? 'ok' : 'failing';
 
   return (
     <div className="nd-coll">
@@ -123,8 +238,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
             <div className="nd-coll-stat-v">{data?.credentialName ?? '—'}</div>
           </div>
           <div>
-            <div className="nd-coll-stat-k">{t('collection.lastPoll')}</div>
-            <div className="nd-coll-stat-v">{agoSec(data?.lastPollSec ?? null)}</div>
+            <div className="nd-coll-stat-k">{t('collection.metrics')}</div>
+            <div className="nd-coll-stat-v">{data ? data.metrics.length : '—'}</div>
           </div>
         </div>
       </div>
@@ -148,21 +263,22 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         </section>
       )}
 
-      {data && data.scalars.length > 0 && (
+      {data && data.metrics.length > 0 && (
         <section>
-          <div className="nd-section-t">{t('collection.latestValues')}</div>
+          <div className="nd-section-head">
+            <div className="nd-section-t">{t('collection.allMetrics')}</div>
+            <RangeControl value={range} onChange={setRange} />
+          </div>
+          <p className="nd-muted nd-coll-editnote">{t('collection.allMetricsNote')}</p>
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">
               <div className="nd-coll-mh">{t('collection.colMetric')}</div>
+              <div className="nd-coll-mh">{t('collection.colShape')}</div>
               <div className="nd-coll-mh right">{t('collection.colLastValue')}</div>
-              <div className="nd-coll-mh right">{t('collection.colUpdated')}</div>
+              <div className="nd-coll-mh right">{t('collection.colStatus')}</div>
             </div>
-            {data.scalars.map((m) => (
-              <div className="nd-coll-mrow" key={m.name}>
-                <div className="nd-coll-mcell mono nd-coll-mname">{m.name}</div>
-                <div className="nd-coll-mcell right nd-coll-mval">{m.display}</div>
-                <div className="nd-coll-mcell right nd-coll-mage">{agoSec(m.updatedSec)}</div>
-              </div>
+            {data.metrics.map((m) => (
+              <MetricRow key={m.metric} nodeId={node.id} entry={m} range={range} />
             ))}
           </div>
         </section>

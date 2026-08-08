@@ -105,6 +105,23 @@ export type MetricPoint = components['schemas']['MetricPoint'];
 /** A time-series window (`GET /api/v1/nodes/:id/metrics/:metric/range`). */
 export type MetricRange = components['schemas']['MetricRange'];
 
+/** One metric a node collects or has data for (`GET /api/v1/nodes/:id/metrics`). */
+export type NodeMetricEntry = components['schemas']['NodeMetricEntry'];
+
+/** Whether a metric is configured, has data, or both. See `METRIC_STATUSES` for the runtime list. */
+export type MetricStatus = components['schemas']['MetricStatus'];
+
+/** What dimension a metric's series carry, which decides how it can be read.
+ *  (`MetricKind` — gauge vs counter — is declared with the collection types further down.) */
+export type MetricDimension = components['schemas']['MetricDimension'];
+
+/** The metric statuses, as an array so per-member i18n coverage is testable at runtime
+ *  (`extensibility.md` §4 — EN/JA parity cannot prove either locale is complete). */
+export const METRIC_STATUSES = ['ok', 'no_data', 'unconfigured'] as const;
+
+/** The metric dimensions, as an array, for the same reason as `METRIC_STATUSES`. */
+export const METRIC_DIMENSIONS = ['none', 'interface', 'entity'] as const;
+
 /** One ranked node in a fleet Top-N result (`GET /api/v1/metrics/top`). `name` is joined from
  *  PostgreSQL (TSDB carries only the id); it falls back to the id for a since-deleted node. */
 export type TopEntry = components['schemas']['TopEntry'];

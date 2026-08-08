@@ -10804,15 +10804,6 @@
               "format": "int64",
               "minimum": 0
             }
-          },
-          {
-            "name": "agg",
-            "in": "query",
-            "description": "`max` ⇒ node-level aggregate of a per-entity table gauge; absent ⇒ scalar node series.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -10838,6 +10829,93 @@
           },
           "403": {
             "description": "Role lacks the read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/metrics": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Every metric this node is configured to collect or has data for, with the status of each.",
+        "description": "Answers what there is to look at for a node, including metrics that come from its checks rather\nthan from a collection set and so appear in no collection listing.",
+        "operationId": "list_node_metrics",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "within_secs",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The node's metrics, name-ordered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeMetricEntry"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode: no write side",
             "content": {
               "application/json": {
                 "schema": {
@@ -11000,6 +11078,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "rate",
+            "in": "query",
+            "description": "`true` ⇒ per-second rate of a counter series instead of its stored values. Cannot be\ncombined with `agg`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -11014,7 +11101,7 @@
             }
           },
           "400": {
-            "description": "The metric name is not an identifier, or `agg` is unsupported",
+            "description": "The metric name is not an identifier, `agg` is unsupported, or `rate` and `agg` were combined",
             "content": {
               "application/json": {
                 "schema": {
@@ -23988,6 +24075,15 @@
           }
         }
       },
+      "MetricDimension": {
+        "type": "string",
+        "description": "The dimension a metric's series carry, which decides how it can be read.",
+        "enum": [
+          "none",
+          "interface",
+          "entity"
+        ]
+      },
       "MetricKind": {
         "type": "string",
         "description": "What a metric's values represent over time.",
@@ -24059,6 +24155,15 @@
             "format": "double"
           }
         }
+      },
+      "MetricStatus": {
+        "type": "string",
+        "description": "Whether a metric is configured for collection, has data, or both.",
+        "enum": [
+          "ok",
+          "no_data",
+          "unconfigured"
+        ]
       },
       "MibEntry": {
         "type": "object",
@@ -24761,6 +24866,39 @@
           "dns",
           "device"
         ]
+      },
+      "NodeMetricEntry": {
+        "type": "object",
+        "description": "One metric on one node: what it is, whether it has data, and how it must be read.",
+        "required": [
+          "metric",
+          "metric_kind",
+          "dimension",
+          "status",
+          "series_count"
+        ],
+        "properties": {
+          "dimension": {
+            "$ref": "#/components/schemas/MetricDimension"
+          },
+          "metric": {
+            "type": "string",
+            "description": "The TSDB metric name."
+          },
+          "metric_kind": {
+            "$ref": "#/components/schemas/MetricKind",
+            "description": "Gauge vs raw counter. A counter's stored value is an odometer reading, so chart it with\n`rate=true` rather than plotting it directly."
+          },
+          "series_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many series share this name on this node — the fan-out behind one entry.",
+            "minimum": 0
+          },
+          "status": {
+            "$ref": "#/components/schemas/MetricStatus"
+          }
+        }
       },
       "NodeNameEntry": {
         "type": "object",

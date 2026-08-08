@@ -897,6 +897,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/nodes/:node_id/metrics",
+        NodeScoped,
+        // Not folded into `query_metrics`: that tool answers "what is this series doing", and this
+        // one answers "which series exist" — the question a client has to settle first.
+        Tool("list_node_metrics"),
+    ),
+    (
+        "GET",
         "/api/v1/nodes/:node_id/metrics/:metric",
         NodeScoped,
         Tool("query_metrics"),

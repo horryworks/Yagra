@@ -86,6 +86,29 @@ pub struct MetricPoint {
     pub v: f64,
 }
 
+/// What the TSDB actually holds for one metric name on one node.
+///
+/// The store used to answer this question with a bare name ([`MetricStore::node_metric_names`]),
+/// which is all the Troubleshoot analyses need. It is not enough to *display* a metric: the caller
+/// cannot tell a node-level scalar from a per-entity table without knowing whether the series carry
+/// an `ifindex` label, and the read that suits one is wrong for the other (ADR-046 decision 3).
+///
+/// ⚠️ `has_ifindex` does **not** mean "per interface". `yagra-transport`'s SNMP walker folds a
+/// multi-index table's instance OID into a synthetic ifindex (FNV-1a), so the label is a per-entity
+/// row key that may or may not name a real interface. Resolving which is a question for whoever
+/// holds the interface inventory — the TSDB cannot answer it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeSeries {
+    /// The metric name (`__name__`).
+    pub metric: String,
+    /// At least one of this metric's series on this node carries an `ifindex` label.
+    pub has_ifindex: bool,
+    /// How many distinct series share this metric name on this node.
+    pub series_count: u32,
+    /// The distinct `ifindex` values seen, ascending. Empty when `has_ifindex` is false.
+    pub ifindexes: Vec<i32>,
+}
+
 /// Somewhere poll results are written and read back.
 #[async_trait]
 pub trait MetricStore: Send + Sync {
@@ -218,11 +241,24 @@ pub trait MetricStore: Send + Sync {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint>;
+    /// The series `node` actually has data for within the trailing `within_secs` window, one entry
+    /// per metric name (ADR-046 decision 3). Empty if the store can't enumerate (the in-memory sink,
+    /// which keeps only the latest value and cannot enumerate per node).
+    ///
+    /// This is the primitive; [`Self::node_metric_names`] is the thin wrapper over it that the
+    /// Troubleshoot analyses use.
+    async fn node_series(&self, _node: Uuid, _within_secs: u64) -> Vec<NodeSeries> {
+        Vec::new()
+    }
     /// The distinct metric names that have at least one sample for `node` within the trailing
     /// `within_secs` window — i.e. which series actually have data for the node (used by the
-    /// Troubleshoot analyses to discover what to scan). Empty if the store can't enumerate
-    /// (the in-memory sink). Names are deduplicated; order is unspecified.
-    async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String>;
+    /// Troubleshoot analyses to discover what to scan). Sorted and deduplicated.
+    ///
+    /// Kept as a wrapper rather than folded into [`Self::node_series`] so the three analysis call
+    /// sites, which only ever wanted names, do not have to learn about series shape.
+    async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String> {
+        names_of(self.node_series(node, within_secs).await)
+    }
 
     /// Live per-interface throughput + oper-status for ONE node in a fixed number of round-trips
     /// (node-scoped queries demuxed by ifindex), NOT one query per interface. The node-detail
@@ -381,10 +417,8 @@ impl MetricStore for InMemorySink {
         Vec::new()
     }
 
-    async fn node_metric_names(&self, _node: Uuid, _within_secs: u64) -> Vec<String> {
-        // The skeleton sink holds a single demo series and can't enumerate per node.
-        Vec::new()
-    }
+    // `node_series` / `node_metric_names`: the trait defaults are correct here — the skeleton sink
+    // holds a single demo series and cannot enumerate per node.
 }
 
 /// A [`MetricStore`] backed by VictoriaMetrics over HTTP.
@@ -1206,7 +1240,7 @@ impl MetricStore for VmStore {
         self.query_range_points(q, from_s, to_s, step_s).await
     }
 
-    async fn node_metric_names(&self, node: Uuid, within_secs: u64) -> Vec<String> {
+    async fn node_series(&self, node: Uuid, within_secs: u64) -> Vec<NodeSeries> {
         // VictoriaMetrics /api/v1/series lists the label sets of every series matching a selector.
         // `node` is a UUID (bounded type), so it's safe to interpolate into the matcher.
         let url = format!("{}/api/v1/series", self.base);
@@ -1234,17 +1268,68 @@ impl MetricStore for VmStore {
         let Ok(json) = resp.json::<serde_json::Value>().await else {
             return Vec::new();
         };
-        let Some(series) = json.get("data").and_then(|d| d.as_array()) else {
-            return Vec::new();
+        series_from_json(&json)
+    }
+}
+
+/// The names behind a series list: sorted and deduplicated, which is what
+/// [`MetricStore::node_metric_names`] promises its callers.
+///
+/// A free function rather than an inline body so it can be tested without standing up a store —
+/// every `MetricStore` implementor needs a live TSDB or a full trait fake, and a fake this trait's
+/// width would drift from the trait faster than it would catch a bug.
+fn names_of(series: Vec<NodeSeries>) -> Vec<String> {
+    let mut names: Vec<String> = series.into_iter().map(|s| s.metric).collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Fold VictoriaMetrics' `/api/v1/series` label-set list into one [`NodeSeries`] per metric name.
+///
+/// Split out of [`VmStore::node_series`] because that method needs a live HTTP endpoint and this is
+/// the part with the actual reasoning in it: which labels count, how the ifindex set accumulates,
+/// and what a label set with no `__name__` does (it is skipped, not counted).
+fn series_from_json(json: &serde_json::Value) -> Vec<NodeSeries> {
+    let Some(series) = json.get("data").and_then(|d| d.as_array()) else {
+        return Vec::new();
+    };
+    // BTreeMap keyed by name: the result is sorted, and `node_metric_names`' contract of sorted
+    // deduplicated names then falls out of the wrapper without a second sort.
+    let mut by_name: std::collections::BTreeMap<String, NodeSeries> =
+        std::collections::BTreeMap::new();
+    for s in series {
+        let Some(name) = s.get("__name__").and_then(|n| n.as_str()) else {
+            continue;
         };
-        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for s in series {
-            if let Some(name) = s.get("__name__").and_then(|n| n.as_str()) {
-                names.insert(name.to_owned());
+        let entry = by_name
+            .entry(name.to_owned())
+            .or_insert_with(|| NodeSeries {
+                metric: name.to_owned(),
+                has_ifindex: false,
+                series_count: 0,
+                ifindexes: Vec::new(),
+            });
+        entry.series_count = entry.series_count.saturating_add(1);
+        // The label is written as a string (ADR-011's thin-label exposition line), so it is parsed
+        // back rather than read as a number. An unparseable one still marks the metric as
+        // ifindex-dimensioned — the caller must not treat it as a node-level scalar just because
+        // one row was malformed.
+        if let Some(raw) = s.get("ifindex").and_then(|i| i.as_str()) {
+            entry.has_ifindex = true;
+            if let Ok(ifindex) = raw.parse::<i32>() {
+                entry.ifindexes.push(ifindex);
             }
         }
-        names.into_iter().collect()
     }
+    by_name
+        .into_values()
+        .map(|mut s| {
+            s.ifindexes.sort_unstable();
+            s.ifindexes.dedup();
+            s
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1252,6 +1337,83 @@ mod tests {
     use super::*;
     use uuid::Uuid;
     use yagra_common::{IfIndex, NodeId};
+
+    /// A `/api/v1/series` body: one label set per series, exactly as VictoriaMetrics returns it.
+    fn series_body(sets: &[serde_json::Value]) -> serde_json::Value {
+        serde_json::json!({ "status": "success", "data": sets })
+    }
+
+    #[test]
+    fn a_metric_with_no_ifindex_label_is_a_node_level_scalar() {
+        let out = series_from_json(&series_body(&[serde_json::json!({
+            "__name__": "icmp_rtt_ms",
+            "node": "00000000-0000-0000-0000-000000000000"
+        })]));
+        assert_eq!(out.len(), 1);
+        assert!(!out[0].has_ifindex);
+        assert_eq!(out[0].series_count, 1);
+        assert!(out[0].ifindexes.is_empty());
+    }
+
+    #[test]
+    fn a_metrics_series_are_folded_into_one_entry_with_its_ifindex_set() {
+        // Eight interface rows of one counter arrive as eight label sets. The inventory shows the
+        // metric once — the fan-out is `series_count`, not eight rows the operator has to read.
+        let sets: Vec<serde_json::Value> = (1..=8)
+            .map(|i| serde_json::json!({ "__name__": "if_hc_in_octets", "ifindex": i.to_string() }))
+            .collect();
+        let out = series_from_json(&series_body(&sets));
+        assert_eq!(out.len(), 1);
+        assert!(out[0].has_ifindex);
+        assert_eq!(out[0].series_count, 8);
+        assert_eq!(out[0].ifindexes, (1..=8).collect::<Vec<i32>>());
+    }
+
+    #[test]
+    fn an_unparseable_ifindex_still_marks_the_metric_as_dimensioned() {
+        // The failure that matters: dropping the row entirely would leave `has_ifindex` false, and
+        // the caller would then read a per-entity table as if it were one node-level value.
+        let out = series_from_json(&series_body(&[serde_json::json!({
+            "__name__": "huawei_cpu_usage",
+            "ifindex": "not-a-number"
+        })]));
+        assert!(out[0].has_ifindex);
+        assert!(out[0].ifindexes.is_empty());
+    }
+
+    #[test]
+    fn a_label_set_with_no_name_is_skipped_rather_than_counted() {
+        let out = series_from_json(&series_body(&[
+            serde_json::json!({ "node": "x" }),
+            serde_json::json!({ "__name__": "icmp_rtt_ms" }),
+        ]));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].series_count, 1);
+    }
+
+    #[test]
+    fn a_missing_or_malformed_body_enumerates_nothing() {
+        assert!(series_from_json(&serde_json::json!({})).is_empty());
+        assert!(series_from_json(&serde_json::json!({ "data": "nope" })).is_empty());
+    }
+
+    #[test]
+    fn node_metric_names_is_the_sorted_deduplicated_names_of_node_series() {
+        // The wrapper's contract, and the reason it stays a wrapper: the Troubleshoot analyses and
+        // the metric inventory read the same enumeration, so the two can never disagree about
+        // which metrics a node has.
+        let series = ["b", "a", "b"]
+            .iter()
+            .map(|m| NodeSeries {
+                metric: (*m).to_owned(),
+                has_ifindex: false,
+                series_count: 1,
+                ifindexes: Vec::new(),
+            })
+            .collect();
+        assert_eq!(names_of(series), vec!["a".to_owned(), "b".to_owned()]);
+        assert!(names_of(Vec::new()).is_empty());
+    }
 
     #[test]
     fn node_selector_has_only_node_label() {

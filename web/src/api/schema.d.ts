@@ -2066,6 +2066,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every metric this node is configured to collect or has data for, with the status of each.
+         * @description Answers what there is to look at for a node, including metrics that come from its checks rather
+         *     than from a collection set and so appear in no collection listing.
+         */
+        get: operations["list_node_metrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/metrics/{metric}": {
         parameters: {
             query?: never;
@@ -6182,6 +6203,11 @@ export interface components {
             enabled: boolean;
         };
         /**
+         * @description The dimension a metric's series carry, which decides how it can be read.
+         * @enum {string}
+         */
+        MetricDimension: "none" | "interface" | "entity";
+        /**
          * @description What a metric's values represent over time.
          * @enum {string}
          */
@@ -6212,6 +6238,11 @@ export interface components {
             /** Format: double */
             value: number;
         };
+        /**
+         * @description Whether a metric is configured for collection, has data, or both.
+         * @enum {string}
+         */
+        MetricStatus: "ok" | "no_data" | "unconfigured";
         /** @description One catalog entry returned by the API. */
         MibEntry: {
             collection: string;
@@ -6569,6 +6600,23 @@ export interface components {
          * @enum {string}
          */
         NodeKind: "meraki" | "url" | "dns" | "device";
+        /** @description One metric on one node: what it is, whether it has data, and how it must be read. */
+        NodeMetricEntry: {
+            dimension: components["schemas"]["MetricDimension"];
+            /** @description The TSDB metric name. */
+            metric: string;
+            /**
+             * @description Gauge vs raw counter. A counter's stored value is an odometer reading, so chart it with
+             *     `rate=true` rather than plotting it directly.
+             */
+            metric_kind: components["schemas"]["MetricKind"];
+            /**
+             * Format: int32
+             * @description How many series share this name on this node — the fan-out behind one entry.
+             */
+            series_count: number;
+            status: components["schemas"]["MetricStatus"];
+        };
         /** @description One resolved node id → display name (unresolved ids are omitted; the caller keeps the raw id). */
         NodeNameEntry: {
             /** Format: uuid */
@@ -16493,8 +16541,6 @@ export interface operations {
                 from?: number;
                 to?: number;
                 step?: number;
-                /** @description `max` ⇒ node-level aggregate of a per-entity table gauge; absent ⇒ scalar node series. */
-                agg?: string;
             };
             header?: never;
             path: {
@@ -16527,6 +16573,67 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_node_metrics: {
+        parameters: {
+            query?: {
+                within_secs?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The node's metrics, name-ordered */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NodeMetricEntry"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the read permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode: no write side */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16607,6 +16714,11 @@ export interface operations {
                 step?: number;
                 /** @description `max` ⇒ node-level aggregate of a per-entity table gauge; absent ⇒ scalar node series. */
                 agg?: string;
+                /**
+                 * @description `true` ⇒ per-second rate of a counter series instead of its stored values. Cannot be
+                 *     combined with `agg`.
+                 */
+                rate?: boolean;
             };
             header?: never;
             path: {
@@ -16628,7 +16740,7 @@ export interface operations {
                     "application/json": components["schemas"]["MetricRange"];
                 };
             };
-            /** @description The metric name is not an identifier, or `agg` is unsupported */
+            /** @description The metric name is not an identifier, `agg` is unsupported, or `rate` and `agg` were combined */
             400: {
                 headers: {
                     [name: string]: unknown;

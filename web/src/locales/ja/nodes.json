@@ -279,15 +279,29 @@
     "subNone": "SNMP 認証情報が紐付いていません。ICMP による死活のみ収集します",
     "profile": "プロファイル",
     "credential": "認証情報",
-    "lastPoll": "最終ポーリング",
     "metricCount_one": "メトリクス {{count}} 件",
     "metricCount_other": "メトリクス {{count}} 件",
-    "latestValues": "最新の値",
     "colMetric": "メトリクス",
     "colLastValue": "最新値",
-    "colUpdated": "更新",
     "nodeMetrics": "ノードメトリクス",
-    "editNote": "このノードからポーリングする SNMP メトリクスです。ノード単位の指定はデバイスプロファイルより優先します。何も指定しなければ、プロファイルまたは組み込みの既定値を使います。"
+    "editNote": "このノードからポーリングする SNMP メトリクスです。ノード単位の指定はデバイスプロファイルより優先します。何も指定しなければ、プロファイルまたは組み込みの既定値を使います。",
+    "metrics": "メトリクス",
+    "allMetrics": "メトリクス",
+    "allMetricsNote": "このノードが収集している、またはデータを持つメトリクスの一覧です。行を開くとグラフを表示します。",
+    "colShape": "形状",
+    "colStatus": "状態",
+    "seriesCount_one": "{{count}} 系列",
+    "seriesCount_other": "{{count}} 系列",
+    "status": {
+      "ok": "収集中",
+      "no_data": "データ無し",
+      "unconfigured": "収集セット外"
+    },
+    "dimension": {
+      "none": "ノード単位",
+      "interface": "インターフェース別",
+      "entity": "行別（ノード最大）"
+    }
   },
   "groupDetail": {
     "health": "ヘルス",

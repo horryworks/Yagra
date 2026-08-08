@@ -67,7 +67,34 @@
 - `http_response_time_ms` still measures time to the response **headers** even when a body feature
   is configured, so the metric means the same thing on every monitor.
 
+- **Every metric a node collects is now visible, not just the ones the UI was written to know
+  about.** The node's Collection tab lists them all and charts any of them; until now it showed the
+  latest value of *scalar* metrics only, with no history, so an operator who added a vendor table
+  column could watch it collect successfully and never see a number. The new
+  `GET /api/v1/nodes/{id}/metrics` answers it, and the MCP tool `list_node_metrics` mirrors it.
+  Each entry states three things:
+  - `status` — `ok` (configured and flowing), `no_data` (configured, nothing has arrived) or
+    `unconfigured` (data exists with no collection item). The last is normal rather than a fault:
+    reachability, the URL and DNS monitors, the neighbour count and values extracted from a
+    monitored JSON response all come from checks rather than from a collection set, and so were
+    invisible to every screen driven by that set. `snmp_neighbor_count` is chartable for the first
+    time as a result.
+  - `dimension` — `none`, `interface` (read those per interface instead) or `entity`, meaning one
+    series per table row. Row identity is folded away when the values are collected, so these are
+    shown as a node-wide maximum and labelled as such rather than implying a per-row breakdown
+    that cannot be produced.
+  - `metric_kind` — gauge or counter, which decides how it may be charted.
+- **A counter can now be charted as a rate.** `GET /api/v1/nodes/{id}/metrics/{metric}/range` takes
+  `rate=true`, returning the per-second rate instead of the stored values. There was previously no
+  way to chart a node-level counter at all: its stored value is an odometer reading, and `agg=max`
+  over one draws a rising line that looks like traffic and is not. `rate` cannot be combined with
+  `agg` (`rate_with_agg`) — a per-entity counter has no node-level rate.
+
 ### Improvements
+- **Device health and the metric list on a node's Overview no longer require admin rights.** They
+  were read from the collection-set endpoint, which requires ManageConfig, so a Viewer saw a single
+  built-in metric and no health gauges at all. They now come from the metric inventory, which is a
+  read.
 - **The Japanese UI copy was swept end to end.** It had accumulated two spellings for the same
   terms, English sentence structure carried through the translation, and notation that drifted
   between screens. Wording changed on most screens; no behaviour did. The conventions are now

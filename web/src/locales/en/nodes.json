@@ -279,15 +279,29 @@
     "subNone": "No SNMP credential bound; only ICMP availability is collected",
     "profile": "Profile",
     "credential": "Credential",
-    "lastPoll": "Last poll",
     "metricCount_one": "{{count}} metric",
     "metricCount_other": "{{count}} metrics",
-    "latestValues": "Latest values",
     "colMetric": "Metric",
     "colLastValue": "Last value",
-    "colUpdated": "Updated",
     "nodeMetrics": "Node metrics",
-    "editNote": "SNMP metrics polled from this node. Node-level entries override the device profile; with none set, the profile / built-in defaults apply."
+    "editNote": "SNMP metrics polled from this node. Node-level entries override the device profile; with none set, the profile / built-in defaults apply.",
+    "metrics": "Metrics",
+    "allMetrics": "Metrics",
+    "allMetricsNote": "Everything this node collects or has data for. Open a row to chart it.",
+    "colShape": "Shape",
+    "colStatus": "Status",
+    "seriesCount_one": "{{count}} series",
+    "seriesCount_other": "{{count}} series",
+    "status": {
+      "ok": "Collecting",
+      "no_data": "No data",
+      "unconfigured": "Not in a set"
+    },
+    "dimension": {
+      "none": "Node-level",
+      "interface": "Per interface",
+      "entity": "Per row (node max)"
+    }
   },
   "groupDetail": {
     "health": "Health",

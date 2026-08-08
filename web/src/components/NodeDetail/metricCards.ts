@@ -14,6 +14,7 @@
 // `include: ['src/**/*.test.ts']`, so logic left in the `.tsx` is logic nothing tests.
 
 import type { MemId } from '../../lib/format';
+import type { NodeMetricEntry } from '../../types/api';
 
 /** How a card's values read, which decides both the headline format and the chart's Y axis. */
 export type MetricScale =
@@ -89,36 +90,36 @@ export const METRIC_CARDS = [
 
 export type MetricCardId = (typeof METRIC_CARDS)[number]['id'];
 
-/** One entry of a node's effective collection set, as `listNodeCollection` returns it. */
-export interface CollectionItem {
-  metric_name: string;
-  kind: string;
-}
-
-/** A card resolved against a node's collection set: which metric to read, and how. */
+/** A card resolved against a node's metric inventory: which metric to read, and how. */
 export interface ResolvedMetric {
   metric: string;
   /**
-   * `max` for table sources, collapsing per-entity rows (per-CPU, per-VDOM, per-context) to one
-   * node-level value at query time; absent for scalar sources, which already are node-level.
+   * `max` for per-entity sources, collapsing rows (per-CPU, per-VDOM, per-context) to one
+   * node-level value at query time; absent for node-level sources, which already are one series.
    */
   agg?: 'max';
 }
 
 /**
- * Pick the first candidate the node actually collects.
+ * Pick the first candidate the node actually has.
  *
- * The aggregate follows the source's `kind`, uniformly. CPU used to force `max` regardless — which
- * agrees with this rule today, because all three CPU candidates are per-entity tables, and disagrees
- * only for a hypothetical scalar CPU metric, where forcing `max` would be the wrong answer anyway.
+ * The source is the metric **inventory** (`listNodeMetrics`), not the collection set. Two things
+ * change with that: the inventory needs only read permission, so a viewer sees these cards at all —
+ * they were admin-only by accident, since the collection endpoint requires ManageConfig — and its
+ * `dimension` is measured from the series that arrived rather than inferred from the collection
+ * kind, so a card is offered when there is something to draw.
  */
 export function resolveCard(
-  items: readonly CollectionItem[],
+  items: readonly NodeMetricEntry[],
   candidates: readonly string[],
 ): ResolvedMetric | null {
   for (const metric of candidates) {
-    const it = items.find((i) => i.metric_name === metric);
-    if (it) return { metric, agg: it.kind === 'table' ? 'max' : undefined };
+    const it = items.find((i) => i.metric === metric);
+    // `no_data` entries are configured but silent — offering a card for one draws an empty chart
+    // under a headline dash, which reads as a broken widget rather than as a quiet device.
+    if (it && it.status !== 'no_data') {
+      return { metric, agg: it.dimension === 'none' ? undefined : 'max' };
+    }
   }
   return null;
 }
@@ -151,8 +152,8 @@ export interface ResolvedMem {
 }
 
 /** The first memory source whose **both** inputs the node collects; used+total needs the pair. */
-export function resolveMem(items: readonly CollectionItem[]): ResolvedMem | null {
-  const names = new Set(items.map((i) => i.metric_name));
+export function resolveMem(items: readonly NodeMetricEntry[]): ResolvedMem | null {
+  const names = new Set(items.filter((i) => i.status !== 'no_data').map((i) => i.metric));
   const spec = MEM_SPECS.find((s) => s.metrics.every((m) => names.has(m)));
   return spec ? { id: spec.id, metrics: spec.metrics, unitToBytes: spec.unitToBytes } : null;
 }
@@ -170,7 +171,7 @@ export interface ResolvedHealth {
  * section is "still resolving" while this has not returned, and "nothing to show" when
  * [`hasAnyHealth`] is false. Neither is a hand-maintained list of card names any more.
  */
-export function resolveHealth(items: readonly CollectionItem[]): ResolvedHealth {
+export function resolveHealth(items: readonly NodeMetricEntry[]): ResolvedHealth {
   const cards = {} as Record<MetricCardId, ResolvedMetric | null>;
   for (const spec of METRIC_CARDS) cards[spec.id] = resolveCard(items, spec.candidates);
   return { cards, mem: resolveMem(items) };

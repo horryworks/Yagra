@@ -4,7 +4,7 @@
 // The bug class here is not "a card renders wrong" — it is "the whole section disappears". Both
 // render guards used to be hand-written lists of card names, so an entry missed in either one made
 // Device health vanish for every node while still compiling. These tests pin the guards to the
-// registry, and the resolution to the collection set.
+// registry, and the resolution to the metric inventory.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,11 +14,22 @@ import {
   resolveCard,
   resolveHealth,
   resolveMem,
-  type CollectionItem,
 } from './metricCards';
+import type { NodeMetricEntry } from '../../types/api';
 
-const table = (metric_name: string): CollectionItem => ({ metric_name, kind: 'table' });
-const scalar = (metric_name: string): CollectionItem => ({ metric_name, kind: 'scalar' });
+const entry = (metric: string, over: Partial<NodeMetricEntry> = {}): NodeMetricEntry => ({
+  metric,
+  metric_kind: 'gauge',
+  dimension: 'none',
+  status: 'ok',
+  series_count: 1,
+  ...over,
+});
+
+/** A per-entity source — what a table walk's series look like once they land. */
+const table = (metric: string): NodeMetricEntry => entry(metric, { dimension: 'entity' });
+/** A node-level source. */
+const scalar = (metric: string): NodeMetricEntry => entry(metric);
 
 describe('METRIC_CARDS registry', () => {
   it('has a unique id and at least one candidate per card', () => {
@@ -62,15 +73,36 @@ describe('resolveCard', () => {
     expect(resolveCard([table(second)], spec.candidates)?.metric).toBe(second);
   });
 
-  it('aggregates node-wide for table sources and not for scalars', () => {
-    // A table is per-entity (per-CPU, per-VDOM, per-context); without `max` the read would return
-    // an arbitrary row. A scalar is already node-level.
+  it('aggregates node-wide for per-entity sources and not for node-level ones', () => {
+    // A per-entity metric has one series per row (per-CPU, per-VDOM, per-context); without `max`
+    // the read would return an arbitrary row. A node-level metric is already one series.
     expect(resolveCard([table('a')], ['a'])).toEqual({ metric: 'a', agg: 'max' });
     expect(resolveCard([scalar('a')], ['a'])).toEqual({ metric: 'a', agg: undefined });
+    // Interface-dimensioned sources aggregate too — none is a card candidate today, but the rule
+    // has to be "node-level or not", not "entity or not", or a future one silently reads one port.
+    expect(resolveCard([entry('a', { dimension: 'interface' })], ['a'])?.agg).toBe('max');
   });
 
-  it('resolves to null when the node collects none of the candidates', () => {
+  it('resolves to null when the node has none of the candidates', () => {
     expect(resolveCard([table('something_else')], ['a', 'b'])).toBeNull();
+  });
+
+  it('skips a candidate that is configured but has never reported', () => {
+    // The inventory sees these where the collection set could not tell them apart from a working
+    // one. A card for a silent metric is a permanent dash over an empty chart, which reads as a
+    // broken widget rather than as a device that has nothing to say.
+    expect(resolveCard([entry('a', { status: 'no_data', series_count: 0 })], ['a'])).toBeNull();
+    // ...and the next candidate down is then free to win.
+    expect(
+      resolveCard([entry('a', { status: 'no_data', series_count: 0 }), scalar('b')], ['a', 'b'])
+        ?.metric,
+    ).toBe('b');
+  });
+
+  it('accepts a metric that has data but no collection item', () => {
+    // Check-spec metrics never appear in a collection set at all, so a source-agnostic rule is the
+    // only one that can ever see them.
+    expect(resolveCard([entry('a', { status: 'unconfigured' })], ['a'])?.metric).toBe('a');
   });
 });
 
