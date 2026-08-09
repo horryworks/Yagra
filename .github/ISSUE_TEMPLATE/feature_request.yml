@@ -1,0 +1,41 @@
+name: Feature request / 機能要望
+description: Suggest a feature or improvement / 新機能や改善を提案する
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pull requests are not being accepted right now, so an issue is the way to influence what gets built. Being told which parts of an NMS are actually painful in the field is more useful than code.
+        現在プルリクエストは受け付けていないため、Issue が開発の方向性に影響を与える唯一の手段です。現場で本当に困っている点を教えてもらえると、コードより役に立ちます。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / 解決したい課題
+      description: What are you monitoring, and what is painful today? / 何を監視していて、今どこが不便ですか
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution / 提案する解決策
+    validations:
+      required: true
+
+  - type: textarea
+    id: scale
+    attributes:
+      label: Scale and environment / 規模・環境
+      description: Roughly how many nodes, what kind of devices, single site or many? / ノード数の目安、機器の種類、拠点は単一か複数か
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or context / 代替案・その他
+      description: How you work around it today, or how another tool handles it / 現在の回避策、他ツールでの実現方法など
+    validations:
+      required: false

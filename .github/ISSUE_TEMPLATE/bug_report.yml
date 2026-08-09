@@ -1,0 +1,130 @@
+name: Bug report / バグ報告
+description: Report a problem with Yagra / 不具合を報告する
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Yagra is in open beta, so bug reports are the most valuable thing you can send.
+        ご報告ありがとうございます。Yagra はオープンベータです。バグ報告が最も価値のあるフィードバックです。
+
+        **Do not report a security vulnerability here** — use [private reporting](https://github.com/horryworks/Yagra/security/advisories/new) instead.
+        **脆弱性はここに書かないでください** — 上記の非公開の報告経路を使ってください。
+
+  - type: input
+    id: version
+    attributes:
+      label: Yagra version
+      description: The image tag you deployed, or the Version column at Settings ▸ Pollers / デプロイしたイメージタグ、または Settings ▸ Pollers の Version 列
+      placeholder: v0.1.23
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: How it is deployed / 実行方法
+      options:
+        - Docker Compose — single node / 単一ノード
+        - Docker Compose with remote pollers / リモートポーラーあり
+        - Kubernetes
+        - Built from source / ソースからビルド
+        - Other / その他
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component / 該当コンポーネント
+      description: Select every part that seems involved / 関係していそうなものをすべて選んでください
+      multiple: true
+      options:
+        - WebUI
+        - yagra-core (API and scheduling / API・スケジューリング)
+        - yagra-poller (polling / ポーリング)
+        - Alerting and notifications / アラート・通知
+        - Discovery and classification / ディスカバリ・分類
+        - Passive events (syslog / trap / webhook) / 受動イベント
+        - Traffic flow (NetFlow / IPFIX / sFlow) / トラフィックフロー
+        - Dashboards or topology / ダッシュボード・トポロジ
+        - Reports / レポート
+        - REST API or MCP
+        - Deployment or upgrade / デプロイ・アップグレード
+        - Backup or restore / バックアップ・リストア
+        - Not sure / わからない
+    validations:
+      required: true
+
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Monitoring method / 監視方式
+      description: If the problem involves monitoring a specific node / 特定ノードの監視に関係する場合
+      options:
+        - N/A / 該当なし
+        - ICMP
+        - SNMP v2c
+        - SNMP v3
+        - HTTP / URL monitoring / URL 監視
+        - DNS
+        - Cisco Meraki Dashboard API
+        - Syslog
+        - SNMP trap
+        - NetFlow / IPFIX / sFlow
+    validations:
+      required: false
+
+  - type: input
+    id: device
+    attributes:
+      label: Device or target / 対象機器
+      description: Vendor and model, or the kind of target, if the problem is device-specific / 機器依存の問題であれば、ベンダー・機種などを書いてください
+      placeholder: Cisco Catalyst 9200 / Huawei USG6000 / Linux server
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce / 再現手順
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior / 期待する動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior / 実際の動作
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshots / ログ・スクリーンショット
+      description: |
+        `docker compose logs yagra-core` / `yagra-poller`, browser console output, or screenshots.
+        `docker compose logs yagra-core` / `yagra-poller` の出力、ブラウザのコンソール、スクリーンショットなど。
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before submitting / 送信前の確認
+      options:
+        - label: I have removed credentials and other secrets (SNMP communities, SNMPv3 users, API tokens, passwords) from anything pasted above. / 貼り付けた内容から認証情報（SNMP コミュニティ、SNMPv3 ユーザー、API トークン、パスワード）を削除しました。
+          required: true

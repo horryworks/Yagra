@@ -49,9 +49,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
+# **Fork pull requests do not run these jobs.** Yagra is not accepting pull requests
+# (`CONTRIBUTING.md`, and `no-pull-requests.yml` closes them), so building one is wasted work — but
+# the real reason is the runners: every job below is self-hosted on the build host, and a
+# `pull_request` run from a fork would execute that fork's code there. The guard below limits these
+# jobs to PRs whose head is a branch of this repository, which is the maintainer's own
+# feature-branch → main flow. Tags and `workflow_dispatch` are unaffected.
+#
+# This is belt and braces alongside GitHub's "require approval for fork pull requests" setting: the
+# setting can be relaxed in the UI without anyone re-reading this file, and the guard cannot.
+# `images` needs all three jobs, so it skips with them.
 jobs:
   backend:
     name: backend (rust)
+    # See the note above `jobs:` — fork PRs are not built.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, yagra-build]
     steps:
       - uses: actions/checkout@v6
@@ -85,6 +97,8 @@ jobs:
 
   frontend:
     name: frontend (web)
+    # See the note above `jobs:` — fork PRs are not built.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, yagra-build]
     defaults:
       run:
@@ -118,6 +132,8 @@ jobs:
   # not worth building.
   compose:
     name: compose files parse
+    # See the note above `jobs:` — fork PRs are not built.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, yagra-build]
     steps:
       - uses: actions/checkout@v6

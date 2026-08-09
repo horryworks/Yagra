@@ -1,0 +1,66 @@
+# GitHub has no switch that turns pull requests off, so this is the switch: every PR from someone
+# who is not the maintainer gets a comment explaining the policy and is closed immediately. The
+# policy itself lives in CONTRIBUTING.md and in `.github/PULL_REQUEST_TEMPLATE.md`, which is what
+# the author sees *before* pressing the button — this workflow only handles the people who press it
+# anyway.
+#
+# Two deliberate choices:
+#
+#   * **`pull_request_target`, not `pull_request`.** A `pull_request` run triggered from a fork gets
+#     a read-only token and could not close anything. `pull_request_target` runs in the base
+#     repository's context with a writable token, and — unlike `pull_request` — it is not held back
+#     by the "require approval for fork pull requests" setting, so the close happens without the
+#     maintainer having to approve a run first. The usual danger of `pull_request_target` is
+#     checking out and executing the fork's code with that token; this job never checks anything
+#     out and runs only `gh`.
+#   * **GitHub-hosted runner, not `yagra-build`.** The rest of CI runs self-hosted, but this
+#     workflow is reachable by any stranger opening a PR. Scheduling that on the build host would
+#     let an outsider queue work on it. A few seconds of hosted runner time is the right trade.
+name: pull requests are not accepted
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    # The maintainer's own branch PRs still work — the feature-branch → main flow in
+    # `.claude/rules/git-workflow.md` depends on them. Only outside contributions are closed.
+    if: >-
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.author_association != 'COLLABORATOR'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain the policy and close
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Number + `--repo` rather than the PR URL: nothing is checked out here, so `gh` has no
+          # git remote to infer the repository from.
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr comment "$PR" --body 'Thank you for taking the time to write this — and sorry for the automated reply.
+
+          **Yagra is not accepting pull requests at this time.** It is developed by a single maintainer and there is no review or licensing process behind outside contributions yet, so this PR is being closed without review. That is about the process, not about your work. See [CONTRIBUTING.md](https://github.com/horryworks/Yagra/blob/main/CONTRIBUTING.md); when the policy changes, that file changes with it.
+
+          If this fixes a real problem, **please open an [issue](https://github.com/horryworks/Yagra/issues/new/choose) describing it.** Yagra is in open beta and a report that says which part broke is worth more right now than the patch — the issue will be acted on, and you are welcome to link this branch from it.
+
+          If it is a security problem, do not describe it in a public issue: use [private vulnerability reporting](https://github.com/horryworks/Yagra/security/advisories/new) instead.
+
+          You remain free to fork and modify Yagra under the AGPL.
+
+          ---
+
+          お時間を割いていただきありがとうございます。自動返信で申し訳ありません。
+
+          **Yagra は現在プルリクエストを受け付けていません。** 単独のメンテナで開発しており、外部コントリビューションのレビュー体制もライセンス上の取り決めもまだ整っていないため、このプルリクエストはレビューせずにクローズします。内容ではなく体制の問題です（[CONTRIBUTING.md](https://github.com/horryworks/Yagra/blob/main/CONTRIBUTING.md)。方針が変わればこのファイルも変わります）。
+
+          実際の不具合の修正であれば、**ぜひ [Issue](https://github.com/horryworks/Yagra/issues/new/choose) を開いて内容を説明してください。** オープンベータの今は、パッチよりも「どこが壊れたか」の報告のほうが価値があります。対応しますし、この branch を Issue からリンクしていただいて構いません。
+
+          脆弱性の場合は公開 Issue に書かず、[非公開の報告経路](https://github.com/horryworks/Yagra/security/advisories/new)を使ってください。
+
+          AGPL の下でフォークして改変することは自由です。'
+          gh pr close "$PR"

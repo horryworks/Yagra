@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability / 脆弱性の報告
+    url: https://github.com/horryworks/Yagra/security/advisories/new
+    about: Never report a security problem in a public issue — use private vulnerability reporting. / 脆弱性は公開 Issue ではなく、この非公開の経路で報告してください
+  - name: Before opening a pull request / プルリクエストを開く前に
+    url: https://github.com/horryworks/Yagra/blob/main/CONTRIBUTING.md
+    about: Pull requests are not being accepted at this time. Open an issue instead. / 現在プルリクエストは受け付けていません。Issue を開いてください
+  - name: Deployment and configuration / デプロイ・設定
+    url: https://github.com/horryworks/Yagra/blob/main/DEPLOYMENT.md
+    about: Check DEPLOYMENT.md and the README before reporting a setup problem as a bug. / 構築でつまずいた場合は、まず DEPLOYMENT.md と README を確認してください
