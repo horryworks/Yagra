@@ -10,9 +10,10 @@ network being monitored. Reports are taken seriously.
 
 **Please do not open a public issue for a security problem.**
 
-- **Preferred:** [private vulnerability reporting](https://github.com/horryworks/Yagra/security/advisories/new)
-  on this repository.
-- **Alternative:** email **horryworks@gmail.com** with `[Yagra security]` in the subject.
+Use **[private vulnerability reporting](https://github.com/horryworks/Yagra/security/advisories/new)**
+on this repository. That is the only reporting channel: there is deliberately no contact e-mail
+address, and a public issue is the wrong place because it discloses the problem before a fix exists.
+Any GitHub account can open a private report, and only the maintainer can see it.
 
 Useful to include: the affected version or commit, the component (`yagra-core`, `yagra-poller`,
 the WebUI, …), what an attacker gains, and a reproduction if you have one.
@@ -61,10 +62,21 @@ These are known, intentional, and documented so a reviewer does not have to gues
   NATS beyond the internal compose network requires the TLS + authentication configuration in
   `docker/nats/nats-server.conf`. Distributed deployments should additionally enable the NATS Auth
   Callout path, which mints per-poller-scoped credentials.
-- **Group-scoped API tokens are rejected with `400`, not silently widened.** Group scope is
-  designed and typed but not yet enforced at the query layer, so issuing such a token would hand an
-  operator a credential they believe is least-privileged while it is in fact unrestricted. Refusing
-  to mint it is the deliberate choice. Role-based permissions *are* enforced.
+- **Group scope fails closed, which means an empty scope sees nothing rather than everything.** A
+  scope naming only groups that have since been deleted resolves to the empty set, kept distinct
+  from "unrestricted" — and a node whose group is not yet known to the scope cache is treated as
+  invisible. So a newly created node can be briefly invisible to a scoped operator; it is never
+  briefly visible to one who should not see it.
+- **An API token can never exceed the account that minted it, and the ceiling is re-checked on every
+  use.** A token may name its own narrower group scope only when its owner is unscoped; a token owned
+  by a group-scoped account **inherits that account's scope** rather than keeping an independent one,
+  so the token does not silently widen when the owner's scope widens. Its role is likewise a ceiling
+  capped at the owner's, and the token stops working when the account is disabled, deleted or
+  demoted.
+- **An Admin cannot be group-scoped.** Administration is fleet-wide by construction — user
+  management, retention, credentials — so a "scoped Admin" would be a credential whose label
+  promised a restriction the role cannot honour. Scope applies to Viewer and Operator, and promoting
+  a scoped account to Admin clears the scope it held rather than leaving a contradiction in place.
 - **The MCP tool surface (`/mcp`) is disabled by default** (`YAGRA_ENABLE_MCP`) and always requires
   a token, including when the anonymous read-only dashboard is enabled.
 - **The anonymous read-only dashboard is disabled by default** (`YAGRA_PUBLIC_DASHBOARD`).

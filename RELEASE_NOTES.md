@@ -10,6 +10,34 @@
 
 ## Unreleased
 
+## v0.2.0 — The first public release: every metric a device reports, URL monitors that read the body, and an SSO form that knows your IdP
+
+**This is Yagra's first public release.** Everything up to v0.1.23 was developed in a private
+repository and never published; those notes are kept below as the record of how the system got here,
+not as releases you could have been running. If you are arriving now, v0.2.0 is the beginning —
+there is no upgrade to perform and no earlier published version to upgrade from. The minor bump
+rather than `1.0.0` is deliberate: what changed is that the source and the images are public, not
+that the API has stopped moving.
+
+Three things worth reading before you deploy it:
+
+- **Yagra is in open beta.** It is a working stack, but most of what these notes describe has not yet
+  been validated in anyone else's production network. Run it alongside your existing monitoring
+  rather than in place of it, and treat the feature list as *what is built*, not as *what has been
+  proven at scale elsewhere*.
+- **Bug reports are the most useful thing you can send**, and they go to
+  [GitHub Issues](https://github.com/horryworks/Yagra/issues) — which is also the **only contact
+  channel for this project**, questions and commercial-licensing inquiries included. There is no
+  contact e-mail address. The one exception is a security vulnerability, which goes through
+  [private vulnerability reporting](https://github.com/horryworks/Yagra/security/advisories/new)
+  rather than a public issue. Pull requests are not being accepted yet — see
+  [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Start from [DEPLOYMENT.md](DEPLOYMENT.md), not from `docker-compose.yml`.** The single-node
+  compose file is an evaluation stack: default database credentials, an ephemeral key-encryption key
+  (so stored device credentials do not survive a restart), and a self-signed certificate. What a real
+  deployment changes is listed there, and the security-relevant essentials are in
+  [SECURITY.md](SECURITY.md).
+
 ### New Features
 - **URL monitors now record how long the endpoint took to answer**, as the new `http_response_time_ms`
   gauge, shown on the node's Overview and available to thresholds like any other metric. Until now a

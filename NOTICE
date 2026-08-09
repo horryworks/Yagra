@@ -1,5 +1,5 @@
 Yagra — network monitoring system
-Copyright (C) 2026 horryworks <horryworks@gmail.com>
+Copyright (C) 2026 horryworks
 
 Source: https://github.com/horryworks/Yagra
 
@@ -17,7 +17,8 @@ this program.  If not, see <https://www.gnu.org/licenses/>.
 The full licence text is in LICENSE.  Individual source files carry the SPDX
 identifier `AGPL-3.0-only` rather than repeating this notice.
 
-For use under terms other than the AGPL, contact horryworks@gmail.com.
+For use under terms other than the AGPL, open an issue:
+https://github.com/horryworks/Yagra/issues
 
 
 THIRD-PARTY COMPONENTS

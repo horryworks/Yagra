@@ -1,0 +1,40 @@
+name: Question / licensing inquiry / 質問・ライセンスの問い合わせ
+description: Ask a question, or inquire about commercial licensing / 質問、または商用ライセンスの問い合わせ
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Issues are the only contact channel for Yagra — there is no contact e-mail address.** Use this template for anything that is not a bug report or a feature request, including commercial-licensing inquiries.
+        **Yagra への連絡窓口は Issue のみで、問い合わせ用のメールアドレスはありません。** バグ報告・機能要望以外は、商用ライセンスの相談も含めてこのテンプレートを使ってください。
+
+        Two exceptions: a **security vulnerability** goes through [private vulnerability reporting](https://github.com/horryworks/Yagra/security/advisories/new), never a public issue. A **setup problem** is usually answered by [DEPLOYMENT.md](https://github.com/horryworks/Yagra/blob/main/DEPLOYMENT.md) — check it first.
+        例外は 2 つあります。**脆弱性**は公開 Issue ではなく[非公開の報告経路](https://github.com/horryworks/Yagra/security/advisories/new)へ。**構築でつまずいた場合**は、まず [DEPLOYMENT.md](https://github.com/horryworks/Yagra/blob/main/DEPLOYMENT.md) を確認してください。
+
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Topic / 種別
+      options:
+        - Question about how Yagra works / 動作についての質問
+        - Commercial licensing / 商用ライセンス
+        - Something else / その他
+    validations:
+      required: true
+
+  - type: textarea
+    id: body
+    attributes:
+      label: Your question / 質問の内容
+      description: For a licensing inquiry, describe how you intend to use Yagra — that is what determines whether the AGPL is a problem for you. / ライセンスの相談の場合は、どのように利用したいかを書いてください（AGPL が支障になるかはそれで決まります）。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Yagra version / バージョン
+      description: The image tag or version, if the question is about a running deployment / 稼働中の環境についての質問なら、イメージタグかバージョン
+    validations:
+      required: false

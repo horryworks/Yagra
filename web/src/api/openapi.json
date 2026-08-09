@@ -4,14 +4,13 @@
     "title": "Yagra northbound API",
     "description": "The REST surface of Yagra-core: inventory, metrics, alerts, passive events and configuration.\n\nThis document is generated from the Rust handlers — it is the contract, not a description of one.",
     "contact": {
-      "name": "horryworks",
-      "email": "horryworks@gmail.com"
+      "name": "horryworks"
     },
     "license": {
       "name": "AGPL-3.0-only",
       "identifier": "AGPL-3.0-only"
     },
-    "version": "0.1.23"
+    "version": "0.2.0"
   },
   "paths": {
     "/api/v1/alerts": {

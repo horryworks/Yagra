@@ -36,11 +36,15 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.23"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.90"
 license = "AGPL-3.0-only"
-authors = ["horryworks <horryworks@gmail.com>"]
+# No e-mail address here, deliberately. utoipa derives the OpenAPI document's
+# `info.contact` from CARGO_PKG_AUTHORS, so an address in this field is published
+# to every API client — and from there to the public API reference on the website.
+# Contact goes through GitHub Issues; see SECURITY.md for vulnerability reports.
+authors = ["horryworks"]
 repository = "https://github.com/horryworks/Yagra"
 
 # Shared dependency versions. Crates opt in with `foo = { workspace = true }`.

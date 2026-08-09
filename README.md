@@ -7,14 +7,19 @@ is architected from the start for **tens of thousands of nodes** and **distribut
 polling**. Users access it through the WebUI.
 
 > [!IMPORTANT]
-> **Yagra is in open beta.** It is under active development, and **many of the features described
-> below have not yet been validated in production**. Expect rough edges, and run Yagra alongside
-> your existing monitoring rather than in place of it.
+> **v0.2.0 is Yagra's first public release**, and **Yagra is in open beta.** It is under active
+> development, and **many of the features described below have not yet been validated in
+> production**. Expect rough edges, and run Yagra alongside your existing monitoring rather than in
+> place of it.
 >
-> **Bug reports on [GitHub Issues](https://github.com/horryworks/Yagra/issues) are very welcome.
-> Pull requests are not being accepted at this time** — see [CONTRIBUTING.md](CONTRIBUTING.md).
+> **Bug reports on [GitHub Issues](https://github.com/horryworks/Yagra/issues) are very welcome** —
+> and Issues are the **only contact channel** for this project, questions and commercial-licensing
+> inquiries included. There is no contact e-mail address. A security vulnerability goes through
+> [private vulnerability reporting](https://github.com/horryworks/Yagra/security/advisories/new)
+> instead of a public issue. **Pull requests are not being accepted at this time** — see
+> [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Status: **v0.1.23.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.2.0 — the first public release.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -53,7 +58,15 @@ polling**. Users access it through the WebUI.
 > **downloadable support bundle** — health sections, applied migrations, the allow-listed
 > environment and core's own rotated logs, scanned for secrets before it is written. And the **LLM
 > root-cause explanation now investigates rather than guesses**, calling the read-only MCP tools
-> under the caller's own visibility scope and storing what it looked up beside its answer. HA stores
+> under the caller's own visibility scope and storing what it looked up beside its answer.
+> **Every metric a device reports is now visible and chartable** rather than only the ones the UI was
+> written to know about: a node's Collection tab lists them all, counters chart as per-second rates,
+> and two new dashboard widgets chart any metric of any node and rank the whole fleet by any metric
+> name. **URL monitors** record response time, can require (or forbid) a keyword in the response body
+> — the case where an endpoint answers `200` while its body says the service is broken — and can lift
+> numbers out of a JSON body under names you choose. Adding an **SSO provider** now starts by picking
+> which identity provider it is — Microsoft Entra ID, Okta, Google Workspace, or any other OIDC
+> provider — and then asks only for what that product actually needs. HA stores
 > remain a configuration step away, not a rewrite.
 
 ## Components
@@ -325,4 +338,5 @@ following is a summary, not legal advice:
 
 For use under terms other than the AGPL (e.g. embedding Yagra in a proprietary product,
 or operating a modified version without the source-disclosure obligation), a separate
-**commercial license** may be available — contact horryworks@gmail.com.
+**commercial license** may be available — [open an issue](https://github.com/horryworks/Yagra/issues/new/choose)
+to ask. All contact goes through GitHub Issues; there is no contact e-mail address.

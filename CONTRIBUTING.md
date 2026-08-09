@@ -31,6 +31,9 @@ restricts what the licence grants you; it only says what this repository will me
   expected, and what happened. Logs from `yagra-core` / `yagra-poller` help enormously.
 - **Feature requests and design discussion.** Open an issue. Being told which parts of an NMS are
   actually painful in the field is more valuable than code.
+- **Questions, and commercial-licensing inquiries.** Open an issue. **Issues are the only contact
+  channel for this project — there is no contact e-mail address**, so please do not go looking for
+  one.
 - **Security reports.** Do **not** use the issue tracker — see [SECURITY.md](SECURITY.md) for the
   private reporting channel.
 
