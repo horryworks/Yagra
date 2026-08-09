@@ -9,10 +9,15 @@
 // counters raw precisely so rates are derived at query time; picking the wrong read here
 // reintroduces the accident that decision was made to avoid.
 //
+// In `lib/` rather than next to the node detail because two surfaces read it now — the node's
+// Collection and Overview tabs, and the dashboard's metric-chart widget — and the table has to stay
+// one table. A second surface choosing its own query shape is the second entrance to the same
+// accident.
+//
 // A `.ts` file on purpose: Vitest runs `environment: 'node'` with `include: ['src/**/*.test.ts']`,
 // so judgement left in the `.tsx` is judgement nothing tests.
 
-import type { MetricDimension, MetricKind, NodeMetricEntry } from '../../types/api';
+import type { MetricDimension, MetricKind, NodeMetricEntry } from '../types/api';
 
 /** How the surface should read one metric's current value. */
 export type MetricRead =

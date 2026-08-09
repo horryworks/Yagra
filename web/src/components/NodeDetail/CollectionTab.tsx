@@ -25,7 +25,7 @@ import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../type
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
-import { viewOf } from './metricInventory';
+import { viewOf } from '../../lib/metricInventory';
 
 type CollState = 'ok' | 'failing' | 'none';
 

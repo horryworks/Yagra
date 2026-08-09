@@ -165,3 +165,34 @@
   border: 1.5px solid var(--bg-primary);
   box-shadow: 0 0 0 1px var(--border-color);
 }
+
+/* Metric chart — the two pickers in the card header (node, then one of its metrics). The card
+   header is narrow, so both are capped and the metric name truncates rather than pushing the
+   edit controls off the row. Under the mobile shell they stack instead of shrinking further. */
+.metricchart-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.metricchart-actions .metricchart-node .nodepick-control {
+  min-width: 0;
+}
+
+.metricchart-actions .metricchart-node {
+  max-width: 150px;
+}
+
+.metricchart-actions select {
+  max-width: 160px;
+}
+
+html[data-viewport='mobile'] .metricchart-actions {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .metricchart-actions .metricchart-node,
+html[data-viewport='mobile'] .metricchart-actions select {
+  max-width: none;
+}

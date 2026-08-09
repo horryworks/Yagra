@@ -255,6 +255,10 @@
       "flow-trend": {
         "title": "Throughput trend",
         "blurb": "Traffic over time by protocol."
+      },
+      "metric-chart": {
+        "title": "Metric chart",
+        "blurb": "Any one metric of any one node, over 6h — including metrics no other card covers."
       }
     }
   },
@@ -448,6 +452,15 @@
       "dirAria": "AS direction",
       "dst": "Destination",
       "src": "Source"
+    },
+    "metricChart": {
+      "pickNode": "Pick a node, then one of its metrics.",
+      "pickNodePlaceholder": "Node…",
+      "pickMetric": "Pick a metric to chart.",
+      "metricAria": "Metric to chart",
+      "metricPlaceholder": "Metric…",
+      "unavailable": "{{metric}} is not available on this node.",
+      "empty": "No data in the last 6 hours…"
     }
   },
   "primitives": {

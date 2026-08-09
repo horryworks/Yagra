@@ -40,6 +40,7 @@ import {
   TopRttWidget,
   TopTalkersWidget,
 } from './widgets/performance';
+import { MetricChartActions, MetricChartWidget } from './widgets/metrics';
 import { GeoMapWidget, RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
 import { DependencyWidget } from './widgets/topology';
 import {
@@ -239,6 +240,21 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     Component: TopMemoryWidget,
     Actions: TopAggActions,
+  },
+  {
+    // The only widget whose subject the catalog does not know in advance: it charts whichever
+    // metric the operator picks off a node's inventory, including ones no curated card covers
+    // (ADR-046 Inc.2). Taller heights are worth offering — a chart is what it is showing.
+    type: 'metric-chart',
+    title: 'registry.widgets.metric-chart.title',
+    section: SECTION.performance,
+    blurb: 'registry.widgets.metric-chart.blurb',
+    backing: 'live',
+    defaultSpan: 6,
+    allowedSpans: [4, 6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
+    Component: MetricChartWidget,
+    Actions: MetricChartActions,
   },
   {
     type: 'busiest-interfaces',

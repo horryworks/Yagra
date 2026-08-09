@@ -5,6 +5,28 @@
 // precision is honest for a number whose units nobody declared), and a judgement in a `.tsx` is a
 // judgement nothing tests.
 
+/** Separator for {@link extractMetricKey} / {@link metricsFromKey}. A comma is illegal in a metric
+ *  name (they are `[a-z0-9_]`), so no name can be split in half by it. */
+const KEY_SEP = ',';
+
+/** Collapse a rule list into one stable string, for use as a `useEffect` dependency.
+ *
+ *  The rules arrive as a fresh array on every render, so depending on the array itself re-runs the
+ *  effect forever; depending on this string re-runs it only when the *names* change.
+ *
+ *  Paired with {@link metricsFromKey} on purpose. The two were once written independently — the
+ *  join used a literal NUL and the split used a space — and the disagreement was invisible for a
+ *  monitor with a single rule (a one-element join has no separator in it at all) while silently
+ *  dropping **every** extracted value on a monitor with two or more. */
+export function extractMetricKey(extracts: readonly { metric: string }[]): string {
+  return extracts.map((e) => e.metric).join(KEY_SEP);
+}
+
+/** The metric names in a key built by {@link extractMetricKey} (empty key ⇒ no rules). */
+export function metricsFromKey(key: string): string[] {
+  return key === '' ? [] : key.split(KEY_SEP);
+}
+
 /** Format an extracted value for a health card.
  *
  *  These are arbitrary numbers from someone else's API — a queue depth, a ratio, a byte count —

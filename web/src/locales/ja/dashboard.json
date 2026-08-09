@@ -255,6 +255,10 @@
       "flow-trend": {
         "title": "スループット推移",
         "blurb": "プロトコル別のトラフィック推移。"
+      },
+      "metric-chart": {
+        "title": "メトリクスグラフ",
+        "blurb": "任意のノードの任意のメトリクスを 6 時間分。ほかのカードが扱わないメトリクスも表示できます。"
       }
     }
   },
@@ -444,6 +448,15 @@
       "dirAria": "AS の方向",
       "dst": "宛先",
       "src": "送信元"
+    },
+    "metricChart": {
+      "pickNode": "ノードを選び、そのメトリクスを選んでください。",
+      "pickNodePlaceholder": "ノード…",
+      "pickMetric": "グラフにするメトリクスを選んでください。",
+      "metricAria": "グラフにするメトリクス",
+      "metricPlaceholder": "メトリクス…",
+      "unavailable": "{{metric}} はこのノードにはありません。",
+      "empty": "直近 6 時間のデータなし…"
     }
   },
   "primitives": {

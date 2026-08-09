@@ -89,6 +89,16 @@
   way to chart a node-level counter at all: its stored value is an odometer reading, and `agg=max`
   over one draws a rising line that looks like traffic and is not. `rate` cannot be combined with
   `agg` (`rate_with_agg`) — a per-entity counter has no node-level rate.
+- **A new "Metric chart" dashboard widget charts any metric of any node.** Pick a node, pick one of
+  its metrics from the list the device actually reports, and the widget draws the last 6 hours.
+  Every other card on the board answers a question the catalog decided in advance; this one is for
+  the metric your devices have and ours do not — a vendor temperature, a value lifted out of a
+  monitored JSON body. Add it as many times as you like. Two behaviours worth knowing:
+  - **It offers only what it can draw honestly.** Per-interface metrics are not listed — the node's
+    Interfaces tab charts those per port, and collapsing eight ports to one line answers a different
+    question. A counter is charted as a per-second rate, never as its stored value.
+  - **A metric that stops being available says so.** If the node no longer reports the selected
+    metric, the widget names it instead of drawing an empty chart.
 
 ### Improvements
 - **Device health and the metric list on a node's Overview no longer require admin rights.** They

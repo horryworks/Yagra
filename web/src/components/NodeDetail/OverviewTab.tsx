@@ -46,9 +46,9 @@ import {
   type ResolvedMem,
   type ResolvedMetric,
 } from './metricCards';
-import { overviewScalars, viewOf } from './metricInventory';
+import { overviewScalars, viewOf } from '../../lib/metricInventory';
 import { certTone, httpToneVar } from './healthTone';
-import { formatExtractedValue } from './urlExtracts';
+import { extractMetricKey, formatExtractedValue, metricsFromKey } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { DnsHealth } from './DnsHealth';
 import { CheckConfigActions } from './CheckConfigActions';
@@ -226,8 +226,9 @@ function UrlHealth({
   const [win, setWin] = useState<[number, number] | null>(null);
 
   // The rule list drives the fetch, so it must be a stable dependency rather than a new array
-  // identity on every render — otherwise the effect re-runs forever.
-  const extractNames = extracts.map((e) => e.metric).join(' ');
+  // identity on every render — otherwise the effect re-runs forever. Key and parse are one pair in
+  // `urlExtracts.ts`; they used to be two independent spellings here and disagreed.
+  const extractNames = extractMetricKey(extracts);
 
   useEffect(() => {
     let cancelled = false;
@@ -260,7 +261,7 @@ function UrlHealth({
         setBodyTruncated(bt.status === 'fulfilled' ? bt.value.value : null);
         setWin([from, to]);
       });
-      const names = extractNames === '' ? [] : extractNames.split(' ');
+      const names = metricsFromKey(extractNames);
       if (names.length > 0) {
         void Promise.allSettled(names.map((m) => api.getNodeMetric(nodeId, m))).then((rs) => {
           if (cancelled) return;

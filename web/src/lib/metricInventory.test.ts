@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { isShowable, metricView, overviewScalars, viewOf } from './metricInventory';
-import { METRIC_DIMENSIONS } from '../../types/api';
-import type { MetricDimension, MetricKind, NodeMetricEntry } from '../../types/api';
+import { METRIC_DIMENSIONS, METRIC_KINDS } from '../types/api';
+import type { MetricDimension, MetricKind, NodeMetricEntry } from '../types/api';
 
 const entry = (over: Partial<NodeMetricEntry> = {}): NodeMetricEntry => ({
   metric: 'm',
@@ -56,7 +56,7 @@ describe('metricView', () => {
   });
 
   it('hands every interface-dimensioned metric to the Interfaces tab', () => {
-    for (const kind of ['gauge', 'counter'] as MetricKind[]) {
+    for (const kind of METRIC_KINDS as readonly MetricKind[]) {
       expect(metricView(kind, 'interface').chart).toEqual({ kind: 'interfaces' });
     }
   });
@@ -65,7 +65,7 @@ describe('metricView', () => {
     // A dimension added to the backend without a cell here would otherwise land on whichever
     // branch happens to be last.
     for (const dimension of METRIC_DIMENSIONS) {
-      for (const kind of ['gauge', 'counter'] as MetricKind[]) {
+      for (const kind of METRIC_KINDS as readonly MetricKind[]) {
         const v = metricView(kind, dimension as MetricDimension);
         expect(v.read.kind, `${kind}/${dimension}`).toBeTruthy();
         expect(v.chart.kind, `${kind}/${dimension}`).toBeTruthy();

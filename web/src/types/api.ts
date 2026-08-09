@@ -457,6 +457,10 @@ export type CollectionKind = components['schemas']['CollectionKind'];
 /** Whether a metric is a gauge or a raw counter. */
 export type MetricKind = components['schemas']['MetricKind'];
 
+/** The metric kinds, as an array, so a rule that must hold for every kind can be asserted over
+ *  them at runtime rather than re-spelled at each call site (`extensibility.md` §4). */
+export const METRIC_KINDS = ['gauge', 'counter'] as const;
+
 /** One thing to collect: a stable metric name, the OID, how to collect it, and its kind. */
 export type CollectionItem = components['schemas']['CollectionItem'];
 
