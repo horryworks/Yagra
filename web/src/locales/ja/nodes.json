@@ -176,7 +176,7 @@
     "none": "この期間のフローデータはありません。",
     "noTrend": "この期間のトラフィック推移はありません。",
     "empty": "フローデータがまだありません。この機器から NetFlow v9 / IPFIX をポーラー（既定 UDP :2055）へエクスポートするよう設定してください。",
-    "disabled": "フロー監視は有効になっていません。ClickHouse のフローストア（core の YAGRA_CLICKHOUSE_URL）とフローリスナー（ポーラーの YAGRA_FLOW_BIND）を設定すると、トラフィックフローを収集できます。",
+    "disabled": "フロー監視は有効になっていません。ClickHouse のフローストア（コアの YAGRA_CLICKHOUSE_URL）とフローリスナー（ポーラーの YAGRA_FLOW_BIND）を設定すると、トラフィックフローを収集できます。",
     "loadError": "フローデータの読み込みに失敗しました。"
   },
   "deleteNode": {
