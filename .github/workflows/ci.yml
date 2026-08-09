@@ -11,11 +11,17 @@
 #
 #   A `pull_request` run uses the workflow file **from the pull request**, not from `main`. So a
 #   fork could delete the fork-PR guard below (or add a second workflow file naming the
-#   `yagra-build` label) and run arbitrary code on the build host — a machine that sits on the same
-#   LAN as the test server, holds the GHCR login, and carries a persistent cargo/BuildKit cache that
-#   the next `v*` release build would compile against. Poisoning that cache ships a backdoored image
-#   to GHCR with every job green. Nothing written in this file can prevent that, because the
-#   attacker supplies this file.
+#   `yagra-build` label) and run arbitrary code on the build host — a machine that answers on
+#   192.168.1.2:22 and 192.168.1.1:22 (the test server and the firewall), whose dockerd a workflow
+#   step can drive as root, and which carries a persistent cargo/BuildKit cache that the next `v*`
+#   release build compiles against. **Poisoning that cache ships a backdoored image to GHCR with
+#   every job green** — the same failure shape as the stale-layer incident, except deliberate.
+#   Nothing written in this file can prevent it, because the attacker supplies this file.
+#
+#   What the host did NOT hold is a registry credential: `~/.docker/config.json` was checked for
+#   both the login user and root and has no auth entries. Publishing is CI's, with `GITHUB_TOKEN`;
+#   `/flashdeploy` pushes to an unauthenticated LAN registry. The risk here is cache poisoning and
+#   network adjacency, not credential theft — do not "fix" this by hunting for secrets to remove.
 #
 # The runners were therefore deregistered from the repository: a malicious `runs-on: self-hosted`
 # now matches no runner and the job simply times out without executing. That property is structural
