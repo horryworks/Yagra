@@ -5,10 +5,27 @@
 # builds never reach the registry at all (see the tag-computation step). CI does NOT deploy: see
 # the note where the `deploy` job used to be, at the bottom of this file.
 #
-# Compute runs on SELF-HOSTED runners (label `yagra-build`) to avoid GitHub-hosted Actions-minute
-# billing — the repo and images (GHCR) stay on GitHub, only the execution is local. A runner host
-# needs: rustup, Node (setup-node fetches it), and Docker + buildx. See the runner setup notes if a
-# job fails with a missing toolchain.
+# Everything runs on GITHUB-HOSTED runners. It used to run on self-hosted runners (label
+# `yagra-build`) on the build host, to avoid Actions-minute billing — which is free for a public
+# repository anyway, and was never worth what it cost once the repository went public:
+#
+#   A `pull_request` run uses the workflow file **from the pull request**, not from `main`. So a
+#   fork could delete the fork-PR guard below (or add a second workflow file naming the
+#   `yagra-build` label) and run arbitrary code on the build host — a machine that sits on the same
+#   LAN as the test server, holds the GHCR login, and carries a persistent cargo/BuildKit cache that
+#   the next `v*` release build would compile against. Poisoning that cache ships a backdoored image
+#   to GHCR with every job green. Nothing written in this file can prevent that, because the
+#   attacker supplies this file.
+#
+# The runners were therefore deregistered from the repository: a malicious `runs-on: self-hosted`
+# now matches no runner and the job simply times out without executing. That property is structural
+# — it survives someone relaxing a setting or editing this file.
+#
+# Accepted cost: builds start cold. `Swatinem/rust-cache` and the BuildKit GHA cache carry what they
+# can between runs, but the Dockerfile's `RUN --mount=type=cache` cargo directories are NOT exported
+# by any cache backend, so an image build recompiles the workspace every time. A release tag takes
+# tens of minutes rather than ~10. That is the price of not having a build machine inside the
+# network reachable from a stranger's pull request.
 
 name: ci
 
@@ -36,44 +53,45 @@ on:
   pull_request:
   workflow_dispatch:
 
-# The self-hosted runners share one `~/.cargo` / `~/.rustup` (and one dockerd), so two concurrent
-# cargo builds race on that shared home: registry/target files vanish mid-compile ("No such file or
-# directory", rustc "never executed"). Serialise same-commit runs rather than letting them contend.
-# `cancel-in-progress: false` keeps both — neither run is dropped.
+# Serialise runs of the same commit. The original reason is gone — the self-hosted runners shared
+# one `~/.cargo`/`~/.rustup` and one dockerd, and concurrent builds corrupted that shared home —
+# because hosted runners are isolated per job. What is left is the GHA cache: two runs of the same
+# commit would write the same `Swatinem/rust-cache` and BuildKit scopes at once, which wastes a full
+# cold build and can evict the entry the other run is about to read.
 #
-# This used to matter most for a release, which fired two runs at once (the `main` push and the
-# `v*` tag push) against the same `github.sha`. With the `main` trigger gone a release fires one
-# run, so this now only covers a re-run or a `workflow_dispatch` racing a tag. Keep it: it costs
-# nothing and the failure it prevents is a corrupted shared cargo home, not a wasted run.
+# **`cancel-in-progress` must stay `false`.** A release fires one run, but a re-run or a
+# `workflow_dispatch` racing the `v*` tag would otherwise cancel the run that publishes to GHCR.
 concurrency:
   group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 # **Fork pull requests do not run these jobs.** Yagra is not accepting pull requests
-# (`CONTRIBUTING.md`, and `no-pull-requests.yml` closes them), so building one is wasted work — but
-# the real reason is the runners: every job below is self-hosted on the build host, and a
-# `pull_request` run from a fork would execute that fork's code there. The guard below limits these
-# jobs to PRs whose head is a branch of this repository, which is the maintainer's own
-# feature-branch → main flow. Tags and `workflow_dispatch` are unaffected.
-#
-# This is belt and braces alongside GitHub's "require approval for fork pull requests" setting: the
-# setting can be relaxed in the UI without anyone re-reading this file, and the guard cannot.
+# (`CONTRIBUTING.md`, and `no-pull-requests.yml` closes them), so building one is wasted work. The
+# guard below limits these jobs to PRs whose head is a branch of this repository, which is the
+# maintainer's own feature-branch → main flow. Tags and `workflow_dispatch` are unaffected.
 # `images` needs all three jobs, so it skips with them.
+#
+# **This guard is not a security control, and must never be treated as one.** A `pull_request` run
+# executes the workflow file from the pull request, so a fork can delete these three `if:` lines in
+# the same PR they are meant to stop. It saves wasted minutes; it does not keep anyone out. What
+# keeps a stranger's code off the build host is that the build host is no longer registered as a
+# runner for this repository — see the note at the top of this file.
 jobs:
   backend:
     name: backend (rust)
     # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, yagra-build]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
-      # Enable the mold linker (S2) for the host clippy/test build. Best-effort and non-fatal: if mold
-      # can't be installed (no passwordless sudo) or `cc` is too old to accept `-fuse-ld=mold` (gcc <
-      # 12), we leave RUSTFLAGS unset and fall back to the default linker — the build still runs. Set
-      # before rust-cache so the cache key is consistent across runs (no restore/save key drift).
+      # Enable the mold linker (S2) for the clippy/test build. The hosted image has passwordless sudo
+      # and a new enough `cc`, so this normally succeeds — but it stays best-effort and non-fatal: if
+      # mold can't be installed or `cc` won't accept `-fuse-ld=mold` (gcc < 12), we leave RUSTFLAGS
+      # unset and fall back to the default linker rather than failing the job. Set before rust-cache
+      # so the cache key is consistent across runs (no restore/save key drift).
       - name: Enable mold linker (best-effort)
         run: |
           if ! command -v mold >/dev/null 2>&1; then
@@ -99,7 +117,7 @@ jobs:
     name: frontend (web)
     # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, yagra-build]
+    runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
@@ -134,7 +152,7 @@ jobs:
     name: compose files parse
     # See the note above `jobs:` — fork PRs are not built.
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, yagra-build]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Validate every composition
@@ -156,7 +174,7 @@ jobs:
 
   images:
     name: docker image
-    runs-on: [self-hosted, linux, yagra-build]
+    runs-on: ubuntu-latest
     needs: [backend, frontend, compose]
     permissions:
       contents: read
@@ -164,28 +182,35 @@ jobs:
       # gates registry access is the login step below, which runs on a v* tag only.
       packages: write          # push to GHCR on a v* release tag
     strategy:
-      # One docker build at a time: the self-hosted runners share a single dockerd, so concurrent
-      # image builds contend on it (and earlier hung on the GHA cache). backend/frontend still
-      # parallelise across runners — only this matrix is serialised. Serialisation also lets `poller`
-      # reuse `core`'s cached build stage: both target the same yagra-rust.Dockerfile, so the shared
-      # `cargo build --bin core --bin poller` runs once (during `core`) and `poller` just assembles
-      # its runtime layer.
+      # **`max-parallel: 1` is load-bearing, for a different reason than it used to be.** It once
+      # stopped concurrent builds contending on the self-hosted host's single dockerd. Now every
+      # matrix entry gets its own hosted machine, and the serialisation is what lets `poller` reuse
+      # `core`'s work: both target the same yagra-rust.Dockerfile and share the `build` stage that
+      # runs `cargo build --bin core --bin poller`, so `core` compiles the workspace, exports that
+      # stage to the `rust` BuildKit cache scope, and `poller` imports it and only assembles its
+      # runtime layer. Run them in parallel and the workspace is compiled twice from cold.
       max-parallel: 1
       matrix:
         include:
-          - { name: core, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: core }
-          - { name: poller, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: poller }
-          - { name: web, context: ./web, dockerfile: docker/web.Dockerfile, target: "" }
+          - { name: core, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: core, cache_scope: rust }
+          - { name: poller, context: ., dockerfile: docker/yagra-rust.Dockerfile, target: poller, cache_scope: rust }
+          - { name: web, context: ./web, dockerfile: docker/web.Dockerfile, target: "", cache_scope: web }
     steps:
       - uses: actions/checkout@v6
-      # Use the host dockerd's built-in BuildKit (`driver: docker`), not an ephemeral
-      # docker-container builder. The container builder is torn down after each run, discarding its
-      # `RUN --mount=type=cache` storage (the compiled cargo `target/` + registry) — so every image
-      # build started cold. The host BuildKit persists on the self-hosted runner, so those cache
-      # mounts survive between runs and dependency compilation is reused across builds.
+      # The hosted image ships toolchains this build never uses, and a release-profile Rust build
+      # plus the wkhtmltopdf layer is the kind of thing that runs a hosted runner out of disk
+      # halfway through. Reclaiming these costs seconds and buys ~20 GB.
+      - name: Reclaim runner disk
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup
+          df -h /
+      # The default `docker-container` driver, NOT `driver: docker`. On the self-hosted host the
+      # latter was correct: it used the host's persistent BuildKit, so `RUN --mount=type=cache`
+      # storage (the compiled cargo `target/` + registry) survived between runs. On a hosted runner
+      # there is no persistent host BuildKit to inherit — the machine is new every job — so that
+      # driver would give up layer caching for nothing. The container driver can import/export the
+      # GHA cache instead, which is the only cache that crosses runs here.
       - uses: docker/setup-buildx-action@v4
-        with:
-          driver: docker
       # Publish to GHCR on a v* release tag ONLY. PRs build without pushing: development builds
       # reach the test server through `/flashdeploy`'s private registry and never appear in GHCR,
       # so the package list is the release history and nothing else.
@@ -198,10 +223,11 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       # Image tags.
       #
-      # PR — one FIXED local tag, overwritten every run. Nothing is pushed, so a per-commit tag
-      # would only pile images up in the shared runner daemon that nothing ever consumes (it
-      # reached 363 images / 13 GB under the old scheme). The name carries no registry host, so it
-      # cannot be pushed anywhere by accident.
+      # PR — one FIXED local tag. Nothing is pushed and nothing is loaded into a daemon, so on a
+      # hosted runner this is only a label on a build that dies with the machine; the job's value is
+      # that the Dockerfile still builds. (Under the self-hosted scheme it mattered more: a
+      # per-commit tag piled images up in the shared daemon, reaching 363 images / 13 GB.) Keep the
+      # name free of a registry host so it cannot be pushed anywhere by accident.
       #
       # v* tag — the release. `:v<version>` is what consumers pin, `:<sha>` is that release's
       # immutable reference, and `:latest` means THE LATEST STABLE RELEASE, so it moves only when
@@ -270,8 +296,17 @@ jobs:
           build-args: ${{ steps.buildargs.outputs.list }}
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.tags.outputs.list }}
-          # No type=gha cache: on the persistent self-hosted runner the local docker layer cache is
-          # reused anyway, and the GHA cache service was hanging the build (stuck importing, no CPU).
+          # `mode=max` exports intermediate stages, not just the final image — that is what makes the
+          # shared `build` stage available to `poller` after `core` has produced it (see the
+          # `max-parallel` note). `core` and `poller` therefore share one scope; `web` is a different
+          # Dockerfile and gets its own so the two do not evict each other out of the repository's
+          # 10 GB Actions cache.
+          #
+          # This does NOT restore the Dockerfile's `RUN --mount=type=cache` cargo directories — no
+          # cache backend exports cache mounts. Layers are reused; the compile is not. A cold cargo
+          # build per release is the accepted cost of moving off the self-hosted host.
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
 
   # There is deliberately no `deploy` job. CI's responsibility ends at publishing the images;
   # deployment to the test server is an explicit act, run from a workstation over SSH by the

@@ -13,9 +13,12 @@
 #     maintainer having to approve a run first. The usual danger of `pull_request_target` is
 #     checking out and executing the fork's code with that token; this job never checks anything
 #     out and runs only `gh`.
-#   * **GitHub-hosted runner, not `yagra-build`.** The rest of CI runs self-hosted, but this
-#     workflow is reachable by any stranger opening a PR. Scheduling that on the build host would
-#     let an outsider queue work on it. A few seconds of hosted runner time is the right trade.
+#   * **GitHub-hosted runner.** This was once the one workflow that had to be hosted, because the
+#     rest of CI ran on the build host and this one is reachable by any stranger opening a PR. All
+#     of CI is hosted now (see the note at the top of `ci.yml` — the self-hosted runners were
+#     deregistered when the repository went public), so this is no longer the exception. It stays
+#     spelled out because the reasoning is still the reason: nothing a stranger can trigger should
+#     ever be schedulable onto a machine inside the network.
 name: pull requests are not accepted
 
 on:

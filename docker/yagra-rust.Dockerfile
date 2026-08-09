@@ -102,11 +102,14 @@ RUN echo "${SOURCE_REF}" > /etc/yagra-source-ref
 RUN echo "${CARGO_PROFILE}" > /etc/yagra-build-profile
 
 COPY . .
-# Reuse compiled deps + cargo registry across builds via BuildKit cache mounts. On the persistent
-# self-hosted CI runner these survive between runs, so a one-line source change recompiles only the
-# changed crates instead of every dependency from scratch. Both binaries are built in one invocation
-# so shared workspace deps compile once, not once per image. Cache mounts aren't part of the image
-# filesystem, so copy the finished binaries out of /app/target before the stage ends.
+# Reuse compiled deps + cargo registry across builds via BuildKit cache mounts. These help wherever
+# BuildKit itself persists — a local `docker build` on the build host, and `/flashdeploy`, which
+# compiles against its own named volume. They do NOT help in CI any more: CI runs on hosted runners
+# and **no cache backend exports cache mounts**, so `type=gha` restores layers but never these
+# directories, and a CI image build compiles the workspace from cold. Both binaries are still built
+# in one invocation so shared workspace deps compile once, not once per image. Cache mounts aren't
+# part of the image filesystem, so copy the finished binaries out of /app/target before the stage
+# ends.
 RUN --mount=type=cache,target=/app/target \
     --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
