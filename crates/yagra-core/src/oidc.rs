@@ -164,6 +164,65 @@ type GroupsClient<
 
 // ── Provider config / API shapes ────────────────────────────────────────────────────────────────
 
+/// Which IdP product a provider was configured for.
+///
+/// Descriptive only: the login handshake is driven by `issuer`, `scopes` and `groups_claim`, and
+/// behaves identically whichever product is named here. `generic` means the provider was defined
+/// field by field rather than from a product's shape.
+//
+// (ADR-010 Increment 2.) Why it is stored at all: the admin form has to put the same
+// product-specific shape back when a provider is reopened, and deriving the product from the issuer
+// URL instead would be the same fact in two places — one that does not survive an Okta custom
+// authorization server or a self-hosted issuer.
+//
+// The catalogue itself — which URL each product's issuer is built from, which scopes it wants —
+// lives only in `web/src/pages/oidcPresets.ts`. There is deliberately no copy here: a second copy of
+// the same string literals is the drift trap this repo keeps paying for, and the server makes no
+// decision from it. Keep the rationale in `//`: a `///` on a `ToSchema` type is published verbatim
+// to API clients and to the public API reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OidcProviderKind {
+    /// Microsoft Entra ID.
+    Entra,
+    /// Okta.
+    Okta,
+    /// Google Workspace.
+    Google,
+    /// Any other OIDC-capable IdP, configured field by field.
+    #[default]
+    Generic,
+}
+
+impl OidcProviderKind {
+    /// Every variant. Load-bearing: [`Self::from_token`] is derived from it, so a product added
+    /// here without a token is a test failure rather than a row that silently reads as generic.
+    pub const ALL: [Self; 4] = [Self::Entra, Self::Okta, Self::Google, Self::Generic];
+
+    /// The token stored in `oidc_providers.kind`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Entra => "entra",
+            Self::Okta => "okta",
+            Self::Google => "google",
+            Self::Generic => "generic",
+        }
+    }
+
+    /// Read a stored token. **Deliberately total**: a value this binary has never heard of — a row
+    /// written by a newer core — reads as [`Self::Generic`] rather than failing the row and taking
+    /// the whole provider list down with it. Same call as `LinkSource` (ADR-043), and the reason
+    /// migration 0077 carries no `CHECK`.
+    #[must_use]
+    pub fn from_token(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|k| k.as_str() == s)
+            .unwrap_or(Self::Generic)
+    }
+}
+
 /// A fully-resolved provider (client_secret decrypted, role_map/scopes parsed) — used at login.
 /// The plaintext `client_secret` lives only in memory and is never logged or returned.
 pub struct OidcProviderConfig {
@@ -183,6 +242,8 @@ pub struct OidcProviderConfig {
 pub struct OidcProviderSummary {
     pub id: Uuid,
     pub name: String,
+    /// Which IdP product this provider was configured for.
+    pub kind: OidcProviderKind,
     pub issuer: String,
     pub client_id: String,
     pub redirect_uri: String,
@@ -200,6 +261,9 @@ pub struct OidcProviderSummary {
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct OidcProviderInput {
     pub name: String,
+    /// Which IdP product this is. Omitted ⇒ `generic`.
+    #[serde(default)]
+    pub kind: OidcProviderKind,
     pub issuer: String,
     pub client_id: String,
     pub client_secret: Option<String>,
@@ -488,9 +552,11 @@ impl OidcRepo {
         let role_map: serde_json::Value = row.try_get("role_map")?;
         let role_map: HashMap<String, String> =
             serde_json::from_value(role_map).unwrap_or_default();
+        let kind: String = row.try_get("kind")?;
         Ok(OidcProviderSummary {
             id: row.try_get("id")?,
             name: row.try_get("name")?,
+            kind: OidcProviderKind::from_token(&kind),
             issuer: row.try_get("issuer")?,
             client_id: row.try_get("client_id")?,
             redirect_uri: row.try_get("redirect_uri")?,
@@ -506,8 +572,8 @@ impl OidcRepo {
     /// All providers (metadata only — no secret).
     pub async fn list(&self) -> anyhow::Result<Vec<OidcProviderSummary>> {
         let rows = sqlx::query(
-            "SELECT id, name, issuer, client_id, redirect_uri, scopes, groups_claim, role_map, \
-             default_role, enabled FROM oidc_providers ORDER BY created_at, name",
+            "SELECT id, name, kind, issuer, client_id, redirect_uri, scopes, groups_claim, \
+             role_map, default_role, enabled FROM oidc_providers ORDER BY created_at, name",
         )
         .fetch_all(&self.pool)
         .await?;
@@ -563,8 +629,8 @@ impl OidcRepo {
         sqlx::query(
             "INSERT INTO oidc_providers \
              (id, name, issuer, client_id, key_id, wrapped_dek, dek_nonce, ciphertext, ct_nonce, \
-              redirect_uri, scopes, groups_claim, role_map, default_role, enabled) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+              redirect_uri, scopes, groups_claim, role_map, default_role, enabled, kind) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
         )
         .bind(id)
         .bind(&input.name)
@@ -581,6 +647,7 @@ impl OidcRepo {
         .bind(role_map)
         .bind(&input.default_role)
         .bind(input.enabled)
+        .bind(input.kind.as_str())
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -599,8 +666,8 @@ impl OidcRepo {
             sqlx::query(
                 "UPDATE oidc_providers SET name=$2, issuer=$3, client_id=$4, redirect_uri=$5, \
                  scopes=$6, groups_claim=$7, role_map=$8, default_role=$9, enabled=$10, \
-                 key_id=$11, wrapped_dek=$12, dek_nonce=$13, ciphertext=$14, ct_nonce=$15 \
-                 WHERE id=$1",
+                 key_id=$11, wrapped_dek=$12, dek_nonce=$13, ciphertext=$14, ct_nonce=$15, \
+                 kind=$16 WHERE id=$1",
             )
             .bind(id)
             .bind(&input.name)
@@ -617,12 +684,14 @@ impl OidcRepo {
             .bind(&sealed.dek_nonce)
             .bind(&sealed.ciphertext)
             .bind(&sealed.ct_nonce)
+            .bind(input.kind.as_str())
             .execute(&self.pool)
             .await?
         } else {
             sqlx::query(
                 "UPDATE oidc_providers SET name=$2, issuer=$3, client_id=$4, redirect_uri=$5, \
-                 scopes=$6, groups_claim=$7, role_map=$8, default_role=$9, enabled=$10 WHERE id=$1",
+                 scopes=$6, groups_claim=$7, role_map=$8, default_role=$9, enabled=$10, \
+                 kind=$11 WHERE id=$1",
             )
             .bind(id)
             .bind(&input.name)
@@ -634,6 +703,7 @@ impl OidcRepo {
             .bind(&role_map)
             .bind(&input.default_role)
             .bind(input.enabled)
+            .bind(input.kind.as_str())
             .execute(&self.pool)
             .await?
         };
@@ -716,6 +786,40 @@ mod tests {
 
     fn map(pairs: &[(&str, Role)]) -> HashMap<String, Role> {
         pairs.iter().map(|(g, r)| ((*g).to_owned(), *r)).collect()
+    }
+
+    // `kind` is both a DB column token and a JSON field, produced by two different mechanisms
+    // (`as_str` and `#[serde(rename_all)]`). Nothing makes them agree, and a disagreement means the
+    // rows the writer produces are rows the reader misreads — silently, as `generic`.
+    #[test]
+    fn every_provider_kind_round_trips_through_its_token_and_through_serde() {
+        for k in OidcProviderKind::ALL {
+            assert_eq!(OidcProviderKind::from_token(k.as_str()), k, "{k:?}");
+            assert_eq!(
+                serde_json::to_value(k).unwrap(),
+                serde_json::Value::String(k.as_str().to_owned()),
+                "{k:?}"
+            );
+        }
+    }
+
+    // Migration 0077 carries no CHECK on purpose: a row written by a newer core naming a product
+    // this binary has never heard of must degrade to the free-text form, not fail the row and take
+    // the whole provider list with it.
+    #[test]
+    fn an_unknown_provider_kind_reads_as_generic() {
+        assert_eq!(
+            OidcProviderKind::from_token("keycloak"),
+            OidcProviderKind::Generic
+        );
+        assert_eq!(OidcProviderKind::from_token(""), OidcProviderKind::Generic);
+        // And an input that omits the field entirely — an N-1 client — says the same thing.
+        let input: OidcProviderInput = serde_json::from_str(
+            r#"{"name":"idp","issuer":"https://idp.example.com","client_id":"c",
+                "redirect_uri":"https://yagra.example.com/auth/callback"}"#,
+        )
+        .unwrap();
+        assert_eq!(input.kind, OidcProviderKind::Generic);
     }
 
     #[test]

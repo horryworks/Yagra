@@ -25273,6 +25273,10 @@
           "issuer": {
             "type": "string"
           },
+          "kind": {
+            "$ref": "#/components/schemas/OidcProviderKind",
+            "description": "Which IdP product this is. Omitted ⇒ `generic`."
+          },
           "name": {
             "type": "string"
           },
@@ -25293,12 +25297,23 @@
           }
         }
       },
+      "OidcProviderKind": {
+        "type": "string",
+        "description": "Which IdP product a provider was configured for.\n\nDescriptive only: the login handshake is driven by `issuer`, `scopes` and `groups_claim`, and\nbehaves identically whichever product is named here. `generic` means the provider was defined\nfield by field rather than from a product's shape.",
+        "enum": [
+          "entra",
+          "okta",
+          "google",
+          "generic"
+        ]
+      },
       "OidcProviderSummary": {
         "type": "object",
         "description": "Provider metadata for the admin API — **never** includes the client_secret.",
         "required": [
           "id",
           "name",
+          "kind",
           "issuer",
           "client_id",
           "redirect_uri",
@@ -25334,6 +25349,10 @@
           },
           "issuer": {
             "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/OidcProviderKind",
+            "description": "Which IdP product this provider was configured for."
           },
           "name": {
             "type": "string"

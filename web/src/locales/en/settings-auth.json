@@ -8,6 +8,18 @@
     "enabled": "Enabled",
     "disabled": "Disabled"
   },
+  "idp": {
+    "entra": "Microsoft Entra ID",
+    "okta": "Okta",
+    "google": "Google Workspace",
+    "generic": "Other (any OIDC provider)"
+  },
+  "idpHint": {
+    "entra": "Register Yagra as an application in Entra ID and paste its directory (tenant) ID below. Only the standard OIDC scopes are requested — Entra refuses any other, and the sign-in page never appears. To map roles from groups, turn on the groups claim under the app registration's Token configuration; the claim arrives as group object IDs.",
+    "okta": "Register Yagra as an OIDC web application in Okta. Yagra signs in against your org authorization server, which serves group membership directly. A custom authorization server has its own issuer URL and needs a groups claim configured on it — use \"Other\" for that.",
+    "google": "Create an OAuth client for a web application in Google Cloud. Google Workspace does not put group membership in the ID token, so roles cannot be mapped from groups — set a default role below to decide what everyone signing in becomes.",
+    "generic": "Enter the provider's details by hand. Use this for any IdP not listed above, and for an Okta custom authorization server."
+  },
   "add": {
     "title": "Add provider"
   },
@@ -19,9 +31,18 @@
     "confirm": "Delete the SSO provider \"{{name}}\"? Users who sign in via SSO will no longer be able to."
   },
   "field": {
+    "product": "Identity provider",
     "name": "Display name",
     "issuer": "Issuer URL",
     "issuerHint": "The provider's base URL; discovery reads {issuer}/.well-known/openid-configuration.",
+    "issuerUnrecognized": "This provider's issuer is not one this form builds — it is shown as stored and is left alone unless you change it. Pick the provider again above to switch to its own field.",
+    "tenant": "Directory (tenant) ID",
+    "tenantPlaceholder": "00000000-0000-0000-0000-000000000000",
+    "tenantHint": "From the app registration's Overview. A verified domain (contoso.onmicrosoft.com) works too.",
+    "domain": "Okta domain",
+    "domainPlaceholder": "acme.okta.com",
+    "domainHint": "Your Okta org, without https:// and without a path.",
+    "requested": "What Yagra will request",
     "clientId": "Client ID",
     "replaceSecret": "Replace client secret",
     "clientSecret": "Client secret",
@@ -33,11 +54,14 @@
     "groupsClaimHint": "The ID-token claim that carries the user's groups (default: groups).",
     "roleMap": "Group → role mapping",
     "roleMapHint": "Map IdP group names to Yagra roles. The highest matching role wins.",
+    "noGroups": "This provider does not put group membership in the ID token, so there is nothing to map. Every account that signs in gets the default role below.",
     "groupPlaceholder": "idp-group-name",
+    "groupPlaceholderEntra": "group object ID (GUID)",
     "addMapping": "Add mapping",
     "defaultRole": "Default role",
     "defaultRoleNone": "None — deny if no group maps",
     "defaultRoleHint": "Role for a user whose groups don't match any mapping.",
+    "defaultRoleRequired": "Required for this provider: it is the role every account that signs in will get. Leaving it unset would deny everyone.",
     "enabled": "Enabled"
   },
   "err": {

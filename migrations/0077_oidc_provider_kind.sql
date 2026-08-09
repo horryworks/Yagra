@@ -1,0 +1,23 @@
+-- 0077_oidc_provider_kind — record WHICH IdP product a provider was configured for (ADR-010 Inc.2).
+--
+-- The provider form used to ask for all eight fields as free text, which assumes the operator
+-- already knows what their IdP wants. It does not: Entra rejects any non-standard scope outright
+-- (AADSTS70011), so the shipped default `openid profile email groups` meant an Entra deployment
+-- never reached the sign-in page — while that same `groups` is exactly how Okta delivers the claim.
+-- No single string is right for both, so the form now asks which product this is and offers only
+-- the fields that product needs.
+--
+-- The product has to be remembered, or reopening the provider for editing could not put the same
+-- form back. Deriving it from the issuer URL instead would be the same fact in two places, and it
+-- breaks for Okta custom authorization servers and self-hosted issuers.
+--
+-- Additive + defaulted ⇒ N-1 safe (ADR-017 expand-contract). Existing rows become 'generic', which
+-- is what they truthfully are: they were configured through the free-text form. An older binary
+-- does not select the column and is unaffected.
+--
+-- No CHECK constraint, deliberately — the same call as topology_links.sources (ADR-043). The Rust
+-- enum is the guard and parses leniently, so a row written by a newer core carrying a product this
+-- binary has not heard of is read as 'generic' rather than failing the row and taking the whole
+-- provider list with it.
+
+ALTER TABLE oidc_providers ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'generic';

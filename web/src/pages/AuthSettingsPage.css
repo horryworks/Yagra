@@ -45,6 +45,27 @@
 .auth-badge.off {
   color: var(--text-tertiary);
 }
+/* Which IdP product the provider was configured for — neutral, so it never competes with the
+   enabled/disabled badge next to it, which is the one carrying status. */
+.auth-badge.product {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* "What Yagra will request" — the scopes and claim a product decides. Disclosed rather than hidden:
+   it is what an operator has to reason about when the IdP refuses a sign-in. */
+.auth-advanced {
+  margin: 0 0 12px;
+}
+.auth-advanced > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: calc(var(--font-size-base) * 0.9);
+  margin-bottom: 8px;
+}
+.auth-advanced > summary:hover {
+  color: var(--text-primary);
+}
 
 /* "Replace secret" / "Enabled" inline checkboxes (mirrors the credentials replace toggle). */
 .auth-replace {

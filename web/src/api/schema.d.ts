@@ -6772,6 +6772,8 @@ export interface components {
             enabled?: boolean;
             groups_claim?: string;
             issuer: string;
+            /** @description Which IdP product this is. Omitted ⇒ `generic`. */
+            kind?: components["schemas"]["OidcProviderKind"];
             name: string;
             redirect_uri: string;
             role_map?: {
@@ -6779,6 +6781,15 @@ export interface components {
             };
             scopes?: string;
         };
+        /**
+         * @description Which IdP product a provider was configured for.
+         *
+         *     Descriptive only: the login handshake is driven by `issuer`, `scopes` and `groups_claim`, and
+         *     behaves identically whichever product is named here. `generic` means the provider was defined
+         *     field by field rather than from a product's shape.
+         * @enum {string}
+         */
+        OidcProviderKind: "entra" | "okta" | "google" | "generic";
         /** @description Provider metadata for the admin API — **never** includes the client_secret. */
         OidcProviderSummary: {
             client_id: string;
@@ -6790,6 +6801,8 @@ export interface components {
             /** Format: uuid */
             id: string;
             issuer: string;
+            /** @description Which IdP product this provider was configured for. */
+            kind: components["schemas"]["OidcProviderKind"];
             name: string;
             redirect_uri: string;
             role_map: {

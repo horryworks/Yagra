@@ -7,6 +7,18 @@
     "enabled": "有効",
     "disabled": "無効"
   },
+  "idp": {
+    "entra": "Microsoft Entra ID",
+    "okta": "Okta",
+    "google": "Google Workspace",
+    "generic": "その他（任意の OIDC プロバイダ）"
+  },
+  "idpHint": {
+    "entra": "Entra ID にアプリケーションとして Yagra を登録し、そのディレクトリ (テナント) ID を下に貼り付けてください。要求するスコープは標準の OIDC スコープだけです。Entra はそれ以外を拒否し、サインイン画面そのものが表示されません。グループからロールを決めるには、アプリ登録の Token configuration でグループクレームを有効にしてください。クレームにはグループのオブジェクト ID が入ります。",
+    "okta": "Okta に OIDC の Web アプリケーションとして Yagra を登録してください。サインイン先は org authorization server で、グループ情報はそのまま取得できます。カスタム authorization server は issuer URL が別で、グループクレームの設定も個別に必要なので、その場合は「その他」を使ってください。",
+    "google": "Google Cloud で Web アプリケーション用の OAuth クライアントを作成してください。Google Workspace は ID トークンにグループ情報を含めないため、グループからロールを決めることはできません。サインインした全員に与えるロールを、下の既定ロールで決めてください。",
+    "generic": "プロバイダの情報を手で入力します。一覧に無い IdP と、Okta のカスタム authorization server はこちらを使ってください。"
+  },
   "add": {
     "title": "プロバイダを追加"
   },
@@ -18,9 +30,18 @@
     "confirm": "SSO プロバイダ「{{name}}」を削除しますか？SSO を使っているユーザーはサインインできなくなります。"
   },
   "field": {
+    "product": "IdP",
     "name": "表示名",
     "issuer": "Issuer URL",
     "issuerHint": "プロバイダのベース URL です。ディスカバリは {issuer}/.well-known/openid-configuration を参照します。",
+    "issuerUnrecognized": "この Issuer URL はこのフォームが組み立てる形ではないため、保存されている値をそのまま表示しています。編集しなければこの値は変わりません。上の IdP を選び直すと、その IdP 専用の入力欄に切り替わります。",
+    "tenant": "ディレクトリ (テナント) ID",
+    "tenantPlaceholder": "00000000-0000-0000-0000-000000000000",
+    "tenantHint": "アプリ登録の概要ページに表示されます。検証済みドメイン（contoso.onmicrosoft.com）でも構いません。",
+    "domain": "Okta ドメイン",
+    "domainPlaceholder": "acme.okta.com",
+    "domainHint": "組織の Okta ドメインです。https:// とパスは付けません。",
+    "requested": "Yagra が要求する内容",
     "clientId": "クライアント ID",
     "replaceSecret": "クライアントシークレットを差し替える",
     "clientSecret": "クライアントシークレット",
@@ -32,11 +53,14 @@
     "groupsClaimHint": "ユーザーのグループが入っている ID トークンのクレーム名です（既定: groups）。",
     "roleMap": "グループ → ロールの対応づけ",
     "roleMapHint": "IdP のグループ名を Yagra のロールに対応づけます。複数一致した場合は、最も高いロールを採用します。",
+    "noGroups": "この IdP は ID トークンにグループ情報を含めないため、対応づけるものがありません。サインインしたアカウントはすべて、下の既定ロールになります。",
     "groupPlaceholder": "idp-group-name",
+    "groupPlaceholderEntra": "グループのオブジェクト ID (GUID)",
     "addMapping": "対応づけを追加",
     "defaultRole": "既定ロール",
     "defaultRoleNone": "なし — 対応づけが無ければ拒否",
     "defaultRoleHint": "どの対応づけにも一致しなかったユーザーに与えるロールです。",
+    "defaultRoleRequired": "この IdP では必須です。サインインした全員がこのロールになります。未設定のままにすると全員が拒否されます。",
     "enabled": "有効"
   },
   "err": {

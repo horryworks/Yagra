@@ -497,6 +497,7 @@ mod tests {
     fn sample_input() -> crate::oidc::OidcProviderInput {
         crate::oidc::OidcProviderInput {
             name: "idp".to_owned(),
+            kind: crate::oidc::OidcProviderKind::Generic,
             issuer: "https://idp.example.com".to_owned(),
             client_id: "yagra".to_owned(),
             client_secret: Some("s".to_owned()),

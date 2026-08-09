@@ -12,10 +12,19 @@ import {
   type LdapConfigView,
   type LdapSecurity,
   type LdapTestResult,
+  type OidcProviderKind,
   type OidcProviderSummary,
   type OidcProviderInput,
   type Role,
 } from '../types/api';
+import {
+  OIDC_PICKER_ORDER,
+  effectiveIssuer,
+  paramFromIssuer,
+  presetOf,
+  providerFormReady,
+  roleMapToSend,
+} from './oidcPresets';
 import {
   connectionUrl,
   defaultPortFor,
@@ -63,8 +72,24 @@ function ProviderModal({
 }) {
   const { t } = useTranslation('settings-auth');
   const editing = provider != null;
+  // A new provider starts on the first product in the picker; an existing one reopens as whatever
+  // it was saved as, which is the whole reason the kind is stored server-side.
+  const initialKind: OidcProviderKind = provider?.kind ?? OIDC_PICKER_ORDER[0];
+  const [kind, setKind] = useState<OidcProviderKind>(initialKind);
+  const preset = presetOf(kind);
   const [name, setName] = useState(provider?.name ?? '');
   const [issuer, setIssuer] = useState(provider?.issuer ?? '');
+  // The one product-specific field the issuer is built from (tenant id / Okta domain).
+  const [issuerParam, setIssuerParam] = useState(
+    provider ? (paramFromIssuer(initialKind, provider.issuer) ?? '') : '',
+  );
+  // A stored issuer this product's form cannot represent — an Okta custom authorization server, or
+  // a row written through the API. Show the raw URL instead of silently rewriting it.
+  const [rawIssuer, setRawIssuer] = useState(
+    provider != null &&
+      presetOf(initialKind).issuerParam !== null &&
+      paramFromIssuer(initialKind, provider.issuer) === null,
+  );
   const [clientId, setClientId] = useState(provider?.client_id ?? '');
   const [replaceSecret, setReplaceSecret] = useState(!editing);
   const [clientSecret, setClientSecret] = useState('');
@@ -72,8 +97,12 @@ function ProviderModal({
     provider?.redirect_uri ??
       (typeof window !== 'undefined' ? `${window.location.origin}/auth/callback` : ''),
   );
-  const [scopes, setScopes] = useState(provider?.scopes ?? 'openid profile email groups');
-  const [groupsClaim, setGroupsClaim] = useState(provider?.groups_claim ?? 'groups');
+  // Reopening a provider reads back what is stored, never the preset — a value edited around this
+  // form must survive being looked at. The preset is applied on create and on switching product.
+  const [scopes, setScopes] = useState(provider?.scopes ?? presetOf(initialKind).scopes);
+  const [groupsClaim, setGroupsClaim] = useState(
+    provider?.groups_claim ?? presetOf(initialKind).groupsClaim,
+  );
   const [rows, setRows] = useState<MapRow[]>(
     provider
       ? Object.entries(provider.role_map).map(([group, role]) => ({
@@ -90,15 +119,28 @@ function ProviderModal({
   const [busy, setBusy] = useState(false);
 
   const secretReady = !replaceSecret ? true : clientSecret !== '';
-  const ready =
-    name.trim() !== '' &&
-    issuer.trim() !== '' &&
-    clientId.trim() !== '' &&
-    redirectUri.trim() !== '' &&
-    secretReady;
+  const sentIssuer = effectiveIssuer(kind, issuerParam, issuer);
+  const ready = providerFormReady({
+    kind,
+    name,
+    issuer: sentIssuer,
+    clientId,
+    redirectUri,
+    secretReady,
+    defaultRole,
+  });
 
   const setRow = (i: number, patch: Partial<MapRow>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  /** Switching product re-applies its scopes and claim, and puts the product's own issuer field
+   *  back — the operator asked for this product's shape, so stop showing the free-text fallback. */
+  const changeKind = (next: OidcProviderKind) => {
+    setKind(next);
+    setScopes(presetOf(next).scopes);
+    setGroupsClaim(presetOf(next).groupsClaim);
+    setRawIssuer(false);
+  };
 
   const submit = () => {
     if (!ready) return;
@@ -111,13 +153,14 @@ function ProviderModal({
     }
     const body: OidcProviderInput = {
       name: name.trim(),
-      issuer: issuer.trim(),
+      kind,
+      issuer: sentIssuer,
       client_id: clientId.trim(),
       ...(replaceSecret ? { client_secret: clientSecret } : {}),
       redirect_uri: redirectUri.trim(),
       scopes: scopes.trim(),
       groups_claim: groupsClaim.trim() || 'groups',
-      role_map,
+      role_map: roleMapToSend(kind, role_map),
       default_role: defaultRole === '' ? null : defaultRole,
       enabled,
     };
@@ -151,19 +194,53 @@ function ProviderModal({
       }
     >
       <div className="modal-field">
+        <label className="modal-field-label">{t('field.product')}</label>
+        <Select value={kind} onChange={(e) => changeKind(e.target.value as OidcProviderKind)}>
+          {OIDC_PICKER_ORDER.map((k) => (
+            <option key={k} value={k}>
+              {t(`idp.${k}`)}
+            </option>
+          ))}
+        </Select>
+        <span className="modal-hint">{t(`idpHint.${kind}`)}</span>
+      </div>
+      <div className="modal-field">
         <label className="modal-field-label">{t('field.name')}</label>
         <TextInput value={name} onChange={(e) => setName(e.target.value)} autoFocus />
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.issuer')}</label>
-        <TextInput
-          className="mono"
-          placeholder="https://idp.example.com"
-          value={issuer}
-          onChange={(e) => setIssuer(e.target.value)}
-        />
-        <span className="modal-hint">{t('field.issuerHint')}</span>
-      </div>
+      {/* One issuer, three shapes: built from a single product field, fixed by the product, or
+          typed out. The fallback to a raw URL is what keeps reopening a hand-written provider from
+          rewriting its issuer. */}
+      {preset.fixedIssuer !== null ? (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.issuer')}</label>
+          <TextInput className="mono" value={preset.fixedIssuer} readOnly disabled />
+        </div>
+      ) : preset.issuerParam !== null && !rawIssuer ? (
+        <div className="modal-field">
+          <label className="modal-field-label">{t(`field.${preset.issuerParam}`)}</label>
+          <TextInput
+            className="mono"
+            placeholder={t(`field.${preset.issuerParam}Placeholder`)}
+            value={issuerParam}
+            onChange={(e) => setIssuerParam(e.target.value)}
+          />
+          <span className="modal-hint">{t(`field.${preset.issuerParam}Hint`)}</span>
+        </div>
+      ) : (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.issuer')}</label>
+          <TextInput
+            className="mono"
+            placeholder="https://idp.example.com"
+            value={issuer}
+            onChange={(e) => setIssuer(e.target.value)}
+          />
+          <span className="modal-hint">
+            {rawIssuer ? t('field.issuerUnrecognized') : t('field.issuerHint')}
+          </span>
+        </div>
+      )}
       <div className="modal-field">
         <label className="modal-field-label">{t('field.clientId')}</label>
         <TextInput
@@ -204,55 +281,96 @@ function ProviderModal({
         />
         <span className="modal-hint">{t('field.redirectUriHint')}</span>
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.scopes')}</label>
-        <TextInput className="mono" value={scopes} onChange={(e) => setScopes(e.target.value)} />
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.groupsClaim')}</label>
-        <TextInput
-          className="mono"
-          value={groupsClaim}
-          onChange={(e) => setGroupsClaim(e.target.value)}
-        />
-        <span className="modal-hint">{t('field.groupsClaimHint')}</span>
-      </div>
-
-      <div className="modal-field">
-        <label className="modal-field-label">{t('field.roleMap')}</label>
-        <span className="modal-hint">{t('field.roleMapHint')}</span>
-        <div className="auth-rolemap">
-          {rows.map((r, i) => (
-            <div className="auth-rolemap-row" key={i}>
-              <TextInput
-                className="mono"
-                placeholder={t('field.groupPlaceholder')}
-                value={r.group}
-                onChange={(e) => setRow(i, { group: e.target.value })}
-              />
-              <Select value={r.role} onChange={(e) => setRow(i, { role: e.target.value as Role })}>
-                {ROLES.map((role) => (
-                  <option key={role} value={role}>
-                    {t(`common:role.${role}`)}
-                  </option>
-                ))}
-              </Select>
-              <Button
-                variant="outline"
-                onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
-              >
-                {t('common:actions.remove')}
-              </Button>
+      {/* For a product these two are decided by the product, but they are still shown rather than
+          hidden: what gets requested at the IdP is the thing an operator has to reason about when a
+          sign-in is refused. The free-text option keeps them editable, as this form always was. */}
+      {kind === 'generic' ? (
+        <>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('field.scopes')}</label>
+            <TextInput
+              className="mono"
+              value={scopes}
+              onChange={(e) => setScopes(e.target.value)}
+            />
+          </div>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('field.groupsClaim')}</label>
+            <TextInput
+              className="mono"
+              value={groupsClaim}
+              onChange={(e) => setGroupsClaim(e.target.value)}
+            />
+            <span className="modal-hint">{t('field.groupsClaimHint')}</span>
+          </div>
+        </>
+      ) : (
+        <details className="auth-advanced">
+          <summary>{t('field.requested')}</summary>
+          <div className="modal-field">
+            <label className="modal-field-label">{t('field.scopes')}</label>
+            <TextInput className="mono" value={scopes} readOnly disabled />
+          </div>
+          {preset.supportsGroups && (
+            <div className="modal-field">
+              <label className="modal-field-label">{t('field.groupsClaim')}</label>
+              <TextInput className="mono" value={groupsClaim} readOnly disabled />
             </div>
-          ))}
-          <Button
-            variant="outline"
-            onClick={() => setRows((rs) => [...rs, { group: '', role: 'viewer' }])}
-          >
-            + {t('field.addMapping')}
-          </Button>
+          )}
+        </details>
+      )}
+
+      {/* A product that does not put groups in the ID token has no working map — offering one
+          would let an operator write rules that quietly never match. Say so instead. */}
+      {!preset.supportsGroups ? (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.roleMap')}</label>
+          <span className="modal-hint">{t('field.noGroups')}</span>
         </div>
-      </div>
+      ) : (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('field.roleMap')}</label>
+          <span className="modal-hint">{t('field.roleMapHint')}</span>
+          <div className="auth-rolemap">
+            {rows.map((r, i) => (
+              <div className="auth-rolemap-row" key={i}>
+                <TextInput
+                  className="mono"
+                  placeholder={
+                    kind === 'entra'
+                      ? t('field.groupPlaceholderEntra')
+                      : t('field.groupPlaceholder')
+                  }
+                  value={r.group}
+                  onChange={(e) => setRow(i, { group: e.target.value })}
+                />
+                <Select
+                  value={r.role}
+                  onChange={(e) => setRow(i, { role: e.target.value as Role })}
+                >
+                  {ROLES.map((role) => (
+                    <option key={role} value={role}>
+                      {t(`common:role.${role}`)}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="outline"
+                  onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                >
+                  {t('common:actions.remove')}
+                </Button>
+              </div>
+            ))}
+            <Button
+              variant="outline"
+              onClick={() => setRows((rs) => [...rs, { group: '', role: 'viewer' }])}
+            >
+              + {t('field.addMapping')}
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="modal-field">
         <label className="modal-field-label">{t('field.defaultRole')}</label>
@@ -267,7 +385,9 @@ function ProviderModal({
             </option>
           ))}
         </Select>
-        <span className="modal-hint">{t('field.defaultRoleHint')}</span>
+        <span className="modal-hint">
+          {preset.supportsGroups ? t('field.defaultRoleHint') : t('field.defaultRoleRequired')}
+        </span>
       </div>
 
       <label className="auth-replace">
@@ -730,6 +850,7 @@ export function AuthSettingsPage() {
                     <div className="auth-provider-main">
                       <div className="auth-provider-name">
                         {p.name}
+                        <span className="auth-badge product">{t(`idp.${p.kind}`)}</span>
                         <span className={p.enabled ? 'auth-badge on' : 'auth-badge off'}>
                           {p.enabled ? t('badge.enabled') : t('badge.disabled')}
                         </span>

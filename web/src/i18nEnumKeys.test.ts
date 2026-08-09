@@ -63,12 +63,15 @@ import {
 } from './components/NodeDetail/checkConfigForm';
 import { EXPIRY_CHOICES } from './pages/tokenForm';
 import { EXPIRY_LEVELS } from './pages/tlsSettingsForm';
+import { OIDC_ISSUER_PARAMS, OIDC_PICKER_ORDER } from './pages/oidcPresets';
 
 import enAccess from './locales/en/access.json';
 import enSettingsTokens from './locales/en/settings-tokens.json';
 import jaSettingsTokens from './locales/ja/settings-tokens.json';
 import enSettingsTls from './locales/en/settings-tls.json';
 import jaSettingsTls from './locales/ja/settings-tls.json';
+import enSettingsAuth from './locales/en/settings-auth.json';
+import jaSettingsAuth from './locales/ja/settings-auth.json';
 import jaAccess from './locales/ja/access.json';
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -303,6 +306,27 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSettingsTokens, ja: jaSettingsTokens };
     expectKeys('token surface', locales, 'surface.', TOKEN_SURFACES);
     expectKeys('token surface hint', locales, 'surfaceHint.', TOKEN_SURFACES);
+  });
+
+  it('every IdP product has a name and setup guidance (settings-auth:idp.*)', () => {
+    // The hint is the whole increment: it is where "Entra refuses a non-standard scope" and
+    // "Google puts no groups in the ID token" are told to the operator. A product added without one
+    // is a picker entry that offers no more help than the free-text form it replaced.
+    const locales = { en: enSettingsAuth, ja: jaSettingsAuth };
+    expectKeys('IdP product', locales, 'idp.', OIDC_PICKER_ORDER);
+    expectKeys('IdP product hint', locales, 'idpHint.', OIDC_PICKER_ORDER);
+  });
+
+  it('every product-specific issuer field is labelled (settings-auth:field.*)', () => {
+    // A product whose issuer is built from one field needs a label, a placeholder and a hint for
+    // it — the operator is being asked for a tenant id or an Okta domain, not for a URL.
+    const keys = OIDC_ISSUER_PARAMS.flatMap((p) => [p, `${p}Placeholder`, `${p}Hint`]);
+    expectKeys(
+      'issuer field',
+      { en: enSettingsAuth, ja: jaSettingsAuth },
+      'field.',
+      keys,
+    );
   });
 
   it('every token state has an explanation (settings-tokens:state.*)', () => {

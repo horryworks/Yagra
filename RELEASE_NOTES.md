@@ -114,6 +114,32 @@
     does not match are indistinguishable from the browser, so the message admits both rather than
     implying the fleet is idle.
 
+- **Adding an SSO provider now starts by picking which identity provider it is** — Microsoft Entra
+  ID, Okta, Google Workspace, or "Other" for anything else — and then asks only for what that
+  product needs. The form used to present eight free-text fields and assume the operator already
+  knew what their IdP wanted, which was not a safe assumption: the scopes it pre-filled included
+  `groups`, and **Entra ID rejects any non-standard scope outright, so an Entra deployment never
+  reached a sign-in page at all**. Dropping `groups` everywhere was not the fix either — it is
+  exactly how Okta delivers group membership. What each product now contributes:
+  - **Entra ID** asks for the directory (tenant) ID and builds the issuer URL from it. It requests
+    only the standard OIDC scopes, and says that the groups claim is turned on in the app
+    registration's token configuration and arrives as group object IDs.
+  - **Okta** asks for the org domain and builds the issuer URL from it, requesting the `groups`
+    scope its org authorization server serves. A custom authorization server has a different issuer
+    and belongs under "Other", which the form says.
+  - **Google Workspace** has one issuer, so there is no URL to enter. **Its group→role mapping is
+    gone, deliberately**: Google does not put group membership in the ID token, so a mapping
+    configured against it could never match. The form explains this and requires a default role,
+    since without one every sign-in would be denied.
+  - **"Other"** is the previous form, unchanged, for any other OIDC provider.
+  - **Existing providers are untouched.** They list and reopen as "Other", which is what they are —
+    they were defined field by field. Nothing about how a configured provider signs users in has
+    changed, and reopening one whose issuer this form does not build leaves it exactly as stored.
+  - The API gains an optional `kind` on `POST`/`PUT /api/v1/settings/oidc` and reports it on the
+    listing (and through the MCP `get_config` surface). Omitting it means `generic`.
+  - ⚠️ **This has not been exercised against a live Entra, Okta or Google tenant.** What each
+    product accepts is taken from its published documentation.
+
 ### Improvements
 - **Device health and the metric list on a node's Overview no longer require admin rights.** They
   were read from the collection-set endpoint, which requires ManageConfig, so a Viewer saw a single

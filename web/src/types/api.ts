@@ -266,6 +266,13 @@ export type OidcProviderSummary = components['schemas']['OidcProviderSummary'];
  *  update to keep the stored secret. */
 export type OidcProviderInput = components['schemas']['OidcProviderInput'];
 
+/** Which IdP product a provider was configured for. `generic` is last on purpose: it is the
+ *  escape hatch for anything not in the list, and the order here is the order of the picker. */
+export const OIDC_PROVIDER_KINDS = ['entra', 'okta', 'google', 'generic'] as const;
+
+/** An IdP product (snake_case). Pinned to `schemas.OidcProviderKind`. */
+export type OidcProviderKind = (typeof OIDC_PROVIDER_KINDS)[number];
+
 /** The configured LDAP/AD directory (`GET /api/v1/settings/ldap`). The bind password is write-only
  *  and never returned; `has_bind_password` signals one is stored. `ca_cert` is a certificate, not a
  *  secret, so it does round-trip. */
