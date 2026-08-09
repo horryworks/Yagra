@@ -413,12 +413,6 @@ impl Principal {
     pub fn can(&self, perm: Permission) -> bool {
         self.role.grants(perm)
     }
-
-    /// Whether the principal may see a node belonging to `node_groups`.
-    #[must_use]
-    pub fn can_see(&self, node_groups: &BTreeSet<String>) -> bool {
-        self.scope.allows(node_groups)
-    }
 }
 
 #[cfg(test)]
@@ -478,18 +472,18 @@ mod tests {
 
     #[test]
     fn all_scope_sees_everything_including_ungrouped() {
-        let p = Principal::new(Role::Admin, Scope::All);
-        assert!(p.can_see(&groups(&["tokyo"])));
-        assert!(p.can_see(&BTreeSet::new())); // ungrouped node
+        let s = Scope::All;
+        assert!(s.allows(&groups(&["tokyo"])));
+        assert!(s.allows(&BTreeSet::new())); // ungrouped node
     }
 
     #[test]
     fn group_scope_filters_visibility() {
-        let p = Principal::new(Role::Operator, Scope::groups(["tokyo", "osaka"]));
-        assert!(p.can_see(&groups(&["tokyo"])));
-        assert!(p.can_see(&groups(&["osaka", "edge"])));
-        assert!(!p.can_see(&groups(&["london"])));
-        assert!(!p.can_see(&BTreeSet::new())); // ungrouped not leaked to scoped user
+        let s = Scope::groups(["tokyo", "osaka"]);
+        assert!(s.allows(&groups(&["tokyo"])));
+        assert!(s.allows(&groups(&["osaka", "edge"])));
+        assert!(!s.allows(&groups(&["london"])));
+        assert!(!s.allows(&BTreeSet::new())); // ungrouped not leaked to scoped user
     }
 
     #[test]

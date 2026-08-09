@@ -25,14 +25,6 @@ pub enum MetricKind {
     Counter,
 }
 
-impl MetricKind {
-    /// Whether a rate/derivative is meaningful for this metric (i.e. it is a counter).
-    #[must_use]
-    pub const fn is_rate_derivable(&self) -> bool {
-        matches!(self, MetricKind::Counter)
-    }
-}
-
 /// Whether `name` is a legal Prometheus/VictoriaMetrics metric name — `[a-zA-Z_:][a-zA-Z0-9_:]*`,
 /// non-empty. Series identity is the single biggest cardinality risk (ADR-011), so this is the
 /// shape check applied at every edge where a metric name enters series identity: the API (operator
@@ -83,12 +75,6 @@ impl SeriesKey {
             metric: metric.into(),
         }
     }
-
-    /// Whether this series carries an interface dimension.
-    #[must_use]
-    pub const fn is_interface_scoped(&self) -> bool {
-        self.ifindex.is_some()
-    }
 }
 
 impl SeriesKey {
@@ -126,12 +112,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn counter_is_rate_derivable_gauge_is_not() {
-        assert!(MetricKind::Counter.is_rate_derivable());
-        assert!(!MetricKind::Gauge.is_rate_derivable());
-    }
-
-    #[test]
     fn metric_name_validation_accepts_real_names_and_rejects_injection() {
         // Every name the poller actually emits is valid.
         for ok in [
@@ -162,7 +142,6 @@ mod tests {
     #[test]
     fn node_series_has_no_interface() {
         let k = SeriesKey::node(NodeId::new(), "cpu_util");
-        assert!(!k.is_interface_scoped());
         assert_eq!(k.ifindex, None);
     }
 
@@ -170,7 +149,6 @@ mod tests {
     fn interface_series_carries_ifindex() {
         let node = NodeId::new();
         let k = SeriesKey::interface(node, IfIndex(3), "if_in_octets");
-        assert!(k.is_interface_scoped());
         assert_eq!(k.ifindex, Some(IfIndex(3)));
         assert_eq!(k.node, node);
     }

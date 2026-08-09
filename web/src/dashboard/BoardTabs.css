@@ -5,7 +5,7 @@
   align-items: center;
   gap: 6px;
   margin-bottom: 16px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: var(--border-width) solid var(--border-color);
   padding-bottom: 8px;
 }
 
@@ -13,7 +13,7 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
   background: var(--bg-secondary);
 }
@@ -72,7 +72,7 @@
 
 .board-tab-add {
   padding: 6px 12px;
-  border: 1px dashed var(--border-color);
+  border: var(--border-width) dashed var(--border-color);
   border-radius: var(--radius);
   background: none;
   color: var(--text-secondary);

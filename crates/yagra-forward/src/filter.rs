@@ -601,15 +601,6 @@ pub struct CompiledFilter {
 }
 
 impl CompiledFilter {
-    /// A filter that accepts everything (no conditions).
-    #[must_use]
-    pub fn allow_all() -> Self {
-        Self {
-            mode: FilterMode::All,
-            conditions: Vec::new(),
-        }
-    }
-
     /// Whether `view` passes.
     #[must_use]
     pub fn matches(&self, view: &FilterView<'_>) -> bool {

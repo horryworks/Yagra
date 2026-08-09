@@ -72,7 +72,7 @@
   margin: 12px 0;
   padding: 10px 12px;
   border-radius: 6px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   color: var(--text-primary);
   font-size: calc(var(--font-size-base) * 0.95);
 }

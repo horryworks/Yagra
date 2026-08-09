@@ -7,7 +7,7 @@
 //! (live-only); this addressing logic is pure and testable.
 
 /// Root subject namespace.
-pub const ROOT: &str = "yagra";
+pub(crate) const ROOT: &str = "yagra";
 
 /// Subject a poller in `pool` subscribes to for its jobs, e.g. `yagra.jobs.tokyo`.
 #[must_use]

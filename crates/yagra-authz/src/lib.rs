@@ -48,7 +48,7 @@ pub struct Permissions {
 /// [`subjects::sanitize_token`], which is exactly what the poller applies to its own id — so the
 /// granted `yagra.poller.assign.{id}` lines up with the subject the poller actually subscribes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PollerScope {
+pub(crate) struct PollerScope {
     pub id: String,
     pub pool: String,
 }
@@ -67,7 +67,7 @@ impl PollerScope {
 /// discovery, plus the fixed publish set and the client reply inbox. Crucially there are **no**
 /// wildcards over other pollers' or other pools' subjects — that is the whole point of the feature.
 #[must_use]
-pub fn allow_list(scope: &PollerScope) -> Permissions {
+pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
     Permissions {
         // Poller → core. A fixed set; `results.backfill` is included (store-and-forward, ADR — the
         // shared static account historically omitted it, which blocked backfill on the remote bus).
@@ -146,7 +146,7 @@ struct ReqConnectOpts {
 
 /// Decode (but do **not** cryptographically verify) an auth-callout request JWT. The server signs it and
 /// we trust the local NATS server; we only need the claims. Empty `user`/`name`/`pass` normalize to `None`.
-pub fn parse_auth_request(request_jwt: &str) -> Result<AuthRequest, AuthzError> {
+pub(crate) fn parse_auth_request(request_jwt: &str) -> Result<AuthRequest, AuthzError> {
     let mut parts = request_jwt.split('.');
     let (_header, body) = match (parts.next(), parts.next()) {
         (Some(h), Some(b)) if !h.is_empty() && !b.is_empty() => (h, b),
@@ -347,7 +347,7 @@ impl AccountSigner {
     }
 
     /// Mint a signed NATS user JWT granting exactly `perms`, bound to `user_nkey`.
-    pub fn mint_user_jwt(
+    pub(crate) fn mint_user_jwt(
         &self,
         user_nkey: &str,
         perms: &Permissions,

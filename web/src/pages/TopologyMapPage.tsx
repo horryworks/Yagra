@@ -12,7 +12,7 @@
 // The layout is hand-written SVG (`components/TopologyMap/graphLayout.ts`) — the graph is undirected
 // and keeps redundant links, so the tidy-tree that served the dependency map could not draw it.
 
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -21,9 +21,11 @@ import {
   layoutGraph,
   MAX_GRAPH_LINKS,
   MAX_GRAPH_NODES,
+  type PlacedNode,
 } from '../components/TopologyMap/graphLayout';
 import { stateColorVar, stateLabel } from '../lib/format';
 import { SEVERITY_ORDER } from '../lib/nodeState';
+import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { api } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
@@ -45,22 +47,41 @@ export function TopologyMapPage() {
   );
   const live = useNodeStates();
 
-  // Overlay the live SSE state on top of the fetched graph (S14): a fresh event wins over the
-  // slower structural refetch's snapshot.
-  const nodes = useMemo(() => {
-    const base = data?.nodes ?? [];
-    return base.map((n) => {
-      const s = live.get(n.id);
-      return s && s !== n.state ? { ...n, state: s } : n;
-    });
-  }, [data, live]);
+  const nodes = useMemo(() => data?.nodes ?? [], [data]);
   const links = useMemo(() => data?.links ?? [], [data]);
+
+  // The layout depends on STRUCTURE ONLY — never on live state. `layoutGraph` is a BFS plus four
+  // barycentre sweeps over up to MAX_GRAPH_NODES/MAX_GRAPH_LINKS, and `live` publishes a fresh Map
+  // whenever any node ANYWHERE in the fleet changes state (~10×/s during a post-restart
+  // first-observe burst). Keying this on `data` is what stops the map re-laying-out under an
+  // operator who is watching it during an alert storm. The state each box is drawn with is overlaid
+  // below onto the already-placed nodes — `state` is the only field the overlay touches and
+  // `layoutGraph` never reads it for placement, so the drawn result is identical either way.
   const layout = useMemo(() => layoutGraph({ nodes, links }), [nodes, links]);
 
+  // Overlay the live SSE state on top of the placed graph (S14): a fresh event wins over the slower
+  // structural refetch's snapshot. The ref carries the previous result so a flush that changes no
+  // node ON THIS MAP hands back the same array — and therefore the same `layout` object and the
+  // same element below, which is what keeps reconciliation proportional to what moved.
+  const overlay = useRef<LiveOverlay<PlacedNode> | null>(null);
+  const placedNodes = useMemo(() => {
+    overlay.current = overlayLiveStates(layout.nodes, live, overlay.current);
+    return overlay.current.out;
+  }, [layout.nodes, live]);
+  const viewLayout = useMemo(
+    () => (placedNodes === layout.nodes ? layout : { ...layout, nodes: placedNodes }),
+    [layout, placedNodes],
+  );
+  // A memoized element: when `viewLayout` is unchanged React bails out of the whole SVG subtree
+  // instead of re-creating thousands of <g>/<line> elements on every fleet-wide flush.
+  const map = useMemo(() => <TopologyMap layout={viewLayout} />, [viewLayout]);
+
   const presentStates = useMemo(() => {
-    const set = new Set(layout.nodes.map((n) => n.state));
+    const set = new Set(placedNodes.map((n) => n.state));
     return SEVERITY_ORDER.filter((s) => set.has(s));
-  }, [layout.nodes]);
+  }, [placedNodes]);
+  // `suppressed` comes from the fetched root-cause edge, not from live state — read it off the
+  // structural layout so it doesn't recompute per flush.
   const anySuppressed = layout.nodes.some((n) => n.suppressed);
   const presentSources = useMemo(() => {
     const set = new Set(layout.edges.map((e) => e.source));
@@ -101,11 +122,7 @@ export function TopologyMapPage() {
           </p>
         </Card>
       );
-    return (
-      <div className="topomap-page-canvas">
-        <TopologyMap layout={layout} />
-      </div>
-    );
+    return <div className="topomap-page-canvas">{map}</div>;
   }
 
   return (

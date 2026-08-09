@@ -10,13 +10,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Modal } from '../components/ui/Modal';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
@@ -36,7 +36,8 @@ const fmtTime = (iso: string) =>
     minute: '2-digit',
   });
 
-/** Confirm + lift a mute (destructive-consent modal). */
+/** Confirm + lift a mute. Destructive-consent chrome comes from the shared modal; only the
+ *  sentence and the confirm label are this dialog's own (the action is "lift", not "delete"). */
 function LiftMuteModal({
   mute,
   targetName,
@@ -49,55 +50,31 @@ function LiftMuteModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('suppression');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .deleteMute(mute.id)
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('mutes.err.lift')));
-        setBusy(false);
-      });
-  };
-
   return (
-    <Modal
+    <ConfirmDeleteModal
       title={t('mutes.lift.title')}
+      confirmLabel={t('mutes.lift.title')}
+      onConfirm={() => api.deleteMute(mute.id)}
+      errorFallback={t('mutes.err.lift')}
       onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('mutes.lift.title')}
-          </Button>
-        </>
-      }
+      onDone={onDone}
     >
-      <p className="modal-confirm-text">
-        {mute.metric_name ? (
-          <Trans
-            t={t}
-            i18nKey="mutes.lift.confirmMetric"
-            values={{ target: targetName, metric: mute.metric_name }}
-            components={{ b: <strong />, m: <span className="mono" /> }}
-          />
-        ) : (
-          <Trans
-            t={t}
-            i18nKey="mutes.lift.confirmAll"
-            values={{ target: targetName }}
-            components={{ b: <strong /> }}
-          />
-        )}
-      </p>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+      {mute.metric_name ? (
+        <Trans
+          t={t}
+          i18nKey="mutes.lift.confirmMetric"
+          values={{ target: targetName, metric: mute.metric_name }}
+          components={{ b: <strong />, m: <span className="mono" /> }}
+        />
+      ) : (
+        <Trans
+          t={t}
+          i18nKey="mutes.lift.confirmAll"
+          values={{ target: targetName }}
+          components={{ b: <strong /> }}
+        />
+      )}
+    </ConfirmDeleteModal>
   );
 }
 

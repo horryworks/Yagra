@@ -10,7 +10,6 @@
 // modal. Channel kind and rule severity are neutral/status chips (categorical vs status).
 
 import { useCallback, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -25,6 +24,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -253,21 +253,21 @@ function ChannelsSection({
       {deleting && (
         <ConfirmDeleteModal
           title={t('routing.channels.delete')}
-          body={
-            <Trans
-              t={t}
-              i18nKey="routing.channels.deleteBody"
-              values={{ name: deleting.name }}
-              components={{ strong: <strong /> }}
-            />
-          }
-          run={() => api.deleteNotificationChannel(deleting.id)}
+          onConfirm={() => api.deleteNotificationChannel(deleting.id)}
+          errorFallback={t('routing.err.delete')}
           onClose={() => setDeleting(null)}
           onDone={() => {
             setDeleting(null);
             onChange();
           }}
-        />
+        >
+          <Trans
+            t={t}
+            i18nKey="routing.channels.deleteBody"
+            values={{ name: deleting.name }}
+            components={{ strong: <strong /> }}
+          />
+        </ConfirmDeleteModal>
       )}
     </section>
   );
@@ -562,21 +562,21 @@ function RulesSection({
       {deleting && (
         <ConfirmDeleteModal
           title={t('routing.rules.deleteTitle')}
-          body={
-            <Trans
-              t={t}
-              i18nKey="routing.rules.deleteBody"
-              values={{ name: deleting.name }}
-              components={{ strong: <strong /> }}
-            />
-          }
-          run={() => api.deleteRoutingRule(deleting.id)}
+          onConfirm={() => api.deleteRoutingRule(deleting.id)}
+          errorFallback={t('routing.err.delete')}
           onClose={() => setDeleting(null)}
           onDone={() => {
             setDeleting(null);
             onChange();
           }}
-        />
+        >
+          <Trans
+            t={t}
+            i18nKey="routing.rules.deleteBody"
+            values={{ name: deleting.name }}
+            components={{ strong: <strong /> }}
+          />
+        </ConfirmDeleteModal>
       )}
     </section>
   );
@@ -664,57 +664,6 @@ function AddRuleModal({
           ))}
         </div>
       </div>
-    </Modal>
-  );
-}
-
-// ── Shared confirm-delete modal ────────────────────────────────────────────────
-
-function ConfirmDeleteModal({
-  title,
-  body,
-  run,
-  onClose,
-  onDone,
-}: {
-  title: string;
-  body: ReactNode;
-  run: () => Promise<void>;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation('alertsConfig');
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const submit = () => {
-    setBusy(true);
-    setError(null);
-    run()
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('routing.err.delete')));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <Modal
-      title={title}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="danger" onClick={submit} disabled={busy}>
-            {t('common:actions.delete')}
-          </Button>
-        </>
-      }
-    >
-      <p className="modal-confirm-text">{body}</p>
-      {error && <p className="form-error">{error}</p>}
     </Modal>
   );
 }

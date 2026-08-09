@@ -177,7 +177,7 @@ impl L3AddrType {
     /// An anycast or broadcast address does not: several routers answer for it, so treating it as
     /// membership would attach a node to a segment it may only be a standby for.
     #[must_use]
-    pub const fn identifies_a_node(self) -> bool {
+    pub(crate) const fn identifies_a_node(self) -> bool {
         match self {
             // `Unknown` is included on purpose: an `ipAddrTable`-only device reports every address
             // that way, and excluding it would make the whole old-MIB path produce no edges.

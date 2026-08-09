@@ -32,14 +32,14 @@ use yagra_common::{subnet_key, DerivedLink, L3Snapshot, NodeId};
 /// hundred parents means the node is effectively never suppressed — but an unbounded fan-in makes
 /// the Dependencies view unreadable and the root-cause climb pointlessly wide. Applied after
 /// sorting, so which parents survive is deterministic.
-pub const MAX_DERIVED_PARENTS: usize = 16;
+pub(crate) const MAX_DERIVED_PARENTS: usize = 16;
 
 /// Cap on nodes one poller may anchor.
 ///
 /// A poller sharing a `/16` with five hundred monitored nodes would make all five hundred roots,
 /// which is fail-safe (nothing gets suppressed) but is also indistinguishable from the feature not
 /// working. The cap keeps that case bounded and countable.
-pub const MAX_ANCHORS_PER_POLLER: usize = 64;
+pub(crate) const MAX_ANCHORS_PER_POLLER: usize = 64;
 
 /// Where one poller sits, as core knows it.
 #[derive(Debug, Clone, PartialEq, Eq)]

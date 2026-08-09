@@ -35,7 +35,7 @@
   font-family: var(--font-family);
   font-size: var(--font-xs);
   padding: 3px 8px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
   color: var(--text-primary);
@@ -58,7 +58,7 @@
 .tpl-preview {
   margin-top: 18px;
   padding: 12px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   background: var(--bg-tertiary);
 }
@@ -106,7 +106,7 @@
 .tpl-problems {
   margin-top: 12px;
   padding-top: 10px;
-  border-top: 1px solid var(--border-color);
+  border-top: var(--border-width) solid var(--border-color);
   font-size: var(--font-xs);
 }
 

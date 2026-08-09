@@ -36,7 +36,21 @@ export function buildJobInput(
   };
 }
 
-/** The initial control state for a tool, straight from its declared defaults. */
+/**
+ * The initial control state for a tool, straight from its declared defaults.
+ *
+ * **Kept although `ReportShell` does not call it**, because it is what makes the `buildJobInput`
+ * tests above mean anything: they assert that a control the bar *hides* still ships a real value,
+ * and that only holds if the state under test was seeded the way the bar seeds it — from
+ * `controls.defaults`, per descriptor — rather than from a literal the test author chose. Hand-built
+ * fixtures would turn `baseline_secs > 0` into an assertion about the fixture.
+ *
+ * ⚠️ It is therefore an **unguarded mirror** (`extensibility.md` §2): `ReportShell` distributes the
+ * same defaults across one `useState` per control and fills `depth` inline when it composes the
+ * request, so a new control, or a default the bar decides to override, has to be written here too or
+ * the tests keep passing against a state shape the operator never sees. Collapsing those `useState`s
+ * into one object seeded by this function would remove the mirror.
+ */
 export function initialControlState(
   descriptor: ReportDescriptor,
   scope: { kind: 'all' | 'group' | 'node'; id: string | null; label: string },

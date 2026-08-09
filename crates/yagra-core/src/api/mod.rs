@@ -526,14 +526,13 @@ pub(super) async fn readyz(State(st): State<ApiState>) -> StatusCode {
 /// A Prometheus-style metric name: `[a-zA-Z_:][a-zA-Z0-9_:]*`. Validating at the edge
 /// keeps the (untrusted) path segment from being interpolated into the PromQL selector
 /// sent to the TSDB (security.md: parse into strong, bounded types at the API edge).
-pub(crate) fn is_valid_metric_name(metric: &str) -> bool {
-    let mut chars = metric.chars();
-    match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {}
-        _ => return false,
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
-}
+///
+/// Re-exported, not re-implemented: the TSDB write path applies the identical rule to
+/// poller-supplied sample names ([`yagra_common::is_valid_metric_name`]), and this file held a
+/// byte-for-byte copy of it — with the API's own call sites split between the two spellings. Two
+/// copies of a validation rule is the worst kind of duplication to keep, because when they drift
+/// the looser one becomes the security boundary.
+pub(crate) use yagra_common::is_valid_metric_name;
 
 #[cfg(test)]
 mod tests {

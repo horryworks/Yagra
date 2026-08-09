@@ -2,7 +2,8 @@
 //! Group-scoped visibility for the read paths (ADR-014 / ADR-019).
 //!
 //! A [`Principal`] carries a [`Scope`] — either unrestricted or a set of folder-group ids. Until
-//! now nothing consulted it: `Principal::can_see` had no caller anywhere under `api/`, so every
+//! now nothing consulted it: the only reader was a `Principal::can_see` convenience that had no
+//! caller anywhere under `api/` (since deleted — this module reads the `Scope` directly), so every
 //! list endpoint returned the whole fleet regardless of who asked, and the two surfaces that
 //! *could* hand out a group scope refused to rather than mint a credential that meant nothing
 //! (`api/api_tokens.rs`, `mcp/mod.rs`). This module is the one place that changes.

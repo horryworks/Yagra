@@ -20,7 +20,6 @@ export const BASELINE_SECS = 14 * 86_400;
 
 /** The analysis windows the form offers, in seconds. */
 export const WINDOW_CHOICES = [86_400, 604_800, 2_592_000, 7_776_000] as const;
-export type WindowSecs = (typeof WINDOW_CHOICES)[number];
 
 /** The form's state. Mirrors the launch drawer's fields plus the cadence. */
 export interface ScheduleForm {

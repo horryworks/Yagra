@@ -8,6 +8,7 @@
 // via these helpers + `t()`, and treats `when_label`/`duration` as a **fallback only** (a row written
 // by an older core, or a malformed detail).
 
+import { csvField } from '../../lib/csv';
 import type { AnalysisFinding, FindingSeverity } from '../../types/api';
 import type { SummaryStat } from './types';
 
@@ -261,14 +262,13 @@ export function timelineKinds(f: AnalysisFinding): string[] {
   ];
 }
 
-/** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote. */
-function csvField(v: string): string {
-  return `"${v.replace(/"/g, '""')}"`;
-}
-
 /**
  * Render findings as CSV text using a descriptor's column spec. Pure (no DOM) so it is testable;
  * the shell wraps it in a Blob download. CRLF per RFC 4180.
+ *
+ * Cells go through the shared `csvField`, which also neutralizes a value a spreadsheet would
+ * otherwise execute — these columns carry device-supplied strings (syslog signatures, sysName),
+ * which are untrusted input under `.claude/rules/security.md`.
  */
 export function toCsv(
   columns: { header: string; cell: (f: AnalysisFinding) => string }[],

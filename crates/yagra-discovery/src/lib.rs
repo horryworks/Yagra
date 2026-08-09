@@ -10,11 +10,11 @@
 //!
 //!  - [`identify`] — best-effort vendor/model extraction from free-form, untrusted `sysDescr`,
 //!    used only to pre-fill the operator's import form.
-//!  - [`credential_finder`] — the per-device rate limiter for the **Credential Finder**, which
+//!  - `credential_finder` — the per-device rate limiter for the **Credential Finder**, which
 //!    probes candidate credentials to find the one a device accepts. Enforced by the poller's
 //!    sweep; rate limiting is what keeps probing from tripping device account lockout.
 
-pub mod credential_finder;
+mod credential_finder;
 
 pub use credential_finder::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 

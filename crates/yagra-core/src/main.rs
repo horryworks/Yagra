@@ -1778,6 +1778,19 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         // restart. A read failure degrades to the compiled defaults rather than skipping the prune.
         let retention = repo.get_retention_settings().await;
         let alert_linked_secs = retention.alert_linked_secs();
+        // The **raw engine view**, deliberately — not the reconciled view the live surfaces show.
+        //
+        // `node_states()` only knows nodes the in-memory matcher has observed since this process
+        // started, so for the first poll interval after a core restart a node that has not yet been
+        // re-observed is simply absent here and lands in the timeline's `unknown` bucket. The live
+        // surfaces (fleet summary, inventory, node detail) fill that window in from persisted state
+        // so an operator is not told the fleet went dark because core was upgraded. This series
+        // therefore *can* disagree with what those surfaces showed at the same instant, and that is
+        // the choice: a historical record must say what was actually being monitored at that moment,
+        // and during the post-restart window the honest answer is "core did not yet know". Back-
+        // filling it from persisted state would make the timeline claim coverage that did not exist
+        // and would erase the visible cost of a restart. If you are here because the dip looks like
+        // a bug: it is the record of a real gap, and the reconciliation belongs on the live side.
         let states = alerts.node_states();
         let mut counts: HashMap<String, i64> = HashMap::new();
         for s in states.values() {
@@ -2835,6 +2848,11 @@ struct SweepCache {
     /// Sleep period for the round (fleet-minimum interval), cached so the fast path needn't rescan.
     min_interval: u32,
     /// Per-pool desired working set (`build_node_specs` output).
+    ///
+    /// Handed to [`Coordinator::reconcile_pool`] **by reference**. It used to be cloned per pool per
+    /// round, which at fleet scale meant deep-copying every node's decrypted credentials, OID column
+    /// lists and route-probe plans on a path whose entire purpose is that nothing changed — the
+    /// steady-state round now touches this map without allocating.
     desired_by_pool: HashMap<String, HashMap<NodeId, Vec<JobSpec>>>,
 }
 
@@ -2918,7 +2936,7 @@ async fn run_scheduler(
         if let Some(c) = &cache {
             if c.reusable(generation, &live) {
                 for (pool, desired) in &c.desired_by_pool {
-                    coordinator.reconcile_pool(pool, desired.clone(), now).await;
+                    coordinator.reconcile_pool(pool, desired, now).await;
                 }
                 stats.record_sweep(0);
                 stats.set_pool_modes(c.desired_by_pool.len() as u64, 0);
@@ -3078,8 +3096,10 @@ async fn run_scheduler(
                             })
                             .collect()
                             .await;
-                        new_desired_by_pool.insert(pool.clone(), desired.clone());
-                        coordinator.reconcile_pool(&pool, desired, now).await;
+                        // Reconcile from the borrow, then hand the one copy to the cache — the set
+                        // is built once per rebuild and never duplicated.
+                        coordinator.reconcile_pool(&pool, &desired, now).await;
+                        new_desired_by_pool.insert(pool.clone(), desired);
                         working_set_pools += 1;
                     } else {
                         // Legacy: per-node due-check + jittered per-job publish to the pool subject.

@@ -18,7 +18,7 @@ use thiserror::Error;
 /// Cap on the number of varbinds kept from one trap.
 pub const MAX_VARBINDS: usize = 32;
 /// Cap on one rendered varbind value, in characters.
-pub const MAX_VALUE_CHARS: usize = 256;
+pub(crate) const MAX_VALUE_CHARS: usize = 256;
 
 /// snmpTrapOID.0 — identifies the trap in v2c (RFC 3416).
 const SNMP_TRAP_OID_0: &str = "1.3.6.1.6.3.1.1.4.1.0";

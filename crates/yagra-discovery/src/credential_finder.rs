@@ -70,12 +70,6 @@ impl<K: Eq + Hash> CredentialProbeLimiter<K> {
         }
     }
 
-    /// New limiter with default (conservative) config.
-    #[must_use]
-    pub fn with_defaults() -> Self {
-        Self::new(LimiterConfig::default())
-    }
-
     /// Decide whether a probe on `device` may proceed at `now_ms`. On [`AttemptDecision::Allow`]
     /// the attempt is recorded (advancing the spacing clock).
     pub fn begin_attempt(&mut self, device: K, now_ms: i64) -> AttemptDecision {
@@ -128,7 +122,7 @@ mod tests {
     use super::*;
 
     fn limiter() -> CredentialProbeLimiter {
-        CredentialProbeLimiter::with_defaults()
+        CredentialProbeLimiter::new(LimiterConfig::default())
     }
 
     #[test]

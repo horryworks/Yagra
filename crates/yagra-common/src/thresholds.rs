@@ -46,7 +46,7 @@ impl Direction {
     ///
     /// For `Above`, the lower bound is stricter; for `Below`, the higher bound is.
     #[must_use]
-    pub fn more_restrictive(self, a: f64, b: f64) -> f64 {
+    pub(crate) fn more_restrictive(self, a: f64, b: f64) -> f64 {
         match self {
             Direction::Above => a.min(b),
             Direction::Below => a.max(b),

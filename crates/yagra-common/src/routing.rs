@@ -254,7 +254,7 @@ impl RoutingAdjacency {
     /// is what an agent reports for a neighbour it has not resolved, and every device's `127.0.0.1`
     /// would match every other device's.
     #[must_use]
-    pub fn identifies_a_peer(&self) -> bool {
+    pub(crate) fn identifies_a_peer(&self) -> bool {
         match self.peer {
             IpAddr::V4(v4) => {
                 !v4.is_unspecified()

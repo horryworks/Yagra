@@ -163,28 +163,6 @@ impl NatsBus {
         self.client.clone()
     }
 
-    /// Subscribe (in a queue group) to every pool's jobs — poller side. Malformed
-    /// messages are logged and skipped rather than killing the stream.
-    pub async fn subscribe_jobs(
-        &self,
-        queue: &str,
-    ) -> Result<impl Stream<Item = PollJob>, BusError> {
-        let sub = self
-            .client
-            .queue_subscribe(subjects::jobs_all(), queue.to_owned())
-            .await
-            .map_err(|e| BusError::Publish(format!("subscribe jobs: {e}")))?;
-        Ok(sub.filter_map(|msg| async move {
-            match serde_json::from_slice::<PollJob>(&msg.payload) {
-                Ok(job) => Some(job),
-                Err(e) => {
-                    tracing::warn!(error = %e, "dropping malformed PollJob from bus");
-                    None
-                }
-            }
-        }))
-    }
-
     /// Subscribe to poll results — core side. Malformed messages are skipped.
     pub async fn subscribe_results(&self) -> Result<impl Stream<Item = PollResult>, BusError> {
         let sub = self
@@ -417,9 +395,12 @@ impl NatsBus {
         }))
     }
 
-    /// Subscribe (in a queue group) to a specific pool's jobs — poller side. Unlike
-    /// [`Self::subscribe_jobs`] (which wildcards every pool), a pooled poller consumes only its own
-    /// pool's subject so jobs stay local (ADR-009). Malformed messages are skipped.
+    /// Subscribe (in a queue group) to a specific pool's jobs — poller side. **The only job
+    /// subscribe there is**: an all-pools wildcard subscribe (`yagra.jobs.*`) used to exist beside
+    /// this and was removed unused, because a poller absorbing another pool's jobs would receive
+    /// that pool's plaintext device credentials (ADR-020) and scan the wrong network. A pooled
+    /// poller consumes only its own pool's subject so jobs stay local (ADR-009). Malformed messages
+    /// are skipped.
     pub async fn subscribe_jobs_for_pool(
         &self,
         pool: &str,

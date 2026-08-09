@@ -71,12 +71,22 @@ impl StaticKeyProvider {
         Self { keys, active: 1 }
     }
 
-    /// Add a KEK generation (used to model rotation).
+    /// Add a KEK generation. **The deferred KEK-rotation surface** (ADR-018), together with
+    /// [`Self::set_active`]: rotation is "generate a new KEK → re-wrap every DEK → retire the old
+    /// one", which needs several generations readable at once. That is why [`SealedSecret`] carries
+    /// a `key_id` and why [`KeyProvider`] is keyed by generation rather than holding one key.
+    ///
+    /// Nothing wires it yet — `key_provider_from_file` mounts a single generation-1 KEK and
+    /// `yagra-core` never advances it, so the only callers today are tests. Do not delete it as
+    /// dead code: the decision is made and the storage format already commits to it; what is
+    /// missing is the operator-facing re-wrap procedure, not the design.
     pub fn add_generation(&mut self, key_id: u32, kek: [u8; 32]) {
         self.keys.insert(key_id, kek);
     }
 
-    /// Set the active generation for new seals.
+    /// Set the active generation for new seals — the second half of the deferred rotation surface
+    /// described on [`Self::add_generation`]. Older generations stay readable, so secrets sealed
+    /// before the switch keep opening while they are re-wrapped.
     pub fn set_active(&mut self, key_id: u32) {
         self.active = key_id;
     }

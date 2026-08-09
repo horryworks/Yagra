@@ -15,7 +15,7 @@
 // virtualized (only on-screen rows in the DOM, S13); node state stays live via the node-state SSE
 // stream (`useNodeStates`) rather than a full refetch.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -33,6 +33,7 @@ import type {
   PoolOption,
 } from '../types/api';
 import { countsTotal, filterResultsTruncated, type StateCounts } from '../lib/nodeTree';
+import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
@@ -164,15 +165,16 @@ export function NodesPage() {
   );
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.
+  // `live` publishes a new Map on every flush (any node in the FLEET, ~10×/s during a first-observe
+  // burst), and this array is `NodeTree`'s `buildNodeTree` + `flattenTree` memo key — so a plain
+  // `.map` re-built the whole tree on flushes where not one loaded node had moved. The ref carries
+  // the previous result and hands the same array back when nothing visible changed.
   const live = useNodeStates();
-  const liveTreeNodes = useMemo(
-    () =>
-      treeNodes.map((n) => {
-        const s = live.get(n.id);
-        return s && s !== n.state ? { ...n, state: s } : n;
-      }),
-    [treeNodes, live],
-  );
+  const overlay = useRef<LiveOverlay<NodeSummary> | null>(null);
+  const liveTreeNodes = useMemo(() => {
+    overlay.current = overlayLiveStates(treeNodes, live, overlay.current);
+    return overlay.current.out;
+  }, [treeNodes, live]);
 
   const suppression = useMemo(
     () => buildSuppressionIndex(windows, mutes, groups, treeNodes),

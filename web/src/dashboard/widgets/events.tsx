@@ -13,7 +13,7 @@ import { Select } from '../../components/ui/Field';
 import { useEntityNames } from '../../components/ui/EntityName';
 import { relativeTime } from '../../lib/format';
 import { api } from '../../services/api';
-import type { EventKind } from '../../types/api';
+import { EVENT_KINDS, type EventKind } from '../../types/api';
 import { Donut, type DonutSegment } from '../primitives/Donut';
 import { KpiTile } from '../primitives/KpiTile';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
@@ -53,10 +53,15 @@ const ACTION_COLOR: Record<string, string> = {
 
 // ── Event feed (live) ────────────────────────────────────────────────────────────────
 
-/** The kind filter from instance settings (undefined = all kinds). */
+/** The kind filter from instance settings (undefined = all kinds).
+ *
+ *  Narrowed through `EVENT_KINDS` rather than a hand-written `||` chain: settings are persisted
+ *  `unknown`, so an unrecognised value must fall back to "all kinds" — but a *new* `EventKind`
+ *  would have been silently unrecognised too, quietly turning a saved per-kind filter into the
+ *  unfiltered feed. */
 function kindOf(settings: WidgetSettings | undefined): EventKind | undefined {
   const k = settings?.kind;
-  return k === 'syslog' || k === 'trap' || k === 'webhook' ? k : undefined;
+  return EVENT_KINDS.find((kind) => kind === k);
 }
 
 export function EventFeedWidget({ instance }: WidgetProps) {

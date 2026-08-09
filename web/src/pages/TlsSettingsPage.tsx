@@ -22,6 +22,7 @@ import {
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge, type Tone } from '../components/ui/Badge';
 import { TextArea, FieldHint } from '../components/ui/Field';
 import './TlsSettingsPage.css';
@@ -45,6 +46,7 @@ export function TlsSettingsPage() {
   const [privateKey, setPrivateKey] = useState('');
   const [names, setNames] = useState('');
   const [attempted, setAttempted] = useState(false);
+  const [confirmingRegenerate, setConfirmingRegenerate] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -84,20 +86,15 @@ export function TlsSettingsPage() {
     }
   }
 
+  // Destructive consent goes through the shared dialog, not `window.confirm`: a native dialog is
+  // unstyled, untranslatable beyond its body text, and its OK button says "OK" where this one says
+  // "Regenerate". A rejection is rethrown so the dialog keeps itself open and shows the reason.
   async function onRegenerate() {
-    // An imported certificate is the operator's, and replacing it with a self-signed one puts the
-    // browser warning back. That deserves a different sentence from replacing a self-signed one.
-    const question =
-      view?.source === 'self_signed' ? t('regenerate.confirm') : t('regenerate.confirmImported');
-    if (!window.confirm(question)) return;
     setBusy(true);
-    setSaveError(null);
     setNotice(null);
+    setSaveError(null);
     try {
       setStatus(await api.regenerateWebTls(parseNames(names)));
-      setNotice(t('regenerate.success'));
-    } catch (e) {
-      setSaveError(errMsg(e, t('error.save')));
     } finally {
       setBusy(false);
     }
@@ -269,11 +266,32 @@ export function TlsSettingsPage() {
         />
         <FieldHint>{t('regenerate.namesHint')}</FieldHint>
         <div className="tls-actions">
-          <Button onClick={() => void onRegenerate()} disabled={busy}>
+          <Button onClick={() => setConfirmingRegenerate(true)} disabled={busy}>
             {busy ? t('regenerate.submitting') : t('regenerate.submit')}
           </Button>
         </div>
       </Card>
+
+      {confirmingRegenerate && (
+        <ConfirmDeleteModal
+          title={t('regenerate.heading')}
+          confirmLabel={t('regenerate.submit')}
+          onConfirm={onRegenerate}
+          errorFallback={t('error.save')}
+          onClose={() => setConfirmingRegenerate(false)}
+          onDone={() => {
+            setConfirmingRegenerate(false);
+            setNotice(t('regenerate.success'));
+          }}
+        >
+          {/* An imported certificate is the operator's, and replacing it with a self-signed one puts
+              the browser warning back. That deserves a different sentence from replacing a
+              self-signed one. */}
+          {view?.source === 'self_signed'
+            ? t('regenerate.confirm')
+            : t('regenerate.confirmImported')}
+        </ConfirmDeleteModal>
+      )}
     </div>
   );
 }

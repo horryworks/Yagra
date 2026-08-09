@@ -13,7 +13,7 @@ use std::net::IpAddr;
 /// Upper bound on tracked per-source buckets. Beyond this the oldest-inserted bucket is
 /// evicted (FIFO, not strict LRU — O(1) and good enough for abuse bounding; a re-inserted
 /// source simply starts with a fresh full bucket).
-pub const MAX_TRACKED_SOURCES: usize = 10_000;
+pub(crate) const MAX_TRACKED_SOURCES: usize = 10_000;
 
 /// A single token bucket.
 #[derive(Debug, Clone, Copy)]

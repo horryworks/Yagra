@@ -63,12 +63,6 @@ impl Node {
         }
     }
 
-    /// Whether this node is at the top of the inventory (has no parent).
-    #[must_use]
-    pub const fn is_root(&self) -> bool {
-        self.parent.is_none()
-    }
-
     /// Look up a grouping tag value.
     #[must_use]
     pub fn tag(&self, key: &str) -> Option<&str> {
@@ -92,7 +86,7 @@ mod tests {
     #[test]
     fn new_node_is_root_with_no_profile_or_pool() {
         let n = v4("core-router");
-        assert!(n.is_root());
+        assert_eq!(n.parent, None);
         assert_eq!(n.profile, None);
         assert_eq!(n.pool, None);
         assert!(n.tags.is_empty());
@@ -103,7 +97,6 @@ mod tests {
         let parent = v4("parent");
         let mut child = v4("child");
         child.parent = Some(parent.id);
-        assert!(!child.is_root());
         assert_eq!(child.parent, Some(parent.id));
     }
 

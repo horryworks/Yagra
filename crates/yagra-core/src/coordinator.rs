@@ -20,7 +20,11 @@
 //!
 //! Concurrency: the registry is a plain [`std::sync::Mutex`] held only for synchronous
 //! read/mutate; every bus/Redis/PG await happens *after* the guard is dropped, so no lock is held
-//! across `.await` (keeps the futures `Send` and the lock uncontended).
+//! across `.await` (keeps the futures `Send` and the lock uncontended). Two deliberate refinements
+//! keep that mutex off the fleet-scale paths: [`Coordinator::reconcile_pool`] takes it **twice, for
+//! O(members) each time**, and does its O(fleet) assignment/fingerprint pass unlocked in between;
+//! and the per-poller result counters sit on their own [`RwLock`] because they are bumped once per
+//! poll result (~1.7k/s at 50k nodes) and must never queue behind a working-set diff.
 //!
 //! SECURITY (security.md): a [`JobSpec`] carries the node's **decrypted, inlined** monitoring
 //! credential (SNMP community / v3 keys / API token). Working-set messages therefore must **never**
@@ -28,7 +32,8 @@
 //! never the specs themselves. See the note on [`Coordinator::reconcile_pool`].
 
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{Stream, StreamExt};
@@ -80,7 +85,11 @@ impl std::io::Write for HashWriter {
 /// against that same node's stored fingerprint (not all-pairs), so 64 bits is ample — no birthday
 /// amplification. Not persisted: a core restart bumps the epoch and re-snapshots every poller, so
 /// cross-version hash stability is irrelevant.
-fn specs_fingerprint(specs: &[JobSpec]) -> u64 {
+///
+/// Generic over the element so the reconcile can fingerprint a **borrowed** `&[&JobSpec]` — serde
+/// forwards `&T` to `T`, so the bytes fed to the hasher are identical to those of an owned
+/// `&[JobSpec]` and the two spellings cannot disagree.
+fn specs_fingerprint<T: serde::Serialize>(specs: &[T]) -> u64 {
     use std::hash::Hasher;
     let mut hw = HashWriter(std::collections::hash_map::DefaultHasher::new());
     // Serializing these plain (map-free) types into an infallible writer cannot fail.
@@ -137,10 +146,6 @@ struct CoordState {
     /// is all the diff needs ("did this node's spec set change?"); the decrypted specs live only
     /// transiently inside [`Coordinator::reconcile_pool`] while a message is built, then drop.
     published: HashMap<String, HashMap<NodeId, u64>>,
-    /// Per-poller count of results core has consumed off the bus (provenance for the Pollers view).
-    /// Kept separate from [`PollerEntry`] so a result that arrives before the first heartbeat is
-    /// still counted.
-    results_seen: HashMap<String, u64>,
 }
 
 /// A point-in-time view of one poller for the Pollers API (Step 6).
@@ -201,8 +206,16 @@ pub struct Coordinator {
     /// skeleton/tests — host telemetry is then simply not persisted. Core is the single writer of
     /// `yagra_host_*` series for every poller, since remote pollers can't reach the TSDB directly.
     store: Option<Arc<dyn MetricStore>>,
-    /// The registry + published baselines + result counters.
+    /// The registry + published baselines.
     state: Mutex<CoordState>,
+    /// Per-poller count of results core has consumed off the bus (provenance for the Pollers view).
+    ///
+    /// On its own lock rather than in [`CoordState`], and an atomic rather than a plain counter,
+    /// because [`Coordinator::record_result`] runs once per poll result while `state` is also held
+    /// by the working-set diff — sharing one mutex made result ingestion wait on a per-pool sweep.
+    /// Kept separate from [`PollerEntry`] for the original reason too: a result that arrives before
+    /// the first heartbeat is still counted.
+    results_seen: RwLock<HashMap<String, AtomicU64>>,
     /// Nudge for the sweep loop, so a membership change is reconciled at once rather than at the
     /// next scheduled round. A [`tokio::sync::Notify`] rather than a channel because the signal
     /// carries nothing and coalescing several nudges into one sweep is exactly right.
@@ -237,6 +250,7 @@ impl Coordinator {
             stats,
             store,
             state: Mutex::new(CoordState::default()),
+            results_seen: RwLock::new(HashMap::new()),
             sweep_wake: tokio::sync::Notify::new(),
         }
     }
@@ -506,107 +520,156 @@ impl Coordinator {
     /// SECURITY (security.md): the published messages carry inlined decrypted credentials inside
     /// each [`JobSpec`]. This method logs **counts and poller ids only** — never spec contents. Keep
     /// it that way when editing.
+    ///
+    /// PERFORMANCE: `desired` is **borrowed**, and so are the specs inside the per-member target
+    /// sets — an owned copy is taken only for the nodes that actually go into a message. The steady
+    /// state (nothing changed) therefore deep-clones nothing at all, where it used to clone the
+    /// fleet's entire decrypted spec set twice per sweep: once for the capability filter and once
+    /// for the caller's cached copy. The three-phase shape below exists for the same reason — the
+    /// O(fleet) assignment + fingerprint pass (which serializes every spec) runs with **no lock
+    /// held**, so a sweep no longer stalls heartbeats and the Pollers view once per pool per round.
     pub async fn reconcile_pool(
         &self,
         pool: &str,
-        desired: HashMap<NodeId, Vec<JobSpec>>,
+        desired: &HashMap<NodeId, Vec<JobSpec>>,
         now: Instant,
     ) {
-        let mut to_send: Vec<(String, SyncMsg)> = Vec::new();
-        let mut assign_map: HashMap<Uuid, String> = HashMap::new();
-        let mut snapshots = 0u64;
-        let mut deltas = 0u64;
+        // ── Phase 1 (locked, O(members)): who is live, and what can each of them honour? ─────────
+        // Snapshotting the capability sets here is what lets the fleet-scale pass below run
+        // unlocked. Membership can move between the phases; that is benign — a poller that left is
+        // skipped in phase 3 (its registry entry is gone) and one that joined is picked up by the
+        // next sweep, which its own registration already nudges.
+        let members: Vec<String>;
+        let caps: HashMap<String, Vec<String>>;
         {
-            let mut st = self.state.lock().expect("coordinator state poisoned");
-            let members = live_members(&st, pool, now);
+            let st = self.state.lock().expect("coordinator state poisoned");
+            members = live_members(&st, pool, now);
             if members.is_empty() {
                 // Defensive: the scheduler only calls us for a pool in `live_pools`. A no-op keeps
                 // the last working set intact rather than tearing everything down on a race.
                 return;
             }
-            let ring = HashRing::new(members.iter().cloned());
-
-            // Per-member assigned target set (start every live member at empty so a member that
-            // loses all its nodes still gets a diff computed).
-            let mut targets: HashMap<String, HashMap<NodeId, Vec<JobSpec>>> = members
+            caps = members
                 .iter()
-                .map(|m| (m.clone(), HashMap::new()))
+                .map(|m| {
+                    let advertised = st
+                        .pollers
+                        .get(m)
+                        .map(|e| e.caps.clone())
+                        .unwrap_or_default();
+                    (m.clone(), advertised)
+                })
                 .collect();
-            for (node, specs) in &desired {
-                if let Some(owner) = ring.assign(*node) {
-                    assign_map.insert(node.as_uuid(), owner.to_owned());
-                    if let Some(set) = targets.get_mut(owner) {
-                        // Withhold a spec its assigned poller cannot honour. Every entry in
-                        // `spec_required_caps` exists because an N-1 poller drops the field it does
-                        // not know and then reports a *confident wrong answer* — a 401 read as an
-                        // outage, or a page it never read reported as content-checked. Withholding
-                        // produces a monitoring gap instead, which is recoverable and wakes no one.
-                        let kept: Vec<JobSpec> = specs
-                            .iter()
-                            .filter(|s| {
-                                let Some(missing) = spec_required_caps(s)
-                                    .into_iter()
-                                    .find(|cap| !poller_has_cap(&st, owner, cap))
-                                else {
-                                    return true;
-                                };
-                                tracing::warn!(
-                                    poller = %owner,
-                                    node = %node,
-                                    cap = missing,
-                                    "poller does not advertise this capability; withholding the check that needs it until the poller is upgraded"
-                                );
-                                metrics::counter!("yagra_specs_withheld_total", "cap" => missing)
-                                    .increment(1);
-                                false
-                            })
-                            .cloned()
-                            .collect();
-                        // An empty set still registers the node as assigned, so the sweep does not
-                        // treat it as unowned and hand it to a second poller.
-                        set.insert(*node, kept);
-                    }
-                }
-            }
+        }
 
-            let epoch = self.epoch;
-            for m in &members {
-                let target = targets.remove(m).unwrap_or_default();
-                // Baseline holds only per-node fingerprints (S16), never the decrypted specs.
-                let prev = st.published.get(m).cloned().unwrap_or_default();
-                // Fingerprint the target once — it is both the change signal vs `prev` and the next
-                // baseline we store below.
-                let target_fps: HashMap<NodeId, u64> = target
+        // ── Phase 2 (unlocked, O(fleet)): assign, filter, fingerprint ───────────────────────────
+        let ring = HashRing::new(members.iter().cloned());
+        // Per-member assigned target set (start every live member at empty so a member that loses
+        // all its nodes still gets a diff computed). The specs are references into `desired`: in the
+        // steady state the fingerprints below decide nothing changed, and a clone would have been
+        // built and dropped for the whole fleet with nothing sent.
+        let mut targets: HashMap<&str, HashMap<NodeId, Vec<&JobSpec>>> = members
+            .iter()
+            .map(|m| (m.as_str(), HashMap::new()))
+            .collect();
+        for (node, specs) in desired {
+            let Some(owner) = ring.assign(*node) else {
+                continue;
+            };
+            let Some(set) = targets.get_mut(owner) else {
+                continue;
+            };
+            // Withhold a spec its assigned poller cannot honour. Every entry in
+            // `spec_required_caps` exists because an N-1 poller drops the field it does not know and
+            // then reports a *confident wrong answer* — a 401 read as an outage, or a page it never
+            // read reported as content-checked. Withholding produces a monitoring gap instead, which
+            // is recoverable and wakes no one.
+            //
+            // Still evaluated for every node every round, deliberately: the fingerprint is taken
+            // over the *kept* set, so a poller that gains a capability must show up as a change.
+            let kept: Vec<&JobSpec> = specs
+                .iter()
+                .filter(|s| {
+                    let Some(missing) = spec_required_caps(s)
+                        .into_iter()
+                        .find(|cap| !has_cap(&caps, owner, cap))
+                    else {
+                        return true;
+                    };
+                    tracing::warn!(
+                        poller = %owner,
+                        node = %node,
+                        cap = missing,
+                        "poller does not advertise this capability; withholding the check that needs it until the poller is upgraded"
+                    );
+                    metrics::counter!("yagra_specs_withheld_total", "cap" => missing).increment(1);
+                    false
+                })
+                .collect();
+            // An empty set still registers the node as assigned, so the sweep does not treat it as
+            // unowned and hand it to a second poller.
+            set.insert(*node, kept);
+        }
+        // Fingerprint each member's target once — it is both the change signal against the stored
+        // baseline and the next baseline. This serializes every spec in the pool, which is precisely
+        // why it sits outside the lock.
+        let mut fps: HashMap<&str, HashMap<NodeId, u64>> = targets
+            .iter()
+            .map(|(m, target)| {
+                let per_node = target
                     .iter()
                     .map(|(node, specs)| (*node, specs_fingerprint(specs)))
                     .collect();
+                (*m, per_node)
+            })
+            .collect();
+
+        // ── Phase 3 (locked, O(changed)): diff against the baseline and build the messages ──────
+        let mut to_send: Vec<(String, SyncMsg)> = Vec::new();
+        let mut snapshots = 0u64;
+        let mut deltas = 0u64;
+        let epoch = self.epoch;
+        {
+            let mut guard = self.state.lock().expect("coordinator state poisoned");
+            // Reborrowed so `published` and `pollers` can be borrowed as the disjoint fields they
+            // are — that is what lets the baseline be read *in place* instead of cloned per member
+            // per round.
+            let st = &mut *guard;
+            for m in &members {
+                let (Some(target), Some(target_fps)) =
+                    (targets.get(m.as_str()), fps.remove(m.as_str()))
+                else {
+                    continue;
+                };
 
                 // Diff: a node is an upsert if it is new or its spec set changed; a node in the
                 // previous set but not the target is a remove. Both sorted for deterministic output.
-                let mut upserts: Vec<NodeJobs> = Vec::new();
-                for (node, specs) in &target {
-                    let changed = prev.get(node).copied() != target_fps.get(node).copied();
-                    if changed {
-                        upserts.push(NodeJobs {
-                            node_id: *node,
-                            specs: specs.clone(),
-                        });
-                    }
-                }
-                upserts.sort_by_key(|nj| nj.node_id);
-                let mut removes: Vec<NodeId> = Vec::new();
-                for node in prev.keys() {
-                    if !target.contains_key(node) {
-                        removes.push(*node);
-                    }
-                }
-                removes.sort();
+                // The baseline holds only per-node fingerprints (S16), never the decrypted specs.
+                let (upserted, removes, prev_len) = {
+                    let prev = st.published.get(m);
+                    let mut upserted: Vec<NodeId> = target_fps
+                        .iter()
+                        .filter(|(node, fp)| prev.and_then(|p| p.get(*node)).copied() != Some(**fp))
+                        .map(|(node, _)| *node)
+                        .collect();
+                    upserted.sort_unstable();
+                    let mut removes: Vec<NodeId> = prev
+                        .map(|p| {
+                            p.keys()
+                                .filter(|node| !target_fps.contains_key(*node))
+                                .copied()
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    removes.sort_unstable();
+                    (upserted, removes, prev.map_or(0, HashMap::len))
+                };
 
                 let Some(entry) = st.pollers.get_mut(m) else {
                     continue;
                 };
                 let needs_snapshot = entry.needs_snapshot;
-                let changed = upserts.len() + removes.len();
+                let changed = upserted.len() + removes.len();
                 if changed == 0 && !needs_snapshot {
                     continue; // nothing to send; keep the baseline as-is
                 }
@@ -614,14 +677,16 @@ impl Coordinator {
                 // Snapshot when forced, or when the change touches > 50% of the working set (delta
                 // would be nearly a full resend anyway). `base` is the larger of old/new so an empty
                 // target (everything moved away) snapshots rather than sending a giant delta.
-                let base = target.len().max(prev.len());
+                let base = target_fps.len().max(prev_len);
                 let use_snapshot = needs_snapshot || changed * 2 > base;
+                entry.seq = new_seq;
                 if use_snapshot {
+                    entry.needs_snapshot = false;
                     let mut nodes: Vec<NodeJobs> = target
                         .iter()
                         .map(|(node, specs)| NodeJobs {
                             node_id: *node,
-                            specs: specs.clone(),
+                            specs: owned(specs),
                         })
                         .collect();
                     nodes.sort_by_key(|nj| nj.node_id); // deterministic chunking
@@ -647,9 +712,20 @@ impl Coordinator {
                             }),
                         ));
                     }
-                    entry.needs_snapshot = false;
                     snapshots += 1;
                 } else {
+                    // Only here does a spec get copied: the nodes whose set actually moved.
+                    // `upserted` is derived from `target_fps`, whose keys are exactly `target`'s, so
+                    // the lookup always hits — `filter_map` is the total-function spelling of that.
+                    let upserts: Vec<NodeJobs> = upserted
+                        .iter()
+                        .filter_map(|node| {
+                            target.get(node).map(|specs| NodeJobs {
+                                node_id: *node,
+                                specs: owned(specs),
+                            })
+                        })
+                        .collect();
                     to_send.push((
                         m.clone(),
                         SyncMsg::Delta(WorkingSetDelta {
@@ -662,7 +738,6 @@ impl Coordinator {
                     ));
                     deltas += 1;
                 }
-                entry.seq = new_seq;
                 st.published.insert(m.clone(), target_fps);
             }
         }
@@ -674,10 +749,19 @@ impl Coordinator {
             }
         }
         // S18: the Redis assignment mirror only changes when the working set does. If this sweep
-        // sent nothing (steady state), `assign_map` is byte-for-byte what Redis already holds — any
-        // node add/remove or ring-membership change produces at least one snapshot or delta above —
-        // so skip the O(fleet) DEL+HSET rewrite. A real change still rewrites the full map.
+        // sent nothing (steady state), the map is byte-for-byte what Redis already holds — any node
+        // add/remove or ring-membership change produces at least one snapshot or delta above — so
+        // skip the O(fleet) DEL+HSET rewrite. A real change still rewrites the full map.
+        //
+        // Built here rather than during assignment for the same reason: a steady-state round must
+        // not allocate a poller-id `String` per node for a map it is not going to write.
         if snapshots + deltas > 0 {
+            let mut assign_map: HashMap<Uuid, String> = HashMap::new();
+            for (m, target) in &targets {
+                for node in target.keys() {
+                    assign_map.insert(node.as_uuid(), (*m).to_owned());
+                }
+            }
             self.volatile.write_assignments(pool, &assign_map).await;
             self.stats.record_assignment_write();
         }
@@ -693,6 +777,16 @@ impl Coordinator {
     /// are computed against `now`; `results_total` is core's consumed-result count for the poller.
     #[must_use]
     pub fn poller_views(&self, now: Instant) -> Vec<PollerView> {
+        // Read the result counters *first* and release their lock, so this never holds two locks at
+        // once — the module's flat-locking discipline. The map is per-poller (tens of entries), so
+        // materializing it is far cheaper than nesting it inside the registry guard.
+        let counts: HashMap<String, u64> = self
+            .results_seen
+            .read()
+            .expect("coordinator result counters poisoned")
+            .iter()
+            .map(|(id, seen)| (id.clone(), seen.load(Ordering::Relaxed)))
+            .collect();
         let st = self.state.lock().expect("coordinator state poisoned");
         let mut views: Vec<PollerView> = st
             .pollers
@@ -707,7 +801,7 @@ impl Coordinator {
                 working_set_nodes: e.working_set_nodes,
                 working_set_specs: e.working_set_specs,
                 inflight: e.inflight,
-                results_total: st.results_seen.get(id).copied().unwrap_or(0),
+                results_total: counts.get(id).copied().unwrap_or(0),
                 host: e.host.clone(),
                 listeners: e.listeners.clone(),
                 caps: e.caps.clone(),
@@ -816,12 +910,41 @@ impl Coordinator {
         ids
     }
 
-    /// Count one poll result core consumed off the bus as produced by `poller_id`. Called on the
-    /// (serialized) result-consume path; a brief `Mutex` bump is cheap enough there.
+    /// Count one poll result core consumed off the bus as produced by `poller_id`.
+    ///
+    /// Deliberately **not** on the registry mutex. This runs once per poll result (~1.7k/s at 50k
+    /// nodes on a 30s interval) from `ingest_result`, and that mutex is also what
+    /// [`Self::reconcile_pool`] takes to diff a pool's working set — so sharing it put per-result
+    /// accounting behind a sweep once per pool per round. In the steady state this is a read guard
+    /// plus a relaxed atomic add and allocates nothing; only the very first result from a given
+    /// poller takes the write lock, to create its counter.
     pub fn record_result(&self, poller_id: &str) {
-        let mut st = self.state.lock().expect("coordinator state poisoned");
-        *st.results_seen.entry(poller_id.to_owned()).or_insert(0) += 1;
+        {
+            let seen = self
+                .results_seen
+                .read()
+                .expect("coordinator result counters poisoned");
+            if let Some(counter) = seen.get(poller_id) {
+                counter.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+        }
+        self.results_seen
+            .write()
+            .expect("coordinator result counters poisoned")
+            .entry(poller_id.to_owned())
+            .or_insert_with(|| AtomicU64::new(0))
+            .fetch_add(1, Ordering::Relaxed);
     }
+}
+
+/// Copy a node's borrowed spec set into the owned `Vec` a bus message has to carry.
+///
+/// The single place a [`JobSpec`] is cloned during a reconcile: everything upstream of a published
+/// message — assignment, the capability filter, fingerprinting — works on references into the
+/// scheduler's cached desired set.
+fn owned(specs: &[&JobSpec]) -> Vec<JobSpec> {
+    specs.iter().map(|s| (*s).clone()).collect()
 }
 
 /// Whether `poller_id` is a registered poller whose last heartbeat is within [`OFFLINE_AFTER`] of
@@ -833,16 +956,13 @@ fn is_live(st: &CoordState, poller_id: &str, now: Instant) -> bool {
         .is_some_and(|e| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
 }
 
-/// The sorted ids of the pool's live members (heartbeat within [`OFFLINE_AFTER`] of `now`). Sorted
-/// so the ring built from them is deterministic across sweeps.
-/// Whether `poller` advertised `cap` in its most recent heartbeat.
+/// Whether `poller` advertised `cap` in its most recent heartbeat, per the capability snapshot the
+/// reconcile took under the registry lock.
 ///
 /// Absence is treated as "cannot", which is the safe direction: a poller too old to send caps at
 /// all is exactly the one that would mishandle a new field.
-fn poller_has_cap(st: &CoordState, poller: &str, cap: &str) -> bool {
-    st.pollers
-        .get(poller)
-        .is_some_and(|e| e.caps.iter().any(|c| c == cap))
+fn has_cap(caps: &HashMap<String, Vec<String>>, poller: &str, cap: &str) -> bool {
+    caps.get(poller).is_some_and(|c| c.iter().any(|x| x == cap))
 }
 
 /// The capability tokens `spec` requires of the poller that will run it — empty when any poller can.
@@ -885,6 +1005,8 @@ fn spec_required_caps(spec: &JobSpec) -> Vec<&'static str> {
     }
 }
 
+/// The sorted ids of the pool's live members (heartbeat within [`OFFLINE_AFTER`] of `now`). Sorted
+/// so the ring built from them is deterministic across sweeps.
 fn live_members(st: &CoordState, pool: &str, now: Instant) -> Vec<String> {
     let mut members: Vec<String> = st
         .pollers
@@ -1122,7 +1244,7 @@ mod tests {
 
         // 101 nodes → two chunks (100 + 1), one shared seq, correct epoch, total_nodes=101.
         let nodes: Vec<(NodeId, u32)> = (0..101).map(|i| (node(i), 30)).collect();
-        coord.reconcile_pool("default", desired(&nodes), now).await;
+        coord.reconcile_pool("default", &desired(&nodes), now).await;
 
         let msgs = drain_syncs(&mut rx, "p1");
         assert_eq!(msgs.len(), 2, "101 nodes chunk into 2 snapshot messages");
@@ -1160,14 +1282,14 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let nodes = desired(&[(node(1), 30), (node(2), 30)]);
-        coord.reconcile_pool("default", nodes.clone(), now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let _ = drain_syncs(&mut rx, "p1"); // discard the first snapshot
 
         // Echo the applied snapshot so no gap/epoch resync is armed, then reconcile the same set.
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
             .await;
-        coord.reconcile_pool("default", nodes, now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         assert!(
             drain_syncs(&mut rx, "p1").is_empty(),
             "an unchanged working set publishes nothing"
@@ -1185,7 +1307,7 @@ mod tests {
             .await;
         // 4-node baseline so a 1-node change is under the 50% snapshot threshold.
         let base = desired(&[(node(1), 30), (node(2), 30), (node(3), 30), (node(4), 30)]);
-        coord.reconcile_pool("default", base, now).await;
+        coord.reconcile_pool("default", &base, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
@@ -1193,7 +1315,7 @@ mod tests {
 
         // Change node(2)'s interval → its spec set differs → one upsert, no removes.
         let changed = desired(&[(node(1), 30), (node(2), 60), (node(3), 30), (node(4), 30)]);
-        coord.reconcile_pool("default", changed, now).await;
+        coord.reconcile_pool("default", &changed, now).await;
 
         let msgs = drain_syncs(&mut rx, "p1");
         assert_eq!(msgs.len(), 1);
@@ -1220,7 +1342,7 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let base = desired(&[(node(1), 30), (node(2), 30), (node(3), 30), (node(4), 30)]);
-        coord.reconcile_pool("default", base, now).await;
+        coord.reconcile_pool("default", &base, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
@@ -1228,7 +1350,7 @@ mod tests {
 
         // Drop node(4).
         let fewer = desired(&[(node(1), 30), (node(2), 30), (node(3), 30)]);
-        coord.reconcile_pool("default", fewer, now).await;
+        coord.reconcile_pool("default", &fewer, now).await;
 
         let msgs = drain_syncs(&mut rx, "p1");
         assert_eq!(msgs.len(), 1);
@@ -1267,7 +1389,7 @@ mod tests {
         // Enough uniform nodes that the 2-member ring gives each poller a real share. Snapshot both,
         // capturing which nodes each initially owns (bucketed so neither id's messages are lost).
         let all: Vec<(NodeId, u32)> = uniform_nodes(40).into_iter().map(|n| (n, 30)).collect();
-        coord.reconcile_pool("default", desired(&all), now).await;
+        coord.reconcile_pool("default", &desired(&all), now).await;
         let initial = drain_buckets(&mut rx);
         let p2_initial = nodes_in(initial.get("p2").map_or(&[], Vec::as_slice));
         assert!(
@@ -1292,7 +1414,7 @@ mod tests {
             "the survivor keeps the pool live"
         );
 
-        coord.reconcile_pool("default", desired(&all), later).await;
+        coord.reconcile_pool("default", &desired(&all), later).await;
         let after = drain_buckets(&mut rx);
         assert!(
             after.get("p2").is_none_or(Vec::is_empty),
@@ -1320,7 +1442,7 @@ mod tests {
             .await;
         let published = node(1);
         coord
-            .reconcile_pool("default", desired(&[(published, 30)]), now)
+            .reconcile_pool("default", &desired(&[(published, 30)]), now)
             .await;
 
         assert_eq!(coord.owner_of(published, now).as_deref(), Some("p1"));
@@ -1345,7 +1467,7 @@ mod tests {
             .await;
         let n = node(1);
         coord
-            .reconcile_pool("default", desired(&[(n, 30)]), now)
+            .reconcile_pool("default", &desired(&[(n, 30)]), now)
             .await;
         assert_eq!(coord.owner_of(n, now).as_deref(), Some("p1"));
 
@@ -1394,7 +1516,7 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let nodes = desired(&[(node(1), 30), (node(2), 30)]);
-        coord.reconcile_pool("default", nodes.clone(), now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
@@ -1404,7 +1526,7 @@ mod tests {
         coord
             .observe_heartbeat(heartbeat("p1", "default", Uuid::new_v4()), now)
             .await;
-        coord.reconcile_pool("default", nodes, now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let msgs = drain_syncs(&mut rx, "p1");
         assert!(
             msgs.iter().all(|m| matches!(m, SyncMsg::SnapshotChunk(_))),
@@ -1423,7 +1545,7 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let nodes = desired(&[(node(1), 30), (node(2), 30)]);
-        coord.reconcile_pool("default", nodes.clone(), now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
@@ -1439,7 +1561,7 @@ mod tests {
                 now,
             )
             .await;
-        coord.reconcile_pool("default", nodes, now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let msgs = drain_syncs(&mut rx, "p1");
         assert!(msgs.iter().all(|m| matches!(m, SyncMsg::SnapshotChunk(_))));
     }
@@ -1454,14 +1576,14 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let nodes = desired(&[(node(1), 30), (node(2), 30)]);
-        coord.reconcile_pool("default", nodes.clone(), now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let _ = drain_syncs(&mut rx, "p1");
 
         // Poller echoes a seq that doesn't match what core sent (1) → gap → resnapshot.
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 99), now)
             .await;
-        coord.reconcile_pool("default", nodes, now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let msgs = drain_syncs(&mut rx, "p1");
         assert!(msgs.iter().all(|m| matches!(m, SyncMsg::SnapshotChunk(_))));
     }
@@ -1476,14 +1598,14 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let nodes = desired(&[(node(1), 30), (node(2), 30)]);
-        coord.reconcile_pool("default", nodes.clone(), now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let _ = drain_syncs(&mut rx, "p1");
 
         // Poller echoes a foreign epoch (e.g. it briefly talked to another core) → resnapshot.
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, Uuid::new_v4(), 1), now)
             .await;
-        coord.reconcile_pool("default", nodes, now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let msgs = drain_syncs(&mut rx, "p1");
         assert!(msgs.iter().all(|m| matches!(m, SyncMsg::SnapshotChunk(_))));
     }
@@ -1498,7 +1620,7 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let base = desired(&[(node(1), 30), (node(2), 30), (node(3), 30), (node(4), 30)]);
-        coord.reconcile_pool("default", base, now).await;
+        coord.reconcile_pool("default", &base, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
@@ -1506,7 +1628,7 @@ mod tests {
 
         // Change 3 of 4 nodes → 3/4 > 50% → snapshot rather than a big delta.
         let changed = desired(&[(node(1), 60), (node(2), 60), (node(3), 60), (node(4), 30)]);
-        coord.reconcile_pool("default", changed, now).await;
+        coord.reconcile_pool("default", &changed, now).await;
         let msgs = drain_syncs(&mut rx, "p1");
         assert_eq!(msgs.len(), 1);
         assert!(matches!(msgs[0], SyncMsg::SnapshotChunk(_)));
@@ -1522,14 +1644,14 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let base = desired(&[(node(1), 30), (node(2), 30)]);
-        coord.reconcile_pool("default", base, now).await;
+        coord.reconcile_pool("default", &base, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
             .await;
 
         // Everything moves away → one empty snapshot chunk (the poller learns it owns nothing).
-        coord.reconcile_pool("default", HashMap::new(), now).await;
+        coord.reconcile_pool("default", &HashMap::new(), now).await;
         let msgs = drain_syncs(&mut rx, "p1");
         assert_eq!(msgs.len(), 1);
         let SyncMsg::SnapshotChunk(snap) = &msgs[0] else {
@@ -1604,13 +1726,13 @@ mod tests {
             .observe_heartbeat(heartbeat("p1", "default", inc), now)
             .await;
         let base = desired(&[(node(1), 30), (node(2), 30), (node(3), 30), (node(4), 30)]);
-        coord.reconcile_pool("default", base, now).await; // snapshot
+        coord.reconcile_pool("default", &base, now).await; // snapshot
         let _ = drain_syncs(&mut rx, "p1");
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
             .await;
         let changed = desired(&[(node(1), 60), (node(2), 30), (node(3), 30), (node(4), 30)]);
-        coord.reconcile_pool("default", changed, now).await; // delta
+        coord.reconcile_pool("default", &changed, now).await; // delta
 
         let snap = stats.snapshot();
         assert_eq!(snap.snapshots_published_total, 1);
@@ -1636,7 +1758,23 @@ mod tests {
         );
         let extra = vec![icmp_spec(node(1), 30), icmp_spec(node(2), 30)];
         assert_ne!(specs_fingerprint(&a), specs_fingerprint(&extra));
-        assert_ne!(specs_fingerprint(&a), specs_fingerprint(&[]));
+        assert_ne!(specs_fingerprint(&a), specs_fingerprint::<JobSpec>(&[]));
+    }
+
+    #[test]
+    fn a_borrowed_spec_set_fingerprints_like_the_owned_one() {
+        // `reconcile_pool` fingerprints `&[&JobSpec]` borrowed out of the scheduler's cached desired
+        // set, so it never copies specs it is not going to send. That only works because serde
+        // forwards `&T` to `T` and the two spellings hash identical bytes. If they ever diverged the
+        // failure would be silent and expensive: every node would read as changed on every sweep, so
+        // core would resend the whole fleet's decrypted credentials to every poller, every round.
+        let held = vec![icmp_spec(node(1), 30), icmp_spec(node(2), 60)];
+        let borrowed: Vec<&JobSpec> = held.iter().collect();
+        assert_eq!(specs_fingerprint(&held), specs_fingerprint(&borrowed));
+        assert_eq!(
+            specs_fingerprint::<JobSpec>(&[]),
+            specs_fingerprint::<&JobSpec>(&[])
+        );
     }
 
     /// A URL job spec, optionally carrying credentials and/or a body rule.
@@ -1721,7 +1859,7 @@ mod tests {
         let n = node(1);
         let mut desired = HashMap::new();
         desired.insert(n, vec![http_spec(n, false, true), icmp_spec(n, 30)]);
-        coord.reconcile_pool("default", desired, now).await;
+        coord.reconcile_pool("default", &desired, now).await;
 
         let published: Vec<JobSpec> = drain_syncs(&mut rx, "p-old")
             .into_iter()
@@ -1746,6 +1884,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_poller_that_gains_a_capability_is_sent_the_spec_it_was_denied() {
+        // Why the capability filter still runs for every node every round even though it now only
+        // borrows: the fingerprint is taken over the **kept** set, not the desired set. An operator
+        // upgrading a poller in place changes nothing about core's desired set, so if the filter
+        // were skipped for unchanged nodes the withheld monitor would stay withheld forever — a
+        // permanent, silent monitoring gap that looks exactly like a healthy steady state.
+        let (coord, bus, _stats) = coordinator();
+        let mut rx = bus.subscribe_sync();
+        let now = t0();
+        let inc = Uuid::new_v4();
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", inc), now) // no caps advertised
+            .await;
+
+        let n = node(1);
+        let mut desired = HashMap::new();
+        desired.insert(n, vec![http_spec(n, false, true), icmp_spec(n, 30)]);
+        coord.reconcile_pool("default", &desired, now).await;
+        let _ = drain_syncs(&mut rx, "p1");
+
+        // The poller comes back on a build that reads bodies. Echo the applied snapshot with the
+        // same incarnation so nothing rearms `needs_snapshot` — the resend can only come from the
+        // diff noticing that the kept set grew.
+        let mut upgraded = heartbeat_echo("p1", "default", inc, coord.epoch, 1);
+        upgraded.caps = vec![CAP_HTTP_BODY.to_owned()];
+        coord.observe_heartbeat(upgraded, now).await;
+        coord.reconcile_pool("default", &desired, now).await;
+
+        let published: Vec<JobSpec> = drain_syncs(&mut rx, "p1")
+            .into_iter()
+            .flat_map(|m| match m {
+                SyncMsg::SnapshotChunk(s) => s.nodes,
+                SyncMsg::Delta(d) => d.upserts,
+            })
+            .flat_map(|nj| nj.specs)
+            .collect();
+        assert!(
+            published
+                .iter()
+                .any(|s| matches!(&s.check, CheckSpec::Http(h) if h.body_match.is_some())),
+            "the withheld spec must reach the poller as soon as it advertises the capability"
+        );
+    }
+
+    #[tokio::test]
     async fn assignment_mirror_write_is_skipped_when_nothing_changes() {
         // S18: the Redis assignment mirror is only rewritten when the sweep actually sent something.
         let (coord, bus, stats) = coordinator();
@@ -1758,7 +1941,7 @@ mod tests {
         let nodes = desired(&[(node(1), 30), (node(2), 30)]);
 
         // First reconcile publishes a snapshot → mirror written once.
-        coord.reconcile_pool("default", nodes.clone(), now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         let _ = drain_syncs(&mut rx, "p1");
         assert_eq!(stats.snapshot().assignment_mirror_writes_total, 1);
 
@@ -1766,7 +1949,7 @@ mod tests {
         coord
             .observe_heartbeat(heartbeat_echo("p1", "default", inc, coord.epoch, 1), now)
             .await;
-        coord.reconcile_pool("default", nodes, now).await;
+        coord.reconcile_pool("default", &nodes, now).await;
         assert_eq!(
             stats.snapshot().assignment_mirror_writes_total,
             1,
@@ -1775,7 +1958,7 @@ mod tests {
 
         // A real change publishes a delta → mirror written again.
         let changed = desired(&[(node(1), 60), (node(2), 30)]);
-        coord.reconcile_pool("default", changed, now).await;
+        coord.reconcile_pool("default", &changed, now).await;
         assert_eq!(stats.snapshot().assignment_mirror_writes_total, 2);
     }
 }

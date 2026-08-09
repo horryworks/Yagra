@@ -49,6 +49,10 @@ default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
+# `FakeTransport` for the worker tests. A dev-dependency on purpose: under resolver v2 the feature
+# is not unified into a normal `cargo build`, so the shipped poller binary still links a
+# `yagra-transport` with no test double in it.
+yagra-transport = { path = "../yagra-transport", features = ["test-util"] }
 async-trait = { workspace = true }
 # Trap PDU fixtures for the listener tests (vendored patch build).
 snmp2 = { workspace = true }

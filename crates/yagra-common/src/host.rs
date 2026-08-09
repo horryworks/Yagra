@@ -30,7 +30,7 @@ pub struct DiskUsage {
 impl DiskUsage {
     /// Percent used (0–100), or `None` when the total capacity is unknown (`size_bytes == 0`).
     #[must_use]
-    pub fn used_pct(&self) -> Option<f64> {
+    pub(crate) fn used_pct(&self) -> Option<f64> {
         if self.size_bytes == 0 {
             None
         } else {

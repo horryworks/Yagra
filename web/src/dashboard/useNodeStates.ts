@@ -55,7 +55,16 @@ export function ingestNodeState(id: string, state: NodeState): void {
   }
 }
 
-/** Reset the shared map + pending buffer (tests only). */
+/**
+ * Reset the shared map + pending buffer.
+ *
+ * **Test infrastructure — it has no production caller and is not supposed to gain one.** The store
+ * and the pending buffer are module-level, so they outlive a single test; without this every case
+ * in `useNodeStates.test.ts` would inherit the previous one's Map and the flush-coalescing
+ * assertions would pass or fail depending on file order. Nothing in the app resets live node state:
+ * a reload remounts the module. So a dead-code sweep will keep finding it — it is deliberate, not
+ * a leftover.
+ */
 export function resetNodeStates(): void {
   pending = [];
   useStore.setState({ states: new Map() });

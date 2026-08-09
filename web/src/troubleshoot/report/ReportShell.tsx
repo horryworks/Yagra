@@ -22,7 +22,7 @@ import { TERMINAL_JOB_STATES, reportPathFor, toolById } from '../data';
 import { runningCount, useTroubleshootStore } from '../store';
 import { NoticeRow } from './kit';
 import { sigmaFor, splitNotices, toCsv } from './format';
-import { buildJobInput } from './jobInput';
+import { buildJobInput, initialControlState } from './jobInput';
 import type { ControlState, ReportDescriptor } from './types';
 import type { AnalysisFinding, AnalysisJob } from '../../types/api';
 import '../troubleshoot.css';
@@ -147,14 +147,15 @@ export function ReportShell({ descriptor }: { descriptor: ReportDescriptor }) {
   }
 
   const run = async () => {
+    // Seed from the descriptor's declared defaults, then overlay what the operator actually set.
+    // A control this tool's bar does not render (today: `depth`) therefore still ships its real
+    // value without being named here — and it comes from the same function the `buildJobInput`
+    // tests seed from, so there is one source rather than two that can drift.
     const state: ControlState = {
-      scopeKind: scope.kind,
-      scopeId: scope.id,
-      scopeLabel: scope.label,
+      ...initialControlState(descriptor, scope),
       windowSecs,
       baselineSecs,
       sensitivity,
-      depth: controls.defaults.depth,
     };
     try {
       const j = await createJob(buildJobInput(descriptor, state, t(windowLabel)));

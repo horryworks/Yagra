@@ -21,6 +21,3 @@ serde_json = { workspace = true }
 # they carry their own JSON Schema for the OpenAPI document (ADR-035) rather than being re-described
 # in `yagra-core`. Derive-only — nothing here knows about HTTP.
 utoipa = { workspace = true }
-
-[dev-dependencies]
-serde_json = { workspace = true }

@@ -22,9 +22,8 @@ import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
+import { mibEntryReady } from './mibEntryForm';
 import './MibRepositoryPage.css';
-
-const OID_RE = /^[0-9]+(\.[0-9]+)*$/;
 
 const COLS = '1.4fr 2fr 1fr 1fr 92px';
 
@@ -39,7 +38,7 @@ function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const valid = metricName.trim().length > 0 && OID_RE.test(oid.trim());
+  const valid = mibEntryReady(metricName, oid);
 
   const submit = () => {
     if (!valid) return;

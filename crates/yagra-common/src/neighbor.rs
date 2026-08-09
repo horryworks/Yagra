@@ -51,7 +51,7 @@ pub const MAX_NEIGHBOR_WALK_ROWS: usize = 8192;
 
 /// Cap on any single device-supplied string, in characters. `sysDescr` in particular runs to
 /// hundreds of bytes on some agents and is pure payload.
-pub const MAX_FIELD_CHARS: usize = 255;
+pub(crate) const MAX_FIELD_CHARS: usize = 255;
 
 /// `lldpLocPortTable` columns, in the order [`builtin_neighbor_columns`] lists them.
 const OID_LLDP_LOC_PORT_ID_SUBTYPE: &str = "1.0.8802.1.1.2.1.3.7.1.2";

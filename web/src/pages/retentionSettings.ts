@@ -50,7 +50,6 @@ export const RETENTION_SUBJECTS = [
   'interfaces',
   'audit_log',
 ] as const;
-export type RetentionSubject = (typeof RETENTION_SUBJECTS)[number];
 
 /** The form's raw text state — one string per editable window. */
 export type RetentionForm = Record<RetentionField, string>;

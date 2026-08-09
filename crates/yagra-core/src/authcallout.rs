@@ -5,7 +5,8 @@
 //! `config::Config::nats_callout_seed_file`), NATS delegates every poller connection to core over the
 //! system subject `$SYS.REQ.USER.AUTH`. For each request we validate the shared bootstrap secret and
 //! mint a NATS user JWT scoped to only that poller's own subjects (`yagra.poller.assign.{id}` + its
-//! pool's jobs/discovery, [`yagra_authz::allow_list`]), so a compromised poller cannot subscribe to
+//! pool's jobs/discovery, built by `yagra_authz`'s internal `allow_list`), so a compromised poller
+//! cannot subscribe to
 //! another poller's — i.e. another device's — credentials off the bus.
 //!
 //! Runs on **every** core (queue-subscribed), not just the leader, so authentication survives a

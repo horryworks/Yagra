@@ -165,7 +165,7 @@ impl ArpEntry {
     /// discover nothing. Loopback and multicast are excluded for the same reason they are excluded
     /// from subnet membership: they identify no host reachable from anywhere else.
     #[must_use]
-    pub fn is_discoverable(&self) -> bool {
+    pub(crate) fn is_discoverable(&self) -> bool {
         match self.ip {
             IpAddr::V4(v4) => {
                 !v4.is_loopback()

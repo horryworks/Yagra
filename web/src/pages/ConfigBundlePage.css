@@ -55,7 +55,7 @@
 }
 
 .cb-sections li + li {
-  border-top: 1px solid var(--border-color);
+  border-top: var(--border-width) solid var(--border-color);
 }
 
 .cb-section-name {
@@ -76,5 +76,5 @@
 .cb-report {
   margin-top: 16px;
   padding-top: 12px;
-  border-top: 1px solid var(--border-color);
+  border-top: var(--border-width) solid var(--border-color);
 }

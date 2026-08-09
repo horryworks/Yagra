@@ -29,11 +29,11 @@ use yagra_common::{
 
 /// Cap on how many members of one subnet are considered. A `/16` with every host answering SNMP
 /// would otherwise make the containment rule quadratic in the router count.
-pub const MAX_MEMBERS_PER_SUBNET: usize = 1024;
+pub(crate) const MAX_MEMBERS_PER_SUBNET: usize = 1024;
 
 /// Cap on how many members of one segment are treated as transit nodes. Beyond a handful, the
 /// "which of these routes" question has stopped having a useful answer.
-pub const MAX_ROUTERS_PER_SEGMENT: usize = 8;
+pub(crate) const MAX_ROUTERS_PER_SEGMENT: usize = 8;
 
 /// Everything the derivation reads.
 #[derive(Debug, Clone, Copy)]

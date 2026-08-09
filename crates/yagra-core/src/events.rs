@@ -1740,9 +1740,13 @@ impl EventEngine {
         // rule (built-in or user-authored) can match by name (`linkDown`) as well as by raw OID.
         // The stored/displayed message is untouched; matching only sees the enriched copy, and
         // resolution is centralized in core so it works regardless of poller version (N-1 safe).
+        // Spelled out rather than `_ =>`: a fourth `EventKind` must decide whether it carries
+        // something to resolve, instead of silently landing in the "no enrichment" arm.
         let haystack: Cow<str> = match (msg.kind, msg.trap_oid.as_deref().and_then(trap_oid_name)) {
             (EventKind::Trap, Some(name)) => Cow::Owned(format!("{name} {}", msg.message)),
-            _ => Cow::Borrowed(msg.message.as_str()),
+            (EventKind::Trap, None) | (EventKind::Syslog | EventKind::Webhook, _) => {
+                Cow::Borrowed(msg.message.as_str())
+            }
         };
 
         for rule in snap

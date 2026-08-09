@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { isShowable, metricView, overviewScalars, viewOf } from './metricInventory';
+import { metricView, overviewScalars, viewOf } from './metricInventory';
 import { METRIC_DIMENSIONS, METRIC_KINDS } from '../types/api';
 import type { MetricDimension, MetricKind, NodeMetricEntry } from '../types/api';
 
@@ -74,15 +74,21 @@ describe('metricView', () => {
   });
 });
 
-describe('viewOf / isShowable', () => {
+describe('viewOf', () => {
   it('reads the pair off the entry', () => {
     expect(viewOf(entry({ metric_kind: 'counter' }))).toEqual(metricView('counter', 'none'));
   });
 
-  it('calls a per-entity counter unshowable but a node-level one showable', () => {
-    // The node-level counter has no current value and still has a rate chart, so it is not hidden.
-    expect(isShowable(entry({ metric_kind: 'counter' }))).toBe(true);
-    expect(isShowable(entry({ metric_kind: 'counter', dimension: 'entity' }))).toBe(false);
+  it('leaves a node-level counter readable somewhere and a per-entity one nowhere', () => {
+    // The distinction the surfaces are built on: the node-level counter has no current value but
+    // still has a rate chart, while the per-entity counter has neither and must be explained
+    // rather than drawn. Asserted through `viewOf` because no surface asks the OR of the two.
+    const nodeLevel = viewOf(entry({ metric_kind: 'counter' }));
+    expect(nodeLevel.read.kind).toBe('none');
+    expect(nodeLevel.chart.kind).toBe('rate');
+    const perEntity = viewOf(entry({ metric_kind: 'counter', dimension: 'entity' }));
+    expect(perEntity.read.kind).toBe('none');
+    expect(perEntity.chart.kind).toBe('none');
   });
 });
 

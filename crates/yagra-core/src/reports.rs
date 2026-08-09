@@ -1572,13 +1572,30 @@ impl ReportRunner {
         nodes.sort_by(|a, b| a.name.cmp(&b.name));
         let states = self.alerts.node_states();
         let total = nodes.len();
+        // A node the engine has never observed takes the same fallback every other surface takes
+        // (`api::nodes::state_or_fallback`): a recent ICMP sample means `ok`. A report generated in
+        // the minutes after a core restart used to print `unknown` down the whole column while the
+        // WebUI showed the same fleet as up — and a report is the artifact someone forwards.
+        // One fleet-wide freshness query, and only when there is something to fall back for.
+        let fresh = if nodes
+            .iter()
+            .take(limit)
+            .any(|n| !states.contains_key(&n.id))
+        {
+            crate::api::nodes::fresh_fleet_ids(self.store.as_ref()).await
+        } else {
+            std::collections::HashSet::new()
+        };
         let rows: Vec<Vec<String>> = nodes
             .iter()
             .take(limit)
             .map(|n| {
-                let state = states
-                    .get(&n.id)
-                    .map_or_else(|| "unknown".to_owned(), |s| s.as_str().to_owned());
+                let state = crate::api::nodes::state_or_fallback(
+                    states.get(&n.id).copied(),
+                    fresh.contains(&n.id.as_uuid()),
+                )
+                .as_str()
+                .to_owned();
                 vec![
                     n.name.clone(),
                     n.address.to_string(),

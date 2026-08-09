@@ -1689,7 +1689,7 @@ mod tests {
             ca_cert: None,
             community: DEFAULT_TRAP_COMMUNITY.to_owned(),
             secret_fp: 0,
-            filter: CompiledFilter::allow_all(),
+            filter: yagra_forward::compile(&FilterExpr::default()).unwrap(),
             tx,
             counters: counters(),
             shutdown: CancellationToken::new(),

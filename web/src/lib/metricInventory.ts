@@ -82,11 +82,13 @@ export function viewOf(entry: NodeMetricEntry): MetricView {
   return metricView(entry.metric_kind, entry.dimension);
 }
 
-/** Whether an entry has any value or history to show on this surface at all. */
-export function isShowable(entry: NodeMetricEntry): boolean {
-  const v = viewOf(entry);
-  return v.read.kind !== 'none' || (v.chart.kind !== 'none' && v.chart.kind !== 'interfaces');
-}
+// There is deliberately no general `isShowable(entry)` here. Every surface's question is narrower
+// and none of them is the OR of the two cells: the Collection tab lists the whole inventory and asks
+// per row whether to read a value and whether the row expands, the metric-chart widget asks only
+// `chartableMetrics` (chart ∈ range|rate|aggregate), and the Overview asks `overviewScalars`. A
+// fourth, broader predicate is one a surface can pick by name and get subtly wrong — the same
+// plausible-not-broken failure this file exists to prevent. Add the predicate a surface needs, in
+// terms of `viewOf`, next to that surface.
 
 /**
  * The entries the node **Overview** shows as a latest-value strip.

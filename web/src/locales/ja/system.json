@@ -279,7 +279,8 @@
     "tier": {
       "availability": "可用性",
       "uplink": "アップリンク",
-      "traffic": "トラフィック"
+      "traffic": "トラフィック",
+      "inventory": "インベントリ"
     },
     "regions": {
       "global": "グローバル (api.meraki.com)",

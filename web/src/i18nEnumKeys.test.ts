@@ -42,6 +42,7 @@ import {
   METRIC_DIMENSIONS,
 } from './types/api';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
+import { MERAKI_TIERS } from './pages/merakiTiers';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
 import { ENDPOINT_COVERAGE } from './pages/discoveredEndpoints';
 import { SEVERITY_ORDER } from './lib/nodeState';
@@ -72,6 +73,8 @@ import enSettingsTls from './locales/en/settings-tls.json';
 import jaSettingsTls from './locales/ja/settings-tls.json';
 import enSettingsAuth from './locales/en/settings-auth.json';
 import jaSettingsAuth from './locales/ja/settings-auth.json';
+import enSettingsAi from './locales/en/settings-ai.json';
+import jaSettingsAi from './locales/ja/settings-ai.json';
 import jaAccess from './locales/ja/access.json';
 import enCommon from './locales/en/common.json';
 import jaCommon from './locales/ja/common.json';
@@ -137,8 +140,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('severity', { en: enFormat, ja: jaFormat }, 'severity.', SEVERITIES);
   });
 
-  it('every role has a label (common:role.*)', () => {
+  it('every role has a label (common:role.* and access:role.*)', () => {
+    // Two namespaces, two independent copies of the same three strings: badges elsewhere read
+    // `common:role.*`, while the Users screen — the role picker, the read-only role cell and the
+    // add-user dialog — is mounted on `access` and builds `role.${r}` there. Pinning only `common`
+    // left the screen that *assigns* roles free to render `role.auditor` at a raw key.
     expectKeys('role', { en: enCommon, ja: jaCommon }, 'role.', ROLES);
+    expectKeys('role (access)', { en: enAccess, ja: jaAccess }, 'role.', ROLES);
   });
 
   it('every node-group type has a label (nodes:groupType.*)', () => {
@@ -249,6 +257,21 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('confidence', { en: enRca, ja: jaRca }, 'confidence.', RCA_CONFIDENCES);
   });
 
+  it('every LLM provider has a label (settings-ai:provider.*)', () => {
+    // Mirrors `ProviderKind` in `crates/yagra-core/src/rca/mod.rs` (the enum `rca/store.rs` parses
+    // its stored `provider` column through). The Settings ▸ AI picker renders one option per entry
+    // of the *backend-fetched* provider list — `t(`provider.${p.key}`)` — so a fourth vendor would
+    // arrive as an option labelled `provider.openai`, in both locales, at the moment an admin is
+    // choosing where incident context is sent. Listed here rather than iterated because the choice
+    // list is fetched at runtime and there is no `as const` array on the TS side to walk.
+    expectKeys(
+      'llm provider',
+      { en: enSettingsAi, ja: jaSettingsAi },
+      'provider.',
+      ['vertex', 'gemini', 'claude'],
+    );
+  });
+
   it('every terminal analysis-job state has a label (troubleshoot:runs.state.*)', () => {
     // `AnalysisJob.state` is a bare string in the schema; the report shell and the runs list only
     // build `runs.state.${state}` for the terminal subset, so that subset is what must resolve.
@@ -329,14 +352,24 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     );
   });
 
-  it('every token state has an explanation (settings-tokens:state.*)', () => {
+  it('every token state has an explanation (settings-tokens:state.* / stateHint.*)', () => {
     // A token can be dead for four independent reasons and the operator needs the real one — "the
     // owner is disabled" and "this expired" call for different actions.
+    //
+    // `tokenForm.ts`'s `TokenState` is a plain union, so the members are listed here rather than
+    // iterated; both key families are derived from this one list so they cannot drift apart.
+    const states = ['active', 'revoked', 'expired', 'no-owner', 'owner-disabled'];
+    const locales = { en: enSettingsTokens, ja: jaSettingsTokens };
+    expectKeys('token state', locales, 'state.', states);
+    // The badge's tooltip, which is the only place the UI says *why* a token stopped
+    // authenticating. `active` and `revoked` deliberately have none (the label already says it),
+    // so the hint set is the rest — a sixth dead-state added without one would put a raw key in a
+    // `title` attribute, where even a reviewer would not see it.
     expectKeys(
-      'token state',
-      { en: enSettingsTokens, ja: jaSettingsTokens },
-      'state.',
-      ['active', 'revoked', 'expired', 'no-owner', 'owner-disabled'],
+      'token state hint',
+      locales,
+      'stateHint.',
+      states.filter((s) => s !== 'active' && s !== 'revoked'),
     );
   });
 
@@ -441,6 +474,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('bundle note', locales, 'bundle.notes.', BUNDLE_NOTE_CODES);
   });
 
+  it('every Meraki collection tier has a label (system:meraki.tier.*)', () => {
+    // This one had already gone wrong. The org list prints `t(`meraki.tier.${x}`)` for whatever the
+    // server stored, and `PUT /meraki/orgs/{id}/cadence` accepts all four tiers — but only three
+    // had strings, so an org with `inventory` enabled showed the operator the raw key. The cadence
+    // dialog's checkboxes are a deliberate subset (`SELECTABLE_MERAKI_TIERS`); the *labels* are not.
+    expectKeys('meraki tier', { en: enSystem, ja: jaSystem }, 'meraki.tier.', MERAKI_TIERS);
+  });
+
   it('every neighbor protocol and capability has strings (nodes:neighbors.*)', () => {
     // Both are rendered from a value the device supplied and the backend normalized. The
     // capability vocabulary is the whole point of that normalization — it exists so one legend
@@ -498,6 +539,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSystem, ja: jaSystem };
     expectKeys('retention subject', locales, 'settings.retention.subject.', RETENTION_SUBJECTS);
     expectKeys('retention field', locales, 'settings.retention.field.', RETENTION_FIELDS);
+    // The unit beside each editable box, built as `settings.retention.unit.${row.unit || 'days'}`
+    // from a server value (`retention.rs` `Field::unit`). Two units today, and getting one wrong is
+    // not cosmetic — it is the difference between keeping unmatched events for 72 hours and 72 days.
+    expectKeys('retention unit', locales, 'settings.retention.unit.', ['days', 'hours']);
   });
 
   it('every discovery walk has a name and help (system:settings.neighbors.walk.*)', () => {

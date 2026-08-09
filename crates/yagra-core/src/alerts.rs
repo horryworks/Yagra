@@ -448,16 +448,39 @@ impl AlertManager {
         let state_before = self.node_state(node);
         let mut actions = Vec::new();
 
+        // One config read for the whole result — the maintenance flag plus every sample's resolved
+        // threshold — instead of one acquisition per sample.
+        //
+        // Two things make that worth doing at fleet sample rates. An SNMP *table* poll emits one
+        // sample per interface per column, so `if_hc_in_octets` arrives a hundred times in one
+        // result; `resolve` is a pure function of (node, metric, config snapshot), and so is
+        // `check_id`, so resolving once per **distinct metric name** is identical work with the
+        // repeats removed — a hundred `RwLock` acquisitions, `Vec<ScopedThreshold>` builds, rule
+        // clones and UUIDv5 (SHA-1) hashes collapse to one. And the guard is dropped before any
+        // `process_check` call: `process_check` and `resweep_suppression` take `config.read()`
+        // themselves, and `std::sync::RwLock` gives no re-entrancy guarantee — a writer arriving
+        // between the two acquisitions can deadlock the thread against itself.
+        //
+        // A small `Vec` with a linear scan rather than a map: the distinct-metric count is a handful
+        // even for a wide table, and this way a sample-free result (ICMP liveness, the common case)
+        // allocates nothing at all.
+        let mut resolved: Vec<(&str, Option<(CheckId, EffectiveThreshold)>)> = Vec::new();
         // Inside an active maintenance window every check observes `Maintenance` instead of
         // its real state: no alert can fire (Maintenance carries no severity) and existing
         // alerts resolve after the usual dwell. The real state flows again when the window
         // ends, re-committing any surviving problem.
-        let in_maintenance = self
-            .config
-            .read()
-            .expect("config rwlock poisoned")
-            .maintenance
-            .contains(&node);
+        let in_maintenance = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            for sample in &result.samples {
+                if !resolved.iter().any(|(metric, _)| *metric == sample.metric) {
+                    let eff = config
+                        .resolve(node, &sample.metric)
+                        .map(|eff| (check_id(node, &sample.metric), eff));
+                    resolved.push((sample.metric.as_str(), eff));
+                }
+            }
+            config.maintenance.contains(&node)
+        };
 
         // Liveness from the reachability outcome.
         let raw = if in_maintenance {
@@ -482,13 +505,15 @@ impl AlertManager {
             },
         ));
 
-        // Threshold checks per sample (only metrics with a resolved threshold alert).
+        // Threshold checks per sample (only metrics with a resolved threshold alert). Every sample
+        // is still fed through `process_check` individually — the memo above dedupes the *lookup*,
+        // never the observation, so the dwell window sees exactly the sample count it did before.
         for sample in &result.samples {
-            let eff = {
-                let config = self.config.read().expect("config rwlock poisoned");
-                config.resolve(node, &sample.metric)
-            };
-            if let Some(eff) = eff {
+            let eff = resolved
+                .iter()
+                .find(|(metric, _)| *metric == sample.metric)
+                .and_then(|(_, eff)| eff.as_ref());
+            if let Some((check, eff)) = eff {
                 let raw = if in_maintenance {
                     NodeState::Maintenance
                 } else if sample.kind == MetricKind::Counter {
@@ -513,7 +538,7 @@ impl AlertManager {
                     raw,
                     result.at_unix_ms,
                     CheckSpec {
-                        check: check_id(node, &sample.metric),
+                        check: *check,
                         metric: &sample.metric,
                         dwell: eff.dwell_samples,
                         is_liveness: false,
@@ -2315,6 +2340,56 @@ mod tests {
         let actions = mgr.observe(&reachable_ok);
         assert!(matches!(actions.as_slice(), [NotifyAction::Resolve(_)]));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    #[test]
+    fn repeated_samples_of_one_metric_each_advance_the_dwell() {
+        // An SNMP table poll emits the same metric name once per interface, so one result can carry
+        // a hundred `if_util_pct` samples. `observe` memoizes the *resolution* per distinct metric
+        // name — one config read, one threshold resolve, one `check_id` — but every sample must
+        // still be observed. Deduplicating the observations too would quietly turn a three-sample
+        // dwell into a three-*poll* dwell, delaying every threshold alert by minutes.
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(AlertConfig::new(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_id: node.to_string(),
+                rule: ThresholdRule {
+                    metric: "if_util_pct".into(),
+                    direction: Direction::Above,
+                    warning: None,
+                    critical: Some(90.0),
+                    dwell_samples: 3,
+                },
+            }],
+            meta,
+        ));
+
+        // Two breaching rows in one result: two observations, one short of the dwell.
+        let mut two_rows = result(node, CheckOutcome::Reachable, 0);
+        two_rows.samples = vec![
+            Sample::gauge("if_util_pct", 95.0),
+            Sample::gauge("if_util_pct", 97.0),
+        ];
+        assert!(
+            mgr.observe(&two_rows).is_empty(),
+            "two samples must not satisfy a three-sample dwell"
+        );
+
+        // The third breaching row commits — samples are counted, not distinct metric names.
+        let mut one_row = result(node, CheckOutcome::Reachable, 1_000);
+        one_row.samples = vec![Sample::gauge("if_util_pct", 99.0)];
+        assert!(
+            matches!(mgr.observe(&one_row).as_slice(), [NotifyAction::Fire(_)]),
+            "the third sample of the metric commits the transition"
+        );
     }
 
     #[test]

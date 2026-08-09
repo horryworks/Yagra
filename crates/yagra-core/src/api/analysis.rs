@@ -30,12 +30,17 @@ use super::{ApiError, ApiResult, ApiState};
 use crate::analysis::{AnalysisJob, AnalysisTool, CreateError, JobParams, ScopeKind};
 use axum::{
     extract::{Path, Query, State},
+    // Imported rather than written out at each use: the guard that compares a documented
+    // `body =` against the handler's real return type parses the literal prefix `(StatusCode,`,
+    // so a fully-qualified spelling silently drops that handler out of its coverage.
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
     routing::{get, post},
-    Json, Router,
+    Json,
+    Router,
 };
 use futures::stream::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -859,7 +864,7 @@ async fn create_analysis_schedule(
     State(st): State<ApiState>,
     actor: super::extract::Actor,
     Json(body): Json<AnalysisScheduleBody>,
-) -> ApiResult<(axum::http::StatusCode, Json<super::util::CreatedId>)> {
+) -> ApiResult<(StatusCode, Json<super::util::CreatedId>)> {
     let (input, next) = parse_schedule_body(&st, &scope, &admin, body)?;
     let id = admin
         .analysis
@@ -873,10 +878,7 @@ async fn create_analysis_schedule(
                 "failed to create analysis schedule",
             )
         })?;
-    Ok((
-        axum::http::StatusCode::CREATED,
-        Json(super::util::CreatedId { id }),
-    ))
+    Ok((StatusCode::CREATED, Json(super::util::CreatedId { id })))
 }
 
 /// Update a schedule. Recomputes `next_run_at` from the new cadence, so an edit takes effect at the
@@ -902,7 +904,7 @@ async fn update_analysis_schedule(
     Path(id): Path<Uuid>,
     actor: super::extract::Actor,
     Json(body): Json<AnalysisScheduleBody>,
-) -> ApiResult<axum::http::StatusCode> {
+) -> ApiResult<StatusCode> {
     // Both ends are checked: the schedule as it stands must be visible, and so must the target the
     // edit moves it to. Checking only the new one would let a scoped caller retarget somebody
     // else's schedule onto their own group and thereby take it over.
@@ -921,7 +923,7 @@ async fn update_analysis_schedule(
             )
         })?;
     if found {
-        Ok(axum::http::StatusCode::NO_CONTENT)
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(
             "schedule_not_found",
@@ -948,7 +950,7 @@ async fn delete_analysis_schedule(
     admin: Admin,
     State(st): State<ApiState>,
     Path(id): Path<Uuid>,
-) -> ApiResult<axum::http::StatusCode> {
+) -> ApiResult<StatusCode> {
     require_visible_schedule(&st, &scope, &admin, id).await?;
     let found = admin
         .analysis
@@ -963,7 +965,7 @@ async fn delete_analysis_schedule(
             )
         })?;
     if found {
-        Ok(axum::http::StatusCode::NO_CONTENT)
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(
             "schedule_not_found",

@@ -5,8 +5,19 @@
 // Every IA entry now has a real screen, so nothing routes to `ComingSoon` at the moment. The
 // component and `nav.ts`'s `implemented` flag stay: they are the mechanism for slotting a screen
 // into the IA before it has a backend, and `nav.test.ts` still pins how a placeholder is grouped.
+//
+// CODE SPLITTING. Three route GROUPS are lazy — Topology, Troubleshoot, Settings (`routeGroups/`).
+// Everything on an operator's daily path (dashboard, nodes, alerts) is imported statically and
+// stays in the initial chunk; the ~25 screens behind those three sections are not, so opening the
+// dashboard no longer downloads the geo outline, the report registry and seventeen settings pages.
+// The split is per GROUP and not per page on purpose: a group's component stays mounted while the
+// operator moves between its screens, so only the first entry suspends and a tab switch inside an
+// already-loaded group never flashes the fallback. React.lazy also caches the resolved module, so
+// leaving a group and coming back is synchronous too.
 
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
+import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { AppShell } from './components/shell/AppShell';
 import { LoginPage } from './pages/LoginPage';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
@@ -19,7 +30,6 @@ import { ClassificationRulesPage } from './pages/ClassificationRulesPage';
 import { CollectionTemplatesPage } from './pages/CollectionTemplatesPage';
 import { MibRepositoryPage } from './pages/MibRepositoryPage';
 import { DiscoveryPage } from './pages/DiscoveryPage';
-import { CredentialsPage } from './pages/CredentialsPage';
 import { ThresholdsPage } from './pages/ThresholdsPage';
 import { ActiveAlertsPage } from './pages/ActiveAlertsPage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -29,36 +39,21 @@ import { EventRulesPage } from './pages/EventRulesPage';
 import { EventSourcesPage } from './pages/EventSourcesPage';
 import { MaintenancePage } from './pages/MaintenancePage';
 import { MutesPage } from './pages/MutesPage';
-import { AuditPage } from './pages/AuditPage';
-import { PreferencesPage } from './pages/PreferencesPage';
-import { SystemHealthPage } from './pages/SystemHealthPage';
-import { PollersPage } from './pages/PollersPage';
-import { IntegrationsCatalogPage } from './pages/integrations/IntegrationsCatalogPage';
-import { MerakiIntegrationPage } from './pages/integrations/MerakiIntegrationPage';
-import { SystemSettingsPage } from './pages/SystemSettingsPage';
-import { ConfigBundlePage } from './pages/ConfigBundlePage';
-import { AboutPage } from './pages/AboutPage';
-import { UsersPage } from './pages/UsersPage';
-import { RolesPage } from './pages/RolesPage';
-import { AuthSettingsPage } from './pages/AuthSettingsPage';
-import { TlsSettingsPage } from './pages/TlsSettingsPage';
-import { AiSettingsPage } from './pages/AiSettingsPage';
-import { ApiTokensPage } from './pages/ApiTokensPage';
-import { ForwardingPage } from './pages/ForwardingPage';
-import { TopologyMapPage } from './pages/TopologyMapPage';
-import { DependencyPage } from './pages/DependencyPage';
-import { GeoMapPage } from './pages/GeoMapPage';
-import { TroubleshootCatalogPage } from './troubleshoot/TroubleshootCatalogPage';
-import { RunsPage } from './troubleshoot/RunsPage';
-import { SavedFindingsPage } from './troubleshoot/SavedFindingsPage';
-import { ScheduledPage } from './troubleshoot/ScheduledPage';
-import { ReportRoutePage } from './troubleshoot/report/ReportRoutePage';
 
-/** Redirect that keeps the query string — a bare `<Navigate to="/x"/>` drops it, which would strip
- *  the `?job=<id>` off existing `/troubleshoot/anomaly?job=…` links and land on an empty report. */
-function RedirectPreservingQuery({ to }: { to: string }) {
-  const { search } = useLocation();
-  return <Navigate to={{ pathname: to, search }} replace />;
+const TopologyRoutes = lazy(() => import('./routeGroups/topology'));
+const TroubleshootRoutes = lazy(() => import('./routeGroups/troubleshoot'));
+const SettingsRoutes = lazy(() => import('./routeGroups/settings'));
+
+/** Layout route for the lazy groups: holds the one Suspense boundary, inside the AppShell so the
+ *  top bar and sidebar stay put while a group's chunk arrives. The fallback is the app's existing
+ *  loading treatment (the same markup `App.tsx` shows while the client config resolves). */
+function LazyGroup() {
+  const { t } = useTranslation();
+  return (
+    <Suspense fallback={<div className="app-loading muted">{t('loading')}</div>}>
+      <Outlet />
+    </Suspense>
+  );
 }
 
 export function AppRoutes() {
@@ -89,13 +84,6 @@ export function AppRoutes() {
         <Route path="nodes/mib" element={<MibRepositoryPage />} />
         <Route path="nodes/:nodeId" element={<NodeDetailPage />} />
 
-        {/* Topology — the network map visualizes the dependency graph (GET /api/v1/topology), the
-            dependency view manages its edges, and the geo map places groups by the coordinates
-            `PUT /api/v1/node-groups/{id}/geo` stores. */}
-        <Route path="topology/map" element={<TopologyMapPage />} />
-        <Route path="topology/dependency" element={<DependencyPage />} />
-        <Route path="topology/geo" element={<GeoMapPage />} />
-
         {/* Alerts */}
         <Route path="alerts" element={<ActiveAlertsPage />} />
         <Route path="alerts/history" element={<HistoryPage />} />
@@ -107,39 +95,21 @@ export function AppRoutes() {
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
         <Route path="alerts/mutes" element={<MutesPage />} />
 
-        {/* Troubleshoot — deep diagnostics run as background jobs */}
-        <Route path="troubleshoot" element={<TroubleshootCatalogPage />} />
-        <Route path="troubleshoot/runs" element={<RunsPage />} />
-        {/* One parameterized route serves every tool's report — adding a report touches only the
-          registry, never this file. The old per-tool path stays as a redirect for live deep links
-          (toasts, bookmarks), preserving `?job=`. */}
-      <Route path="troubleshoot/report/:tool" element={<ReportRoutePage />} />
-      <Route
-        path="troubleshoot/anomaly"
-        element={<RedirectPreservingQuery to="/troubleshoot/report/anomaly" />}
-      />
-        <Route path="troubleshoot/scheduled" element={<ScheduledPage />} />
-        <Route path="troubleshoot/findings" element={<SavedFindingsPage />} />
-
-        {/* Settings — the tab lands on System health (the first sidebar item). */}
+        {/* Settings lands on System health (the first sidebar item). Kept here rather than inside
+            the group so a bare `/settings` redirects without fetching the settings chunk — a
+            static segment outranks the `settings/*` splat below. */}
         <Route path="settings" element={<Navigate to="/settings/system-health" replace />} />
-        <Route path="settings/system-health" element={<SystemHealthPage />} />
-        <Route path="settings/pollers" element={<PollersPage />} />
-        <Route path="settings/forwarding" element={<ForwardingPage />} />
-        <Route path="settings/integrations" element={<IntegrationsCatalogPage />} />
-        <Route path="settings/integrations/meraki" element={<MerakiIntegrationPage />} />
-        <Route path="settings/ai" element={<AiSettingsPage />} />
-        <Route path="settings/credentials" element={<CredentialsPage />} />
-        <Route path="settings/users" element={<UsersPage />} />
-        <Route path="settings/roles" element={<RolesPage />} />
-        <Route path="settings/auth" element={<AuthSettingsPage />} />
-        <Route path="settings/tls" element={<TlsSettingsPage />} />
-        <Route path="settings/api-tokens" element={<ApiTokensPage />} />
-        <Route path="settings/audit" element={<AuditPage />} />
-        <Route path="settings/system" element={<SystemSettingsPage />} />
-        <Route path="settings/config-bundle" element={<ConfigBundlePage />} />
-        <Route path="settings/preferences" element={<PreferencesPage />} />
-        <Route path="settings/about" element={<AboutPage />} />
+
+        {/* The lazy groups. Each mounts its own nested <Routes>; see `routeGroups/`.
+            Topology — the network map visualizes the derived connectivity graph
+            (GET /api/v1/topology), the dependency view manages its edges, and the geo map places
+            groups by the coordinates `PUT /api/v1/node-groups/{id}/geo` stores.
+            Troubleshoot — deep diagnostics run as background jobs. */}
+        <Route element={<LazyGroup />}>
+          <Route path="topology/*" element={<TopologyRoutes />} />
+          <Route path="troubleshoot/*" element={<TroubleshootRoutes />} />
+          <Route path="settings/*" element={<SettingsRoutes />} />
+        </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Route>

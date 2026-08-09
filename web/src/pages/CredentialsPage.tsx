@@ -45,6 +45,12 @@ import {
   type HttpAuthScheme,
   type HttpAuthState,
 } from './httpAuthCredential';
+import {
+  nextCredentialSort,
+  visibleCredentials,
+  type CredentialSort,
+  type CredentialSortKey,
+} from './credentialList';
 import './CredentialsPage.css';
 
 const KINDS = ['snmp_v2c', 'snmp_v3', 'http_auth', 'api_token'] as const;
@@ -472,15 +478,13 @@ function DeleteCredentialModal({
   );
 }
 
-type SortKey = 'name' | 'used_by';
-
 export function CredentialsPage() {
   const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<CredentialSummary[]>([]);
   const [query, setQuery] = useState('');
   const [kindFilter, setKindFilter] = useState('all');
-  const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: 'name', dir: 1 });
+  const [sort, setSort] = useState<CredentialSort>({ key: 'name', dir: 1 });
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -504,24 +508,13 @@ export function CredentialsPage() {
     load();
   }, [load]);
 
-  const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const filtered = rows.filter(
-      (c) =>
-        (q === '' || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)) &&
-        (kindFilter === 'all' || c.kind === kindFilter),
-    );
-    const sorted = [...filtered].sort((a, b) => {
-      const av = sort.key === 'name' ? a.name : a.used_by;
-      const bv = sort.key === 'name' ? b.name : b.used_by;
-      return (av < bv ? -1 : av > bv ? 1 : 0) * sort.dir;
-    });
-    return sorted;
-  }, [rows, query, kindFilter, sort]);
+  const list = useMemo(
+    () => visibleCredentials(rows, query, kindFilter, sort),
+    [rows, query, kindFilter, sort],
+  );
 
-  const toggleSort = (key: SortKey) =>
-    setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: 1 }));
-  const arrow = (key: SortKey) =>
+  const toggleSort = (key: CredentialSortKey) => setSort((s) => nextCredentialSort(s, key));
+  const arrow = (key: CredentialSortKey) =>
     sort.key === key ? <span className="ytable-arrow">{sort.dir === 1 ? '▲' : '▼'}</span> : null;
 
   return (

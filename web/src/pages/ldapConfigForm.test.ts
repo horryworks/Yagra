@@ -11,7 +11,6 @@ import {
   validateLdapForm,
   type LdapFormState,
 } from './ldapConfigForm';
-import { addRoleMapRow, fromRoleMapRows, toRoleMapRows } from './roleMapForm';
 import type { LdapConfigView } from '../types/api';
 
 const stored = (over: Partial<LdapConfigView> = {}): LdapConfigView =>
@@ -193,52 +192,5 @@ describe('loading a saved configuration', () => {
     expect(payload.ca_cert).toBeNull();
     expect(payload.group_base_dn).toBeNull();
     expect(payload.default_role).toBeNull();
-  });
-});
-
-describe('the role-map rows', () => {
-  it('round-trip a stored mapping', () => {
-    const map = { NetOps: 'admin', NOC: 'operator' };
-    expect(fromRoleMapRows(toRoleMapRows(map))).toEqual(map);
-  });
-
-  // The source is a JSON object whose key order is an accident of serialization; an unsorted list
-  // would appear to reshuffle itself between visits.
-  it('present a stable order', () => {
-    expect(toRoleMapRows({ b: 'viewer', a: 'admin' }).map((r) => r.group)).toEqual(['a', 'b']);
-  });
-
-  it('drop a blank group and trim the rest', () => {
-    expect(fromRoleMapRows(rows([['  ', 'admin'], [' NetOps ', 'operator']]))).toEqual({
-      NetOps: 'operator',
-    });
-  });
-
-  it('fall back to viewer for a role this build does not know', () => {
-    // The API types `role_map` values as bare strings, so a row written by a newer build must not
-    // silently widen to something more privileged.
-    expect(toRoleMapRows({ NetOps: 'superuser' })[0].role).toBe('viewer');
-  });
-
-  // Nothing stops an operator typing the same group into two rows, and the object being built can
-  // only hold one. Last-wins is the documented choice because it matches the row they edited most
-  // recently — pinned here so a refactor to `??=`/first-wins is a failing test rather than a silent
-  // change to which of two visible rows takes effect.
-  it('let a later row win a duplicate group', () => {
-    expect(
-      fromRoleMapRows(
-        rows([
-          ['NetOps', 'viewer'],
-          ['NetOps', 'admin'],
-        ]),
-      ),
-    ).toEqual({ NetOps: 'admin' });
-  });
-
-  it('give a new row a key that cannot collide', () => {
-    const start = toRoleMapRows({ a: 'viewer' });
-    const next = addRoleMapRow(start);
-    expect(new Set(next.map((r) => r.key)).size).toBe(next.length);
-    expect(next[next.length - 1].group).toBe('');
   });
 });

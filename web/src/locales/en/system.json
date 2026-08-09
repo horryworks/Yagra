@@ -286,7 +286,8 @@
     "tier": {
       "availability": "Availability",
       "uplink": "Uplink",
-      "traffic": "Traffic"
+      "traffic": "Traffic",
+      "inventory": "Inventory"
     },
     "regions": {
       "global": "Global (api.meraki.com)",

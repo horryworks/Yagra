@@ -19,6 +19,7 @@ import { Button } from '../../components/ui/Button';
 import { Modal } from '../../components/ui/Modal';
 import { TextInput, Select } from '../../components/ui/Field';
 import { MerakiImportModal } from '../../components/MerakiImport/MerakiImportModal';
+import { SELECTABLE_MERAKI_TIERS } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
 
 // The visible region name is a translation key; the base_url (the technical Meraki endpoint) is not.
@@ -326,7 +327,7 @@ function CadenceModal({
       <div className="modal-field">
         <label className="modal-field-label">{t('meraki.cadence.enabledTiers')}</label>
         <div className="meraki-tier-row">
-          {(['availability', 'uplink', 'traffic'] as const).map((tier) => (
+          {SELECTABLE_MERAKI_TIERS.map((tier) => (
             <label className="meraki-chip-check" key={tier}>
               <input type="checkbox" checked={tiers.has(tier)} onChange={() => toggleTier(tier)} />
               <span>{t(`meraki.tier.${tier}`)}</span>

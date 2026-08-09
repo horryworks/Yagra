@@ -350,9 +350,6 @@ export type ForwardFilterMode = (typeof FORWARD_FILTER_MODES)[number];
 /** One `field op value` test. `value` is always a string; core parses it per field type. */
 export type ForwardCondition = components['schemas']['Condition'];
 
-/** A destination's filter. No conditions = forward everything. */
-export type ForwardFilter = components['schemas']['FilterExpr'];
-
 /** A forwarding destination (`GET /api/v1/forwarding/destinations`). `has_secret` reports whether a
  *  sealed secret (the SNMP community, or the BigQuery service-account key) is stored — the value
  *  itself is never returned. On a BigQuery destination, `false` means Workload Identity. */
@@ -872,13 +869,6 @@ export type AnalysisScheduleStatus = (typeof ANALYSIS_SCHEDULE_STATUSES)[number]
 // Definitions are reusable templates (opaque `spec` the frontend owns); schedules fire them on a
 // preset cadence; runs are saved generated reports. Shared resource: everyone reads, admins write.
 
-/** One choice for a `select` section setting. */
-export type ReportSettingOption = components['schemas']['SettingOption'];
-
-/** A configurable setting on a report section (drives the builder controls). `kind` is
- *  `number` | `select`. */
-export type ReportSectionSetting = components['schemas']['SectionSetting'];
-
 /** A report-section type from the catalog (`GET /api/v1/reports/sections`). */
 export type ReportSectionDef = components['schemas']['SectionDef'];
 
@@ -1158,9 +1148,6 @@ export type RcaConfidence = (typeof RCA_CONFIDENCES)[number];
 /** One node's facts as the model saw them. */
 export type RcaNodeFacts = components['schemas']['NodeFacts'];
 
-/** One dated signal on the evidence timeline. */
-export type RcaSignal = components['schemas']['IncidentSignal'];
-
 /** The evidence the answer was grounded in — stored beside it so a reader can check the
  *  explanation rather than trust it (ADR-029's display rule). */
 export type RcaEvidence = components['schemas']['IncidentContext'];
@@ -1196,9 +1183,6 @@ export type ConfigBundle = components['schemas']['ConfigBundle'];
 /** What an import did: per-table counts plus what it skipped or changed and why. */
 export type ImportReport = components['schemas']['ImportReport'];
 
-/** One table's line of an import report. */
-export type BundleTableResult = components['schemas']['TableResult'];
-
 /** One thing the export or the import did that the operator would not otherwise see. */
 export type BundleNote = components['schemas']['BundleNote'];
 
@@ -1213,9 +1197,6 @@ export const BUNDLE_NOTE_CODES = [
   'webhook_token_reset',
   'schedule_next_run_recomputed',
 ] as const;
-
-/** A bundle note code (snake_case). Pinned to `schemas.NoteCode`. */
-export type BundleNoteCode = (typeof BUNDLE_NOTE_CODES)[number];
 
 // ── WebUI TLS certificate (ADR-044) ─────────────────────────────────────────────────────────────
 

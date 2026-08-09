@@ -201,6 +201,24 @@ describe('toCsv', () => {
   it('emits a header even with no rows', () => {
     expect(toCsv([{ header: 'a', cell: () => 'x' }], [])).toBe('"a"');
   });
+
+  it('neutralizes a device-supplied cell that a spreadsheet would execute', () => {
+    // These columns carry strings the device wrote (sysName, a syslog signature), which are
+    // untrusted input. `csvField`'s own rules are tested in `lib/csv.test.ts`; what this pins is
+    // that the export path goes through it — a local copy reappearing here is the original bug.
+    const csv = toCsv(
+      [{ header: 'node', cell: (x) => x.node_name }],
+      [f({ node_name: '=WEBSERVICE("http://evil.example")' })],
+    );
+    expect(csv.split('\r\n')[1]).toBe('"\'=WEBSERVICE(""http://evil.example"")"');
+  });
+
+  it('leaves a negative measurement numeric', () => {
+    // Deliberate: `r` is negative for every inverse correlation, so prefixing it would make the
+    // column text for half its rows and numeric for the other half.
+    const csv = toCsv([{ header: 'r', cell: () => '-0.87' }], [f()]);
+    expect(csv.split('\r\n')[1]).toBe('"-0.87"');
+  });
 });
 
 describe('ratioBucket', () => {

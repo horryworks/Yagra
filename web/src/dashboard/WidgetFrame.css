@@ -78,6 +78,14 @@
   transition: background var(--transition), color var(--transition);
 }
 
+/* Keyboard focus: the app-standard accent border, same as `.icon-btn:focus-visible` and the
+   sibling resize grip. Without it these two fall back to the UA focus ring. */
+.widgetframe-remove:focus-visible,
+.widgetframe-handle:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
 /* Destructive remove fills critical on hover, exactly like IconButton.danger. */
 .widgetframe-remove:hover {
   background: var(--status-critical);

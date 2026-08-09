@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// How an audit entry's stored `action` string is split for display, and how a cell is quoted for
-// CSV export.
+// How an audit entry's stored `action` string is split for display, plus the CSV field encoder the
+// export uses (re-exported from `lib/csv`, where it is shared with the Troubleshoot exports).
 //
-// Extracted from AuditPage.tsx so both are testable (Vitest never runs `.tsx`). The CSV quoting in
+// Extracted from AuditPage.tsx so both are testable (Vitest never runs `.tsx`). The CSV encoding in
 // particular is worth reaching: the audit log records attacker-influenceable text — a failed login
 // stores the submitted username verbatim — and that text is exported to a file an operator opens
-// in a spreadsheet.
+// in a spreadsheet, which will execute it given the chance.
 
 /** An `action` split into what it was and what it acted on. */
 export interface ParsedAction {
@@ -26,11 +26,10 @@ export function parseAction(action: string): ParsedAction {
   return { method: action.slice(0, sp), path: action.slice(sp + 1), login: false };
 }
 
-/** Quote a CSV field (RFC 4180): wrap in quotes, double any embedded quote.
+/** Re-exported so `AuditPage` keeps one import for its row helpers.
  *
- *  Unconditional quoting rather than "quote when it contains a comma": the values here include
- *  usernames a caller chose, so deciding per value is a rule that can be got wrong once and
- *  corrupt every row after it. */
-export function csvField(v: string | number): string {
-  return `"${String(v).replace(/"/g, '""')}"`;
-}
+ *  The implementation moved to `lib/csv` once the Troubleshoot export turned out to hold a
+ *  byte-identical copy — and neither copy neutralized a leading `=`, so a username submitted to a
+ *  failed login could be planted as `=HYPERLINK(…)` and evaluated when an admin opened the export.
+ *  Do not re-inline it here: that is the shape the bug had. */
+export { csvField } from '../lib/csv';

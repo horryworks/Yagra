@@ -14,7 +14,7 @@
 //! large pages, an AI client wants small ones — because a clamp is surface policy, not assembly.
 
 use super::extract::{Actor, RequireManageConfig, RequireView, Scoped};
-use super::nodes::{fresh_fallback_ids, NodePageQuery};
+use super::nodes::{fresh_fallback_ids, state_or_fallback, NodePageQuery};
 use super::{ApiError, ApiResult, ApiState};
 use crate::api::extract::Admin;
 use axum::{
@@ -144,16 +144,13 @@ pub(crate) async fn topology_page(
         .into_iter()
         .map(|r| {
             let nid = NodeId::from(r.id);
-            let state = match states.get(&nid) {
-                Some(s) => *s,
-                None if fresh_fallback.contains(&r.id) => NodeState::Ok,
-                None => NodeState::Unknown,
-            };
             TopologyNode {
                 id: r.id,
                 name: r.name,
                 parent_id: r.parent_id,
-                state,
+                // The rule lives in `nodes::state_or_fallback`, not here: this map was a fourth
+                // hand-written copy of it, and the copies had already drifted.
+                state: state_or_fallback(states.get(&nid).copied(), fresh_fallback.contains(&r.id)),
                 root_cause: root_causes.get(&nid).copied(),
             }
         })

@@ -89,7 +89,7 @@ export function ChannelTemplateModal({
       size="wide"
       footer={
         <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             {t('common:actions.cancel')}
           </Button>
           <Button variant="outline" onClick={runPreview} disabled={busy}>

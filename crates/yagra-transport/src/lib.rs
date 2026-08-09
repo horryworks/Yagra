@@ -453,6 +453,13 @@ pub trait Transport: Send + Sync {
 ///
 /// Returns a fixed probe regardless of target, so poller logic can be exercised with no
 /// raw-socket privilege and no real device.
+///
+/// **Test-only.** Gated behind this crate's own `cfg(test)` and the `test-util` feature, so it is
+/// not compiled into the shipped library — a transport that reports every device reachable has no
+/// business being reachable from a release binary. Downstream crates opt in from
+/// **dev-dependencies** (`yagra-transport = { …, features = ["test-util"] }`); with resolver v2 that
+/// does not leak into a normal `cargo build` of the dependent.
+#[cfg(any(test, feature = "test-util"))]
 #[derive(Debug, Clone)]
 pub struct FakeTransport {
     /// The probe every ICMP call returns.
@@ -476,6 +483,7 @@ pub struct FakeTransport {
 }
 
 /// A canned one-hop chain resolving to `10.1.2.3`, or the same query having timed out.
+#[cfg(any(test, feature = "test-util"))]
 fn fake_dns_chain(resolved: bool) -> DnsChain {
     DnsChain {
         query: "example.test".to_owned(),
@@ -503,6 +511,7 @@ fn fake_dns_chain(resolved: bool) -> DnsChain {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 impl FakeTransport {
     /// The canned instance rows for `column_oids`, honouring `max_rows`.
     ///
@@ -615,6 +624,7 @@ impl FakeTransport {
     }
 }
 
+#[cfg(any(test, feature = "test-util"))]
 #[async_trait]
 impl Transport for FakeTransport {
     async fn probe_icmp(

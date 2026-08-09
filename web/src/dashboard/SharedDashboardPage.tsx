@@ -210,7 +210,7 @@ export function SharedDashboardPage() {
               </>
             }
           >
-            <p>
+            <p className="modal-confirm-text">
               <Trans t={t} i18nKey="shared.confirmEditBody" components={{ strong: <strong /> }} />
             </p>
           </Modal>
@@ -235,7 +235,7 @@ export function SharedDashboardPage() {
               </>
             }
           >
-            <p>{t('shared.resetBody')}</p>
+            <p className="modal-confirm-text">{t('shared.resetBody')}</p>
           </Modal>
         )}
 
@@ -258,7 +258,7 @@ export function SharedDashboardPage() {
               </>
             }
           >
-            <p>{t('shared.cancelBody')}</p>
+            <p className="modal-confirm-text">{t('shared.cancelBody')}</p>
           </Modal>
         )}
       </div>

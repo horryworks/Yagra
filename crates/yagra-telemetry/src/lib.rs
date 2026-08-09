@@ -47,16 +47,16 @@ use tracing_subscriber::EnvFilter;
 
 /// Turns on OTLP span export and points at the collector's OTLP/HTTP endpoint
 /// (e.g. `http://otel-collector:4318`). Unset ⇒ tracing export disabled (logs only).
-pub const ENDPOINT_ENV: &str = "YAGRA_OTEL_ENDPOINT";
+pub(crate) const ENDPOINT_ENV: &str = "YAGRA_OTEL_ENDPOINT";
 /// OpenTelemetry-standard fallback for [`ENDPOINT_ENV`].
-pub const STD_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
+pub(crate) const STD_ENDPOINT_ENV: &str = "OTEL_EXPORTER_OTLP_ENDPOINT";
 
 /// Directory the rolling JSON log file is written to (e.g. `/var/log/yagra`). Unset or empty ⇒ no
 /// file layer, stdout only — which is the pre-ADR-045 behaviour and stays the default for anyone
 /// who has `docker logs`.
 pub const LOG_DIR_ENV: &str = "YAGRA_LOG_DIR";
 /// How many hourly log files to keep in [`LOG_DIR_ENV`]. Default [`DEFAULT_LOG_RETAIN_HOURS`].
-pub const LOG_RETAIN_ENV: &str = "YAGRA_LOG_RETAIN_HOURS";
+pub(crate) const LOG_RETAIN_ENV: &str = "YAGRA_LOG_RETAIN_HOURS";
 /// Two days of hourly files. Long enough that a fault noticed the next morning is still on disk,
 /// short enough to bound the volume without anyone tuning it.
 pub const DEFAULT_LOG_RETAIN_HOURS: usize = 48;

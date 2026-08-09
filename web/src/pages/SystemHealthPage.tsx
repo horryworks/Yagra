@@ -25,12 +25,8 @@ import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/mon
 import { saveBlob } from '../lib/download';
 import { formatBytes, formatUtil, pointsToSeries } from '../lib/format';
 import { alignTo, pctSeries } from '../lib/seriesMath';
-import type {
-  DependencyHealth,
-  DiskUsage,
-  HostInfo,
-  HostMetricRange,
-} from '../types/api';
+import { diskHeadline } from './diskHeadline';
+import type { DependencyHealth, HostInfo, HostMetricRange } from '../types/api';
 import './SystemHealthPage.css';
 
 const REFRESH_MS = 15_000;
@@ -149,17 +145,6 @@ function HostMetricCard({
       )}
     </div>
   );
-}
-
-/** The Disk card headline: "used / size · pct" when capacity is known, else a bare size (the
- *  PostgreSQL `database` proxy has no capacity). */
-function diskHeadline(current: DiskUsage | undefined): string {
-  if (!current) return '—';
-  if (current.size_bytes > 0) {
-    const pct = (current.used_bytes / current.size_bytes) * 100;
-    return `${formatBytes(current.used_bytes)} / ${formatBytes(current.size_bytes)} · ${formatUtil(pct)}`;
-  }
-  return formatBytes(current.used_bytes);
 }
 
 /** Host resources for the selected instance: an instance selector (Core + each poller) + a shared

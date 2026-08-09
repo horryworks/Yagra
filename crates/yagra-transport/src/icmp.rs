@@ -3,7 +3,7 @@
 //!
 //! This is the production [`Transport`] for liveness/RTT. It needs `CAP_NET_RAW` at
 //! runtime (granted to the poller container only — see `.claude/rules/security.md`),
-//! so it cannot be exercised in a normal unit test; the privilege-free [`FakeTransport`]
+//! so it cannot be exercised in a normal unit test; the privilege-free `FakeTransport`
 //! covers poller logic. The pure aggregation step ([`summarize`]) *is* unit-tested.
 //!
 //! Per ADR-012 this layer collects **raw** observations only (reachability, per-probe

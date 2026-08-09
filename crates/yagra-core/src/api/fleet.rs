@@ -59,9 +59,17 @@ pub(crate) struct FleetSummary {
 
 /// Tally the fleet by rolled-up display state.
 ///
-/// Nodes the alert engine has never observed — brand new, or in a pool with no live poller — are
-/// counted as `unknown`. That matches the per-node list's fallback, and it is what makes the tally
-/// reconcile with the inventory `total` instead of quietly summing to less.
+/// Nodes the alert engine has never observed — brand new, or right after a core restart before the
+/// first sweep — take the same fallback the per-node list takes: a recent ICMP sample means `ok`,
+/// silence means `unknown` ([`super::nodes::state_or_fallback`]). This tally used to count *all* of
+/// them as `unknown` while claiming in a comment that it matched the list, so for the minutes after
+/// every restart the dashboard summary reported `unknown` for nodes the Nodes page beside it was
+/// showing as `ok`.
+///
+/// The fallback costs a TSDB query, so it is asked **only when something is actually unobserved** —
+/// in the steady state the engine holds an opinion about every node and this function does no I/O
+/// beyond the inventory count, exactly as before.
+///
 /// Scoping costs the unrestricted caller nothing: `NodeScope::All` keeps the precomputed
 /// `node_state_counts()` fast path exactly as it was. A scoped caller instead walks `node_states()`
 /// once, intersecting with the visible set — O(fleet) over an in-memory map, not a database scan,
@@ -95,8 +103,31 @@ pub(crate) async fn state_tally(st: &ApiState, scope: &NodeScope) -> FleetSummar
         }
     }
     let unobserved = (total - observed_total).max(0);
-    *states.entry(NodeState::Unknown.as_str()).or_insert(0) += unobserved;
+    let fresh = fresh_unobserved(st, scope, unobserved).await;
+    *states.entry(NodeState::Ok.as_str()).or_insert(0) += fresh;
+    *states.entry(NodeState::Unknown.as_str()).or_insert(0) += unobserved - fresh;
     FleetSummary { total, states }
+}
+
+/// How many of the `unobserved` visible nodes a recent ICMP sample makes `ok`.
+///
+/// This tally holds *counts*, not the ids of the unobserved nodes, so it cannot use the paged
+/// probe: it asks for the fleet's fresh set once and subtracts everything the engine already has an
+/// opinion about. Clamped to `unobserved` because the TSDB outlives the inventory — a deleted
+/// node's series stays fresh for the rest of the retention window, and an unclamped count would
+/// make the tally sum to more than `total`.
+async fn fresh_unobserved(st: &ApiState, scope: &NodeScope, unobserved: i64) -> i64 {
+    if unobserved <= 0 {
+        return 0;
+    }
+    let known = st.alerts.node_states();
+    let fresh = super::nodes::fresh_fleet_ids(st.store.as_ref()).await;
+    let n = fresh
+        .into_iter()
+        .map(NodeId::from)
+        .filter(|id| !known.contains_key(id) && scope.allows_node(st, *id))
+        .count() as i64;
+    n.min(unobserved)
 }
 
 /// Fleet-wide status summary, computed server-side from the live alert engine (S12).
@@ -142,19 +173,22 @@ pub(crate) struct FleetGroupSummary {
 /// Roll a node→group map + the engine's per-node states into per-group **direct-member** tallies.
 ///
 /// Pure (no I/O) so the grouping and fallback rules are unit-testable. Ungrouped nodes (null
-/// `group_id`) are skipped — no widget rolls them up. A node the engine has never observed counts
-/// as `unknown`, matching the per-node list's fallback so a group's tally reconciles with its size.
+/// `group_id`) are skipped — no widget rolls them up. A node the engine has never observed takes
+/// the same fallback as the per-node list ([`super::nodes::state_or_fallback`]): `fresh` holds the
+/// unobserved nodes with a recent ICMP sample, and the rest are `unknown` — so a group's tally
+/// reconciles with its size *and* agrees with what the Nodes tree shows for the same members.
 pub(crate) fn aggregate_group_counts(
     node_groups: &[(Uuid, Option<Uuid>)],
     states: &HashMap<NodeId, NodeState>,
+    fresh: &HashSet<Uuid>,
 ) -> HashMap<Uuid, GroupStateCounts> {
     let mut groups: HashMap<Uuid, GroupStateCounts> = HashMap::new();
     for (id, group_id) in node_groups {
         let Some(gid) = group_id else { continue };
-        let state = states
-            .get(&NodeId::from(*id))
-            .copied()
-            .unwrap_or(NodeState::Unknown);
+        let state = super::nodes::state_or_fallback(
+            states.get(&NodeId::from(*id)).copied(),
+            fresh.contains(id),
+        );
         let c = groups.entry(*gid).or_default();
         match state {
             NodeState::Ok => c.ok += 1,
@@ -210,8 +244,18 @@ pub(crate) async fn group_summary(
             )
         })?;
     let states = st.alerts.node_states();
+    // Same fallback as the tally above and the per-node list, and skipped on the same condition:
+    // one fleet-wide freshness query, only when the engine is missing an opinion about someone.
+    let any_unobserved = node_groups
+        .iter()
+        .any(|(id, group)| group.is_some() && !states.contains_key(&NodeId::from(*id)));
+    let fresh = if any_unobserved {
+        super::nodes::fresh_fleet_ids(st.store.as_ref()).await
+    } else {
+        HashSet::new()
+    };
     Ok(FleetGroupSummary {
-        groups: aggregate_group_counts(&node_groups, &states),
+        groups: aggregate_group_counts(&node_groups, &states, &fresh),
     })
 }
 
@@ -502,9 +546,9 @@ mod tests {
         states.insert(NodeId::from(n_ok), NodeState::Ok);
         states.insert(NodeId::from(n_warn), NodeState::Warning);
         states.insert(NodeId::from(n_crit), NodeState::Critical);
-        // n_never intentionally absent from `states`.
-
-        let out = aggregate_group_counts(&node_groups, &states);
+        // n_never intentionally absent from `states`, and absent from the fresh set too — so it
+        // takes the `unknown` half of the fallback.
+        let out = aggregate_group_counts(&node_groups, &states, &HashSet::new());
 
         // The ungrouped node rolls up into no group.
         assert_eq!(out.len(), 2);
@@ -519,6 +563,72 @@ mod tests {
         };
         assert_eq!(total(c1), 2);
         assert_eq!(total(c2), 2);
+    }
+
+    /// A store holding one RTT reading for `node`, and nothing else.
+    fn store_with_rtt(node: NodeId) -> std::sync::Arc<dyn crate::store::MetricStore> {
+        let sink = crate::sink::InMemorySink::default();
+        sink.ingest(&yagra_bus::PollResult {
+            job_id: Uuid::nil(),
+            node_id: node,
+            at_unix_ms: 0,
+            outcome: yagra_bus::CheckOutcome::Reachable,
+            samples: vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 1.5)],
+            interfaces: Vec::new(),
+            sys_descr: None,
+            dns_chain: None,
+            neighbors: None,
+            l3: None,
+            arp: None,
+            routing: None,
+            observational: false,
+            poller_id: None,
+            trace_context: Default::default(),
+        });
+        std::sync::Arc::new(sink)
+    }
+
+    #[tokio::test]
+    async fn the_tally_and_the_per_node_list_agree_about_an_unobserved_but_fresh_node() {
+        // The bug this pins: right after a core restart the engine has observed nobody, so the
+        // summary counted every node `unknown` while the Nodes page beside it — which applies the
+        // freshness fallback — showed the same nodes `ok`. Two surfaces, one node, two answers.
+        let mut st = public_state();
+        let ids: Vec<NodeId> = st
+            .nodes
+            .list_page(None, None, 10)
+            .await
+            .expect("skeleton inventory")
+            .iter()
+            .map(|n| n.id)
+            .collect();
+        assert_eq!(ids.len(), 1, "the skeleton inventory is one demo node");
+        st.store = store_with_rtt(ids[0]);
+
+        let per_node = crate::api::nodes::display_states(&st, &ids).await;
+        assert_eq!(per_node.get(&ids[0]).copied(), Some(NodeState::Ok));
+
+        let tally = state_tally(&st, &NodeScope::All).await;
+        assert_eq!(tally.total, 1);
+        assert_eq!(
+            tally.states["ok"], 1,
+            "the tally must apply the same fallback the per-node list does"
+        );
+        assert_eq!(tally.states["unknown"], 0);
+        // Still all six keys, and they still sum to `total`.
+        assert_eq!(tally.states.len(), NodeState::ALL.len());
+        assert_eq!(tally.states.values().sum::<i64>(), tally.total);
+    }
+
+    #[tokio::test]
+    async fn a_silent_unobserved_node_is_still_unknown() {
+        // The other half of the fallback, and the reason it is a fallback rather than an
+        // assumption: no recent sample means we genuinely do not know, and saying `ok` there would
+        // report a dead fleet as healthy.
+        let st = public_state();
+        let tally = state_tally(&st, &NodeScope::All).await;
+        assert_eq!((tally.total, tally.states["unknown"]), (1, 1));
+        assert_eq!(tally.states["ok"], 0);
     }
 
     #[test]

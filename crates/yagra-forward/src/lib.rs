@@ -8,7 +8,7 @@
 //! `yagra-core`'s forwarder.
 //!
 //! Two output *relay* fidelities exist, and the difference is the reason this crate has renderers at
-//! all (a BigQuery destination is neither — see [`bqrow`]):
+//! all (a BigQuery destination is neither — see the `bqrow` module):
 //!
 //! * **Verbatim** — the original datagram, carried on [`yagra_bus::EventMsg::raw`] (syslog/traps) or
 //!   [`yagra_bus::RawFlowDatagram`] (flow exports). Byte-exact.
@@ -24,7 +24,7 @@
 //! removed from a bundle without re-encoding it, so a flow filter is an **any-record** test — if any
 //! record in the datagram matches, the whole datagram is relayed, non-matching records included.
 
-pub mod bqrow;
+mod bqrow;
 pub mod filter;
 pub mod render;
 

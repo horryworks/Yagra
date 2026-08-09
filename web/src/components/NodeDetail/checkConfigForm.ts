@@ -167,10 +167,6 @@ export function dnsDraftFrom(cfg: DnsCheckConfig): DnsCheckDraft {
   };
 }
 
-/** Why a draft cannot be sent. A key in the `nodes` namespace under `checkEdit.err.`, or `null`
- *  when the draft is valid — the caller resolves it with `t()` so this layer stays i18n-free. */
-export type DraftError = string | null;
-
 /** Build the `expected_status` union from the flat fields, or name what is wrong with them. */
 function expectedStatusFrom(d: UrlCheckDraft): { ok: ExpectedStatus | undefined } | { err: string } {
   if (d.statusMode === 'two_xx') return { ok: undefined };

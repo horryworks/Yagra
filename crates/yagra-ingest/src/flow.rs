@@ -30,13 +30,13 @@ pub const DEFAULT_FLOW_TOP_N: usize = 500;
 
 /// Upper bound on distinct flow keys tracked in one bucket before overflow is dropped (counted).
 /// Caps aggregator memory against a source-cycling flood, mirroring the rate limiter's source cap.
-pub const MAX_AGG_KEYS: usize = 100_000;
+pub(crate) const MAX_AGG_KEYS: usize = 100_000;
 
 /// Upper bound on cached templates (across all exporters). FIFO eviction beyond this.
-pub const MAX_TEMPLATES: usize = 8_192;
+pub(crate) const MAX_TEMPLATES: usize = 8_192;
 
 /// Upper bound on flow records decoded from a single datagram (a crafted-packet backstop).
-pub const MAX_RECORDS_PER_DATAGRAM: usize = 8_192;
+pub(crate) const MAX_RECORDS_PER_DATAGRAM: usize = 8_192;
 
 /// Upper bound on fields in one template (a crafted-template backstop).
 const MAX_TEMPLATE_FIELDS: usize = 128;
@@ -1014,7 +1014,7 @@ impl FlowAggregator {
 
     /// New aggregator with explicit top-N and distinct-key caps.
     #[must_use]
-    pub fn with_caps(top_n: usize, key_cap: usize) -> Self {
+    pub(crate) fn with_caps(top_n: usize, key_cap: usize) -> Self {
         Self {
             top_n: if top_n == 0 {
                 DEFAULT_FLOW_TOP_N
@@ -1083,7 +1083,7 @@ impl FlowAggregator {
     /// aggregated records (sorted bytes-descending) and the count of flows/keys dropped beyond the
     /// caps (key-cap overflow + top-N truncation).
     #[must_use]
-    pub fn drain_top_n(&mut self) -> (Vec<AggregatedFlow>, u32) {
+    pub(crate) fn drain_top_n(&mut self) -> (Vec<AggregatedFlow>, u32) {
         let overflow = self.dropped_overflow;
         self.dropped_overflow = 0;
         let map = std::mem::take(&mut self.map);
@@ -1124,7 +1124,7 @@ impl FlowAggregator {
 /// Upper bound on distinct exporters tracked in one bucket. A poller realistically sees far fewer;
 /// beyond this, a new exporter's flows are dropped (counted) so a spoofed-source flood can't grow
 /// memory unbounded.
-pub const MAX_EXPORTERS: usize = 4_096;
+pub(crate) const MAX_EXPORTERS: usize = 4_096;
 
 /// One exporter's aggregated top-N flows, ready to become a bus `FlowBatch`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1156,7 +1156,7 @@ impl ExporterBuckets {
 
     /// New set with explicit top-N and exporter caps.
     #[must_use]
-    pub fn with_caps(top_n: usize, max_exporters: usize) -> Self {
+    pub(crate) fn with_caps(top_n: usize, max_exporters: usize) -> Self {
         Self {
             per_exporter: HashMap::new(),
             top_n,

@@ -134,7 +134,9 @@ export function BoardTabs({ editing }: { editing: boolean }) {
             </>
           }
         >
-          <p>{t('boardTabs.removeBody', { name: confirmRemove.name })}</p>
+          <p className="modal-confirm-text">
+            {t('boardTabs.removeBody', { name: confirmRemove.name })}
+          </p>
         </Modal>
       )}
     </div>

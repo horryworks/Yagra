@@ -171,6 +171,8 @@ async fn list_report_definitions(
     _guard: RequireView,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<Vec<reports::ReportDefinition>>> {
+    // Not the `Admin` extractor: skeleton mode has no definition store, so "no templates" is the
+    // truthful answer here, and the builder renders its empty state instead of an error.
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
@@ -629,13 +631,20 @@ async fn export_report_run(
 /// **The HTML goes in on stdin and the arguments are fixed**, so there is no command injection —
 /// which matters because the HTML contains device-supplied strings. Errors if the binary is missing
 /// or exits non-zero.
+///
+/// **Local file access is switched off explicitly.** `reports::render_document` emits a
+/// self-contained document — inline `<style>`, inline SVG charts, no `<img>`, no `<link>`, no
+/// `url()`, no `file://` — so nothing in a report needs to read the container's filesystem. This
+/// used to pass `--enable-local-file-access` for no reason, which is the flag that turns an escape
+/// bug in the (device-supplied) text of a report into a local-file read. Stated rather than left to
+/// the default so it stays off if a future renderer version flips that default back.
 async fn html_to_pdf(html: &str) -> anyhow::Result<Vec<u8>> {
     use tokio::io::AsyncWriteExt;
     use tokio::process::Command;
     let mut child = Command::new("wkhtmltopdf")
         .args([
             "--quiet",
-            "--enable-local-file-access",
+            "--disable-local-file-access",
             "--encoding",
             "utf-8",
             "-", // read HTML from stdin
@@ -669,6 +678,8 @@ async fn list_report_schedules(
     _guard: RequireView,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<Vec<reports::ReportSchedule>>> {
+    // Not the `Admin` extractor: skeleton mode has no scheduler to hold schedules, so an empty
+    // list is the truth — a 503 would break a page that otherwise works.
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };

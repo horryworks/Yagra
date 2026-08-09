@@ -95,6 +95,26 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
 const FALLBACK_FRESH_SECS: u64 = 600;
 
+/// The metric the fallback probe asks about. Named once so the three probes below (single, paged,
+/// fleet-wide) cannot end up asking about different series.
+const FALLBACK_METRIC: &str = "icmp_rtt_ms";
+
+/// **The display rule itself**: the engine's opinion when it has one, otherwise a recent ICMP
+/// sample means `ok` and silence means `unknown`.
+///
+/// Pure — every caller brings its own already-batched inputs, and nothing here does I/O. It is a
+/// function rather than three lines because it *was* three lines, four times over: the topology
+/// graph, the fleet tally, the per-group rollup and the inventory report each restated it, and two
+/// of them had dropped the fallback entirely. The visible symptom was a core restart making the
+/// dashboard summary report `unknown` for nodes the Nodes page was simultaneously showing as `ok`.
+pub(crate) fn state_or_fallback(known: Option<NodeState>, fresh: bool) -> NodeState {
+    match known {
+        Some(s) => s,
+        None if fresh => NodeState::Ok,
+        None => NodeState::Unknown,
+    }
+}
+
 /// The rolled-up state to display for one node.
 ///
 /// The alert engine's opinion when it has one. When it does not — a just-added node, or right
@@ -102,18 +122,16 @@ const FALLBACK_FRESH_SECS: u64 = 600;
 /// **Every surface that reports a node's state must go through this or [`display_states`]**, or
 /// the same node reads differently depending on which endpoint you ask.
 pub(crate) async fn display_state(st: &ApiState, node: NodeId) -> NodeState {
-    match st.alerts.node_state(node) {
-        Some(s) => s,
-        None if st
+    let known = st.alerts.node_state(node);
+    // One node, one round-trip — and only when the engine has nothing to say. Anything holding a
+    // page of nodes takes `display_states` instead, which asks once for the whole page (S20).
+    let fresh = known.is_none()
+        && st
             .store
-            .latest(&SeriesKey::node(node, "icmp_rtt_ms"))
+            .latest(&SeriesKey::node(node, FALLBACK_METRIC))
             .await
-            .is_some() =>
-        {
-            NodeState::Ok
-        }
-        None => NodeState::Unknown,
-    }
+            .is_some();
+    state_or_fallback(known, fresh)
 }
 
 /// [`display_state`] for a page of nodes, in one TSDB query instead of N.
@@ -134,7 +152,7 @@ pub(crate) async fn display_states(st: &ApiState, nodes: &[NodeId]) -> HashMap<N
         HashSet::new()
     } else {
         st.store
-            .fresh_node_ids_scoped("icmp_rtt_ms", FALLBACK_FRESH_SECS, &unobserved)
+            .fresh_node_ids_scoped(FALLBACK_METRIC, FALLBACK_FRESH_SECS, &unobserved)
             .await
             .into_iter()
             .collect()
@@ -142,12 +160,10 @@ pub(crate) async fn display_states(st: &ApiState, nodes: &[NodeId]) -> HashMap<N
     nodes
         .iter()
         .map(|n| {
-            let state = match known.get(n) {
-                Some(s) => *s,
-                None if fresh.contains(&n.as_uuid()) => NodeState::Ok,
-                None => NodeState::Unknown,
-            };
-            (*n, state)
+            (
+                *n,
+                state_or_fallback(known.get(n).copied(), fresh.contains(&n.as_uuid())),
+            )
         })
         .collect()
 }
@@ -162,7 +178,23 @@ pub(crate) async fn fresh_fallback_ids(st: &ApiState, unobserved: &[NodeId]) -> 
     }
     let scope: Vec<Uuid> = unobserved.iter().map(NodeId::as_uuid).collect();
     st.store
-        .fresh_node_ids_scoped("icmp_rtt_ms", FALLBACK_FRESH_SECS, &scope)
+        .fresh_node_ids_scoped(FALLBACK_METRIC, FALLBACK_FRESH_SECS, &scope)
+        .await
+        .into_iter()
+        .collect()
+}
+
+/// The **whole fleet's** fresh set, for the rollups that hold counts rather than a page of ids.
+///
+/// [`fresh_fallback_ids`] pushes its id set into the query selector, which is right for a page and
+/// wrong for a rollup: the fleet tally, the per-group summary and the inventory report each cover
+/// every visible node, and a selector carrying 50,000 UUIDs is not a query. So they share one
+/// unscoped freshness query instead — and every caller skips it entirely unless something is
+/// actually unobserved, which is the steady state (the engine holds an opinion about every node it
+/// has swept). Takes the store rather than `ApiState` because the report renderer has no `ApiState`.
+pub(crate) async fn fresh_fleet_ids(store: &dyn crate::store::MetricStore) -> HashSet<Uuid> {
+    store
+        .fresh_node_ids(FALLBACK_METRIC, FALLBACK_FRESH_SECS)
         .await
         .into_iter()
         .collect()
@@ -227,21 +259,29 @@ pub(crate) struct NodePageQuery {
 /// paths produce identical rows.
 async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummary> {
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
+    let node_ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
     // Skeleton mode has neither ordering nor Meraki bindings; a read failure degrades the badge and
     // the ordering, never the list.
-    let (orders, meraki_ids) = match st.admin.as_ref() {
-        Some(admin) => (
-            admin.repo.node_sort_orders(&ids).await.unwrap_or_default(),
-            admin
-                .meraki_devices
-                .filter_meraki(&ids)
-                .await
-                .unwrap_or_default(),
-        ),
-        None => (HashMap::new(), HashSet::new()),
+    let inventory = async {
+        match st.admin.as_ref() {
+            Some(admin) => tokio::join!(
+                async { admin.repo.node_sort_orders(&ids).await.unwrap_or_default() },
+                async {
+                    admin
+                        .meraki_devices
+                        .filter_meraki(&ids)
+                        .await
+                        .unwrap_or_default()
+                }
+            ),
+            None => (HashMap::new(), HashSet::new()),
+        }
     };
-    let node_ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
-    let states = display_states(st, &node_ids).await;
+    // Three independent reads — two PostgreSQL, one TSDB — on the hottest list in the product:
+    // every tree page, every debounced search keystroke, every lazy folder expand runs all three.
+    // None needs another's answer, so they overlap rather than queue (the shape `interface_heatmap`
+    // uses for its per-link fan-out).
+    let ((orders, meraki_ids), states) = tokio::join!(inventory, display_states(st, &node_ids));
     nodes
         .into_iter()
         .map(|n| NodeSummary {

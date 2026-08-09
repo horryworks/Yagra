@@ -14,7 +14,7 @@
 //! **The dataset is never created; the table is.** A dataset carries a region that cannot be
 //! changed afterwards, so silently creating one would pick data residency on the operator's behalf
 //! and be irreversible. A missing dataset is an error that says so. A missing table is created with
-//! DAY partitioning and clustering from [`yagra_forward::bqrow`].
+//! DAY partitioning and clustering from `yagra_forward`'s `bqrow` schemas.
 //!
 //! **Log discipline** (security.md): BigQuery's per-row error `message` strings are never logged or
 //! surfaced — those can echo the offending row, and a forwarded row can contain a syslog body with

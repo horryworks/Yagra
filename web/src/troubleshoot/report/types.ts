@@ -92,10 +92,3 @@ export interface ReportDescriptor {
   Body: (props: ReportBodyProps) => ReactNode;
   csv: CsvColumn[];
 }
-
-/**
- * Partial during the incremental rollout so each increment ships independently; the final cleanup
- * increment tightens this to `Record<AnalysisToolKey, ReportDescriptor>` so the compiler itself
- * enforces that every tool has a report.
- */
-export type ReportRegistry = Partial<Record<AnalysisToolKey, ReportDescriptor>>;

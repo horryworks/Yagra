@@ -200,7 +200,7 @@ export function MyDashboardPage() {
               </>
             }
           >
-            <p>{t('my.resetBody')}</p>
+            <p className="modal-confirm-text">{t('my.resetBody')}</p>
           </Modal>
         )}
 
@@ -223,7 +223,7 @@ export function MyDashboardPage() {
               </>
             }
           >
-            <p>{t('my.cancelBody')}</p>
+            <p className="modal-confirm-text">{t('my.cancelBody')}</p>
           </Modal>
         )}
       </div>

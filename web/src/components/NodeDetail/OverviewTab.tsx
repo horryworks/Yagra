@@ -45,6 +45,7 @@ import {
   type ResolvedMem,
   type ResolvedMetric,
 } from './metricCards';
+import { formatKb, memPctSeries } from './overviewMetrics';
 import { overviewScalars, viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { certTone, httpToneVar } from './healthTone';
@@ -402,13 +403,6 @@ function UrlHealth({
       </div>
     </section>
   );
-}
-
-/** Human-friendly kilobyte formatter for Meraki windowed usage gauges. */
-function formatKb(kb: number): string {
-  if (kb >= 1_048_576) return `${(kb / 1_048_576).toFixed(1)} GB`;
-  if (kb >= 1024) return `${(kb / 1024).toFixed(1)} MB`;
-  return `${Math.round(kb)} KB`;
 }
 
 /** Cisco Meraki device health: availability (`meraki_device_up`), client count, and windowed
@@ -846,28 +840,6 @@ function MemHealth({
       )}
     </div>
   );
-}
-
-/** Build the memory usage-% series by aligning a source's two input ranges on shared timestamps
- *  and deriving % per point (`deriveMem`). */
-function memPctSeries(
-  mem: ResolvedMem,
-  byMetric: Record<string, MetricPoint[]>,
-): { timestamps: number[]; values: number[] } {
-  const [a, b] = mem.metrics;
-  const bById = new Map<number, number>();
-  for (const p of byMetric[b] ?? []) bById.set(p.t, p.v);
-  const timestamps: number[] = [];
-  const values: number[] = [];
-  for (const p of byMetric[a] ?? []) {
-    const vb = bById.get(p.t);
-    if (vb == null) continue;
-    const { pct } = deriveMem(mem.id, { [a]: p.v, [b]: vb }, mem.unitToBytes);
-    if (pct == null) continue;
-    timestamps.push(p.t);
-    values.push(pct);
-  }
-  return { timestamps, values };
 }
 
 /** Latest values of the node's node-level metrics. Hidden when the node has none (e.g. an

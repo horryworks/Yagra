@@ -70,14 +70,14 @@
 .nd-nb-cap {
   font-size: var(--font-xs);
   padding: 1px 6px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
   color: var(--text-secondary);
   white-space: nowrap;
 }
 
 .nd-nb-history {
-  border-top: 1px solid var(--border-color);
+  border-top: var(--border-width) solid var(--border-color);
   margin-top: var(--space-3);
   padding-top: var(--space-3);
 }

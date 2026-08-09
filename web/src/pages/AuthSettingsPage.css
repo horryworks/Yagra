@@ -36,7 +36,7 @@
   font-weight: 600;
   padding: 1px 8px;
   border-radius: 10px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
 }
 .auth-badge.on {
   color: var(--status-ok);
@@ -110,7 +110,7 @@
   font-size: var(--font-size-base);
   color: var(--text-primary);
   background: var(--bg-primary);
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: 4px;
   padding: 6px 8px;
 }
@@ -127,7 +127,7 @@
 .auth-test {
   margin-top: 12px;
   padding: 12px;
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-radius: 4px;
   background: var(--bg-secondary);
 }

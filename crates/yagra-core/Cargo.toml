@@ -109,4 +109,3 @@ mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
 tower = { workspace = true }
-serde_json = { workspace = true }

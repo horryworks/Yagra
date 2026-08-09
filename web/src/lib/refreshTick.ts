@@ -80,7 +80,16 @@ export function getRefreshTick(): number {
   return tick;
 }
 
-/** Reset the shared clock (tests only). */
+/**
+ * Reset the shared clock: stop the interval, drop every listener, rewind the tick.
+ *
+ * **Test infrastructure — it has no production caller and is not supposed to gain one.** `tick`,
+ * `timer` and `listeners` are module-level (that is the whole point of this file: one timer, not
+ * seven), so a test that subscribes leaves a live `setInterval` and a non-zero tick behind for the
+ * next one. In the app the ref-count already stops the timer when the last card unmounts, and
+ * nothing ever wants the clock rewound. So a dead-code sweep will keep finding it — it is
+ * deliberate, not a leftover.
+ */
 export function resetRefreshTick(): void {
   stopTimer();
   listeners.clear();

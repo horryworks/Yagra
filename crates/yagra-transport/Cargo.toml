@@ -8,6 +8,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# `FakeTransport` — the canned, always-reachable test double. Off by default so it is not compiled
+# into the shipped library; downstream crates enable it from **dev-dependencies** only, which
+# resolver v2 keeps out of a normal (non-test) build of the dependent.
+test-util = []
+
 [dependencies]
 yagra-common = { path = "../yagra-common" }
 thiserror = { workspace = true }
@@ -25,6 +31,3 @@ x509-parser = { workspace = true }
 serde_json = { workspace = true }
 # DNS name-resolution monitoring transport (ADR-033).
 hickory-resolver = { workspace = true }
-
-[dev-dependencies]
-tokio = { workspace = true }

@@ -31,6 +31,3 @@ futures = { workspace = true, optional = true }
 
 [features]
 nats = ["dep:async-nats", "dep:futures"]
-
-[dev-dependencies]
-serde_json = { workspace = true }

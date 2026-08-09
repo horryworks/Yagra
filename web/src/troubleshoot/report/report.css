@@ -17,7 +17,7 @@
   gap: var(--space-2);
   margin-bottom: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-left: 3px solid var(--severity-info);
   border-radius: var(--radius-sm, 4px);
   background: var(--bg-secondary);
@@ -430,7 +430,7 @@
 
 .tsr-incident {
   padding: var(--space-3);
-  border: 1px solid var(--border-color);
+  border: var(--border-width) solid var(--border-color);
   border-left: 3px solid var(--severity-info);
   border-radius: var(--radius-sm, 4px);
   background: var(--bg-secondary);
