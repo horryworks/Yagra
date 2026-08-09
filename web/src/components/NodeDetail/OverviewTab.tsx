@@ -32,7 +32,6 @@ import type {
   NodeAssignment,
   NodeDetail,
   NodeGroup,
-  NodeMetricEntry,
   NodeStatus,
   NodeSummary,
 } from '../../types/api';
@@ -47,6 +46,7 @@ import {
   type ResolvedMetric,
 } from './metricCards';
 import { overviewScalars, viewOf } from '../../lib/metricInventory';
+import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { certTone, httpToneVar } from './healthTone';
 import { extractMetricKey, formatExtractedValue, metricsFromKey } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
@@ -644,12 +644,9 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
       // The metric inventory, not the collection set: it needs only read permission (the collection
       // endpoint is ManageConfig, so this whole section used to be invisible to a viewer), and it
       // reports whether each metric has actually reported rather than only that it was asked for.
-      let items: NodeMetricEntry[] = [];
-      try {
-        items = await api.listNodeMetrics(nodeId);
-      } catch {
-        // no inventory (skeleton mode, or the node is gone) → no health card
-      }
+      // Through the shared cache, so this and the scalar strip below make one request between them
+      // (and so the dashboard's fleet Top-N learns the names this node has).
+      const items = await fetchNodeMetrics(nodeId);
       if (!cancelled) setHealth(resolveHealth(items));
     })();
     return () => {
@@ -887,12 +884,9 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let shown: NodeMetricEntry[] = [];
-      try {
-        shown = overviewScalars(await api.listNodeMetrics(nodeId));
-      } catch {
-        // no inventory → nothing to probe; the section hides itself below
-      }
+      // An empty inventory (skeleton mode, or the node is gone) means nothing to probe; the section
+      // hides itself below.
+      const shown = overviewScalars(await fetchNodeMetrics(nodeId));
       // Fetch every reading concurrently (was a per-metric await waterfall — a dozen serial
       // round-trips on open and on each poll). Order is preserved; a metric with no reading yet is
       // simply dropped. Matches the sibling loaders (UrlHealth/CpuHealth/…).

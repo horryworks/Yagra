@@ -5,6 +5,7 @@
 import type {
   AlertHistoryRow,
   CalendarBucket,
+  MetricTopAgg,
   NodeGroup,
   NodeState,
   NodeSummary,
@@ -12,6 +13,15 @@ import type {
 } from '../../types/api';
 // Worst-first precedence for rolling a set of node states up to a single "group" state.
 import { SEVERITY_ORDER, emptyStateCounts } from '../../lib/nodeState';
+import type { WidgetSettings } from '../types';
+
+/** The now / trailing-1h-peak window every Top-N widget stores in its settings bag, defaulting to
+ *  `now`. Shared because the widgets that write it (`TopAggActions`) and the ones that plan a query
+ *  from it are in different files, and an unrecognised value must land on the same default in both
+ *  — the bag is user-editable JSON, so `agg: 'yesterday'` is a shape that can actually arrive. */
+export function topAggOf(settings: WidgetSettings | undefined): MetricTopAgg {
+  return settings?.agg === 'max_1h' ? 'max_1h' : 'now';
+}
 
 /** The worst (most severe) state in a set, or `ok` when empty. Used for site/region tiles. */
 export function worstState(states: NodeState[]): NodeState {

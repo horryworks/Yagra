@@ -40,7 +40,12 @@ import {
   TopRttWidget,
   TopTalkersWidget,
 } from './widgets/performance';
-import { MetricChartActions, MetricChartWidget } from './widgets/metrics';
+import {
+  MetricChartActions,
+  MetricChartWidget,
+  MetricTopActions,
+  MetricTopWidget,
+} from './widgets/metrics';
 import { GeoMapWidget, RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
 import { DependencyWidget } from './widgets/topology';
 import {
@@ -255,6 +260,21 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedRowSpans: [1, 2, 3],
     Component: MetricChartWidget,
     Actions: MetricChartActions,
+  },
+  {
+    // Its fleet-wide twin (ADR-046 Inc.3): the same "any metric" question asked of every node at
+    // once. The metric is typed rather than picked from a list, because nothing may enumerate the
+    // fleet's metric names — see `metricTop.ts`.
+    type: 'metric-top',
+    title: 'registry.widgets.metric-top.title',
+    section: SECTION.performance,
+    blurb: 'registry.widgets.metric-top.blurb',
+    backing: 'rollup',
+    defaultSpan: 4,
+    allowedSpans: [4, 6],
+    allowedRowSpans: [1, 2, 3],
+    Component: MetricTopWidget,
+    Actions: MetricTopActions,
   },
   {
     type: 'busiest-interfaces',

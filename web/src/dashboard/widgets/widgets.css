@@ -196,3 +196,26 @@ html[data-viewport='mobile'] .metricchart-actions .metricchart-node,
 html[data-viewport='mobile'] .metricchart-actions select {
   max-width: none;
 }
+
+/* Metric Top-N — the typed metric name and the now/1h window in the card header. The field is the
+   widest thing in a 4-span card's header, so it is capped and truncates; under the mobile shell it
+   takes the full row instead of shrinking to a few characters. */
+.metrictop-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.metrictop-actions .metrictop-metric {
+  min-width: 0;
+  max-width: 160px;
+}
+
+html[data-viewport='mobile'] .metrictop-actions {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .metrictop-actions .metrictop-metric {
+  max-width: none;
+}

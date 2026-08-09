@@ -99,6 +99,20 @@
     question. A counter is charted as a per-second rate, never as its stored value.
   - **A metric that stops being available says so.** If the node no longer reports the selected
     metric, the widget names it instead of drawing an empty chart.
+- **A new "Top nodes by metric" dashboard widget ranks the whole fleet by any metric name.** The
+  curated Top RTT / CPU / memory cards each rank one thing the catalog chose; this one ranks whatever
+  you type, current value or trailing-hour peak, so a vendor metric no card covers can still answer
+  "which of my devices is worst". Three behaviours worth knowing:
+  - **The metric is typed, not picked from a list.** There is deliberately no fleet-wide metric
+    catalogue to choose from — enumerating every series across every node is the one query that does
+    not survive a large fleet. The field suggests the metrics this browser has already seen on nodes
+    you opened, and accepts anything else.
+  - **A counter is refused rather than ranked.** Ranking a counter's stored value ranks how long each
+    node has been up, not how busy it is. Use the interface Top-N cards for traffic and errors, or
+    chart the counter as a rate on a node.
+  - **An empty ranking says why it might be empty.** Nothing reporting the metric and a name that
+    does not match are indistinguishable from the browser, so the message admits both rather than
+    implying the fleet is idle.
 
 ### Improvements
 - **Device health and the metric list on a node's Overview no longer require admin rights.** They

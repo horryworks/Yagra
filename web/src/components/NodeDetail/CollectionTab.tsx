@@ -26,6 +26,7 @@ import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { viewOf } from '../../lib/metricInventory';
+import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 
 type CollState = 'ok' | 'failing' | 'none';
 
@@ -193,7 +194,9 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               .then((cs) => cs.find((c) => c.id === node.credential_id)?.name ?? null)
               .catch(() => null)
           : Promise.resolve(null),
-        api.listNodeMetrics(node.id).catch(() => [] as NodeMetricEntry[]),
+        // Through the shared cache — never stale here (no `maxAgeMs`, so it re-reads), but it is
+        // what teaches the dashboard's fleet Top-N the metric names this node has.
+        fetchNodeMetrics(node.id),
       ]);
       if (!cancelled) setData({ sets, metrics, profileName, credentialName });
     })();

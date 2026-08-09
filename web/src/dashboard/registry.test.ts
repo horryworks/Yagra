@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import { catalogBySection, defaultLayout, getDefinition, REGISTRY, registryView } from './registry';
+import enDashboard from '../locales/en/dashboard.json';
+import jaDashboard from '../locales/ja/dashboard.json';
 
 describe('widget registry', () => {
   it('has unique, stable type ids', () => {
@@ -53,6 +55,22 @@ describe('widget registry', () => {
       const def = getDefinition(w.type);
       expect(def).toBeDefined();
       expect(def!.allowedSpans).toContain(w.span);
+    }
+  });
+
+  it('has a title and a blurb in both locales for every widget', () => {
+    // EN/JA parity cannot catch this: a new widget's strings are missing from *both* files, so
+    // parity passes and the catalog shows the operator `registry.widgets.metric-top.title`.
+    const strings = (bundle: Record<string, unknown>, key: string): unknown =>
+      key.split('.').reduce<unknown>((o, k) => (o as Record<string, unknown> | undefined)?.[k], bundle);
+    for (const d of REGISTRY) {
+      for (const [lang, bundle] of [
+        ['en', enDashboard],
+        ['ja', jaDashboard],
+      ] as const) {
+        expect(strings(bundle, d.title), `${lang}: ${d.title}`).toBeTruthy();
+        expect(strings(bundle, d.blurb), `${lang}: ${d.blurb}`).toBeTruthy();
+      }
     }
   });
 

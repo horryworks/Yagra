@@ -259,6 +259,10 @@
       "metric-chart": {
         "title": "Metric chart",
         "blurb": "Any one metric of any one node, over 6h — including metrics no other card covers."
+      },
+      "metric-top": {
+        "title": "Top nodes by metric",
+        "blurb": "The highest-value nodes for any metric name you type — including metrics no other card covers."
       }
     }
   },
@@ -461,6 +465,13 @@
       "metricPlaceholder": "Metric…",
       "unavailable": "{{metric}} is not available on this node.",
       "empty": "No data in the last 6 hours…"
+    },
+    "metricTop": {
+      "pickMetric": "Type a metric name to rank the fleet by.",
+      "metricAria": "Metric to rank by",
+      "metricPlaceholder": "Metric…",
+      "counter": "{{metric}} is a counter. Ranking its stored value would rank how long each node has been up, not how busy it is.",
+      "empty": "No node is reporting {{metric}}. The name has to match exactly — a node's Collection tab lists the ones it has."
     }
   },
   "primitives": {

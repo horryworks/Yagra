@@ -12,11 +12,9 @@ import type { InterfaceTopEntry, InterfaceTopMetric, MetricTopAgg } from '../../
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import type { WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
-
-/** Read the now/1h window from instance settings (default "now"). */
-function aggOf(settings: WidgetProps['instance']['settings']): MetricTopAgg {
-  return settings?.agg === 'max_1h' ? 'max_1h' : 'now';
-}
+// The now/1h window reader lives in `util.ts` — the metric Top-N widget plans its query from the
+// same settings key in a file tests can reach, and one default is the point of sharing it.
+import { topAggOf as aggOf } from './util';
 
 /** Shared header action for every Top-N widget: the now / 1h-max window selector. */
 export function TopAggActions({ instance, setSettings }: WidgetProps) {
