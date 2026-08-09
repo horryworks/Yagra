@@ -5,6 +5,15 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 アラートを発出します。Docker で動作し、**数万ノード規模**と**分散ポーリング**を最初から
 見据えたアーキテクチャを採用しています。利用者は WebUI からアクセスします。
 
+> [!IMPORTANT]
+> **Yagra はオープンベータです。** 現在も活発に開発中で、**以下に挙げる機能のうち、まだ本番環境で
+> 検証できていないものが数多くあります**。粗い部分があることを前提に、既存の監視を置き換えるのでは
+> なく、まずは併用する形でお試しください。
+>
+> **[GitHub Issue](https://github.com/horryworks/Yagra/issues) でのバグ報告は歓迎します。ただし、
+> 現時点では Pull Request は受け付けていません** — [CONTRIBUTING.md](CONTRIBUTING.md) を参照して
+> ください。
+
 > ステータス: **v0.1.23。** ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、受動イベント監視、探索・分類、アラート、ダッシュボード、レポートを備えたスタックが、
 > PostgreSQL / Redis / NATS / VictoriaMetrics 上で Docker Compose により動作します。既定は単一
@@ -260,6 +269,19 @@ WebUI は既定で HTTPS です。core が初回起動時に自己署名証明�
 cargo build && cargo test              # バックエンド（Rust ワークスペース）
 cd web && npm install && npm run dev   # フロントエンド（Vite 開発サーバ）
 ```
+
+## コントリビューション
+
+Yagra はオープンベータで、開発者は 1 人です。
+
+**バグ報告・機能要望・設計上の議論は
+[GitHub Issue](https://github.com/horryworks/Yagra/issues) で歓迎します** — 実ネットワークで
+NMS のどこが実際に壊れるのかを教えてもらえることが、今いちばん有り難い貢献です。
+
+**Pull Request は現時点では受け付けていません。** 今日 PR を開いても、レビューされずにクローズされます
+— 内容が歓迎されないからではなく、受け入れる体制がまだ無いためです。詳しい状況とライセンス上の意味は
+[CONTRIBUTING.md](CONTRIBUTING.md)（英語）に記載しています。セキュリティに関する報告は Issue ではなく、
+[SECURITY.md](SECURITY.md) の非公開の連絡経路をご利用ください。
 
 ## ライセンス
 

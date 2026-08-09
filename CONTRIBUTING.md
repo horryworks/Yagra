@@ -2,6 +2,17 @@
 
 # Contributing
 
+## Yagra is in open beta
+
+Yagra is under active development, and **many of its features have not yet been validated in
+production**. The documentation and the README describe what is built, not what has been proven at
+scale in someone else's network — treat both accordingly, and run Yagra alongside your existing
+monitoring rather than in place of it.
+
+That is exactly why bug reports matter more than anything else at this stage: the gap between
+"implemented" and "holds up in the field" is what needs closing, and it closes fastest when someone
+says which part broke.
+
 ## Pull requests are not being accepted right now
 
 **Please do not open a pull request.** Yagra is developed by a single maintainer and is not set up

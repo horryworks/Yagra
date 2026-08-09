@@ -6,6 +6,14 @@ performance, and thresholds, and raises alerts on anomalies. It runs in Docker a
 is architected from the start for **tens of thousands of nodes** and **distributed
 polling**. Users access it through the WebUI.
 
+> [!IMPORTANT]
+> **Yagra is in open beta.** It is under active development, and **many of the features described
+> below have not yet been validated in production**. Expect rough edges, and run Yagra alongside
+> your existing monitoring rather than in place of it.
+>
+> **Bug reports on [GitHub Issues](https://github.com/horryworks/Yagra/issues) are very welcome.
+> Pull requests are not being accepted at this time** — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 > Status: **v0.1.23.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
@@ -271,6 +279,20 @@ Local development:
 cargo build && cargo test              # backend (Rust workspace)
 cd web && npm install && npm run dev   # frontend (Vite dev server)
 ```
+
+## Contributing
+
+Yagra is in open beta and developed by a single maintainer.
+
+**Bug reports, feature requests and design discussion are welcome as
+[GitHub Issues](https://github.com/horryworks/Yagra/issues)** — being told which parts of an NMS
+actually break in a real network is the most useful thing anyone can send right now.
+
+**Pull requests are not being accepted at this time.** One opened today would be closed without
+review — for want of a process behind it, not because the work is unwelcome.
+[CONTRIBUTING.md](CONTRIBUTING.md) sets out the state in full, including what it means for
+licensing. Security issues go through the private channel in [SECURITY.md](SECURITY.md), never the
+issue tracker.
 
 ## License
 
