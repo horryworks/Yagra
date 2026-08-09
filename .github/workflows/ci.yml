@@ -21,11 +21,25 @@
 # now matches no runner and the job simply times out without executing. That property is structural
 # — it survives someone relaxing a setting or editing this file.
 #
-# Accepted cost: builds start cold. `Swatinem/rust-cache` and the BuildKit GHA cache carry what they
-# can between runs, but the Dockerfile's `RUN --mount=type=cache` cargo directories are NOT exported
-# by any cache backend, so an image build recompiles the workspace every time. A release tag takes
-# tens of minutes rather than ~10. That is the price of not having a build machine inside the
-# network reachable from a stranger's pull request.
+# Accepted cost, measured on the first hosted run (2026-08-09, `ci-fast`, nothing published):
+# **11m09s → 28m14s** against the comparable self-hosted run. Where it went, per job:
+#
+#     compose   0m13s → 0m08s     frontend  1m16s → 1m16s     backend   7m56s → 10m48s
+#     img/core  1m51s → 13m49s    img/poller 0m21s → 1m22s    img/web   0m46s → 2m01s
+#
+# `img/core` is the whole story. `Swatinem/rust-cache` and the BuildKit GHA cache carry what they
+# can, but **no cache backend exports the Dockerfile's `RUN --mount=type=cache` cargo directories**,
+# so the image build recompiles the workspace every run and that ~14 min is a floor, not a cold-start
+# cost that later runs recover. `img/poller` staying at 1m22s is the `max-parallel: 1` design
+# working — it imported `core`'s shared `build` stage instead of compiling again.
+#
+# **A release tag is slower still and always was**: v0.1.19…v0.2.0 ran 24m51s–33m47s on self-hosted
+# (v0.2.0: 29m48s), because a tag builds `release` rather than `ci-fast` and pushes to GHCR. Expect
+# that to grow by roughly what `img/core` grew here. Do not quote "~10 minutes" for a release; that
+# figure only ever described a `ci-fast` branch build.
+#
+# That is the price of not having a build machine inside the network reachable from a stranger's
+# pull request.
 
 name: ci
 
