@@ -46,6 +46,18 @@
 - **The Collection tab no longer shows a `0` count pill** on nodes whose profile attaches no
   collection sets — which is every URL and DNS monitor. A zero there read as a fault; it now shows
   no pill, matching the Interfaces tab's existing rule.
+- **"Edit node" is now on the node pane of the Nodes page**, not only on the full detail page.
+  Changing a node's profile, credential, maker/model or poller pool from the inventory split meant
+  first pressing "Open detail" — a button that reads as navigation, not as editing, so the edit path
+  was effectively hidden. It sits beside "Move…" and opens the same dialog.
+
+### Bug Fixes
+- **A DNS monitor's resolution history no longer paints its status chip over the next column.** The
+  Resolution column was 140px wide while "No such name (NXDOMAIN)" — and its Japanese equivalent
+  more so — needs half again as much, and a status chip is deliberately never squeezed, so it
+  overflowed at every browser width. The column is now sized for the longest label in either locale,
+  and the chip truncates with an ellipsis (full text on hover) rather than spilling if a future label
+  or a wider system font still does not fit.
 
 ## v0.2.0 — The first public release: every metric a device reports, URL monitors that read the body, and an SSO form that knows your IdP
 

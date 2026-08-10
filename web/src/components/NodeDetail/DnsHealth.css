@@ -118,6 +118,24 @@
   word-break: break-all;
 }
 
+/* The resolution column holds a whole sentence ("No such name (NXDOMAIN)"), not a status word, and
+   `Badge.css` deliberately keeps a chip at full width (`flex-shrink: 0`) so it is never squeezed
+   next to a long label. In a fixed grid track there is no sibling to give way, so the chip simply
+   spilled over the chain column at every browser width. Here — where the badge *is* the cell — let
+   it give way instead and ellipsize its own text; `.dt-cell > *` already supplies `min-width: 0`
+   and `overflow: hidden`, but `text-overflow` needs a block child to act on. */
+.dns-history .dt-cell .badge {
+  flex-shrink: 1;
+  max-width: 100%;
+}
+
+.dns-history-outcome {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* On mobile the chain reads top-to-bottom; the arrows rotate to match. */
 html[data-viewport='mobile'] .dns-chain {
   flex-direction: column;

@@ -302,14 +302,17 @@ export function NodeDetail({
                 {t('detail.move')}
               </Button>
             )}
+            {/* Both variants: editing the bindings from the inline pane was only reachable via
+                "Open detail", which nobody read as "edit this node". The modal is nodeId-driven and
+                the refetch is local, so it works identically in the split. */}
+            {canEdit && (
+              <Button variant="outline" onClick={() => setEditingBindings(true)}>
+                {t('detail.editNode')}
+              </Button>
+            )}
             {variant === 'inline' && onOpenDetail && (
               <Button variant="outline" onClick={onOpenDetail}>
                 {t('detail.openDetail')}
-              </Button>
-            )}
-            {variant === 'page' && canEdit && (
-              <Button variant="outline" onClick={() => setEditingBindings(true)}>
-                {t('detail.editNode')}
               </Button>
             )}
             {variant === 'page' && canEdit && (

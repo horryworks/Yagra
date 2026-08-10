@@ -91,18 +91,27 @@ export function DnsHealth({
     {
       key: 'outcome',
       header: t('overview.resolution'),
-      width: '140px',
+      // Sized for the longest failure label in either locale ("No such name (NXDOMAIN)",
+      // 「名前が存在しない（NXDOMAIN）」) — a badge never shrinks, so at 140px it overflowed the
+      // grid track and painted over the chain column. The headroom is deliberate: `--ui-font-family`
+      // names Inter but nothing self-hosts it, so the real glyph widths are whatever the operator's
+      // system-ui and CJK fallback happen to be. `.dns-history-outcome` truncates whatever still
+      // doesn't fit, so the bleed cannot come back with a future label or a wider font.
+      width: '230px',
       // The failure kind used to render as its raw token, so a Japanese operator read
       // `nx_domain`. It is a closed set now, so it gets translated strings.
-      render: (row) => (
-        <Badge tone={row.resolved ? 'up' : 'critical'}>
-          {row.resolved
-            ? t('overview.resolves')
-            : row.failure_kind
-              ? t(`dns.failure.${row.failure_kind}`)
-              : t('overview.doesNotResolve')}
-        </Badge>
-      ),
+      render: (row) => {
+        const label = row.resolved
+          ? t('overview.resolves')
+          : row.failure_kind
+            ? t(`dns.failure.${row.failure_kind}`)
+            : t('overview.doesNotResolve');
+        return (
+          <Badge tone={row.resolved ? 'up' : 'critical'} title={label}>
+            <span className="dns-history-outcome">{label}</span>
+          </Badge>
+        );
+      },
     },
     {
       key: 'chain',
