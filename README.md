@@ -7,7 +7,7 @@ is architected from the start for **tens of thousands of nodes** and **distribut
 polling**. Users access it through the WebUI.
 
 > [!IMPORTANT]
-> **v0.2.0 is Yagra's first public release**, and **Yagra is in open beta.** It is under active
+> **Yagra has been public since v0.2.0**, and **Yagra is in open beta.** It is under active
 > development, and **many of the features described below have not yet been validated in
 > production**. Expect rough edges, and run Yagra alongside your existing monitoring rather than in
 > place of it.
@@ -19,7 +19,7 @@ polling**. Users access it through the WebUI.
 > instead of a public issue. **Pull requests are not being accepted at this time** — see
 > [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Status: **v0.2.0 — the first public release.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.2.1 — the inventory now says what each node is.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at

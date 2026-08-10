@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.1 — The inventory says what each node is, tabs a kind cannot fill are gone, and ＋ adds a node
+
 ### Breaking changes
 - **The node list now reports what each node *is*.** `GET /api/v1/nodes` and
   `GET /api/v1/nodes/by-group` replace the two-valued `source` field with `kind` — the same
