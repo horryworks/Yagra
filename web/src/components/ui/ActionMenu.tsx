@@ -10,11 +10,15 @@
 // primitive (cursor-anchored context menu carrying sections and chips). Migrate them here rather
 // than growing a fourth copy.
 //
-// Positioning is `fixed` and measured from the trigger, not `absolute`, and that is load-bearing:
-// the first caller sits in `.nodes-pane`, which is `overflow: hidden` inside a 312px grid column,
-// so an absolutely-positioned menu is clipped whichever edge it aligns to. A fixed-position
-// descendant escapes an `overflow: hidden` ancestor that establishes no containing block, which is
-// the same escape `.ntree-menu` already takes in that very pane.
+// The menu is `fixed`, measured from the trigger, and rendered through a PORTAL to document.body.
+// Every part of that is load-bearing. The callers sit in `.nodes-pane`, which is `overflow: hidden`
+// inside a 312px grid column, so an absolutely-positioned menu is clipped whichever edge it aligns
+// to. `fixed` escapes that — but only while no ancestor establishes a containing block for fixed
+// descendants, and a virtualized list does exactly that: `@tanstack/react-virtual` gives every row
+// a `transform: translateY(...)`, against which viewport coordinates silently resolve. Rendered in
+// place inside a tree row the menu therefore landed far outside the scroller, invisible, wide
+// enough to raise a horizontal scrollbar. The portal is what makes "fixed" mean the viewport
+// again, and it is why this component is safe to put inside any row — including a `DataTable` one.
 //
 // Behaviour follows the house pattern (troubleshoot/ToolCard): outside-mousedown and Escape close,
 // the trigger carries aria-haspopup/aria-expanded, items are role="menuitem" and stopPropagation()
@@ -22,6 +26,7 @@
 // menu-button keyboard contract, because a menu that only opens by mouse is not operable.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import './ActionMenu.css';
 
@@ -143,7 +148,10 @@ export function ActionMenu({
       if (restoreFocus) triggerEl()?.focus();
     };
     const onDown = (e: globalThis.MouseEvent) => {
-      if (!wrapRef.current?.contains(e.target as Node)) shut(false);
+      // The menu is portalled, so it is NOT inside `wrapRef` in the DOM — both have to be asked,
+      // or clicking a menu item closes the menu before its handler runs.
+      const t = e.target as Node;
+      if (!wrapRef.current?.contains(t) && !menuRef.current?.contains(t)) shut(false);
     };
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') shut(true);
@@ -225,44 +233,48 @@ export function ActionMenu({
   return (
     <div className={['amenu', className].filter(Boolean).join(' ')} ref={wrapRef}>
       {trigger(triggerProps)}
-      {open && (
-        <div
-          ref={menuRef}
-          className="amenu-menu"
-          role="menu"
-          aria-label={label}
-          style={pos ? { top: pos.top, left: pos.left } : { top: 0, left: 0, visibility: 'hidden' }}
-          onKeyDown={onMenuKeyDown}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {items.map((it, i) => (
-            <button
-              key={it.key}
-              type="button"
-              role="menuitem"
-              tabIndex={-1}
-              ref={(el) => {
-                itemRefs.current[i] = el;
-              }}
-              className={it.danger ? 'amenu-item danger' : 'amenu-item'}
-              disabled={it.disabled}
-              onClick={(e) => {
-                e.stopPropagation();
-                setOpen(false);
-                setPos(null);
-                it.onSelect();
-              }}
-            >
-              {it.icon && (
-                <span className="amenu-item-icon" aria-hidden>
-                  {it.icon}
-                </span>
-              )}
-              <span className="amenu-item-label">{it.label}</span>
-            </button>
-          ))}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="amenu-menu"
+            role="menu"
+            aria-label={label}
+            style={
+              pos ? { top: pos.top, left: pos.left } : { top: 0, left: 0, visibility: 'hidden' }
+            }
+            onKeyDown={onMenuKeyDown}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {items.map((it, i) => (
+              <button
+                key={it.key}
+                type="button"
+                role="menuitem"
+                tabIndex={-1}
+                ref={(el) => {
+                  itemRefs.current[i] = el;
+                }}
+                className={it.danger ? 'amenu-item danger' : 'amenu-item'}
+                disabled={it.disabled}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpen(false);
+                  setPos(null);
+                  it.onSelect();
+                }}
+              >
+                {it.icon && (
+                  <span className="amenu-item-icon" aria-hidden>
+                    {it.icon}
+                  </span>
+                )}
+                <span className="amenu-item-label">{it.label}</span>
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
