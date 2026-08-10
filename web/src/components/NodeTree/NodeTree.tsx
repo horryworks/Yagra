@@ -39,6 +39,7 @@ import {
 } from '../../lib/suppression';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
+import { ActionMenu } from '../ui/ActionMenu';
 import { WrenchIcon, BellOffIcon } from '../ui/icons';
 import { HealthBar } from '../HealthBar/HealthBar';
 import { GroupIcon } from './GroupIcon';
@@ -168,6 +169,8 @@ export function NodeTree({
   const [drag, setDrag] = useState<DragItem | null>(null);
   const [dropTarget, setDropTarget] = useState<DropTarget>(null);
   const [menu, setMenu] = useState<Menu>(null);
+  /** Group row whose ＋ menu is open — keeps that row's hover-revealed actions on screen. */
+  const [addMenuGroup, setAddMenuGroup] = useState<string | null>(null);
 
   // Active name filter (case-insensitive). While filtering, every group is force-expanded and
   // non-matching rows are hidden, so matches are always revealed.
@@ -457,18 +460,44 @@ export function NodeTree({
           !!suppression?.muteGroups.has(group.id),
         )}
         {canEdit && (
-          <span className="ntree-actions">
-            <button
-              type="button"
-              className="ntree-act"
-              title={t('group.addSubgroup')}
-              onClick={(e) => {
-                e.stopPropagation();
-                onAddGroup(group.id);
-              }}
-            >
-              ＋
-            </button>
+          // `menu-open` keeps the hover-revealed actions rendered while this row's ＋ menu is up:
+          // the menu opens BELOW the row, so reaching it takes the pointer off the row, and the
+          // hover rule would otherwise unmount the menu on the way there.
+          <span
+            className={`ntree-actions${addMenuGroup === group.id ? ' menu-open' : ''}`}
+          >
+            <ActionMenu
+              label={t('addMenu.label')}
+              align="end"
+              onOpenChange={(o) => setAddMenuGroup(o ? group.id : null)}
+              items={[
+                ...(onAddNode
+                  ? [
+                      {
+                        key: 'node',
+                        label: t('tree.addNodeHere'),
+                        onSelect: () => onAddNode(group.id),
+                      },
+                    ]
+                  : []),
+                {
+                  key: 'group',
+                  label: t('group.addSubgroup'),
+                  onSelect: () => onAddGroup(group.id),
+                },
+              ]}
+              trigger={(p) => (
+                <button
+                  {...p}
+                  type="button"
+                  className="ntree-act"
+                  title={t('addMenu.trigger')}
+                  aria-label={t('addMenu.trigger')}
+                >
+                  ＋
+                </button>
+              )}
+            />
             <button
               type="button"
               className="ntree-act"

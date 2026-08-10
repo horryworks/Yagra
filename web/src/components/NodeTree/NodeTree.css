@@ -162,7 +162,9 @@
   margin-left: auto;
 }
 
-.ntree-row:hover .ntree-actions {
+.ntree-row:hover .ntree-actions,
+/* Its own ＋ menu is open — the pointer has to leave the row to reach it. */
+.ntree-actions.menu-open {
   display: inline-flex;
 }
 

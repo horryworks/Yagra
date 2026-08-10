@@ -51,7 +51,8 @@
   selected they read `Add node to "Tokyo"…` / `Add subgroup in "Tokyo"…`, and with nothing selected
   they file at top level. Adding a node used to be reachable only by right-clicking a tree row,
   which is undiscoverable on a desktop and impossible on a touch device, where `contextmenu` never
-  fires — so on a phone the inventory could grow folders but not nodes.
+  fires — so on a phone the inventory could grow folders but not nodes. The ＋ on a group row offers
+  the same two, scoped to that group.
 - **The Add node dialog now has a Group field.** It is preselected from wherever the dialog was
   opened and can be changed before saving, instead of the previous read-only "Adding to *top
   level*" note. This also fixes a node added from a selected group's pane landing at top level

@@ -54,13 +54,24 @@ interface Props {
    *  lands on whichever element that is. */
   trigger: (props: ActionMenuTriggerProps) => ReactNode;
   className?: string;
+  /** Told whenever the menu opens or closes. For a trigger that is only conditionally visible —
+   *  a hover-revealed row action — which must stay rendered while its own menu is open, or the
+   *  menu disappears the moment the pointer leaves the row to reach it. */
+  onOpenChange?: (open: boolean) => void;
 }
 
 /** Gap between trigger and menu, and the minimum distance kept from the viewport edge. */
 const GAP = 4;
 const EDGE = 8;
 
-export function ActionMenu({ items, label, align = 'end', trigger, className }: Props) {
+export function ActionMenu({
+  items,
+  label,
+  align = 'end',
+  trigger,
+  className,
+  onOpenChange,
+}: Props) {
   const [open, setOpen] = useState(false);
   /** Measured position. `null` until the layout effect has run — the menu stays invisible until
    *  then, so it never paints at the wrong place first. */
@@ -99,6 +110,14 @@ export function ActionMenu({ items, label, align = 'end', trigger, className }: 
     focusOnOpen.current = null;
     focusAt(want === -1 ? enabled.length - 1 : Math.min(want, enabled.length - 1));
   });
+
+  // Reported from one place rather than at each of the five sites that flip `open` — a missed one
+  // would leave the trigger's row stuck visible, or hide the menu the operator is reading.
+  const openChangeRef = useRef(onOpenChange);
+  openChangeRef.current = onOpenChange;
+  useEffect(() => {
+    openChangeRef.current?.(open);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
