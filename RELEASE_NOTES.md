@@ -46,6 +46,16 @@
 - **The Collection tab no longer shows a `0` count pill** on nodes whose profile attaches no
   collection sets — which is every URL and DNS monitor. A zero there read as a fault; it now shows
   no pill, matching the Interfaces tab's existing rule.
+- **The inventory's ＋ adds a node, not just a group.** It now opens a two-item menu — add node, add
+  group — and both act on whatever the tree has selected: with a group (or a node inside one)
+  selected they read `Add node to "Tokyo"…` / `Add subgroup in "Tokyo"…`, and with nothing selected
+  they file at top level. Adding a node used to be reachable only by right-clicking a tree row,
+  which is undiscoverable on a desktop and impossible on a touch device, where `contextmenu` never
+  fires — so on a phone the inventory could grow folders but not nodes.
+- **The Add node dialog now has a Group field.** It is preselected from wherever the dialog was
+  opened and can be changed before saving, instead of the previous read-only "Adding to *top
+  level*" note. This also fixes a node added from a selected group's pane landing at top level
+  regardless of the group.
 - **"Edit node" is now on the node pane of the Nodes page**, not only on the full detail page.
   Changing a node's profile, credential, maker/model or poller pool from the inventory split meant
   first pressing "Open detail" — a button that reads as navigation, not as editing, so the edit path

@@ -7,10 +7,11 @@
 // is no list to forget an entry in. (The old reset never cleared the failure message, so reopening
 // the form showed the previous attempt's error above a blank form.)
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Trans, useTranslation } from 'react-i18next';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { isValidPoolName } from '../../lib/pool';
+import { groupOptions } from '../../lib/nodeTree';
 import {
   isAddableKind,
   monitorKind,
@@ -42,7 +43,8 @@ export function AddNodeModal({
   onCreated,
 }: {
   groups: NodeGroup[];
-  /** Folder the new node lands in (from the tree's right-click); `null` = top level. */
+  /** Folder the new node STARTS in — seeds the Group select, which the operator can change.
+   *  `null` = ungrouped. */
   groupId: string | null;
   onClose: () => void;
   onCreated: () => void;
@@ -52,6 +54,11 @@ export function AddNodeModal({
   const [form, setForm] = useState<AddNodeForm>(EMPTY_ADD_NODE_FORM);
   /** The parent picker's display label — UI only, so it is not part of the request payload. */
   const [parentName, setParentName] = useState('');
+  /** Folder the node will be filed into. Seeded from the launch context, then editable: the dialog
+   *  is reached from the page header, the tree, the ＋ menu and a group's detail pane, and only the
+   *  operator knows where the node belongs. Deliberately NOT part of `AddNodeForm` — that type maps
+   *  1:1 onto the create bodies and no create endpoint takes a group; placement is a second call. */
+  const [group, setGroup] = useState<string>(groupId ?? '');
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -82,10 +89,10 @@ export function AddNodeModal({
     setBusy(true);
     setError(null);
     sendCreate(createRequest(kind, form))
-      // The create endpoints take no group_id, so a node lands Ungrouped; when the add was launched
-      // from a folder's right-click, place it there with the canonical op (same as drag-drop). A
-      // placement failure is soft — the node still exists, just at top level.
-      .then(({ id }) => (groupId ? api.setNodeGroup(id, groupId) : undefined))
+      // The create endpoints take no group_id, so a node lands Ungrouped; file it with the
+      // canonical op (same as drag-drop). A placement failure is soft — the node still exists,
+      // just ungrouped.
+      .then(({ id }) => (group ? api.setNodeGroup(id, group) : undefined))
       // No `setBusy(false)` here: success unmounts the dialog, and re-enabling it first would open
       // a window where the button is live again with the node already created.
       .then(onCreated)
@@ -238,10 +245,6 @@ export function AddNodeModal({
   };
 
   const poolValid = isValidPoolName(form.pool);
-  const target = useMemo(
-    () => groups.find((g) => g.id === groupId)?.name ?? t('add.topLevel'),
-    [groups, groupId, t],
-  );
 
   return (
     <Modal
@@ -259,9 +262,19 @@ export function AddNodeModal({
       }
     >
       <div className="form-stack">
-        <p className="form-note">
-          <Trans t={t} i18nKey="add.addingTo" values={{ target }} components={{ b: <strong /> }} />
-        </p>
+        {/* Where it lands. Same control and the same keys as MoveNodeModal — one semantic
+            (`setNodeGroup`), one widget. */}
+        <label className="form-label">
+          {t('field.group')}
+          <Select value={group} onChange={(e) => setGroup(e.target.value)}>
+            <option value="">{t('moveNode.ungroupedOption')}</option>
+            {groupOptions(groups).map((o) => (
+              <option key={o.id} value={o.id}>
+                {o.label}
+              </option>
+            ))}
+          </Select>
+        </label>
         <label className="form-label">
           {t('add.monitoringType')}
           <Select

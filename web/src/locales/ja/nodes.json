@@ -63,8 +63,6 @@
   "add": {
     "node": "ノードを追加",
     "urlMonitor": "URL 監視を追加",
-    "addingTo": "<b>{{target}}</b> に追加します。",
-    "topLevel": "トップレベル",
     "monitoringType": "監視タイプ",
     "typeDevice": "デバイス (ICMP / SNMP)",
     "typeUrl": "URL 監視 (HTTP / HTTPS)",
@@ -85,6 +83,12 @@
     "poolOptional": "ポーラープール（任意）",
     "poolPlaceholder": "空欄ならグループから継承",
     "poolHint": "このノードを担当するポーラープールです。空欄にすると、配置先のグループから継承します。"
+  },
+  "addMenu": {
+    "trigger": "追加",
+    "label": "インベントリに追加",
+    "nodeIn": "「{{name}}」にノードを追加…",
+    "groupIn": "「{{name}}」にサブグループを追加…"
   },
   "group": {
     "add": "グループを追加",
@@ -331,6 +335,7 @@
     "editMove": "編集 / 移動…",
     "open": "開く",
     "addNodeEllipsis": "ノードを追加…",
+    "addGroupEllipsis": "グループを追加…",
     "deleteEllipsis": "削除…",
     "pool": "ポーラープール",
     "poolInherit": "継承",

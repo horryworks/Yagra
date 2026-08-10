@@ -1,0 +1,82 @@
+/* Anchored action menu. Chrome matches the popover the rest of the app already uses (`.ovm-menu`,
+   `.ts-run-menu`); the difference is `position: fixed` + measured coordinates, so the menu is not
+   clipped by a scrolling/overflow-hidden ancestor. */
+
+.amenu {
+  position: relative;
+  display: inline-flex;
+}
+
+.amenu-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 176px;
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 4px;
+  box-shadow: 0 8px 24px var(--overlay);
+}
+
+.amenu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.amenu-item:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Keyboard focus: an inset accent hairline rather than an outline (§ Interactive states). */
+.amenu-item:focus-visible {
+  background: var(--bg-tertiary);
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+.amenu-item.danger {
+  color: var(--status-critical);
+}
+
+.amenu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Labels can interpolate an operator-chosen name — clip rather than let the menu grow unbounded. */
+.amenu-item-label {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.amenu-item-icon {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.amenu-item-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+html[data-viewport='mobile'] .amenu-item {
+  min-height: var(--touch-target);
+}

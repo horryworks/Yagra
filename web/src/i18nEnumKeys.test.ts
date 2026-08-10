@@ -52,6 +52,7 @@ import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { MONITOR_KINDS } from './pages/monitorKinds';
+import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
 import { RUN_STATUS } from './reports/runStatus';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
@@ -322,6 +323,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // now. A kind added without strings would put a raw key in the dropdown an operator picks from.
     const keys = MONITOR_KINDS.flatMap((k) => [k.optionKey, k.titleKey, k.errorKey]);
     expectKeys('monitor kind', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every ＋-menu label resolves (nodes:tree.*/addMenu.*)', () => {
+    // The inventory ＋ picks its two labels at runtime from the tree selection, and `t()` is not
+    // typed against a key union — so a typo or a half-added key would render raw text on the one
+    // control that creates nodes. EN/JA parity cannot catch it: a key missing from both is "in
+    // parity".
+    expectKeys('add menu label', { en: enNodes, ja: jaNodes }, '', ADD_MENU_LABEL_KEYS);
   });
 
   it('every node kind has a label (nodes:kind.*)', () => {

@@ -167,3 +167,16 @@ html[data-viewport='mobile'] .nodes-detail-back {
   font-size: var(--font-md);
   cursor: pointer;
 }
+
+/* The pane head is a 38px desktop row. On mobile the ＋ is now a menu trigger and has to be a real
+   tap target, so the head gives instead of clipping it. */
+html[data-viewport='mobile'] .nodes-pane-head {
+  height: auto;
+  min-height: var(--touch-target);
+  padding: 4px 8px 4px 12px;
+}
+
+html[data-viewport='mobile'] .nodes-pane-add {
+  min-height: var(--touch-target);
+  min-width: var(--touch-target);
+}

@@ -35,12 +35,14 @@ import type {
 import { countsTotal, filterResultsTruncated, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
+import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
 import { inheritedGroupPool } from '../lib/pool';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
+import { ActionMenu } from '../components/ui/ActionMenu';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput } from '../components/ui/Field';
 import { AddNodeModal } from '../components/AddNodeModal/AddNodeModal';
@@ -339,6 +341,14 @@ export function NodesPage() {
     setAddGroupId(null);
   };
 
+  /** Open the add-node dialog filed into `groupId` (`null` = ungrouped / top level). One opener for
+   *  every entry point — the group-detail pane's button used to skip the folder and drop the node
+   *  at top level, which is what a second copy of two setState calls buys you. */
+  const openAddNode = (groupId: string | null) => {
+    setAddGroupId(groupId);
+    setAdding(true);
+  };
+
   // Direct moves (drag-drop): assign immediately and refresh.
   const moveNode = (nodeId: string, groupId: string | null) =>
     api.setNodeGroup(nodeId, groupId).then(reload).catch((e: unknown) =>
@@ -387,6 +397,10 @@ export function NodesPage() {
     selected?.kind === 'node' ? treeNodes.find((n) => n.id === selected.id) ?? null : null;
   const selectedGroup =
     selected?.kind === 'group' ? groups.find((g) => g.id === selected.id) ?? null : null;
+  // What the pane-head ＋ acts on: the selected group, a selected node's folder, else top level.
+  // Not memoized — `selected` is re-parsed into a fresh object every render, so a memo on it would
+  // never hit, and this is two finds over the arrays the two lines above already scan.
+  const addTarget = addMenuTarget(selected, groups, treeNodes);
 
   return (
     <div className={selected ? 'page-fill nodes-detail-active' : 'page-fill'}>
@@ -410,13 +424,10 @@ export function NodesPage() {
         }
         actions={
           authed && (
-            <Button
-              variant="primary"
-              onClick={() => {
-                setAddGroupId(null);
-                setAdding(true);
-              }}
-            >
+            // Deliberately top level, not the tree selection: this button survives the inventory
+            // pane being collapsed to a rail, where the operator cannot see what is selected. The
+            // dialog's Group select is where a different folder gets chosen.
+            <Button variant="primary" onClick={() => openAddNode(null)}>
               {t('add.node')}
             </Button>
           )
@@ -465,14 +476,35 @@ export function NodesPage() {
                 </button>
               )}
               {authed && (
-                <Button
-                  variant="outline"
-                  className="nodes-pane-add"
-                  title={t('group.add')}
-                  onClick={() => setGroupModal({ mode: 'add', parentId: null })}
-                >
-                  ＋
-                </Button>
+                // Both entries target the same folder — the tree selection, or top level. Adding a
+                // node used to be right-click-only, which touch devices never fire.
+                <ActionMenu
+                  label={t('addMenu.label')}
+                  align="end"
+                  items={[
+                    {
+                      key: 'node',
+                      label: t(addTarget.addNodeKey, { name: addTarget.groupName ?? '' }),
+                      onSelect: () => openAddNode(addTarget.groupId),
+                    },
+                    {
+                      key: 'group',
+                      label: t(addTarget.addGroupKey, { name: addTarget.groupName ?? '' }),
+                      onSelect: () => setGroupModal({ mode: 'add', parentId: addTarget.groupId }),
+                    },
+                  ]}
+                  trigger={(p) => (
+                    <Button
+                      {...p}
+                      variant="outline"
+                      className="nodes-pane-add"
+                      title={t('addMenu.trigger')}
+                      aria-label={t('addMenu.trigger')}
+                    >
+                      ＋
+                    </Button>
+                  )}
+                />
               )}
               <TextInput
                 className="nodes-pane-search"
@@ -498,14 +530,7 @@ export function NodesPage() {
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
-            onAddNode={
-              authed
-                ? (gid) => {
-                    setAddGroupId(gid);
-                    setAdding(true);
-                  }
-                : undefined
-            }
+            onAddNode={authed ? openAddNode : undefined}
             onDeleteNode={authed ? (n) => setDeletingNode(n) : undefined}
             onRequestMoveNode={(n) => setMovingNode(n)}
             onMoveNode={moveNode}
@@ -555,7 +580,7 @@ export function NodesPage() {
               nodes={treeNodes}
               canEdit={authed}
               onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
-              onAddNode={() => setAdding(true)}
+              onAddNode={() => openAddNode(selectedGroup.id)}
             />
           ) : (
             <div className="nd-empty">

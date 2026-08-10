@@ -63,8 +63,6 @@
   "add": {
     "node": "Add node",
     "urlMonitor": "Add URL monitor",
-    "addingTo": "Adding to <b>{{target}}</b>.",
-    "topLevel": "top level",
     "monitoringType": "Monitoring type",
     "typeDevice": "Device (ICMP / SNMP)",
     "typeUrl": "URL monitor (HTTP / HTTPS)",
@@ -85,6 +83,12 @@
     "poolOptional": "Poller pool (optional)",
     "poolPlaceholder": "blank = inherit from group",
     "poolHint": "Which poller pool polls this node. Leave blank to inherit from the group it lands in."
+  },
+  "addMenu": {
+    "trigger": "Add",
+    "label": "Add to inventory",
+    "nodeIn": "Add node to \"{{name}}\"…",
+    "groupIn": "Add subgroup in \"{{name}}\"…"
   },
   "group": {
     "add": "Add group",
@@ -331,6 +335,7 @@
     "editMove": "Edit / move…",
     "open": "Open",
     "addNodeEllipsis": "Add node…",
+    "addGroupEllipsis": "Add group…",
     "deleteEllipsis": "Delete…",
     "pool": "Poller pool",
     "poolInherit": "Inherit",
