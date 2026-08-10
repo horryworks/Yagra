@@ -348,6 +348,28 @@ impl std::ops::Deref for WebTls {
     }
 }
 
+/// The migration-history reader behind the upgrade view (ADR-050) — absent only in skeleton mode.
+pub struct Upgrade(pub Arc<crate::upgrade::UpgradeRepo>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for Upgrade {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.upgrade
+            .as_ref()
+            .map(|u| Self(u.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for Upgrade {
+    type Target = crate::upgrade::UpgradeRepo;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// The LDAP/AD directory store — present only when this deployment persists directory
 /// configuration (ADR-041).
 ///

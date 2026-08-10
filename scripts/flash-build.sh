@@ -65,7 +65,10 @@ docker run --rm \
     cargo clippy --workspace --profile $PROFILE -- -D warnings
     cargo build  --profile $PROFILE --bin yagra-core --bin yagra-poller
     install -m0755 target/$PROFILE/yagra-core target/$PROFILE/yagra-poller /out/
+    install -m0644 docker-compose.deploy.yml scripts/yagra-backup.sh /out/
   "
 
 say "binaries in $OUT"
-ls -l "$OUT/yagra-core" "$OUT/yagra-poller"
+# The two release artifacts are listed too: the `prebuilt` Dockerfile stage COPYs them, so a missing
+# one fails the image build rather than producing a core image that cannot be upgraded from.
+ls -l "$OUT/yagra-core" "$OUT/yagra-poller" "$OUT/docker-compose.deploy.yml" "$OUT/yagra-backup.sh"

@@ -20,6 +20,9 @@
 -- FLOW IS VERBATIM-ONLY. There is no rendered form of a template-bound binary export, so `verbatim`
 -- must be true for a flow destination (enforced at the API edge, not by a CHECK here — the rule is a
 -- source/destination pairing, which SQL would express far less clearly than the validator does).
+--
+-- reversible: the DROP CONSTRAINTs immediately re-add a WIDER check, which no binary can fail to
+-- satisfy. Nothing is removed and no column is retyped (ADR-050 decision 7).
 
 -- Widen the stream selector: 'flow' joins syslog and traps.
 ALTER TABLE forward_destinations DROP CONSTRAINT IF EXISTS forward_destinations_source_kind_check;

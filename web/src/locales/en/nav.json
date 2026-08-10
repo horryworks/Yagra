@@ -57,6 +57,7 @@
     "audit": "Audit log",
     "system": "System settings",
     "configBundle": "Configuration bundle",
+    "upgrade": "Upgrade",
     "preferences": "Preferences",
     "about": "About"
   },
@@ -90,7 +91,8 @@
     "settingsForwarding": "Relay received syslog and traps to external collectors",
     "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients",
     "settingsAi": "The language model that writes incident explanations",
-    "settingsConfigBundle": "Export or import the monitoring configuration as a portable file"
+    "settingsConfigBundle": "Export or import the monitoring configuration as a portable file",
+    "settingsUpgrade": "Which build is running, and how far back this deployment can be taken"
   },
   "shell": {
     "home": "Home",

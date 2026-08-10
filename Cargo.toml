@@ -88,6 +88,10 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 rand = "0.8"
 # Machine hostname for poller identity default (ADR-009) — tiny, cross-platform, no unsafe of ours.
 hostname = "0.4"
+# Semantic-version comparison for the upgrade compatibility window (ADR-050 decision 7). Hand-rolled
+# comparison is exactly wrong at the edges a monitoring system reaches eventually — a text compare
+# orders 0.2.10 before 0.2.9 — and this is the value that decides whether the UI offers a rollback.
+semver = "1"
 # Low-level socket options for the parallel edge UDP listeners (S9): SO_REUSEPORT so the kernel
 # load-balances datagrams across N independent receive queues, and an enlarged SO_RCVBUF to absorb
 # bursts. The Unix-only options are cfg-gated; the non-unix dev box falls back to a single socket.

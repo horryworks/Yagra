@@ -94,6 +94,9 @@ mod token;
 mod topology_links;
 mod topology_mode;
 mod topology_projection;
+// What this deployment is running and how far back it can be taken (ADR-050). Named apart from
+// `repo`, which *applies* migrations; this one reasons about what applying them cost.
+mod upgrade;
 mod url_check;
 mod volatile;
 mod webtls;
@@ -147,6 +150,16 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(run_healthcheck().await);
     }
 
+    // `yagra-core migrations` prints the migration set THIS binary embeds, as JSON, and exits.
+    // No database, no telemetry, no config — deliberately, because the caller runs it inside the
+    // *target* image (`docker run --rm ghcr.io/…/yagra-core:vX migrations`) to learn what an
+    // upgrade would apply, before anything is touched (ADR-050 decision 6). Sits beside
+    // `healthcheck` and before any wiring for the same reason: cheap and side-effect-free.
+    if std::env::args().nth(1).as_deref() == Some("migrations") {
+        print_embedded_migrations();
+        return Ok(());
+    }
+
     // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
     // spans at shutdown, so keep it alive for the whole process (`main` awaits the run loop below).
     let _telemetry = yagra_telemetry::init("yagra-core");
@@ -181,6 +194,31 @@ async fn run_healthcheck() -> i32 {
         Ok(resp) if resp.status().is_success() => 0,
         _ => 1,
     }
+}
+
+/// Print the embedded migration set as one JSON object on stdout (`yagra-core migrations`).
+///
+/// The checksum is included because it is what distinguishes "this version is already applied" from
+/// "this version was applied from *different* SQL" — the second is the case an upgrade planner must
+/// never wave through, and sqlx reports it as `VersionMismatch` rather than a missing version.
+fn print_embedded_migrations() {
+    let migrator = repo::embedded_migrations();
+    let migrations: Vec<serde_json::Value> = migrator
+        .iter()
+        .map(|m| {
+            let checksum: String = m.checksum.iter().map(|b| format!("{b:02x}")).collect();
+            serde_json::json!({
+                "version": m.version,
+                "description": m.description.as_ref(),
+                "checksum": checksum,
+            })
+        })
+        .collect();
+    let doc = serde_json::json!({
+        "core_version": env!("CARGO_PKG_VERSION"),
+        "migrations": migrations,
+    });
+    println!("{doc}");
 }
 
 /// Live mode: PostgreSQL + NATS + VictoriaMetrics, real ICMP polling end to end.
@@ -709,7 +747,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         classification,
         classifier,
         groups: group_repo,
-        audit: audit_repo,
+        audit: audit_repo.clone(),
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
@@ -823,6 +861,23 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .map(std::path::PathBuf::from),
     ));
 
+    // Built before `repo` is erased to `Arc<dyn NodeListing>` below, which moves it. An unset
+    // YAGRA_UPGRADE_DIR means the updater sidecar is not deployed, which is the default: the
+    // migration/compatibility half still answers, the apply half reports itself disabled.
+    let upgrade = Arc::new(upgrade::UpgradeRepo::new(
+        repo.pool(),
+        std::env::var("YAGRA_UPGRADE_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from),
+    ));
+
+    // If an upgrade finished while we were the process being replaced, close its audit trail now.
+    // Deliberately not leader-gated and deliberately awaited: it is one claimed file and one row,
+    // and the claim makes a double-run harmless — whereas deferring it behind leadership would lose
+    // the record entirely on a single-core deployment that is not yet leader when this runs.
+    upgrade.record_finished_run(&audit_repo).await;
+
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
         store,
@@ -846,6 +901,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         enable_mcp: cfg.enable_mcp,
         rca,
         webtls: Some(webtls.clone()),
+        upgrade: Some(upgrade),
         metrics: Some(metrics.clone()),
         started: std::time::SystemTime::now(),
     };
@@ -1378,6 +1434,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // No metadata store ⇒ nowhere to keep a provider config or a report; the RCA endpoints 503.
         rca: None,
         webtls: None,
+        upgrade: None,
         metrics: Some(metrics.clone()),
         started: std::time::SystemTime::now(),
     };

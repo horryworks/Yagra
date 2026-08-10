@@ -1349,6 +1349,22 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "GET",
+        "/api/v1/system/upgrade",
+        Global(
+            "describes the deployment itself — which binary is running and how much schema it \
+             carries — not monitored-node data, and it demands ManageConfig, whose holder is \
+             unscoped by construction (ADR-014)",
+        ),
+        Tool("get_system_health"),
+    ),
+    (
+        "POST",
+        "/api/v1/system/upgrade",
+        Global("replaces every container in the deployment; there is no narrower unit of it"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
         "/api/v1/system/support-bundle",
         Global(
             "a diagnostic snapshot of the deployment itself; it demands ManageConfig + \

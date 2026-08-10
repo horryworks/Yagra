@@ -90,6 +90,8 @@ import type {
   SystemHostsResponse,
   HostMetricRange,
   VersionInfo,
+  UpgradeStatus,
+  UpgradeRunAccepted,
   ProfileSummary,
   ProfileInput,
   ReportDefinition,
@@ -1207,6 +1209,16 @@ export const api = {
 
   /** Running core/API version (for Settings ▸ About). Public — no auth required. */
   getVersion: (): Promise<VersionInfo> => apiGet('/api/v1/version'),
+
+  /** Which binary is actually running, how much schema is applied, and whether this deployment
+   *  could still be taken back to an earlier release (Settings ▸ Upgrade, ADR-050).
+   *  Needs manage-configuration. */
+  getUpgradeStatus: (): Promise<UpgradeStatus> => apiGet('/api/v1/system/upgrade'),
+
+  /** Move this deployment to a release. Returns as soon as the updater has the request — the work
+   *  outlives core, which restarts partway through, so poll `getUpgradeStatus` for the outcome. */
+  applyUpgrade: (targetTag: string): Promise<UpgradeRunAccepted> =>
+    apiPost('/api/v1/system/upgrade', { body: { target_tag: targetTag } }),
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (

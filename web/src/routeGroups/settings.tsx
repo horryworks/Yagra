@@ -28,6 +28,7 @@ import { AuditPage } from '../pages/AuditPage';
 import { SystemSettingsPage } from '../pages/SystemSettingsPage';
 import { ConfigBundlePage } from '../pages/ConfigBundlePage';
 import { PreferencesPage } from '../pages/PreferencesPage';
+import { UpgradePage } from '../pages/UpgradePage';
 import { AboutPage } from '../pages/AboutPage';
 
 export default function SettingsRoutes() {
@@ -50,6 +51,7 @@ export default function SettingsRoutes() {
       <Route path="audit" element={<AuditPage />} />
       <Route path="system" element={<SystemSettingsPage />} />
       <Route path="config-bundle" element={<ConfigBundlePage />} />
+      <Route path="upgrade" element={<UpgradePage />} />
       <Route path="preferences" element={<PreferencesPage />} />
       <Route path="about" element={<AboutPage />} />
       <Route path="*" element={<Navigate to="/dashboard" replace />} />

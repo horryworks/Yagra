@@ -116,6 +116,11 @@ services:
       # `metrics` = the VictoriaMetrics data volume (mounted read-only below). Database growth is
       # tracked via pg_database_size instead (the pgdata dir is 0700 and can't be stat'd).
       YAGRA_DISK_WATCH_PATHS: ${YAGRA_DISK_WATCH_PATHS:-/=root,/hostfs/vm=metrics}
+      # Where core exchanges upgrade requests and status with the `yagra-updater` sidecar (ADR-050,
+      # Settings ▸ Upgrade). Setting it does NOT enable upgrades: the page reports the mechanism as
+      # disabled until the sidecar at the bottom of this file is uncommented and starts reporting.
+      # Unset it to remove even the directory.
+      YAGRA_UPGRADE_DIR: ${YAGRA_UPGRADE_DIR:-/data/upgrade}
       # Local-auth admin password seeded on first start. Left empty by default: core then
       # generates a one-time random admin password and prints it once in its logs
       # (`docker compose logs core`). Set YAGRA_ADMIN_PASSWORD in .env to choose your own.
@@ -184,6 +189,12 @@ services:
       # Core's rotated log files (ADR-045). A named volume, so they outlive the container — a log
       # that dies with the process it was recording is no use for diagnosing why it died.
       - logdata:/var/log/yagra
+      # Upgrade hand-off (ADR-050). Read-write: core writes the request file, the `yagra-updater`
+      # sidecar writes the status back. A file rather than the database or the bus because core is
+      # RESTARTED by the operation it requested — the process that asks is never the process that
+      # sees it finish, so progress has to outlive both. Harmless with no sidecar deployed: core
+      # then reports the mechanism as disabled and nothing ever reads the directory.
+      - upgradedata:/data/upgrade
       # Auth Callout account seed (ADR-030) — mount the SEED file read-only. It is a secret (like the
       # KEK): keep it off env vars and out of the image. Uncomment with the env vars above.
       # - ${YAGRA_CALLOUT_SEED_DIR:-./callout}:/etc/yagra/callout:ro
@@ -423,6 +434,189 @@ services:
           sleep "$$YAGRA_IPASN_REFRESH_SECS"
         done
 
+  # ── Upgrade executor (ADR-050) — DISABLED BY DEFAULT. Read this whole block before enabling. ──
+  #
+  # Uncommenting gives ONE container the Docker socket, and therefore root on this host. That is the
+  # feature, not a side effect: it is what lets an operator upgrade Yagra from the WebUI on a network
+  # with no shell access (ADR-045's production premise). It also creates a path from Yagra's Admin
+  # role to host root that does not otherwise exist, so it is off unless you decide otherwise.
+  #
+  # What bounds it:
+  #   * core does NOT get the socket. Two ADRs rejected that (ADR-040, ADR-044) and this does not
+  #     overturn them — it changes who holds it, exactly as `ipasn-updater` above holds the only
+  #     outbound network path. Delete this service and the mechanism is gone.
+  #   * The image repository is fixed HERE, in the host's environment. It cannot be set over the
+  #     API, so no request can name a different registry.
+  #   * The only commands are check / apply. The request file is `key=value`, every value is
+  #     regex-checked before use, and it is never `.`-sourced or eval'd — that would turn write
+  #     access to a volume into arbitrary code execution.
+  #   * The apply work runs in a THROWAWAY container outside this compose project, because
+  #     `docker compose up -d` would otherwise recreate this very container mid-operation.
+  #
+  # To enable: uncomment, then `docker compose -p yagra up -d`. Settings ▸ Upgrade turns live once
+  # the sidecar writes its first heartbeat.
+  #
+  # yagra-updater:
+  #   image: docker:28-cli
+  #   restart: unless-stopped
+  #   # The socket's group on the host. Check with `stat -c %g /var/run/docker.sock` and set
+  #   # YAGRA_DOCKER_GID in .env if it is not 0 — a mismatch shows up as "permission denied" on
+  #   # every docker command in this container's log.
+  #   user: "0:${YAGRA_DOCKER_GID:-0}"
+  #   environment:
+  #     YAGRA_UPGRADE_REPO: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}
+  #     YAGRA_UPGRADE_CHECK_SECS: ${YAGRA_UPGRADE_CHECK_SECS:-21600}
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - upgradedata:/data/upgrade
+  #   command:
+  #     - sh
+  #     - -c
+  #     - |
+  #       set -eu
+  #       D=/data/upgrade
+  #       mkdir -p "$$D/bin"
+  #       # core runs as uid 10001 and must be able to write the request file.
+  #       chown -R 10001:10001 "$$D" 2>/dev/null || true
+  #       REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
+  #       IVL="$${YAGRA_UPGRADE_CHECK_SECS:-21600}"
+  #       SELF="$$(hostname)"
+  #       label() { docker inspect -f "{{index .Config.Labels \"$$1\"}}" "$$SELF" 2>/dev/null || true; }
+  #       PROJ="$$(label com.docker.compose.project)"
+  #       WORKDIR="$$(label com.docker.compose.project.working_dir)"
+  #       : "$${PROJ:=yagra}"
+  #
+  #       # The apply procedure, written out once so the throwaway container can run it and so an
+  #       # operator can read it here. Arguments: <tag> <run-id> <requested-by>.
+  #       cat > "$$D/bin/apply.sh" <<'APPLY'
+  #       set -u
+  #       TAG="$$1"; RUN="$$2"; BY="$$3"; D=/data/upgrade
+  #       say() { # <state> <step> <message>
+  #         printf '{"id":"%s","command":"apply","target":"%s","state":"%s","step":"%s","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
+  #           "$$RUN" "$$TAG" "$$1" "$$2" "$$3" "$$START" "$${FIN:-null}" "$$BY" > "$$D/status.json.tmp"
+  #         mv "$$D/status.json.tmp" "$$D/status.json"
+  #         printf '{"at":%s,"step":"%s","message":"%s"}\n' "$$(date +%s)" "$$2" "$$3" >> "$$D/log.ndjson"
+  #       }
+  #       fail() { FIN=$$(date +%s); say failed "$$1" "$$2"; exit 1; }
+  #       START=$$(date +%s); FIN=
+  #       say running start "requested by $$BY"
+  #
+  #       # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
+  #       #    it. The script ships inside the RUNNING core image, so the backup matches the version
+  #       #    being replaced. NOTE: this is a rollback aid, not a disaster-recovery backup — it
+  #       #    lands beside the database it protects.
+  #       say running backup "backing up before touching anything"
+  #       CORE_CID=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
+  #       [ -n "$$CORE_CID" ] || fail backup "cannot find the running core container"
+  #       docker cp "$$CORE_CID:/usr/share/yagra/yagra-backup.sh" /tmp/backup.sh 2>/dev/null \
+  #         || fail backup "this core image ships no backup script; upgrade from the command line"
+  #       ( cd /project && sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
+  #
+  #       # 2. Pull all three images BEFORE anything is stopped, so a bad tag or an unreachable
+  #       #    registry costs nothing.
+  #       say running pull "pulling $$TAG"
+  #       for i in core poller web; do
+  #         docker pull "$$REPO/yagra-$$i:$$TAG" >/dev/null 2>&1 || fail pull "cannot pull yagra-$$i:$$TAG"
+  #       done
+  #
+  #       # 3. Take the compose file OUT OF THE TARGET IMAGE (ADR-050 decision 5) so the composition
+  #       #    and the images are always the same version. The host's .env is never touched.
+  #       say running compose "installing the $$TAG composition"
+  #       CID=$$(docker create "$$REPO/yagra-core:$$TAG") || fail compose "cannot stage the target image"
+  #       docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" /project/docker-compose.deploy.yml \
+  #         || { docker rm "$$CID" >/dev/null 2>&1; fail compose "the target image ships no compose file"; }
+  #       docker rm "$$CID" >/dev/null 2>&1 || true
+  #
+  #       # 4. Recreate. `-p` is load-bearing: without it compose derives the project from the
+  #       #    directory name, forks a second empty stack and orphans the real volumes.
+  #       say running compose "recreating containers"
+  #       ( cd /project && YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) \
+  #         || fail compose "docker compose up failed; the previous images are still on this host"
+  #
+  #       # 5. Verify the thing that is actually running — not that a command returned 0. A green
+  #       #    pipeline has shipped a stale binary in this project before (ADR-036), so the check is
+  #       #    the running container's own provenance marker, not the tag we asked for.
+  #       say running verify "waiting for core to come back"
+  #       i=0
+  #       while [ $$i -lt 60 ]; do
+  #         NEW=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
+  #         if [ -n "$$NEW" ] && docker exec "$$NEW" yagra-core healthcheck >/dev/null 2>&1; then
+  #           REF=$$(docker exec "$$NEW" cat /etc/yagra-source-ref 2>/dev/null || echo unknown)
+  #           PROF=$$(docker exec "$$NEW" cat /etc/yagra-build-profile 2>/dev/null || echo unknown)
+  #           FIN=$$(date +%s); say succeeded verify "now running $$TAG ($$PROF, $$REF)"; exit 0
+  #         fi
+  #         i=$$((i+1)); sleep 5
+  #       done
+  #       fail verify "core did not become healthy within 5 minutes; it may still be starting"
+  #       APPLY
+  #
+  #       heartbeat() {
+  #         printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s}\n' "$$(date +%s)" "$$REPO" "$$IVL" > "$$D/current.json.tmp"
+  #         mv "$$D/current.json.tmp" "$$D/current.json"
+  #       }
+  #
+  #       # Best effort by design: an air-gapped site has no registry to list, and the operator can
+  #       # still name a tag by hand. A failure here is reported, never fatal.
+  #       list_releases() {
+  #         NAME="$${REPO#*/}/yagra-core"
+  #         TOK=$$(wget -qO- "https://ghcr.io/token?scope=repository:$$NAME:pull&service=ghcr.io" 2>/dev/null \
+  #                | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+  #         TAGS=$$(wget -qO- --header="Authorization: Bearer $$TOK" "https://ghcr.io/v2/$$NAME/tags/list" 2>/dev/null \
+  #                 | tr ',' '\n' | sed -n 's/.*"\(v[0-9][0-9.]*[0-9a-z-]*\)".*/\1/p' | sort -Vr | head -20)
+  #         if [ -z "$$TAGS" ]; then
+  #           printf '{"written_at":%s,"releases":[],"error":"could not reach the registry"}\n' "$$(date +%s)" > "$$D/available.json.tmp"
+  #         else
+  #           ITEMS=$$(for t in $$TAGS; do printf '{"tag":"%s","core_digest":null},' "$$t"; done | sed 's/,$$//')
+  #           printf '{"written_at":%s,"releases":[%s],"error":null}\n' "$$(date +%s)" "$$ITEMS" > "$$D/available.json.tmp"
+  #         fi
+  #         mv "$$D/available.json.tmp" "$$D/available.json"
+  #       }
+  #
+  #       # Read one field out of the request file WITHOUT sourcing it. Sourcing would turn write
+  #       # access to this volume into code execution.
+  #       field() { sed -n "s/^$$1=//p" "$$D/request" | head -1; }
+  #
+  #       reject() {
+  #         printf '{"id":"%s","command":"apply","target":null,"state":"rejected","step":"validate","message":"%s","started_at":%s,"finished_at":%s,"requested_by":null}\n' \
+  #           "$${1:-unknown}" "$$2" "$$(date +%s)" "$$(date +%s)" > "$$D/status.json.tmp"
+  #         mv "$$D/status.json.tmp" "$$D/status.json"
+  #       }
+  #
+  #       handle() {
+  #         SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
+  #         TAG=$$(field tag); BY=$$(field requested_by)
+  #         rm -f "$$D/request"
+  #         # An upgrade replaces core but NOT this container, so a new core paired with an old
+  #         # updater is structural. Refuse clearly rather than half-executing a misread request.
+  #         [ "$$SCHEMA" = "1" ] || { reject "$$ID" "this updater is older than the core that made the request; update it by hand"; return; }
+  #         [ "$$CMD" = "apply" ] || { reject "$$ID" "unsupported command"; return; }
+  #         echo "$$ID" | grep -Eq '^[0-9a-f-]{36}$$' || { reject unknown "malformed run id"; return; }
+  #         echo "$$TAG" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' \
+  #           || { reject "$$ID" "not a release tag"; return; }
+  #         echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
+  #         [ -n "$$WORKDIR" ] || { reject "$$ID" "cannot locate the compose project directory"; return; }
+  #         # Detached, outside this compose project, so `up -d --remove-orphans` cannot kill the
+  #         # work — including when it recreates this very container.
+  #         docker run --rm -d --name "yagra-upgrade-$$ID" \
+  #           -v /var/run/docker.sock:/var/run/docker.sock \
+  #           -v "$${PROJ}_upgradedata:/data/upgrade" \
+  #           -v "$$WORKDIR:/project" \
+  #           -e "REPO=$$REPO" -e "PROJ=$$PROJ" \
+  #           docker:28-cli sh /data/upgrade/bin/apply.sh "$$TAG" "$$ID" "$$BY" >/dev/null \
+  #           || reject "$$ID" "could not start the upgrade container"
+  #       }
+  #
+  #       heartbeat; list_releases
+  #       LAST=$$(date +%s)
+  #       while true; do
+  #         [ -f "$$D/request" ] && handle
+  #         NOW=$$(date +%s)
+  #         if [ $$((NOW - LAST)) -ge "$$IVL" ]; then heartbeat; list_releases; LAST=$$NOW; fi
+  #         # A short beat keeps the request file responsive; the registry check keeps its own clock.
+  #         sleep 5
+  #         heartbeat
+  #       done
+
 volumes:
   pgdata:
   vmdata:
@@ -436,3 +630,7 @@ volumes:
              # core rewrites it on the next start.
   logdata:   # core's rotated log files (ADR-045), read back by the support bundle. Bounded by
              # YAGRA_LOG_RETAIN_HOURS hourly files; deleting it costs only the retained history.
+  upgradedata: # upgrade request/status hand-off between core and the yagra-updater sidecar
+             # (ADR-050). Holds no configuration and no secret — deleting it loses only the record
+             # of the last run. It exists even with the sidecar commented out, which costs nothing
+             # and means enabling the sidecar later needs no change to core.

@@ -10,6 +10,39 @@
 
 ## Unreleased
 
+### New Features
+- **Settings ▸ Upgrade — Yagra can now say which build is running and how far back it can be taken**
+  (ADR-050). `GET /api/v1/system/upgrade` (manage-configuration) reports the running binary's commit
+  and build profile, how many migrations are applied, and the *compatibility floor* — the oldest
+  version that can still run against this database. Until now the commit and build profile were
+  readable only from inside a support bundle behind three permissions, which meant the question a
+  green pipeline cannot answer ("is this actually the binary I built?") had no cheap way to be
+  asked. The same answers are on the MCP surface as `get_system_health(section="upgrade")`.
+- **Upgrading from the WebUI, off by default.** A new `yagra-updater` sidecar — shipped **commented
+  out** in `docker-compose.deploy.yml` — carries out backup → pull → compose swap → recreate →
+  verify when `POST /api/v1/system/upgrade` asks it to. **core never gets the Docker socket**; the
+  sidecar holds it, exactly as `ipasn-updater` holds the only outbound network path, and deleting
+  the service removes the capability. Enabling it creates a path from Yagra's Admin role to host
+  root that does not otherwise exist, so read the block before uncommenting it. The write endpoint
+  requires manage-configuration **and** manage-credentials, and stays off the MCP surface.
+
+### Improvements
+- **Downgrades are possible again, within a declared window.** A new `schema_compat` table lets a
+  migration that narrows the schema declare the oldest version that can still run afterwards;
+  saying nothing means reversible, which is true of all 77 migrations shipped so far. core now
+  starts against a database migrated by a *newer* core when — and only when — every unrecognised
+  migration is newer than everything it embeds. Anything else (a gap in the middle, a foreign
+  history) still refuses to start, as it must. **Nothing is deleted by going back:** columns the
+  newer version added stay in place, unread, and become visible again on the next upgrade.
+  ⚠️ This takes effect for downgrades *to* releases that contain it, so the window opens from the
+  release after this one.
+- **`yagra-core migrations`** prints the migration set a binary embeds as JSON, with no database and
+  no configuration — so an upgrade can be planned by running it inside the target image before
+  anything is touched.
+- Maintenance windows gained a fleet-wide `system` scope, used by the upgrade path to silence
+  self-monitoring for a bounded period. It is deliberately not offered in the add-window dialog:
+  nothing but an upgrade should be able to silence the whole fleet.
+
 ## v0.2.1 — The inventory says what each node is, tabs a kind cannot fill are gone, and ＋ adds a node
 
 ### Breaking changes

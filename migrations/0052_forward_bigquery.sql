@@ -24,6 +24,9 @@
 -- five sealed columns as the SNMP community — envelope-encrypted with the KEK, never returned by the
 -- API, never logged. Leaving it unset selects GCE/GKE Workload Identity instead, which stores no
 -- secret at all and is the better deployment where it is available.
+--
+-- reversible: the DROP CONSTRAINT immediately re-adds a WIDER check, which no binary can fail to
+-- satisfy. Nothing is removed and no column is retyped (ADR-050 decision 7).
 ALTER TABLE forward_destinations DROP CONSTRAINT IF EXISTS forward_destinations_dest_kind_check;
 ALTER TABLE forward_destinations ADD CONSTRAINT forward_destinations_dest_kind_check
     CHECK (dest_kind IN ('syslog_udp', 'syslog_tcp', 'syslog_tls', 'snmp_trap_udp', 'flow_udp',

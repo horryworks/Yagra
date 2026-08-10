@@ -214,6 +214,20 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     },
     FoldedRead {
         tool: "get_system_health",
+        arg: "upgrade",
+        method: "GET",
+        path: "/api/v1/system/upgrade",
+        // The second `ManageConfig` member of this family, for the same reason as `forwarding`: it
+        // answers with build provenance and — once the updater sidecar lands — the registry, the
+        // resolved digests and the store images the target compose pins. That is the deployment's
+        // configuration, not a health counter (ADR-050 decision 13).
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_system_health",
         arg: "version",
         method: "GET",
         path: "/api/v1/version",

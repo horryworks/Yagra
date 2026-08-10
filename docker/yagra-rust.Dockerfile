@@ -116,6 +116,11 @@ RUN --mount=type=cache,target=/app/target \
     cargo build --profile ${CARGO_PROFILE} --bin yagra-core --bin yagra-poller \
     && cp target/${CARGO_PROFILE}/yagra-core /app/yagra-core \
     && cp target/${CARGO_PROFILE}/yagra-poller /app/yagra-poller
+# The composition and the backup procedure travel WITH the binaries (ADR-050 decision 5). An
+# upgrade takes the compose file out of the image it is installing, so the two can never be a
+# version apart — which is the failure ADR-044 hit (a new compose publishing 443 with an old web
+# container that never listened on it). Staged under /app so both `bins` sources agree on the path.
+RUN cp docker-compose.deploy.yml scripts/yagra-backup.sh /app/
 
 # ── prebuilt — take binaries compiled outside by scripts/flash-build.sh (BIN_SRC=prebuilt) ──
 #
@@ -138,6 +143,11 @@ ARG CARGO_PROFILE=ci-fast
 RUN echo "${SOURCE_REF}" > /etc/yagra-source-ref \
  && echo "${CARGO_PROFILE}" > /etc/yagra-build-profile
 COPY --chmod=0755 yagra-core yagra-poller /app/
+# Same two release artifacts the `build` stage stages, put there by scripts/flash-build.sh. Both
+# stages must offer them at the same path: the runtime stage below copies from whichever won, and
+# must not know which that was. Getting this wrong breaks ONLY the flash path, because BuildKit
+# never evaluates the stage it did not select.
+COPY docker-compose.deploy.yml yagra-backup.sh /app/
 
 # ── The selector. BuildKit builds only the stage this resolves to. ──
 FROM ${BIN_SRC} AS bins
@@ -183,10 +193,15 @@ RUN apt-get update \
 RUN groupadd -r -g 10001 yagra \
  && useradd -r -u 10001 -g 10001 yagra \
  && install -d -o yagra -g yagra -m 0750 /var/lib/yagra/tls \
- && install -d -o yagra -g yagra -m 0750 /var/log/yagra
+ && install -d -o yagra -g yagra -m 0750 /var/log/yagra \
+ && install -d -o yagra -g yagra -m 0770 /data/upgrade
 COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
 COPY --from=bins /app/yagra-core /usr/local/bin/yagra-core
+# Release artifacts an upgrade reads back out of this image (ADR-050 decisions 5 and 9): the
+# composition for the version being installed, and the backup procedure of record (ADR-040) for the
+# version being replaced. Copied out with `docker cp`, never executed here.
+COPY --from=bins /app/docker-compose.deploy.yml /app/yagra-backup.sh /usr/share/yagra/
 USER yagra
 EXPOSE 8080
 # Liveness: the binary probes its own /healthz (dependency-free — the slim runtime has no curl/wget).

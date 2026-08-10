@@ -109,6 +109,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
         super::session::Doc::openapi(),
         super::ldap::Doc::openapi(),
         super::webtls::Doc::openapi(),
+        super::upgrade::Doc::openapi(),
         super::oidc::Doc::openapi(),
         super::system::Doc::openapi(),
         super::support::Doc::openapi(),

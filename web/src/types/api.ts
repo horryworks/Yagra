@@ -741,6 +741,19 @@ export type SystemHealth = components['schemas']['SystemHealth'];
  *  (= the workspace version). Public — no secrets. The WebUI pairs this with its own build version. */
 export type VersionInfo = components['schemas']['VersionInfo'];
 
+/** What this deployment is running and how far back it can be taken (`GET /api/v1/system/upgrade`,
+ *  ADR-050). `ManageConfig` — it answers with build provenance and, once the updater sidecar lands,
+ *  the registry and resolved digests, which is deployment configuration rather than a health
+ *  counter. */
+export type UpgradeStatus = components['schemas']['UpgradeStatusResponse'];
+
+/** The oldest core version that can still run this database, and which migration decided it.
+ *  `null` on `SchemaState.compat` means every applied migration is reversible. */
+export type CompatFloor = components['schemas']['CompatFloor'];
+
+/** The accepted upgrade run (`POST /api/v1/system/upgrade`). */
+export type UpgradeRunAccepted = components['schemas']['RunAccepted'];
+
 // ── Host self-observability (Yagra monitoring its own core + pollers) ──────────
 
 /** Usage of one watched filesystem (or a store-size proxy). `size_bytes === 0` ⇒ capacity unknown

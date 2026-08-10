@@ -24,7 +24,8 @@
       "group": "グループ",
       "groupTag": "グループ（タグ）",
       "node": "ノード",
-      "profile": "プロファイル"
+      "profile": "プロファイル",
+      "system": "システム全体"
     },
     "actions": {
       "enable": "有効化",

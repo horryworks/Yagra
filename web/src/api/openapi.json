@@ -16076,6 +16076,137 @@
         }
       }
     },
+    "/api/v1/system/upgrade": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "What this deployment is running, and how far back it can be taken.",
+        "operationId": "get_upgrade",
+        "responses": {
+          "200": {
+            "description": "The running build, the applied schema, and the compatibility floor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpgradeStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the manage-configuration permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no metadata store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Move this deployment to a different release.",
+        "description": "Hands the request to the privileged updater container and returns immediately — the work\noutlives this process, which restarts partway through. Poll `GET` for the outcome.",
+        "operationId": "apply_upgrade",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyUpgrade"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; the updater will carry it out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a published release tag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks manage-configuration or manage-credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A run is already in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The updater is not deployed, not running, or this core is not the leader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/thresholds": {
       "get": {
         "tags": [
@@ -18353,6 +18484,19 @@
           }
         }
       },
+      "ApplyUpgrade": {
+        "type": "object",
+        "description": "A request to move this deployment to a particular release.",
+        "required": [
+          "target_tag"
+        ],
+        "properties": {
+          "target_tag": {
+            "type": "string",
+            "description": "The release tag to move to, e.g. `v0.2.2`. Must be a published release tag; the repository\nit is fetched from is fixed by the deployment and cannot be set here."
+          }
+        }
+      },
       "AuditRow": {
         "type": "object",
         "description": "One audit row (API shape; `at` is RFC 3339 text at the edge).",
@@ -18413,6 +18557,54 @@
         "properties": {
           "authorize_url": {
             "type": "string"
+          }
+        }
+      },
+      "AvailableRelease": {
+        "type": "object",
+        "description": "One release the sidecar found, with the digests it resolved.",
+        "required": [
+          "tag"
+        ],
+        "properties": {
+          "core_digest": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Resolved image digest for `yagra-core` at that tag; `null` when it could not be resolved."
+          },
+          "tag": {
+            "type": "string",
+            "description": "The release tag (`v0.2.2`)."
+          }
+        }
+      },
+      "AvailableVersions": {
+        "type": "object",
+        "description": "The versions the sidecar last saw in the registry (`available.json`).",
+        "required": [
+          "written_at"
+        ],
+        "properties": {
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the list is empty or stale, when the sidecar could not reach the registry. A closed\nnetwork has no registry, so this is an ordinary state rather than a fault."
+          },
+          "releases": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AvailableRelease"
+            },
+            "description": "Releases found, newest first."
+          },
+          "written_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds when the list was refreshed."
           }
         }
       },
@@ -19116,6 +19308,30 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CompatFloor": {
+        "type": "object",
+        "description": "The oldest core version that can still run this database, and which migration decided that.",
+        "required": [
+          "min_core",
+          "reason",
+          "since_version"
+        ],
+        "properties": {
+          "min_core": {
+            "type": "string",
+            "description": "Oldest core version that can start against this schema, as bare semver (`\"0.3.0\"`)."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why that migration narrowed the schema."
+          },
+          "since_version": {
+            "type": "integer",
+            "format": "int64",
+            "description": "The migration that imposed the floor."
           }
         }
       },
@@ -26989,6 +27205,137 @@
           }
         }
       },
+      "RunAccepted": {
+        "type": "object",
+        "description": "The accepted run.",
+        "required": [
+          "id",
+          "target_tag"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Correlation id for this run; it appears on the status the updater writes."
+          },
+          "maintenance_window_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fleet-wide maintenance window opened for the duration, or `null` if one could not be\nopened (the run still proceeds — silencing is a courtesy, not a precondition)."
+          },
+          "target_tag": {
+            "type": "string",
+            "description": "The release the run targets."
+          }
+        }
+      },
+      "RunStatus": {
+        "type": "object",
+        "description": "The most recent run the sidecar performed (`status.json`).\n\nSurvives core restarting mid-operation, which is the whole reason it is a file: the process that\nasked for the upgrade is not the process that sees it finish (ADR-050 decision 3).",
+        "required": [
+          "id",
+          "command",
+          "state",
+          "started_at"
+        ],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "`check`, `apply` or `rollback`."
+          },
+          "finished_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds when it ended; `null` while it is still running."
+          },
+          "id": {
+            "type": "string",
+            "description": "The run id core generated when it wrote the request."
+          },
+          "message": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Human-readable detail, especially the reason for a failure or refusal."
+          },
+          "requested_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Who asked for it."
+          },
+          "started_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix seconds when the run began."
+          },
+          "state": {
+            "type": "string",
+            "description": "`running`, `succeeded`, `failed` or `rejected`."
+          },
+          "step": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Which phase the run reached — `backup`, `pull`, `compose`, `verify`."
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The release the run targets, when it targets one."
+          }
+        }
+      },
+      "RunningBuild": {
+        "type": "object",
+        "description": "Which binary is running.",
+        "required": [
+          "core_version",
+          "uptime_seconds"
+        ],
+        "properties": {
+          "build_profile": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`release` or `ci-fast` (`/etc/yagra-build-profile`); `null` outside a container."
+          },
+          "core_version": {
+            "type": "string",
+            "description": "The crate version this core was compiled from."
+          },
+          "hostname": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The container's hostname, which is how a replica identifies itself in the logs."
+          },
+          "source_ref": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The commit the image was built from (`/etc/yagra-source-ref`); `null` outside a container."
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Seconds since this process started.",
+            "minimum": 0
+          }
+        }
+      },
       "SavedFinding": {
         "type": "object",
         "description": "One finding as the cross-run search returns it: the finding, plus the run it came from.",
@@ -27162,6 +27509,39 @@
             "format": "int64",
             "description": "Working-set snapshots core has published to pollers since start (ADR-020).",
             "minimum": 0
+          }
+        }
+      },
+      "SchemaState": {
+        "type": "object",
+        "description": "What this database's migration history says about itself.",
+        "required": [
+          "applied_count"
+        ],
+        "properties": {
+          "applied_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many migrations have been applied."
+          },
+          "compat": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CompatFloor",
+                "description": "The binding compatibility floor, or `null` when every applied migration is reversible."
+              }
+            ]
+          },
+          "latest_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The newest applied migration version; `null` only on a database with none."
           }
         }
       },
@@ -28619,6 +28999,98 @@
           }
         }
       },
+      "UpdaterInfo": {
+        "type": "object",
+        "description": "Whether the privileged updater container is deployed, and whether it is alive.",
+        "required": [
+          "present",
+          "fresh"
+        ],
+        "properties": {
+          "check_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "How often it re-checks the registry, in seconds.",
+            "minimum": 0
+          },
+          "fresh": {
+            "type": "boolean",
+            "description": "Whether its last report is recent enough for it to be considered alive."
+          },
+          "last_seen": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix seconds of its last report."
+          },
+          "present": {
+            "type": "boolean",
+            "description": "Whether the updater has ever reported. `false` means it is not deployed at all — the\ndefault, since the mechanism is opt-in."
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The image repository it is pinned to. Fixed by the host environment and not settable over\nthis API."
+          }
+        }
+      },
+      "UpgradeStatusResponse": {
+        "type": "object",
+        "description": "The state of the upgrade mechanism and of this deployment's schema.",
+        "required": [
+          "enabled",
+          "updater",
+          "current",
+          "schema"
+        ],
+        "properties": {
+          "available": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AvailableVersions",
+                "description": "Releases the updater last saw in the registry; `null` when it has never looked."
+              }
+            ]
+          },
+          "current": {
+            "$ref": "#/components/schemas/RunningBuild",
+            "description": "The running build."
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether an upgrade can be requested from here — the updater is deployed **and** alive.\nWhen `false`, this response describes only what is already installed."
+          },
+          "last_run": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/RunStatus",
+                "description": "The most recent run, finished or in flight; `null` when none has ever been requested."
+              }
+            ]
+          },
+          "schema": {
+            "$ref": "#/components/schemas/SchemaState",
+            "description": "Applied migrations and the compatibility floor they imply."
+          },
+          "updater": {
+            "$ref": "#/components/schemas/UpdaterInfo",
+            "description": "The updater container's own state."
+          }
+        }
+      },
       "UrlCheckConfig": {
         "type": "object",
         "description": "A node's URL-monitoring configuration (1:1 with the node). No secrets: the optional auth\n`credential` is a reference; core resolves/inlines the decrypted value (ADR-018/020).",
@@ -28958,7 +29430,8 @@
           "node",
           "profile",
           "group",
-          "group_id"
+          "group_id",
+          "system"
         ]
       }
     },

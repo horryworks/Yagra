@@ -10,5 +10,8 @@
 -- the stale row — delete it here. Migrations run before the seed (main.rs). The name is specific to
 -- our built-in template, so operator-created metrics are not affected. A node's resolved collection
 -- set simply stops including it; any past values in the TSDB are harmless and just stop being written.
+--
+-- reversible: deletes one built-in catalog row, not schema — and an older binary re-seeds its own
+-- built-ins on boot, so going back restores it (ADR-050 decision 7).
 
 DELETE FROM collection_template_items WHERE metric_name = 'huawei_mem_size';

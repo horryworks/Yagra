@@ -30,15 +30,46 @@ pub enum WindowScope {
     /// UUID) so it can't be confused with the tag-based `group` scope.
     #[serde(rename = "group_id")]
     FolderGroup,
+    /// Every node, with no id at all — the deployment itself is out of service.
+    ///
+    /// Added for ADR-050: an upgrade restarts core and every poller, and alerting about that is
+    /// noise an operator cannot act on. The other four scopes all answer "which nodes", and none of
+    /// them can say "all of them" without enumerating something that changes underneath.
+    ///
+    /// ⚠️ **The window hides real outages too**, which is why the upgrade path fills `ends_at`
+    /// before it starts rather than closing the window when it finishes: a run that dies partway
+    /// must not leave the fleet silent indefinitely.
+    System,
 }
 
 impl WindowScope {
+    /// Parse the stored `scope_level` token.
+    ///
+    /// The fallback is over a `&str` from the database, not over this enum, so it is not the
+    /// wildcard `coding-conventions.md` bans — it is the lenient read that keeps one unrecognised
+    /// row from failing a whole page. It does mean an **older core reads a `system` window as a
+    /// profile window whose id matches no profile**, i.e. suppresses nothing. That is the safe
+    /// direction: during a rolling upgrade the old binary alerts too much rather than too little.
     fn parse(s: &str) -> Self {
         match s {
             "node" => WindowScope::Node,
             "group" => WindowScope::Group,
             "group_id" => WindowScope::FolderGroup,
+            "system" => WindowScope::System,
             _ => WindowScope::Profile,
+        }
+    }
+
+    /// The stored token, which must match the serde tag — the column and the JSON field are
+    /// produced by two different mechanisms (testing.md).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WindowScope::Node => "node",
+            WindowScope::Profile => "profile",
+            WindowScope::Group => "group",
+            WindowScope::FolderGroup => "group_id",
+            WindowScope::System => "system",
         }
     }
 }
@@ -281,6 +312,8 @@ pub fn nodes_in_maintenance(scopes: &[(WindowScope, String)], nodes: &[Node]) ->
             }
             WindowScope::Group => node.tags.values().any(|v| v == scope_id),
             WindowScope::FolderGroup => false,
+            // No id to match: the deployment itself is out of service, so every node is.
+            WindowScope::System => true,
         });
         if covered {
             out.insert(node.id);

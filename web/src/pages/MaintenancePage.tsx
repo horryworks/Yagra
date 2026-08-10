@@ -110,6 +110,8 @@ export function MaintenancePage() {
     if (w.scope_level === 'group') return t('maintenance.scope.groupTag');
     if (w.scope_level === 'node') return t('maintenance.scope.node');
     if (w.scope_level === 'profile') return t('maintenance.scope.profile');
+    // Opened by the upgrade path, never by hand — it is not offered in the add dialog (ADR-050).
+    if (w.scope_level === 'system') return t('maintenance.scope.system');
     return w.scope_level;
   };
 

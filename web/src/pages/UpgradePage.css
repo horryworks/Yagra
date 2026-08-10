@@ -1,0 +1,42 @@
+/* Settings ▸ Upgrade (ADR-050). Same label/value rhythm as Settings ▸ About — the two answer
+   neighbouring questions and should not look like different products. */
+
+.upgrade-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.upgrade-row {
+  display: flex;
+  align-items: baseline;
+  gap: 24px;
+}
+
+.upgrade-label {
+  flex: 0 0 180px;
+  font-size: var(--font-sm);
+}
+
+.upgrade-value {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.upgrade-value.mono {
+  font-size: var(--font-sm);
+}
+
+.upgrade-note {
+  margin: 0;
+  max-width: 70ch;
+  line-height: 1.5;
+}
+
+.upgrade-hint {
+  margin: 6px 0 0;
+  max-width: 70ch;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}

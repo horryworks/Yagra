@@ -58,6 +58,11 @@ pub(crate) fn routes() -> Router<ApiState> {
 /// The scope levels a maintenance window may target. `group_id` is a folder-group UUID (resolved
 /// recursively — the All Nodes right-click scope); the other three mirror threshold scoping
 /// (ADR-013).
+///
+/// ⚠️ **`system` is deliberately absent.** A fleet-wide window exists (ADR-050) but is opened only
+/// by the upgrade path, which knows its own end time. Leaving it out of this list means no caller —
+/// scoped or not — can silence the entire fleet through the ordinary CRUD surface, and the list
+/// stays the answer to "what may an operator create", which is what the error message promises.
 const WINDOW_SCOPE_LEVELS: [&str; 4] = ["profile", "group", "node", "group_id"];
 /// The scope kinds a mute may target.
 const MUTE_SCOPE_KINDS: [&str; 2] = ["node", "group"];
@@ -116,7 +121,9 @@ fn window_target(w: &crate::maintenance::StoredWindow) -> ScopeTarget {
             .parse::<Uuid>()
             .map_or(ScopeTarget::Unbounded, ScopeTarget::Group),
         // A device class, and a free-form tag value, respectively — each an open-ended node set.
-        WindowScope::Profile | WindowScope::Group => ScopeTarget::Unbounded,
+        // `System` joins them for the same reason and the strongest version of it: it names the
+        // whole fleet, so no group scope narrows it.
+        WindowScope::Profile | WindowScope::Group | WindowScope::System => ScopeTarget::Unbounded,
     }
 }
 

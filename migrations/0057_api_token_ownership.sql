@@ -24,6 +24,9 @@
 -- still accept an expired or MCP-only token on `/mcp`. The window is one deploy long and each of
 -- these is a defence-in-depth layer rather than the only gate (revocation still works on both
 -- versions), so this is accepted rather than blocked behind a two-phase migration.
+--
+-- reversible: the UPDATE writes only to `owner_user_id`, a column this migration just added, so no
+-- value an older binary reads is rewritten (ADR-050 decision 7).
 
 ALTER TABLE api_tokens
     ADD COLUMN surfaces      TEXT[] NOT NULL DEFAULT '{mcp}',

@@ -1868,8 +1868,11 @@ impl YagraMcp {
                        disk), host_trends (one host over time — needs `instance`, optional \
                        `from`/`to`/`step`), forwarding (relay delivery status), credentials \
                        (whether stored credentials still decrypt), version, deployment (which \
-                       optional tiers are enabled). Sections require different permissions: most \
-                       need view, forwarding needs manage-config, credentials needs \
+                       optional tiers are enabled), upgrade (which binary is actually running — \
+                       commit and build profile, not just the version — how much schema is \
+                       applied, and whether this deployment could still be taken back to an \
+                       earlier release). Sections require different permissions: most need view, \
+                       forwarding and upgrade need manage-config, credentials needs \
                        manage-credentials."
     )]
     async fn get_system_health(
@@ -2005,6 +2008,13 @@ impl YagraMcp {
             HealthSection::Deployment => {
                 ok_json(TOOL, &crate::api::health::client_config(&self.state).await)
             }
+            HealthSection::Upgrade => match self.state.upgrade.as_ref() {
+                Some(u) => match crate::api::upgrade::upgrade_status(u, self.state.started).await {
+                    Ok(r) => ok_json(TOOL, &r),
+                    Err(e) => tool_unavailable(TOOL, &format!("{e}")),
+                },
+                None => tool_unavailable(TOOL, "the upgrade view requires live mode"),
+            },
         }
     }
 
@@ -2780,6 +2790,7 @@ enum HealthSection {
     Credentials,
     Version,
     Deployment,
+    Upgrade,
 }
 
 impl HealthSection {
@@ -2798,6 +2809,7 @@ impl HealthSection {
         "credentials",
         "version",
         "deployment",
+        "upgrade",
     ];
 
     fn parse(s: &str) -> Option<Self> {
@@ -2815,6 +2827,7 @@ impl HealthSection {
             "credentials" => Self::Credentials,
             "version" => Self::Version,
             "deployment" => Self::Deployment,
+            "upgrade" => Self::Upgrade,
             _ => return None,
         })
     }
@@ -2835,6 +2848,7 @@ impl HealthSection {
             Self::Credentials => "credentials",
             Self::Version => "version",
             Self::Deployment => "deployment",
+            Self::Upgrade => "upgrade",
         }
     }
 }
@@ -3728,6 +3742,7 @@ mod tests {
             enable_mcp: true,
             rca: None,
             webtls: None,
+            upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
         }
@@ -4512,7 +4527,7 @@ mod tests {
         }
         assert_eq!(
             HealthSection::NAMES.len(),
-            13,
+            14,
             "the advertised section list changed; check the description and folded.rs together"
         );
     }

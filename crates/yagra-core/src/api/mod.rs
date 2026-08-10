@@ -75,6 +75,7 @@ pub(crate) mod system;
 pub(crate) mod tests_support;
 pub(crate) mod thresholds;
 pub(crate) mod topology;
+pub(crate) mod upgrade;
 pub(crate) mod users;
 pub(crate) mod util;
 mod webtls;
@@ -302,6 +303,9 @@ pub struct ApiState {
     /// double-do, and a standby that starts first on a fresh database still has to be able to
     /// bootstrap one or the web container waits forever.
     pub webtls: Option<Arc<crate::webtls::WebTlsRepo>>,
+    /// Migration history and the compatibility floor it implies (ADR-050); `None` in skeleton mode.
+    /// Read-only, so every core answers — there is nothing here for a standby to double-do.
+    pub upgrade: Option<Arc<crate::upgrade::UpgradeRepo>>,
     /// The process's Prometheus registry handle, so the support bundle (ADR-045) can carry the same
     /// scrape `/metrics` serves. `None` only where there is no recorder to read (the API tests).
     ///
@@ -369,6 +373,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(session::routes())
         .merge(ldap::routes())
         .merge(webtls::routes())
+        .merge(upgrade::routes())
         .merge(oidc::routes())
         .merge(system::routes())
         // The support-bundle download (ADR-045). Its own module because its guard is the union of
@@ -570,6 +575,7 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
         }
@@ -606,6 +612,7 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
         };
@@ -640,6 +647,7 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
         };

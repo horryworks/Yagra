@@ -24,7 +24,8 @@
       "group": "group",
       "groupTag": "group (tag)",
       "node": "node",
-      "profile": "profile"
+      "profile": "profile",
+      "system": "whole deployment"
     },
     "actions": {
       "enable": "Enable",

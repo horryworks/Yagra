@@ -3191,6 +3191,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What this deployment is running, and how far back it can be taken. */
+        get: operations["get_upgrade"];
+        put?: never;
+        /**
+         * Move this deployment to a different release.
+         * @description Hands the request to the privileged updater container and returns immediately — the work
+         *     outlives this process, which restarts partway through. Poll `GET` for the outcome.
+         */
+        post: operations["apply_upgrade"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/thresholds": {
         parameters: {
             query?: never;
@@ -3927,6 +3949,14 @@ export interface components {
             default_poll_interval_secs: number;
             meraki_polling_enabled: boolean;
         };
+        /** @description A request to move this deployment to a particular release. */
+        ApplyUpgrade: {
+            /**
+             * @description The release tag to move to, e.g. `v0.2.2`. Must be a published release tag; the repository
+             *     it is fetched from is fixed by the deployment and cannot be set here.
+             */
+            target_tag: string;
+        };
         /** @description One audit row (API shape; `at` is RFC 3339 text at the edge). */
         AuditRow: {
             action: string;
@@ -3951,6 +3981,28 @@ export interface components {
         /** @description Where to send the browser to start the SSO handshake. */
         AuthorizeUrl: {
             authorize_url: string;
+        };
+        /** @description One release the sidecar found, with the digests it resolved. */
+        AvailableRelease: {
+            /** @description Resolved image digest for `yagra-core` at that tag; `null` when it could not be resolved. */
+            core_digest?: string | null;
+            /** @description The release tag (`v0.2.2`). */
+            tag: string;
+        };
+        /** @description The versions the sidecar last saw in the registry (`available.json`). */
+        AvailableVersions: {
+            /**
+             * @description Why the list is empty or stale, when the sidecar could not reach the registry. A closed
+             *     network has no registry, so this is an ordinary state rather than a fault.
+             */
+            error?: string | null;
+            /** @description Releases found, newest first. */
+            releases?: components["schemas"]["AvailableRelease"][];
+            /**
+             * Format: int64
+             * @description Unix seconds when the list was refreshed.
+             */
+            written_at: number;
         };
         /**
          * @description A keyword rule applied to a URL monitor's response body.
@@ -4246,6 +4298,18 @@ export interface components {
             /** Format: uuid */
             id: string;
             name: string;
+        };
+        /** @description The oldest core version that can still run this database, and which migration decided that. */
+        CompatFloor: {
+            /** @description Oldest core version that can start against this schema, as bare semver (`"0.3.0"`). */
+            min_core: string;
+            /** @description Why that migration narrowed the schema. */
+            reason: string;
+            /**
+             * Format: int64
+             * @description The migration that imposed the floor.
+             */
+            since_version: number;
         };
         /**
          * @description One `field op value` test. `value` is always a string so the config has a single JSON shape;
@@ -7501,6 +7565,66 @@ export interface components {
             error?: string | null;
             matched: boolean;
         };
+        /** @description The accepted run. */
+        RunAccepted: {
+            /** @description Correlation id for this run; it appears on the status the updater writes. */
+            id: string;
+            /**
+             * @description The fleet-wide maintenance window opened for the duration, or `null` if one could not be
+             *     opened (the run still proceeds — silencing is a courtesy, not a precondition).
+             */
+            maintenance_window_id?: string | null;
+            /** @description The release the run targets. */
+            target_tag: string;
+        };
+        /**
+         * @description The most recent run the sidecar performed (`status.json`).
+         *
+         *     Survives core restarting mid-operation, which is the whole reason it is a file: the process that
+         *     asked for the upgrade is not the process that sees it finish (ADR-050 decision 3).
+         */
+        RunStatus: {
+            /** @description `check`, `apply` or `rollback`. */
+            command: string;
+            /**
+             * Format: int64
+             * @description Unix seconds when it ended; `null` while it is still running.
+             */
+            finished_at?: number | null;
+            /** @description The run id core generated when it wrote the request. */
+            id: string;
+            /** @description Human-readable detail, especially the reason for a failure or refusal. */
+            message?: string | null;
+            /** @description Who asked for it. */
+            requested_by?: string | null;
+            /**
+             * Format: int64
+             * @description Unix seconds when the run began.
+             */
+            started_at: number;
+            /** @description `running`, `succeeded`, `failed` or `rejected`. */
+            state: string;
+            /** @description Which phase the run reached — `backup`, `pull`, `compose`, `verify`. */
+            step?: string | null;
+            /** @description The release the run targets, when it targets one. */
+            target?: string | null;
+        };
+        /** @description Which binary is running. */
+        RunningBuild: {
+            /** @description `release` or `ci-fast` (`/etc/yagra-build-profile`); `null` outside a container. */
+            build_profile?: string | null;
+            /** @description The crate version this core was compiled from. */
+            core_version: string;
+            /** @description The container's hostname, which is how a replica identifies itself in the logs. */
+            hostname?: string | null;
+            /** @description The commit the image was built from (`/etc/yagra-source-ref`); `null` outside a container. */
+            source_ref?: string | null;
+            /**
+             * Format: int64
+             * @description Seconds since this process started.
+             */
+            uptime_seconds: number;
+        };
         /** @description One finding as the cross-run search returns it: the finding, plus the run it came from. */
         SavedFinding: {
             /**
@@ -7591,6 +7715,20 @@ export interface components {
              * @description Working-set snapshots core has published to pollers since start (ADR-020).
              */
             snapshots_published_total: number;
+        };
+        /** @description What this database's migration history says about itself. */
+        SchemaState: {
+            /**
+             * Format: int64
+             * @description How many migrations have been applied.
+             */
+            applied_count: number;
+            compat?: null | components["schemas"]["CompatFloor"];
+            /**
+             * Format: int64
+             * @description The newest applied migration version; `null` only on a database with none.
+             */
+            latest_version?: number | null;
         };
         /**
          * @description Which slice of the inventory an account may see: everything, or a named set of node groups.
@@ -8251,6 +8389,47 @@ export interface components {
             /** Format: uuid */
             node_id?: string | null;
         };
+        /** @description Whether the privileged updater container is deployed, and whether it is alive. */
+        UpdaterInfo: {
+            /**
+             * Format: int64
+             * @description How often it re-checks the registry, in seconds.
+             */
+            check_interval_secs?: number | null;
+            /** @description Whether its last report is recent enough for it to be considered alive. */
+            fresh: boolean;
+            /**
+             * Format: int64
+             * @description Unix seconds of its last report.
+             */
+            last_seen?: number | null;
+            /**
+             * @description Whether the updater has ever reported. `false` means it is not deployed at all — the
+             *     default, since the mechanism is opt-in.
+             */
+            present: boolean;
+            /**
+             * @description The image repository it is pinned to. Fixed by the host environment and not settable over
+             *     this API.
+             */
+            repo?: string | null;
+        };
+        /** @description The state of the upgrade mechanism and of this deployment's schema. */
+        UpgradeStatusResponse: {
+            available?: null | components["schemas"]["AvailableVersions"];
+            /** @description The running build. */
+            current: components["schemas"]["RunningBuild"];
+            /**
+             * @description Whether an upgrade can be requested from here — the updater is deployed **and** alive.
+             *     When `false`, this response describes only what is already installed.
+             */
+            enabled: boolean;
+            last_run?: null | components["schemas"]["RunStatus"];
+            /** @description Applied migrations and the compatibility floor they imply. */
+            schema: components["schemas"]["SchemaState"];
+            /** @description The updater container's own state. */
+            updater: components["schemas"]["UpdaterInfo"];
+        };
         /**
          * @description A node's URL-monitoring configuration (1:1 with the node). No secrets: the optional auth
          *     `credential` is a reference; core resolves/inlines the decrypted value (ADR-018/020).
@@ -8434,7 +8613,7 @@ export interface components {
          *     rather than extending the shared [`yagra_common::ScopeLevel`].
          * @enum {string}
          */
-        WindowScope: "node" | "profile" | "group" | "group_id";
+        WindowScope: "node" | "profile" | "group" | "group_id" | "system";
     };
     responses: never;
     parameters: never;
@@ -20973,6 +21152,122 @@ export interface operations {
                 };
             };
             /** @description Inventory storage is unavailable (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_upgrade: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The running build, the applied schema, and the compatibility floor */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpgradeStatusResponse"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the manage-configuration permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no metadata store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    apply_upgrade: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyUpgrade"];
+            };
+        };
+        responses: {
+            /** @description Accepted; the updater will carry it out */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAccepted"];
+                };
+            };
+            /** @description Not a published release tag */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks manage-configuration or manage-credentials */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A run is already in flight */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The updater is not deployed, not running, or this core is not the leader */
             503: {
                 headers: {
                     [name: string]: unknown;

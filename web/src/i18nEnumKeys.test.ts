@@ -74,6 +74,9 @@ import enSettingsTokens from './locales/en/settings-tokens.json';
 import jaSettingsTokens from './locales/ja/settings-tokens.json';
 import enSettingsTls from './locales/en/settings-tls.json';
 import jaSettingsTls from './locales/ja/settings-tls.json';
+import enSettingsUpgrade from './locales/en/settings-upgrade.json';
+import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
+import { UPGRADE_BUILD_KINDS, UPGRADE_RUN_STATES } from './pages/upgradeStatus';
 import enSettingsAuth from './locales/en/settings-auth.json';
 import jaSettingsAuth from './locales/ja/settings-auth.json';
 import enSettingsAi from './locales/en/settings-ai.json';
@@ -467,6 +470,31 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSettingsTls, ja: jaSettingsTls };
     expectKeys('certificate source', locales, 'source.', TLS_CERT_SOURCES);
     expectKeys('certificate source hint', locales, 'sourceHint.', TLS_CERT_SOURCES);
+  });
+
+  it('every upgrade run state has a label (settings-upgrade:runState.*)', () => {
+    // The Upgrade page renders the updater's own run state, and it is the screen an operator is
+    // staring at while their monitoring is down. A state added to the sidecar without strings would
+    // render "runState.quiesced" at exactly that moment, in both locales, with parity passing.
+    expectKeys(
+      'upgrade run state',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'runState.',
+      UPGRADE_RUN_STATES,
+    );
+    // And the build kinds beside them, which are what separate a release from a flash build.
+    expectKeys(
+      'upgrade build kind',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'buildKind.',
+      UPGRADE_BUILD_KINDS,
+    );
+    expectKeys(
+      'upgrade build kind hint',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'buildKindHint.',
+      UPGRADE_BUILD_KINDS,
+    );
   });
 
   it('every account kind has a label (access:users.kind.*)', () => {

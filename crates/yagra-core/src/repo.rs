@@ -24,6 +24,54 @@ use crate::neighbors::AdjacencySettings;
 use crate::retention::RetentionSettings;
 use crate::topology_mode::TopologyMode;
 
+/// The migration set compiled into this binary.
+///
+/// One function rather than a second `sqlx::migrate!` call, because two call sites of that macro
+/// are two answers to "what does this build embed?" that nothing keeps equal. [`NodeRepo::migrate`]
+/// applies it; `yagra-core migrations` prints it **without a database**, which is what lets an
+/// upgrade be planned from the target image before anything is touched (ADR-050 decision 6).
+#[must_use]
+pub fn embedded_migrations() -> sqlx::migrate::Migrator {
+    sqlx::migrate!("../../migrations")
+}
+
+/// May this binary start against a database whose migration history it does not fully recognise?
+///
+/// sqlx refuses by default: `validate_applied_migrations` returns `VersionMissing` for any applied
+/// version the binary does not embed. That guard is a **policy check, not a data check** — under
+/// expand-contract (ADR-017) an `up` is additive, so an older binary reads a newer schema perfectly
+/// well; it simply never selects the new columns. The guard exists to catch *misconfiguration*, and
+/// the misconfigurations it catches are worth keeping.
+///
+/// So the relaxation is deliberately narrow (ADR-050 decision 7). `true` only when:
+///
+///  * at least one applied version is not embedded here, **and**
+///  * every such version is greater than the newest version this binary embeds.
+///
+/// That is exactly the shape of "the database is simply ahead of me" — a downgrade. Anything else
+/// (a hole in the middle, a version from a different migration set) still fails hard, because those
+/// are the real accidents: pointed at the wrong database, or handed someone else's migrations.
+///
+/// Checksum mismatches are unaffected — they surface as `VersionMismatch`, which `ignore_missing`
+/// does not touch. An edited applied migration still refuses to boot, as it must.
+fn relax_ignore_missing(embedded: &[i64], applied: &[i64]) -> bool {
+    let Some(newest_embedded) = embedded.iter().copied().max() else {
+        return false; // No embedded migrations at all: nothing to reason from.
+    };
+    let known: std::collections::BTreeSet<i64> = embedded.iter().copied().collect();
+    let mut saw_newer = false;
+    for version in applied {
+        if known.contains(version) {
+            continue;
+        }
+        if *version <= newest_embedded {
+            return false; // A gap *within* our own range — not a downgrade.
+        }
+        saw_newer = true;
+    }
+    saw_newer
+}
+
 /// A device-class/profile row for the API (id + name + role/vendor metadata).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ProfileSummary {
@@ -418,10 +466,51 @@ impl NodeRepo {
 
     /// Apply all embedded migrations (expand-contract, ADR-017). Embedded at compile
     /// time, so this needs no database at build.
+    ///
+    /// Starts in **downgrade-compatibility mode** when the database carries migrations this binary
+    /// does not embed *and every one of them is newer than everything it does* — see
+    /// [`relax_ignore_missing`] for why that condition is the whole safety argument.
     pub async fn migrate(&self) -> anyhow::Result<()> {
-        sqlx::migrate!("../../migrations").run(&self.pool).await?;
+        let mut migrator = embedded_migrations();
+        let embedded: Vec<i64> = migrator.iter().map(|m| m.version).collect();
+        let applied = self.applied_migration_versions().await;
+        if relax_ignore_missing(&embedded, &applied) {
+            let ahead: Vec<i64> = applied
+                .iter()
+                .copied()
+                .filter(|v| !embedded.contains(v))
+                .collect();
+            tracing::warn!(
+                versions = ?ahead,
+                core_version = env!("CARGO_PKG_VERSION"),
+                "this database was migrated by a NEWER core; starting in downgrade-compatibility \
+                 mode (ADR-050). Columns those migrations added are present but unread — upgrading \
+                 again makes them visible, and nothing is lost meanwhile."
+            );
+            migrator.set_ignore_missing(true);
+        }
+        migrator.run(&self.pool).await?;
         tracing::info!("database migrations applied");
         Ok(())
+    }
+
+    /// Versions recorded in `_sqlx_migrations`, ascending.
+    ///
+    /// Every failure collapses to "none", which is correct for the one case that matters — a fresh
+    /// database has no such table — and harmless for the rest: an empty answer only ever *disables*
+    /// the relaxation below, and a database that is genuinely unreachable fails a moment later in
+    /// `run` with a far better error than this function could produce.
+    async fn applied_migration_versions(&self) -> Vec<i64> {
+        match sqlx::query_scalar::<_, i64>("SELECT version FROM _sqlx_migrations ORDER BY version")
+            .fetch_all(&self.pool)
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::debug!(error = %e, "no migration history yet (fresh database?)");
+                Vec::new()
+            }
+        }
     }
 
     /// Column list shared by the full and paged node queries (`host(address)` strips any
@@ -1936,6 +2025,111 @@ mod tests {
         let shared = format!("clamp(1, {})", "NODE_SEARCH_MAX");
         // Both implementations clamp, and both clamp against the constant.
         assert_eq!(src.matches(&shared).count(), 2);
+    }
+
+    /// The downgrade relaxation opens for a database that is *ahead*, and for nothing else.
+    ///
+    /// Each case here is a misconfiguration the default guard exists to catch, so the assertion is
+    /// as much about the `false`s as the `true` (ADR-050 decision 7).
+    #[test]
+    fn the_ignore_missing_relaxation_only_opens_for_a_newer_database() {
+        let embedded = [1i64, 2, 3];
+
+        // The ordinary cases: nothing extra to forgive.
+        assert!(!relax_ignore_missing(&embedded, &[]), "fresh database");
+        assert!(
+            !relax_ignore_missing(&embedded, &[1, 2, 3]),
+            "exactly current"
+        );
+        assert!(
+            !relax_ignore_missing(&embedded, &[1, 2]),
+            "database behind us — `run` simply applies 3"
+        );
+
+        // The one case that opens it: every unknown version is newer than everything we embed.
+        assert!(relax_ignore_missing(&embedded, &[1, 2, 3, 4]), "one ahead");
+        assert!(
+            relax_ignore_missing(&embedded, &[1, 2, 3, 4, 5]),
+            "several ahead"
+        );
+        assert!(
+            relax_ignore_missing(&embedded, &[2, 3, 4]),
+            "ahead, and a version we embed was never applied — `run` still applies 1"
+        );
+
+        // A hole *inside* our own range is a different database or a different migration set —
+        // note both sets below are chosen so the unknown version sits BELOW the newest embedded
+        // one, which is the only thing that distinguishes an accident from a downgrade.
+        assert!(
+            !relax_ignore_missing(&[1, 2, 5], &[1, 3, 5]),
+            "3 is unknown and sits below our newest — an unrecognised history, not a downgrade"
+        );
+        assert!(
+            !relax_ignore_missing(&[10, 20], &[5]),
+            "wholly foreign history below our newest"
+        );
+
+        // Degenerate input must not fail open.
+        assert!(!relax_ignore_missing(&[], &[1, 2, 3]), "nothing embedded");
+    }
+
+    /// Every migration that narrows the schema must say how far back it can still be run.
+    ///
+    /// `schema_compat` (0078) answers "can this deployment go back to version X?", and its default
+    /// is **reversible** — an additive migration inserts nothing. That default is true for all 77
+    /// migrations that predate it, and it is also the dangerous one: a contract step whose author
+    /// forgets the row makes the WebUI advertise a rollback that crash-loops. Neither SQL nor sqlx
+    /// can catch that, so this does — a destructive migration must carry either an
+    /// `INSERT INTO schema_compat` floor or an explicit `-- reversible: <why>` marker.
+    ///
+    /// Comments are stripped before the scan. Three of the twelve files a naive grep first flagged
+    /// mention `DROP INDEX` only in prose explaining why they are reversible, and an index is
+    /// invisible to the binary anyway — which is why `drop index` is not in the needle list.
+    #[test]
+    fn every_destructive_migration_declares_its_reversibility() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
+        let mut files: Vec<std::path::PathBuf> = std::fs::read_dir(&dir)
+            .expect("migrations/ is readable from the crate directory")
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+            .collect();
+        files.sort();
+        assert!(files.len() >= 78, "migrations/ looks truncated");
+
+        for path in files {
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            let raw = std::fs::read_to_string(&path).expect("migration is readable");
+            // Statements only. Splitting each line at `--` would also truncate a string literal
+            // containing a double dash, but that can only ever *hide* a statement from the scan,
+            // never invent one — and no migration here has such a literal.
+            let code = raw
+                .lines()
+                .map(|l| l.split("--").next().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .to_lowercase();
+            // No migration uses dollar-quoted bodies, so `;` is a safe statement separator.
+            let destructive = code.split(';').any(|stmt| {
+                let s = stmt.trim();
+                s.starts_with("update ")
+                    || s.starts_with("delete ")
+                    || s.contains("drop column")
+                    || s.contains("drop table")
+                    || s.contains("drop constraint")
+                    || (s.contains("alter column") && s.contains(" type "))
+            });
+            if !destructive {
+                continue;
+            }
+            assert!(
+                raw.to_lowercase().contains("-- reversible:")
+                    || code.contains("insert into schema_compat"),
+                "{name} narrows the schema or rewrites rows in place, but declares neither an \
+                 `INSERT INTO schema_compat` floor nor a `-- reversible: <why>` marker. Decide \
+                 which it is — the WebUI promises a rollback based on this (ADR-050 decision 7)."
+            );
+        }
     }
 
     #[tokio::test]

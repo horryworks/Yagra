@@ -37,6 +37,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         enable_mcp: false,
         rca: None,
         webtls: None,
+        upgrade: None,
         // No Prometheus recorder is installed in the test binary, so the support bundle records
         // the scrape as an omission rather than carrying one.
         metrics: None,

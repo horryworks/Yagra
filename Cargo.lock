@@ -5146,6 +5146,7 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "schemars 1.2.1",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

@@ -1,0 +1,81 @@
+{
+  "title": "Upgrade",
+  "subtitle": "What this deployment is running, and how far back it can be taken.",
+  "loading": "Loading…",
+  "error": "Could not read the upgrade status.",
+
+  "build": {
+    "heading": "Running build",
+    "coreVersion": "Core version",
+    "webuiVersion": "WebUI version",
+    "sourceRef": "Built from commit",
+    "buildProfile": "Build",
+    "hostname": "Container",
+    "uptime": "Running for",
+    "unknown": "Unknown"
+  },
+  "buildKind": {
+    "release": "Release",
+    "development": "Development build",
+    "unknown": "Not from an image"
+  },
+  "buildKindHint": {
+    "release": "A published release image.",
+    "development": "Built and pushed straight to this server, bypassing the release pipeline. Expected on a test server, not in production.",
+    "unknown": "No build markers found, so this core was most likely started outside a container."
+  },
+
+  "schema": {
+    "heading": "Database schema",
+    "applied": "Migrations applied",
+    "latest": "Newest migration",
+    "appliedValue": "{{count}}"
+  },
+
+  "rollback": {
+    "heading": "Going back",
+    "unrestricted": "Every migration applied to this database is reversible, so an earlier release can still run against it.",
+    "unrestrictedHint": "Nothing is deleted by returning to an earlier version. Columns a newer version added stay in place, unread, and become visible again the moment you upgrade.",
+    "floored": "This database can only be run by Yagra {{minCore}} or newer.",
+    "flooredReason": "Migration {{version}} narrowed the schema: {{reason}}",
+    "flooredHint": "Returning to anything older needs a restore from backup — the schema itself can no longer be read by those versions."
+  },
+
+  "mechanism": {
+    "heading": "Upgrading from here",
+    "disabled": "The upgrade mechanism is not enabled on this deployment.",
+    "disabledHint": "Upgrades are applied by a separate privileged container, which is off by default. Until it is enabled, upgrades stay a command-line operation — this page reports what is installed but cannot change it.",
+    "disabledHowTo": "To enable it, uncomment the yagra-updater service in docker-compose.deploy.yml and restart the stack.",
+    "stopped": "The updater is enabled but has stopped reporting.",
+    "stoppedHint": "It was running at some point, so this is a fault rather than a setting. Check its logs with: docker compose -p yagra logs yagra-updater",
+    "readyFrom": "Releases are fetched from {{repo}}, which is fixed by this server and cannot be changed from the WebUI.",
+    "noNewer": "No release newer than the one running was found.",
+    "noRegistry": "The updater could not reach a registry, so there is no list of releases. This is expected on a closed network."
+  },
+
+  "apply": {
+    "button": "Upgrade to this",
+    "confirmTitle": "Upgrade to {{tag}}?",
+    "confirmBody": "Every Yagra container will be replaced with {{tag}}. Monitoring stops for the duration and this page will lose its connection until the new version is up.",
+    "confirmBackup": "A backup is taken first. It is a rollback aid, not a disaster-recovery backup — it lands on this same host, so keep your own copies elsewhere.",
+    "confirmFloor": "Note: this database can only be run by {{minCore}} or newer, so it cannot be taken back past that point.",
+    "confirm": "Upgrade now",
+    "cancel": "Cancel",
+    "failed": "The upgrade could not be started."
+  },
+
+  "run": {
+    "heading": "Last run",
+    "state": "State",
+    "target": "Target",
+    "message": "Detail",
+    "requestedBy": "Requested by",
+    "disconnectWarning": "This page will stop responding shortly and come back on its own once the new version is serving. Do not reload or restart anything by hand while it is running."
+  },
+  "runState": {
+    "running": "Running",
+    "succeeded": "Succeeded",
+    "failed": "Failed",
+    "rejected": "Rejected"
+  }
+}

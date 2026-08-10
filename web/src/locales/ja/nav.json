@@ -57,6 +57,7 @@
     "audit": "監査ログ",
     "system": "システム設定",
     "configBundle": "設定バンドル",
+    "upgrade": "アップグレード",
     "preferences": "環境設定",
     "about": "バージョン情報"
   },
@@ -90,7 +91,8 @@
     "settingsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
     "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン",
     "settingsAi": "障害の説明文を書かせる言語モデルの設定",
-    "settingsConfigBundle": "監視設定を可搬なファイルとして書き出し・取り込み"
+    "settingsConfigBundle": "監視設定を可搬なファイルとして書き出し・取り込み",
+    "settingsUpgrade": "動いているビルドと、どこまで戻せるか"
   },
   "shell": {
     "home": "ホーム",

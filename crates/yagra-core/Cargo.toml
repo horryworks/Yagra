@@ -39,6 +39,8 @@ thiserror = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 regex = { workspace = true }
+# Compatibility-window arithmetic for the upgrade planner (ADR-050 decision 7).
+semver = { workspace = true }
 # Notification-template rendering (ADR-039). Core-only on purpose: the *variable set* is the
 # contract and lives in `yagra-common`, but the engine stays here so it does not ride along into
 # the poller image, which sends no notifications.

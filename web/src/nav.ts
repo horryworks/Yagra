@@ -269,6 +269,13 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Cb',
           },
+          {
+            labelKey: 'settings.upgrade',
+            descKey: 'descriptions.settingsUpgrade',
+            path: '/settings/upgrade',
+            implemented: true,
+            mono: 'Up',
+          },
         ],
       },
       {
