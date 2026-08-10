@@ -7,9 +7,6 @@
 --
 -- Expand-only (ADR-017): additive columns with a DEFAULT, so existing rows and the previous code
 -- (which never names sort_order on INSERT) keep working — N/N-1 upgrade-safe.
---
--- reversible: the UPDATEs write only to the two columns this migration just added, so no value an
--- older binary reads is rewritten (ADR-050 decision 7).
 
 ALTER TABLE node_groups ADD COLUMN sort_order DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE nodes ADD COLUMN sort_order DOUBLE PRECISION NOT NULL DEFAULT 0;

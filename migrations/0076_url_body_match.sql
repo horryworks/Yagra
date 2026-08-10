@@ -28,9 +28,6 @@
 -- write), and a DB-level copy of those bounds would be a second source drifting from the first —
 -- the same call `topology_links.sources` made. What is worth pinning here is only the document
 -- shape, which is what an application bug would get wrong in a way that survives a round trip.
---
--- reversible: `DROP CONSTRAINT IF EXISTS` here is the idempotent re-create idiom — each one is
--- immediately followed by the ADD. Nothing is removed and no column is retyped (ADR-050 decision 7).
 
 ALTER TABLE url_checks
     ADD COLUMN IF NOT EXISTS body_match JSONB,

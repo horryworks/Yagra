@@ -18,9 +18,6 @@
 -- NULL (nodes.profile_id ON DELETE SET NULL) — it keeps polling and is re-classified on the next
 -- Discovery scan, or re-assigned by the operator. The new catalog is broader, so most classes map
 -- to a more specific successor (e.g. "Cisco IOS router" → "Cisco IOS/IOS-XE router").
---
--- reversible: range-deletes built-in catalog rows, not schema — and an older binary re-seeds its own
--- built-ins on boot, so going back restores its catalog (ADR-050 decision 7).
 
 DELETE FROM classification_rules
  WHERE id >= '00000000-0000-0000-0000-00005eed8000'::uuid

@@ -2085,6 +2085,49 @@ mod tests {
     /// Comments are stripped before the scan. Three of the twelve files a naive grep first flagged
     /// mention `DROP INDEX` only in prose explaining why they are reversible, and an index is
     /// invisible to the binary anyway — which is why `drop index` is not in the needle list.
+    ///
+    /// ⚠️ **The historical declarations live HERE rather than in the files, and that is forced.**
+    /// `sqlx::migrate!` checksums every migration, so adding even a comment line to one that has
+    /// already been applied makes every existing deployment refuse to start with
+    /// `migration N was previously applied but has been modified`. This was learned the expensive
+    /// way: the first cut of this rule wrote a `-- reversible:` line into all nine and took the
+    /// test server down on deploy. An applied migration is immutable — full stop.
+    ///
+    /// So: migrations **already applied somewhere** are grandfathered in this list. New ones carry
+    /// the marker in the file, where it belongs, because nothing has checksummed them yet.
+    const GRANDFATHERED_REVERSIBLE: &[(&str, &str)] = &[
+        ("0015", "backfills only the two columns it just added"),
+        (
+            "0020",
+            "range-deletes built-in catalog rows; an older core re-seeds its own on boot",
+        ),
+        (
+            "0021",
+            "deletes one operator-created catalog row, not schema",
+        ),
+        (
+            "0022",
+            "deletes one built-in catalog row; an older core re-seeds it",
+        ),
+        (
+            "0030",
+            "corrects one seeded threshold value; the schema is untouched",
+        ),
+        (
+            "0051",
+            "drops a CHECK only to immediately re-add a WIDER one",
+        ),
+        (
+            "0052",
+            "drops a CHECK only to immediately re-add a WIDER one",
+        ),
+        ("0057", "backfills only the column it just added"),
+        (
+            "0076",
+            "`DROP CONSTRAINT IF EXISTS` is the idempotent re-create idiom here",
+        ),
+    ];
+
     #[test]
     fn every_destructive_migration_declares_its_reversibility() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
@@ -2122,12 +2165,19 @@ mod tests {
             if !destructive {
                 continue;
             }
+            let grandfathered = GRANDFATHERED_REVERSIBLE
+                .iter()
+                .any(|(prefix, _)| name.starts_with(prefix));
             assert!(
-                raw.to_lowercase().contains("-- reversible:")
+                grandfathered
+                    || raw.to_lowercase().contains("-- reversible:")
                     || code.contains("insert into schema_compat"),
                 "{name} narrows the schema or rewrites rows in place, but declares neither an \
                  `INSERT INTO schema_compat` floor nor a `-- reversible: <why>` marker. Decide \
-                 which it is — the WebUI promises a rollback based on this (ADR-050 decision 7)."
+                 which it is — the WebUI promises a rollback based on this (ADR-050 decision 7). \
+                 If this migration has ALREADY been applied to a live deployment, do not edit the \
+                 file: it is checksummed, and changing it stops every existing deployment from \
+                 starting. Add it to GRANDFATHERED_REVERSIBLE instead."
             );
         }
     }

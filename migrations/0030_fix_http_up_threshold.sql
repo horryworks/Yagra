@@ -9,9 +9,6 @@
 -- is `ON CONFLICT (id) DO NOTHING`, so it cannot rewrite the already-inserted row — do it here.
 -- Stable id = Uuid::from_u128(0x0000_0000_0000_0000_0000_0000_5eed_a000). Guard on the old value so
 -- an operator who deliberately customised this threshold is left untouched.
---
--- reversible: corrects one seeded row's value; the schema is untouched and an older binary reads
--- the corrected bound exactly as it reads any operator edit (ADR-050 decision 7).
 UPDATE thresholds
    SET critical = 0.5
  WHERE id = '00000000-0000-0000-0000-00005eeda000'

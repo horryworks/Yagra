@@ -11,8 +11,5 @@
 -- "Huawei CloudEngine switch". The seed never recreates this name, so it stays gone.
 -- FK-safe: a node bound to it falls to NULL (nodes.profile_id ON DELETE SET NULL) and is
 -- re-classified on the next Discovery scan; its template links / classification rules cascade.
---
--- reversible: deletes one operator-created catalog row, not schema. An older binary starts against
--- the resulting schema unchanged (ADR-050 decision 7).
 
 DELETE FROM profiles WHERE name = 'Huawei CloudEngine';
