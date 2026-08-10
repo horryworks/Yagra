@@ -6713,6 +6713,14 @@ export interface components {
              */
             group_id?: string | null;
             id: components["schemas"]["NodeId"];
+            /**
+             * @description **What this node is**, and therefore how it is polled — the value that distinguishes a URL
+             *     or DNS monitor from an ordinary ICMP/SNMP device in the inventory.
+             *
+             *     Resolved by `NodeKind::resolve`, the same function `GET /nodes/{id}` and the scheduler ask,
+             *     so a list row can never disagree with the detail page it opens.
+             */
+            kind: components["schemas"]["NodeKind"];
             model?: string | null;
             name: string;
             /**
@@ -6726,11 +6734,6 @@ export interface components {
              * @description Manual order within the group (the tree sorts members by this, then by name).
              */
             sort_order: number;
-            /**
-             * @description How this node is monitored, for the tree badge: `"meraki"` for a Cisco Meraki device,
-             *     otherwise `"device"`.
-             */
-            source: string;
             state: components["schemas"]["NodeState"];
             /** @description Descriptive maker/model for the "name (addr) (vendor) (model)" display. */
             vendor?: string | null;

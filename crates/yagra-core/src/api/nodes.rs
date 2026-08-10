@@ -25,7 +25,7 @@
 
 use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
 use super::util::CreatedId;
-use super::{pool_resolver, ApiError, ApiResult, ApiState};
+use super::{pool_resolver, AdminState, ApiError, ApiResult, ApiState};
 use crate::groups::{placement_order, would_create_cycle};
 use axum::{
     extract::{Path, Query},
@@ -220,9 +220,12 @@ pub(crate) struct NodeSummary {
     /// The tree's pool picker edits exactly this value, so it is what marks the active choice —
     /// the *effective* pool (and the poller holding the node) comes from `/nodes/:id/assignment`.
     pool: Option<String>,
-    /// How this node is monitored, for the tree badge: `"meraki"` for a Cisco Meraki device,
-    /// otherwise `"device"`.
-    source: &'static str,
+    /// **What this node is**, and therefore how it is polled — the value that distinguishes a URL
+    /// or DNS monitor from an ordinary ICMP/SNMP device in the inventory.
+    ///
+    /// Resolved by `NodeKind::resolve`, the same function `GET /nodes/{id}` and the scheduler ask,
+    /// so a list row can never disagree with the detail page it opens.
+    kind: NodeKind,
 }
 
 /// One keyset page of the inventory.
@@ -254,44 +257,88 @@ pub(crate) struct NodePageQuery {
     pub search: Option<String>,
 }
 
+/// Which single-purpose rows each of the given nodes carries, resolved into a [`NodeKind`].
+///
+/// Page-scoped: each read is a `WHERE node_id = ANY($1)` over the ids on this page, not a
+/// full-table scan of every monitor in the fleet. A node absent from all three sets is a
+/// `Device` — which is also what a *failed* read degrades to, matching [`get_node`] and the
+/// scheduler, so a transient database error cannot make the list and the detail page disagree
+/// about what a node is.
+///
+/// Shared with the MCP `list_nodes` / `get_node_status` tools (ADR-042 read parity) so the two
+/// surfaces answer "what is this node" from one place rather than two.
+pub(crate) async fn node_kinds(admin: &AdminState, ids: &[Uuid]) -> HashMap<Uuid, NodeKind> {
+    let (meraki, url, dns) = tokio::join!(
+        async {
+            admin
+                .meraki_devices
+                .filter_meraki(ids)
+                .await
+                .unwrap_or_default()
+        },
+        async { admin.url_checks.filter_url(ids).await.unwrap_or_default() },
+        async { admin.dns_checks.filter_dns(ids).await.unwrap_or_default() },
+    );
+    resolve_kinds(ids, &meraki, &url, &dns)
+}
+
+/// The pure half of [`node_kinds`]: three membership sets into one kind per id.
+///
+/// Split out so the precedence can be tested without a database. It must stay a *call* to
+/// `NodeKind::resolve` — writing the `if meraki … else if url …` chain here would be a second
+/// answer to "what is this node", which is the thing `NodeKind` exists to prevent.
+fn resolve_kinds(
+    ids: &[Uuid],
+    meraki: &HashSet<Uuid>,
+    url: &HashSet<Uuid>,
+    dns: &HashSet<Uuid>,
+) -> HashMap<Uuid, NodeKind> {
+    ids.iter()
+        .map(|id| {
+            let kind = NodeKind::resolve(NodeRows {
+                meraki: meraki.contains(id),
+                url: url.contains(id),
+                dns: dns.contains(id),
+            });
+            (*id, kind)
+        })
+        .collect()
+}
+
 /// Enrich raw `Node` rows into UI [`NodeSummary`] rows: live display state, tree sort order, and
-/// the Meraki-source badge. Shared by the paged fleet list and the per-group lazy tree load so both
+/// the node's resolved kind. Shared by the paged fleet list and the per-group lazy tree load so both
 /// paths produce identical rows.
 async fn build_node_summaries(st: &ApiState, nodes: Vec<Node>) -> Vec<NodeSummary> {
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
     let node_ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
-    // Skeleton mode has neither ordering nor Meraki bindings; a read failure degrades the badge and
-    // the ordering, never the list.
+    // Skeleton mode has neither ordering nor side tables; a read failure degrades the kind and the
+    // ordering, never the list.
     let inventory = async {
         match st.admin.as_ref() {
             Some(admin) => tokio::join!(
                 async { admin.repo.node_sort_orders(&ids).await.unwrap_or_default() },
-                async {
-                    admin
-                        .meraki_devices
-                        .filter_meraki(&ids)
-                        .await
-                        .unwrap_or_default()
-                }
+                node_kinds(admin, &ids),
             ),
-            None => (HashMap::new(), HashSet::new()),
+            None => (HashMap::new(), HashMap::new()),
         }
     };
-    // Three independent reads — two PostgreSQL, one TSDB — on the hottest list in the product:
-    // every tree page, every debounced search keystroke, every lazy folder expand runs all three.
+    // Five independent reads — four PostgreSQL, one TSDB — on the hottest list in the product:
+    // every tree page, every debounced search keystroke, every lazy folder expand runs all five.
     // None needs another's answer, so they overlap rather than queue (the shape `interface_heatmap`
-    // uses for its per-link fan-out).
-    let ((orders, meraki_ids), states) = tokio::join!(inventory, display_states(st, &node_ids));
+    // uses for its per-link fan-out) and the wall clock is the slowest one, not their sum. The two
+    // that `node_kinds` added are the price of the list agreeing with the detail page; the cheaper-
+    // looking alternative — the three `node_ids()` full-table reads the scheduler uses — is
+    // unbounded in how many monitors exist and returns rows this page cannot use.
+    let ((orders, kinds), states) = tokio::join!(inventory, display_states(st, &node_ids));
     nodes
         .into_iter()
         .map(|n| NodeSummary {
             state: states.get(&n.id).copied().unwrap_or(NodeState::Unknown),
             sort_order: orders.get(&n.id.as_uuid()).copied().unwrap_or(0.0),
-            source: if meraki_ids.contains(&n.id.as_uuid()) {
-                "meraki"
-            } else {
-                "device"
-            },
+            kind: kinds
+                .get(&n.id.as_uuid())
+                .copied()
+                .unwrap_or(NodeKind::Device),
             id: n.id,
             name: n.name,
             address: n.address.to_string(),
@@ -1677,5 +1724,52 @@ mod tests {
         // transient database error cannot make the API and the poller disagree about a node.
         assert_eq!(NodeKind::resolve(NodeRows::default()), NodeKind::Device);
         assert!(NodeKind::Device.is_polled_per_node());
+    }
+
+    #[test]
+    fn the_inventory_row_reports_the_same_kind_the_node_detail_does() {
+        // The list and the detail are two code paths answering one question, and an operator moves
+        // between them in one click — a row badged `device` that opens a page saying `url` is the
+        // disagreement `NodeKind::resolve` exists to make impossible. `resolve_kinds` therefore
+        // delegates, and delegation is cheap to "optimize" back into a local `if` chain, so pin it
+        // over every combination of side-table rows rather than over the three that occur in
+        // practice — the stray-row cases are exactly where a re-derived precedence would differ.
+        let id = Uuid::from_u128(1);
+        let ids = [id];
+        for bits in 0u8..8 {
+            let rows = NodeRows {
+                meraki: bits & 1 != 0,
+                url: bits & 2 != 0,
+                dns: bits & 4 != 0,
+            };
+            let set = |present: bool| {
+                if present {
+                    HashSet::from([id])
+                } else {
+                    HashSet::new()
+                }
+            };
+            let got = resolve_kinds(&ids, &set(rows.meraki), &set(rows.url), &set(rows.dns));
+            assert_eq!(
+                got.get(&id).copied(),
+                Some(NodeKind::resolve(rows)),
+                "{rows:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_side_table_read_degrades_a_list_row_toward_device() {
+        // Each of the three reads behind `node_kinds` is `unwrap_or_default()`, so a database
+        // hiccup looks exactly like "no row" — the empty-set case. It must land on `Device`, the
+        // same direction `get_node` and the scheduler degrade in, or a transient error would badge
+        // a URL monitor as a device on one surface and not the other.
+        let id = Uuid::from_u128(2);
+        let empty = HashSet::new();
+        let got = resolve_kinds(&[id], &empty, &empty, &empty);
+        assert_eq!(got.get(&id).copied(), Some(NodeKind::Device));
+        // An id nobody asked about is not invented, and an empty page is an empty map.
+        assert_eq!(got.len(), 1);
+        assert!(resolve_kinds(&[], &empty, &empty, &empty).is_empty());
     }
 }

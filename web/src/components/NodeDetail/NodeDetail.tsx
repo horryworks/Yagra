@@ -6,7 +6,7 @@
 // pills + warning dots), and the Edit/Delete modals. Live data (status, RTT, interfaces) refreshes
 // on an interval; the active tab is controlled by the caller (URL on the page, local in the split).
 
-import { useEffect, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
@@ -36,15 +36,17 @@ import { EventsTab } from './EventsTab';
 import { FlowTab } from './FlowTab';
 import {
   NODE_DETAIL_TAB_META,
-  NODE_DETAIL_TABS,
   normalizeNodeDetailTab,
+  resolveNodeDetailTab,
+  visibleNodeDetailTabs,
   type NodeDetailTab,
   type NodeDetailTabStats,
 } from './tabs';
 import { SetParentModal } from '../SetParentModal/SetParentModal';
+import { nodeSubLineParts } from './nodeIdentity';
+import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import './NodeDetail.css';
 
-const METRIC = 'icmp_rtt_ms';
 const RTT_WINDOW_SECS = 30 * 60;
 
 interface Props {
@@ -79,8 +81,11 @@ export function NodeDetail({
 }: Props) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
-  const activeTab = normalizeNodeDetailTab(tab);
   const [node, setNode] = useState<NodeDetailData | null>(null);
+  // Kind-aware: a tab this node's kind does not show falls back to Overview. `node` is null until
+  // the config load resolves, and the render below returns a loading pane until then, so the bar is
+  // never painted from an unresolved kind.
+  const activeTab = resolveNodeDetailTab(tab, node?.kind ?? null);
   const [status, setStatus] = useState<NodeStatus | null>(null);
   const [series, setSeries] = useState<{ timestamps: number[]; values: number[] }>({
     timestamps: [],
@@ -119,9 +124,20 @@ export function NodeDetail({
     setIfLoaded(false);
   }, [nodeId, refreshNonce]);
 
-  // Live data: status + RTT history + interfaces. Loads on node change and on every shared refresh
-  // tick (S24 — one clock for the whole detail instead of a per-card setInterval). Each tick re-runs
-  // this effect, so its cleanup cancels an in-flight round before the next one starts.
+  // Whether this node can have interfaces at all. Gates the eager fetch below: a URL/DNS/Meraki
+  // node never gets an ifTable walk, so asking every refresh tick is a request that can only ever
+  // come back empty. Undecided while the config is still loading — the pane is not rendered yet.
+  const hasInterfaces = node != null && visibleNodeDetailTabs(node.kind).includes('interfaces');
+
+  // The series that says "we heard from this node". Kind-driven: only an ordinary device is pinged,
+  // so asking every kind for `icmp_rtt_ms` meant a URL monitor, a DNS monitor and a Meraki device
+  // each had a permanently empty series — and therefore no "seen …" in the header. Only a device's
+  // is also charted (Overview's ICMP sparkline); for the rest it is read for the timestamp alone.
+  const livenessMetric = node ? NODE_KIND_SPEC[node.kind].livenessMetric : null;
+
+  // Live data: status + liveness history + interfaces. Loads on node change and on every shared
+  // refresh tick (S24 — one clock for the whole detail instead of a per-card setInterval). Each tick
+  // re-runs this effect, so its cleanup cancels an in-flight round before the next one starts.
   useEffect(() => {
     let cancelled = false;
     const to = Math.floor(Date.now() / 1000);
@@ -129,10 +145,21 @@ export function NodeDetail({
       .getNodeStatus(nodeId)
       .then((s) => !cancelled && setStatus(s))
       .catch(() => undefined);
-    api
-      .getNodeMetricRange(nodeId, METRIC, { from: to - RTT_WINDOW_SECS, to })
-      .then((r) => !cancelled && setSeries(pointsToSeries(r.points)))
-      .catch(() => undefined);
+    if (livenessMetric) {
+      api
+        .getNodeMetricRange(nodeId, livenessMetric, { from: to - RTT_WINDOW_SECS, to })
+        .then((r) => !cancelled && setSeries(pointsToSeries(r.points)))
+        .catch(() => undefined);
+    }
+    if (!hasInterfaces) {
+      // Settle the badge state rather than leaving it "loading" forever for a kind that has none.
+      setInterfaces([]);
+      setIfError(null);
+      setIfLoaded(true);
+      return () => {
+        cancelled = true;
+      };
+    }
     api
       .listNodeInterfaces(nodeId)
       .then((r) => {
@@ -149,7 +176,19 @@ export function NodeDetail({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, refreshNonce, tick, t]);
+  }, [nodeId, refreshNonce, tick, t, hasInterfaces, livenessMetric]);
+
+  // Correct a tab the loaded kind does not show, so the URL (page) or pane state (split) matches
+  // what is drawn instead of quietly diverging. Comparing the *normalized* value is deliberate:
+  // `?tab=bogus` keeps today's behaviour of rendering Overview and leaving the param alone, and
+  // only a real-but-inapplicable tab is rewritten. It cannot loop — after the correction the two
+  // sides agree, and 'overview' is visible to every kind (pinned in tabs.test.ts).
+  useEffect(() => {
+    if (!node) return;
+    const requested = normalizeNodeDetailTab(tab);
+    const allowed = resolveNodeDetailTab(tab, node.kind);
+    if (requested !== allowed) onTabChange(allowed);
+  }, [node, tab, onTabChange]);
 
   // Collection-set count for the Collection tab badge (the profile's attached templates).
   useEffect(() => {
@@ -238,6 +277,13 @@ export function NodeDetail({
         <div className="nd-namerow">
           <div className="nd-namewrap">
             <span className="nd-name">{node.name}</span>
+            {/* What this node is, when it is not an ordinary device. Unmarked is the default so a
+                normal device's name is not decorated — the badge means "read this differently". */}
+            {NODE_KIND_SPEC[node.kind].badge && (
+              <span className="nd-kind" title={t(NODE_KIND_SPEC[node.kind].labelKey)}>
+                {NODE_KIND_SPEC[node.kind].badge}
+              </span>
+            )}
             {status && <StatePill state={state} />}
           </div>
           <div className="nd-actions">
@@ -274,11 +320,12 @@ export function NodeDetail({
           </div>
         </div>
         <div className="nd-sub">
-          <span className="mono">{node.address}</span>
-          <span className="nd-sep">·</span>
-          <span>
-            {[node.vendor, node.model].filter(Boolean).join(' ') || t('detail.unknownDevice')}
-          </span>
+          {nodeSubLineParts(node, t).map((part, i) => (
+            <Fragment key={part.id}>
+              {i > 0 && <span className="nd-sep">·</span>}
+              <span className={part.mono ? 'mono' : undefined}>{part.text}</span>
+            </Fragment>
+          ))}
           {lastSeen != null && (
             <>
               <span className="nd-sep">·</span>
@@ -297,7 +344,7 @@ export function NodeDetail({
       )}
 
       <div className="nd-tabs" role="tablist">
-        {NODE_DETAIL_TABS.map((key) => {
+        {visibleNodeDetailTabs(node.kind).map((key) => {
           const meta = NODE_DETAIL_TAB_META[key];
           const n = meta.badge?.(tabStats) ?? null;
           return (

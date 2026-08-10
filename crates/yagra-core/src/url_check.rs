@@ -114,6 +114,26 @@ impl UrlCheckRepo {
             .collect()
     }
 
+    /// Of the given node ids, which are URL monitors — the page-scoped variant of
+    /// [`Self::node_ids`], for the inventory list's kind badge.
+    ///
+    /// Bounded by the page size rather than by how many monitors exist: `/nodes` keyset-pages a
+    /// 50k fleet and calls this once per page, so the full-table read would grow without limit
+    /// while returning rows the page cannot use. Empty input short-circuits so we never send
+    /// `= ANY('{}')`. Mirrors `MerakiDeviceRepo::filter_meraki`.
+    pub async fn filter_url(&self, node_ids: &[Uuid]) -> anyhow::Result<HashSet<Uuid>> {
+        if node_ids.is_empty() {
+            return Ok(HashSet::new());
+        }
+        let rows = sqlx::query("SELECT node_id FROM url_checks WHERE node_id = ANY($1)")
+            .bind(node_ids)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| r.try_get::<Uuid, _>("node_id").map_err(Into::into))
+            .collect()
+    }
+
     /// Delete a node's URL check. Returns whether a row was removed.
     pub async fn delete(&self, node_id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM url_checks WHERE node_id = $1")
@@ -173,6 +193,18 @@ mod tests {
         let src = production_source();
         assert!(src.contains("ON CONFLICT (node_id) DO UPDATE SET"));
         assert!(src.contains("DELETE FROM url_checks WHERE node_id = $1"));
+    }
+
+    #[test]
+    fn the_page_scoped_filter_is_a_set_query_not_a_per_row_lookup() {
+        // `/nodes` keyset-pages a 50k fleet and asks this once per page to badge the rows. A
+        // per-node `WHERE node_id = $1` would be a round trip per row, and the unscoped
+        // `SELECT node_id FROM url_checks` grows with how many monitors exist while returning rows
+        // the page cannot use. The empty guard matters too: `= ANY('{}')` is a query sent to answer
+        // nothing, on every page of a fleet with no URL monitors at all.
+        let src = production_source();
+        assert!(src.contains("WHERE node_id = ANY($1)"));
+        assert!(src.contains("if node_ids.is_empty()"));
     }
 
     #[test]

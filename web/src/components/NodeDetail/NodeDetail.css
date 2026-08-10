@@ -61,6 +61,22 @@
   text-overflow: ellipsis;
 }
 
+/* What kind of node this is (URL / DNS / Meraki monitor), beside its name. Only non-device kinds
+   carry one — see `lib/nodeKind.ts`. Same visual language as the inventory tree's `.ntree-badge`,
+   spelled out here rather than shared because a component owns its own CSS file. */
+.nd-kind {
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border-radius: 8px;
+  font-size: var(--font-2xs);
+  font-weight: var(--weight-semibold);
+  letter-spacing: 0.02em;
+  line-height: 1.7;
+  color: var(--accent-color);
+  background: var(--bg-tertiary);
+  border: var(--border-width) solid var(--border-color);
+}
+
 .nd-actions {
   margin-left: auto;
   display: flex;

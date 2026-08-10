@@ -10,6 +10,43 @@
 
 ## Unreleased
 
+### Breaking changes
+- **The node list now reports what each node *is*.** `GET /api/v1/nodes` and
+  `GET /api/v1/nodes/by-group` replace the two-valued `source` field with `kind` — the same
+  `meraki` / `url` / `dns` / `device` value `GET /api/v1/nodes/{id}` already returned, resolved by
+  the one function the scheduler also asks, so a list row can no longer disagree with the detail
+  page it opens. `source` is removed rather than deprecated: it was a lossy projection added for a
+  single tree badge, and it would have read `"device"` for every monitor kind added since and every
+  one added next. Mapping for API clients: `source == "meraki"` becomes `kind == "meraki"`, and
+  everything that was `"device"` is now one of `device`, `url` or `dns`. The MCP `list_nodes` and
+  `get_node_status` tools carry the same `kind`, so an AI client can tell a URL monitor from a
+  switch before asking which metrics it has.
+
+### Improvements
+- **A node's detail page now shows only the tabs its kind can fill.** A URL or DNS monitor shows
+  Overview and Collection; a Meraki device adds Events. Interfaces, Neighbors and Flow are gone from
+  those kinds — not because they were empty today, but because they cannot ever be filled: a URL or
+  DNS monitor is dispatched one HTTP or DNS check and is never SNMP-walked or pinged, and a Meraki
+  device is polled through the Dashboard API with no per-node job at all. Nothing becomes
+  unreachable: passive events for any node remain at **Alerts ▸ Events** filtered by node, and none
+  of these kinds is ever a NetFlow exporter. A bookmarked link to a tab a node does not show now
+  lands on Overview *and* corrects the address bar, instead of drawing a pane with no tab selected.
+- **The Overview of a monitor stops describing a device it is not.** A DNS monitor used to lead with
+  an empty "ICMP RTT · last 30 min" chart and a facts grid whose Maker, Model, SNMP credential and
+  Uptime were four consecutive em dashes — all of them answers to an SNMP walk that kind never
+  receives. The chart is now shown only where ICMP is actually sent, the grid lists only rows that
+  can hold a value (a DNS monitor gains a Resolver row instead), and the line under the node's name
+  reads `wg.example.net · A` rather than `0.0.0.0 · unknown device`. Each kind's "last seen" is now
+  read from the metric it actually produces, so monitors show one at all.
+- **URL, DNS and Meraki nodes are now labelled as such in the inventory.** A short `URL` / `DNS` /
+  `Meraki` badge sits after the name in the node tree, in a group's member list and beside the title
+  on the detail page, with the full kind on hover. Ordinary devices stay unmarked, so the badge means
+  "read this one differently". Previously only Meraki was distinguishable and a URL monitor was
+  indistinguishable from a switch.
+- **The Collection tab no longer shows a `0` count pill** on nodes whose profile attaches no
+  collection sets — which is every URL and DNS monitor. A zero there read as a fault; it now shows
+  no pill, matching the Interfaces tab's existing rule.
+
 ## v0.2.0 — The first public release: every metric a device reports, URL monitors that read the body, and an SSO form that knows your IdP
 
 **This is Yagra's first public release.** Everything up to v0.1.23 was developed in a private

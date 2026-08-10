@@ -24,7 +24,7 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 use yagra_alert::Alert;
-use yagra_common::{Node, NodeState};
+use yagra_common::{Node, NodeKind, NodeState};
 
 use crate::analysis::{AnalysisFinding, AnalysisJob};
 use crate::events::EventRow;
@@ -46,6 +46,14 @@ pub struct NodeSummaryDto {
     pub address: String,
     /// Rolled-up display state: `ok`/`warning`/`critical`/`unknown`/`unreachable`/`maintenance`.
     pub state: String,
+    /// What this node is, and therefore what it can be asked about:
+    /// `device` (ICMP, plus SNMP when configured) / `url` (an HTTP endpoint monitor) /
+    /// `dns` (a name-resolution monitor) / `meraki` (polled through the Meraki Dashboard API).
+    ///
+    /// Worth reading before `list_node_metrics`: a URL monitor has `http_*` and no interfaces, a
+    /// DNS monitor has `dns_*`, and neither is ever pinged — so an absent `icmp_rtt_ms` on one of
+    /// them is the design, not an outage.
+    pub kind: String,
     pub parent: Option<Uuid>,
     pub group: Option<Uuid>,
     pub vendor: Option<String>,
@@ -54,14 +62,22 @@ pub struct NodeSummaryDto {
 }
 
 impl NodeSummaryDto {
-    /// Build from a node and its (optional) rolled-up display state.
+    /// Build from a node, its (optional) rolled-up display state, and its resolved kind.
+    ///
+    /// The kind is passed in rather than derived here: it comes from `NodeKind::resolve` over the
+    /// side-table rows, which is a database read the caller has already batched over the page.
     #[must_use]
-    pub fn from_node(node: &Node, state: Option<NodeState>) -> Self {
+    pub fn from_node(node: &Node, state: Option<NodeState>, kind: NodeKind) -> Self {
         Self {
             id: node.id.0,
             name: node.name.clone(),
             address: node.address.to_string(),
             state: state_str(state),
+            // The serde token, so this string and the REST field are produced by one mechanism.
+            kind: serde_json::to_value(kind)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_else(|| "device".to_owned()),
             parent: node.parent.map(|p| p.0),
             group: node.group.map(|g| g.0),
             vendor: node.vendor.clone(),
@@ -664,11 +680,14 @@ mod tests {
     #[test]
     fn node_summary_dto_omits_credential_and_pool() {
         let node = sample_node_with_secret();
-        let dto = NodeSummaryDto::from_node(&node, Some(NodeState::Warning));
+        let dto = NodeSummaryDto::from_node(&node, Some(NodeState::Warning), NodeKind::Url);
         let json = serde_json::to_value(&dto).expect("serialize");
         // Sanity: it carries the safe fields…
         assert_eq!(json["name"], "edge-router-1");
         assert_eq!(json["state"], "warning");
+        // The kind is the serde token, not the Debug spelling — a model reads this string and the
+        // REST `kind` field must be the same word.
+        assert_eq!(json["kind"], "url");
         assert_eq!(json["tags"]["site"], "tokyo");
         // …and not the secret/internal ones.
         assert!(json.get("credential").is_none());
@@ -716,7 +735,7 @@ mod tests {
             "UrlCheck",
         );
 
-        let summary = NodeSummaryDto::from_node(&node, Some(NodeState::Ok));
+        let summary = NodeSummaryDto::from_node(&node, Some(NodeState::Ok), NodeKind::Device);
         assert_inventory_dto_is_clean(&serde_json::to_value(&summary).unwrap(), "NodeSummary");
 
         let status = NodeStatusDto {

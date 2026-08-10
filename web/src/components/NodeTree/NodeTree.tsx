@@ -20,6 +20,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import type { NodeGroup, NodeSummary, PoolOption } from '../../types/api';
 import { poolChoices } from '../../lib/pool';
+import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import {
   asGroupType,
   buildNodeTree,
@@ -535,9 +536,12 @@ export function NodeTree({
         >
           {node.name}
         </button>
-        {node.source === 'meraki' && (
-          <span className="ntree-badge ntree-badge-meraki" title={t('tree.merakiBadgeTitle')}>
-            Meraki
+        {/* What kind of node this is, when it is not an ordinary ICMP/SNMP device — a URL monitor,
+            a DNS monitor or a Meraki device. Unmarked is the default: the tree is overwhelmingly
+            ordinary devices, so a badge on every one of 50k rows would say nothing. */}
+        {NODE_KIND_SPEC[node.kind].badge && (
+          <span className="ntree-badge" title={t(NODE_KIND_SPEC[node.kind].labelKey)}>
+            {NODE_KIND_SPEC[node.kind].badge}
           </span>
         )}
         {suppressionMarks(

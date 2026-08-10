@@ -25,7 +25,14 @@
     "polledByLegacy": "稼働中のポーラーなし",
     "polledByPending": "未割り当て",
     "polledByMeraki": "Meraki コレクタ",
-    "polledByUnknown": "不明"
+    "polledByUnknown": "不明",
+    "resolver": "リゾルバ"
+  },
+  "kind": {
+    "device": "デバイス（ICMP / SNMP）",
+    "url": "URL 監視（HTTP / HTTPS）",
+    "dns": "DNS 監視（名前解決）",
+    "meraki": "Cisco Meraki (Dashboard API)"
   },
   "groupType": {
     "site": "サイト",
@@ -317,7 +324,6 @@
     "custom": "カスタム…",
     "editMoveGroup": "グループを編集 / 移動",
     "moveToGroup": "グループへ移動…",
-    "merakiBadgeTitle": "Cisco Meraki (Dashboard API)",
     "dragHint": "グループの上にドラッグすると入れ子・割り当て、行と行の間にドラッグすると並べ替えになります。",
     "loadingNodes": "ノードを読み込み中…",
     "emptyInventory": "インベントリにノードがありません。監視を開始するにはノードを追加してください。",

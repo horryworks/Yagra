@@ -25134,7 +25134,7 @@
           "address",
           "state",
           "sort_order",
-          "source"
+          "kind"
         ],
         "properties": {
           "address": {
@@ -25150,6 +25150,10 @@
           },
           "id": {
             "$ref": "#/components/schemas/NodeId"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/NodeKind",
+            "description": "**What this node is**, and therefore how it is polled — the value that distinguishes a URL\nor DNS monitor from an ordinary ICMP/SNMP device in the inventory.\n\nResolved by `NodeKind::resolve`, the same function `GET /nodes/{id}` and the scheduler ask,\nso a list row can never disagree with the detail page it opens."
           },
           "model": {
             "type": [
@@ -25171,10 +25175,6 @@
             "type": "number",
             "format": "double",
             "description": "Manual order within the group (the tree sorts members by this, then by name)."
-          },
-          "source": {
-            "type": "string",
-            "description": "How this node is monitored, for the tree badge: `\"meraki\"` for a Cisco Meraki device,\notherwise `\"device\"`."
           },
           "state": {
             "$ref": "#/components/schemas/NodeState"

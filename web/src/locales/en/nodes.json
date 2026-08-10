@@ -25,7 +25,14 @@
     "polledByLegacy": "No live poller",
     "polledByPending": "Not yet assigned",
     "polledByMeraki": "Meraki collector",
-    "polledByUnknown": "Unknown"
+    "polledByUnknown": "Unknown",
+    "resolver": "Resolver"
+  },
+  "kind": {
+    "device": "Device (ICMP / SNMP)",
+    "url": "URL monitor (HTTP / HTTPS)",
+    "dns": "DNS monitor (name resolution)",
+    "meraki": "Cisco Meraki (Dashboard API)"
   },
   "groupType": {
     "site": "Site",
@@ -317,7 +324,6 @@
     "custom": "Custom…",
     "editMoveGroup": "Edit / move group",
     "moveToGroup": "Move to group…",
-    "merakiBadgeTitle": "Cisco Meraki (Dashboard API)",
     "dragHint": "Drag onto a group to nest/assign; drag between rows to reorder.",
     "loadingNodes": "Loading nodes…",
     "emptyInventory": "No nodes in inventory. Add one to start monitoring.",

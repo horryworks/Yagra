@@ -40,7 +40,9 @@ import {
   TLS_CERT_SOURCES,
   METRIC_STATUSES,
   METRIC_DIMENSIONS,
+  NODE_KINDS,
 } from './types/api';
+import { NODE_KIND_SPEC } from './lib/nodeKind';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { MERAKI_TIERS } from './pages/merakiTiers';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
@@ -320,6 +322,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // now. A kind added without strings would put a raw key in the dropdown an operator picks from.
     const keys = MONITOR_KINDS.flatMap((k) => [k.optionKey, k.titleKey, k.errorKey]);
     expectKeys('monitor kind', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every node kind has a label (nodes:kind.*)', () => {
+    // The label is the badge's tooltip — the only place the badge's two or three letters are spelled
+    // out. This is the *display* set, so unlike MONITOR_KINDS above it must cover `meraki` too.
+    const keys = NODE_KINDS.map((k) => NODE_KIND_SPEC[k].labelKey);
+    expectKeys('node kind', { en: enNodes, ja: jaNodes }, '', keys);
   });
 
   it('every token surface has a label and a hint (settings-tokens:surface.*)', () => {

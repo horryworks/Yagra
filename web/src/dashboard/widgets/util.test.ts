@@ -33,7 +33,7 @@ const node = (id: string, state: NodeSummary['state'], group_id: string | null =
   model: null,
   group_id,
   sort_order: 0,
-  source: 'device',
+  kind: 'device',
 });
 
 /** A folder. `pin` is the group it resolves to on the map — what the server puts in `geo_group`

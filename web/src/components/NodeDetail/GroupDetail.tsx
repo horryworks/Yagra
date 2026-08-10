@@ -20,6 +20,7 @@ import {
   type TreeGroup,
 } from '../../lib/nodeTree';
 import { stateLabel } from '../../lib/format';
+import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import type { NodeGroup, NodeSummary } from '../../types/api';
 import './NodeDetail.css';
 
@@ -112,6 +113,11 @@ export function GroupDetail({ group, groups, nodes, canEdit, onEditGroup, onAddN
                 <div className="nd-member" key={n.id}>
                   <StatusDot state={n.state} withLabel={false} />
                   <span className="nd-member-name">{n.name}</span>
+                  {NODE_KIND_SPEC[n.kind].badge && (
+                    <span className="nd-kind" title={t(NODE_KIND_SPEC[n.kind].labelKey)}>
+                      {NODE_KIND_SPEC[n.kind].badge}
+                    </span>
+                  )}
                   <span className="nd-member-addr mono">{n.address}</span>
                 </div>
               ))}

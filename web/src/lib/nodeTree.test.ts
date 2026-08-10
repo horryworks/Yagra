@@ -50,7 +50,7 @@ const node = (
   model: null,
   group_id: groupId,
   sort_order,
-  source: 'device',
+  kind: 'device',
 });
 
 describe('flattenTree', () => {

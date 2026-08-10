@@ -42,7 +42,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use yagra_common::{NodeId, Permission, SeriesKey, Severity};
+use yagra_common::{NodeId, NodeKind, Permission, SeriesKey, Severity};
 
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
@@ -156,7 +156,9 @@ impl YagraMcp {
     #[tool(
         description = "List monitored nodes with their rolled-up state. Optional case-insensitive \
                        `search` matches name or address; `limit` is 1–100 (default 50). Returns \
-                       node id, name, address, state, parent, group, vendor, model, and tags."
+                       node id, name, address, state, kind, parent, group, vendor, model, and tags. \
+                       `kind` says what a node is — `device`, `url`, `dns` or `meraki` — and \
+                       therefore which metrics it can have."
     )]
     async fn list_nodes(
         &self,
@@ -193,9 +195,27 @@ impl YagraMcp {
         // core restart) reported `unknown` here while the dashboard showed it `ok`.
         let ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
         let states = crate::api::nodes::display_states(&self.state, &ids).await;
+        // The kind comes from the same resolver the REST list uses (ADR-042 read parity), so a
+        // model and the WebUI cannot be told different things about what a node is. Skeleton mode
+        // has no side tables to read, so everything resolves to `device` — the same degradation
+        // the REST path takes on a failed read.
+        let uuids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
+        let kinds = match self.state.admin.as_ref() {
+            Some(admin) => crate::api::nodes::node_kinds(admin, &uuids).await,
+            None => HashMap::new(),
+        };
         let out: Vec<NodeSummaryDto> = nodes
             .iter()
-            .map(|n| NodeSummaryDto::from_node(n, states.get(&n.id).copied()))
+            .map(|n| {
+                NodeSummaryDto::from_node(
+                    n,
+                    states.get(&n.id).copied(),
+                    kinds
+                        .get(&n.id.as_uuid())
+                        .copied()
+                        .unwrap_or(NodeKind::Device),
+                )
+            })
             .collect();
         ok_json("list_nodes", &out)
     }
@@ -244,8 +264,13 @@ impl YagraMcp {
             .list_interfaces(p.node_id)
             .await
             .unwrap_or_default();
+        let kind = crate::api::nodes::node_kinds(admin, &[p.node_id])
+            .await
+            .get(&p.node_id)
+            .copied()
+            .unwrap_or(NodeKind::Device);
         let dto = NodeStatusDto {
-            node: NodeSummaryDto::from_node(&node, Some(state)),
+            node: NodeSummaryDto::from_node(&node, Some(state), kind),
             // Every alert here is on this node, so its name is this node's name.
             alerts: alerts
                 .iter()

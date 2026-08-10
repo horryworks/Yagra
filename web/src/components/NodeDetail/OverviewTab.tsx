@@ -46,6 +46,7 @@ import {
   type ResolvedMetric,
 } from './metricCards';
 import { formatKb, memPctSeries } from './overviewMetrics';
+import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
 import { overviewScalars, viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 import { certTone, httpToneVar } from './healthTone';
@@ -61,7 +62,9 @@ interface Props {
   groups: NodeGroup[];
   nodes?: NodeSummary[];
   status: NodeStatus | null;
-  /** RTT history (last ~30 min), shared with the header's "seen" line. */
+  /** The kind's liveness history (last ~30 min), shared with the header's "seen" line. Charted
+   *  here only for an ordinary device, where it is `icmp_rtt_ms`; for the monitor kinds it is
+   *  their own up-gauge and exists for the timestamp — see `NODE_KIND_SPEC.livenessMetric`. */
   series: { timestamps: number[]; values: number[] };
   unreachable: boolean;
   /** Whether the viewer may reconfigure monitoring (ManageConfig). Gates the check-config edit. */
@@ -84,33 +87,40 @@ export function OverviewTab({
   const facts = useFacts(node, groups, nodes, unreachable);
   return (
     <div className="nd-overview">
-      <section>
-        <div className="nd-section-t">{t('overview.icmpRttTitle')}</div>
-        {series.timestamps.length > 0 ? (
-          <MetricChart
-            title=""
-            timestamps={series.timestamps}
-            values={series.values}
-            height={96}
-            yFormat={(v) => `${Math.round(v)}`}
-            legendFormat={formatRtt}
-          />
-        ) : (
-          <p className="nd-muted nd-spark-empty">
-            {unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
-          </p>
-        )}
-      </section>
+      {/* Only an ordinary device is pinged at all — see `overviewShowsIcmp`. For the monitor kinds
+          the equivalent chart lives in their own health card below, over their own metric. */}
+      {overviewShowsIcmp(node.kind) && (
+        <section>
+          <div className="nd-section-t">{t('overview.icmpRttTitle')}</div>
+          {series.timestamps.length > 0 ? (
+            <MetricChart
+              title=""
+              timestamps={series.timestamps}
+              values={series.values}
+              height={96}
+              yFormat={(v) => `${Math.round(v)}`}
+              legendFormat={formatRtt}
+            />
+          ) : (
+            <p className="nd-muted nd-spark-empty">
+              {unreachable ? t('overview.unreachableDash') : t('overview.noRttHistory')}
+            </p>
+          )}
+        </section>
+      )}
 
       <div className="nd-facts">
-        {facts.map((f) => (
-          <div key={f.label}>
-            <div className="nd-fact-k">{f.label}</div>
-            <div className={`nd-fact-v${f.mono ? ' mono' : ''}${f.warn ? ' warn' : ''}`}>
-              {f.value}
+        {visibleFactRows(node.kind).map((row) => {
+          const f = facts[row];
+          return (
+            <div key={row}>
+              <div className="nd-fact-k">{f.label}</div>
+              <div className={`nd-fact-v${f.mono ? ' mono' : ''}${f.warn ? ' warn' : ''}`}>
+                {f.value}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {status && status.alerts.length > 0 && (
@@ -497,20 +507,31 @@ interface Fact {
   warn?: boolean;
 }
 
-/** Resolve the facts-grid rows for a node: group breadcrumb, poll-pool + current poller, address,
- *  maker/model, the profile/credential names (looked up by id), the parent-node name, and uptime. */
+/** Resolve every facts-grid row for a node: group breadcrumb, poll-pool + current poller, address,
+ *  maker/model, the profile/credential names (looked up by id), the parent-node name, uptime and
+ *  the DNS resolver.
+ *
+ *  Returns all of them keyed by [`FactRow`] — the caller renders `visibleFactRows(kind)`. Building
+ *  the full record and filtering at render (rather than assembling a per-kind array here) is what
+ *  makes the map exhaustive to the compiler: a new row cannot be added without a value. */
 function useFacts(
   node: NodeDetail,
   groups: NodeGroup[],
   nodes: NodeSummary[] | undefined,
   unreachable: boolean,
-): Fact[] {
+): Record<FactRow, Fact> {
   const { t } = useTranslation('nodes');
   const [profileName, setProfileName] = useState<string | null>(null);
   const [credentialName, setCredentialName] = useState<string | null>(null);
   const [parentName, setParentName] = useState<string | null>(null);
   const [uptime, setUptime] = useState<string | null>(null);
   const [assignment, setAssignment] = useState<NodeAssignment | undefined>(undefined);
+
+  // The rows a kind does not show are not fetched for. `visibleFactRows` is the one place that
+  // decides, so a row and the request that fills it cannot disagree about whether it is needed.
+  const rows = visibleFactRows(node.kind);
+  const wantsCredential = rows.includes('credential');
+  const wantsUptime = rows.includes('uptime');
 
   useEffect(() => {
     let cancelled = false;
@@ -520,7 +541,7 @@ function useFacts(
         .then((ps) => !cancelled && setProfileName(ps.find((p) => p.id === node.profile_id)?.name ?? null))
         .catch(() => undefined);
     } else setProfileName(null);
-    if (node.credential_id) {
+    if (node.credential_id && wantsCredential) {
       api
         .listCredentials()
         .then(
@@ -532,7 +553,7 @@ function useFacts(
     return () => {
       cancelled = true;
     };
-  }, [node.profile_id, node.credential_id]);
+  }, [node.profile_id, node.credential_id, wantsCredential]);
 
   // Parent node name: from the already-loaded inventory list if present, else a targeted fetch.
   useEffect(() => {
@@ -555,10 +576,12 @@ function useFacts(
     };
   }, [node.parent_id, nodes]);
 
-  // Uptime from the SNMP sysUpTime scalar (TimeTicks).
+  // Uptime from the SNMP sysUpTime scalar (TimeTicks). Only asked for when the row is shown — the
+  // monitor kinds are never SNMP-walked, so this could only ever 404 for them.
   useEffect(() => {
     let cancelled = false;
     setUptime(null);
+    if (!wantsUptime) return;
     api
       .getNodeMetric(node.id, 'snmp_sys_uptime_ticks')
       .then((r) => !cancelled && setUptime(formatUptimeTicks(r.value)))
@@ -566,7 +589,7 @@ function useFacts(
     return () => {
       cancelled = true;
     };
-  }, [node.id]);
+  }, [node.id, wantsUptime]);
 
   // Effective pool + current poller (ADR-009/020). Live coordinator state, so it is its own read
   // rather than part of the node row; an older core without the endpoint just leaves it undefined
@@ -585,27 +608,34 @@ function useFacts(
 
   const path = groupPath(groups, node.group_id ?? null);
   const groupName = (id: string) => groups.find((g) => g.id === id)?.name;
-  return [
-    { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },
+  return {
+    group: { label: t('field.group'), value: path.length ? path.join(' / ') : t('ungrouped') },
     // Placement facts sit together: which folder, which pool, which poller.
-    { label: t('field.pool'), value: poolFactLabel(assignment, groupName, t), mono: true },
-    {
+    pool: { label: t('field.pool'), value: poolFactLabel(assignment, groupName, t), mono: true },
+    polledBy: {
       label: t('field.polledBy'),
       value: polledByLabel(assignment?.polled_by, t),
       mono: assignment?.polled_by.state === 'assigned',
       warn: polledByIsWarning(assignment?.polled_by),
     },
-    { label: t('field.ipAddress'), value: node.address, mono: true },
-    { label: t('field.maker'), value: node.vendor || '—' },
-    { label: t('field.model'), value: node.model || '—', mono: true },
-    { label: t('field.deviceProfile'), value: profileName ?? '—' },
-    { label: t('field.snmpCredential'), value: credentialName ?? '—' },
-    { label: t('field.parentNode'), value: parentName ?? '—', mono: !!parentName },
-    {
+    address: { label: t('field.ipAddress'), value: node.address, mono: true },
+    maker: { label: t('field.maker'), value: node.vendor || '—' },
+    model: { label: t('field.model'), value: node.model || '—', mono: true },
+    profile: { label: t('field.deviceProfile'), value: profileName ?? '—' },
+    credential: { label: t('field.snmpCredential'), value: credentialName ?? '—' },
+    parent: { label: t('field.parentNode'), value: parentName ?? '—', mono: !!parentName },
+    uptime: {
       label: t('field.uptime'),
       value: unreachable ? t('overview.unreachableDash') : (uptime ?? '—'),
     },
-  ];
+    // DNS monitors only: the resolver being queried. Blank means the poller container's own
+    // resolver, which is a real answer, not a missing one.
+    resolver: {
+      label: t('field.resolver'),
+      value: node.dns_check?.resolver ?? t('overview.systemResolver'),
+      mono: !!node.dns_check?.resolver,
+    },
+  };
 }
 
 /** ifOperStatus (1 = up) → a node-state colour for status dots/charts. (Shared with the
