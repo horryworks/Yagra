@@ -5063,7 +5063,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-alert"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "serde",
@@ -5077,7 +5077,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-authz"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "data-encoding",
  "nkeys",
@@ -5090,7 +5090,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-bus"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-nats",
  "async-trait",
@@ -5108,7 +5108,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-common"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -5118,7 +5118,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-core"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-nats",
@@ -5179,14 +5179,14 @@ dependencies = [
 
 [[package]]
 name = "yagra-discovery"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "yagra-common",
 ]
 
 [[package]]
 name = "yagra-forward"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "chrono",
  "regex",
@@ -5202,7 +5202,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-hoststats"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "libc",
  "sysinfo",
@@ -5212,7 +5212,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-ingest"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "snmp2",
  "thiserror 2.0.18",
@@ -5220,7 +5220,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-poller"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5249,7 +5249,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-secrets"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -5259,7 +5259,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-telemetry"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "opentelemetry",
  "opentelemetry-otlp",
@@ -5274,7 +5274,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-topology"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "uuid",
  "yagra-common",
@@ -5282,7 +5282,7 @@ dependencies = [
 
 [[package]]
 name = "yagra-transport"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "async-trait",
  "csnmp",

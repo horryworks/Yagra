@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.3 — the upgrade reaches every site, one poller at a time, and a handover no longer costs samples
+
 ### New Features
 - **A remote-site poller can now be upgraded by the same button that upgrades the deployment.**
   Until now Settings ▸ Upgrade replaced core, the WebUI and a co-located poller — everything in one

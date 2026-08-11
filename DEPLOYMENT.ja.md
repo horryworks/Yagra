@@ -433,6 +433,7 @@ export RUST_LOG=info
 | `YAGRA_POLLER_POOL` | `default` | このポーラが担当するプール |
 | `YAGRA_BUS_CA_FILE` | 未設定 ⇒ 平文 | `tls://` バスに固定する CA/サーバ証明書 |
 | `YAGRA_MAX_CONCURRENT_POLLS` | `64` | 同時実行プローブ数の上限 |
+| `YAGRA_ADOPT_RATE_PER_SEC` | `200` | 他ポーラーの作業を引き継ぐ際のジッタ窓を決めるレート（チェック数/秒）。`0` で間隔全体にジッタ（従来動作）|
 | `YAGRA_POLLER_QUEUE` | `pollers` | 負荷分散ジョブ消費用の NATS キューグループ |
 | **パッシブイベント（syslog / SNMP トラップ）** | | |
 | `YAGRA_SYSLOG_BIND` | 未設定 ⇒ 無効 | syslog 受信の UDP バインド（例 `0.0.0.0:1514`） |

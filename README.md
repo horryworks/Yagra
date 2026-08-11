@@ -19,7 +19,7 @@ polling**. Users access it through the WebUI.
 > instead of a public issue. **Pull requests are not being accepted at this time** — see
 > [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Status: **v0.2.2 — Yagra takes its own next version, from its own WebUI.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.2.3 — Yagra upgrades its remote sites too, one poller at a time.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -72,7 +72,10 @@ polling**. Users access it through the WebUI.
 > sidecar that holds the Docker socket so core never has to — with a switch on the page to shut the
 > mechanism off, a declared **downgrade window** so going back is a supported move rather than a
 > gamble, and an offline path that installs from a `docker save` archive where no registry is
-> reachable. HA stores remain a configuration step away, not a rewrite.
+> reachable. That upgrade now **reaches the pollers at monitored sites as well** (opt-in per site):
+> core hands each one the release it just installed, **one poller at a time per pool**, so a pool
+> with two or more pollers keeps monitoring throughout, and the page names any poller that will stay
+> behind before you press the button. HA stores remain a configuration step away, not a rewrite.
 
 ## Components
 
