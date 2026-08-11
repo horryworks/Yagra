@@ -16,19 +16,21 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { api, errMsg } from '../services/api';
 import type { UpgradeStatus } from '../types/api';
+import type { Offer } from './upgradeStatus';
 import {
   buildKind,
   bundleTagFromFilename,
-  canApply,
+  canOffer,
   canUploadBundle,
   isRunning,
   looksLikeReleaseTag,
   mechanism,
-  offerableReleases,
   rollback,
+  rollbacks,
   runState,
   shortRef,
   switchPending,
+  upgrades,
 } from './upgradeStatus';
 import './UpgradePage.css';
 
@@ -70,6 +72,7 @@ export function UpgradePage() {
   // `null` when no upload is in flight; 0…1 while one is.
   const [uploaded, setUploaded] = useState<number | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [showOlder, setShowOlder] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
   // Sticky: once a run starts, a failed poll means core is restarting — which is the operation
   // working, not an error. Without this the page would flip to "could not read" mid-upgrade.
@@ -182,13 +185,42 @@ export function UpgradePage() {
     );
   }
 
+  // One row per release. The button says which way it goes — "upgrade to this" on a release older
+  // than the running one is simply false, and this page is where an operator decides whether to
+  // touch production.
+  const row = (offer: Offer) => (
+    <li key={offer.tag} className="upgrade-release">
+      <span className="mono">{offer.tag}</span>
+      <div className="upgrade-release-action">
+        {offer.blocked && (
+          <span className="upgrade-blocked muted">{t(`offerBlock.${offer.blocked}`)}</span>
+        )}
+        <Button
+          variant={offer.direction === 'upgrade' ? 'primary' : undefined}
+          disabled={!canOffer(status, offer)}
+          onClick={() => {
+            setApplyError(null);
+            setConfirming(offer.tag);
+          }}
+        >
+          {t(`offerAction.${offer.direction}`)}
+        </Button>
+      </div>
+    </li>
+  );
+
   const kind = buildKind(status.current.build_profile);
   const ref = shortRef(status.current.source_ref);
   const back = rollback(status);
   const state = mechanism(status);
-  const releases = offerableReleases(status);
   const last = status.last_run;
   const lastState = runState(last?.state);
+  const newer = upgrades(status);
+  const older = rollbacks(status);
+  // The dialog has to say the same thing the button did. Falls back to `upgrade` only if the offer
+  // vanished between the click and the render, which cannot happen without a reload.
+  const confirmingDir =
+    status.offers.find((o) => o.tag === confirming)?.direction ?? 'upgrade';
   const uploading = uploaded !== null;
   const tagOk = looksLikeReleaseTag(bundleTag);
   const bundleReady = !uploading && canUploadBundle(status) && bundleFile !== null && tagOk;
@@ -299,28 +331,33 @@ export function UpgradePage() {
             <p className="upgrade-hint muted">
               {t('mechanism.readyFrom', { repo: status.updater.repo ?? '—' })}
             </p>
-            {releases.length === 0 ? (
+            {newer.length === 0 && (
               <p className="upgrade-note">
                 {status.available?.error ? t('mechanism.noRegistry') : t('mechanism.noNewer')}
               </p>
-            ) : (
-              <ul className="upgrade-releases">
-                {releases.map((tag) => (
-                  <li key={tag} className="upgrade-release">
-                    <span className="mono">{tag}</span>
-                    <Button
-                      variant="primary"
-                      disabled={!canApply(status)}
-                      onClick={() => {
-                        setApplyError(null);
-                        setConfirming(tag);
-                      }}
-                    >
-                      {t('apply.button')}
-                    </Button>
-                  </li>
-                ))}
-              </ul>
+            )}
+            {newer.length > 0 && <ul className="upgrade-releases">{newer.map(row)}</ul>}
+
+            {/* Older releases are folded away. They are the long half of the list and the rare
+                half of the intent — nobody opens this page to go backwards by default. */}
+            {older.length > 0 && (
+              <>
+                <button
+                  type="button"
+                  className="upgrade-disclosure"
+                  onClick={() => setShowOlder(!showOlder)}
+                >
+                  {showOlder
+                    ? t('rollbackList.hide')
+                    : t('rollbackList.show', { count: older.length })}
+                </button>
+                {showOlder && (
+                  <>
+                    <p className="upgrade-hint muted">{t('rollbackList.hint')}</p>
+                    <ul className="upgrade-releases">{older.map(row)}</ul>
+                  </>
+                )}
+              </>
             )}
           </>
         )}
@@ -391,7 +428,7 @@ export function UpgradePage() {
 
       {confirming && (
         <Modal
-          title={t('apply.confirmTitle', { tag: confirming })}
+          title={t(`apply.confirmTitle.${confirmingDir}`, { tag: confirming })}
           onClose={() => setConfirming(null)}
           footer={
             <>
@@ -399,12 +436,14 @@ export function UpgradePage() {
                 {t('apply.cancel')}
               </Button>
               <Button variant="danger" onClick={() => void apply(confirming)} disabled={submitting}>
-                {t('apply.confirm')}
+                {t(`apply.confirm.${confirmingDir}`)}
               </Button>
             </>
           }
         >
-          <p className="upgrade-note">{t('apply.confirmBody', { tag: confirming })}</p>
+          <p className="upgrade-note">
+            {t(`apply.confirmBody.${confirmingDir}`, { tag: confirming })}
+          </p>
           <p className="upgrade-hint muted">{t('apply.confirmBackup')}</p>
           {back.kind === 'floored' && (
             <p className="upgrade-hint muted">

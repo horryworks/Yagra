@@ -6875,6 +6875,16 @@ export interface components {
          * @enum {string}
          */
         NotifyEvent: "fire" | "resolve" | "suppress";
+        /**
+         * @description Why a release cannot be installed.
+         * @enum {string}
+         */
+        OfferBlock: "below_floor" | "unknown";
+        /**
+         * @description Which way a release would move this deployment.
+         * @enum {string}
+         */
+        OfferDirection: "upgrade" | "rollback";
         /** @description OIDC callback body: the `code` + `state` the WebUI forwards from the IdP redirect. */
         OidcCallbackBody: {
             code: string;
@@ -7357,6 +7367,24 @@ export interface components {
             node_id: string;
             provider: string;
             summary: string;
+        };
+        /**
+         * @description A release the operator could move to, with the direction and the verdict already decided.
+         *
+         *     Computed here rather than in the WebUI on purpose. The comparison is semver — `0.2.10` is newer
+         *     than `0.2.9` — and it is the same rule that decides whether a rollback is safe, so it lives in
+         *     the one place that already owns [`binding_floor`]. A second implementation in TypeScript would
+         *     be the drift `.claude/rules/extensibility.md` §2 names, on the question where being subtly wrong
+         *     costs the most.
+         */
+        ReleaseOffer: {
+            blocked?: null | components["schemas"]["OfferBlock"];
+            /** @description Resolved image digest, when the sidecar could resolve one. */
+            core_digest?: string | null;
+            /** @description Whether this moves forward or back. */
+            direction: components["schemas"]["OfferDirection"];
+            /** @description The release tag. */
+            tag: string;
         };
         /**
          * @description A report's contents: the answer, the evidence it was grounded in, and the language it was
@@ -8495,6 +8523,11 @@ export interface components {
              */
             enabled: boolean;
             last_run?: null | components["schemas"]["RunStatus"];
+            /**
+             * @description The moves this deployment could make, each with its direction and whether it is allowed.
+             *     Excludes the running version. Empty when the updater has found nothing.
+             */
+            offers: components["schemas"]["ReleaseOffer"][];
             /** @description Applied migrations and the compatibility floor they imply. */
             schema: components["schemas"]["SchemaState"];
             /** @description The updater container's own state. */

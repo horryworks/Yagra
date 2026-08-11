@@ -5,21 +5,24 @@ import {
   buildKind,
   bundleTagFromFilename,
   canApply,
+  canOffer,
   canUploadBundle,
   isRunning,
   looksLikeReleaseTag,
   mechanism,
-  offerableReleases,
   rollback,
+  rollbacks,
   runState,
   shortRef,
   switchPending,
+  upgrades,
 } from './upgradeStatus';
 
 function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
   return {
     enabled: false,
     upgrade_enabled: true,
+    offers: [],
     updater: {
       present: false,
       fresh: false,
@@ -113,20 +116,42 @@ describe('applying', () => {
     expect(canApply(busy)).toBe(false);
   });
 
-  it('never offers the version already running as somewhere to move to', () => {
+  it('splits what the backend offered into forwards and backwards', () => {
     const s = status({
-      available: {
-        written_at: 1,
-        releases: [{ tag: 'v0.2.2', core_digest: null }, { tag: 'v0.2.1', core_digest: null }],
-        error: null,
-      },
+      enabled: true,
+      ...updater(true, true),
+      offers: [
+        { tag: 'v0.2.2', core_digest: null, direction: 'upgrade', blocked: null },
+        { tag: 'v0.2.0', core_digest: null, direction: 'rollback', blocked: null },
+        { tag: 'v0.1.6', core_digest: null, direction: 'rollback', blocked: 'below_floor' },
+      ],
     });
-    expect(offerableReleases(s)).toEqual(['v0.2.2']); // current is 0.2.1
+    expect(upgrades(s).map((o) => o.tag)).toEqual(['v0.2.2']);
+    expect(rollbacks(s).map((o) => o.tag)).toEqual(['v0.2.0', 'v0.1.6']);
+  });
+
+  // The bug this guards: with no floor declared the page offered twenty rollbacks, every one of
+  // them a binary that cannot start against the applied schema. A blocked offer stays visible —
+  // an operator looking for that version needs to see why, not to find it missing — but the
+  // button must be dead.
+  it('shows a blocked rollback and refuses to let it be pressed', () => {
+    const s = status({
+      enabled: true,
+      ...updater(true, true),
+      offers: [
+        { tag: 'v0.2.0', core_digest: null, direction: 'rollback', blocked: null },
+        { tag: 'v0.1.6', core_digest: null, direction: 'rollback', blocked: 'below_floor' },
+      ],
+    });
+    const [ok, blocked] = rollbacks(s);
+    expect(canOffer(s, ok)).toBe(true);
+    expect(canOffer(s, blocked)).toBe(false);
   });
 
   it('offers nothing when the updater never reached a registry', () => {
     const s = status({ available: { written_at: 1, releases: [], error: 'no registry' } });
-    expect(offerableReleases(s)).toEqual([]);
+    expect(upgrades(s)).toEqual([]);
+    expect(rollbacks(s)).toEqual([]);
   });
 
   // A newer updater may invent a state. Rendering a raw key at an operator is the failure mode.

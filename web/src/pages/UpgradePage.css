@@ -62,6 +62,74 @@
   cursor: not-allowed;
 }
 
+/* The release list. This had no styles at all until 2026-08-11 and rendered as a bulleted list with
+   the button jammed against the version — a `<ul>` with no rules is not "unstyled", it is wrong. */
+.upgrade-releases {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 560px;
+}
+
+.upgrade-release {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  font-size: var(--font-sm);
+}
+
+.upgrade-release-action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Why a release cannot be installed, beside its dead button rather than in a tooltip: the whole
+   point is that the operator reads it without hunting. */
+.upgrade-blocked {
+  font-size: var(--font-sm);
+  text-align: right;
+  max-width: 34ch;
+  line-height: 1.4;
+}
+
+.upgrade-disclosure {
+  margin-top: 12px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-color);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.upgrade-disclosure:hover {
+  color: var(--accent-hover);
+}
+
+@media (max-width: 560px) {
+  .upgrade-release {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .upgrade-blocked {
+    text-align: left;
+    max-width: none;
+  }
+}
+
 /* Offline bundle: file, tag, go. Wraps rather than scrolls — the file input is the widest thing
    on the page and its rendered width is the browser's, not ours. */
 .upgrade-bundle {

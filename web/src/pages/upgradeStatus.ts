@@ -67,11 +67,35 @@ export function canApply(status: UpgradeStatus): boolean {
   return status.enabled && !isRunning(status);
 }
 
-/** Releases worth offering: everything the updater found except the one already running.
- *  Sorted by the updater; this only removes the current version so the list is a list of *moves*. */
-export function offerableReleases(status: UpgradeStatus): string[] {
-  const current = `v${status.current.core_version}`;
-  return (status.available?.releases ?? []).map((r) => r.tag).filter((t) => t !== current);
+/** Which way a release moves this deployment. The backend decides — see `release_offers` in
+ *  `crates/yagra-core/src/upgrade.rs`; comparing versions here would be a second copy of the rule
+ *  that says whether a rollback is safe. `as const` so `i18nEnumKeys.test.ts` can iterate it. */
+export const UPGRADE_OFFER_DIRECTIONS = ['upgrade', 'rollback'] as const;
+export type OfferDirection = (typeof UPGRADE_OFFER_DIRECTIONS)[number];
+
+/** Why a release cannot be installed. Same source, same reason. */
+export const UPGRADE_OFFER_BLOCKS = ['below_floor', 'unknown'] as const;
+export type OfferBlock = (typeof UPGRADE_OFFER_BLOCKS)[number];
+
+export type Offer = UpgradeStatus['offers'][number];
+
+/** The releases newer than the running one. */
+export function upgrades(status: UpgradeStatus): Offer[] {
+  return status.offers.filter((o) => o.direction === 'upgrade');
+}
+
+/** The releases older than the running one, blocked ones included.
+ *
+ *  Kept rather than filtered out: an operator hunting for a version needs to see that it exists and
+ *  why it is refused. Dropping it would read as "that release never existed" (ADR-050 decision 10).
+ */
+export function rollbacks(status: UpgradeStatus): Offer[] {
+  return status.offers.filter((o) => o.direction === 'rollback');
+}
+
+/** May this particular release be installed right now? */
+export function canOffer(status: UpgradeStatus, offer: Offer): boolean {
+  return canApply(status) && !offer.blocked;
 }
 
 /** What this deployment's migration history says about going back. */

@@ -34,6 +34,11 @@
     shared volume is ever executed. Requesting an upgrade needs manage-configuration **and**
     manage-credentials, and none of it is on the MCP surface.
   - The registry is checked once a day.
+  - Each release is labelled with the direction it moves you, and a version that cannot read the
+    current database is shown greyed out with the reason rather than hidden. Releases before 0.2.2
+    are in that category for every deployment: the startup relaxation that lets a core run against
+    a database migrated by a newer one first ships here, so there is nothing older to return to
+    except from a backup.
 - **Upgrading with no registry at all.** `POST /api/v1/system/upgrade/bundle` takes a `docker save`
   archive of a release's three images, streams it to the shared volume and installs it — the same
   backup, the same composition-from-the-target-image, the same provenance check afterwards. Only

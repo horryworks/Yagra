@@ -76,7 +76,12 @@ import enSettingsTls from './locales/en/settings-tls.json';
 import jaSettingsTls from './locales/ja/settings-tls.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
-import { UPGRADE_BUILD_KINDS, UPGRADE_RUN_STATES } from './pages/upgradeStatus';
+import {
+  UPGRADE_BUILD_KINDS,
+  UPGRADE_OFFER_BLOCKS,
+  UPGRADE_OFFER_DIRECTIONS,
+  UPGRADE_RUN_STATES,
+} from './pages/upgradeStatus';
 import enSettingsAuth from './locales/en/settings-auth.json';
 import jaSettingsAuth from './locales/ja/settings-auth.json';
 import enSettingsAi from './locales/en/settings-ai.json';
@@ -494,6 +499,29 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
       'buildKindHint.',
       UPGRADE_BUILD_KINDS,
+    );
+    // Direction is the one this page got wrong in front of an operator: every button read
+    // "upgrade to this" while offering versions older than the running one. Four key families are
+    // keyed off it now, and a missing one would put a raw key on the button that replaces a
+    // production deployment.
+    for (const prefix of [
+      'offerAction.',
+      'apply.confirmTitle.',
+      'apply.confirmBody.',
+      'apply.confirm.',
+    ]) {
+      expectKeys(
+        `upgrade offer direction (${prefix})`,
+        { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+        prefix,
+        UPGRADE_OFFER_DIRECTIONS,
+      );
+    }
+    expectKeys(
+      'upgrade offer block',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'offerBlock.',
+      UPGRADE_OFFER_BLOCKS,
     );
   });
 

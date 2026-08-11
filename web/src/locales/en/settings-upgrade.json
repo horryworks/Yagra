@@ -71,13 +71,35 @@
     "failed": "The archive could not be uploaded."
   },
 
+  "offerAction": {
+    "upgrade": "Upgrade to this",
+    "rollback": "Go back to this"
+  },
+  "offerBlock": {
+    "below_floor": "This version cannot read the current database.",
+    "unknown": "Cannot tell whether this version can read the current database."
+  },
+  "rollbackList": {
+    "show": "Show {{count}} earlier releases",
+    "hide": "Hide earlier releases",
+    "hint": "Going back is not an upgrade: it stops at the oldest version that can still read this database, and anything older needs a restore from backup."
+  },
+
   "apply": {
-    "button": "Upgrade to this",
-    "confirmTitle": "Upgrade to {{tag}}?",
-    "confirmBody": "Every Yagra container will be replaced with {{tag}}. Monitoring stops for the duration and this page will lose its connection until the new version is up.",
+    "confirmTitle": {
+      "upgrade": "Upgrade to {{tag}}?",
+      "rollback": "Go back to {{tag}}?"
+    },
+    "confirmBody": {
+      "upgrade": "Every Yagra container will be replaced with {{tag}}. Monitoring stops for the duration and this page will lose its connection until the new version is up.",
+      "rollback": "Every Yagra container will be replaced with {{tag}}, which is older than what is running. Nothing is deleted — columns the newer version added stay in place, unread — but anything only it understood stops being visible until you come forward again. Monitoring stops for the duration and this page will lose its connection."
+    },
     "confirmBackup": "A backup is taken first. It is a rollback aid, not a disaster-recovery backup — it lands on this same host, so keep your own copies elsewhere.",
     "confirmFloor": "Note: this database can only be run by {{minCore}} or newer, so it cannot be taken back past that point.",
-    "confirm": "Upgrade now",
+    "confirm": {
+      "upgrade": "Upgrade now",
+      "rollback": "Go back now"
+    },
     "cancel": "Cancel",
     "failed": "The upgrade could not be started."
   },

@@ -160,6 +160,93 @@ pub struct AvailableRelease {
     pub core_digest: Option<String>,
 }
 
+/// Which way a release would move this deployment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OfferDirection {
+    /// Newer than what is running.
+    Upgrade,
+    /// Older than what is running.
+    Rollback,
+}
+
+/// Why a release cannot be installed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OfferBlock {
+    /// Older than the compatibility floor: that binary cannot start against this schema at all.
+    BelowFloor,
+    /// Neither the tag nor the floor could be read as a version, so nothing can be promised.
+    Unknown,
+}
+
+/// A release the operator could move to, with the direction and the verdict already decided.
+///
+/// Computed here rather than in the WebUI on purpose. The comparison is semver — `0.2.10` is newer
+/// than `0.2.9` — and it is the same rule that decides whether a rollback is safe, so it lives in
+/// the one place that already owns [`binding_floor`]. A second implementation in TypeScript would
+/// be the drift `.claude/rules/extensibility.md` §2 names, on the question where being subtly wrong
+/// costs the most.
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct ReleaseOffer {
+    /// The release tag.
+    pub tag: String,
+    /// Resolved image digest, when the sidecar could resolve one.
+    pub core_digest: Option<String>,
+    /// Whether this moves forward or back.
+    pub direction: OfferDirection,
+    /// Why it must not be offered, or `null` when it can be.
+    pub blocked: Option<OfferBlock>,
+}
+
+/// Turn what the sidecar found into what the operator may actually press.
+///
+/// Excludes the running version — the list is a list of *moves*. A rollback below the compatibility
+/// floor is returned but marked blocked rather than dropped: an operator looking for a version that
+/// is not there needs to know it exists and why it is refused (ADR-050 decision 10), and silently
+/// shortening the list would read as "that release never existed".
+#[must_use]
+pub fn release_offers(
+    releases: &[AvailableRelease],
+    current: &str,
+    floor: Option<&CompatFloor>,
+) -> Vec<ReleaseOffer> {
+    let running = parse_version(current);
+    // An unreadable floor blocks every rollback. Same stance as `binding_floor`: a floor nobody can
+    // read is not evidence that going back is safe.
+    let min = floor.map(|f| (parse_version(&f.min_core), f));
+
+    releases
+        .iter()
+        .filter_map(|r| {
+            let target = parse_version(&r.tag);
+            let direction = match (&target, &running) {
+                (Some(t), Some(c)) if t == c => return None,
+                (Some(t), Some(c)) if t > c => OfferDirection::Upgrade,
+                (Some(_), Some(_)) => OfferDirection::Rollback,
+                // Cannot tell which way it goes. Treat it as a rollback so it inherits the
+                // cautious branch below rather than being offered as a safe step forward.
+                _ => OfferDirection::Rollback,
+            };
+            let blocked = match (direction, &target, &min) {
+                (OfferDirection::Upgrade, _, _) => None,
+                (OfferDirection::Rollback, None, _) => Some(OfferBlock::Unknown),
+                (OfferDirection::Rollback, Some(_), None) => None,
+                (OfferDirection::Rollback, Some(t), Some((Some(m), _))) => {
+                    (t < m).then_some(OfferBlock::BelowFloor)
+                }
+                (OfferDirection::Rollback, Some(_), Some((None, _))) => Some(OfferBlock::Unknown),
+            };
+            Some(ReleaseOffer {
+                tag: r.tag.clone(),
+                core_digest: r.core_digest.clone(),
+                direction,
+                blocked,
+            })
+        })
+        .collect()
+}
+
 /// The versions the sidecar last saw in the registry (`available.json`).
 #[derive(Debug, Clone, serde::Deserialize, serde::Serialize, utoipa::ToSchema)]
 pub struct AvailableVersions {
@@ -964,6 +1051,79 @@ mod tests {
             Err(BundleError::BadRunId)
         ));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn avail(tags: &[&str]) -> Vec<AvailableRelease> {
+        tags.iter()
+            .map(|t| AvailableRelease {
+                tag: (*t).to_owned(),
+                core_digest: None,
+            })
+            .collect()
+    }
+
+    /// The bug this function exists to stop, as a test.
+    ///
+    /// With an empty `schema_compat` the page offered twenty rollbacks and every one of them was a
+    /// binary that cannot start against this schema — measured on the real v0.2.1 image, which
+    /// embeds migrations up to 0077 and has no `relax_ignore_missing`.
+    #[test]
+    fn a_rollback_below_the_floor_is_offered_but_refused() {
+        let floor = floor(78, "0.2.2");
+        let offers = release_offers(
+            &avail(&["v0.3.0", "v0.2.2", "v0.2.1", "v0.1.6"]),
+            "0.2.2",
+            Some(&floor),
+        );
+        let by = |t: &str| offers.iter().find(|o| o.tag == t).cloned();
+
+        assert!(by("v0.2.2").is_none(), "the running version is not a move");
+        let up = by("v0.3.0").unwrap();
+        assert_eq!(up.direction, OfferDirection::Upgrade);
+        assert!(
+            up.blocked.is_none(),
+            "forward is never blocked by the floor"
+        );
+        for old in ["v0.2.1", "v0.1.6"] {
+            let o = by(old).unwrap();
+            assert_eq!(o.direction, OfferDirection::Rollback);
+            assert_eq!(
+                o.blocked,
+                Some(OfferBlock::BelowFloor),
+                "{old} cannot start"
+            );
+        }
+    }
+
+    /// No declared floor means every applied migration is reversible, so a rollback is allowed.
+    #[test]
+    fn without_a_floor_a_rollback_is_offered() {
+        let offers = release_offers(&avail(&["v0.2.0"]), "0.2.1", None);
+        assert_eq!(offers[0].direction, OfferDirection::Rollback);
+        assert!(offers[0].blocked.is_none());
+    }
+
+    /// The reason this is not a string comparison in TypeScript.
+    #[test]
+    fn direction_is_decided_by_semver_not_by_text() {
+        let offers = release_offers(&avail(&["v0.2.10"]), "0.2.9", None);
+        assert_eq!(
+            offers[0].direction,
+            OfferDirection::Upgrade,
+            "0.2.10 is newer than 0.2.9; as text it sorts before it"
+        );
+    }
+
+    /// Anything unreadable — the tag or the floor — is refused rather than assumed safe.
+    #[test]
+    fn an_unreadable_version_is_never_offered_as_a_safe_move() {
+        let odd = release_offers(&avail(&["nightly"]), "0.2.1", None);
+        assert_eq!(odd[0].direction, OfferDirection::Rollback);
+        assert_eq!(odd[0].blocked, Some(OfferBlock::Unknown));
+
+        let bad_floor = floor(78, "not-a-version");
+        let offers = release_offers(&avail(&["v0.2.0"]), "0.2.1", Some(&bad_floor));
+        assert_eq!(offers[0].blocked, Some(OfferBlock::Unknown));
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

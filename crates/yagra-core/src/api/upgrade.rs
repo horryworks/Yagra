@@ -167,8 +167,12 @@ pub(crate) struct UpgradeStatusResponse {
     current: RunningBuild,
     /// Applied migrations and the compatibility floor they imply.
     schema: SchemaState,
-    /// Releases the updater last saw in the registry; `null` when it has never looked.
+    /// Releases the updater last saw in the registry; `null` when it has never looked. Carries the
+    /// raw list and why it may be empty — `offers` is the part a page should render.
     available: Option<AvailableVersions>,
+    /// The moves this deployment could make, each with its direction and whether it is allowed.
+    /// Excludes the running version. Empty when the updater has found nothing.
+    offers: Vec<crate::upgrade::ReleaseOffer>,
     /// The most recent run, finished or in flight; `null` when none has ever been requested.
     last_run: Option<RunStatus>,
 }
@@ -231,6 +235,7 @@ pub(crate) async fn upgrade_status(
 ) -> anyhow::Result<UpgradeStatusResponse> {
     let schema = upgrade.schema_state().await?;
     let switched_on = upgrade.enabled().await;
+    let available = upgrade.available();
     let p = crate::support_bundle::provenance(started);
     let beat = upgrade.heartbeat();
     let now = super::util::now_unix_s();
@@ -260,8 +265,13 @@ pub(crate) async fn upgrade_status(
             hostname: p.hostname,
             uptime_seconds: p.uptime_seconds,
         },
+        available: available.clone(),
+        offers: crate::upgrade::release_offers(
+            available.as_ref().map_or(&[], |a| a.releases.as_slice()),
+            p.core_version,
+            schema.compat.as_ref(),
+        ),
         schema,
-        available: upgrade.available(),
         last_run: upgrade.last_run(),
     })
 }
