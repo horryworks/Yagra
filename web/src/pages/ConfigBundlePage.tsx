@@ -21,6 +21,7 @@ import { Button } from '../components/ui/Button';
 import type { ConfigBundle, ImportReport } from '../types/api';
 import {
   bundleFilename,
+  bundleImportErrorKey,
   bundleRowCount,
   bundleSections,
   parseBundleFile,
@@ -129,9 +130,9 @@ function ImportPanel() {
             return;
           }
           setError(
-            parsed.reason === 'unsupported-version'
-              ? t('bundle.import.err.version', { version: parsed.version })
-              : t(`bundle.import.err.${parsed.reason}`),
+            t(`bundle.import.err.${bundleImportErrorKey(parsed.reason)}`, {
+              version: 'version' in parsed ? parsed.version : undefined,
+            }),
           );
         })
         .catch(() => setError(t('bundle.import.err.read')));

@@ -100,8 +100,15 @@ export function sliderFor(sigma: number): number {
   return Math.min(Math.max(Math.round(raw), 1), 5);
 }
 
+/** Every reason the schedule dialog refuses to submit. `as const` so the i18n coverage test can
+ *  walk it: the dialog renders `t(`schedule.err.${problem}`)` with no fallback. */
+export const SCHEDULE_FORM_PROBLEMS = ['unknown_cadence', 'missing_scope'] as const;
+
+/** Why a schedule cannot be saved. */
+export type ScheduleFormProblem = (typeof SCHEDULE_FORM_PROBLEMS)[number];
+
 /** Whether the form can be submitted — the reasons are all things the backend would reject. */
-export function scheduleFormError(f: ScheduleForm): 'unknown_cadence' | 'missing_scope' | null {
+export function scheduleFormError(f: ScheduleForm): ScheduleFormProblem | null {
   if (f.frequency === 'unknown') return 'unknown_cadence';
   // A group/node scope with no id would widen to the whole fleet in the runner.
   if (f.scope.kind !== 'all' && !f.scope.id) return 'missing_scope';

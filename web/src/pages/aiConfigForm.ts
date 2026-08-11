@@ -58,7 +58,16 @@ export function keyIsRequired(
 }
 
 /** Validation-problem codes; the caller turns these into localized text. */
-export type AiFormProblem = 'modelRequired' | 'projectRequired' | 'keyRequired' | 'tokensRange';
+/** Every reason the AI settings form refuses to save. `as const` so the i18n coverage test can walk
+ *  it: the page renders `t(`err.${problem}`)` with no fallback. */
+export const AI_FORM_PROBLEMS = [
+  'modelRequired',
+  'projectRequired',
+  'keyRequired',
+  'tokensRange',
+] as const;
+
+export type AiFormProblem = (typeof AI_FORM_PROBLEMS)[number];
 
 /** The first problem with the form, or `null` when it can be submitted. */
 export function validateAiForm(

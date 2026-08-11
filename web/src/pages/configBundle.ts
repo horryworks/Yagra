@@ -45,10 +45,31 @@ export const BUNDLE_TABLES = [
 /** A carried table's name. */
 export type BundleTable = (typeof BUNDLE_TABLES)[number];
 
-/** Why a file the operator picked is not usable, or the bundle it turned out to be. */
+/** Every reason a picked file is refused before it is uploaded. `as const` so the i18n coverage
+ *  test can walk it — the page renders the resolved key with no fallback, and that sentence is all
+ *  the operator is told about why their file will not import. */
+export const BUNDLE_IMPORT_REASONS = ['invalid-json', 'not-a-bundle', 'unsupported-version'] as const;
+
+/** Why a picked file is not usable. */
+export type BundleImportReason = (typeof BUNDLE_IMPORT_REASONS)[number];
+
+/** The `system:bundle.import.err.*` leaf for a refusal.
+ *
+ *  Not simply the reason: `unsupported-version` renders a sentence carrying `{{version}}`, so its
+ *  key is `version`. Here rather than as a ternary in the page because a mapping in a `.tsx` cannot
+ *  be walked by the i18n coverage test (Vitest never runs one), and this is exactly the branch that
+ *  would otherwise let a new reason ship pointing at a key nobody wrote. */
+export function bundleImportErrorKey(reason: BundleImportReason): string {
+  return reason === 'unsupported-version' ? 'version' : reason;
+}
+
+/** Why a file the operator picked is not usable, or the bundle it turned out to be.
+ *
+ *  The reasons are spelled through `BundleImportReason` rather than re-listed, so the parser and
+ *  the list the coverage test walks cannot come apart. */
 export type ParsedBundle =
   | { ok: true; bundle: ConfigBundle }
-  | { ok: false; reason: 'invalid-json' | 'not-a-bundle' }
+  | { ok: false; reason: Exclude<BundleImportReason, 'unsupported-version'> }
   | { ok: false; reason: 'unsupported-version'; version: number };
 
 /** Read a picked file. Deliberately strict about the two header fields and indifferent to

@@ -17,8 +17,13 @@ export type Span = 4 | 6 | 8 | 12;
 export type RowSpan = 1 | 2 | 3;
 
 /** How much backend work a widget needs today (mirrors the design handoff legend). `new`
- *  widgets are catalogued but not yet buildable, so they show disabled in the picker. */
-export type Backing = 'live' | 'rollup' | 'new';
+ *  widgets are catalogued but not yet buildable, so they show disabled in the picker.
+ *
+ *  `as const` because the catalog modal badges each widget with `t(`catalog.backing.${backing}`)`
+ *  and has no fallback — a fourth tag added without strings would put a raw key on every card in
+ *  the picker, in both locales (extensibility.md §4). */
+export const BACKINGS = ['live', 'rollup', 'new'] as const;
+export type Backing = (typeof BACKINGS)[number];
 
 /** Per-instance settings bag (widget-specific; e.g. `{ nodeId }` for the RTT chart). Opaque to
  *  everything but the owning widget. */

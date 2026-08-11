@@ -33,6 +33,39 @@ export type ExpectedStatusMode = (typeof EXPECTED_STATUS_MODES)[number];
 export const BODY_MATCH_MODES = ['contains', 'not_contains'] as const;
 export type BodyMatchMode = (typeof BODY_MATCH_MODES)[number];
 
+/** Every reason this dialog refuses to save, across both check kinds.
+ *
+ *  One list rather than one per builder: the modal renders all of them through the same
+ *  `t(`checkEdit.err.${built.error}`)` with no fallback, so they share one key family and one
+ *  coverage test. A code added to a builder without a row here fails to compile there, which is the
+ *  point — the alternative is a raw key in the dialog that configures what a monitor checks. */
+export const CHECK_FORM_PROBLEMS = [
+  // URL check
+  'urlRequired',
+  'urlScheme',
+  'timeout',
+  'statusCodes',
+  'statusRange',
+  'bodyPatternRequired',
+  'bodyPatternTooLong',
+  'bodyMaxBytes',
+  'bodyMatchNeedsBody',
+  'tooManyExtracts',
+  'extractMetricRequired',
+  'extractPathRequired',
+  'extractMetricName',
+  'extractMetricReserved',
+  'extractMetricDuplicate',
+  'extractPathTooLong',
+  // DNS check
+  'dnsNameRequired',
+  'resolverPort',
+  'maxDepth',
+] as const;
+
+/** Why a check's configuration cannot be saved. */
+export type CheckFormProblem = (typeof CHECK_FORM_PROBLEMS)[number];
+
 /** Body-rule bounds, restated so the form can say *why* before a round trip.
  *
  *  ⚠️ A mirror of `yagra_common::{BODY_PATTERN_MAX_LEN, BODY_MAX_BYTES_RANGE,
@@ -168,7 +201,7 @@ export function dnsDraftFrom(cfg: DnsCheckConfig): DnsCheckDraft {
 }
 
 /** Build the `expected_status` union from the flat fields, or name what is wrong with them. */
-function expectedStatusFrom(d: UrlCheckDraft): { ok: ExpectedStatus | undefined } | { err: string } {
+function expectedStatusFrom(d: UrlCheckDraft): { ok: ExpectedStatus | undefined } | { err: CheckFormProblem } {
   if (d.statusMode === 'two_xx') return { ok: undefined };
   if (d.statusMode === 'exact') {
     const parts = d.statusCodes
@@ -188,7 +221,7 @@ function expectedStatusFrom(d: UrlCheckDraft): { ok: ExpectedStatus | undefined 
 }
 
 /** Build the body-keyword rule, or name what is wrong with it. `undefined` ⇒ no rule configured. */
-function bodyMatchFrom(d: UrlCheckDraft): { ok: BodyMatch | undefined } | { err: string } {
+function bodyMatchFrom(d: UrlCheckDraft): { ok: BodyMatch | undefined } | { err: CheckFormProblem } {
   if (!d.bodyMatchEnabled) return { ok: undefined };
   const pattern = d.bodyPattern.trim();
   // An empty keyword is contained by every string: `contains` would always pass and `not_contains`
@@ -206,7 +239,7 @@ function filledExtracts(d: UrlCheckDraft): JsonExtractDraft[] {
 }
 
 /** Build the extraction rules, or name the first thing wrong with them. */
-function jsonExtractFrom(d: UrlCheckDraft): { ok: JsonExtract[] } | { err: string } {
+function jsonExtractFrom(d: UrlCheckDraft): { ok: JsonExtract[] } | { err: CheckFormProblem } {
   const rows = filledExtracts(d);
   if (rows.length === 0) return { ok: [] };
   if (rows.length > BODY_LIMITS.maxExtracts) return { err: 'tooManyExtracts' };
@@ -237,7 +270,7 @@ function jsonExtractFrom(d: UrlCheckDraft): { ok: JsonExtract[] } | { err: strin
  *
  *  Everything is sent explicitly rather than omitted-when-default: this is a *replace*, so leaving
  *  a field out would reset it to the server default instead of keeping what the operator sees. */
-export function urlBodyFrom(d: UrlCheckDraft): { body: UrlCheckConfig } | { error: string } {
+export function urlBodyFrom(d: UrlCheckDraft): { body: UrlCheckConfig } | { error: CheckFormProblem } {
   const url = d.url.trim();
   if (url === '') return { error: 'urlRequired' };
   if (!/^https?:\/\//i.test(url)) return { error: 'urlScheme' };
@@ -286,7 +319,7 @@ export function urlBodyFrom(d: UrlCheckDraft): { body: UrlCheckConfig } | { erro
 }
 
 /** The draft → the `PUT` body, or the first reason it cannot be sent. */
-export function dnsBodyFrom(d: DnsCheckDraft): { body: DnsCheckConfig } | { error: string } {
+export function dnsBodyFrom(d: DnsCheckDraft): { body: DnsCheckConfig } | { error: CheckFormProblem } {
   // The server stores the name normalized; normalizing here too keeps the field the operator
   // reopens identical to the one they saved.
   const name = d.name.trim().toLowerCase().replace(/\.$/, '');

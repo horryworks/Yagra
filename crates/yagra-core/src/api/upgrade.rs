@@ -604,3 +604,207 @@ async fn dispatch(
         maintenance_window_id: window.map(|w| w.to_string()),
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::tests_support::{private_state, public_state};
+    use super::ApiState;
+    use crate::upgrade::BundleError;
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+    use yagra_common::{Principal, Role, Scope};
+
+    /// Every route this module serves, with a body that would be valid if the caller got that far.
+    ///
+    /// Listed rather than derived so a route added without a decision about who may reach it shows
+    /// up as a missing row here — the whole surface is one permission pair, and the cost of getting
+    /// that wrong on *this* feature is host root (ADR-050).
+    const ROUTES: &[(&str, &str, &str)] = &[
+        ("GET", "/api/v1/system/upgrade", ""),
+        (
+            "POST",
+            "/api/v1/system/upgrade",
+            r#"{"target_tag":"v0.2.2"}"#,
+        ),
+        (
+            "POST",
+            "/api/v1/system/upgrade/bundle?target_tag=v0.2.2",
+            "not-really-a-tar",
+        ),
+        (
+            "PUT",
+            "/api/v1/system/upgrade/enabled",
+            r#"{"enabled":false}"#,
+        ),
+    ];
+
+    fn request(method: &str, uri: &str, body: &str, token: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder().uri(uri).method(method);
+        if let Some(t) = token {
+            b = b.header("authorization", format!("Bearer {t}"));
+        }
+        if !body.is_empty() {
+            b = b.header("content-type", "application/json");
+        }
+        b.body(Body::from(body.to_owned())).expect("request")
+    }
+
+    async fn call(
+        st: ApiState,
+        method: &str,
+        uri: &str,
+        body: &str,
+        token: Option<&str>,
+    ) -> (StatusCode, serde_json::Value) {
+        let res = super::super::router(st)
+            .oneshot(request(method, uri, body, token))
+            .await
+            .expect("response");
+        let status = res.status();
+        let bytes = to_bytes(res.into_body(), 1 << 20).await.expect("body");
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+        )
+    }
+
+    fn token_for(st: &ApiState, role: Role) -> String {
+        st.sessions
+            .issue(uuid::Uuid::new_v4(), Principal::new(role, Scope::All), "u")
+    }
+
+    /// Authentication runs before the mechanism is looked at, on reads as well as writes.
+    ///
+    /// The read is included deliberately, and so is `public_state`: `public_dashboard` opens reads
+    /// of *monitoring data*, and this read is not that — it answers with build provenance, the
+    /// registry the updater pulls from, resolved digests and the images the target composition
+    /// pins. An anonymous caller must learn only that it is unauthenticated, never whether this
+    /// deployment has an updater installed.
+    #[tokio::test]
+    async fn every_upgrade_route_is_gated_before_the_mechanism_is_consulted() {
+        for st in [private_state, public_state] {
+            for (method, uri, body) in ROUTES {
+                let (status, json) = call(st(), method, uri, body, None).await;
+                assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {uri}");
+                assert_eq!(json["error"]["code"], "unauthorized", "{method} {uri}");
+            }
+        }
+    }
+
+    /// 403, not 401 — the two have to stay distinguishable, or an operator cannot tell "sign in"
+    /// from "your role cannot do this".
+    #[tokio::test]
+    async fn neither_viewer_nor_operator_may_reach_the_upgrade_surface() {
+        for role in [Role::Viewer, Role::Operator] {
+            for (method, uri, body) in ROUTES {
+                let st = private_state();
+                let token = token_for(&st, role);
+                let (status, _) = call(st, method, uri, body, Some(&token)).await;
+                assert_eq!(status, StatusCode::FORBIDDEN, "{role:?} on {method} {uri}");
+            }
+        }
+    }
+
+    /// The answer the 401s above must *not* have been.
+    ///
+    /// Skeleton mode carries no `UpgradeRepo`, so an authorized admin reaches the availability
+    /// guard and gets the typed 503. Distinguishing this from the 401 is the whole point of the
+    /// extractor ordering rule (`api-conventions.md`).
+    #[tokio::test]
+    async fn an_authorized_admin_gets_the_typed_unavailable_when_no_mechanism_is_installed() {
+        for (method, uri, body) in ROUTES {
+            let st = private_state();
+            let token = token_for(&st, Role::Admin);
+            let (status, json) = call(st, method, uri, body, Some(&token)).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{method} {uri}");
+            assert_eq!(json["error"]["code"], "admin_unavailable", "{method} {uri}");
+        }
+    }
+
+    /// `Leader` sits inside `UpgradeWrite`, so it is checked *before* the mechanism is looked at.
+    ///
+    /// The two 503s carry different codes, which is what makes this observable: a standby answers
+    /// `not_leader` where a leaderless-but-configured deployment would answer `admin_unavailable`.
+    /// Reversing the order would make a standby report the deployment's configuration instead.
+    #[tokio::test]
+    async fn a_write_is_refused_for_leadership_before_the_mechanism_is_looked_at() {
+        for (method, uri, body) in ROUTES.iter().filter(|(m, ..)| *m != "GET") {
+            let st = private_state();
+            st.is_leader
+                .store(false, std::sync::atomic::Ordering::Release);
+            let token = token_for(&st, Role::Admin);
+            let (status, json) = call(st, method, uri, body, Some(&token)).await;
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{method} {uri}");
+            assert_eq!(json["error"]["code"], "not_leader", "{method} {uri}");
+        }
+        // The read is not leader-gated: asking a standby what it is running is a fair question, and
+        // refusing it would make the standby the harder of the two to diagnose.
+        let st = private_state();
+        st.is_leader
+            .store(false, std::sync::atomic::Ordering::Release);
+        let token = token_for(&st, Role::Admin);
+        let (_, json) = call(st, "GET", "/api/v1/system/upgrade", "", Some(&token)).await;
+        assert_ne!(json["error"]["code"], "not_leader");
+    }
+
+    /// Each staging failure maps to the status the page branches on.
+    ///
+    /// `Disabled` is the one worth pinning: it renders as `upgrade_unavailable`, **not**
+    /// `upgrade_disabled`. Those two mean different things to the operator — "no updater here" vs
+    /// "there is one and you switched it off" — and the page offers a different next step for each.
+    #[test]
+    fn every_staging_failure_maps_to_the_status_the_page_branches_on() {
+        let cases = [
+            (
+                BundleError::TooLarge { cap: 4 << 30 },
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "bundle_too_large",
+            ),
+            (
+                BundleError::Disabled,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "upgrade_unavailable",
+            ),
+            (
+                BundleError::BadRunId,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+            (
+                BundleError::Io(std::io::Error::other("no space left on device")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+            ),
+        ];
+        for (err, status, code) in cases {
+            let mapped = super::bundle_error(err);
+            assert_eq!(mapped.status(), status, "{code}");
+            assert_eq!(mapped.code(), code);
+        }
+    }
+
+    /// A refusal tells the operator the cap, and tells them nothing about the filesystem.
+    ///
+    /// The archive path is the one place in this feature where an OS error text is within reach of
+    /// a response — `BundleError::Io` wraps a real `io::Error`, and its `Display` deliberately drops
+    /// the cause. This is the assertion that keeps it dropped (security.md).
+    #[test]
+    fn a_refusal_names_the_cap_and_never_the_filesystem() {
+        let cap = 4u64 << 30;
+        let too_large = super::too_large(cap);
+        assert!(
+            too_large.message().contains("4096 MiB"),
+            "the cap has to be in the message, or the operator cannot act on it: {}",
+            too_large.message()
+        );
+
+        let leaked = "no space left on device";
+        let io = super::bundle_error(BundleError::Io(std::io::Error::other(leaked)));
+        assert!(
+            !io.message().contains(leaked),
+            "an OS error text reached the client: {}",
+            io.message()
+        );
+    }
+}

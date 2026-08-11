@@ -10,6 +10,8 @@
 // Pure `buildIncidentTimeline` + thin renderer (the FlowSankey pattern) so the awkward cases —
 // a zero-length span, an unknown lane, unsorted input — are unit-tested without a DOM.
 
+import { TIMELINE_LANES, type Lane as TimelineLane } from './format';
+
 /** One signal as the backend stores it in `detail.timeline[]`. */
 export interface TimelineSignal {
   /** Unix seconds. */
@@ -41,10 +43,12 @@ export function signalLabel(s: Pick<TimelineSignal, 'label' | 'node_name'>): str
   return s.node_name ? `${s.node_name}: ${s.label}` : s.label;
 }
 
-export type Lane = 'metric' | 'event' | 'flow' | 'other';
-
-/** Lane order is fixed (cause → effect reading order), independent of what a given incident has. */
-export const LANES: Lane[] = ['metric', 'event', 'flow', 'other'];
+// Lane order is fixed (cause → effect reading order), independent of what a given incident has.
+// Declared in `format.ts` and re-exported here so existing importers are undisturbed: the lane keys
+// are rendered through `t()`, and only a `.ts` module can be walked by the i18n coverage test
+// (`.claude/rules/testing.md` — Vitest never runs a `.tsx`).
+export const LANES = TIMELINE_LANES;
+export type Lane = TimelineLane;
 
 const W = 640;
 const LANE_H = 28;

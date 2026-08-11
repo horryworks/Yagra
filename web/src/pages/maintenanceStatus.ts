@@ -8,11 +8,20 @@
 
 import type { MaintenanceWindow } from '../types/api';
 
+/** Every status a window can display as. `as const` rather than a bare `string` return so
+ *  `i18nEnumKeys.test.ts` can demand `maintenance.status.*` in both locales — the page interpolates
+ *  this key with no fallback, and a fifth status would otherwise render raw in the column an
+ *  operator reads to check whether alerting is currently suppressed. */
+export const MAINTENANCE_STATUSES = ['disabled', 'active', 'ended', 'scheduled'] as const;
+
+/** A window's display status. */
+export type MaintenanceStatus = (typeof MAINTENANCE_STATUSES)[number];
+
 /** Language-agnostic status key + badge tone; the label is resolved at the call site. */
 export function windowStatus(
   w: MaintenanceWindow,
   now: number = Date.now(),
-): { labelKey: string; tone: 'info' | 'neutral' } {
+): { labelKey: MaintenanceStatus; tone: 'info' | 'neutral' } {
   if (!w.enabled) return { labelKey: 'disabled', tone: 'neutral' };
   if (w.active) return { labelKey: 'active', tone: 'info' };
   if (new Date(w.ends_at).getTime() < now) return { labelKey: 'ended', tone: 'neutral' };

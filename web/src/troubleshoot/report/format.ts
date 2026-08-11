@@ -135,23 +135,38 @@ export function sortByDetail(findings: AnalysisFinding[], key: string): Analysis
     .sort((a, b) => (detailNum(b, key) ?? -Infinity) - (detailNum(a, key) ?? -Infinity));
 }
 
+// The report bodies render each of the buckets below through `t()` with the value interpolated
+// into the key. They are `as const` arrays rather than bare unions for the reason in
+// `extensibility.md` §4: EN/JA parity cannot prove either locale complete, so a bucket added here
+// without its strings is missing from *both* and renders raw. `i18nEnumKeys.test.ts` walks these.
+
+/** The magnitudes `humanDays` can return, in the order it tries them. */
+export const TTE_UNITS = ['h', 'd', 'mo'] as const;
+/** A time-to-exhaustion unit key. */
+export type TteUnit = (typeof TTE_UNITS)[number];
+
 /**
  * A day count as a localizable magnitude + unit key. Returning the unit rather than a formatted
  * string is what lets JA say「4ヶ月」— the Rust `human_days` equivalent builds English inline and
  * cannot go through `t()`.
  */
-export function humanDays(days: number): { count: number; unit: 'h' | 'd' | 'mo' } {
+export function humanDays(days: number): { count: number; unit: TteUnit } {
   if (!Number.isFinite(days) || days < 0) return { count: 0, unit: 'd' };
   if (days < 1) return { count: Math.round(days * 24), unit: 'h' };
   if (days < 90) return { count: Math.round(days), unit: 'd' };
   return { count: Math.round(days / 30), unit: 'mo' };
 }
 
+/** The two ways a correlated pair can move. */
+export const CORRELATION_DIRECTIONS = ['coRising', 'inverse'] as const;
+/** Which way a correlated pair moves. */
+export type CorrelationDirection = (typeof CORRELATION_DIRECTIONS)[number];
+
 /**
  * Which way a correlated pair moves. `r >= 0` counts as co-rising — matching the backend's `>= 0.0`
  * exactly, so a perfectly flat pair is bucketed identically on both sides.
  */
-export function correlationDirection(r: number): 'coRising' | 'inverse' {
+export function correlationDirection(r: number): CorrelationDirection {
   return r >= 0 ? 'coRising' : 'inverse';
 }
 
@@ -162,8 +177,13 @@ export function capacityBucket(tteDays: number): 'soon' | 'mid' | 'far' {
   return 'far';
 }
 
+/** The flap-rate buckets. */
+export const FLAP_BUCKETS = ['chronic', 'intermittent'] as const;
+/** How persistent a node's flapping is. */
+export type FlapBucket = (typeof FLAP_BUCKETS)[number];
+
 /** A node flapping at least once an hour is chronic rather than intermittent. */
-export function flapBucket(perHour: number): 'chronic' | 'intermittent' {
+export function flapBucket(perHour: number): FlapBucket {
   return perHour >= 1 ? 'chronic' : 'intermittent';
 }
 
@@ -175,9 +195,26 @@ export function flapBucket(perHour: number): 'chronic' | 'intermittent' {
  * horizontal — the backend ships this classification only inside an English `duration` string, so it
  * has to be recomputed here to be localizable, and it must agree exactly.
  */
-export function scanPattern(distinctDst: number, distinctPorts: number): 'horizontal' | 'vertical' {
+export function scanPattern(distinctDst: number, distinctPorts: number): ScanPattern {
   return distinctDst >= distinctPorts ? 'horizontal' : 'vertical';
 }
+
+/** The scan shapes `scanPattern` can return. */
+export const SCAN_PATTERNS = ['horizontal', 'vertical'] as const;
+/** A scan's shape. */
+export type ScanPattern = (typeof SCAN_PATTERNS)[number];
+
+/**
+ * The incident-timeline lanes, in fixed cause → effect reading order.
+ *
+ * Here rather than in `IncidentTimeline.tsx` where they were declared: the lane keys are rendered
+ * through `t()` and therefore need to be reachable from a `.ts` test — Vitest's `include` is
+ * `src/**‍/*.test.ts`, so a list that only exists in a `.tsx` cannot be walked by one
+ * (`.claude/rules/testing.md`).
+ */
+export const TIMELINE_LANES = ['metric', 'event', 'flow', 'other'] as const;
+/** One row of the incident timeline. */
+export type Lane = (typeof TIMELINE_LANES)[number];
 
 /**
  * The rule name behind an `event_flap` finding. The backend encodes it as `event:{rule_name}` in

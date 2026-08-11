@@ -5,6 +5,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../components/ui/Button';
+import { WEEKDAY_KEYS } from '../../lib/cadence';
 import {
   alertWhatOf,
   relativeTime,
@@ -24,7 +25,6 @@ import { RankedBars } from '../primitives/RankedBars';
 import { usePolled } from '../usePolled';
 import { bucketAlertsByHour, calendarMatrix } from './util';
 
-const DOW_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
 const HOUR_LABELS = Array.from({ length: 24 }, (_, h) => (h % 6 === 0 ? String(h) : ''));
 
 export function ActiveAlertsWidget() {
@@ -135,7 +135,10 @@ export function AlertCalendarWidget() {
   if (loading && !data) return <p className="muted">{t('common:loading')}</p>;
   const matrix = calendarMatrix(data ?? []);
   if ((data ?? []).length === 0) return <p className="muted">{t('widgets.alertCalendar.empty')}</p>;
-  const rowLabels = DOW_KEYS.map((k) => t(`widgets.alertCalendar.dow.${k}`));
+  // Shared with the report/analysis schedule labels — one list, because the *order* is load-bearing
+  // (`calendarMatrix` rows are `Date.getDay()`) and a private copy is how two screens end up
+  // disagreeing about which row is Sunday.
+  const rowLabels = WEEKDAY_KEYS.map((k) => t(`widgets.alertCalendar.dow.${k}`));
   return (
     <Heatmap
       rowLabels={rowLabels}

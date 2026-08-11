@@ -23,14 +23,21 @@ export function expiryLevel(expiresInDays: number): ExpiryLevel {
   return 'ok';
 }
 
+/** Every reason the import button can be disabled. `as const` so `i18nEnumKeys.test.ts` can walk it
+ *  — the page renders `t(`import.block.${block}`)` with no fallback, so a reason added without its
+ *  strings shows the operator a raw key in both locales while they are replacing the certificate
+ *  their browser trusts. */
+export const IMPORT_BLOCKS = [
+  'certificate-missing',
+  'certificate-not-pem',
+  'certificate-has-key',
+  'key-missing',
+  'key-not-pem',
+  'key-encrypted',
+] as const;
+
 /** Why the import button is disabled, or `null` when it is not. */
-export type ImportBlock =
-  | 'certificate-missing'
-  | 'certificate-not-pem'
-  | 'certificate-has-key'
-  | 'key-missing'
-  | 'key-not-pem'
-  | 'key-encrypted';
+export type ImportBlock = (typeof IMPORT_BLOCKS)[number];
 
 const CERT_HEADER = '-----BEGIN CERTIFICATE-----';
 const KEY_HEADER = /-----BEGIN (RSA |EC )?PRIVATE KEY-----/;

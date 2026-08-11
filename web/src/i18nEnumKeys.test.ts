@@ -10,6 +10,14 @@
 // These tests close that hole for the enums that actually grow. Each one iterates the runtime list
 // that `types/api.ts` derives its union from, so adding a variant there without its strings fails
 // here, in both languages, naming the key.
+//
+// Not every runtime-built key belongs here, and the exclusions are deliberate rather than missed.
+// **Three families pass a `defaultValue` and are therefore allowed to be partial:**
+// `settings-forwarding:valuePlaceholder.*` (falls back to ''), `settings-auth:ldap.stage.*` (falls
+// back to the stage name the server sent — an unbounded set), and
+// `dashboard:widgets.eventFeed.*` (falls back to the row's own key). A family with a fallback
+// degrades to something readable; a family without one renders `dest.kafka` at the operator. That
+// is the line: if you add a runtime-built key with no `defaultValue`, it needs a case below.
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -43,6 +51,23 @@ import {
   NODE_KINDS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
+import { WEEKDAY_KEYS } from './lib/cadence';
+import { BACKINGS } from './dashboard/types';
+import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
+import { CHECK_FORM_PROBLEMS } from './components/NodeDetail/checkConfigForm';
+import { AI_FORM_PROBLEMS } from './pages/aiConfigForm';
+import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
+import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
+import { IMPORT_BLOCKS } from './pages/tlsSettingsForm';
+import { MAINTENANCE_STATUSES } from './pages/maintenanceStatus';
+import { SCHEDULE_FORM_PROBLEMS } from './troubleshoot/scheduleForm';
+import {
+  CORRELATION_DIRECTIONS,
+  FLAP_BUCKETS,
+  SCAN_PATTERNS,
+  TIMELINE_LANES,
+  TTE_UNITS,
+} from './troubleshoot/report/format';
 import { DIFF_VERDICTS } from './pages/topologyDiff';
 import { MERAKI_TIERS } from './pages/merakiTiers';
 import { DISCOVERY_WALKS } from './pages/neighborSettings';
@@ -113,6 +138,8 @@ import enSystem from './locales/en/system.json';
 import jaSystem from './locales/ja/system.json';
 import enTopology from './locales/en/topology.json';
 import jaTopology from './locales/ja/topology.json';
+import enSuppression from './locales/en/suppression.json';
+import jaSuppression from './locales/ja/suppression.json';
 
 type Json = Record<string, unknown>;
 
@@ -642,6 +669,125 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'discovery.seen.coverage.',
       ENDPOINT_COVERAGE,
     );
+  });
+
+  it('every weekday has a label on both surfaces that render one', () => {
+    // One token list, two key prefixes: the schedule labels (`reports:weekday.*`) and the alert
+    // calendar's row headers (`dashboard:widgets.alertCalendar.dow.*`). The list used to be
+    // declared twice — and the *order* is load-bearing on both sides, because the index is
+    // `Date.getDay()`, so a private copy could silently label Sunday's row as Monday.
+    expectKeys('weekday', { en: enReports, ja: jaReports }, 'weekday.', WEEKDAY_KEYS);
+    expectKeys(
+      'alert calendar weekday',
+      { en: enDashboard, ja: jaDashboard },
+      'widgets.alertCalendar.dow.',
+      WEEKDAY_KEYS,
+    );
+  });
+
+  it('every widget backing tag has a label (dashboard:catalog.backing.*)', () => {
+    // Badged on every card in the "add widget" picker, from the registry's own field.
+    expectKeys('widget backing', { en: enDashboard, ja: jaDashboard }, 'catalog.backing.', BACKINGS);
+  });
+
+  it('every user-list filter segment has a label (access:users.filter.*)', () => {
+    // The segmented control is `['all', ...ROLES]`, built in `UsersPage.tsx`. Rebuilt here from the
+    // same union rather than imported, because the page is a `.tsx` and Vitest never loads one —
+    // the list is one expression long, so restating it beats moving the control's layout into a
+    // module for the test's sake. A fourth role reaches this test through `ROLES`.
+    expectKeys('user filter segment', { en: enAccess, ja: jaAccess }, 'users.filter.', [
+      'all',
+      ...ROLES,
+    ]);
+  });
+
+  it('every maintenance-window status has a label (suppression:maintenance.status.*)', () => {
+    // The badge in the windows table. `disabled` and `ended` look alike and mean opposite things
+    // to an operator asking "are my alerts muted right now" — a raw key for either is worse than
+    // useless on that screen.
+    expectKeys(
+      'maintenance status',
+      { en: enSuppression, ja: jaSuppression },
+      'maintenance.status.',
+      MAINTENANCE_STATUSES,
+    );
+  });
+
+  it('every certificate import block has an explanation (settings-tls:import.block.*)', () => {
+    // This hint is the *only* thing telling an operator why the Import button will not light up.
+    expectKeys(
+      'certificate import block',
+      { en: enSettingsTls, ja: jaSettingsTls },
+      'import.block.',
+      IMPORT_BLOCKS,
+    );
+  });
+
+  it('every form refusal code has a sentence, on each form that has one', () => {
+    // Five dialogs each render `t(`<prefix>.${code}`)` with **no** `defaultValue`, so a code added
+    // to the validator without its strings is a raw key where the only explanation should be. They
+    // are grouped into one test because they share a failure mode, not a namespace.
+    expectKeys(
+      'group geo problem',
+      { en: enNodes, ja: jaNodes },
+      'err.',
+      GEO_PROBLEMS,
+    );
+    expectKeys(
+      'check config problem',
+      { en: enNodes, ja: jaNodes },
+      'checkEdit.err.',
+      CHECK_FORM_PROBLEMS,
+    );
+    expectKeys('ai form problem', { en: enSettingsAi, ja: jaSettingsAi }, 'err.', AI_FORM_PROBLEMS);
+    expectKeys(
+      'ldap form problem',
+      { en: enSettingsAuth, ja: jaSettingsAuth },
+      'ldap.err.',
+      LDAP_FORM_PROBLEMS,
+    );
+    expectKeys(
+      'schedule form problem',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'schedule.err.',
+      SCHEDULE_FORM_PROBLEMS,
+    );
+    // Walked through `bundleImportErrorKey` rather than used raw: `unsupported-version` renders a
+    // sentence carrying the version it found, so its leaf is `version`, not the reason.
+    expectKeys(
+      'bundle import refusal',
+      { en: enSystem, ja: jaSystem },
+      'bundle.import.err.',
+      BUNDLE_IMPORT_REASONS.map(bundleImportErrorKey),
+    );
+  });
+
+  it('every Troubleshoot report bucket has a label (troubleshoot:report.*)', () => {
+    // Five buckets the report bodies compute client-side and render through `t()`. They are derived
+    // in TypeScript rather than returned by the API — three of them deliberately re-implement a
+    // backend classification that only exists inside an English sentence — so nothing on the Rust
+    // side would ever surface a missing string.
+    const locales = { en: enTroubleshoot, ja: jaTroubleshoot };
+    // The runway is pluralized ("1 day left" / "3 days left"), so the stored keys carry i18next's
+    // suffixes — the `users.scope.groups` case below, and the same reason: the suffix set is a
+    // property of the language, not of the union. JA has one plural form and therefore only
+    // `_other`, which is why the `_one` pass compares EN against itself.
+    expectKeys(
+      'capacity tte unit',
+      locales,
+      'report.capacity.tte.',
+      TTE_UNITS.map((u) => `${u}_other`),
+    );
+    expectKeys(
+      'capacity tte unit (en singular)',
+      { en: enTroubleshoot, ja: enTroubleshoot },
+      'report.capacity.tte.',
+      TTE_UNITS.map((u) => `${u}_one`),
+    );
+    expectKeys('correlation direction', locales, 'report.correlation.dir.', CORRELATION_DIRECTIONS);
+    expectKeys('flap bucket', locales, 'report.flap.bucket.', FLAP_BUCKETS);
+    expectKeys('scan pattern', locales, 'report.flow_scan.pattern.', SCAN_PATTERNS);
+    expectKeys('timeline lane', locales, 'report.incident_correlate.lane.', TIMELINE_LANES);
   });
 
   it('every scope label state has strings (access:users.scope.* and settings-tokens:scope.*)', () => {

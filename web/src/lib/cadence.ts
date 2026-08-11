@@ -32,7 +32,18 @@ export const SELECTABLE_CADENCES = CADENCES.filter(
   (f) => f !== 'unknown',
 ) as readonly Exclude<Cadence, 'unknown'>[];
 
-const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+/** Weekday tokens in `Date.getDay()` order — index **is** the day number, so this is positional and
+ *  must not be re-sorted.
+ *
+ *  Exported and `as const` because a second consumer appeared: the alert-calendar widget had its own
+ *  byte-identical copy under a different name, which is the shape §3 of `extensibility.md` warns
+ *  about — two lists that must stay in the same *order* with nothing tying them together. The key
+ *  prefix stays per-call-site (`reports:weekday.` here, `widgets.alertCalendar.dow.` there); it is
+ *  only the tokens that are shared, and `i18nEnumKeys.test.ts` iterates this array for both. */
+export const WEEKDAY_KEYS = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'] as const;
+
+/** A weekday token, derived from the array so the two cannot disagree (§4). */
+export type WeekdayKey = (typeof WEEKDAY_KEYS)[number];
 
 /** Weekday name for 0=Sun..6=Sat (clamped). `t` is threaded in (non-component module) so the label
  *  re-resolves on language change. */

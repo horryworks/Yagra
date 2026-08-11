@@ -54,13 +54,20 @@ export function inheritedPin(
   return group.geo_group;
 }
 
+/** Every reason a coordinate pair is refused. `as const` so the i18n coverage test can walk it: the
+ *  dialog renders `t(`err.${pin.error}`)` with no fallback. */
+export const GEO_PROBLEMS = ['geoPair', 'geoNumber', 'geoRange'] as const;
+
+/** Why a coordinate pair cannot be saved. */
+export type GeoProblem = (typeof GEO_PROBLEMS)[number];
+
 /** The draft → the `PUT` body, or the first reason it cannot be sent.
  *
  *  Both fields or neither: half a coordinate pair is not a location. Clearing both is meaningful —
  *  it removes the pin — so it is a valid body rather than an error. */
 export function geoBodyFrom(
   draft: GeoDraft,
-): { body: { latitude: number | null; longitude: number | null } } | { error: string } {
+): { body: { latitude: number | null; longitude: number | null } } | { error: GeoProblem } {
   const lat = draft.latitude.trim();
   const lon = draft.longitude.trim();
   if (lat === '' && lon === '') return { body: { latitude: null, longitude: null } };

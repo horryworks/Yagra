@@ -111,17 +111,23 @@ export function connectionUrl(form: LdapFormState): string {
   return `${scheme}://${authority}:${form.port.trim()}`;
 }
 
+/** Every reason a form cannot be saved. `as const` so the i18n coverage test can walk it: the page
+ *  renders `t(`ldap.err.${problem}`)` with no fallback, and a code added without strings would be
+ *  the only thing an admin is told about why sign-in configuration will not save. */
+export const LDAP_FORM_PROBLEMS = [
+  'host',
+  'port',
+  'bindDn',
+  'bindPassword',
+  'userBaseDn',
+  'userFilter',
+  'groupPair',
+  'groupFilter',
+  'noMapping',
+] as const;
+
 /** Why a form cannot be saved. A code rather than a sentence, so both locales own the wording. */
-export type LdapFormProblem =
-  | 'host'
-  | 'port'
-  | 'bindDn'
-  | 'bindPassword'
-  | 'userBaseDn'
-  | 'userFilter'
-  | 'groupPair'
-  | 'groupFilter'
-  | 'noMapping';
+export type LdapFormProblem = (typeof LDAP_FORM_PROBLEMS)[number];
 
 /** Validate the form, returning the first problem or `null`. */
 export function validateLdapForm(
