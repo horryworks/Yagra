@@ -1253,7 +1253,7 @@ export interface paths {
         get: operations["list_maintenance_windows"];
         put?: never;
         post: operations["create_maintenance_window"];
-        delete?: never;
+        delete: operations["clear_ended_maintenance_windows"];
         options?: never;
         head?: never;
         patch?: never;
@@ -4311,6 +4311,15 @@ export interface components {
             sysdescr_regex?: string | null;
             sysobjectid_prefix?: string | null;
             vendor?: string | null;
+        };
+        /** @description The outcome of a bulk clear. */
+        ClearedWindows: {
+            /**
+             * Format: int64
+             * @description How many windows were deleted. May be lower than a client expected: the server's clock
+             *     decides what has ended, and a group-scoped caller clears only what it can see.
+             */
+            deleted: number;
         };
         /** @description Client bootstrap config — no secrets. */
         ClientConfig: {
@@ -13585,6 +13594,65 @@ export interface operations {
             };
             /** @description A group_id scope naming a group that does not exist */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    clear_ended_maintenance_windows: {
+        parameters: {
+            query?: {
+                /** @description Must be `ended`. Required: a request without it is refused rather than read as "all". */
+                status?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description How many ended windows were deleted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClearedWindows"];
+                };
+            };
+            /** @description `status` missing or not `ended` */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the ManageMaintenance permission */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };

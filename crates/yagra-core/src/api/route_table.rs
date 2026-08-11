@@ -627,6 +627,14 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("PUT", "/api/v1/llm/config", ADMIN_CFG, NO_MCP_WRITE),
     ("POST", "/api/v1/llm/test", ADMIN_CFG, NO_MCP_WRITE),
     (
+        "DELETE",
+        "/api/v1/maintenance-windows",
+        // Clears the *ended* windows, and like its GET sibling it reads the rows and filters them
+        // afterwards rather than pushing the scope into a store predicate.
+        PostFiltered,
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/maintenance-windows",
         PostFiltered,

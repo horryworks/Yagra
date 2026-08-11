@@ -33,11 +33,19 @@
     },
     "err": {
       "delete": "failed to delete window",
-      "update": "failed to update window"
+      "update": "failed to update window",
+      "clearEnded": "failed to clear ended windows"
     },
     "delete": {
       "title": "Delete maintenance window",
       "confirm": "Delete maintenance window <b>{{name}}</b>? This cannot be undone."
+    },
+    "clearEnded": {
+      "action": "Clear ended ({{count}})",
+      "title": "Clear ended maintenance windows",
+      "confirmLabel": "Clear",
+      "confirm_one": "Delete <b>{{count}}</b> ended maintenance window? Windows that have not ended are kept. This cannot be undone.",
+      "confirm_other": "Delete <b>{{count}}</b> ended maintenance windows? Windows that have not ended are kept. This cannot be undone."
     }
   },
   "maintenanceForm": {

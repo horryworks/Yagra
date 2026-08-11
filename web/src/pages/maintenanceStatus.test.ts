@@ -4,7 +4,7 @@
 // is still paging them.
 
 import { describe, expect, it } from 'vitest';
-import { windowStatus } from './maintenanceStatus';
+import { isEnded, windowStatus } from './maintenanceStatus';
 import type { MaintenanceWindow } from '../types/api';
 
 const NOW = 1_700_000_000_000;
@@ -46,5 +46,48 @@ describe('windowStatus', () => {
     for (const w of [win({ enabled: false }), win({ ends_at: iso(NOW - 1) }), win()]) {
       expect(windowStatus(w, NOW).tone).toBe('neutral');
     }
+  });
+
+  it('reads a disabled window whose end time has passed as ended', () => {
+    // It used to read "disabled" forever, indistinguishable from a window waiting to be switched
+    // on — and the bulk clear would then have offered to delete a row the badge called disabled.
+    expect(windowStatus(win({ enabled: false, ends_at: iso(NOW - 1) }), NOW).labelKey).toBe('ended');
+  });
+
+  it('still reads a disabled window that has not ended as disabled', () => {
+    // The precedence must not over-rotate: `ended` wins only once the clock has actually passed.
+    expect(windowStatus(win({ enabled: false, ends_at: iso(NOW + 1) }), NOW).labelKey).toBe(
+      'disabled',
+    );
+  });
+
+  it('puts the ended boundary where the server puts it', () => {
+    // The server computes `active` as `ends_at > now()` and deletes on `ends_at <= now()`, so a
+    // window ending exactly now is ended on both sides. A `<` here would disagree by one tick.
+    expect(windowStatus(win({ ends_at: iso(NOW) }), NOW).labelKey).toBe('ended');
+  });
+});
+
+describe('isEnded', () => {
+  it('never counts a window the server says is active', () => {
+    // `active` is the server's statement that alerts are suppressed right now. A skewed browser
+    // clock may under-count; it must never offer to delete a live suppression.
+    expect(isEnded(win({ active: true, ends_at: iso(NOW - 3_600_000) }), NOW)).toBe(false);
+  });
+
+  it('is exactly the set the bulk clear removes', () => {
+    // The button's count and the server's `ends_at <= now()` have to name the same rows, or the
+    // confirmation promises a number the operator does not get.
+    const rows = [
+      win({ id: 'active', active: true, ends_at: iso(NOW + 60_000) }),
+      win({ id: 'scheduled', ends_at: iso(NOW + 60_000) }),
+      win({ id: 'ended', ends_at: iso(NOW - 60_000) }),
+      win({ id: 'disabled-past', enabled: false, ends_at: iso(NOW - 60_000) }),
+      win({ id: 'disabled-future', enabled: false, ends_at: iso(NOW + 60_000) }),
+    ];
+    expect(rows.filter((w) => isEnded(w, NOW)).map((w) => w.id)).toEqual([
+      'ended',
+      'disabled-past',
+    ]);
   });
 });

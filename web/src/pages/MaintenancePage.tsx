@@ -23,7 +23,7 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
-import { windowStatus } from './maintenanceStatus';
+import { isEnded, windowStatus } from './maintenanceStatus';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
@@ -67,6 +67,41 @@ function DeleteWindowModal({
   );
 }
 
+/** Confirm + delete every ended window the account can see (destructive-consent modal).
+ *
+ *  One request, so there is no partial failure to represent: it commits or it rejects and the
+ *  dialog stays open with the message. The server's count is not shown — the reloaded list is the
+ *  answer, and it also reconciles a stale page or another operator having got there first. */
+function ClearEndedModal({
+  count,
+  onClose,
+  onDone,
+}: {
+  count: number;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('suppression');
+  return (
+    <ConfirmDeleteModal
+      title={t('maintenance.clearEnded.title')}
+      confirmLabel={t('maintenance.clearEnded.confirmLabel')}
+      onConfirm={() => api.clearEndedMaintenanceWindows()}
+      errorFallback={t('maintenance.err.clearEnded')}
+      onClose={onClose}
+      onDone={onDone}
+    >
+      <Trans
+        t={t}
+        i18nKey="maintenance.clearEnded.confirm"
+        count={count}
+        values={{ count }}
+        components={{ b: <strong /> }}
+      />
+    </ConfirmDeleteModal>
+  );
+}
+
 export function MaintenancePage() {
   const { t } = useTranslation('suppression');
   const authed = useAuthStore((s) => s.authed);
@@ -78,6 +113,7 @@ export function MaintenancePage() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
+  const [clearing, setClearing] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -114,6 +150,11 @@ export function MaintenancePage() {
     if (w.scope_level === 'system') return t('maintenance.scope.system');
     return w.scope_level;
   };
+
+  // One clock reading for the whole render, so the badges and the clear button's count cannot be
+  // computed a millisecond apart and disagree about a window that ends mid-render.
+  const now = Date.now();
+  const endedCount = rows.filter((w) => isEnded(w, now)).length;
 
   // Resolve a node scope by name across the whole fleet (not just the first list page — the old
   // nodes.find() capped at 100 and showed a raw UUID for the 101st+ node, S12).
@@ -153,9 +194,20 @@ export function MaintenancePage() {
             <TableSpacer />
             <ResultCount shown={rows.length} noun={t('common:noun.window', { count: rows.length })} />
             {authed && (
-              <Button variant="primary" onClick={() => setAdding(true)}>
-                {t('maintenance.add')}
-              </Button>
+              <>
+                {/* Kept mounted and disabled at zero rather than appearing and disappearing: at
+                    zero it still tells the operator the capability exists. */}
+                <Button
+                  variant="danger"
+                  onClick={() => setClearing(true)}
+                  disabled={endedCount === 0}
+                >
+                  {t('maintenance.clearEnded.action', { count: endedCount })}
+                </Button>
+                <Button variant="primary" onClick={() => setAdding(true)}>
+                  {t('maintenance.add')}
+                </Button>
+              </>
             )}
           </TableToolbar>
 
@@ -181,7 +233,7 @@ export function MaintenancePage() {
               </div>
             ) : (
               rows.map((w) => {
-                const status = windowStatus(w);
+                const status = windowStatus(w, now);
                 return (
                   <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={w.id}>
                     <div className="ytable-cell">
@@ -244,6 +296,16 @@ export function MaintenancePage() {
           onClose={() => setDeleting(null)}
           onDone={() => {
             setDeleting(null);
+            load();
+          }}
+        />
+      )}
+      {clearing && (
+        <ClearEndedModal
+          count={endedCount}
+          onClose={() => setClearing(false)}
+          onDone={() => {
+            setClearing(false);
             load();
           }}
         />

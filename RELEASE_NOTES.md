@@ -11,6 +11,15 @@
 ## Unreleased
 
 ### New Features
+- **Ended maintenance windows can be cleared in one action.** The windows list keeps every window
+  until someone deletes it, so an operator who schedules recurring work reads a page that is mostly
+  history — and every upgrade adds one more, at the top. Alerts ▸ Maintenance windows now has a
+  "Clear ended" button beside the count, backed by `DELETE /api/v1/maintenance-windows?status=ended`
+  (manage-maintenance). The server's clock decides what has ended and the caller's group scope
+  decides which rows are eligible — the browser sends no list of ids — so a window still running or
+  still scheduled is never removed, and a group-scoped account clears only what it can see. The
+  response says how many rows went. `status` is required and must be `ended`: a bare `DELETE` on the
+  collection is refused rather than read as "delete them all".
 - **Settings ▸ Upgrade says when it last looked for a release, and has a button to look again.**
   The updater checks the registry every 24 hours (`YAGRA_UPGRADE_CHECK_SECS`), which means the hour
   a release is published is the hour the list is guaranteed to be out of date — the one hour anyone
@@ -30,6 +39,12 @@
   repeating the version number already printed beside them.
 
 ### Bug Fixes
+- **A disabled maintenance window whose time had passed read as "disabled" forever.** The status
+  column tested `enabled` before it tested the clock, so a window that was switched off and then ran
+  out never reached the `ended` badge — it sat in the list looking like something still waiting to be
+  turned on. It now reads `ended` once its end time has passed, which is also what the new bulk clear
+  counts. A window the server reports as currently active is still never shown as ended, whatever the
+  browser's clock says.
 - **The Upgrade page went silent for the whole of an upgrade.** After the confirmation dialog closed
   it showed nothing — no progress, no state change — until the page was reloaded by hand. It armed
   its polling from the server's run state, but the updater only looks for a request every five

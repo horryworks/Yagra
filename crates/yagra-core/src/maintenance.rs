@@ -215,6 +215,30 @@ impl MaintenanceRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Delete the windows among `ids` that have ended. Returns how many rows went.
+    ///
+    /// **`ends_at <= now()` is evaluated by the database, not by the caller.** The browser's clock
+    /// decides nothing here, and the predicate is the exact complement of [`Self::active_scopes`]'
+    /// `ends_at > now()` — so a window this removes is one that was already suppressing nothing.
+    ///
+    /// `ids` is the caller's *visible* set (`api::maintenance::visible_windows`), which is what
+    /// makes this honour RBAC group scope. The two conditions are ANDed in one statement so
+    /// neither rule can be applied without the other: dropping the id clause would clear the whole
+    /// deployment's ended windows for a group-scoped caller, and dropping the time clause would
+    /// delete windows that are still suppressing alerts.
+    pub async fn delete_ended_windows(&self, ids: &[Uuid]) -> anyhow::Result<u64> {
+        // `= ANY('{}')` is valid but pointless; skip the round trip.
+        if ids.is_empty() {
+            return Ok(0);
+        }
+        let res =
+            sqlx::query("DELETE FROM maintenance_windows WHERE id = ANY($1) AND ends_at <= now()")
+                .bind(ids)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.rows_affected())
+    }
+
     /// The scopes of windows active **right now** (enabled, covering the current time).
     /// The alert-config refresh resolves these against the inventory.
     pub async fn active_scopes(&self) -> anyhow::Result<Vec<(WindowScope, String)>> {
@@ -240,10 +264,14 @@ impl MaintenanceRepo {
     /// (ADR-050 decision 12). The process that opened the window is never the process that sees the
     /// run finish, so this is the only place it can happen.
     ///
-    /// **`ends_at` moves to `now()`; the row is not deleted.** The fleet really was silenced for
-    /// that long, and an operator asking "why did nothing alert at 10:31" deserves to find the
-    /// answer rather than an absence. [`Self::active_scopes`] filters on `ends_at > now()`, so the
-    /// suppression stops on the alerting config's next refresh either way.
+    /// **`ends_at` moves to `now()`; this path does not delete the row.** The fleet really was
+    /// silenced for that long, and an operator asking "why did nothing alert at 10:31" deserves to
+    /// find the answer rather than an absence. [`Self::active_scopes`] filters on `ends_at > now()`,
+    /// so the suppression stops on the alerting config's next refresh either way.
+    ///
+    /// That is a rule about *this* path only, not a guarantee the row survives: an operator may
+    /// delete a closed window by hand or clear the ended ones in bulk
+    /// ([`Self::delete_ended_windows`]), and both are audited.
     pub async fn end_upgrade_windows(&self) -> anyhow::Result<u64> {
         let res = sqlx::query(
             "UPDATE maintenance_windows SET ends_at = now() \
@@ -359,6 +387,54 @@ mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
     use yagra_common::ProfileId;
+
+    /// This module's own source. The bulk clear's two safety conditions live entirely inside one
+    /// SQL string and there is no database in unit tests, so nothing else can catch a rewrite that
+    /// drops one of them.
+    const SRC: &str = include_str!("maintenance.rs");
+
+    /// The executable code above this test module, comments stripped — otherwise a doc comment
+    /// *naming* a pattern reads as the pattern itself (testing.md's self-match trap).
+    fn production_source() -> String {
+        SRC.split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_bulk_delete_lets_the_database_decide_what_ended_means() {
+        // The whole design rests on this: the client sends no timestamp and no list of "ended"
+        // ids, so a browser with a skewed clock cannot talk the server into deleting a window that
+        // is still suppressing alerts. A rewrite that bound a caller-supplied time here would look
+        // fine and pass every other test.
+        let src = production_source();
+        let stmt = src
+            .split_once("DELETE FROM maintenance_windows WHERE id = ANY($1)")
+            .expect("the bulk clear statement is still here")
+            .1;
+        let stmt = &stmt[..stmt.find('"').expect("the statement is a string literal")];
+        assert!(
+            stmt.contains("AND ends_at <= now()"),
+            "the bulk clear must apply the ended test in SQL, found: {stmt}"
+        );
+    }
+
+    #[test]
+    fn the_bulk_delete_is_bounded_by_an_id_list() {
+        // Without the id clause a group-scoped caller clears every ended window in the deployment,
+        // including ones they cannot see — the filtering happens in the API layer and arrives only
+        // as this list.
+        let src = production_source();
+        assert!(src.contains("DELETE FROM maintenance_windows WHERE id = ANY($1)"));
+        assert!(
+            src.contains("if ids.is_empty()"),
+            "an empty visible set must short-circuit rather than reach the database"
+        );
+    }
 
     fn node(profile: Option<ProfileId>, tags: &[(&str, &str)]) -> Node {
         Node {

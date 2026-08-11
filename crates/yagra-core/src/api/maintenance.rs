@@ -18,13 +18,13 @@ use super::scope::ScopeTarget;
 use super::util::CreatedId;
 use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
@@ -32,6 +32,7 @@ use uuid::Uuid;
 #[openapi(paths(
     list_maintenance_windows,
     create_maintenance_window,
+    clear_ended_maintenance_windows,
     set_maintenance_window_enabled,
     delete_maintenance_window,
     list_mutes,
@@ -45,7 +46,9 @@ pub(crate) fn routes() -> Router<ApiState> {
     Router::new()
         .route(
             "/api/v1/maintenance-windows",
-            get(list_maintenance_windows).post(create_maintenance_window),
+            get(list_maintenance_windows)
+                .post(create_maintenance_window)
+                .delete(clear_ended_maintenance_windows),
         )
         .route(
             "/api/v1/maintenance-windows/:id",
@@ -445,6 +448,91 @@ async fn delete_maintenance_window(
     }
 }
 
+/// The one value `status` may carry on a bulk clear.
+const CLEARABLE_STATUS: &str = "ended";
+
+/// Reject a bulk clear that does not say what it is clearing.
+///
+/// ⚠️ A bare `DELETE` on a collection reads, to any client, as "delete the collection" — and this
+/// collection is what stops an operator being paged through planned work. Requiring an explicit
+/// discriminator means such a caller gets a 400 naming what this endpoint actually does, rather
+/// than quietly getting something narrower and believing they got the whole thing. It also leaves
+/// room for a second status later without any existing caller's meaning changing under it.
+///
+/// No case folding and no synonyms: parse at the edge, do not guess (`api-conventions.md`).
+fn require_clearable_status(status: Option<&str>) -> Result<(), ApiError> {
+    if status.map(str::trim) == Some(CLEARABLE_STATUS) {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "invalid_status",
+        format!("status must be `{CLEARABLE_STATUS}`"),
+    ))
+}
+
+/// Which windows a bulk clear removes.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct ClearQuery {
+    /// Must be `ended`. Required: a request without it is refused rather than read as "all".
+    status: Option<String>,
+}
+
+/// The outcome of a bulk clear.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(super) struct ClearedWindows {
+    /// How many windows were deleted. May be lower than a client expected: the server's clock
+    /// decides what has ended, and a group-scoped caller clears only what it can see.
+    deleted: u64,
+}
+
+#[utoipa::path(
+    delete, path = "/api/v1/maintenance-windows", tag = "maintenance",
+    params(ClearQuery),
+    responses(
+        (status = 200, description = "How many ended windows were deleted", body = ClearedWindows),
+        (status = 400, description = "`status` missing or not `ended`", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn clear_ended_maintenance_windows(
+    _perm: RequireManageMaintenance,
+    // ⚠️ `Scoped` must stay the second parameter: `route_table`'s
+    // `every_filtered_route_takes_the_scope_extractor` reads the signature only as far as the first
+    // `)`, so a `Query(…)` ahead of it would truncate what that test can see.
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+    admin: Admin,
+    Query(q): Query<ClearQuery>,
+) -> ApiResult<Json<ClearedWindows>> {
+    require_clearable_status(q.status.as_deref())?;
+    // The same seam the GET and the MCP tool read, so this can never remove a window the caller
+    // cannot see. The *ended* half is applied again by the database — see `delete_ended_windows`.
+    let ids: Vec<Uuid> = visible_windows(&st, &scope, &admin)
+        .await?
+        .iter()
+        .map(|w| w.id)
+        .collect();
+    let deleted = admin
+        .maintenance
+        .delete_ended_windows(&ids)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "clear ended maintenance windows",
+                "failed to clear ended maintenance windows",
+            )
+        })?;
+    // `audit_mw` records the path only — no query string, no body — so the audit row says this was
+    // called and not what it did. Same accepted trade as `config_bundle::import_bundle`; the count
+    // lives here so it is at least recoverable from the logs.
+    tracing::info!(deleted, "ended maintenance windows cleared");
+    Ok(Json(ClearedWindows { deleted }))
+}
+
 // ── Mutes (reactive; AckAlerts) ──────────────────────────────────────────────
 
 #[utoipa::path(
@@ -648,6 +736,22 @@ mod tests {
     }
 
     #[test]
+    fn a_bulk_clear_must_say_what_it_is_clearing() {
+        // The failure this guards is not a typo — it is a client issuing `DELETE` on the collection
+        // meaning "delete them all" and getting a silent partial. Tested as a pure function because
+        // the router cannot reach it: extractors run in argument order and `Admin` answers 503 in
+        // skeleton mode long before the query is parsed.
+        for bad in [None, Some(""), Some("  "), Some("active"), Some("ENDED")] {
+            let Err(err) = require_clearable_status(bad) else {
+                panic!("{bad:?} must be refused");
+            };
+            assert_eq!(err.code(), "invalid_status", "{bad:?}");
+        }
+        assert!(require_clearable_status(Some("ended")).is_ok());
+        assert!(require_clearable_status(Some(" ended ")).is_ok());
+    }
+
+    #[test]
     fn unparseable_bounds_are_rejected_not_defaulted() {
         for (s, e) in [
             ("not-a-time", "2026-07-28T10:00:00Z"),
@@ -795,10 +899,22 @@ mod tests {
                 "{path}"
             );
         }
+        // The bulk clear is a write too, and it is gated *before* the query is looked at — an
+        // anonymous caller learns it is anonymous, never whether `status=ended` was acceptable.
+        assert_eq!(
+            status_of(
+                public_state(),
+                "DELETE",
+                "/api/v1/maintenance-windows?status=ended",
+                None
+            )
+            .await,
+            StatusCode::UNAUTHORIZED
+        );
     }
 
     #[tokio::test]
-    async fn a_viewer_can_open_neither_a_window_nor_a_mute() {
+    async fn a_viewer_can_neither_open_a_suppression_nor_clear_one() {
         let st = private_state();
         let token = st.sessions.issue(
             Uuid::new_v4(),
@@ -812,6 +928,18 @@ mod tests {
                 "{path}"
             );
         }
+        // 403, not 401 — the two must stay distinguishable, and a viewer clearing the fleet's
+        // maintenance history would be a write dressed as a tidy-up.
+        assert_eq!(
+            status_of(
+                st,
+                "DELETE",
+                "/api/v1/maintenance-windows?status=ended",
+                Some(&token)
+            )
+            .await,
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[tokio::test]
@@ -833,5 +961,17 @@ mod tests {
                 "{path}"
             );
         }
+        // Also pins the extractor order on the bulk clear: availability is reported before the
+        // query is parsed, so a valid `status` cannot make a skeleton core answer anything else.
+        assert_eq!(
+            status_of(
+                st,
+                "DELETE",
+                "/api/v1/maintenance-windows?status=ended",
+                Some(&token)
+            )
+            .await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 }

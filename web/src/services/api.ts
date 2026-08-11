@@ -1789,6 +1789,12 @@ export const api = {
   deleteMaintenanceWindow: (id: string): Promise<void> =>
     apiDelete('/api/v1/maintenance-windows/{id}', { path: { id } }),
 
+  /** Delete every *ended* maintenance window this account can see, and answer how many went.
+   *  The browser sends only the discriminator: the server's clock decides what has ended and the
+   *  caller's group scope decides which rows are eligible. */
+  clearEndedMaintenanceWindows: (): Promise<{ deleted: number }> =>
+    apiDelete('/api/v1/maintenance-windows', { query: { status: 'ended' } }),
+
   /** Unexpired mutes (notification silences; alerts still show in the UI/history). */
   listMutes: (): Promise<Mute[]> => apiGet('/api/v1/mutes'),
 

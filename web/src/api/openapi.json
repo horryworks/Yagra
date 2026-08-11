@@ -6304,6 +6304,75 @@
             }
           }
         }
+      },
+      "delete": {
+        "tags": [
+          "maintenance"
+        ],
+        "operationId": "clear_ended_maintenance_windows",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Must be `ended`. Required: a request without it is refused rather than read as \"all\".",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many ended windows were deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClearedWindows"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`status` missing or not `ended`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageMaintenance permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/maintenance-windows/{id}": {
@@ -19402,6 +19471,21 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ClearedWindows": {
+        "type": "object",
+        "description": "The outcome of a bulk clear.",
+        "required": [
+          "deleted"
+        ],
+        "properties": {
+          "deleted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "How many windows were deleted. May be lower than a client expected: the server's clock\ndecides what has ended, and a group-scoped caller clears only what it can see.",
+            "minimum": 0
           }
         }
       },

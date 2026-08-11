@@ -469,6 +469,21 @@ describe('api client', () => {
     expect(init.method).toBe('DELETE');
   });
 
+  it('clears ended maintenance windows with an explicit status discriminator', async () => {
+    // The discriminator is the whole safety of this endpoint: a bare DELETE on the collection is
+    // refused by the server rather than read as "delete every window", so the client must never
+    // stop sending it.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({ deleted: 3 }) } as Response);
+    globalThis.fetch = spy;
+    const res = await api.clearEndedMaintenanceWindows();
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/maintenance-windows?status=ended');
+    expect(init.method).toBe('DELETE');
+    expect(res).toEqual({ deleted: 3 });
+  });
+
   it('replaces a profile’s templates with a PUT body', async () => {
     const spy = vi
       .fn()
