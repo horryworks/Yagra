@@ -53,6 +53,18 @@
     "noRegistry": "アップデータがレジストリに到達できず、リリース一覧を取得できていません。閉域では想定どおりの状態です。"
   },
 
+  "bundle": {
+    "heading": "ファイルから導入",
+    "intro": "レジストリに到達できない環境向けの経路です。到達できる場所でリリースのイメージを保存し、そのファイルをここへ渡してください。以降の手順は通常のアップグレードと同一で、同じバックアップを取得し、同じ検証で成否を判断します。",
+    "howTo": "docker save -o yagra-v0.2.2.tar ghcr.io/horryworks/yagra-core:v0.2.2 ghcr.io/horryworks/yagra-poller:v0.2.2 ghcr.io/horryworks/yagra-web:v0.2.2",
+    "tagLabel": "このファイルに含まれるリリース",
+    "needTag": "ファイルに含まれるリリースを入力してください（例: v0.2.2）。実際に含まれるイメージと照合します。",
+    "limit": "上限は {{size}} GiB です。展開する分の空き容量も必要で、目安はファイルサイズのさらに 2 倍です。",
+    "button": "アップロードして導入",
+    "uploading": "アップロード中… {{percent}}%",
+    "failed": "アーカイブをアップロードできませんでした。"
+  },
+
   "apply": {
     "button": "この版へ上げる",
     "confirmTitle": "{{tag}} へアップグレードしますか？",

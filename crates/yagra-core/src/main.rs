@@ -870,6 +870,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .ok()
             .filter(|s| !s.trim().is_empty())
             .map(std::path::PathBuf::from),
+        std::env::var("YAGRA_UPGRADE_BUNDLE_MAX_BYTES")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(upgrade::DEFAULT_BUNDLE_MAX_BYTES),
     ));
 
     // If an upgrade finished while we were the process being replaced, close its audit trail now.
@@ -877,6 +881,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // and the claim makes a double-run harmless — whereas deferring it behind leadership would lose
     // the record entirely on a single-core deployment that is not yet leader when this runs.
     upgrade.record_finished_run(&audit_repo).await;
+    // An uploaded image archive is a gigabyte, and the paths that abandon one all end with core
+    // not running (ADR-050 Increment 3). Startup is therefore the only reliable place to sweep.
+    upgrade.prune_stale_bundles();
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {

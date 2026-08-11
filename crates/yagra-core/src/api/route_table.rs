@@ -1364,6 +1364,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "POST",
+        "/api/v1/system/upgrade/bundle",
+        Global("installs an uploaded release across every container in the deployment"),
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/system/support-bundle",
         Global(

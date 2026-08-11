@@ -2,9 +2,8 @@
 // Upgrade (Settings ▸ Upgrade, ADR-050). What this deployment is running, and how far back it can
 // be taken. Manage-configuration — it reports build provenance rather than a health counter.
 //
-// This is Increment 1a: the half that needs no Docker. The privileged updater sidecar, the list of
-// available versions and the apply button arrive in 1b/2; until then the page says so plainly
-// rather than rendering an empty version list, which would read as "you are up to date".
+// The privileged updater sidecar is off by default, so the page says so plainly rather than
+// rendering an empty version list, which would read as "you are up to date".
 //
 // The judgement lives in `upgradeStatus.ts` so it can be unit-tested — Vitest never runs a .tsx
 // (testing.md). What is left here is layout.
@@ -19,8 +18,11 @@ import { api, errMsg } from '../services/api';
 import type { UpgradeStatus } from '../types/api';
 import {
   buildKind,
+  bundleTagFromFilename,
   canApply,
+  canUploadBundle,
   isRunning,
+  looksLikeReleaseTag,
   mechanism,
   offerableReleases,
   rollback,
@@ -61,6 +63,11 @@ export function UpgradePage() {
   const [confirming, setConfirming] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [bundleFile, setBundleFile] = useState<File | null>(null);
+  const [bundleTag, setBundleTag] = useState('');
+  const [bundleError, setBundleError] = useState<string | null>(null);
+  // `null` when no upload is in flight; 0…1 while one is.
+  const [uploaded, setUploaded] = useState<number | null>(null);
   // Sticky: once a run starts, a failed poll means core is restarting — which is the operation
   // working, not an error. Without this the page would flip to "could not read" mid-upgrade.
   const everSeen = useRef(false);
@@ -103,6 +110,30 @@ export function UpgradePage() {
     }
   };
 
+  const pickBundle = (file: File | null) => {
+    setBundleFile(file);
+    setBundleError(null);
+    // Only ever a suggestion — the updater verifies the tag against the images the archive really
+    // holds, so a wrong guess fails the run rather than installing the wrong thing.
+    const guess = file ? bundleTagFromFilename(file.name) : null;
+    if (guess) setBundleTag(guess);
+  };
+
+  const upload = async () => {
+    if (!bundleFile) return;
+    setBundleError(null);
+    setUploaded(0);
+    try {
+      await api.uploadUpgradeBundle(bundleFile, bundleTag.trim(), setUploaded);
+      setBundleFile(null);
+      await load();
+    } catch (e) {
+      setBundleError(errMsg(e, t('bundle.failed')));
+    } finally {
+      setUploaded(null);
+    }
+  };
+
   const header = (
     <PageHeader
       title={t('title')}
@@ -140,6 +171,11 @@ export function UpgradePage() {
   const releases = offerableReleases(status);
   const last = status.last_run;
   const lastState = runState(last?.state);
+  const uploading = uploaded !== null;
+  const tagOk = looksLikeReleaseTag(bundleTag);
+  const bundleReady = !uploading && canUploadBundle(status) && bundleFile !== null && tagOk;
+  const maxBytes = status.updater.bundle_max_bytes ?? null;
+  const maxGib = maxBytes === null ? null : Math.round((maxBytes / 1024 ** 3) * 10) / 10;
 
   return (
     <div>
@@ -246,6 +282,51 @@ export function UpgradePage() {
           </>
         )}
       </Card>
+
+      {/* Only where the deployment has opted in. A site with a registry never sees this — and a
+          site without one has no other way in, since the release list above will be empty. */}
+      {state === 'ready' && status.updater.allow_bundle && (
+        <Card title={t('bundle.heading')}>
+          <p className="upgrade-hint muted">{t('bundle.intro')}</p>
+          <p className="upgrade-hint muted mono">{t('bundle.howTo')}</p>
+          <div className="upgrade-bundle">
+            <input
+              type="file"
+              accept=".tar,application/x-tar"
+              disabled={uploading || !canUploadBundle(status)}
+              onChange={(e) => pickBundle(e.target.files?.[0] ?? null)}
+            />
+            <input
+              type="text"
+              className="mono"
+              placeholder="v0.2.2"
+              value={bundleTag}
+              disabled={uploading || !canUploadBundle(status)}
+              onChange={(e) => setBundleTag(e.target.value)}
+              aria-label={t('bundle.tagLabel')}
+            />
+            <Button
+              variant="primary"
+              disabled={!bundleReady}
+              onClick={() => void upload()}
+            >
+              {t('bundle.button')}
+            </Button>
+          </div>
+          {maxGib !== null && (
+            <p className="upgrade-hint muted">{t('bundle.limit', { size: maxGib })}</p>
+          )}
+          {bundleFile && !tagOk && (
+            <p className="upgrade-hint muted">{t('bundle.needTag')}</p>
+          )}
+          {uploading && (
+            <p className="upgrade-hint muted">
+              {t('bundle.uploading', { percent: Math.round((uploaded ?? 0) * 100) })}
+            </p>
+          )}
+          {bundleError && <p className="upgrade-note">{bundleError}</p>}
+        </Card>
+      )}
 
       {last && (
         <Card title={t('run.heading')}>

@@ -314,6 +314,51 @@ async function fetchBlob(url: string, fallbackCode: string): Promise<Download> {
 }
 
 
+/** Send a file as a raw request body, reporting progress as it goes.
+ *
+ *  XHR rather than `fetch` for one reason: no browser reports *upload* progress through `fetch`,
+ *  and this is the only call in the app where the body is large enough for that to matter — a
+ *  multi-gigabyte image archive over a slow link, with nothing on screen, is indistinguishable
+ *  from a hung page. Error decoding matches {@link request} so the same ADR-019 envelope surfaces
+ *  as the same {@link ApiError}. */
+function uploadRaw<T>(
+  url: string,
+  file: Blob,
+  onProgress?: (fraction: number) => void,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${BASE}${url}`);
+    if (authToken) xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+    xhr.setRequestHeader('content-type', 'application/octet-stream');
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) onProgress?.(e.loaded / e.total);
+    };
+    xhr.onerror = () => reject(new ApiError('network_error', 'the upload could not be sent', 0));
+    xhr.onabort = () => reject(new ApiError('aborted', 'the upload was cancelled', 0));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve((xhr.responseText ? JSON.parse(xhr.responseText) : undefined) as T);
+        return;
+      }
+      let code = 'http_error';
+      let message = `request failed with status ${xhr.status}`;
+      try {
+        const body = JSON.parse(xhr.responseText) as ApiErrorBody;
+        if (body?.error) {
+          code = body.error.code;
+          message = body.error.message;
+        }
+      } catch {
+        // Non-JSON error body — keep the generic message.
+      }
+      if (xhr.status === 401 && authToken) notifyAuthFailure();
+      reject(new ApiError(code, message, xhr.status));
+    };
+    xhr.send(file);
+  });
+}
+
 /** A downloaded attachment. `filename` is `null` when the server sent no usable one. */
 export interface Download {
   blob: Blob;
@@ -1219,6 +1264,20 @@ export const api = {
    *  outlives core, which restarts partway through, so poll `getUpgradeStatus` for the outcome. */
   applyUpgrade: (targetTag: string): Promise<UpgradeRunAccepted> =>
     apiPost('/api/v1/system/upgrade', { body: { target_tag: targetTag } }),
+
+  /** Install a release from a `docker save` archive, for a site with no reachable registry
+   *  (ADR-050 Increment 3). The path is written out because the body is raw bytes, not JSON, so
+   *  the generated helpers do not cover it — the same reason the two downloads write theirs out. */
+  uploadUpgradeBundle: (
+    file: Blob,
+    targetTag: string,
+    onProgress?: (fraction: number) => void,
+  ): Promise<UpgradeRunAccepted> =>
+    uploadRaw(
+      `/api/v1/system/upgrade/bundle?target_tag=${encodeURIComponent(targetTag)}`,
+      file,
+      onProgress,
+    ),
 
   /** Import selected discovered devices as nodes. */
   importDiscovered: (

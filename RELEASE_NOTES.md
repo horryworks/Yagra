@@ -25,6 +25,14 @@
   the service removes the capability. Enabling it creates a path from Yagra's Admin role to host
   root that does not otherwise exist, so read the block before uncommenting it. The write endpoint
   requires manage-configuration **and** manage-credentials, and stays off the MCP surface.
+- **Upgrading with no registry at all.** `POST /api/v1/system/upgrade/bundle` takes a `docker save`
+  archive of a release's three images, streams it to the shared volume and installs it — the same
+  backup, the same composition-from-the-target-image, the same provenance check afterwards. Only
+  step two changes: `docker load` instead of `docker pull`, followed by a check that the archive
+  really contains the release the operator named. It needs a **second** opt-in beyond the sidecar
+  itself (`YAGRA_UPGRADE_ALLOW_BUNDLE=1`), because it is the one path that can put an image on the
+  host that nothing in the composition names. A site with a reachable registry should leave it
+  closed.
 
 ### Improvements
 - **Downgrades are possible again, within a declared window.** A new `schema_compat` table lets a

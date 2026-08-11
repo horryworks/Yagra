@@ -102,6 +102,44 @@ export function buildKind(profile: string | null | undefined): BuildKind {
   return 'development';
 }
 
+/**
+ * May an image archive be uploaded from here (ADR-050 Increment 3)?
+ *
+ * Three conditions, and the third is separate from the other two on purpose: a deployment can have
+ * a working updater and still refuse archives, because `docker load` installs whatever the file
+ * contains. The backend says so via the updater's own heartbeat, so this reads the answer rather
+ * than inferring one.
+ */
+export function canUploadBundle(status: UpgradeStatus): boolean {
+  return canApply(status) && status.updater.allow_bundle;
+}
+
+/**
+ * A typo filter for the target-tag field, and **deliberately looser than the backend's rule**.
+ *
+ * The real grammar is `is_valid_tag` in `crates/yagra-core/src/upgrade.rs`, and it stays the only
+ * one: copying it here would put the rule that decides what reaches a root-privileged container in
+ * two languages with nothing comparing them (extensibility.md §2). What justifies any check at all
+ * is the size — a rejected tag after a gigabyte has already been uploaded is a wasted upload.
+ *
+ * So this only has to be **weaker** than the backend's rule, never different in the other
+ * direction: anything the backend would accept must pass here, and the test asserts exactly that.
+ */
+export function looksLikeReleaseTag(tag: string): boolean {
+  const t = tag.trim();
+  return t.startsWith('v') && t.length > 1 && !/[\s/:@]/.test(t);
+}
+
+/**
+ * Guess the tag from an archive's filename, to pre-fill the field.
+ *
+ * A convenience with no authority: the operator can overwrite it, and the updater checks the tag
+ * against the images the archive really contains regardless of where the string came from.
+ */
+export function bundleTagFromFilename(name: string): string | null {
+  return /v\d+\.\d+\.\d+(?:-[0-9A-Za-z]+)?/.exec(name)?.[0] ?? null;
+}
+
 /** Commit refs are displayed short; the full value stays in the DOM title. */
 export function shortRef(ref: string | null | undefined, len = 12): string | null {
   const trimmed = ref?.trim();

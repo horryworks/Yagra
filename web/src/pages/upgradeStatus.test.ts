@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import type { UpgradeStatus } from '../types/api';
 import {
   buildKind,
+  bundleTagFromFilename,
   canApply,
+  canUploadBundle,
   isRunning,
+  looksLikeReleaseTag,
   mechanism,
   offerableReleases,
   rollback,
@@ -15,7 +18,15 @@ import {
 function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
   return {
     enabled: false,
-    updater: { present: false, fresh: false, repo: null, last_seen: null, check_interval_secs: null },
+    updater: {
+      present: false,
+      fresh: false,
+      repo: null,
+      last_seen: null,
+      check_interval_secs: null,
+      allow_bundle: false,
+      bundle_max_bytes: null,
+    },
     available: null,
     last_run: null,
     current: {
@@ -30,8 +41,16 @@ function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
   } as UpgradeStatus;
 }
 
-const updater = (present: boolean, fresh: boolean) => ({
-  updater: { present, fresh, repo: 'ghcr.io/horryworks', last_seen: 1, check_interval_secs: 3600 },
+const updater = (present: boolean, fresh: boolean, allowBundle = false) => ({
+  updater: {
+    present,
+    fresh,
+    repo: 'ghcr.io/horryworks',
+    last_seen: 1,
+    check_interval_secs: 3600,
+    allow_bundle: allowBundle,
+    bundle_max_bytes: allowBundle ? 4 * 1024 * 1024 * 1024 : null,
+  },
 });
 
 describe('mechanism', () => {
@@ -89,6 +108,47 @@ describe('applying', () => {
     expect(runState('succeeded')).toBe('succeeded');
     expect(runState('quiesced')).toBeNull();
     expect(runState(undefined)).toBeNull();
+  });
+});
+
+describe('offline bundle', () => {
+  // A working updater is not consent to install an arbitrary archive: `docker load` takes whatever
+  // the file holds, so the deployment opts into that separately.
+  it('needs the updater to say it accepts archives, not merely to be alive', () => {
+    expect(canUploadBundle(status({ enabled: true, ...updater(true, true, true) }))).toBe(true);
+    expect(canUploadBundle(status({ enabled: true, ...updater(true, true, false) }))).toBe(false);
+    expect(canUploadBundle(status({ enabled: false, ...updater(true, false, true) }))).toBe(false);
+  });
+
+  it('does not offer an upload while one is already running', () => {
+    const busy = status({
+      enabled: true,
+      ...updater(true, true, true),
+      last_run: { id: 'r', command: 'bundle', state: 'running', started_at: 1 },
+    });
+    expect(canUploadBundle(busy)).toBe(false);
+  });
+
+  // The property that makes this a pre-filter and not a second copy of the backend's grammar:
+  // it may never reject something the backend would take. The list mirrors the Rust test
+  // `a_release_tag_is_accepted_in_the_forms_this_project_actually_publishes`.
+  it('never rejects a tag the backend accepts', () => {
+    for (const ok of ['v0.2.1', 'v1.0.0', 'v0.2.10', 'v0.3.0-beta1', 'v1.2.3-rc2']) {
+      expect(looksLikeReleaseTag(ok)).toBe(true);
+      expect(looksLikeReleaseTag(`  ${ok}  `)).toBe(true);
+    }
+  });
+
+  it('catches the mistakes worth catching before a gigabyte is uploaded', () => {
+    for (const bad of ['', '   ', '0.2.1', 'latest', 'v0.2.1 --privileged', 'ghcr.io/x:v0.2.1']) {
+      expect(looksLikeReleaseTag(bad)).toBe(false);
+    }
+  });
+
+  it('pre-fills the tag from the archive filename, and gives up quietly', () => {
+    expect(bundleTagFromFilename('yagra-v0.2.2.tar')).toBe('v0.2.2');
+    expect(bundleTagFromFilename('/downloads/yagra_v1.2.3-rc2_images.tar')).toBe('v1.2.3-rc2');
+    expect(bundleTagFromFilename('images.tar')).toBeNull();
   });
 });
 

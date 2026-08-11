@@ -1,16 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! What this deployment is running, and how far back it can be taken — Settings ▸ Upgrade (ADR-050).
 //!
-//! One endpoint so far. It answers three questions a closed-network operator currently cannot ask
-//! at all: which binary is *actually* running, how much schema this database carries, and whether
-//! returning to an earlier version is still possible.
+//! One read and two writes. The read answers three questions a closed-network operator otherwise
+//! cannot ask at all: which binary is *actually* running, how much schema this database carries,
+//! and whether returning to an earlier version is still possible. The writes hand a release to the
+//! privileged updater — by tag from a registry, or as an uploaded archive for a site that can reach
+//! no registry at all.
 //!
-//! **`ManageConfig`, not `View`.** The obvious reading is that a version number is a health
-//! counter, and ADR-050 first said so. It is not: this answers with build provenance and — once the
-//! updater sidecar lands in Increment 1b — the registry it pulls from, resolved digests and the
-//! store images the target compose pins. That is deployment configuration, which is exactly the
-//! argument `mcp/folded.rs` already records for putting the `forwarding` section behind
-//! `ManageConfig` rather than `View`, and the same bar `/settings/tls` sits at.
+//! **`ManageConfig`, not `View`, on the read.** The obvious reading is that a version number is a
+//! health counter, and ADR-050 first said so. It is not: this answers with build provenance, the
+//! registry the updater pulls from, resolved digests and the store images the target compose pins.
+//! That is deployment configuration, which is exactly the argument `mcp/folded.rs` already records
+//! for putting the `forwarding` section behind `ManageConfig` rather than `View`, and the same bar
+//! `/settings/tls` sits at.
 //!
 //! **Provenance stops being bundle-only here.** `source_ref` and `build_profile` distinguish a
 //! release build from a `/flashdeploy` build of the same commit, and until now the only way to read
@@ -19,7 +21,15 @@
 //! answer needs to be reachable without taking an archive. `GET /api/v1/version` keeps its
 //! contract — public, one field — deliberately untouched.
 
-use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
+use async_trait::async_trait;
+use axum::{
+    body::Body,
+    extract::{DefaultBodyLimit, FromRequestParts, Query, State},
+    http::{request::Parts, StatusCode},
+    routing::{get, post},
+    Json, Router,
+};
+use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
@@ -28,7 +38,7 @@ use super::extract::{
     Admin, Caller, Leader, RequireManageConfig, RequireManageCredentials, Upgrade,
 };
 use super::ApiState;
-use crate::upgrade::{AvailableVersions, RunStatus, SchemaState};
+use crate::upgrade::{AvailableVersions, BundleError, Command, RunStatus, SchemaState};
 
 /// How long the fleet-wide maintenance window opened by an apply may last.
 ///
@@ -44,15 +54,50 @@ const MAINTENANCE_WINDOW_SECS: i64 = 900;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(OpenApi)]
-#[openapi(paths(get_upgrade, apply_upgrade))]
+#[openapi(paths(get_upgrade, apply_upgrade, upload_bundle))]
 pub(super) struct Doc;
 
 /// The upgrade routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
-    Router::new().route(
-        "/api/v1/system/upgrade",
-        get(get_upgrade).post(apply_upgrade),
-    )
+    Router::new()
+        .route(
+            "/api/v1/system/upgrade",
+            get(get_upgrade).post(apply_upgrade),
+        )
+        .merge(
+            Router::new()
+                .route("/api/v1/system/upgrade/bundle", post(upload_bundle))
+                // Its own sub-router so the disabled limit reaches this route and nothing else.
+                // The body is a multi-gigabyte image archive streamed straight to disk, so axum's
+                // 2 MiB default would refuse it before the handler ran. The real bound is
+                // `YAGRA_UPGRADE_BUNDLE_MAX_BYTES`, enforced chunk by chunk as the bytes land,
+                // ahead of a free-space check made before any of them do.
+                .layer(DefaultBodyLimit::disable()),
+        )
+}
+
+/// The authorization both write paths require, as one extractor.
+///
+/// `ManageConfig` alone is not enough: an upgrade replaces the process that holds the KEK, so it is
+/// restricted to someone already trusted with the credentials that process can decrypt — the same
+/// argument ADR-045 used for the support bundle. `Leader` because two cores must not both rewrite
+/// the compose project.
+///
+/// One type rather than three parameters repeated on each handler, so the rule and its **order**
+/// are written once: permissions first, availability after, which is what keeps an unauthenticated
+/// caller from learning whether this core is the leader.
+pub(crate) struct UpgradeWrite;
+
+#[async_trait]
+impl FromRequestParts<ApiState> for UpgradeWrite {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        RequireManageConfig::from_request_parts(parts, st).await?;
+        RequireManageCredentials::from_request_parts(parts, st).await?;
+        Leader::from_request_parts(parts, st).await?;
+        Ok(Self)
+    }
 }
 
 /// Which binary is running.
@@ -89,6 +134,13 @@ pub(crate) struct UpdaterInfo {
     last_seen: Option<i64>,
     /// How often it re-checks the registry, in seconds.
     check_interval_secs: Option<u64>,
+    /// Whether it will install an uploaded image archive. Off unless the host's compose file turns
+    /// it on — it is the only path that can bring an image this deployment never named onto the
+    /// host, so it is gated separately from the mechanism as a whole (ADR-050 Increment 3).
+    allow_bundle: bool,
+    /// The largest archive core will accept, in bytes. Present whenever `allow_bundle` is, so the
+    /// UI can refuse an oversized file before spending an hour uploading it.
+    bundle_max_bytes: Option<u64>,
 }
 
 /// The state of the upgrade mechanism and of this deployment's schema.
@@ -180,6 +232,11 @@ pub(crate) async fn upgrade_status(
             repo: beat.as_ref().map(|h| h.repo.clone()),
             last_seen: beat.as_ref().map(|h| h.written_at),
             check_interval_secs: beat.as_ref().map(|h| h.check_interval_secs),
+            allow_bundle: beat.as_ref().is_some_and(|h| h.allow_bundle),
+            bundle_max_bytes: beat
+                .as_ref()
+                .filter(|h| h.allow_bundle)
+                .map(|_| upgrade.bundle_max_bytes()),
         },
         current: RunningBuild {
             core_version: p.core_version.to_owned(),
@@ -211,26 +268,187 @@ pub(crate) async fn upgrade_status(
     ),
 )]
 async fn apply_upgrade(
-    // ManageConfig alone is not enough: an upgrade replaces the process that holds the KEK, so it
-    // is restricted to someone already trusted with the credentials it can decrypt — the same
-    // argument ADR-045 used for the support bundle. `Leader` because two cores must not both
-    // rewrite the compose project.
-    _config: RequireManageConfig,
-    _creds: RequireManageCredentials,
-    _leader: Leader,
+    _auth: UpgradeWrite,
     upgrade: Upgrade,
     admin: Admin,
     caller: Option<Caller>,
     Json(body): Json<ApplyUpgrade>,
 ) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let tag = body.target_tag.trim();
+    let now = super::util::now_unix_s();
+    preflight(&upgrade, tag, now)?;
+    let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
+    let id = crate::upgrade::new_run_id();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(dispatch(&upgrade, &admin, Command::Apply, &id, tag, &by, now).await?),
+    ))
+}
+
+/// Where an uploaded archive is going.
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub(crate) struct BundleQuery {
+    /// The release the archive contains, e.g. `v0.2.2`. The updater checks it against the images
+    /// the archive actually carries, so a bundle cannot quietly install a different version.
+    target_tag: String,
+}
+
+/// Install a release from an uploaded image archive, for a site with no reachable registry.
+///
+/// The body is the output of `docker save` for the release's three images. Nothing else about the
+/// upgrade changes: the same backup is taken, the same composition is installed from the target
+/// image, and the same provenance check decides whether it worked. Returns as soon as the archive
+/// is stored; poll `GET /api/v1/system/upgrade` for the outcome.
+///
+/// Accepting archives is opt-in on the deployment and off by default, so this answers `503` until
+/// an operator has turned it on at the host.
+// Why it is separately gated: every other route here names a tag, and the repository it is fetched
+// from is fixed by the host, so the set of images that can reach this machine is bounded. `docker
+// load` installs whatever the archive carries. That is the only widening in the feature, hence its
+// own environment variable rather than a ride on the sidecar being enabled at all.
+#[utoipa::path(
+    post, path = "/api/v1/system/upgrade/bundle", tag = "system",
+    params(BundleQuery),
+    request_body(
+        content = Vec<u8>,
+        description = "A `docker save` archive holding the core, poller and web images for the target release",
+        content_type = "application/octet-stream",
+    ),
+    responses(
+        (status = 202, description = "Archive stored; the updater will install it", body = RunAccepted),
+        (status = 400, description = "Not a published release tag", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
+        (status = 409, description = "A run is already in flight", body = super::error::ErrorBody),
+        (status = 413, description = "The archive is larger than this deployment accepts", body = super::error::ErrorBody),
+        (status = 503, description = "The updater is not deployed, not running, not the leader, or does not accept archives", body = super::error::ErrorBody),
+        (status = 507, description = "Not enough free space to store the archive and unpack it", body = super::error::ErrorBody),
+    ),
+)]
+async fn upload_bundle(
+    _auth: UpgradeWrite,
+    upgrade: Upgrade,
+    admin: Admin,
+    caller: Option<Caller>,
+    Query(q): Query<BundleQuery>,
+    headers: axum::http::HeaderMap,
+    // Last: it consumes the request, so nothing can be extracted after it.
+    body: Body,
+) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
+    let tag = q.target_tag.trim().to_owned();
+    let now = super::util::now_unix_s();
+    preflight(&upgrade, &tag, now)?;
+    if !upgrade.heartbeat().is_some_and(|h| h.allow_bundle) {
+        return Err(ApiError::unavailable(
+            "bundle_not_allowed",
+            "this deployment does not accept uploaded image archives; set \
+             YAGRA_UPGRADE_ALLOW_BUNDLE on the updater to enable it",
+        ));
+    }
+
+    // Refuse on the declared length before a byte is written. Advisory — a chunked upload declares
+    // nothing and the per-chunk cap is what actually holds — but when it is present it turns an
+    // hour-long upload that was always going to be refused into an immediate answer.
+    let cap = upgrade.bundle_max_bytes();
+    let declared = headers
+        .get(axum::http::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok());
+    if let Some(len) = declared {
+        if len > cap {
+            return Err(too_large(cap));
+        }
+        // A full Docker filesystem stops PostgreSQL, so this refusal protects the deployment rather
+        // than the upload. Unmeasurable free space is not treated as no space.
+        if let Some(free) = upgrade.free_bytes() {
+            let need = crate::upgrade::bundle_space_needed(len);
+            if free < need {
+                tracing::warn!(
+                    free,
+                    need,
+                    "refused an image archive for lack of disk space"
+                );
+                return Err(ApiError::insufficient_storage(
+                    "insufficient_disk",
+                    format!(
+                        "this host has {} MiB free; storing the archive and unpacking it needs \
+                         about {} MiB",
+                        free / (1024 * 1024),
+                        need / (1024 * 1024)
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Whatever the last run left behind goes now: there is no run in flight (preflight said so),
+    // so every archive still on disk is abandoned, and this is about to write another gigabyte.
+    upgrade.prune_stale_bundles();
+
+    let id = crate::upgrade::new_run_id();
+    let mut sink = upgrade.begin_bundle(&id).await.map_err(bundle_error)?;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        // A dropped connection lands here. The partial file goes with `sink` (its `Drop`), so an
+        // abandoned upload costs nothing beyond the transfer.
+        let chunk = chunk.map_err(|e| {
+            tracing::warn!(run = %id, error = %e, "image archive upload broke off");
+            ApiError::bad_request("bundle_incomplete", "the upload did not complete")
+        })?;
+        sink.write(&chunk).await.map_err(bundle_error)?;
+    }
+    let bytes = sink.finish().await.map_err(bundle_error)?;
+
+    let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
+    tracing::warn!(run = %id, target = %tag, bytes, by = %by, "image archive received");
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(dispatch(&upgrade, &admin, Command::Bundle, &id, &tag, &by, now).await?),
+    ))
+}
+
+/// `413`, worded the same wherever it comes from.
+fn too_large(cap: u64) -> ApiError {
+    ApiError::payload_too_large(
+        "bundle_too_large",
+        format!(
+            "the archive is larger than the {} MiB this deployment accepts; raise \
+             YAGRA_UPGRADE_BUNDLE_MAX_BYTES if that is deliberate",
+            cap / (1024 * 1024)
+        ),
+    )
+}
+
+/// Map a staging failure onto the status the UI branches on, keeping the I/O cause in the log.
+fn bundle_error(e: BundleError) -> ApiError {
+    match e {
+        BundleError::TooLarge { cap } => too_large(cap),
+        BundleError::Disabled => ApiError::unavailable(
+            "upgrade_unavailable",
+            "the upgrade mechanism is not enabled on this deployment",
+        ),
+        // Both of these are core's own doing — the id it minted, or a volume it cannot write.
+        // Neither tells the client anything useful, and the I/O text must not reach it.
+        BundleError::BadRunId | BundleError::Io(_) => ApiError::from_internal(
+            &e,
+            "stage the uploaded image archive",
+            "failed to store the uploaded image archive",
+        ),
+    }
+}
+
+/// The checks both request paths share: a real tag, a live updater, nothing already running.
+///
+/// One function rather than two copies because the *order* is the security-relevant part — the tag
+/// is validated before anything acts on it — and because a second copy is how one of them ends up
+/// missing the 409 (extensibility.md §3).
+fn preflight(upgrade: &crate::upgrade::UpgradeRepo, tag: &str, now: i64) -> Result<(), ApiError> {
     if !crate::upgrade::is_valid_tag(tag) {
         return Err(ApiError::bad_request(
             "invalid_tag",
             "target_tag must be a published release tag such as v0.2.2",
         ));
     }
-    let now = super::util::now_unix_s();
     let ready = upgrade.heartbeat().is_some_and(|h| {
         crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
@@ -248,12 +466,23 @@ async fn apply_upgrade(
             "an upgrade is already running",
         ));
     }
+    Ok(())
+}
 
-    let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
-
-    // Silence self-monitoring for a BOUNDED period, before the request is written — core is about
-    // to stop, so this is the last moment anything can open it. Failure is not fatal: an upgrade
-    // that runs noisily is better than one that does not run.
+/// Open the bounded maintenance window, then hand the request over.
+///
+/// Shared so the two commands cannot drift on the order. It matters: core stops moments after the
+/// request file appears, so the window has to exist first or it never will.
+async fn dispatch(
+    upgrade: &crate::upgrade::UpgradeRepo,
+    admin: &Admin,
+    command: Command,
+    id: &str,
+    tag: &str,
+    by: &str,
+    now: i64,
+) -> Result<RunAccepted, ApiError> {
+    // Failure is not fatal: an upgrade that runs noisily is better than one that does not run.
     let ends = chrono::Utc::now() + chrono::Duration::seconds(MAINTENANCE_WINDOW_SECS);
     let window = admin
         .maintenance
@@ -268,21 +497,21 @@ async fn apply_upgrade(
         .map_err(|e| tracing::warn!(error = %e, "could not open the upgrade maintenance window"))
         .ok();
 
-    let id = upgrade.request_apply(tag, &by, now).map_err(|e| {
+    upgrade.request(command, id, tag, by, now).map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "hand the upgrade request to the updater",
             "failed to hand the upgrade request to the updater",
         )
     })?;
-    tracing::warn!(run = %id, target = tag, by = %by, "upgrade requested; core will restart");
+    tracing::warn!(
+        run = %id, target = tag, command = command.as_str(), by = %by,
+        "upgrade requested; core will restart"
+    );
 
-    Ok((
-        StatusCode::ACCEPTED,
-        Json(RunAccepted {
-            id,
-            target_tag: tag.to_owned(),
-            maintenance_window_id: window.map(|w| w.to_string()),
-        }),
-    ))
+    Ok(RunAccepted {
+        id: id.to_owned(),
+        target_tag: tag.to_owned(),
+        maintenance_window_id: window.map(|w| w.to_string()),
+    })
 }

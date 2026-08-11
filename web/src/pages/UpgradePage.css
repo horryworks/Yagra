@@ -40,3 +40,41 @@
   font-size: var(--font-sm);
   line-height: 1.5;
 }
+
+/* Offline bundle: file, tag, go. Wraps rather than scrolls — the file input is the widest thing
+   on the page and its rendered width is the browser's, not ours. */
+.upgrade-bundle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.upgrade-bundle input[type='text'] {
+  width: 12ch;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-sm);
+}
+
+.upgrade-bundle input[type='text']:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.upgrade-bundle input[type='file'] {
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-sm);
+}
+
+.upgrade-bundle input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

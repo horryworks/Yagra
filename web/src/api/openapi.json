@@ -16207,6 +16207,125 @@
         }
       }
     },
+    "/api/v1/system/upgrade/bundle": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Install a release from an uploaded image archive, for a site with no reachable registry.",
+        "description": "The body is the output of `docker save` for the release's three images. Nothing else about the\nupgrade changes: the same backup is taken, the same composition is installed from the target\nimage, and the same provenance check decides whether it worked. Returns as soon as the archive\nis stored; poll `GET /api/v1/system/upgrade` for the outcome.\n\nAccepting archives is opt-in on the deployment and off by default, so this answers `503` until\nan operator has turned it on at the host.",
+        "operationId": "upload_bundle",
+        "parameters": [
+          {
+            "name": "target_tag",
+            "in": "query",
+            "description": "The release the archive contains, e.g. `v0.2.2`. The updater checks it against the images\nthe archive actually carries, so a bundle cannot quietly install a different version.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "A `docker save` archive holding the core, poller and web images for the target release",
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "format": "int32",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Archive stored; the updater will install it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a published release tag",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks manage-configuration or manage-credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A run is already in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The archive is larger than this deployment accepts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The updater is not deployed, not running, not the leader, or does not accept archives",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "507": {
+            "description": "Not enough free space to store the archive and unpack it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/thresholds": {
       "get": {
         "tags": [
@@ -29004,9 +29123,23 @@
         "description": "Whether the privileged updater container is deployed, and whether it is alive.",
         "required": [
           "present",
-          "fresh"
+          "fresh",
+          "allow_bundle"
         ],
         "properties": {
+          "allow_bundle": {
+            "type": "boolean",
+            "description": "Whether it will install an uploaded image archive. Off unless the host's compose file turns\nit on — it is the only path that can bring an image this deployment never named onto the\nhost, so it is gated separately from the mechanism as a whole (ADR-050 Increment 3)."
+          },
+          "bundle_max_bytes": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The largest archive core will accept, in bytes. Present whenever `allow_bundle` is, so the\nUI can refuse an oversized file before spending an hour uploading it.",
+            "minimum": 0
+          },
           "check_interval_secs": {
             "type": [
               "integer",

@@ -30,7 +30,20 @@ use sqlx::{PgPool, Row};
 /// container is the one component an upgrade does not replace — a new core paired with an old
 /// updater is structural rather than a rollout window. An updater that does not recognise the
 /// schema refuses and says why, instead of half-executing a request it misread.
+///
+/// Adding a *command* did not need a bump, and that is the property to preserve: the updater
+/// matches the command against a closed list and refuses anything else by name, so an updater older
+/// than [`Command::Bundle`] answers "unsupported command" rather than misreading it. A bump is for
+/// a change to the *shape* of the file, where an old updater would read the wrong value out of a
+/// line it thinks it understands.
 pub const REQUEST_SCHEMA: u32 = 1;
+
+/// Ceiling on an uploaded image archive unless `YAGRA_UPGRADE_BUNDLE_MAX_BYTES` overrides it.
+///
+/// Three release images saved together come to roughly a gigabyte, so this is not a working limit —
+/// it is the one that catches the wrong file being dragged into the browser before it fills the
+/// filesystem PostgreSQL is on.
+pub const DEFAULT_BUNDLE_MAX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 /// How stale the updater's heartbeat may be before it is reported as stopped rather than ready.
 ///
@@ -70,6 +83,63 @@ pub struct UpdaterHeartbeat {
     pub repo: String,
     /// How often the sidecar re-checks for new versions, in seconds.
     pub check_interval_secs: u64,
+    /// Whether the sidecar will install an uploaded image archive (`YAGRA_UPGRADE_ALLOW_BUNDLE`).
+    ///
+    /// Declared by the sidecar, never decided here. That is the whole point of the gate: an archive
+    /// is the one path that can put an image core never named onto the host, so it is opened by
+    /// editing the host's compose file and by nothing reachable over the API. `#[serde(default)]`
+    /// makes an updater too old to know the field read as `false`, which is the safe direction.
+    #[serde(default)]
+    pub allow_bundle: bool,
+}
+
+/// What core is asking the updater to do.
+///
+/// A closed set, because the value crosses into a container holding the Docker socket. The updater
+/// compares it against these exact tokens and refuses anything else by name — including a command
+/// newer than itself, which is why adding one needs no [`REQUEST_SCHEMA`] bump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Command {
+    /// Fetch the release from the registry and install it.
+    Apply,
+    /// Install from an image archive already uploaded to the shared volume (ADR-050 Increment 3).
+    Bundle,
+}
+
+impl Command {
+    /// The token written into the request file.
+    ///
+    /// ⚠️ A new variant also belongs in `tests::COMMANDS` below, which is what pins this list to
+    /// the shell sidecar's own accept list. Rust cannot enumerate variants, so that array is
+    /// hand-written — the same arrangement as `repo.rs`'s grandfathered-migration table.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Apply => "apply",
+            Self::Bundle => "bundle",
+        }
+    }
+}
+
+/// Why an image-archive upload could not be staged.
+#[derive(Debug, thiserror::Error)]
+pub enum BundleError {
+    /// No hand-off volume, so there is no updater to hand an archive to.
+    #[error("the upgrade mechanism is not enabled")]
+    Disabled,
+    /// Not an id this core minted — which is also what makes the staged file name a name.
+    #[error("invalid run id")]
+    BadRunId,
+    /// Past the byte cap.
+    #[error("the archive is larger than the {cap}-byte limit")]
+    TooLarge {
+        /// The limit that was passed.
+        cap: u64,
+    },
+    /// The filesystem refused. The cause is kept for the log and deliberately out of `Display`,
+    /// which is what an API client would be shown (security.md).
+    #[error("could not stage the archive")]
+    Io(#[from] std::io::Error),
 }
 
 /// One release the sidecar found, with the digests it resolved.
@@ -144,12 +214,33 @@ impl RunStatus {
 pub struct UpgradeRepo {
     pool: PgPool,
     dir: Option<PathBuf>,
+    bundle_max_bytes: u64,
 }
 
 impl UpgradeRepo {
     #[must_use]
-    pub fn new(pool: PgPool, dir: Option<PathBuf>) -> Self {
-        Self { pool, dir }
+    pub fn new(pool: PgPool, dir: Option<PathBuf>, bundle_max_bytes: u64) -> Self {
+        Self {
+            pool,
+            dir,
+            bundle_max_bytes,
+        }
+    }
+
+    /// The largest image archive this deployment will accept.
+    #[must_use]
+    pub fn bundle_max_bytes(&self) -> u64 {
+        self.bundle_max_bytes
+    }
+
+    /// Free space on the filesystem holding the hand-off volume, when it can be measured.
+    ///
+    /// The volume lives under `/var/lib/docker`, so this measures the filesystem `docker load` will
+    /// unpack onto as well — the one that matters. `None` off unix, where the mechanism does not
+    /// run at all.
+    #[must_use]
+    pub fn free_bytes(&self) -> Option<u64> {
+        yagra_hoststats::available_bytes(self.dir.as_deref()?)
     }
 
     /// The updater's heartbeat, or `None` when the mechanism is off or has never run.
@@ -170,25 +261,77 @@ impl UpgradeRepo {
         self.read_json("status.json")
     }
 
-    /// Ask the updater to apply `tag`.
+    /// Ask the updater to carry out `command` against `tag`, under the run id `id`.
     ///
-    /// Returns the run id. The caller must have validated `tag` with [`is_valid_tag`] — this
-    /// asserts it again rather than trusting that, because this function is the last thing between
-    /// an HTTP body and a file a root-privileged container reads.
+    /// The caller must have validated `tag` with [`is_valid_tag`] and taken `id` from
+    /// [`new_run_id`] — this asserts both again rather than trusting them, because this function is
+    /// the last thing between an HTTP request and a file a root-privileged container reads.
     ///
     /// Written to a temporary name and renamed, so the updater never sees a half-written request.
-    pub fn request_apply(&self, tag: &str, requested_by: &str, now: i64) -> anyhow::Result<String> {
+    pub fn request(
+        &self,
+        command: Command,
+        id: &str,
+        tag: &str,
+        requested_by: &str,
+        now: i64,
+    ) -> anyhow::Result<()> {
         let dir = self
             .dir
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("the upgrade mechanism is not enabled"))?;
         anyhow::ensure!(is_valid_tag(tag), "invalid release tag");
-        let id = uuid::Uuid::new_v4().to_string();
-        let body = request_body(REQUEST_SCHEMA, &id, "apply", tag, requested_by, now);
+        anyhow::ensure!(is_run_id(id), "invalid run id");
+        let body = request_body(REQUEST_SCHEMA, id, command.as_str(), tag, requested_by, now);
         let tmp = dir.join("request.tmp");
         std::fs::write(&tmp, body)?;
         std::fs::rename(&tmp, dir.join("request"))?;
-        Ok(id)
+        Ok(())
+    }
+
+    /// Start receiving an image archive for run `id`.
+    ///
+    /// The archive is named after the run rather than after anything the client sent, so there is
+    /// no filename to validate and none in the request file: the updater rebuilds the path from the
+    /// id it already regex-checks.
+    pub async fn begin_bundle(&self, id: &str) -> Result<BundleUpload, BundleError> {
+        let dir = self.dir.as_deref().ok_or(BundleError::Disabled)?;
+        stage_bundle(&dir.join(BUNDLE_SUBDIR), id, self.bundle_max_bytes).await
+    }
+
+    /// Delete staged archives no run is waiting on.
+    ///
+    /// An archive is a gigabyte sitting in a volume nothing else prunes, and every path that
+    /// abandons one is a path where core is not around to tidy up: a request the updater rejects,
+    /// an updater too old to know the command, core restarting between the upload and the run.
+    /// "Keep only what the in-flight run needs" is the rule that stays true without bookkeeping.
+    ///
+    /// Best effort by design — a failure here must never stop an upgrade, so it is logged and
+    /// dropped rather than returned.
+    pub fn prune_stale_bundles(&self) {
+        let Some(dir) = self.dir.as_deref() else {
+            return;
+        };
+        let keep = self.last_run().filter(RunStatus::is_running).map(|r| r.id);
+        let Ok(entries) = std::fs::read_dir(dir.join(BUNDLE_SUBDIR)) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            let Some(run) = name.split('.').next() else {
+                continue;
+            };
+            if keep.as_deref() == Some(run) {
+                continue;
+            }
+            match std::fs::remove_file(entry.path()) {
+                Ok(()) => tracing::info!(file = name, "removed an abandoned upgrade archive"),
+                Err(e) => {
+                    tracing::warn!(file = name, error = %e, "could not remove an abandoned upgrade archive")
+                }
+            }
+        }
     }
 
     /// Record the outcome of a run that finished while this core was not running.
@@ -281,6 +424,119 @@ impl UpgradeRepo {
             latest_version,
             compat: binding_floor(declared),
         })
+    }
+}
+
+/// Where staged image archives live inside the hand-off volume.
+const BUNDLE_SUBDIR: &str = "bundle";
+
+/// A fresh run id.
+///
+/// Minted by the caller rather than inside [`UpgradeRepo::request`] because an archive upload names
+/// its file after the run *before* the request exists — the transfer takes minutes and the request
+/// is what starts the work.
+#[must_use]
+pub fn new_run_id() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
+/// Is this one of our own run ids?
+///
+/// Also the guarantee that `bundle/<id>.tar` is a name and not a path: a value with no `/`, no `\`
+/// and no `.` cannot climb out of the directory or shadow another run's file. Checked here rather
+/// than trusted from the caller so the property holds at the point it is relied on.
+#[must_use]
+pub fn is_run_id(id: &str) -> bool {
+    id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+
+/// Bytes that must be free to accept an archive of `len` bytes.
+///
+/// Twice the archive plus a margin: the tar lands on the Docker filesystem and then `docker load`
+/// unpacks its layers onto the same filesystem, so the peak holds both. Deliberately an estimate —
+/// layers unpack larger than they store — and the margin is what keeps the estimate from being the
+/// thing that fills the disk. Refusing early matters because a full Docker filesystem takes
+/// PostgreSQL down with it, and this is the only endpoint that can write a gigabyte.
+#[must_use]
+pub fn bundle_space_needed(len: u64) -> u64 {
+    // Saturating throughout: an absurd declared length must come out as "more space than exists",
+    // never wrap into a small number that passes the check.
+    len.saturating_mul(2).saturating_add(512 * 1024 * 1024)
+}
+
+/// Open the staging file for a run. Free function so the upload can be tested without a database.
+async fn stage_bundle(dir: &Path, id: &str, cap: u64) -> Result<BundleUpload, BundleError> {
+    if !is_run_id(id) {
+        return Err(BundleError::BadRunId);
+    }
+    tokio::fs::create_dir_all(dir).await?;
+    let final_path = dir.join(format!("{id}.tar"));
+    let tmp = dir.join(format!("{id}.tar.part"));
+    let file = tokio::fs::File::create(&tmp).await?;
+    Ok(BundleUpload {
+        tmp,
+        final_path,
+        file,
+        written: 0,
+        cap,
+        done: false,
+    })
+}
+
+/// An image archive being written into the hand-off volume.
+///
+/// Streamed to disk rather than buffered: the file is around a gigabyte and core shares a host with
+/// PostgreSQL. Written under a `.part` name and renamed at the end, so the updater — which polls
+/// for work every few seconds — can never pick up a half-received archive.
+pub struct BundleUpload {
+    tmp: PathBuf,
+    final_path: PathBuf,
+    file: tokio::fs::File,
+    written: u64,
+    cap: u64,
+    done: bool,
+}
+
+impl BundleUpload {
+    /// Append a chunk, refusing once the cap would be passed.
+    ///
+    /// Checked *before* the write, so the cap bounds what reaches the disk rather than describing
+    /// what already did.
+    pub async fn write(&mut self, chunk: &[u8]) -> Result<(), BundleError> {
+        use tokio::io::AsyncWriteExt;
+        let next = self.written.saturating_add(chunk.len() as u64);
+        if next > self.cap {
+            return Err(BundleError::TooLarge { cap: self.cap });
+        }
+        self.file.write_all(chunk).await?;
+        self.written = next;
+        Ok(())
+    }
+
+    /// Publish the archive under its final name and return how many bytes it holds.
+    ///
+    /// `sync_all` because the reader is another container and core is about to be replaced by the
+    /// very work this file feeds — the bytes have to survive without this process.
+    pub async fn finish(mut self) -> Result<u64, BundleError> {
+        use tokio::io::AsyncWriteExt;
+        self.file.flush().await?;
+        self.file.sync_all().await?;
+        tokio::fs::rename(&self.tmp, &self.final_path).await?;
+        self.done = true;
+        Ok(self.written)
+    }
+}
+
+impl Drop for BundleUpload {
+    /// Abandon a transfer that did not finish.
+    ///
+    /// Every failure path ends here — a client that disconnects mid-upload, the byte cap, a write
+    /// error — so no caller has to remember to remove the partial file, and none of them can
+    /// forget on some new error path added later.
+    fn drop(&mut self) {
+        if !self.done {
+            let _ = std::fs::remove_file(&self.tmp);
+        }
     }
 }
 
@@ -411,6 +667,10 @@ pub fn heartbeat_is_fresh(written_at: i64, check_interval_secs: u64, now: i64) -
 mod tests {
     use super::*;
 
+    /// Every command core can write. Hand-written because Rust cannot enumerate variants; it is
+    /// what `every_command_is_accepted_by_the_sidecar` iterates.
+    const COMMANDS: &[Command] = &[Command::Apply, Command::Bundle];
+
     fn floor(since: i64, min_core: &str) -> CompatFloor {
         CompatFloor {
             min_core: min_core.to_owned(),
@@ -522,6 +782,94 @@ mod tests {
 
         // Container clock skew must not read as "stopped".
         assert!(heartbeat_is_fresh(1_000_000, hourly, 999_000));
+    }
+
+    /// The one mirror this feature creates: the commands Rust can write ⟷ the commands the shell
+    /// sidecar accepts. Nothing else compares them, and the failure is silent — core writes a
+    /// request the updater answers "unsupported command" to, which reads as a bug in the updater.
+    #[test]
+    fn every_command_is_accepted_by_the_sidecar() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        assert!(
+            compose.contains("yagra-updater"),
+            "read the wrong file — the updater service is not in it"
+        );
+        for cmd in COMMANDS {
+            // Built at runtime: a literal needle in a test that reads a file it is not in would
+            // still be fine here, but keeping it derived means the enum stays the source.
+            let arm = format!("{})", cmd.as_str());
+            assert!(
+                compose.contains(&arm),
+                "the updater's command list has no `{arm}` arm, so core can ask for a command it \
+                 will refuse"
+            );
+        }
+    }
+
+    /// The staged file's name is a name because the id cannot be anything else.
+    #[test]
+    fn a_run_id_cannot_name_a_path() {
+        assert!(is_run_id(&new_run_id()));
+        assert!(is_run_id("0f8fad5b-d9cb-469f-a165-70867728950e"));
+        for bad in [
+            "",
+            "../../etc/passwd",
+            "0f8fad5b-d9cb-469f-a165-70867728950e/x",
+            "0f8fad5b-d9cb-469f-a165-7086772895",    // too short
+            "0f8fad5b-d9cb-469f-a165-70867728950ee", // too long
+            "0f8fad5b-d9cb-469f-a165-708677289.0e",  // a dot would split the extension
+            "0f8fad5b d9cb 469f a165 70867728950e",
+        ] {
+            assert!(!is_run_id(bad), "{bad:?} must not become a file name");
+        }
+    }
+
+    /// Refusing early is the point: the peak holds the archive and what `docker load` unpacks.
+    #[test]
+    fn the_space_needed_covers_the_archive_and_what_it_unpacks_into() {
+        let gig = 1024 * 1024 * 1024;
+        assert!(
+            bundle_space_needed(gig) > 2 * gig,
+            "the tar plus its layers"
+        );
+        // An absurd length must not wrap into a small number and pass the check.
+        assert_eq!(bundle_space_needed(u64::MAX), u64::MAX);
+    }
+
+    /// A transfer that stops partway leaves nothing behind, and the cap stops bytes rather than
+    /// reporting on them afterwards.
+    #[tokio::test]
+    async fn an_unfinished_archive_is_removed_and_the_cap_bounds_what_reaches_the_disk() {
+        let dir = std::env::temp_dir().join(format!("yagra-bundle-{}", new_run_id()));
+        let id = new_run_id();
+        let part = dir.join(format!("{id}.tar.part"));
+        let done = dir.join(format!("{id}.tar"));
+
+        // Over the cap: the write is refused and the partial file goes with the dropped upload.
+        {
+            let mut up = stage_bundle(&dir, &id, 8).await.expect("staged");
+            up.write(b"1234").await.expect("under the cap");
+            let err = up.write(b"56789").await.expect_err("over the cap");
+            assert!(matches!(err, BundleError::TooLarge { cap: 8 }));
+        }
+        assert!(!part.exists(), "the partial archive must not survive");
+        assert!(!done.exists(), "and it must certainly not be published");
+
+        // A completed transfer is renamed, which is what makes it visible to the updater.
+        {
+            let mut up = stage_bundle(&dir, &id, 8).await.expect("staged");
+            up.write(b"abc").await.expect("under the cap");
+            assert_eq!(up.finish().await.expect("finished"), 3);
+        }
+        assert!(!part.exists(), "the staging name is gone");
+        assert_eq!(std::fs::read(&done).expect("published"), b"abc");
+
+        assert!(matches!(
+            stage_bundle(&dir, "../evil", 8).await,
+            Err(BundleError::BadRunId)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

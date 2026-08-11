@@ -3213,6 +3213,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/upgrade/bundle": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install a release from an uploaded image archive, for a site with no reachable registry.
+         * @description The body is the output of `docker save` for the release's three images. Nothing else about the
+         *     upgrade changes: the same backup is taken, the same composition is installed from the target
+         *     image, and the same provenance check decides whether it worked. Returns as soon as the archive
+         *     is stored; poll `GET /api/v1/system/upgrade` for the outcome.
+         *
+         *     Accepting archives is opt-in on the deployment and off by default, so this answers `503` until
+         *     an operator has turned it on at the host.
+         */
+        post: operations["upload_bundle"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/thresholds": {
         parameters: {
             query?: never;
@@ -8391,6 +8417,18 @@ export interface components {
         };
         /** @description Whether the privileged updater container is deployed, and whether it is alive. */
         UpdaterInfo: {
+            /**
+             * @description Whether it will install an uploaded image archive. Off unless the host's compose file turns
+             *     it on — it is the only path that can bring an image this deployment never named onto the
+             *     host, so it is gated separately from the mechanism as a whole (ADR-050 Increment 3).
+             */
+            allow_bundle: boolean;
+            /**
+             * Format: int64
+             * @description The largest archive core will accept, in bytes. Present whenever `allow_bundle` is, so the
+             *     UI can refuse an oversized file before spending an hour uploading it.
+             */
+            bundle_max_bytes?: number | null;
             /**
              * Format: int64
              * @description How often it re-checks the registry, in seconds.
@@ -21269,6 +21307,100 @@ export interface operations {
             };
             /** @description The updater is not deployed, not running, or this core is not the leader */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    upload_bundle: {
+        parameters: {
+            query: {
+                /**
+                 * @description The release the archive contains, e.g. `v0.2.2`. The updater checks it against the images
+                 *     the archive actually carries, so a bundle cannot quietly install a different version.
+                 */
+                target_tag: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description A `docker save` archive holding the core, poller and web images for the target release */
+        requestBody: {
+            content: {
+                "application/octet-stream": number[];
+            };
+        };
+        responses: {
+            /** @description Archive stored; the updater will install it */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RunAccepted"];
+                };
+            };
+            /** @description Not a published release tag */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks manage-configuration or manage-credentials */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description A run is already in flight */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The archive is larger than this deployment accepts */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The updater is not deployed, not running, not the leader, or does not accept archives */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Not enough free space to store the archive and unpack it */
+            507: {
                 headers: {
                     [name: string]: unknown;
                 };

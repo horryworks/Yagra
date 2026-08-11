@@ -53,6 +53,18 @@
     "noRegistry": "The updater could not reach a registry, so there is no list of releases. This is expected on a closed network."
   },
 
+  "bundle": {
+    "heading": "Install from a file",
+    "intro": "For a site with no registry it can reach. Save the release's images where you can reach one, bring the file here, and the rest of the upgrade is identical — the same backup is taken and the same checks decide whether it worked.",
+    "howTo": "docker save -o yagra-v0.2.2.tar ghcr.io/horryworks/yagra-core:v0.2.2 ghcr.io/horryworks/yagra-poller:v0.2.2 ghcr.io/horryworks/yagra-web:v0.2.2",
+    "tagLabel": "Release in this file",
+    "needTag": "Enter the release this file contains, for example v0.2.2. It is checked against the images the file actually holds.",
+    "limit": "Up to {{size}} GiB. There must also be room to unpack it — roughly twice the file again.",
+    "button": "Upload and install",
+    "uploading": "Uploading… {{percent}}%",
+    "failed": "The archive could not be uploaded."
+  },
+
   "apply": {
     "button": "Upgrade to this",
     "confirmTitle": "Upgrade to {{tag}}?",

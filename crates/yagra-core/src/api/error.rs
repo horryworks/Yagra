@@ -95,6 +95,13 @@ impl ApiError {
         Self::new(StatusCode::PAYLOAD_TOO_LARGE, code, message)
     }
 
+    /// `507` — the request is fine but this host has nowhere to put the result. Distinct from
+    /// `413`: the payload is within the accepted size, so the operator's move is to free space or
+    /// upgrade from the command line, not to send something smaller.
+    pub fn insufficient_storage(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::INSUFFICIENT_STORAGE, code, message)
+    }
+
     /// `502` — an upstream this endpoint depends on (an IdP, a cloud API) misbehaved. Distinct from
     /// `500`: the fault is outside Yagra, so the operator's next move is to check that system.
     pub fn bad_gateway(code: &'static str, message: impl Into<String>) -> Self {
