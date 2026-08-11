@@ -36,7 +36,7 @@
     "heading": "戻せるかどうか",
     "unrestricted": "適用済みのマイグレーションはすべて可逆で、以前のリリースでも動きます。戻しても 1 行も失われません。",
     "floored": "このデータベースを動かせるのは Yagra {{minCore}} 以降だけです。",
-    "flooredReason": "マイグレーション {{version}} がスキーマを狭めました: {{reason}}",
+    "flooredReason": "マイグレーション {{version}} による制約: {{reason}}",
     "flooredHint": "これより古い版にはバックアップからの復元が必要です。"
   },
 

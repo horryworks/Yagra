@@ -49,6 +49,12 @@
   showed somebody requesting an upgrade and never showed whether it worked. core now waits for the
   outcome. The row reads `upgrade succeeded -> v0.2.2 (…)`, attributed to whoever pressed the button,
   and a failed run is recorded just as a successful one is.
+- **The Upgrade page gave the wrong reason for a version it will not go back to.** It stated that the
+  migration in question had narrowed the schema, which was not true of the only floor that exists:
+  releases before 0.2.2 cannot start against a newer database because the tolerance for one first
+  shipped in 0.2.2, not because anything was narrowed. The floor's own recorded reason was printed
+  correctly right after it, and contradicted the sentence introducing it. The page no longer asserts
+  a cause of its own.
 
 ## v0.2.2 — Yagra installs its own next version, says how far back it can be taken, and needs no registry to do it
 

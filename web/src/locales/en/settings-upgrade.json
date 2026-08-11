@@ -36,7 +36,7 @@
     "heading": "Going back",
     "unrestricted": "Every migration here is reversible, so an earlier release still runs — and nothing is deleted by going back.",
     "floored": "This database can only be run by Yagra {{minCore}} or newer.",
-    "flooredReason": "Migration {{version}} narrowed the schema: {{reason}}",
+    "flooredReason": "Set by migration {{version}}: {{reason}}",
     "flooredHint": "Anything older needs a restore from backup."
   },
 
