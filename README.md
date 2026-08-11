@@ -19,7 +19,7 @@ polling**. Users access it through the WebUI.
 > instead of a public issue. **Pull requests are not being accepted at this time** — see
 > [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Status: **v0.2.1 — the inventory now says what each node is.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.2.2 — Yagra takes its own next version, from its own WebUI.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
@@ -66,8 +66,13 @@ polling**. Users access it through the WebUI.
 > — the case where an endpoint answers `200` while its body says the service is broken — and can lift
 > numbers out of a JSON body under names you choose. Adding an **SSO provider** now starts by picking
 > which identity provider it is — Microsoft Entra ID, Okta, Google Workspace, or any other OIDC
-> provider — and then asks only for what that product actually needs. HA stores
-> remain a configuration step away, not a rewrite.
+> provider — and then asks only for what that product actually needs. And a deployment now **takes its
+> next version from its own WebUI**: Settings ▸ Upgrade lists the releases it can move to and runs
+> backup → pull → install the composition carried inside the target image → recreate → verify, in a
+> sidecar that holds the Docker socket so core never has to — with a switch on the page to shut the
+> mechanism off, a declared **downgrade window** so going back is a supported move rather than a
+> gamble, and an offline path that installs from a `docker save` archive where no registry is
+> reachable. HA stores remain a configuration step away, not a rewrite.
 
 ## Components
 

@@ -168,7 +168,7 @@ Open **https://\<host\>/** once it is up. The certificate is self-signed until y
 
 **Credential persistence (important).** The `kek-init` service writes a 32-byte KEK into the `kekdata` volume once and never overwrites it; core mounts it read-only at `YAGRA_KEK_FILE=/kek/key`. Without a persistent KEK, core falls back to an **ephemeral** key regenerated on every restart, and all stored credentials (SNMP communities, API tokens) become undecryptable after a redeploy. The compose file wires this up for you — just don't delete the `kekdata` volume.
 
-**Upgrades.** Pull a newer tag and `up -d` again:
+**Upgrades.** From v0.2.2 the ordinary way is **Settings ▸ Upgrade in the WebUI** — this composition ships a `yagra-updater` sidecar that does the whole thing, and no shell is required. The command line below still works and is the way back if the sidecar is switched off or cannot run:
 
 ```bash
 YAGRA_IMAGE_TAG=v0.1.4 docker compose -f docker-compose.deploy.yml pull
@@ -413,6 +413,13 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_RCA_CACHE_SECS` | `900` | RCA report cache lifetime (seconds); `force` bypasses the cache but not the caps |
 | `YAGRA_RCA_MAX_TURNS` | `6` | How many tool-calling turns an LLM root-cause analysis may take before it must answer. **`1` restores the pre-v0.1.23 single-shot behaviour exactly** — no tools are offered and the provider request is byte-identical to before |
 | `YAGRA_RCA_TASK_BUDGET_SECS` | `240` | Wall-clock ceiling for one root-cause analysis including its tool calls. Hitting it returns the model's last answer rather than failing the request |
+| **Upgrade from the WebUI** (deployment **B**; the last four are read by the `yagra-updater` sidecar, not by core) | | |
+| `YAGRA_UPGRADE_DIR` | unset ⇒ apply half off | Directory core and the sidecar hand requests through (`/data/upgrade` in `docker-compose.deploy.yml`, on a shared volume). Unset means no sidecar is deployed: Settings ▸ Upgrade still answers what is running and what it could move to, and reports the apply half unavailable. **Nothing in this directory is ever executed** — it carries a request file, a heartbeat and uploaded archives only |
+| `YAGRA_UPGRADE_BUNDLE_MAX_BYTES` | `4294967296` (4 GiB) | Ceiling on an uploaded image archive, enforced as the bytes land. Three release images saved together come to roughly a gigabyte, so this is not a working limit — it is what catches the wrong file being dragged into the browser before it fills the filesystem PostgreSQL is on |
+| `YAGRA_UPGRADE_REPO` | `ghcr.io/horryworks` | Where **releases** are looked for. Deliberately its own variable and not `YAGRA_IMAGE_REPO`: where releases live is not necessarily where this deployment's current images came from, and a box pulling SHA-tagged builds from a private mirror would otherwise point the release picker at a registry holding none. Fixed by the host either way — no API request can name a registry |
+| `YAGRA_UPGRADE_CHECK_SECS` | `86400` (daily) | How often the sidecar lists the available releases. The list only fills a picker, so checking more often buys nothing. Switching the mechanism off in the WebUI stops the call entirely |
+| `YAGRA_UPGRADE_ALLOW_BUNDLE` | `0` | Allow installing an uploaded `docker save` archive. **Widens the Admin-to-host-root path** from "a published tag of our three images" to "any image the archive contains", which is why it is a host setting and cannot be turned on from the WebUI. Set it only for a site with no reachable registry at all. Everything after the load is unchanged — same backup, same composition swap, same provenance check, and the archive must contain the tag the operator claimed |
+| `YAGRA_DOCKER_GID` | `0` | Group the sidecar runs as. Only matters if you move its uid off `0`; root reaches the socket whatever the gid says |
 | **NATS Auth Callout (per-poller bus credentials)** | | |
 | `YAGRA_NATS_CALLOUT_SEED_FILE` | unset ⇒ callout off | Path to the mounted NATS account nkey seed; core then mints per-poller scoped bus users |
 | `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | NATS account minted poller users are placed into (must match the server's `auth_callout` account) |
@@ -490,7 +497,10 @@ Every binary emits structured logs and a Prometheus `/metrics` endpoint out of t
 
 Upgrades are designed to be low-effort and **never** lose or corrupt data:
 
-- **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; there is no manual migration CLI.
+- **Settings ▸ Upgrade does it for you (v0.2.2+, deployment **B** only).** The page lists the releases this deployment can move to and runs backup → pull → install the composition carried inside the target image → recreate → verify. The work is done by a `yagra-updater` sidecar, which is the only container holding the Docker socket — core never has it. Requesting an upgrade needs **manage-configuration and manage-credentials**, it is audited, and it is not on the MCP surface. A switch on the same page turns the mechanism off; the setting lives in PostgreSQL, so it survives the upgrades it governs.
+  - **A release older than the running one is a downgrade, and it is offered only when it can actually boot.** A migration may declare a *compatibility floor* — the oldest version that can still run once it has been applied — and anything below the current floor is shown greyed out with the reason rather than hidden. Nothing is deleted by going back: columns the newer version added stay in place, unread.
+  - **No registry reachable?** Run `docker save` on the three release images where you can reach them, and upload the archive at the same page. It needs `YAGRA_UPGRADE_ALLOW_BUNDLE=1` on the host as a second, deliberate opt-in, because `docker load` installs whatever the archive contains — see the variable reference below before turning it on.
+- **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; `yagra-core migrations` prints the set a binary embeds as JSON with no database and no configuration, so an upgrade can be planned by running it inside the target image first.
 - **The bus is version-tolerant (N/N-1).** A new core works with old pollers during a rollout, so you can upgrade core first and pollers after.
 - **Rolling upgrades.** Pollers are stateless — replace them in any order. For Docker, pull the new tag and `up -d` (see **B**). Remote pollers: pull and `up -d` per site; a pool briefly down falls back to legacy publish, so no node goes dark.
 - **Take a backup before a major upgrade** — see [Backup & restore](#backup--restore) below.

@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.2 — Yagra installs its own next version, says how far back it can be taken, and needs no registry to do it
+
 ### New Features
 - **Settings ▸ Upgrade — Yagra can now say which build is running and how far back it can be taken**
   (ADR-050). `GET /api/v1/system/upgrade` (manage-configuration) reports the running binary's commit
@@ -33,6 +35,9 @@
     install a tag we published and nothing else; the command set is closed; and nothing in the
     shared volume is ever executed. Requesting an upgrade needs manage-configuration **and**
     manage-credentials, and none of it is on the MCP surface.
+  - **Where releases are looked for is a host setting of its own** — `YAGRA_UPGRADE_REPO`, defaulting
+    to the public GHCR repository — and deliberately not "wherever the running containers came from".
+    A deployment pulling its images from a private mirror still finds the real release list.
   - The registry is checked once a day.
   - Each release is labelled with the direction it moves you, and a version that cannot read the
     current database is shown greyed out with the reason rather than hidden. Releases before 0.2.2
