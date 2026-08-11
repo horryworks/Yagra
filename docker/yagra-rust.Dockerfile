@@ -120,7 +120,13 @@ RUN --mount=type=cache,target=/app/target \
 # upgrade takes the compose file out of the image it is installing, so the two can never be a
 # version apart — which is the failure ADR-044 hit (a new compose publishing 443 with an old web
 # container that never listened on it). Staged under /app so both `bins` sources agree on the path.
-RUN cp docker-compose.deploy.yml scripts/yagra-backup.sh /app/
+#
+# Only the backup script moves: WORKDIR is /app and `COPY . .` above already put the compose file at
+# /app/docker-compose.deploy.yml. Naming it here as well made `cp` a same-file copy, which is a hard
+# error — `cp: '...' and '/app/...' are the same file`, exit 1, whole build dead. That shipped
+# because this stage is the one `/flashdeploy` prunes (BIN_SRC=prebuilt) and no `main` push runs CI,
+# so nothing evaluated the line until `/release`'s pre-flight build did.
+RUN cp scripts/yagra-backup.sh /app/yagra-backup.sh
 
 # ── prebuilt — take binaries compiled outside by scripts/flash-build.sh (BIN_SRC=prebuilt) ──
 #
