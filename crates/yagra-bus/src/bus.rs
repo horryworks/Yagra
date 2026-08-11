@@ -8,7 +8,7 @@
 
 use crate::messages::{
     AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
+    PollResult, PollerUpgradeMsg, RawFlowDatagram, SyncMsg, SyncRequest,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -82,6 +82,34 @@ pub trait SyncBus: Send + Sync {
     async fn publish_sync_request(&self, req: SyncRequest) -> Result<(), BusError>;
     /// Publish a poll job to a specific pool's subject (per-job fallback / poll-now / legacy).
     async fn publish_job_for_pool(&self, pool: &str, job: PollJob) -> Result<(), BusError>;
+
+    /// Wait until everything published so far has actually left this process.
+    ///
+    /// A publish only queues into the client's writer, so `Ok(())` from one of the methods above is
+    /// not delivery — which does not matter for a beat that another beat will follow, and matters a
+    /// great deal for the **last** one. A poller's `leaving` heartbeat is the difference between
+    /// core reassigning its nodes now and core waiting out three missed beats (ADR-009); publish it
+    /// and exit, and the write is lost with the runtime. Call this after any publish whose sender is
+    /// about to stop existing.
+    ///
+    /// Defaulted to a no-op: an in-memory bus has nothing in flight, and every implementation that
+    /// does is expected to override it.
+    async fn flush(&self) -> Result<(), BusError> {
+        Ok(())
+    }
+}
+
+/// Core telling one poller to replace itself (ADR-051).
+///
+/// A fourth seam rather than a method on [`SyncBus`], for the reason `DiscoveryBus` was split out:
+/// the two ends are different code and want different surfaces. More than that, this one is a
+/// *privilege* boundary — a command on it ends up in a container holding the Docker socket — and
+/// keeping it off the working-set trait means nothing that merely distributes polling work can
+/// reach it by having the wrong handle in scope.
+#[async_trait]
+pub trait UpgradeBus: Send + Sync {
+    /// Publish an upgrade command addressed to a single poller.
+    async fn publish_poller_upgrade(&self, msg: PollerUpgradeMsg) -> Result<(), BusError>;
 }
 
 /// The discovery-sweep side of the bus (Phase C).
@@ -156,6 +184,8 @@ pub struct InMemoryBus {
     discovery_results: broadcast::Sender<DiscoveryResult>,
     // Core⇄core session revocation (ADR-016 Increment 2a).
     auth_revokes: broadcast::Sender<AuthRevoke>,
+    // Per-poller upgrade commands (ADR-051), carrying their routing key like `sync` does.
+    poller_upgrades: broadcast::Sender<(String, PollerUpgradeMsg)>,
 }
 
 impl InMemoryBus {
@@ -176,6 +206,7 @@ impl InMemoryBus {
         let (pool_discovery_jobs, _) = broadcast::channel(capacity);
         let (discovery_results, _) = broadcast::channel(capacity);
         let (auth_revokes, _) = broadcast::channel(capacity);
+        let (poller_upgrades, _) = broadcast::channel(capacity);
         Self {
             jobs,
             results,
@@ -191,6 +222,7 @@ impl InMemoryBus {
             pool_discovery_jobs,
             discovery_results,
             auth_revokes,
+            poller_upgrades,
         }
     }
 
@@ -282,6 +314,17 @@ impl InMemoryBus {
     #[must_use]
     pub fn subscribe_auth_revoke(&self) -> broadcast::Receiver<AuthRevoke> {
         self.auth_revokes.subscribe()
+    }
+
+    /// Subscribe to per-poller upgrade commands, with the poller id they are addressed to.
+    ///
+    /// A channel exists here for the same reason every other one does: a publish with no in-memory
+    /// counterpart is a publish nothing can unit-test, and this one ends in a container with the
+    /// Docker socket — the last publish in the system that should only be exercisable against a
+    /// live NATS.
+    #[must_use]
+    pub fn subscribe_poller_upgrades(&self) -> broadcast::Receiver<(String, PollerUpgradeMsg)> {
+        self.poller_upgrades.subscribe()
     }
 }
 
@@ -375,6 +418,14 @@ impl DiscoveryBus for InMemoryBus {
 impl PeerBus for InMemoryBus {
     async fn publish_auth_revoke(&self, msg: AuthRevoke) -> Result<(), BusError> {
         let _ = self.auth_revokes.send(msg);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl UpgradeBus for InMemoryBus {
+    async fn publish_poller_upgrade(&self, msg: PollerUpgradeMsg) -> Result<(), BusError> {
+        let _ = self.poller_upgrades.send((msg.poller_id.clone(), msg));
         Ok(())
     }
 }
@@ -741,5 +792,32 @@ mod tests {
             .unwrap();
 
         assert_eq!(rx.recv().await.unwrap(), msg);
+    }
+
+    #[tokio::test]
+    async fn published_poller_upgrade_reaches_subscriber_with_routing_id() {
+        use crate::messages::{PollerUpgradeMsg, UpgradeStep};
+
+        let bus = InMemoryBus::new(8);
+        let mut rx = bus.subscribe_poller_upgrades();
+
+        let msg = PollerUpgradeMsg {
+            poller_id: "edge-tokyo-1".to_owned(),
+            run_id: "1a2b3c4d-0000-0000-0000-00000000abcd".to_owned(),
+            tag: "v0.2.3".to_owned(),
+            requested_by: "admin".to_owned(),
+            requested_at: 1_786_400_000,
+            step: UpgradeStep::Apply,
+        };
+        UpgradeBus::publish_poller_upgrade(&bus, msg.clone())
+            .await
+            .unwrap();
+
+        // The routing key travels beside the message here, exactly as `sync` does — the in-memory
+        // stand-in for a per-poller subject, so a test can prove a command addressed to one site
+        // does not read as one addressed to another.
+        let (id, got) = rx.recv().await.unwrap();
+        assert_eq!(id, "edge-tokyo-1");
+        assert_eq!(got, msg);
     }
 }

@@ -120,6 +120,15 @@ pub struct UpdaterHeartbeat {
     /// yet — at most one beat.
     #[serde(default)]
     pub paused: bool,
+    /// Poller ids in the updater's own compose project — the ones this deployment's upgrade
+    /// recreates on its way past (ADR-051).
+    ///
+    /// `None` from an updater too old to report it, and that distinction is load-bearing: core
+    /// cannot otherwise tell a co-located poller from a remote one, so guessing would either invent
+    /// a "1 poller will be left behind" warning on the commonest deployment shape there is, or
+    /// block its upgrades on a version skew that resolves itself inside the same run.
+    #[serde(default)]
+    pub local_pollers: Option<Vec<String>>,
 }
 
 /// What core is asking the updater to do.
@@ -220,6 +229,71 @@ pub enum OfferBlock {
     BelowFloor,
     /// Neither the tag nor the floor could be read as a version, so nothing can be promised.
     Unknown,
+    /// A poller this upgrade will **not** carry would be left more than one release behind the
+    /// target, and the bus only promises N/N-1 (ADR-050 decision 8, ADR-017).
+    ///
+    /// Until v0.2.3 that constraint existed only in prose, so the jump it called dangerous was
+    /// exactly as pressable as any other. Note what it does *not* block: a poller that upgrades in
+    /// the same operation is never a reason to refuse, because its skew never outlives the run.
+    PollersBehind,
+}
+
+/// One poller as the upgrade view needs to see it: what it runs, and whether it can replace itself.
+#[derive(Debug, Clone)]
+pub struct PollerBuild {
+    /// Sanitized poller id.
+    pub id: String,
+    /// Version from its latest heartbeat, when it has reported one.
+    pub version: Option<String>,
+    /// It advertises `CAP_SELF_UPGRADE` — a site updater is deployed beside it and core can hand it
+    /// the same release (ADR-051).
+    pub self_upgrades: bool,
+}
+
+/// A poller a single press of Upgrade would leave on its current build.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct PollerLag {
+    /// Sanitized poller id.
+    pub id: String,
+    /// What it is running now; `null` when it has never reported a version.
+    pub version: Option<String>,
+}
+
+/// Who an upgrade carries along, and who it leaves behind.
+///
+/// `null` on the response rather than an empty plan when the updater has not said which pollers
+/// share its compose project: "no poller is left behind" and "nobody asked" are different answers,
+/// and only one of them is safe to render as a reassuring zero (the lesson ADR-045 paid for).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct PollerUpgradePlan {
+    /// Pollers this operation replaces: the ones in core's own compose project, plus any that
+    /// advertise `CAP_SELF_UPGRADE`.
+    pub with_core: Vec<String>,
+    /// Pollers that stay on their current build until someone upgrades them by hand.
+    pub manual: Vec<PollerLag>,
+}
+
+/// Split the fleet into what an upgrade carries and what it leaves behind.
+///
+/// `local` is the set the updater reported from its own compose project — the only trustworthy
+/// answer to "is this poller co-located", because nothing on the bus distinguishes a poller sharing
+/// core's host from one at a remote site (a container's id *is* its hostname *is* its poller id, and
+/// neither `mgmt_addrs` nor the pool says which project it belongs to).
+#[must_use]
+pub fn poller_upgrade_plan(pollers: &[PollerBuild], local: &[String]) -> PollerUpgradePlan {
+    let mut with_core = Vec::new();
+    let mut manual = Vec::new();
+    for p in pollers {
+        if p.self_upgrades || local.iter().any(|l| l == &p.id) {
+            with_core.push(p.id.clone());
+        } else {
+            manual.push(PollerLag {
+                id: p.id.clone(),
+                version: p.version.clone(),
+            });
+        }
+    }
+    PollerUpgradePlan { with_core, manual }
 }
 
 /// A release the operator could move to, with the direction and the verdict already decided.
@@ -247,16 +321,34 @@ pub struct ReleaseOffer {
 /// floor is returned but marked blocked rather than dropped: an operator looking for a version that
 /// is not there needs to know it exists and why it is refused (ADR-050 decision 10), and silently
 /// shortening the list would read as "that release never existed".
+/// `stragglers` is what the pollers this upgrade would *not* carry are running (see
+/// [`poller_upgrade_plan`]); an empty slice disables the N-2 gate, which is the correct reading when
+/// nobody has said who those pollers are.
 #[must_use]
 pub fn release_offers(
     releases: &[AvailableRelease],
     current: &str,
     floor: Option<&CompatFloor>,
+    stragglers: &[String],
 ) -> Vec<ReleaseOffer> {
     let running = parse_version(current);
     // An unreadable floor blocks every rollback. Same stance as `binding_floor`: a floor nobody can
     // read is not evidence that going back is safe.
     let min = floor.map(|f| (parse_version(&f.min_core), f));
+    // The releases the operator can actually see, ascending. "One release behind" is measured
+    // against this list rather than by arithmetic on the version numbers, because the distance that
+    // matters is how many releases happened — 0.1.19 → 0.2.0 is one step, and no numeric rule reads
+    // it that way.
+    let mut ladder: Vec<Version> = releases
+        .iter()
+        .filter_map(|r| parse_version(&r.tag))
+        .collect();
+    ladder.sort_unstable();
+    ladder.dedup();
+    // The oldest version any left-behind poller is on. Only versions we can read count: a poller
+    // that has never reported one cannot be judged, and refusing every upgrade over a poller we
+    // know nothing about would make the gate fire hardest exactly where it knows least.
+    let oldest_straggler = stragglers.iter().filter_map(|v| parse_version(v)).min();
 
     releases
         .iter()
@@ -271,7 +363,10 @@ pub fn release_offers(
                 _ => OfferDirection::Rollback,
             };
             let blocked = match (direction, &target, &min) {
-                (OfferDirection::Upgrade, _, _) => None,
+                (OfferDirection::Upgrade, t, _) => t
+                    .as_ref()
+                    .filter(|t| leaves_a_poller_two_behind(t, oldest_straggler.as_ref(), &ladder))
+                    .map(|_| OfferBlock::PollersBehind),
                 (OfferDirection::Rollback, None, _) => Some(OfferBlock::Unknown),
                 (OfferDirection::Rollback, Some(_), None) => None,
                 (OfferDirection::Rollback, Some(t), Some((Some(m), _))) => {
@@ -287,6 +382,29 @@ pub fn release_offers(
             })
         })
         .collect()
+}
+
+/// Would installing `target` leave a poller more than one release behind it?
+///
+/// `ladder` is every readable release, ascending. The predecessor of `target` there is the oldest
+/// build the bus still promises to talk to (N-1); a straggler older than that is N-2 or worse. A
+/// target with no predecessor in the list has nothing to be behind, and so does an unreadable or
+/// absent straggler.
+fn leaves_a_poller_two_behind(
+    target: &Version,
+    oldest_straggler: Option<&Version>,
+    ladder: &[Version],
+) -> bool {
+    let Some(straggler) = oldest_straggler else {
+        return false;
+    };
+    let Some(idx) = ladder.iter().position(|v| v == target) else {
+        return false;
+    };
+    let Some(predecessor) = idx.checked_sub(1).and_then(|i| ladder.get(i)) else {
+        return false;
+    };
+    straggler < predecessor
 }
 
 /// The versions the sidecar last saw in the registry (`available.json`).
@@ -581,27 +699,29 @@ impl UpgradeRepo {
     ///
     /// Spawned, never awaited — it sleeps for as long as the run does, bounded by
     /// [`MAINTENANCE_WINDOW_SECS`], past which both things it exists to do are moot.
+    /// Returns the settled run, so the caller can start the poller convergence that must follow a
+    /// successful one (ADR-051). `None` when there was nothing to settle or another core claimed it
+    /// — in both cases this process must not also drive the pollers, or two cores would issue the
+    /// same commands.
     pub async fn settle_finished_run(
         &self,
         audit: &crate::audit::AuditRepo,
         maintenance: &crate::maintenance::MaintenanceRepo,
-    ) {
-        let Some(dir) = self.dir.as_deref() else {
-            return;
-        };
+    ) -> Option<RunStatus> {
+        let dir = self.dir.as_deref()?;
         let deadline = tokio::time::Instant::now()
             + Duration::from_secs(MAINTENANCE_WINDOW_SECS.unsigned_abs());
         let run = loop {
             let run = self.last_run();
             match watch_step(run.as_ref(), tokio::time::Instant::now() >= deadline) {
                 WatchStep::Settle => break run.expect("Settle is only reached with a run"),
-                WatchStep::Stop => return,
+                WatchStep::Stop => return None,
                 WatchStep::Wait => tokio::time::sleep(RUN_WATCH_TICK).await,
             }
         };
 
         if !claim_run(dir, &run.id) {
-            return;
+            return None;
         }
 
         // Give the fleet its monitoring back now rather than at the bound (ADR-050 decision 12).
@@ -630,6 +750,7 @@ impl UpgradeRepo {
         } else {
             tracing::info!(run = %run.id, state = %run.state, "recorded the completed upgrade");
         }
+        Some(run)
     }
 
     fn read_json<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
@@ -1370,6 +1491,7 @@ mod tests {
             &avail(&["v0.3.0", "v0.2.2", "v0.2.1", "v0.1.6"]),
             "0.2.2",
             Some(&floor),
+            &[],
         );
         let by = |t: &str| offers.iter().find(|o| o.tag == t).cloned();
 
@@ -1394,7 +1516,7 @@ mod tests {
     /// No declared floor means every applied migration is reversible, so a rollback is allowed.
     #[test]
     fn without_a_floor_a_rollback_is_offered() {
-        let offers = release_offers(&avail(&["v0.2.0"]), "0.2.1", None);
+        let offers = release_offers(&avail(&["v0.2.0"]), "0.2.1", None, &[]);
         assert_eq!(offers[0].direction, OfferDirection::Rollback);
         assert!(offers[0].blocked.is_none());
     }
@@ -1402,7 +1524,7 @@ mod tests {
     /// The reason this is not a string comparison in TypeScript.
     #[test]
     fn direction_is_decided_by_semver_not_by_text() {
-        let offers = release_offers(&avail(&["v0.2.10"]), "0.2.9", None);
+        let offers = release_offers(&avail(&["v0.2.10"]), "0.2.9", None, &[]);
         assert_eq!(
             offers[0].direction,
             OfferDirection::Upgrade,
@@ -1413,13 +1535,142 @@ mod tests {
     /// Anything unreadable — the tag or the floor — is refused rather than assumed safe.
     #[test]
     fn an_unreadable_version_is_never_offered_as_a_safe_move() {
-        let odd = release_offers(&avail(&["nightly"]), "0.2.1", None);
+        let odd = release_offers(&avail(&["nightly"]), "0.2.1", None, &[]);
         assert_eq!(odd[0].direction, OfferDirection::Rollback);
         assert_eq!(odd[0].blocked, Some(OfferBlock::Unknown));
 
         let bad_floor = floor(78, "not-a-version");
-        let offers = release_offers(&avail(&["v0.2.0"]), "0.2.1", Some(&bad_floor));
+        let offers = release_offers(&avail(&["v0.2.0"]), "0.2.1", Some(&bad_floor), &[]);
         assert_eq!(offers[0].blocked, Some(OfferBlock::Unknown));
+    }
+
+    // ── The N-2 gate (ADR-050 decision 8, made real by ADR-051 decision 10) ─────────────────────
+
+    fn build(id: &str, version: Option<&str>, self_upgrades: bool) -> PollerBuild {
+        PollerBuild {
+            id: id.to_owned(),
+            version: version.map(str::to_owned),
+            self_upgrades,
+        }
+    }
+
+    /// The constraint ADR-050 wrote down and nothing enforced: with a poller two releases behind the
+    /// target, the bus is outside its N/N-1 promise the moment the run finishes — and the button was
+    /// exactly as pressable as any other.
+    #[test]
+    fn a_jump_that_would_strand_a_poller_two_releases_back_is_refused() {
+        let ladder = avail(&["v0.2.3", "v0.2.2", "v0.2.1"]);
+        let offers = release_offers(&ladder, "0.2.1", None, &["0.2.1".to_owned()]);
+        let by = |t: &str| offers.iter().find(|o| o.tag == t).cloned().unwrap();
+
+        assert!(
+            by("v0.2.2").blocked.is_none(),
+            "one release apart is exactly what N/N-1 promises"
+        );
+        assert_eq!(
+            by("v0.2.3").blocked,
+            Some(OfferBlock::PollersBehind),
+            "two apart leaves the poller unsupported"
+        );
+    }
+
+    /// A blocked offer stays on the list. Same discipline as the floor: a version that looks absent
+    /// reads as "never released", which sends the operator looking for a problem that is not there.
+    #[test]
+    fn a_blocked_jump_is_still_listed() {
+        let offers = release_offers(
+            &avail(&["v0.2.3", "v0.2.2", "v0.2.1"]),
+            "0.2.1",
+            None,
+            &["0.2.1".to_owned()],
+        );
+        assert!(offers.iter().any(|o| o.tag == "v0.2.3"));
+    }
+
+    /// A poller that upgrades inside the same run is never a reason to refuse: its skew does not
+    /// outlive the operation. Getting this wrong would block the single-host deployment — the
+    /// commonest shape there is, and the one with nothing to strand.
+    #[test]
+    fn a_poller_that_rides_along_never_blocks_a_jump() {
+        let ladder = avail(&["v0.2.3", "v0.2.2", "v0.2.1"]);
+        // Same fleet, same lag — the only difference is who carries it.
+        let stranded = release_offers(&ladder, "0.2.1", None, &["0.2.1".to_owned()]);
+        let carried = release_offers(&ladder, "0.2.1", None, &[]);
+        assert_eq!(
+            stranded.iter().find(|o| o.tag == "v0.2.3").unwrap().blocked,
+            Some(OfferBlock::PollersBehind)
+        );
+        assert!(carried
+            .iter()
+            .find(|o| o.tag == "v0.2.3")
+            .unwrap()
+            .blocked
+            .is_none());
+    }
+
+    /// Distance is counted in releases, not in version arithmetic: `0.1.19 → 0.2.0` is one step, and
+    /// no rule over the numbers themselves reads it that way.
+    #[test]
+    fn distance_is_measured_in_releases_not_in_version_numbers() {
+        let ladder = avail(&["v0.2.0", "v0.1.19", "v0.1.18"]);
+        let offers = release_offers(&ladder, "0.1.19", None, &["0.1.19".to_owned()]);
+        assert!(
+            offers
+                .iter()
+                .find(|o| o.tag == "v0.2.0")
+                .unwrap()
+                .blocked
+                .is_none(),
+            "a major/minor bump is still just the next release"
+        );
+    }
+
+    /// A poller that has never reported a version cannot be judged, so it does not block. The gate
+    /// must not fire hardest where it knows least — that is how a safety check becomes the thing
+    /// operators route around.
+    #[test]
+    fn an_unreadable_poller_version_does_not_block_anything() {
+        let ladder = avail(&["v0.2.3", "v0.2.2", "v0.2.1"]);
+        let offers = release_offers(&ladder, "0.2.1", None, &["not-a-version".to_owned()]);
+        assert!(offers
+            .iter()
+            .find(|o| o.tag == "v0.2.3")
+            .unwrap()
+            .blocked
+            .is_none());
+    }
+
+    /// The split core cannot make on its own: a co-located poller is upgraded by the same `up -d`,
+    /// a remote one is not, and nothing on the bus tells them apart. Only the updater's own project
+    /// listing does.
+    #[test]
+    fn the_plan_splits_the_fleet_by_project_and_by_capability() {
+        let fleet = vec![
+            build("core-host-poller", Some("0.2.2"), false),
+            build("edge-tokyo-1", Some("0.2.1"), true),
+            build("edge-osaka-1", Some("0.2.0"), false),
+            build("edge-nagoya-1", None, false),
+        ];
+        let plan = poller_upgrade_plan(&fleet, &["core-host-poller".to_owned()]);
+
+        assert_eq!(
+            plan.with_core,
+            vec!["core-host-poller".to_owned(), "edge-tokyo-1".to_owned()],
+            "in core's project, or able to replace itself"
+        );
+        assert_eq!(
+            plan.manual,
+            vec![
+                PollerLag {
+                    id: "edge-osaka-1".to_owned(),
+                    version: Some("0.2.0".to_owned()),
+                },
+                PollerLag {
+                    id: "edge-nagoya-1".to_owned(),
+                    version: None,
+                },
+            ]
+        );
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

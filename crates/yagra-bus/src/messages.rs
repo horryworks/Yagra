@@ -71,6 +71,18 @@ pub const CAP_HTTP_AUTH: &str = "http-auth";
 /// both, or neither, and a fleet mid-upgrade can advertise one without the other.
 pub const CAP_HTTP_BODY: &str = "http-body";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can replace itself on
+/// command: a site updater is deployed beside it and it has seen that updater's heartbeat (ADR-051).
+///
+/// Declared, never inferred, and the reason is the same one that made `allow_bundle` a declaration
+/// in ADR-050 — the side holding the Docker socket is the side that knows whether it exists. Core
+/// could guess from a remote poller's address or its pool and would be wrong in both directions: a
+/// site that deliberately left the sidecar commented out looks identical on the bus to one that
+/// enabled it. Absence therefore means "cannot", so the worst a missing claim costs is a poller that
+/// keeps being listed as needing a hand — never a command sent into a container that cannot act on
+/// it, and never a version skew nobody was told about.
+pub const CAP_SELF_UPGRADE: &str = "self-upgrade";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -767,6 +779,58 @@ pub struct SyncRequest {
     pub pool: String,
     /// The poller's current incarnation.
     pub incarnation: Uuid,
+}
+
+/// Which half of an upgrade a [`PollerUpgradeMsg`] is asking for.
+///
+/// Split because the two have completely different costs to a site. Fetching an image over a WAN
+/// link is minutes and costs no monitoring at all; recreating the container is seconds and is the
+/// entire outage. Doing them as one step would make a single-poller pool dark for the download,
+/// which is the case ADR-051 decision 13 exists to shrink.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeStep {
+    /// Fetch the release's images and stop. The poller keeps running and keeps polling.
+    Prefetch,
+    /// Install what is already local: recreate the containers from the target composition.
+    ///
+    /// The default, so a message from a producer that predates the split still means "do the
+    /// upgrade" rather than silently meaning "download it and never install it" — a failure that
+    /// would look exactly like success from core's side until the version never changed.
+    #[default]
+    Apply,
+}
+
+/// Core telling one poller to replace itself with a published release (ADR-051).
+///
+/// Published on [`crate::subjects::upgrade_for`] — its own subject, addressed to a single poller, so
+/// a build that has never heard of it simply does not subscribe and nothing happens. That is the
+/// whole N-1 story for this family: no version field, no capability check on the receiving side, no
+/// way for the command to disturb the working-set stream it travels beside.
+///
+/// **The poller executes none of this.** It validates the fields and writes them into the hand-off
+/// file its site updater reads (ADR-050's format, unchanged), because the container that holds the
+/// Docker socket must never be the container that talks to the network.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollerUpgradeMsg {
+    /// Sanitized id of the poller this is addressed to. Redundant with the subject on purpose: a
+    /// poller that receives one for someone else drops it rather than acting on a routing mistake.
+    pub poller_id: String,
+    /// The run this belongs to — core's upgrade run id, so the site's audit trail and the central
+    /// one name the same operation.
+    pub run_id: String,
+    /// Release tag to install, e.g. `v0.2.3`. Validated on both sides (defence in depth: the poller
+    /// checks it before writing the file, and the updater checks it again before using it).
+    pub tag: String,
+    /// Who asked, for the site's own audit line. Empty when core cannot attribute it.
+    #[serde(default)]
+    pub requested_by: String,
+    /// Unix seconds when core issued it.
+    #[serde(default)]
+    pub requested_at: i64,
+    /// Fetch only, or install (see [`UpgradeStep`]).
+    #[serde(default)]
+    pub step: UpgradeStep,
 }
 
 /// What kind of check to run. Tagged so new protocols can be added without breaking
@@ -2992,6 +3056,48 @@ mod tests {
         let wire = serde_json::to_string(&bye).unwrap();
         let back: HeartbeatMsg = serde_json::from_str(&wire).unwrap();
         assert!(back.leaving);
+    }
+
+    #[test]
+    fn poller_upgrade_tolerates_missing_and_unknown_fields() {
+        // The mandatory three are what a command means; everything else defaults. `step` defaulting
+        // to `Apply` is the load-bearing one: a producer that predates the prefetch split means
+        // "upgrade", and defaulting to `Prefetch` would download the release and never install it —
+        // a failure indistinguishable from success until the version never changed.
+        let json = r#"{
+            "poller_id": "edge-1",
+            "run_id": "1a2b3c4d-0000-0000-0000-00000000abcd",
+            "tag": "v0.2.3",
+            "something_newer": {"nested": true}
+        }"#;
+        let msg: PollerUpgradeMsg = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.step, UpgradeStep::Apply);
+        assert_eq!(msg.requested_by, "");
+        assert_eq!(msg.requested_at, 0);
+
+        let wire = serde_json::to_string(&PollerUpgradeMsg {
+            step: UpgradeStep::Prefetch,
+            ..msg
+        })
+        .unwrap();
+        let back: PollerUpgradeMsg = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.step, UpgradeStep::Prefetch);
+    }
+
+    #[test]
+    fn the_upgrade_subject_is_its_own_family_not_a_variant_of_the_assignment_stream() {
+        // Subject partitioning *is* the version gate for this family (module docs, mechanism 4): an
+        // older poller never subscribes here, so the command reaches nobody and the site stays put.
+        // It also means `yagra.poller.assign.>` does not cover it — the trap both bus allow-lists
+        // have to be edited for, with no compile error if either is missed.
+        let up = crate::subjects::upgrade_for("edge-1");
+        assert_eq!(up, "yagra.poller.upgrade.edge-1");
+        assert!(!up.starts_with("yagra.poller.assign"));
+        // Sanitized like every other per-poller subject, so an id cannot become two tokens.
+        assert_eq!(
+            crate::subjects::upgrade_for("a.b/c"),
+            "yagra.poller.upgrade.a-b-c"
+        );
     }
 
     #[test]

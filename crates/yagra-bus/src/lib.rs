@@ -13,18 +13,19 @@ pub mod messages;
 pub mod nats;
 pub mod subjects;
 
-pub use bus::{Bus, BusError, DiscoveryBus, InMemoryBus, PeerBus, SyncBus};
+pub use bus::{Bus, BusError, DiscoveryBus, InMemoryBus, PeerBus, SyncBus, UpgradeBus};
 pub use messages::{
     encode_raw, AuthRevoke, CheckOutcome, CheckSpec, DiscoveredDevice, DiscoveredInterface,
     DiscoveryCredential, DiscoveryJob, DiscoveryResult, DiscoveryV3, DnsCheck, EventKind, EventMsg,
     FlowBatch, FlowRecord, HeartbeatMsg, HttpCheck, IcmpCheck, JobSpec, MerakiCollectCheck,
-    MerakiDeviceRef, NodeJobs, PollJob, PollResult, RawFlowDatagram, RawFlowProto, Sample,
-    SnmpArpCheck, SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn,
-    SnmpNeighborCheck, SnmpNeighborColumn, SnmpRouteProbe, SnmpRoutingCheck, SnmpRoutingColumn,
-    SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck,
-    SnmpV3RoutingCheck, SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext, WorkingSetDelta,
-    WorkingSetSnapshot, CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_HTTP_BODY, CAP_RAW_CAPTURE,
-    HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
+    MerakiDeviceRef, NodeJobs, PollJob, PollResult, PollerUpgradeMsg, RawFlowDatagram,
+    RawFlowProto, Sample, SnmpArpCheck, SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check,
+    SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn, SnmpRouteProbe,
+    SnmpRoutingCheck, SnmpRoutingColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check,
+    SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3RoutingCheck, SnmpV3TableCheck, SyncMsg, SyncRequest,
+    TraceContext, UpgradeStep, WorkingSetDelta, WorkingSetSnapshot, CAP_FLOW_RELAY, CAP_HTTP_AUTH,
+    CAP_HTTP_BODY, CAP_RAW_CAPTURE, CAP_SELF_UPGRADE, HEARTBEAT_SECS, OFFLINE_AFTER_SECS,
+    SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
 pub use nats::{redact_url, split_userinfo_password, NatsBus, DEFAULT_POOL, POLLER_QUEUE};

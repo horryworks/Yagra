@@ -25756,7 +25756,8 @@
         "description": "Why a release cannot be installed.",
         "enum": [
           "below_floor",
-          "unknown"
+          "unknown",
+          "pollers_behind"
         ]
       },
       "OfferDirection": {
@@ -26034,7 +26035,9 @@
           "working_set_nodes",
           "working_set_specs",
           "results_total",
-          "mgmt_addrs"
+          "mgmt_addrs",
+          "caps",
+          "listeners"
         ],
         "properties": {
           "anchor_node_id": {
@@ -26044,6 +26047,13 @@
             ],
             "format": "uuid",
             "description": "The node this poller attaches to, naming where it sits in the derived dependency graph.\n`null` ⇒ core places it from `mgmt_addrs` instead."
+          },
+          "caps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional capabilities this poller's build advertises (`raw-capture`, `flow-relay`,\n`http-auth`, `http-body`, `self-upgrade`). Empty when the poller is offline, and empty from\nan N-1 build — **absence means \"cannot\", never \"unknown\"**, which is the same reading core\napplies when it decides whether to send a poller work that depends on one."
           },
           "cpu_pct": {
             "type": [
@@ -26078,6 +26088,13 @@
               "null"
             ],
             "description": "Last durably-recorded contact (RFC 3339); `null` for a live poller not yet persisted (it\nregisters within the 60s inventory-upsert throttle window)."
+          },
+          "listeners": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Passive-event listeners it has bound (e.g. `syslog:514`, `trap:162`). Empty when offline.\n\nWorth reading before restarting a poller: unlike active polling, nothing can take these over\nand nothing backfills them, so whatever they would have received while it was down is gone\n(the same set `monitoring_gaps` stamps onto a healed gap)."
           },
           "mem_used_pct": {
             "type": [
@@ -26126,6 +26143,26 @@
             "format": "int32",
             "description": "Working-set spec count it last reported.",
             "minimum": 0
+          }
+        }
+      },
+      "PollerLag": {
+        "type": "object",
+        "description": "A poller a single press of Upgrade would leave on its current build.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Sanitized poller id."
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is running now; `null` when it has never reported a version."
           }
         }
       },
@@ -26185,6 +26222,30 @@
           "truncated": {
             "type": "boolean",
             "description": "Whether `nodes` is a capped page of `total`."
+          }
+        }
+      },
+      "PollerUpgradePlan": {
+        "type": "object",
+        "description": "Who an upgrade carries along, and who it leaves behind.\n\n`null` on the response rather than an empty plan when the updater has not said which pollers\nshare its compose project: \"no poller is left behind\" and \"nobody asked\" are different answers,\nand only one of them is safe to render as a reassuring zero (the lesson ADR-045 paid for).",
+        "required": [
+          "with_core",
+          "manual"
+        ],
+        "properties": {
+          "manual": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PollerLag"
+            },
+            "description": "Pollers that stay on their current build until someone upgrades them by hand."
+          },
+          "with_core": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pollers this operation replaces: the ones in core's own compose project, plus any that\nadvertise `CAP_SELF_UPGRADE`."
           }
         }
       },
@@ -29473,6 +29534,17 @@
               "$ref": "#/components/schemas/ReleaseOffer"
             },
             "description": "The moves this deployment could make, each with its direction and whether it is allowed.\nExcludes the running version. Empty when the updater has found nothing."
+          },
+          "pollers": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PollerUpgradePlan",
+                "description": "Which pollers this operation would replace and which it would leave on their current build\n(ADR-051). `null` when the updater has not reported the pollers in its own compose project —\ncore cannot tell a co-located poller from a remote one on its own, and an invented answer\nwould read as fact."
+              }
+            ]
           },
           "schema": {
             "$ref": "#/components/schemas/SchemaState",

@@ -612,6 +612,21 @@ services:
         APPLY
         )
 
+        # Poller ids in this updater's own compose project — the ones an apply recreates on its way
+        # past, because they are in the same `up -d` (ADR-051). Core cannot work this out for itself:
+        # nothing on the bus says which compose project a poller belongs to, so without this it must
+        # either warn that a co-located poller "will be left behind" (false on the commonest
+        # deployment there is) or refuse a two-release jump over a skew that resolves inside the same
+        # run. A poller's id is `YAGRA_POLLER_ID` if set, else its container hostname — so read the
+        # env first and fall back, mirroring the poller's own resolution order.
+        local_pollers() {
+          for c in $$(docker compose -p "$$PROJ" ps -q poller 2>/dev/null); do
+            PID=$$(docker inspect -f '{{range .Config.Env}}{{if eq (index (split . "=") 0) "YAGRA_POLLER_ID"}}{{index (split . "=") 1}}{{end}}{{end}}' "$$c" 2>/dev/null)
+            [ -z "$$PID" ] && PID=$$(docker inspect -f '{{.Config.Hostname}}' "$$c" 2>/dev/null)
+            [ -n "$$PID" ] && printf '"%s",' "$$PID"
+          done | sed 's/,$$//'
+        }
+
         # The heartbeat is how core learns what this updater will do: `allow_bundle` and `paused`
         # are reported, never assumed, so the capability is declared by the container that holds
         # the socket rather than inferred by the one that does not. It keeps beating while paused —
@@ -619,7 +634,8 @@ services:
         heartbeat() {
           if [ "$$ALLOW" = "1" ]; then AB=true; else AB=false; fi
           if paused; then PS=true; else PS=false; fi
-          printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s,"allow_bundle":%s,"paused":%s}\n' "$$(date +%s)" "$$REPO" "$$IVL" "$$AB" "$$PS" > "$$D/current.json.tmp"
+          LP=$$(local_pollers)
+          printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s,"allow_bundle":%s,"paused":%s,"local_pollers":[%s]}\n' "$$(date +%s)" "$$REPO" "$$IVL" "$$AB" "$$PS" "$$LP" > "$$D/current.json.tmp"
           mv "$$D/current.json.tmp" "$$D/current.json"
         }
 

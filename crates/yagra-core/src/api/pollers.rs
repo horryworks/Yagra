@@ -115,6 +115,17 @@ pub(crate) struct PollerInfo {
     /// The node this poller attaches to, naming where it sits in the derived dependency graph.
     /// `null` ⇒ core places it from `mgmt_addrs` instead.
     anchor_node_id: Option<Uuid>,
+    /// Optional capabilities this poller's build advertises (`raw-capture`, `flow-relay`,
+    /// `http-auth`, `http-body`, `self-upgrade`). Empty when the poller is offline, and empty from
+    /// an N-1 build — **absence means "cannot", never "unknown"**, which is the same reading core
+    /// applies when it decides whether to send a poller work that depends on one.
+    caps: Vec<String>,
+    /// Passive-event listeners it has bound (e.g. `syslog:514`, `trap:162`). Empty when offline.
+    ///
+    /// Worth reading before restarting a poller: unlike active polling, nothing can take these over
+    /// and nothing backfills them, so whatever they would have received while it was down is gone
+    /// (the same set `monitoring_gaps` stamps onto a healed gap).
+    listeners: Vec<String>,
 }
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
@@ -207,6 +218,15 @@ fn build_pollers_response(
                 // addresses, and the anchor is not the poller's to report at all.
                 mgmt_addrs: inv.map(|r| r.mgmt_addrs.clone()).unwrap_or_default(),
                 anchor_node_id: inv.and_then(|r| r.anchor_node_id),
+                // Live-only, and deliberately empty rather than stale when the poller is offline: a
+                // capability describes the build that is *running*, so reporting the last one seen
+                // would answer for a process that no longer exists.
+                caps: lv
+                    .filter(|_| online)
+                    .map_or_else(Vec::new, |v| v.caps.clone()),
+                listeners: lv
+                    .filter(|_| online)
+                    .map_or_else(Vec::new, |v| v.listeners.clone()),
             }
         })
         .collect();

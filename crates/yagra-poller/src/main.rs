@@ -56,6 +56,20 @@ use yagra_bus::{
 };
 use yagra_telemetry::{shutdown_signal, spawn_cancellable, CancellationToken};
 
+/// How long shutdown waits for probes already in flight to finish and publish (ADR-051).
+///
+/// Sized against the probe timeouts rather than the poll interval: a probe still outstanding after
+/// this was on its way to timing out, and its result would have been a failure the next poll
+/// re-establishes. Long enough to save the common case, short enough that `docker stop`'s own 10s
+/// grace still ends in a clean exit rather than a SIGKILL.
+const INFLIGHT_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How long shutdown waits for the heartbeat loop to publish and flush its `leaving` beat.
+const LEAVE_BEAT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// How long the `leaving` beat itself waits for the bus to confirm it left the process.
+const LEAVE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// How the poller identifies itself to core (ADR-009). `id` is already sanitized for use as a NATS
 /// subject token; `pool` is the (defaulted) pool it serves.
 struct PollerIdentity {
@@ -153,7 +167,15 @@ async fn main() -> anyhow::Result<()> {
 
     // Shared state across the tasks: the working set (source of truth for local scheduling), a
     // lifetime result counter, and an in-flight gauge — the latter two feed heartbeat telemetry.
-    let working_set = Arc::new(Mutex::new(WorkingSet::new()));
+    // Adoption rate (ADR-051): how fast this poller takes on specs handed over by another poller.
+    // It sizes the window newcomers spread over, so a failover reaches them in about
+    // `adopted / rate` seconds instead of up to a full poll interval. `0` restores the pre-v0.2.3
+    // behaviour (spread across the interval); see `working_set`'s module docs.
+    let adopt_rate = std::env::var("YAGRA_ADOPT_RATE_PER_SEC")
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .unwrap_or(working_set::DEFAULT_ADOPT_RATE_PER_SEC);
+    let working_set = Arc::new(Mutex::new(WorkingSet::with_adopt_rate(adopt_rate)));
     let results_total = Arc::new(AtomicU64::new(0));
     let inflight = Arc::new(AtomicU64::new(0));
 
@@ -242,7 +264,7 @@ async fn main() -> anyhow::Result<()> {
     // be aborted by it, because its last act is to publish a `leaving` beat so core reassigns this
     // poller's nodes immediately instead of waiting three missed heartbeats. Being cancelled
     // mid-publish would put us back to timeout detection. It exits on its own once that beat is out.
-    tokio::spawn(run_heartbeat_loop(
+    let heartbeat_task = tokio::spawn(run_heartbeat_loop(
         bus.clone(),
         identity.id.clone(),
         identity.pool.clone(),
@@ -259,6 +281,18 @@ async fn main() -> anyhow::Result<()> {
         location::local_mgmt_addrs(),
         shutdown.clone(),
     ));
+
+    // Upgrade commands (ADR-051): core tells this poller to replace itself, and this poller writes
+    // the request into the hand-off directory its site updater watches. Subscribed only when the
+    // hand-off directory is configured — with nowhere to write, receiving the command would be a
+    // log line and a lie, since the page would then show the site as "will upgrade".
+    if let Some(dir) = env_nonempty("YAGRA_UPGRADE_DIR") {
+        let sub = Box::pin(bus.subscribe_poller_upgrades(&identity.id).await?);
+        spawn_cancellable(
+            &shutdown,
+            run_upgrade_loop(sub, identity.id.clone(), PathBuf::from(dir)),
+        );
+    }
 
     // Local scheduler: every 500ms, drain due specs into a bounded channel feeding the worker loop.
     let (jobs_tx, jobs_rx) = mpsc::channel::<PollJob>(256);
@@ -282,6 +316,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Blocks for the process lifetime: the local scheduler keeps feeding this stream (so a bus blip
     // doesn't stop polling), so it only returns if both sources end (shutdown).
+    let inflight_gauge = inflight.clone();
     tokio::select! {
         _ = worker::run_stream(
             unified,
@@ -298,7 +333,180 @@ async fn main() -> anyhow::Result<()> {
             tracing::info!("shutdown signal — poller stopped");
         }
     }
+
+    // Everything below runs *after* the select and before `main` returns, because returning drops
+    // the runtime and every task on it. Two things are still owed at that moment, and both are
+    // results that would otherwise silently go missing (ADR-023: a rolling upgrade must not lose
+    // data). Dropping `run_stream` above already stopped accepting new jobs — the probes it spawned
+    // are independent tasks and keep going.
+    drain_inflight(&inflight_gauge, INFLIGHT_DRAIN_TIMEOUT).await;
+    // The heartbeat loop is not cancellable precisely so it can publish the `leaving` beat; joining
+    // it is what makes that guarantee real, since otherwise it races this function's return and the
+    // beat is lost with the runtime. It exits on its own once the beat is flushed.
+    match tokio::time::timeout(LEAVE_BEAT_TIMEOUT, heartbeat_task).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => tracing::warn!(error = %e, "heartbeat task ended abnormally"),
+        Err(_) => tracing::warn!("timed out waiting for the leaving heartbeat"),
+    }
     Ok(())
+}
+
+/// Turn upgrade commands into hand-off files for the site updater to act on (ADR-051).
+///
+/// **This loop executes nothing.** It validates, writes a file, and goes back to waiting — the same
+/// division ADR-050 drew centrally, where core writes a request and a container with the Docker
+/// socket reads it. The poller is the piece with a network connection, so it is the piece that must
+/// not be able to run anything.
+async fn run_upgrade_loop<S>(mut stream: S, poller_id: String, dir: PathBuf)
+where
+    S: futures::Stream<Item = yagra_bus::PollerUpgradeMsg> + Unpin,
+{
+    use futures::StreamExt;
+    while let Some(msg) = stream.next().await {
+        // Addressed to someone else: the subject already routed it, so this can only be a mistake
+        // (or a probe). Drop it rather than act on a routing error — the site whose id is on the
+        // message is not this one, and installing its release here would be silently wrong.
+        if msg.poller_id != poller_id {
+            tracing::warn!(intended = %msg.poller_id, "ignoring an upgrade command addressed elsewhere");
+            continue;
+        }
+        // Validate here as well as in the updater. Neither check is redundant: this one keeps a
+        // malformed value out of the shared volume at all, and the updater's keeps it out of the
+        // `docker` invocation even if something else wrote the file.
+        if !is_release_tag(&msg.tag) {
+            tracing::warn!(tag = %msg.tag, "refusing an upgrade command with an invalid release tag");
+            continue;
+        }
+        if !is_run_id(&msg.run_id) {
+            tracing::warn!("refusing an upgrade command with an invalid run id");
+            continue;
+        }
+        let command = match msg.step {
+            yagra_bus::UpgradeStep::Prefetch => "prefetch",
+            yagra_bus::UpgradeStep::Apply => "apply",
+        };
+        let body = format!(
+            "schema=1\nid={}\ncommand={}\ntag={}\nrequested_by={}\nrequested_at={}\n",
+            msg.run_id,
+            command,
+            msg.tag,
+            sanitize_actor(&msg.requested_by),
+            msg.requested_at,
+        );
+        // Temp-then-rename, so the updater never reads a partially written request (ADR-050).
+        let tmp = dir.join("request.tmp");
+        let write =
+            std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, dir.join("request")));
+        match write {
+            Ok(()) => {
+                tracing::info!(tag = %msg.tag, %command, run = %msg.run_id, "handed an upgrade request to the site updater")
+            }
+            Err(e) => tracing::error!(error = %e, "failed to write the upgrade request"),
+        }
+    }
+}
+
+/// Is this a release tag this poller will pass on? Mirrors core's `upgrade::is_valid_tag` — `v`
+/// plus a three-part semver with an optional short suffix, and nothing else.
+///
+/// A second copy of a rule is normally the thing to avoid, but not across a trust boundary: the
+/// point is that the value is checked by *both* sides, so neither has to assume the other did. The
+/// rule is small and stable enough to state twice, and each side's copy has a test.
+fn is_release_tag(tag: &str) -> bool {
+    let Some(rest) = tag.strip_prefix('v') else {
+        return false;
+    };
+    if rest.is_empty() || rest.len() > 40 {
+        return false;
+    }
+    let (core, suffix) = match rest.split_once('-') {
+        Some((c, s)) => (c, Some(s)),
+        None => (rest, None),
+    };
+    let parts: Vec<&str> = core.split('.').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+    if !parts
+        .iter()
+        .all(|p| !p.is_empty() && p.len() <= 6 && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return false;
+    }
+    match suffix {
+        None => true,
+        Some(s) => !s.is_empty() && s.len() <= 16 && s.bytes().all(|b| b.is_ascii_alphanumeric()),
+    }
+}
+
+/// A run id is a UUID in hyphenated form, and nothing else — it becomes part of a filename.
+fn is_run_id(id: &str) -> bool {
+    id.len() == 36 && id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+}
+
+/// Reduce an actor to characters that cannot break out of the `key=value` line the updater parses.
+fn sanitize_actor(who: &str) -> String {
+    let clean: String = who
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-'))
+        .take(64)
+        .collect();
+    if clean.is_empty() {
+        "unknown".to_owned()
+    } else {
+        clean
+    }
+}
+
+/// [`yagra_bus::CAP_SELF_UPGRADE`], but only when a site updater is really there to act on it.
+///
+/// Two conditions, and both are needed. `YAGRA_UPGRADE_DIR` says an operator wired the hand-off
+/// volume; a **fresh** `current.json` in it says the sidecar is running rather than commented out,
+/// crashed, or wired to the wrong path. Claiming on the env var alone would let core report a site
+/// as "will upgrade with core" and then send it a command nothing reads — the version skew would
+/// still be there, and the page would say it had been dealt with, which is worse than saying
+/// nothing (ADR-051).
+fn self_upgrade_cap() -> Option<String> {
+    let dir = env_nonempty("YAGRA_UPGRADE_DIR")?;
+    let raw = std::fs::read_to_string(Path::new(&dir).join("current.json")).ok()?;
+    let beat: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let written_at = beat.get("written_at")?.as_i64()?;
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
+    .ok()?;
+    // The sidecar beats every few seconds; a minute of slack absorbs clock skew between two
+    // containers on the same host without ever calling a dead updater alive. A beat from the future
+    // is skew, not staleness — it was clearly written.
+    (now.saturating_sub(written_at) <= 60).then(|| yagra_bus::CAP_SELF_UPGRADE.to_owned())
+}
+
+/// Wait for in-flight probes to finish, up to `budget`.
+///
+/// A probe that is mid-flight when the process exits is a poll that happened and was thrown away:
+/// its result is never published, and store-and-forward cannot help because that only buffers what a
+/// *disconnected* bus refused. Nothing needs to be cancelled — the worker stream is already gone, so
+/// the count only falls. Bounded because a hung probe must not hold the shutdown open; a device that
+/// has not answered in `budget` was going to time out anyway.
+async fn drain_inflight(inflight: &AtomicU64, budget: Duration) {
+    let started = tokio::time::Instant::now();
+    loop {
+        let n = inflight.load(Ordering::Relaxed);
+        if n == 0 {
+            return;
+        }
+        if started.elapsed() >= budget {
+            tracing::warn!(
+                inflight = n,
+                "shutting down with probes still in flight — their results are lost"
+            );
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// Consume this poller's working-set syncs, folding each into the shared [`WorkingSet`]. On a gap /
@@ -446,7 +654,14 @@ async fn run_heartbeat_loop<B>(
                 // Without the claim core withholds every content-checked monitor rather than let
                 // this poller report `http_up = 1` for a page it never looked at.
                 yagra_bus::CAP_HTTP_BODY.to_owned(),
-            ],
+            ]
+            .into_iter()
+            // Unlike the four above, this one is conditional: it says a site updater is deployed
+            // beside this poller and has been seen alive, so core may hand it a release to install
+            // (ADR-051). Claiming it unconditionally would make core send commands into sites that
+            // cannot act on them, and report every such site as "will upgrade" when it will not.
+            .chain(self_upgrade_cap())
+            .collect(),
             host: Some(host_collector.sample()),
             leaving,
             // Where this poller sits, so core can root the derived dependency graph (ADR-043).
@@ -456,7 +671,22 @@ async fn run_heartbeat_loop<B>(
             tracing::warn!(error = %e, "failed to publish heartbeat");
         }
         if leaving {
-            tracing::info!("published leaving heartbeat — core can reassign this poller's nodes");
+            // `publish` only queues into the client's writer, and this process is about to stop
+            // existing — so without the flush the beat that makes a hand-over prompt is exactly the
+            // beat most likely to be lost, degrading every graceful restart to the 30s timeout path
+            // it was written to avoid (ADR-051). Bounded: a broker that cannot take it in a second
+            // will not take it at all, and we are on the way out either way.
+            match tokio::time::timeout(LEAVE_FLUSH_TIMEOUT, bus.flush()).await {
+                Ok(Ok(())) => tracing::info!(
+                    "published leaving heartbeat — core can reassign this poller's nodes"
+                ),
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "leaving heartbeat may not have reached the bus");
+                }
+                Err(_) => tracing::warn!(
+                    "timed out flushing the leaving heartbeat — core will fall back to timeout detection"
+                ),
+            }
             return;
         }
     }
@@ -738,6 +968,55 @@ mod tests {
         assert_eq!(
             subjects::assignment_for(&id.id),
             subjects::assignment_for(&subjects::sanitize_token(&id.id))
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn draining_returns_at_once_when_nothing_is_in_flight() {
+        // The common case, and the one that must not add latency: an idle poller exits immediately.
+        let idle = AtomicU64::new(0);
+        let started = tokio::time::Instant::now();
+        drain_inflight(&idle, INFLIGHT_DRAIN_TIMEOUT).await;
+        assert_eq!(started.elapsed(), Duration::ZERO);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn draining_waits_for_a_probe_then_stops_waiting_for_a_stuck_one() {
+        // A probe that finishes releases the shutdown as soon as the count reaches zero...
+        let busy = Arc::new(AtomicU64::new(1));
+        let finisher = busy.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            finisher.store(0, Ordering::Relaxed);
+        });
+        let started = tokio::time::Instant::now();
+        drain_inflight(&busy, INFLIGHT_DRAIN_TIMEOUT).await;
+        let waited = started.elapsed();
+        assert!(waited >= Duration::from_millis(200), "waited {waited:?}");
+        assert!(waited < INFLIGHT_DRAIN_TIMEOUT, "waited {waited:?}");
+
+        // ...and one that never does cannot hold the process open past the budget, or `docker stop`
+        // escalates to SIGKILL and we lose the `leaving` beat as well as the probe.
+        let stuck = AtomicU64::new(3);
+        let started = tokio::time::Instant::now();
+        drain_inflight(&stuck, INFLIGHT_DRAIN_TIMEOUT).await;
+        assert!(started.elapsed() >= INFLIGHT_DRAIN_TIMEOUT);
+    }
+
+    /// The `leaving` beat is the one publish in the process with no successor, so it is the one that
+    /// must be flushed. Nothing in the type system says so — `publish` returning `Ok` reads like
+    /// delivery — hence a test that reads the source and pins the call.
+    #[test]
+    fn the_leaving_beat_is_flushed_before_the_loop_returns() {
+        let src = include_str!("main.rs");
+        let leave = src
+            .split_once("if leaving {")
+            .expect("the heartbeat loop's leaving arm")
+            .1;
+        let arm = &leave[..leave.find("\n        }").unwrap_or(leave.len())];
+        assert!(
+            arm.contains("bus.flush()"),
+            "the leaving arm must flush: a queued publish dies with the runtime"
         );
     }
 }

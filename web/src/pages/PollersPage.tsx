@@ -449,6 +449,10 @@ export function PollersPage() {
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
   const [drill, setDrill] = useState<PollerNodesResponse | null>(null);
+  /** Core's own version, so a poller's can be read as "same" or "behind" rather than as a number
+   *  the operator has to compare by eye. Fetched once — it cannot change without this page
+   *  reloading, since core restarting is what changes it. */
+  const [coreVersion, setCoreVersion] = useState<string | null>(null);
 
   // Refresh without flashing the initial loading state on every poll (loading only gates the very
   // first paint, like the sibling list pages).
@@ -477,6 +481,15 @@ export function PollersPage() {
     const id = setInterval(load, REFRESH_MS);
     return () => clearInterval(id);
   }, [load]);
+
+  // Best-effort context, like the gaps below: if this read fails the version column simply shows
+  // the number with no verdict, which is what it did before.
+  useEffect(() => {
+    api
+      .getVersion()
+      .then((v) => setCoreVersion(v.core))
+      .catch(() => {});
+  }, []);
 
   // The open drill-down follows the same cadence as the fleet table, so a reassignment shows up
   // without the operator reopening it. A read error just leaves the last page on screen.
@@ -593,7 +606,28 @@ export function PollersPage() {
                           {online ? t('pollers.status.online') : t('pollers.status.offline')}
                         </span>
                       </div>
-                      <div className="ytable-cell mono">{p.version ?? '—'}</div>
+                      {/* Version skew, not just a version. A remote-site poller is upgraded on its
+                          own host, so drifting behind core is the normal outcome of an upgrade and
+                          the operator has no other place to notice it (ADR-051). */}
+                      <div className="ytable-cell mono">
+                        {p.version ?? '—'}
+                        {online && p.version && coreVersion && p.version !== coreVersion && (
+                          <>
+                            {' '}
+                            <Badge tone="warning" title={t('pollers.skewHint', { core: coreVersion })}>
+                              {t('pollers.skew')}
+                            </Badge>
+                          </>
+                        )}
+                        {online && p.caps.includes('self-upgrade') && (
+                          <>
+                            {' '}
+                            <Badge tone="neutral" title={t('pollers.selfUpgradeHint')}>
+                              {t('pollers.selfUpgrade')}
+                            </Badge>
+                          </>
+                        )}
+                      </div>
                       <div className="ytable-cell">
                         {workingSetLabel(p.working_set_nodes, p.working_set_specs, online, t)}
                       </div>

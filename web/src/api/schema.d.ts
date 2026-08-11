@@ -6913,7 +6913,7 @@ export interface components {
          * @description Why a release cannot be installed.
          * @enum {string}
          */
-        OfferBlock: "below_floor" | "unknown";
+        OfferBlock: "below_floor" | "unknown" | "pollers_behind";
         /**
          * @description Which way a release would move this deployment.
          * @enum {string}
@@ -7034,6 +7034,13 @@ export interface components {
              */
             anchor_node_id?: string | null;
             /**
+             * @description Optional capabilities this poller's build advertises (`raw-capture`, `flow-relay`,
+             *     `http-auth`, `http-body`, `self-upgrade`). Empty when the poller is offline, and empty from
+             *     an N-1 build — **absence means "cannot", never "unknown"**, which is the same reading core
+             *     applies when it decides whether to send a poller work that depends on one.
+             */
+            caps: string[];
+            /**
              * Format: double
              * @description Current host CPU utilization % (0–100) from its latest heartbeat; `null` when the poller is
              *     offline or on an N-1 build without host telemetry.
@@ -7053,6 +7060,14 @@ export interface components {
              *     registers within the 60s inventory-upsert throttle window).
              */
             last_seen?: string | null;
+            /**
+             * @description Passive-event listeners it has bound (e.g. `syslog:514`, `trap:162`). Empty when offline.
+             *
+             *     Worth reading before restarting a poller: unlike active polling, nothing can take these over
+             *     and nothing backfills them, so whatever they would have received while it was down is gone
+             *     (the same set `monitoring_gaps` stamps onto a healed gap).
+             */
+            listeners: string[];
             /**
              * Format: double
              * @description Current host memory-used % (0–100); `null` when unavailable.
@@ -7085,6 +7100,13 @@ export interface components {
              */
             working_set_specs: number;
         };
+        /** @description A poller a single press of Upgrade would leave on its current build. */
+        PollerLag: {
+            /** @description Sanitized poller id. */
+            id: string;
+            /** @description What it is running now; `null` when it has never reported a version. */
+            version?: string | null;
+        };
         /** @description One node in the poller drill-down. */
         PollerNodeRef: {
             /** Format: uuid */
@@ -7106,6 +7128,22 @@ export interface components {
             total: number;
             /** @description Whether `nodes` is a capped page of `total`. */
             truncated: boolean;
+        };
+        /**
+         * @description Who an upgrade carries along, and who it leaves behind.
+         *
+         *     `null` on the response rather than an empty plan when the updater has not said which pollers
+         *     share its compose project: "no poller is left behind" and "nobody asked" are different answers,
+         *     and only one of them is safe to render as a reassuring zero (the lesson ADR-045 paid for).
+         */
+        PollerUpgradePlan: {
+            /** @description Pollers that stay on their current build until someone upgrades them by hand. */
+            manual: components["schemas"]["PollerLag"][];
+            /**
+             * @description Pollers this operation replaces: the ones in core's own compose project, plus any that
+             *     advertise `CAP_SELF_UPGRADE`.
+             */
+            with_core: string[];
         };
         /** @description The `GET /api/v1/pollers` body: the fleet of pollers + the per-pool summary. */
         PollersResponse: {
@@ -8565,6 +8603,7 @@ export interface components {
              *     Excludes the running version. Empty when the updater has found nothing.
              */
             offers: components["schemas"]["ReleaseOffer"][];
+            pollers?: null | components["schemas"]["PollerUpgradePlan"];
             /** @description Applied migrations and the compatibility floor they imply. */
             schema: components["schemas"]["SchemaState"];
             /** @description The updater container's own state. */

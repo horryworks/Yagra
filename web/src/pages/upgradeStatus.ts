@@ -169,10 +169,28 @@ export const UPGRADE_OFFER_DIRECTIONS = ['upgrade', 'rollback'] as const;
 export type OfferDirection = (typeof UPGRADE_OFFER_DIRECTIONS)[number];
 
 /** Why a release cannot be installed. Same source, same reason. */
-export const UPGRADE_OFFER_BLOCKS = ['below_floor', 'unknown'] as const;
+export const UPGRADE_OFFER_BLOCKS = ['below_floor', 'unknown', 'pollers_behind'] as const;
 export type OfferBlock = (typeof UPGRADE_OFFER_BLOCKS)[number];
 
 export type Offer = UpgradeStatus['offers'][number];
+
+/** Who this operation would carry and who it would leave behind (ADR-051), or `null` while the
+ *  updater has not reported the pollers in its own compose project.
+ *
+ *  `null` is not "nobody" and must not render as one: core cannot tell a co-located poller from a
+ *  remote one without that list, so an empty count would be an invention rather than an answer. */
+export type PollerPlan = NonNullable<UpgradeStatus['pollers']>;
+
+export function pollerPlan(status: UpgradeStatus): PollerPlan | null {
+  return status.pollers ?? null;
+}
+
+/** Pollers this operation will not touch. The count the confirmation must not stay silent about:
+ *  the failure everyone has already had is not "the upgrade missed a poller", it is "the upgrade
+ *  missed a poller and nothing said so". */
+export function leftBehind(status: UpgradeStatus): PollerPlan['manual'] {
+  return status.pollers?.manual ?? [];
+}
 
 /** The releases newer than the running one. */
 export function upgrades(status: UpgradeStatus): Offer[] {

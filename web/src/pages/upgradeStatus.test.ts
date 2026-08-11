@@ -9,8 +9,10 @@ import {
   canUploadBundle,
   isRunning,
   lastChecked,
+  leftBehind,
   looksLikeReleaseTag,
   mechanism,
+  pollerPlan,
   rollback,
   rollbacks,
   runPhase,
@@ -379,5 +381,27 @@ describe('lastChecked', () => {
     } as Partial<UpgradeStatus>);
     expect(lastChecked(st)).toBe(1_786_400_000);
     expect(lastChecked(st)).not.toBe(st.updater.last_seen);
+  });
+});
+
+describe('pollerPlan / leftBehind', () => {
+  // The distinction the whole feature turns on: core cannot tell a co-located poller from a remote
+  // one without the updater naming its own compose project, so "nobody is left behind" and "nobody
+  // asked" must not render the same. An invented zero is the failure mode here -- a reassuring
+  // number is worse than a blank (ADR-045's lesson, applied to ADR-051).
+  it('reports nothing rather than an empty plan when the updater has not said', () => {
+    expect(pollerPlan(status())).toBeNull();
+    expect(leftBehind(status())).toEqual([]);
+  });
+
+  it('separates the pollers this run replaces from the ones it strands', () => {
+    const st = status({
+      pollers: {
+        with_core: ['core-host-poller', 'edge-tokyo-1'],
+        manual: [{ id: 'edge-osaka-1', version: '0.2.0' }],
+      },
+    } as Partial<UpgradeStatus>);
+    expect(pollerPlan(st)?.with_core).toHaveLength(2);
+    expect(leftBehind(st).map((p) => p.id)).toEqual(['edge-osaka-1']);
   });
 });

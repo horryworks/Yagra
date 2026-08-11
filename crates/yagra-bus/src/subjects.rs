@@ -105,6 +105,24 @@ pub fn assignment_for(poller: &str) -> String {
     format!("{ROOT}.poller.assign.{}", sanitize_token(poller))
 }
 
+/// Subject core publishes one poller's upgrade command on, e.g. `yagra.poller.upgrade.edge-1`
+/// (ADR-051).
+///
+/// **Its own token, not a variant on [`assignment_for`]'s stream, and that is the version gate.** A
+/// poller build with no upgrade support never subscribes here, so the command is delivered to
+/// nobody and the site stays where it is — which is precisely the desired N-1 behaviour, obtained
+/// structurally rather than by a check anyone could forget. Riding on the assignment subject would
+/// instead put a control message into the stream `seq` gap-detection guards, where an older poller
+/// dropping the envelope would take that round's *working-set update* down with it.
+///
+/// ⚠️ `yagra.poller.assign.>` does **not** cover this. Both bus allow-lists need their own entry —
+/// `yagra-authz`'s per-poller grant and the static account in `docker/nats/nats-server.conf` — and
+/// missing either is a runtime denial with no compile error.
+#[must_use]
+pub fn upgrade_for(poller: &str) -> String {
+    format!("{ROOT}.poller.upgrade.{}", sanitize_token(poller))
+}
+
 /// Subject core publishes pool-scoped discovery jobs on (the discovery analogue of
 /// [`jobs_for_pool`]), e.g. `yagra.discovery.jobs.tokyo`. Pollers in the pool queue-subscribe.
 #[must_use]

@@ -28,6 +28,7 @@ import {
   lastChecked,
   looksLikeReleaseTag,
   mechanism,
+  pollerPlan,
   rollback,
   rollbacks,
   runPhase,
@@ -391,6 +392,7 @@ export function UpgradePage() {
   const kind = buildKind(status.current.build_profile);
   const ref = shortRef(status.current.source_ref);
   const back = rollback(status);
+  const plan = pollerPlan(status);
   const state = mechanism(status);
   const last = status.last_run;
   const lastState = runState(last?.state);
@@ -455,6 +457,33 @@ export function UpgradePage() {
           </Row>
         </div>
       </Card>
+
+      {/* Who comes along. Rendered only once the updater has named the pollers in its own compose
+          project: without that list core cannot tell a co-located poller from a remote one, and a
+          count it guessed would read as a fact (ADR-051). */}
+      {plan && (
+        <Card title={t('pollers.heading')}>
+          <p className="upgrade-note">
+            {t('pollers.withCore', { count: plan.with_core.length })}
+          </p>
+          {plan.manual.length === 0 ? (
+            <p className="upgrade-hint muted">{t('pollers.noneLeft')}</p>
+          ) : (
+            <>
+              <p className="upgrade-note">{t('pollers.manual', { count: plan.manual.length })}</p>
+              <ul className="upgrade-releases">
+                {plan.manual.map((p) => (
+                  <li key={p.id} className="upgrade-release">
+                    <span className="mono">{p.id}</span>
+                    <span className="muted">{p.version ?? t('build.unknown')}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="upgrade-hint muted">{t('pollers.manualHint')}</p>
+            </>
+          )}
+        </Card>
+      )}
 
       <Card title={t('rollback.heading')}>
         {back.kind === 'unrestricted' ? (
@@ -651,6 +680,17 @@ export function UpgradePage() {
             {t(`apply.confirmBody.${confirmingDir}`, { tag: confirming })}
           </p>
           <p className="upgrade-hint muted">{t('apply.confirmBackup')}</p>
+          {/* Never let a left-behind poller be silent (ADR-051). The worst property of the old
+              behaviour was not that remote pollers stayed put — it was that nothing said so. */}
+          {plan && plan.manual.length > 0 && (
+            <p className="upgrade-note">
+              {t('pollers.confirmSplit', {
+                count: plan.manual.length,
+                withCore: plan.with_core.length,
+                names: plan.manual.map((p) => p.id).join(', '),
+              })}
+            </p>
+          )}
           {back.kind === 'floored' && (
             <p className="upgrade-hint muted">
               {t('apply.confirmFloor', { minCore: back.minCore })}

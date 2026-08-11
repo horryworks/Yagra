@@ -285,7 +285,7 @@ impl Coordinator {
             self.wake_sweep();
             return false;
         }
-        let (doc, do_pg, gap, gap_listeners) = {
+        let (doc, do_pg, gap, gap_listeners, is_new) = {
             let mut st = self.state.lock().expect("coordinator state poisoned");
             let epoch = self.epoch;
             let known = st.pollers.contains_key(&hb.poller_id);
@@ -365,8 +365,16 @@ impl Coordinator {
                 results_total: hb.results_total,
                 seen_unix_ms: now_unix_ms(),
             };
-            (doc, do_pg, offline_gap, gap_listeners)
+            (doc, do_pg, offline_gap, gap_listeners, !known)
         };
+        // A poller we did not have joined the ring — nudge the sweep instead of letting its share sit
+        // with whoever covered for it until the next tick. The departure side has done this since the
+        // `leaving` beat landed; the arrival side had not, so a poller coming back from an upgrade or
+        // a restart waited out one sweep period (the fleet-minimum interval, 30s by default) before
+        // core even told it what to poll — and then re-jittered everything on top of that (ADR-051).
+        if is_new {
+            self.wake_sweep();
+        }
         // A monitoring gap healed: record the window (store-and-forward backfills its metrics; alerts
         // resume from "now"). One durable row per offline→online transition (Phase 3).
         if let Some(since) = gap {
@@ -466,6 +474,11 @@ impl Coordinator {
         self.volatile
             .record_poller(&req.poller_id, &doc, REDIS_TTL)
             .await;
+        // A poller asking for its working set is waiting on the sweep to build one, and this is the
+        // first thing a poller does on boot — so it is the earliest moment core can act on a return
+        // (the heartbeat is up to `HEARTBEAT_SECS` behind it). Nudging here is what makes a restart
+        // symmetric with a departure; both are idempotent, so the two nudges coalesce into one sweep.
+        self.wake_sweep();
     }
 
     /// Drain the heartbeat stream into [`Self::observe_heartbeat`] using the real clock. Thin so the
@@ -1105,6 +1118,54 @@ mod tests {
         assert_eq!(views.len(), 1);
         assert!(views[0].online);
     }
+
+    /// `true` if a sweep nudge is pending. `Notify::notify_one` stores a permit, so this both
+    /// observes and consumes it — call it once per assertion.
+    async fn sweep_pending(coord: &Arc<Coordinator>) -> bool {
+        tokio::time::timeout(Duration::from_millis(50), coord.sweep_nudged())
+            .await
+            .is_ok()
+    }
+
+    #[tokio::test]
+    async fn a_rejoining_poller_nudges_the_sweep_just_like_a_leaving_one() {
+        // The departure side has nudged since the `leaving` beat landed; the arrival side did not,
+        // so a poller returning from a restart or an upgrade sat idle until the next sweep tick —
+        // up to the fleet-minimum poll interval — while whoever covered for it kept its share.
+        // Both directions of a rolling restart have to be prompt, or the second half eats the
+        // saving the first half made (ADR-051).
+        let (coord, _bus, _stats) = coordinator();
+        let now = Instant::now();
+
+        // First sighting is an arrival.
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), now)
+            .await;
+        assert!(sweep_pending(&coord).await, "a new poller must nudge");
+
+        // A steady beat from a poller core already knows changes nothing, so it must not.
+        coord
+            .observe_heartbeat(heartbeat("edge-1", "tokyo", Uuid::nil()), now)
+            .await;
+        assert!(
+            !sweep_pending(&coord).await,
+            "an ordinary beat must not wake the sweep — that would be a sweep every 10s per poller"
+        );
+
+        // A sync request is the earliest signal of a return: it arrives on boot, ahead of the beat.
+        coord
+            .observe_sync_request(
+                SyncRequest {
+                    poller_id: "edge-2".to_owned(),
+                    pool: "tokyo".to_owned(),
+                    incarnation: Uuid::new_v4(),
+                },
+                now,
+            )
+            .await;
+        assert!(sweep_pending(&coord).await, "a sync request must nudge");
+    }
+
     #[tokio::test]
     async fn reappearing_poller_after_offline_window_records_one_gap() {
         // Store-and-forward (Phase 3): a *known* poller whose heartbeats lapsed past the offline

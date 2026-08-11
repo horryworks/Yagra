@@ -2008,13 +2008,21 @@ impl YagraMcp {
             HealthSection::Deployment => {
                 ok_json(TOOL, &crate::api::health::client_config(&self.state).await)
             }
-            HealthSection::Upgrade => match self.state.upgrade.as_ref() {
-                Some(u) => match crate::api::upgrade::upgrade_status(u, self.state.started).await {
-                    Ok(r) => ok_json(TOOL, &r),
-                    Err(e) => tool_unavailable(TOOL, &format!("{e}")),
-                },
-                None => tool_unavailable(TOOL, "the upgrade view requires live mode"),
-            },
+            HealthSection::Upgrade => {
+                match (self.state.upgrade.as_ref(), self.state.admin.as_ref()) {
+                    (Some(u), Some(admin)) => match crate::api::upgrade::upgrade_status(
+                        u,
+                        self.state.started,
+                        &crate::api::upgrade::poller_builds(admin),
+                    )
+                    .await
+                    {
+                        Ok(r) => ok_json(TOOL, &r),
+                        Err(e) => tool_unavailable(TOOL, &format!("{e}")),
+                    },
+                    _ => tool_unavailable(TOOL, "the upgrade view requires live mode"),
+                }
+            }
         }
     }
 

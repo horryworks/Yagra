@@ -97,6 +97,11 @@ pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
             subjects::jobs_for_pool(&scope.pool),
             subjects::discovery_jobs_for_pool(&scope.pool),
             subjects::discovery_jobs(),
+            // Its own upgrade command, and only its own (ADR-051). Note where this is **not**:
+            // nowhere in `publish`. Core is the only thing that may issue one, and a poller holding
+            // publish rights here could order an upgrade — or a downgrade — at another site.
+            // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
+            subjects::upgrade_for(&scope.id),
             "_INBOX.>".to_owned(),
         ],
     }

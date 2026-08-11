@@ -81,7 +81,19 @@
   },
   "offerBlock": {
     "below_floor": "This version cannot read the current database.",
-    "unknown": "Cannot tell whether this version can read the current database."
+    "unknown": "Cannot tell whether this version can read the current database.",
+    "pollers_behind": "This jump would leave a poller more than one release behind, which the bus does not support. Upgrade to the release in between first."
+  },
+  "pollers": {
+    "heading": "Pollers",
+    "withCore": "{{count}} poller is replaced by this operation.",
+    "withCore_other": "{{count}} pollers are replaced by this operation.",
+    "noneLeft": "No poller is left behind.",
+    "manual": "{{count}} poller stays on its current version:",
+    "manual_other": "{{count}} pollers stay on their current version:",
+    "manualHint": "A remote-site poller upgrades itself only when a site updater is deployed beside it. Until then, upgrade it on its own host.",
+    "confirmSplit": "{{withCore}} poller upgrades with this deployment; {{count}} does not and stays on its current version: {{names}}",
+    "confirmSplit_other": "{{withCore}} pollers upgrade with this deployment; {{count}} do not and stay on their current version: {{names}}"
   },
   "rollbackList": {
     "show": "Show {{count}} earlier releases",

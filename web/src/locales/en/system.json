@@ -16,6 +16,10 @@
       "online": "Online",
       "offline": "Offline"
     },
+    "skew": "behind",
+    "skewHint": "This poller is not on core's version ({{core}}). A remote-site poller is upgraded on its own host.",
+    "selfUpgrade": "self-upgrades",
+    "selfUpgradeHint": "A site updater is deployed beside this poller, so an upgrade of this deployment replaces it too.",
     "lastSeen": {
       "live": "Live"
     },

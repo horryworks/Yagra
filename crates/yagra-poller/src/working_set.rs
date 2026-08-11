@@ -15,9 +15,28 @@
 //! epoch mismatch yields [`ApplyOutcome::NeedSync`] (the caller asks core for a fresh snapshot) and
 //! **never** mutates the set. A snapshot replaces the whole set and re-anchors `epoch`/`last_seq`.
 //!
-//! Anti-stampede (monitoring-conventions): a newly-scheduled spec gets `next_due = now + jitter`
-//! (uniform in `[0, interval)`), but a spec that survives a snapshot unchanged **keeps its previous
-//! phase** so a resync doesn't bunch every poll onto the same tick.
+//! Anti-stampede (monitoring-conventions): a newly-scheduled spec gets `next_due = now + jitter`,
+//! but a spec that survives a snapshot unchanged **keeps its previous phase** so a resync doesn't
+//! bunch every poll onto the same tick.
+//!
+//! **The jitter window is sized by a job rate, not by the poll interval, and that distinction is the
+//! whole point.** Until v0.2.3 a new spec was jittered uniformly over `[0, interval)`. That is
+//! correct for a cold start, and wrong for the case it also covered: a node **handed over** from
+//! another poller (failover, scale-out, a rolling upgrade) is indistinguishable here from a
+//! brand-new one, so it was re-phased from zero — the previous owner stopped polling it at most one
+//! interval ago, and this poller would wait up to another full interval, for a worst-case
+//! **2 × interval** between consecutive samples. The pool still had a live poller the whole time, so
+//! nothing alerted: `pool_coverage` only fires at zero live pollers, and `monitoring_gaps` records
+//! core↔poller visibility, not a missed poll. ADR-023 requires that a rolling upgrade or a
+//! reassignment "leaves no polling hole and loses no data", so this was an unmet promise rather than
+//! a missing feature.
+//!
+//! The fix keeps the anti-stampede property but states it directly: newly adopted specs are spread
+//! over **how long it takes to poll them once at a sustained rate**
+//! ([`WorkingSet::with_adopt_rate`]), clamped to their own interval. Adopting 50 specs takes a
+//! fraction of a second; a 25,000-spec cold start still clamps to the interval and behaves exactly
+//! as before. The window is a floor no schedule can beat, so this is not a trade against the
+//! stampede rule — it is the same rule expressed in the units that actually bound it (ADR-051).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -26,10 +45,26 @@ use uuid::Uuid;
 use yagra_bus::{JobSpec, NodeJobs, PollJob, SyncMsg, WorkingSetDelta, WorkingSetSnapshot};
 use yagra_common::NodeId;
 
+/// Specs per second a poller is willing to take on when it adopts work from another poller. Sizes
+/// the adoption window (see the module docs); it is a spreading rate, not a throttle — nothing
+/// enforces it downstream, and `YAGRA_MAX_CONCURRENT_POLLS` is what actually bounds concurrency.
+///
+/// 200/s means a 2-poller pool of 10,000 specs hands over its half in 25s, comfortably inside the
+/// 300s `pool_coverage` debounce, while a full-fleet cold start clamps to the interval as before.
+pub const DEFAULT_ADOPT_RATE_PER_SEC: u32 = 200;
+
 /// One scheduled polling spec: the reusable [`JobSpec`] plus the local time its next poll is due.
 struct ScheduledSpec {
     spec: JobSpec,
     next_due: Instant,
+}
+
+/// One spec part-way through an adoption: `next_due` is `None` while it is still unknown how many
+/// specs this apply is adopting in total, because that count is what sizes the window they spread
+/// over. A spec that kept its previous phase already has its `Some`.
+struct PendingSpec {
+    spec: JobSpec,
+    next_due: Option<Instant>,
 }
 
 /// A snapshot being reassembled from its chunks, keyed by `(epoch, seq)`. Chunks of one snapshot
@@ -66,6 +101,9 @@ pub struct WorkingSet {
     last_seq: u64,
     /// A snapshot currently being reassembled from its chunks.
     pending: Option<PendingSnapshot>,
+    /// Specs per second used to size the adoption window. `0` disables the cap, restoring the
+    /// pre-v0.2.3 behaviour of spreading a new spec across its whole interval.
+    adopt_rate_per_sec: u32,
 }
 
 impl Default for WorkingSet {
@@ -75,15 +113,37 @@ impl Default for WorkingSet {
 }
 
 impl WorkingSet {
-    /// An empty working set with no epoch and no pending snapshot.
+    /// An empty working set with no epoch and no pending snapshot, adopting at
+    /// [`DEFAULT_ADOPT_RATE_PER_SEC`].
     #[must_use]
     pub fn new() -> Self {
+        Self::with_adopt_rate(DEFAULT_ADOPT_RATE_PER_SEC)
+    }
+
+    /// As [`Self::new`], with an explicit adoption rate in specs per second (`YAGRA_ADOPT_RATE_PER_SEC`).
+    ///
+    /// `0` is the escape hatch: it disables the window entirely, so every newly adopted spec is
+    /// jittered across its full interval exactly as builds before v0.2.3 did.
+    #[must_use]
+    pub fn with_adopt_rate(adopt_rate_per_sec: u32) -> Self {
         Self {
             nodes: HashMap::new(),
             epoch: None,
             last_seq: 0,
             pending: None,
+            adopt_rate_per_sec,
         }
+    }
+
+    /// The window, in milliseconds, that `added` newly adopted specs spread over: how long polling
+    /// them once takes at the sustained rate. `u32::MAX` when the cap is off, leaving the per-spec
+    /// clamp to its own interval as the only bound.
+    fn adopt_window_ms(&self, added: usize) -> u32 {
+        if self.adopt_rate_per_sec == 0 {
+            return u32::MAX;
+        }
+        let ms = (added as u64).saturating_mul(1000) / u64::from(self.adopt_rate_per_sec);
+        u32::try_from(ms).unwrap_or(u32::MAX)
     }
 
     /// Fold one [`SyncMsg`] into the set. `now` is the local clock; `rng(bound)` must return a value
@@ -115,9 +175,20 @@ impl WorkingSet {
         if delta.seq != self.last_seq + 1 {
             return ApplyOutcome::NeedSync; // gap in the stream → resync
         }
+        // Two passes: donate surviving phases first so the count of genuinely new specs is known,
+        // then size the adoption window from that count and settle the newcomers into it. Staging is
+        // equivalent to inserting per node — the nodes are independent.
+        let mut staged: Vec<(NodeId, Vec<PendingSpec>)> = Vec::with_capacity(delta.upserts.len());
+        let mut added = 0usize;
         for nj in delta.upserts {
-            let scheduled = reschedule(self.nodes.get(&nj.node_id), nj.specs, now, rng);
-            self.nodes.insert(nj.node_id, scheduled);
+            let pending = reschedule(self.nodes.get(&nj.node_id), nj.specs);
+            added += pending.iter().filter(|p| p.next_due.is_none()).count();
+            staged.push((nj.node_id, pending));
+        }
+        let window_ms = self.adopt_window_ms(added);
+        for (node_id, pending) in staged {
+            self.nodes
+                .insert(node_id, settle(pending, now, window_ms, rng));
         }
         for node in delta.removes {
             self.nodes.remove(&node);
@@ -186,10 +257,21 @@ impl WorkingSet {
         rng: &mut impl FnMut(u32) -> u32,
     ) {
         let old = std::mem::take(&mut self.nodes);
-        let mut new_nodes: HashMap<NodeId, Vec<ScheduledSpec>> = HashMap::new();
+        let mut staged: Vec<(NodeId, Vec<PendingSpec>)> = Vec::new();
+        let mut added = 0usize;
         for node_jobs in group.chunks.into_values().flatten() {
-            let scheduled = reschedule(old.get(&node_jobs.node_id), node_jobs.specs, now, rng);
-            new_nodes.insert(node_jobs.node_id, scheduled);
+            let pending = reschedule(old.get(&node_jobs.node_id), node_jobs.specs);
+            added += pending.iter().filter(|p| p.next_due.is_none()).count();
+            staged.push((node_jobs.node_id, pending));
+        }
+        // A cold start (empty `old`) makes every spec new, so the window clamps to the interval and
+        // this is byte-for-byte the previous behaviour. A resync after a reassignment donates most
+        // phases, so `added` is small and the newcomers land promptly.
+        let window_ms = self.adopt_window_ms(added);
+        let mut new_nodes: HashMap<NodeId, Vec<ScheduledSpec>> =
+            HashMap::with_capacity(staged.len());
+        for (node_id, pending) in staged {
+            new_nodes.insert(node_id, settle(pending, now, window_ms, rng));
         }
         self.nodes = new_nodes;
         self.epoch = Some(group.epoch);
@@ -234,16 +316,12 @@ impl WorkingSet {
     }
 }
 
-/// Build the scheduled specs for a node from its new spec list, donating each surviving spec's
-/// previous `next_due` (matched by full [`JobSpec`] equality, greedily, so duplicates pair up) and
-/// jittering only the specs that are new or changed. This is what keeps a snapshot/upsert from
-/// re-phasing an unchanged poll (anti-stampede, monitoring-conventions).
-fn reschedule(
-    old: Option<&Vec<ScheduledSpec>>,
-    new_specs: Vec<JobSpec>,
-    now: Instant,
-    rng: &mut impl FnMut(u32) -> u32,
-) -> Vec<ScheduledSpec> {
+/// Pair a node's new spec list against what it already had, donating each surviving spec's previous
+/// `next_due` (matched by full [`JobSpec`] equality, greedily, so duplicates pair up). Specs that
+/// are new or changed come back with `next_due: None` — [`settle`] gives them one once the size of
+/// the adoption is known. Donating the phase is what keeps a snapshot/upsert from re-phasing an
+/// unchanged poll (anti-stampede, monitoring-conventions).
+fn reschedule(old: Option<&Vec<ScheduledSpec>>, new_specs: Vec<JobSpec>) -> Vec<PendingSpec> {
     let mut used = vec![false; old.map_or(0, Vec::len)];
     let mut out = Vec::with_capacity(new_specs.len());
     for spec in new_specs {
@@ -257,17 +335,42 @@ fn reschedule(
                 }
             }
         }
-        let next_due = reused.unwrap_or_else(|| jitter(now, spec.interval_secs, rng));
-        out.push(ScheduledSpec { spec, next_due });
+        out.push(PendingSpec {
+            spec,
+            next_due: reused,
+        });
     }
     out
 }
 
-/// `now + uniform([0, interval))`, computed in milliseconds. A zero interval yields `now` (no jitter,
-/// `rng` is never called with a zero bound).
-fn jitter(now: Instant, interval_secs: u32, rng: &mut impl FnMut(u32) -> u32) -> Instant {
-    let bound = interval_secs.saturating_mul(1000);
-    let offset_ms = if bound == 0 { 0 } else { rng(bound) };
+/// Give every spec that did not keep a phase its `next_due`, spread uniformly over the adoption
+/// window — clamped per spec to its own interval, since spreading a 10s poll over 25s would move the
+/// gap rather than close it.
+fn settle(
+    pending: Vec<PendingSpec>,
+    now: Instant,
+    window_ms: u32,
+    rng: &mut impl FnMut(u32) -> u32,
+) -> Vec<ScheduledSpec> {
+    pending
+        .into_iter()
+        .map(|p| {
+            let next_due = p.next_due.unwrap_or_else(|| {
+                let bound = p.spec.interval_secs.saturating_mul(1000).min(window_ms);
+                jitter(now, bound, rng)
+            });
+            ScheduledSpec {
+                spec: p.spec,
+                next_due,
+            }
+        })
+        .collect()
+}
+
+/// `now + uniform([0, bound_ms))`. A zero bound yields `now` — poll it on the next scheduler tick —
+/// and `rng` is never called with a zero bound.
+fn jitter(now: Instant, bound_ms: u32, rng: &mut impl FnMut(u32) -> u32) -> Instant {
+    let offset_ms = if bound_ms == 0 { 0 } else { rng(bound_ms) };
     now + Duration::from_millis(u64::from(offset_ms))
 }
 
@@ -893,6 +996,163 @@ mod tests {
         assert_eq!(
             ws.nodes[&node(1)][0].next_due,
             much_later + Duration::from_secs(30)
+        );
+    }
+
+    // ── Adoption window (ADR-051) ────────────────────────────────────────────────────────────────
+    //
+    // The property under test is the one that had no test and no alert: a node handed over from
+    // another poller must be polled promptly, not re-phased across a whole interval. `max_bound`
+    // records the largest jitter bound the set ever asked for, which is exactly the window.
+
+    /// A jitter source that records every bound it is asked for and always returns the maximum
+    /// offset (`bound - 1`), so the assertions bound the *worst* case rather than an average.
+    fn recording(seen: &mut Vec<u32>) -> impl FnMut(u32) -> u32 + '_ {
+        move |bound| {
+            seen.push(bound);
+            bound.saturating_sub(1)
+        }
+    }
+
+    fn many_nodes(count: u128, interval: u32) -> Vec<NodeJobs> {
+        (0..count)
+            .map(|i| NodeJobs {
+                node_id: node(i + 1),
+                specs: vec![icmp_spec(node(i + 1), interval)],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_small_handover_is_adopted_inside_the_rate_window_not_a_whole_interval() {
+        // 50 specs at 200/s ⇒ a 250ms window, against a 30s interval. Before ADR-051 the bound was
+        // the interval, so the last of these nodes could go unpolled for 30s after its previous
+        // owner had already stopped — a 60s hole between consecutive samples that nothing measured.
+        let mut ws = WorkingSet::with_adopt_rate(200);
+        let e = Uuid::from_u128(1);
+        let mut seen = Vec::new();
+        let out = ws.apply(
+            snapshot(e, 1, 0, 1, many_nodes(50, 30)),
+            Instant::now(),
+            &mut recording(&mut seen),
+        );
+        assert_eq!(out, ApplyOutcome::Applied);
+        assert_eq!(ws.stats(), (50, 50));
+        assert!(
+            seen.iter().all(|&b| b == 250),
+            "50 specs / 200 per sec = a 250ms window, got {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_cold_start_still_spreads_across_the_interval() {
+        // 25,000 specs at 200/s wants 125s, which exceeds the 30s interval — so the per-spec clamp
+        // wins and this is byte-for-byte the pre-ADR-051 behaviour. The rate is a ceiling on the
+        // burst, never a licence to poll a whole fleet at once.
+        let mut ws = WorkingSet::with_adopt_rate(200);
+        let e = Uuid::from_u128(1);
+        let mut seen = Vec::new();
+        ws.apply(
+            snapshot(e, 1, 0, 1, many_nodes(25_000, 30)),
+            Instant::now(),
+            &mut recording(&mut seen),
+        );
+        assert!(
+            seen.iter().all(|&b| b == 30_000),
+            "cold start must clamp to the interval"
+        );
+    }
+
+    #[test]
+    fn the_window_is_sized_by_the_new_specs_only_not_the_whole_set() {
+        // The case the fix exists for: a 500-node poller adopts 10 more. Sizing the window off the
+        // set (510) instead of the adoption (10) would spread the newcomers over 2.5s instead of
+        // 50ms — and, worse, would grow with the size of the poller rather than the size of the
+        // failover.
+        let mut ws = WorkingSet::with_adopt_rate(200);
+        let e = Uuid::from_u128(1);
+        let now = Instant::now();
+        ws.apply(
+            snapshot(e, 1, 0, 1, many_nodes(500, 30)),
+            now,
+            &mut fixed(0),
+        );
+        let mut seen = Vec::new();
+        let newcomers: Vec<NodeJobs> = (500..510)
+            .map(|i| NodeJobs {
+                node_id: node(i + 1),
+                specs: vec![icmp_spec(node(i + 1), 30)],
+            })
+            .collect();
+        let out = ws.apply(
+            delta(e, 2, newcomers, vec![]),
+            now,
+            &mut recording(&mut seen),
+        );
+        assert_eq!(out, ApplyOutcome::Applied);
+        assert_eq!(seen.len(), 10, "only the newcomers are jittered");
+        assert!(
+            seen.iter().all(|&b| b == 50),
+            "10 specs / 200 per sec = a 50ms window, got {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_resync_that_donates_every_phase_jitters_nothing() {
+        // A core restart bumps the epoch and re-snapshots the whole fleet. Nothing moved, so every
+        // spec keeps its phase and the adoption window never applies — the property the original
+        // anti-stampede rule bought, and the one this change must not spend.
+        let mut ws = WorkingSet::with_adopt_rate(200);
+        let now = Instant::now();
+        let nodes = many_nodes(200, 30);
+        ws.apply(
+            snapshot(Uuid::from_u128(1), 1, 0, 1, nodes.clone()),
+            now,
+            &mut fixed(7_000),
+        );
+        let before: Vec<Instant> = (1..=200).map(|i| ws.nodes[&node(i)][0].next_due).collect();
+        let mut seen = Vec::new();
+        ws.apply(
+            snapshot(Uuid::from_u128(2), 1, 0, 1, nodes),
+            now,
+            &mut recording(&mut seen),
+        );
+        assert!(seen.is_empty(), "an unchanged resync must not re-jitter");
+        let after: Vec<Instant> = (1..=200).map(|i| ws.nodes[&node(i)][0].next_due).collect();
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_zero_adopt_rate_restores_the_interval_wide_jitter() {
+        // The escape hatch (`YAGRA_ADOPT_RATE_PER_SEC=0`) for a site that would rather have the old
+        // spreading than the prompt adoption.
+        let mut ws = WorkingSet::with_adopt_rate(0);
+        let mut seen = Vec::new();
+        ws.apply(
+            snapshot(Uuid::from_u128(1), 1, 0, 1, many_nodes(4, 30)),
+            Instant::now(),
+            &mut recording(&mut seen),
+        );
+        assert!(
+            seen.iter().all(|&b| b == 30_000),
+            "rate 0 means no window, so the interval is the only bound"
+        );
+    }
+
+    #[test]
+    fn a_short_interval_is_never_stretched_by_a_long_window() {
+        // A 10s check adopted alongside 10,000 others must not be pushed out to the 50s window —
+        // the clamp is per spec, so spreading can only ever shorten a spec's wait, never lengthen it.
+        let mut ws = WorkingSet::with_adopt_rate(200);
+        let mut seen = Vec::new();
+        ws.apply(
+            snapshot(Uuid::from_u128(1), 1, 0, 1, many_nodes(10_000, 10)),
+            Instant::now(),
+            &mut recording(&mut seen),
+        );
+        assert!(
+            seen.iter().all(|&b| b == 10_000),
+            "the 50s window must clamp down to the 10s interval"
         );
     }
 }

@@ -10,10 +10,10 @@
 //! pool subject and pollers consume them with a **queue group** so each job is delivered
 //! to exactly one poller (load-balanced), while results fan in on a single subject.
 
-use crate::bus::{Bus, BusError, DiscoveryBus, PeerBus, SyncBus};
+use crate::bus::{Bus, BusError, DiscoveryBus, PeerBus, SyncBus, UpgradeBus};
 use crate::messages::{
     AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, RawFlowDatagram, SyncMsg, SyncRequest,
+    PollResult, PollerUpgradeMsg, RawFlowDatagram, SyncMsg, SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -289,6 +289,32 @@ impl NatsBus {
         }))
     }
 
+    /// Subscribe to this poller's upgrade commands — poller side (ADR-051). A plain subscribe on a
+    /// subject addressed to one poller, like the assignment stream and for the same reason.
+    ///
+    /// **A build that does not call this receives nothing**, which is the entire N-1 story for the
+    /// family: an older poller is not told to upgrade, so it stays put and keeps polling. Malformed
+    /// messages are skipped, as everywhere else.
+    pub async fn subscribe_poller_upgrades(
+        &self,
+        poller_id: &str,
+    ) -> Result<impl Stream<Item = PollerUpgradeMsg>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::upgrade_for(poller_id))
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe poller upgrades: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<PollerUpgradeMsg>(&msg.payload) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed PollerUpgradeMsg from bus");
+                    None
+                }
+            }
+        }))
+    }
+
     /// Subscribe (in a queue group) to discovery jobs — poller side. Malformed messages skipped.
     pub async fn subscribe_discovery_jobs(
         &self,
@@ -550,6 +576,27 @@ impl SyncBus for NatsBus {
             .publish(subjects::jobs_for_pool(pool), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish job for pool {pool}: {e}")))
+    }
+
+    async fn flush(&self) -> Result<(), BusError> {
+        self.client
+            .flush()
+            .await
+            .map_err(|e| BusError::Publish(format!("flush: {e}")))
+    }
+}
+
+#[async_trait]
+impl UpgradeBus for NatsBus {
+    async fn publish_poller_upgrade(&self, msg: PollerUpgradeMsg) -> Result<(), BusError> {
+        let subject = subjects::upgrade_for(&msg.poller_id);
+        let poller = msg.poller_id.clone();
+        let payload = serde_json::to_vec(&msg)
+            .map_err(|e| BusError::Publish(format!("encode poller upgrade: {e}")))?;
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish upgrade to {poller}: {e}")))
     }
 }
 

@@ -198,6 +198,11 @@ pub(crate) struct UpgradeStatusResponse {
     offers: Vec<crate::upgrade::ReleaseOffer>,
     /// The most recent run, finished or in flight; `null` when none has ever been requested.
     last_run: Option<RunStatus>,
+    /// Which pollers this operation would replace and which it would leave on their current build
+    /// (ADR-051). `null` when the updater has not reported the pollers in its own compose project —
+    /// core cannot tell a co-located poller from a remote one on its own, and an invented answer
+    /// would read as fact.
+    pollers: Option<crate::upgrade::PollerUpgradePlan>,
 }
 
 /// A request to move this deployment to a particular release.
@@ -233,9 +238,10 @@ pub(crate) struct RunAccepted {
 async fn get_upgrade(
     _guard: RequireManageConfig,
     upgrade: Upgrade,
+    admin: Admin,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<UpgradeStatusResponse>> {
-    upgrade_status(&upgrade, st.started)
+    upgrade_status(&upgrade, st.started, &poller_builds(&admin))
         .await
         .map(Json)
         .map_err(|e| {
@@ -247,6 +253,25 @@ async fn get_upgrade(
         })
 }
 
+/// The live poller fleet, reduced to what the upgrade view asks of it.
+///
+/// Live registry only: an upgrade acts on pollers that are running now, and a poller core has not
+/// heard from cannot be handed a release whatever the durable inventory last recorded about it.
+pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::PollerBuild> {
+    let now = std::time::Instant::now();
+    admin
+        .coordinator
+        .poller_views(now)
+        .into_iter()
+        .filter(|v| v.online)
+        .map(|v| crate::upgrade::PollerBuild {
+            self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
+            version: (!v.version.is_empty()).then_some(v.version),
+            id: v.id,
+        })
+        .collect()
+}
+
 /// The body of [`get_upgrade`], shared with `get_system_health(section="upgrade")`.
 ///
 /// Split out rather than duplicated so the MCP surface answers with the REST route's own type —
@@ -255,6 +280,7 @@ async fn get_upgrade(
 pub(crate) async fn upgrade_status(
     upgrade: &crate::upgrade::UpgradeRepo,
     started: std::time::SystemTime,
+    fleet: &[crate::upgrade::PollerBuild],
 ) -> anyhow::Result<UpgradeStatusResponse> {
     let schema = upgrade.schema_state().await?;
     let switched_on = upgrade.enabled().await;
@@ -265,6 +291,13 @@ pub(crate) async fn upgrade_status(
     let fresh = beat.as_ref().is_some_and(|h| {
         crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
+    // Who this operation would carry and who it would strand. `None` — not an empty plan — while the
+    // updater has not named the pollers in its own project, because core has no other way to tell a
+    // co-located poller from a remote one and a wrong answer here is worse than no answer.
+    let plan = beat
+        .as_ref()
+        .and_then(|h| h.local_pollers.as_ref())
+        .map(|local| crate::upgrade::poller_upgrade_plan(fleet, local));
     Ok(UpgradeStatusResponse {
         enabled: beat.is_some() && fresh && switched_on,
         upgrade_enabled: switched_on,
@@ -293,7 +326,14 @@ pub(crate) async fn upgrade_status(
             available.as_ref().map_or(&[], |a| a.releases.as_slice()),
             p.core_version,
             schema.compat.as_ref(),
+            // Only pollers this operation leaves behind can be stranded on an unsupported version,
+            // and an unreported project means an empty slice — the gate stays open rather than
+            // guessing (see `PollerUpgradePlan`).
+            &plan.as_ref().map_or_else(Vec::new, |p| {
+                p.manual.iter().filter_map(|m| m.version.clone()).collect()
+            }),
         ),
+        pollers: plan,
         schema,
         last_run: upgrade.last_run(),
     })

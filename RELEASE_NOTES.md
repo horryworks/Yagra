@@ -11,6 +11,22 @@
 ## Unreleased
 
 ### New Features
+- **A remote-site poller can now be upgraded by the same button that upgrades the deployment.**
+  Until now Settings ▸ Upgrade replaced core, the WebUI and a co-located poller — everything in one
+  compose project — and left every poller at a monitored site untouched, with nothing on screen
+  saying so. Add the `yagra-poller-updater` sidecar to `docker-compose.poller.yml` (shipped
+  commented out, and off unless you uncomment it) and the site declares itself able to install a
+  release; core then hands it the same one it just installed, **one poller at a time per pool**, so
+  a pool with two or more pollers keeps monitoring throughout. The poller never touches the Docker
+  socket: it validates the command and writes it into a shared volume for the sidecar, exactly as
+  core does centrally. Images are fetched *before* anything stops, so a single-poller site is out
+  for the container recreate rather than for the download.
+- **The Upgrade page says which pollers come along and which do not.** The plan and the confirmation
+  both name the pollers that will stay on their current version, so a partial upgrade is something
+  you decide rather than something you discover. `GET /api/v1/system/upgrade` gained a `pollers`
+  object (`with_core`, `manual`); it is `null` — not an empty list — until the updater reports which
+  pollers share its compose project, because "nobody is left behind" and "nobody asked" are
+  different answers.
 - **Ended maintenance windows can be cleared in one action.** The windows list keeps every window
   until someone deletes it, so an operator who schedules recurring work reads a page that is mostly
   history — and every upgrade adds one more, at the top. Alerts ▸ Maintenance windows now has a
@@ -29,6 +45,35 @@
   switched off, so a deployment that makes no outbound connections still makes none.
 
 ### Improvements
+- **A poller taking over another poller's nodes now polls them promptly instead of after up to a
+  full interval.** When a poller left a pool — a restart, a failure, a rolling upgrade, a scale-in —
+  the survivor treated the arriving nodes as brand new and spread their first poll uniformly across
+  the poll interval. The previous owner had already stopped, so consecutive samples for those nodes
+  could be up to **twice the interval** apart (a minute at the 30s default), and nothing reported
+  it: the pool still had a live poller, so no coverage alert fired, and `monitoring_gaps` records
+  core↔poller visibility rather than a missed poll. Adopted work is now spread over how long it
+  takes to poll it once at a sustained rate (`YAGRA_ADOPT_RATE_PER_SEC`, default 200 specs/s,
+  clamped to the interval), so a handover of fifty nodes completes in a fraction of a second while a
+  full cold start behaves exactly as before. Set it to `0` for the previous behaviour.
+- **A poller returning to the fleet is given its nodes back at once.** A departing poller already
+  triggered an immediate reassignment; a rejoining one waited for the next scheduler sweep — up to
+  the fleet-minimum poll interval — during which its share stayed with whoever had covered for it.
+  Both directions are now immediate.
+- **A poller shutting down now finishes what it started.** It waits (up to 5s) for probes already in
+  flight to report before exiting, instead of dropping their results with the runtime, and it
+  confirms its final "I am leaving" heartbeat has actually left the process. That heartbeat is what
+  lets core reassign immediately rather than waiting out three missed beats, and it could previously
+  be lost to the race with process exit.
+- **`GET /api/v1/pollers` now returns each poller's `caps` and `listeners`,** and Settings ▸ Pollers
+  marks a poller that is not on core's version and one that can upgrade itself. The listener list is
+  worth reading before restarting a site: syslog, traps and flow exports have no buffer and no
+  standby, so unlike active polling nothing recovers what arrives while a poller is down.
+- **An upgrade that would strand a poller two releases behind is now refused rather than offered.**
+  The bus supports one release of skew (N/N-1); ADR-050 wrote that down and nothing enforced it, so
+  the jump it called dangerous was as pressable as any other. Such a release now appears in the list
+  with the reason and a disabled button — visible, because a version that looks absent reads as
+  "never released". Only pollers the operation will *not* upgrade count, so a deployment whose
+  pollers all come along is never blocked.
 - **The Upgrade page now shows what an upgrade is doing while it does it.** A progress bar and the
   named phase — backing up, fetching images, replacing containers, verifying — replace a screen
   that changed in no visible way for the ~65 seconds an upgrade takes. It also distinguishes the

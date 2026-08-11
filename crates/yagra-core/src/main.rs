@@ -96,6 +96,7 @@ mod topology_mode;
 mod topology_projection;
 // What this deployment is running and how far back it can be taken (ADR-050). Named apart from
 // `repo`, which *applies* migrations; this one reasons about what applying them cost.
+mod poller_upgrade;
 mod upgrade;
 mod url_check;
 mod volatile;
@@ -890,8 +891,45 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         let upgrade = upgrade.clone();
         let audit = audit_repo.clone();
         let maintenance = maintenance.clone();
+        let bus_up = bus.clone();
+        let coord = coordinator.clone();
         spawn_cancellable(&shutdown, async move {
-            upgrade.settle_finished_run(&audit, &maintenance).await;
+            let Some(run) = upgrade.settle_finished_run(&audit, &maintenance).await else {
+                return;
+            };
+            // Remote-site pollers are a separate compose project on a separate host, so core's own
+            // upgrade never touched them (ADR-051). Hand them the same release now — and only now:
+            // N/N-1 covers new-core-with-old-poller, while the reverse has a known routing hole
+            // (ADR-009), so "core first" is a constraint rather than a preference.
+            if run.state != "succeeded" {
+                return;
+            }
+            let Some(tag) = run.target.clone() else {
+                return;
+            };
+            let targets: Vec<poller_upgrade::Target> = coord
+                .poller_views(std::time::Instant::now())
+                .into_iter()
+                .filter(|v| v.online && v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE))
+                .map(|v| poller_upgrade::Target {
+                    id: v.id,
+                    pool: v.pool,
+                    version: v.version,
+                    incarnation: v.incarnation,
+                })
+                .collect();
+            poller_upgrade::converge(
+                poller_upgrade::Run {
+                    bus: bus_up,
+                    coordinator: coord,
+                    audit,
+                    tag,
+                    run_id: run.id,
+                    requested_by: run.requested_by.unwrap_or_else(|| "unknown".to_owned()),
+                },
+                targets,
+            )
+            .await;
         });
     }
     // An uploaded image archive is a gigabyte, and the paths that abandon one all end with core

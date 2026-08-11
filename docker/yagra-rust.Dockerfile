@@ -153,7 +153,7 @@ COPY --chmod=0755 yagra-core yagra-poller /app/
 # stages must offer them at the same path: the runtime stage below copies from whichever won, and
 # must not know which that was. Getting this wrong breaks ONLY the flash path, because BuildKit
 # never evaluates the stage it did not select.
-COPY docker-compose.deploy.yml yagra-backup.sh /app/
+COPY docker-compose.deploy.yml docker-compose.poller.yml yagra-backup.sh /app/
 
 # ── The selector. BuildKit builds only the stage this resolves to. ──
 FROM ${BIN_SRC} AS bins
@@ -238,9 +238,17 @@ RUN useradd -r -u 10002 yagra \
  && apt-get install -y --no-install-recommends libcap2-bin \
  && rm -rf /var/lib/apt/lists/* \
  && install -d -o yagra -g yagra -m 0755 /var/lib/yagra/buffer \
- && install -d -o yagra -g yagra -m 0750 /var/log/yagra
+ && install -d -o yagra -g yagra -m 0750 /var/log/yagra \
+ && install -d -o yagra -g yagra -m 0770 /data/upgrade
 COPY --from=bins /etc/yagra-source-ref /etc/yagra-source-ref
 COPY --from=bins /etc/yagra-build-profile /etc/yagra-build-profile
+# The composition for the version being installed, read back out of this image by a site updater
+# (ADR-051, mirroring ADR-050 decision 5 for core). Copied out with `docker cp`, never executed here.
+#
+# ⚠️ Both `bins` sources must offer it at this path — `build` gets it from `COPY . .`, `prebuilt` from
+# scripts/flash-build.sh — because BuildKit never evaluates the stage it did not select, so a miss on
+# one side stays invisible until whichever path is that stage's only reader runs.
+COPY --from=bins /app/docker-compose.poller.yml /usr/share/yagra/
 # The binary arrives through a bind mount rather than a COPY, so that placing it and granting it
 # CAP_NET_RAW are ONE layer.
 #
