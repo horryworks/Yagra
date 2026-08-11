@@ -19,9 +19,30 @@
 //! whether the WebUI offers a rollback button.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use semver::Version;
 use sqlx::{PgPool, Row};
+
+/// How long the fleet-wide maintenance window opened by an apply may last.
+///
+/// **Bounded before the run starts *and* closed when it ends** (ADR-050 decision 12). core is
+/// restarted by the operation it requested, so the process that opens the window is never the one
+/// that could close it — the core that comes back does that, in
+/// [`UpgradeRepo::settle_finished_run`]. This bound is the backstop for the run that never reports
+/// at all: a run that dies partway must not leave the whole fleet silent for good.
+///
+/// ⚠️ Fifteen minutes is a placeholder and now a demonstrably generous one: the first measured
+/// apply on real hardware (2026-08-11, v0.2.1→v0.2.2, test server) took **65 seconds** end to end —
+/// backup 5s, pull 34s, recreate 24s. It fits inside `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` (300s)
+/// with room to spare, which is what ADR-050 asked this number to be checked against. It stays at
+/// 900 because it now only bounds the *pathological* case, and one measurement on one link is not a
+/// distribution: shortening it would trade a harmless idle margin for a fleet that starts alerting
+/// about itself mid-upgrade on a slower connection.
+pub const MAINTENANCE_WINDOW_SECS: i64 = 900;
+
+/// How often [`UpgradeRepo::settle_finished_run`] re-reads `status.json` while a run is in flight.
+const RUN_WATCH_TICK: Duration = Duration::from_secs(5);
 
 /// The request-file format version core writes and the updater checks (ADR-050 decision 14).
 ///
@@ -300,6 +321,33 @@ impl RunStatus {
     }
 }
 
+/// What [`UpgradeRepo::settle_finished_run`]'s watch does with the status it just read.
+///
+/// Split out from the loop so the decision is testable without a filesystem, a clock, a PgPool or a
+/// sidecar — the loop around it is then only sleeping.
+#[derive(Debug, PartialEq, Eq)]
+enum WatchStep {
+    /// The run reported an outcome: settle it.
+    Settle,
+    /// Still in flight. Sleep and look again.
+    Wait,
+    /// Nothing to settle, now or later.
+    Stop,
+}
+
+fn watch_step(run: Option<&RunStatus>, expired: bool) -> WatchStep {
+    match run {
+        // No run has ever been requested against this handoff directory. Waiting for one would
+        // hold the task open for the whole bound on every ordinary restart.
+        None => WatchStep::Stop,
+        Some(run) if !run.is_running() => WatchStep::Settle,
+        // ⚠️ `Wait`, not `Stop` — this arm is the bug. core boots mid-run, so `running` is the
+        // *expected* first read, not a reason to give up.
+        Some(_) if expired => WatchStep::Stop,
+        Some(_) => WatchStep::Wait,
+    }
+}
+
 /// Reads the migration history, and the shared volume the updater sidecar talks over.
 ///
 /// `dir` is `None` when `YAGRA_UPGRADE_DIR` is unset, which is the default and means the whole
@@ -488,29 +536,59 @@ impl UpgradeRepo {
         }
     }
 
-    /// Record the outcome of a run that finished while this core was not running.
+    /// Wait for the run that replaced this process to report an outcome, then settle it: one audit
+    /// row, and the fleet-wide maintenance window closed.
     ///
     /// The process that asked for the upgrade is never the process that sees it finish — core is
-    /// restarted by the very operation it requested. Without this, the audit trail would show
-    /// somebody requesting an upgrade and would never show whether it worked, which is the half an
-    /// operator actually needs afterwards.
+    /// restarted by the very operation it requested. Both halves therefore have to happen here, and
+    /// only here.
     ///
-    /// Idempotent through a marker file beside the status: the run is claimed by renaming, so two
-    /// cores racing at startup produce one row, and a core restarting for an unrelated reason does
-    /// not re-log an old run.
-    pub async fn record_finished_run(&self, audit: &crate::audit::AuditRepo) {
+    /// ⚠️ **This waits; reading once was a bug.** core is recreated during the updater's `compose`
+    /// step and boots while the run is still `running` — the updater does not write the outcome
+    /// until `verify` completes. Measured at **7 seconds** apart on the test server (2026-08-11,
+    /// v0.2.1→v0.2.2: core up at 10:31:32, `succeeded` written at 10:31:39). A single read at
+    /// startup saw `running`, returned, and was never called again, so *every* completed upgrade
+    /// went unaudited and the window was left to expire on its own. Verified on the real
+    /// deployment: `status.json` unclaimed, no outcome row, only the `POST` that requested it.
+    ///
+    /// Spawned, never awaited — it sleeps for as long as the run does, bounded by
+    /// [`MAINTENANCE_WINDOW_SECS`], past which both things it exists to do are moot.
+    pub async fn settle_finished_run(
+        &self,
+        audit: &crate::audit::AuditRepo,
+        maintenance: &crate::maintenance::MaintenanceRepo,
+    ) {
         let Some(dir) = self.dir.as_deref() else {
             return;
         };
-        let Some(run) = self.last_run() else { return };
-        if run.is_running() {
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_secs(MAINTENANCE_WINDOW_SECS.unsigned_abs());
+        let run = loop {
+            let run = self.last_run();
+            match watch_step(run.as_ref(), tokio::time::Instant::now() >= deadline) {
+                WatchStep::Settle => break run.expect("Settle is only reached with a run"),
+                WatchStep::Stop => return,
+                WatchStep::Wait => tokio::time::sleep(RUN_WATCH_TICK).await,
+            }
+        };
+
+        if !claim_run(dir, &run.id) {
             return;
         }
-        // Claim it. `rename` is atomic, so exactly one caller wins even across processes.
-        let claim = dir.join(format!("status.{}.logged", run.id));
-        if claim.exists() || std::fs::rename(dir.join("status.json"), &claim).is_err() {
-            return;
+
+        // Give the fleet its monitoring back now rather than at the bound (ADR-050 decision 12).
+        // First, because it is the half with a deadline: the audit row is equally true a second
+        // later, whereas every second of window is a second the deployment cannot see a real
+        // outage. A failure here is not worth retrying — `ends_at` is the backstop and it holds.
+        match maintenance.end_upgrade_windows().await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(windows = n, "closed the upgrade maintenance window"),
+            Err(e) => tracing::warn!(
+                error = %e,
+                "could not close the upgrade maintenance window; it expires on its own"
+            ),
         }
+
         let action = format!(
             "upgrade {} -> {} ({})",
             run.state,
@@ -787,6 +865,25 @@ fn sanitize_actor(name: &str) -> String {
     }
 }
 
+/// Take exclusive responsibility for settling run `id`. Returns whether this caller won.
+///
+/// `create_new` fails when the marker already exists, and the test-and-create is atomic in the
+/// filesystem, so exactly one caller wins even across processes — two cores racing at startup
+/// settle the run once, and a core restarting for an unrelated reason does not re-settle an old one.
+///
+/// **The marker is a new file; `status.json` is left alone.** Claiming used to be a rename *of* the
+/// status onto the marker, which destroys the run — the Upgrade page's `last_run` and the 409 that
+/// stops a second apply both read that file, so settling would have blanked the outcome on the one
+/// screen an operator opens straight afterwards. Nobody saw it because the caller's race meant the
+/// rename never executed; fixing the race would have shipped the regression.
+fn claim_run(dir: &Path, id: &str) -> bool {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(dir.join(format!("status.{id}.logged")))
+        .is_ok()
+}
+
 /// Serialize a request as the `key=value` lines the updater parses.
 ///
 /// Every value is constrained before it gets here — the tag by [`is_valid_tag`], the actor by
@@ -831,6 +928,83 @@ mod tests {
     /// Every command core can write. Hand-written because Rust cannot enumerate variants; it is
     /// what `every_command_is_accepted_by_the_sidecar` iterates.
     const COMMANDS: &[Command] = &[Command::Apply, Command::Bundle];
+
+    fn run_in_state(state: &str) -> RunStatus {
+        RunStatus {
+            id: "78269f5f-a498-4faa-9aea-41f6210b501d".to_owned(),
+            command: "apply".to_owned(),
+            target: Some("v0.2.2".to_owned()),
+            state: state.to_owned(),
+            step: None,
+            message: None,
+            started_at: 1_786_444_236,
+            finished_at: None,
+            requested_by: Some("horry".to_owned()),
+        }
+    }
+
+    /// The regression. core is recreated by the very `compose` step it is watching, so it boots
+    /// while the run still reads `running` — 7 seconds before the outcome was written, measured on
+    /// the test server. Treating that first read as "nothing to do" is what left every completed
+    /// upgrade unaudited and every window open to its bound.
+    #[test]
+    fn a_run_still_in_flight_makes_the_watch_wait_not_stop() {
+        assert_eq!(
+            watch_step(Some(&run_in_state("running")), false),
+            WatchStep::Wait
+        );
+    }
+
+    #[test]
+    fn a_run_that_reported_an_outcome_settles_whatever_the_outcome_was() {
+        for state in ["succeeded", "failed", "rejected"] {
+            assert_eq!(
+                watch_step(Some(&run_in_state(state)), false),
+                WatchStep::Settle,
+                "{state} is an outcome; a failed upgrade needs its audit row and its window closed \
+                 just as much as a successful one"
+            );
+        }
+    }
+
+    /// The bound has to win eventually, or a run that never reports holds the task open for good.
+    #[test]
+    fn the_watch_gives_up_once_the_window_it_would_close_has_expired() {
+        assert_eq!(
+            watch_step(Some(&run_in_state("running")), true),
+            WatchStep::Stop
+        );
+    }
+
+    /// The common case by far: an ordinary restart, no upgrade in sight. Waiting the whole bound
+    /// for a run that does not exist would be a task per boot doing nothing.
+    #[test]
+    fn no_run_at_all_stops_immediately() {
+        assert_eq!(watch_step(None, false), WatchStep::Stop);
+    }
+
+    /// Claiming must not consume the status: `last_run` still has to answer afterwards, because the
+    /// Upgrade page reads it to show the operator how the thing they just pressed turned out.
+    #[test]
+    fn claiming_a_run_leaves_its_status_readable() {
+        let dir = std::env::temp_dir().join(format!("yagra-claim-{}", new_run_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let status = dir.join("status.json");
+        std::fs::write(&status, r#"{"state":"succeeded"}"#).unwrap();
+
+        assert!(claim_run(&dir, "abc"), "the first caller claims the run");
+        assert!(status.exists(), "claiming must not consume status.json");
+        assert!(
+            !claim_run(&dir, "abc"),
+            "a second caller must lose, or two cores write two audit rows for one upgrade"
+        );
+        assert!(
+            claim_run(&dir, "def"),
+            "a different run is a different claim"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     fn floor(since: i64, min_core: &str) -> CompatFloor {
         CompatFloor {

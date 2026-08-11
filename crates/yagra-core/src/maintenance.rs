@@ -36,11 +36,21 @@ pub enum WindowScope {
     /// noise an operator cannot act on. The other four scopes all answer "which nodes", and none of
     /// them can say "all of them" without enumerating something that changes underneath.
     ///
-    /// ⚠️ **The window hides real outages too**, which is why the upgrade path fills `ends_at`
-    /// before it starts rather than closing the window when it finishes: a run that dies partway
-    /// must not leave the fleet silent indefinitely.
+    /// ⚠️ **The window hides real outages too.** The upgrade path therefore does both halves: it
+    /// fills `ends_at` before it starts, so a run that dies partway cannot leave the fleet silent
+    /// indefinitely, *and* the core that comes back closes the window as soon as the run reports an
+    /// outcome ([`MaintenanceRepo::end_upgrade_windows`]). The bound is the backstop, not the plan —
+    /// a measured upgrade takes ~65s against a 900s bound.
     System,
 }
+
+/// The `scope_id` every window the upgrade path opens carries.
+///
+/// [`WindowScope::System`] is deliberately absent from `WINDOW_SCOPE_LEVELS`, so no operator can
+/// open a fleet-wide window through ordinary CRUD — which is what makes "system scope, this id"
+/// a precise enough match for [`MaintenanceRepo::end_upgrade_windows`] to close the run's own
+/// window without carrying its id through the updater and back.
+pub const UPGRADE_SCOPE_ID: &str = "upgrade";
 
 impl WindowScope {
     /// Parse the stored `scope_level` token.
@@ -222,6 +232,28 @@ impl MaintenanceRepo {
                 ))
             })
             .collect()
+    }
+
+    /// End every still-open upgrade window now. Returns how many were closed.
+    ///
+    /// Called by the core that comes back after an upgrade, once the run has reported an outcome
+    /// (ADR-050 decision 12). The process that opened the window is never the process that sees the
+    /// run finish, so this is the only place it can happen.
+    ///
+    /// **`ends_at` moves to `now()`; the row is not deleted.** The fleet really was silenced for
+    /// that long, and an operator asking "why did nothing alert at 10:31" deserves to find the
+    /// answer rather than an absence. [`Self::active_scopes`] filters on `ends_at > now()`, so the
+    /// suppression stops on the alerting config's next refresh either way.
+    pub async fn end_upgrade_windows(&self) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "UPDATE maintenance_windows SET ends_at = now() \
+             WHERE scope_level = $1 AND scope_id = $2 AND ends_at > now()",
+        )
+        .bind(WindowScope::System.as_str())
+        .bind(UPGRADE_SCOPE_ID)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Unexpired mutes, soonest-expiring first. Expired rows are dropped lazily on read

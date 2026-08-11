@@ -743,7 +743,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         notifications,
         mib,
         discovery,
-        maintenance,
+        maintenance: maintenance.clone(),
         classification,
         classifier,
         groups: group_repo,
@@ -876,11 +876,24 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .unwrap_or(upgrade::DEFAULT_BUNDLE_MAX_BYTES),
     ));
 
-    // If an upgrade finished while we were the process being replaced, close its audit trail now.
-    // Deliberately not leader-gated and deliberately awaited: it is one claimed file and one row,
-    // and the claim makes a double-run harmless — whereas deferring it behind leadership would lose
-    // the record entirely on a single-core deployment that is not yet leader when this runs.
-    upgrade.record_finished_run(&audit_repo).await;
+    // If an upgrade replaced the process we just took over from, see it through: close its audit
+    // trail, and give the fleet back the monitoring the run's maintenance window is suppressing.
+    //
+    // Deliberately not leader-gated — the claim marker makes a double-run harmless, whereas
+    // deferring it behind leadership would lose both on a single-core deployment that is not yet
+    // leader when this runs.
+    //
+    // Deliberately **not** awaited, which is the change: core boots during the updater's `compose`
+    // step, so the run is still in flight when this starts and settling it means waiting for the
+    // outcome. Awaiting that would hold the whole API port closed for the length of an upgrade.
+    {
+        let upgrade = upgrade.clone();
+        let audit = audit_repo.clone();
+        let maintenance = maintenance.clone();
+        spawn_cancellable(&shutdown, async move {
+            upgrade.settle_finished_run(&audit, &maintenance).await;
+        });
+    }
     // An uploaded image archive is a gigabyte, and the paths that abandon one all end with core
     // not running (ADR-050 Increment 3). Startup is therefore the only reliable place to sweep.
     upgrade.prune_stale_bundles();

@@ -40,17 +40,7 @@ use super::extract::{
 use super::ApiState;
 use crate::upgrade::{AvailableVersions, BundleError, Command, RunStatus, SchemaState};
 
-/// How long the fleet-wide maintenance window opened by an apply may last.
-///
-/// **Bounded before the run starts, not closed when it ends** (ADR-050 decision 12). core restarts
-/// in the middle, so there is no process left to close it — and a run that dies partway must not
-/// leave the whole fleet silent for good. The window therefore expires on its own.
-///
-/// ⚠️ Fifteen minutes is a placeholder with a real deadline attached: ADR-050 requires measuring
-/// pull + backup + `up -d` on hardware before this number means anything, and in particular whether
-/// it fits inside `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` (300s). Too short and the upgrade alerts
-/// on itself; too long and a genuine outage during it is invisible.
-const MAINTENANCE_WINDOW_SECS: i64 = 900;
+use crate::upgrade::MAINTENANCE_WINDOW_SECS;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(OpenApi)]
@@ -562,6 +552,10 @@ async fn preflight(
 ///
 /// Shared so the two commands cannot drift on the order. It matters: core stops moments after the
 /// request file appears, so the window has to exist first or it never will.
+///
+/// Nothing here closes it — this process will not be alive to. The core that comes back does that
+/// once the run reports an outcome ([`crate::upgrade::UpgradeRepo::settle_finished_run`]); the
+/// `ends_at` written here is the backstop for the run that never reports at all.
 async fn dispatch(
     upgrade: &crate::upgrade::UpgradeRepo,
     admin: &Admin,
@@ -578,7 +572,7 @@ async fn dispatch(
         .create_window(
             &format!("Upgrade to {tag}"),
             crate::maintenance::WindowScope::System.as_str(),
-            "upgrade",
+            crate::maintenance::UPGRADE_SCOPE_ID,
             chrono::Utc::now(),
             ends,
         )

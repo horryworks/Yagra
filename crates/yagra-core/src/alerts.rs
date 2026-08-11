@@ -842,6 +842,17 @@ impl AlertManager {
     /// `Critical` because an entire site's monitoring has stopped, which is a strictly larger blast
     /// radius than one device being down — and because an existing `critical → PagerDuty` routing
     /// rule is what ADR-009 asks this to reach.
+    ///
+    /// **A maintenance window does not silence this, including the fleet-wide one an upgrade opens
+    /// (ADR-050 decision 12), and that is deliberate.** The gate lives in [`Self::observe`] and
+    /// tests a *node* set, so a [`Subject::Pool`] could never fall in it by accident; the question
+    /// is whether to add a second gate here, and the answer is no on three counts. The debounce is
+    /// already the mechanism for this exact case — [`crate::pool_coverage::DEFAULT_RAISE_AFTER`] is
+    /// 300s precisely so an ordinary restart cannot page anyone, against a measured 65s upgrade. A
+    /// window long enough to matter would be hiding the one outcome worth paging about, "the
+    /// upgrade left a site unmonitored", during the exact window in which it just became true. And
+    /// the gate would have to sit in [`Self::raise_event_alert`], which also carries every
+    /// syslog/trap-derived alert — silencing far more than the upgrade ever asked for.
     pub fn raise_pool_coverage_alert(&self, pool: &str, at_unix_ms: i64) -> Option<NotifyAction> {
         let subject = Subject::Pool(pool.to_owned());
         let check = subject_check_id(&subject, crate::pool_coverage::COVERAGE_METRIC);

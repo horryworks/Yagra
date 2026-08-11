@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **An upgrade no longer silences the whole fleet for 15 minutes after it has finished.** Applying an
+  upgrade opens a deployment-wide maintenance window so the restart cannot alert about itself. The
+  window was only ever bounded — nothing closed it — so a 65-second upgrade left every node in
+  `maintenance`, and every real outage invisible, for the remaining ~14 minutes. The core that comes
+  back now closes the window as soon as the run reports its outcome. The bound remains as the
+  backstop for a run that never reports at all.
+- **A completed upgrade is recorded in the audit log again — it never was.** core is recreated by the
+  `compose` step of the run it is watching, so it came back while the run still read `running`,
+  checked once, and never looked again; the updater wrote the outcome seconds later. The audit trail
+  showed somebody requesting an upgrade and never showed whether it worked. core now waits for the
+  outcome. The row reads `upgrade succeeded -> v0.2.2 (…)`, attributed to whoever pressed the button,
+  and a failed run is recorded just as a successful one is.
+
 ## v0.2.2 — Yagra installs its own next version, says how far back it can be taken, and needs no registry to do it
 
 ### New Features
