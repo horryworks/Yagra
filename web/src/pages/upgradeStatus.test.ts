@@ -8,13 +8,20 @@ import {
   canOffer,
   canUploadBundle,
   isRunning,
+  lastChecked,
   looksLikeReleaseTag,
   mechanism,
   rollback,
   rollbacks,
+  runPhase,
   runState,
+  runStep,
   shortRef,
+  shouldPoll,
+  stepProgress,
   switchPending,
+  UPGRADE_PROGRESS_STEPS,
+  UPGRADE_RUN_STEPS,
   upgrades,
 } from './upgradeStatus';
 
@@ -256,5 +263,121 @@ describe('shortRef', () => {
     expect(shortRef(null)).toBeNull();
     expect(shortRef(undefined)).toBeNull();
     expect(shortRef('   ')).toBeNull();
+  });
+});
+
+describe('runPhase', () => {
+  const ran = (over: Record<string, unknown>) =>
+    status({
+      enabled: true,
+      last_run: { id: 'r1', command: 'apply', started_at: 1, ...over },
+    } as Partial<UpgradeStatus>);
+
+  it('is idle when nothing was asked for and nothing is running', () => {
+    expect(runPhase(status(), null).kind).toBe('idle');
+    expect(runPhase(ran({ state: 'succeeded' }), null).kind).toBe('idle');
+  });
+
+  // THE regression. core hands the request to the sidecar, which looks for it once every five
+  // seconds and then has to start a container, so for 5-10s `status.json` still describes the
+  // PREVIOUS run. Reading the server alone there says "succeeded" -- and the page, which armed its
+  // poll from exactly that, stopped fetching and sat silent through the whole upgrade.
+  it('is starting - not idle, not done - while the sidecar has yet to pick the request up', () => {
+    expect(runPhase(status(), 'r2').kind).toBe('starting');
+    expect(runPhase(ran({ state: 'succeeded' }), 'r2').kind).toBe('starting');
+  });
+
+  it('reports the phase and its position once the sidecar is writing', () => {
+    const phase = runPhase(ran({ state: 'running', step: 'pull' }), 'r1');
+    expect(phase).toEqual({ kind: 'running', step: 'pull', index: 2, total: 5 });
+  });
+
+  it('is running even for a run this browser did not start', () => {
+    // Someone else pressed the button, or this tab was reloaded mid-run.
+    expect(runPhase(ran({ state: 'running', step: 'backup' }), null).kind).toBe('running');
+  });
+
+  it('is done only for the run that was asked for, matched by id', () => {
+    expect(runPhase(ran({ state: 'succeeded' }), 'r1')).toEqual({ kind: 'done', state: 'succeeded' });
+    expect(runPhase(ran({ state: 'failed' }), 'r1')).toEqual({ kind: 'done', state: 'failed' });
+    // A stale pending id must not read an unrelated run as this one's outcome.
+    expect(runPhase(ran({ state: 'succeeded' }), 'other').kind).toBe('starting');
+  });
+
+  it('survives a step the sidecar knows and this build does not', () => {
+    const phase = runPhase(ran({ state: 'running', step: 'quiescing' }), 'r1');
+    expect(phase).toMatchObject({ kind: 'running', step: null, index: -1 });
+    // No position rather than a position of zero: "unknown phase" is not "nothing has happened".
+    expect(stepProgress(phase)).toBeNull();
+  });
+
+  it('polls from the act of starting, not from what the server currently says', () => {
+    expect(shouldPoll(status(), 'r2')).toBe(true);
+    expect(shouldPoll(ran({ state: 'running' }), null)).toBe(true);
+    expect(shouldPoll(ran({ state: 'succeeded' }), 'r1')).toBe(false);
+    expect(shouldPoll(status(), null)).toBe(false);
+  });
+
+  it('refuses a second release during the window where the backend 409 cannot yet see one', () => {
+    // Both the UI guard and the server's conflict check read the same status.json, so in this
+    // window neither of them knows a run exists. `pending` is the only thing that does.
+    const st = status({ enabled: true, last_run: null } as Partial<UpgradeStatus>);
+    expect(canApply(st, null)).toBe(true);
+    expect(canApply(st, 'r2')).toBe(false);
+    expect(canOffer(st, { tag: 'v0.2.2', direction: 'upgrade', blocked: null } as never, 'r2')).toBe(
+      false,
+    );
+    expect(canUploadBundle(status({ enabled: true, ...updater(true, true, true) }), 'r2')).toBe(
+      false,
+    );
+  });
+});
+
+describe('run steps', () => {
+  it('puts the refusal stamp outside the progress track', () => {
+    // `validate` is what a REFUSED request is stamped with, so it needs a label but must never
+    // place a bar at 20%.
+    expect(UPGRADE_RUN_STEPS).toContain('validate');
+    expect(UPGRADE_PROGRESS_STEPS).not.toContain('validate');
+    for (const s of UPGRADE_PROGRESS_STEPS) expect(UPGRADE_RUN_STEPS).toContain(s);
+  });
+
+  it('narrows an unknown step to null instead of rendering it raw', () => {
+    expect(runStep('pull')).toBe('pull');
+    expect(runStep('quiescing')).toBeNull();
+    expect(runStep(null)).toBeNull();
+    expect(runStep(undefined)).toBeNull();
+  });
+
+  it('advances monotonically and never reaches 1 before the run ends', () => {
+    const at = (step: string) =>
+      stepProgress(
+        runPhase(
+          status({
+            enabled: true,
+            last_run: { id: 'r1', command: 'apply', state: 'running', step, started_at: 1 },
+          } as Partial<UpgradeStatus>),
+          'r1',
+        ),
+      );
+    const seen = UPGRADE_PROGRESS_STEPS.map((s) => at(s) ?? 0);
+    for (let i = 1; i < seen.length; i += 1) expect(seen[i]).toBeGreaterThan(seen[i - 1]);
+    expect(seen[seen.length - 1]).toBeLessThan(1);
+    expect(stepProgress({ kind: 'done', state: 'succeeded' })).toBe(1);
+  });
+});
+
+describe('lastChecked', () => {
+  // Not `updater.last_seen`: that is the 5-second heartbeat and is always fresh, so following it
+  // would present an 18-hour-old release list as up to date -- which is exactly what happened on
+  // the test server the day v0.2.2 shipped.
+  it('reads when the registry was read, not when the sidecar last breathed', () => {
+    expect(lastChecked(status())).toBeNull();
+    const st = status({
+      ...updater(true, true),
+      available: { written_at: 1_786_400_000, releases: [], error: null },
+    } as Partial<UpgradeStatus>);
+    expect(lastChecked(st)).toBe(1_786_400_000);
+    expect(lastChecked(st)).not.toBe(st.updater.last_seen);
   });
 });

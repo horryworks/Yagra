@@ -10,7 +10,33 @@
 
 ## Unreleased
 
+### New Features
+- **Settings ▸ Upgrade says when it last looked for a release, and has a button to look again.**
+  The updater checks the registry every 24 hours (`YAGRA_UPGRADE_CHECK_SECS`), which means the hour
+  a release is published is the hour the list is guaranteed to be out of date — the one hour anyone
+  opens this page. `POST /api/v1/system/upgrade/check` (manage-configuration) asks the updater to
+  re-read it now; the page shows the result landing. It installs nothing and takes no argument: the
+  repository queried is still fixed by the host, and the command is refused while the mechanism is
+  switched off, so a deployment that makes no outbound connections still makes none.
+
+### Improvements
+- **The Upgrade page now shows what an upgrade is doing while it does it.** A progress bar and the
+  named phase — backing up, fetching images, replacing containers, verifying — replace a screen
+  that changed in no visible way for the ~65 seconds an upgrade takes. It also distinguishes the
+  connection being lost *because the containers are being replaced* from the page having frozen,
+  which previously looked identical.
+- **Less text on the Upgrade page.** The explanatory paragraphs are cut to a sentence each and three
+  are gone entirely; the release buttons now read "Upgrade" / "Downgrade" rather than a sentence
+  repeating the version number already printed beside them.
+
 ### Bug Fixes
+- **The Upgrade page went silent for the whole of an upgrade.** After the confirmation dialog closed
+  it showed nothing — no progress, no state change — until the page was reloaded by hand. It armed
+  its polling from the server's run state, but the updater only looks for a request every five
+  seconds and then has to start a container, so for the first 5–10 seconds the server was still
+  reporting the *previous* run as finished. The poll was therefore never armed at all. It now starts
+  from the request being accepted. The same window let a second release be clicked, which the
+  backend's own conflict check could not see either; both are closed.
 - **An upgrade no longer silences the whole fleet for 15 minutes after it has finished.** Applying an
   upgrade opens a deployment-wide maintenance window so the restart cannot alert about itself. The
   window was only ever bounded — nothing closed it — so a 65-second upgrade left every node in

@@ -681,6 +681,25 @@ services:
               BUNDLE="$$D/bundle/$$ID.tar"
               [ -f "$$BUNDLE" ] || { reject "$$ID" "the uploaded archive is missing"; return; }
               ;;
+            # Re-read the registry now instead of waiting out the interval, and return: it names no
+            # release, starts no container and touches nothing this deployment runs.
+            #
+            # It deliberately writes NO status.json, on any path including refusal. That file means
+            # "a run", and three things read it: the Upgrade page's "last run" card, the 409 that
+            # stops a second apply, and core's settle_finished_run -- which would CLAIM it, write an
+            # `upgrade succeeded` audit row for an upgrade that never happened, and close a
+            # maintenance window it never opened. The observable is available.json's written_at,
+            # which is what the page watches. Refusal is core's to report: it answers 503 while the
+            # switch is off, so reaching the branch below means a race with the toggle.
+            refresh)
+              if paused; then echo "refresh ignored: the mechanism is switched off" >&2; return; fi
+              list_releases
+              # Restart the interval's clock: a manual check is a check, and re-fetching five
+              # seconds later on the old schedule would be a second call to the registry for the
+              # same answer.
+              LAST=$$(date +%s)
+              return
+              ;;
             *) reject "$$ID" "unsupported command"; return ;;
           esac
           # Defence in depth: core refuses to write a request at all while the switch is off, so

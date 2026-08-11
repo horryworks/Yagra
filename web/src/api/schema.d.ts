@@ -3239,6 +3239,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/upgrade/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the updater to re-read the registry's release list now.
+         * @description The list is otherwise refreshed on the sidecar's own clock — every 24 hours by default — so the
+         *     hour a release is published is the hour the picker is guaranteed to be out of date. Accepted and
+         *     carried out asynchronously; the answer arrives as a newer `available.written_at` on `GET`.
+         *
+         *     Changes nothing about this deployment: no image is installed, no container restarts, and the
+         *     repository queried is fixed by the host, not by this request.
+         */
+        post: operations["check_upgrades"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/system/upgrade/enabled": {
         parameters: {
             query?: never;
@@ -7664,7 +7689,10 @@ export interface components {
          *     asked for the upgrade is not the process that sees it finish (ADR-050 decision 3).
          */
         RunStatus: {
-            /** @description `check`, `apply` or `rollback`. */
+            /**
+             * @description `apply` or `bundle` — the commands that produce a run. (`refresh` writes no status: it
+             *     changes nothing, and a status file of its own would blank the last upgrade's outcome.)
+             */
             command: string;
             /**
              * Format: int64
@@ -21477,6 +21505,60 @@ export interface operations {
             };
             /** @description Not enough free space to store the archive and unpack it */
             507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    check_upgrades: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted; the updater will re-read the registry within a few seconds */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks manage-configuration */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description An upgrade is already in flight */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The updater is not deployed, not running, switched off, or this core is not the leader */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

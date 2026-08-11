@@ -14,29 +14,52 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { ProgressBar } from '../components/ui/ProgressBar';
 import { api, errMsg } from '../services/api';
+import { formatTimestamp, relativeTime } from '../lib/format';
 import type { UpgradeStatus } from '../types/api';
-import type { Offer } from './upgradeStatus';
+import type { Offer, RunPhase } from './upgradeStatus';
 import {
   buildKind,
   bundleTagFromFilename,
   canOffer,
   canUploadBundle,
   isRunning,
+  lastChecked,
   looksLikeReleaseTag,
   mechanism,
   rollback,
   rollbacks,
+  runPhase,
   runState,
   shortRef,
+  shouldPoll,
+  stepProgress,
   switchPending,
+  UPGRADE_PROGRESS_STEPS,
   upgrades,
 } from './upgradeStatus';
 import './UpgradePage.css';
 
-/** How often to re-read the status. Fast while a run is in flight — core restarts during it, so
- *  most of these requests are expected to fail and the page must not treat that as an error. */
-const POLL_RUNNING_MS = 5_000;
+/** How often to re-read the status while a run is in flight.
+ *
+ *  Two seconds, not five: the whole operation is ~65 seconds measured (backup 5s, pull 34s,
+ *  recreate 24s), so a five-second beat draws a bar that moves about a dozen times. Core restarts
+ *  in the middle, so most of these requests are expected to fail and the page must not treat that
+ *  as an error. */
+const POLL_RUNNING_MS = 2_000;
+
+/** Give up polling a run that never reports. The sidecar's own verify loop caps at five minutes and
+ *  core closes the window at fifteen, so past this there is nothing left to wait for. */
+const POLL_CEILING_MS = 15 * 60_000;
+
+/** How long to keep watching for a manual registry check to land before calling it a miss. The
+ *  sidecar's request beat is five seconds and two `wget`s follow it. */
+const CHECK_TIMEOUT_MS = 45_000;
+
+/** A poll has to fail for this long during a run before the page says the connection is gone.
+ *  One missed request is normal; a run of them is core being recreated. */
+const STALE_AFTER_MS = 6_000;
 
 /** One label/value row, mirroring Settings ▸ About so the two read as one family. */
 function Row({ label, children, mono }: { label: string; children: React.ReactNode; mono?: boolean }) {
@@ -44,6 +67,72 @@ function Row({ label, children, mono }: { label: string; children: React.ReactNo
     <div className="upgrade-row">
       <div className="upgrade-label muted">{label}</div>
       <div className={mono ? 'upgrade-value mono' : 'upgrade-value'}>{children}</div>
+    </div>
+  );
+}
+
+/**
+ * What is happening right now, from the moment the button is pressed until the outcome is in.
+ *
+ * This is the half that was missing. The page used to render nothing at all between the confirm
+ * dialog closing and a manual reload — the operator watched their monitoring go down with no sign
+ * the machine had heard them. The run takes about 65 seconds on real hardware, and core is
+ * destroyed and recreated inside it, so several of those seconds have no backend to ask.
+ *
+ * Every state below is one the operator actually passes through:
+ *   starting  — requested; the sidecar checks for it every five seconds
+ *   running   — a phase the sidecar named, with its position on the track
+ *   stale     — the requests are failing, which during `compose` is the operation working
+ */
+function Progress({
+  phase,
+  stale,
+  target,
+  t,
+}: {
+  phase: RunPhase;
+  stale: boolean;
+  target: string | null;
+  t: (k: string, o?: Record<string, unknown>) => string;
+}) {
+  const pct = stepProgress(phase);
+  const step = phase.kind === 'running' ? phase.step : null;
+  return (
+    <div className="upgrade-progress">
+      <p className="upgrade-note">
+        {phase.kind === 'starting'
+          ? t('run.starting')
+          : step
+            ? t(`runStep.${step}`)
+            : t('run.working')}
+        {target ? ` — ${target}` : ''}
+      </p>
+      <ProgressBar value={pct} label={t('run.inFlight')} />
+      {/* The track spelled out, so "pull" is placed rather than merely named: an operator who has
+          not read the ADR still learns that a backup came first and a check comes last. */}
+      <ol className="upgrade-steps">
+        {UPGRADE_PROGRESS_STEPS.map((s, i) => {
+          const done = phase.kind === 'done' || (phase.kind === 'running' && i < phase.index);
+          const now = phase.kind === 'running' && i === phase.index;
+          return (
+            <li
+              key={s}
+              className={now ? 'upgrade-step upgrade-step-now' : 'upgrade-step'}
+              aria-current={now ? 'step' : undefined}
+            >
+              <span className="upgrade-step-mark" aria-hidden="true">
+                {done ? '✓' : now ? '▸' : '·'}
+              </span>
+              <span className={done || now ? undefined : 'muted'}>{t(`runStep.${s}`)}</span>
+            </li>
+          );
+        })}
+      </ol>
+      {/* Distinguishes "core is being replaced" from "the page has frozen". The two look identical
+          without it, and only one of them is the upgrade working (ADR-050 decision 3). */}
+      <p className="upgrade-hint muted">
+        {stale ? t('run.reconnecting') : t('run.disconnectWarning')}
+      </p>
     </div>
   );
 }
@@ -74,18 +163,50 @@ export function UpgradePage() {
   const [switching, setSwitching] = useState(false);
   const [showOlder, setShowOlder] = useState(false);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  // The run this browser asked for, held only until the server reports an outcome for it.
+  //
+  // ⚠️ It never decides the outcome (ADR-050 decision 3) — it decides whether to keep asking. The
+  // page cannot read the server alone here: the sidecar looks for the request once every five
+  // seconds and then starts a container, so for 5–10s `status.json` still describes the PREVIOUS
+  // run. Arming the poll from `isRunning` therefore never armed it at all, and the page sat silent
+  // through the entire upgrade. See `runPhase` for the full account.
+  const [pending, setPending] = useState<string | null>(null);
+  // The tag that was asked for, so the progress card can name it before the server can.
+  const [requestedTag, setRequestedTag] = useState<string | null>(null);
+  // Set when polls start failing during a run: core is being recreated. Distinct from `failed`,
+  // which only ever means "we never got a first answer".
+  const [stale, setStale] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState<string | null>(null);
   // Sticky: once a run starts, a failed poll means core is restarting — which is the operation
   // working, not an error. Without this the page would flip to "could not read" mid-upgrade.
   const everSeen = useRef(false);
+  const lastOk = useRef<number>(Date.now());
+  // The manual check runs its own watch rather than riding the run poll, because it is waiting on a
+  // different fact (`available.written_at`) and must stop on its own deadline. Held in a ref so
+  // leaving the page cancels it.
+  const checkWatch = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (checkWatch.current !== null) window.clearInterval(checkWatch.current);
+    },
+    [],
+  );
 
   const load = useCallback(async () => {
     try {
       const s = await api.getUpgradeStatus();
       everSeen.current = true;
+      lastOk.current = Date.now();
       setStatus(s);
       setFailed(false);
+      setStale(false);
     } catch {
       if (!everSeen.current) setFailed(true);
+      // The page keeps rendering the last snapshot either way — but it now says so. Before this it
+      // showed stale data indistinguishable from live data, which during an upgrade is exactly the
+      // moment an operator needs to know which one they are looking at.
+      else if (Date.now() - lastOk.current > STALE_AFTER_MS) setStale(true);
     }
   }, []);
 
@@ -93,20 +214,29 @@ export function UpgradePage() {
     void load();
   }, [load]);
 
-  // While a run is in flight, keep polling *through* the outage. `status` is deliberately not in
-  // the dependency list beyond the flag: re-creating the interval on every tick would reset it.
-  const running = status ? isRunning(status) : false;
+  // Poll from the act of starting, not from what the server currently says — `DiscoveryPage` arms
+  // its interval the same way, and the inversion was the bug. `status` is deliberately not in the
+  // dependency list beyond the flag: re-creating the interval on every tick would reset it.
+  const polling = status ? shouldPoll(status, pending) : false;
   useEffect(() => {
-    if (!running) return undefined;
-    const h = window.setInterval(() => void load(), POLL_RUNNING_MS);
+    if (!polling) return undefined;
+    const started = Date.now();
+    const h = window.setInterval(() => {
+      // A run that never reports must not be polled for ever. Dropping `pending` returns the page
+      // to whatever the server last said, which is the honest thing to show.
+      if (Date.now() - started > POLL_CEILING_MS) setPending(null);
+      else void load();
+    }, POLL_RUNNING_MS);
     return () => window.clearInterval(h);
-  }, [running, load]);
+  }, [polling, load]);
 
   const apply = async (tag: string) => {
     setSubmitting(true);
     setApplyError(null);
     try {
-      await api.applyUpgrade(tag);
+      const accepted = await api.applyUpgrade(tag);
+      setPending(accepted.id);
+      setRequestedTag(tag);
       setConfirming(null);
       await load();
     } catch (e) {
@@ -114,6 +244,51 @@ export function UpgradePage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  /** Ask the updater to re-read the registry, then watch for the answer to land.
+   *
+   *  The POST only says the request was handed over; what proves it worked is `available.written_at`
+   *  moving. Watching that rather than the 202 is what lets this report "the updater never answered"
+   *  instead of a success the operator cannot see. */
+  const checkNow = async () => {
+    if (!status) return;
+    const before = lastChecked(status);
+    setChecking(true);
+    setCheckError(null);
+    try {
+      await api.checkUpgrades();
+    } catch (e) {
+      setCheckError(errMsg(e, t('mechanism.checkFailed')));
+      setChecking(false);
+      return;
+    }
+    const deadline = Date.now() + CHECK_TIMEOUT_MS;
+    const stop = () => {
+      if (checkWatch.current !== null) window.clearInterval(checkWatch.current);
+      checkWatch.current = null;
+      setChecking(false);
+    };
+    checkWatch.current = window.setInterval(() => {
+      void (async () => {
+        try {
+          const s = await api.getUpgradeStatus();
+          setStatus(s);
+          lastOk.current = Date.now();
+          const now = lastChecked(s);
+          if (now !== null && now !== before) {
+            stop();
+            return;
+          }
+        } catch {
+          /* keep waiting — the deadline below is what ends this */
+        }
+        if (Date.now() > deadline) {
+          stop();
+          setCheckError(t('mechanism.checkTimeout'));
+        }
+      })();
+    }, 2_000);
   };
 
   const toggle = async (next: boolean) => {
@@ -145,7 +320,11 @@ export function UpgradePage() {
     setBundleError(null);
     setUploaded(0);
     try {
-      await api.uploadUpgradeBundle(bundleFile, bundleTag.trim(), setUploaded);
+      const accepted = await api.uploadUpgradeBundle(bundleFile, bundleTag.trim(), setUploaded);
+      // An archive install is a run like any other — same backup, same compose swap, same verify —
+      // so it gets the same progress treatment rather than going quiet after the upload bar fills.
+      setPending(accepted.id);
+      setRequestedTag(bundleTag.trim());
       setBundleFile(null);
       await load();
     } catch (e) {
@@ -197,7 +376,7 @@ export function UpgradePage() {
         )}
         <Button
           variant={offer.direction === 'upgrade' ? 'primary' : undefined}
-          disabled={!canOffer(status, offer)}
+          disabled={!canOffer(status, offer, pending)}
           onClick={() => {
             setApplyError(null);
             setConfirming(offer.tag);
@@ -221,9 +400,18 @@ export function UpgradePage() {
   // vanished between the click and the render, which cannot happen without a reload.
   const confirmingDir =
     status.offers.find((o) => o.tag === confirming)?.direction ?? 'upgrade';
+  const phase = runPhase(status, pending);
+  const inFlight = phase.kind === 'starting' || phase.kind === 'running';
+  // Which release is being installed. Prefer the server's answer, but fall back to the tag this
+  // browser asked for: during `starting` the server is still describing the *previous* run, so
+  // reading `last.target` alone would name the wrong version on the one screen that must not.
+  const pendingTarget =
+    (last?.id === pending ? last?.target : null) ?? requestedTag ?? last?.target ?? null;
+  const checkedAt = lastChecked(status);
   const uploading = uploaded !== null;
   const tagOk = looksLikeReleaseTag(bundleTag);
-  const bundleReady = !uploading && canUploadBundle(status) && bundleFile !== null && tagOk;
+  const bundleReady =
+    !uploading && canUploadBundle(status, pending) && bundleFile !== null && tagOk;
   const maxBytes = status.updater.bundle_max_bytes ?? null;
   const maxGib = maxBytes === null ? null : Math.round((maxBytes / 1024 ** 3) * 10) / 10;
 
@@ -272,7 +460,6 @@ export function UpgradePage() {
         {back.kind === 'unrestricted' ? (
           <>
             <p className="upgrade-note">{t('rollback.unrestricted')}</p>
-            <p className="upgrade-hint muted">{t('rollback.unrestrictedHint')}</p>
           </>
         ) : (
           <>
@@ -320,7 +507,6 @@ export function UpgradePage() {
         {state === 'paused' && (
           <>
             <p className="upgrade-note">{t('mechanism.paused')}</p>
-            <p className="upgrade-hint muted">{t('mechanism.pausedHint')}</p>
             {switchPending(status) && (
               <p className="upgrade-hint muted">{t('mechanism.switchPending')}</p>
             )}
@@ -331,6 +517,28 @@ export function UpgradePage() {
             <p className="upgrade-hint muted">
               {t('mechanism.readyFrom', { repo: status.updater.repo ?? '—' })}
             </p>
+
+            {/* When the list was last fetched, and a way to fetch it again. The automatic check
+                runs every 24 hours by default, so the hour a release is published is the hour this
+                is guaranteed to be stale — which is exactly when someone opens this page. */}
+            <div className="upgrade-checked">
+              <span className="upgrade-hint muted">
+                {checkedAt === null ? (
+                  t('mechanism.neverChecked')
+                ) : (
+                  <span title={formatTimestamp(checkedAt * 1000)}>
+                    {t('mechanism.lastChecked', {
+                      when: relativeTime(new Date(checkedAt * 1000).toISOString()),
+                    })}
+                  </span>
+                )}
+              </span>
+              <Button onClick={() => void checkNow()} disabled={checking || inFlight}>
+                {checking ? t('mechanism.checking') : t('mechanism.checkNow')}
+              </Button>
+            </div>
+            {checkError && <p className="upgrade-note">{checkError}</p>}
+
             {newer.length === 0 && (
               <p className="upgrade-note">
                 {status.available?.error ? t('mechanism.noRegistry') : t('mechanism.noNewer')}
@@ -351,12 +559,7 @@ export function UpgradePage() {
                     ? t('rollbackList.hide')
                     : t('rollbackList.show', { count: older.length })}
                 </button>
-                {showOlder && (
-                  <>
-                    <p className="upgrade-hint muted">{t('rollbackList.hint')}</p>
-                    <ul className="upgrade-releases">{older.map(row)}</ul>
-                  </>
-                )}
+                {showOlder && <ul className="upgrade-releases">{older.map(row)}</ul>}
               </>
             )}
           </>
@@ -373,7 +576,7 @@ export function UpgradePage() {
             <input
               type="file"
               accept=".tar,application/x-tar"
-              disabled={uploading || !canUploadBundle(status)}
+              disabled={uploading || !canUploadBundle(status, pending)}
               onChange={(e) => pickBundle(e.target.files?.[0] ?? null)}
             />
             <input
@@ -381,7 +584,7 @@ export function UpgradePage() {
               className="mono"
               placeholder="v0.2.2"
               value={bundleTag}
-              disabled={uploading || !canUploadBundle(status)}
+              disabled={uploading || !canUploadBundle(status, pending)}
               onChange={(e) => setBundleTag(e.target.value)}
               aria-label={t('bundle.tagLabel')}
             />
@@ -408,12 +611,17 @@ export function UpgradePage() {
         </Card>
       )}
 
-      {last && (
+      {inFlight && (
+        <Card title={t('run.inFlight')}>
+          <Progress phase={phase} stale={stale} target={pendingTarget} t={t} />
+        </Card>
+      )}
+
+      {!inFlight && last && (
         <Card title={t('run.heading')}>
           <div className="upgrade-grid">
             <Row label={t('run.state')}>
               {lastState ? t(`runState.${lastState}`) : last.state}
-              {last.step ? ` — ${last.step}` : ''}
             </Row>
             <Row label={t('run.target')} mono>
               {last.target ?? '—'}
@@ -421,8 +629,6 @@ export function UpgradePage() {
             <Row label={t('run.message')}>{last.message ?? '—'}</Row>
             <Row label={t('run.requestedBy')}>{last.requested_by ?? '—'}</Row>
           </div>
-          {/* The one thing the operator must be told before their session drops. */}
-          {isRunning(status) && <p className="upgrade-hint muted">{t('run.disconnectWarning')}</p>}
         </Card>
       )}
 

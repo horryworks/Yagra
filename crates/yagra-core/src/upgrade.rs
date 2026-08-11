@@ -133,6 +133,13 @@ pub enum Command {
     Apply,
     /// Install from an image archive already uploaded to the shared volume (ADR-050 Increment 3).
     Bundle,
+    /// Re-read the registry's tag list now, instead of waiting for the sidecar's own clock.
+    ///
+    /// The only command that changes nothing: it installs no image, restarts no container, and
+    /// carries no argument at all. It exists because the automatic check runs every 24 hours by
+    /// default, and the moment an operator most wants the list is the hour a release is published —
+    /// which is exactly when it is guaranteed to be stale.
+    Refresh,
 }
 
 impl Command {
@@ -146,6 +153,20 @@ impl Command {
         match self {
             Self::Apply => "apply",
             Self::Bundle => "bundle",
+            Self::Refresh => "refresh",
+        }
+    }
+
+    /// Whether this command names a release to act on.
+    ///
+    /// Exhaustive on purpose: [`UpgradeRepo::request`] is the last thing between an HTTP request and
+    /// a file a root-privileged container reads, and it refuses to write a tagless request for a
+    /// command that needs one. A new variant therefore cannot be added without deciding this.
+    #[must_use]
+    pub fn needs_tag(self) -> bool {
+        match self {
+            Self::Apply | Self::Bundle => true,
+            Self::Refresh => false,
         }
     }
 }
@@ -290,7 +311,8 @@ pub struct AvailableVersions {
 pub struct RunStatus {
     /// The run id core generated when it wrote the request.
     pub id: String,
-    /// `check`, `apply` or `rollback`.
+    /// `apply` or `bundle` — the commands that produce a run. (`refresh` writes no status: it
+    /// changes nothing, and a status file of its own would blank the last upgrade's outcome.)
     pub command: String,
     /// The release the run targets, when it targets one.
     #[serde(default)]
@@ -463,18 +485,24 @@ impl UpgradeRepo {
         self.read_json("status.json")
     }
 
-    /// Ask the updater to carry out `command` against `tag`, under the run id `id`.
+    /// Ask the updater to carry out `command`, under the run id `id`, against `tag` where the
+    /// command names one.
     ///
     /// The caller must have validated `tag` with [`is_valid_tag`] and taken `id` from
     /// [`new_run_id`] — this asserts both again rather than trusting them, because this function is
     /// the last thing between an HTTP request and a file a root-privileged container reads.
+    ///
+    /// `tag` is `None` only for a command whose [`Command::needs_tag`] is false, and passing `None`
+    /// to one that needs it is refused here rather than written out as an empty tag: the sidecar
+    /// would reject it anyway, but a request file that reaches the socket-holding container half
+    /// formed is not a thing to rely on being caught downstream.
     ///
     /// Written to a temporary name and renamed, so the updater never sees a half-written request.
     pub fn request(
         &self,
         command: Command,
         id: &str,
-        tag: &str,
+        tag: Option<&str>,
         requested_by: &str,
         now: i64,
     ) -> anyhow::Result<()> {
@@ -482,7 +510,7 @@ impl UpgradeRepo {
             .dir
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("the upgrade mechanism is not enabled"))?;
-        anyhow::ensure!(is_valid_tag(tag), "invalid release tag");
+        let tag = checked_tag(command, tag)?;
         anyhow::ensure!(is_run_id(id), "invalid run id");
         let body = request_body(REQUEST_SCHEMA, id, command.as_str(), tag, requested_by, now);
         let tmp = dir.join("request.tmp");
@@ -865,6 +893,32 @@ fn sanitize_actor(name: &str) -> String {
     }
 }
 
+/// The tag string to write for `command`, or the reason this request must not be written.
+///
+/// Split out of [`UpgradeRepo::request`] so the decision is testable without a filesystem or a
+/// `PgPool`, the same reason [`watch_step`] is a free function. What it protects is narrow and
+/// worth stating: `refresh` carries no release, so the guard has to admit `None` — and the way
+/// that goes wrong is a *tagless `apply`* reaching the socket-holding container, which is exactly
+/// what [`UpgradeRepo::request`] exists to stand in front of.
+fn checked_tag(command: Command, tag: Option<&str>) -> anyhow::Result<&str> {
+    match tag {
+        Some(t) => {
+            anyhow::ensure!(is_valid_tag(t), "invalid release tag");
+            Ok(t)
+        }
+        None => {
+            anyhow::ensure!(
+                !command.needs_tag(),
+                "{} requires a release tag",
+                command.as_str()
+            );
+            // The field stays, empty: the updater parses a fixed set of lines and a missing one
+            // would be a different shape, which is what `REQUEST_SCHEMA` is for.
+            Ok("")
+        }
+    }
+}
+
 /// Take exclusive responsibility for settling run `id`. Returns whether this caller won.
 ///
 /// `create_new` fails when the marker already exists, and the test-and-create is atomic in the
@@ -927,7 +981,7 @@ mod tests {
 
     /// Every command core can write. Hand-written because Rust cannot enumerate variants; it is
     /// what `every_command_is_accepted_by_the_sidecar` iterates.
-    const COMMANDS: &[Command] = &[Command::Apply, Command::Bundle];
+    const COMMANDS: &[Command] = &[Command::Apply, Command::Bundle, Command::Refresh];
 
     fn run_in_state(state: &str) -> RunStatus {
         RunStatus {
@@ -1093,6 +1147,45 @@ mod tests {
         assert!(request_body(1, "i", "apply", "v0.2.2", "///", 0).contains("requested_by=unknown"));
     }
 
+    /// `refresh` is the one command with nothing to act on, and the guard that lets it through must
+    /// not become a way to write a tagless `apply`. Both directions are asserted because only one
+    /// of them is the dangerous one: a tagless `apply` reaching a socket-holding container is the
+    /// failure this whole function exists to prevent.
+    #[test]
+    fn only_a_command_that_names_no_release_may_be_requested_without_one() {
+        assert!(Command::Apply.needs_tag());
+        assert!(Command::Bundle.needs_tag());
+        assert!(!Command::Refresh.needs_tag());
+
+        assert_eq!(
+            checked_tag(Command::Refresh, None).expect("refresh names no release"),
+            ""
+        );
+        for cmd in [Command::Apply, Command::Bundle] {
+            assert!(
+                checked_tag(cmd, None).is_err(),
+                "{} must not be written without a release to act on",
+                cmd.as_str()
+            );
+        }
+        // A tag that *is* supplied is still checked, for every command — admitting `None` must not
+        // become a second, laxer way in.
+        for cmd in COMMANDS {
+            assert_eq!(
+                checked_tag(*cmd, Some("v0.2.2")).expect("a real tag"),
+                "v0.2.2"
+            );
+            assert!(checked_tag(*cmd, Some("latest ; rm -rf /")).is_err());
+        }
+
+        // And the empty tag lands as a field rather than as a missing line: the sidecar parses a
+        // fixed shape, and changing the shape is what `REQUEST_SCHEMA` would have to be bumped for.
+        let body = request_body(REQUEST_SCHEMA, "run-1", "refresh", "", "admin", 0);
+        assert!(body.contains("command=refresh\n"), "{body:?}");
+        assert!(body.contains("tag=\n"), "{body:?}");
+        assert_eq!(body.lines().count(), 6, "still six fields");
+    }
+
     /// "The sidecar is off" and "the sidecar has died" must not render as the same thing.
     #[test]
     fn a_heartbeat_goes_stale_relative_to_its_own_cadence() {
@@ -1140,6 +1233,35 @@ mod tests {
                  will refuse"
             );
         }
+    }
+
+    /// `refresh` must not write a status file, and only the shell can be asked whether it does.
+    ///
+    /// `status.json` means "a run", and three things read it: the Upgrade page's last-run card, the
+    /// 409 that stops a second apply, and [`UpgradeRepo::settle_finished_run`] — which would *claim*
+    /// it, write an `upgrade succeeded` audit row for an upgrade that never happened, and close a
+    /// maintenance window it never opened. Nothing on the Rust side can catch that, because the
+    /// writer is the sidecar; so this reads the arm and asserts it calls neither writer.
+    #[test]
+    fn the_refresh_arm_writes_no_status_file() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let arm = format!("{})", Command::Refresh.as_str());
+        let start = compose.find(&arm).expect("the refresh arm exists");
+        // Up to the arm terminator: `;;` ends a case arm in POSIX sh.
+        let body = &compose[start..];
+        let body = &body[..body.find(";;").expect("the arm is terminated")];
+        for writer in ["reject ", "say ", "status.json"] {
+            assert!(
+                !body.contains(writer),
+                "the refresh arm reaches `{writer}`, so a refresh would overwrite the last run:\n\
+                 {body}"
+            );
+        }
+        assert!(
+            body.contains("list_releases"),
+            "the refresh arm does not refresh anything:\n{body}"
+        );
     }
 
     /// The second Rust ⟷ shell mirror: the key core writes into the hand-off volume ⟷ the

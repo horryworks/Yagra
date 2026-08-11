@@ -59,12 +59,107 @@ export function isRunning(status: UpgradeStatus): boolean {
   return status.last_run?.state === 'running';
 }
 
+/** The phases the sidecar writes into `status.json`, in the order it writes them.
+ *
+ *  `validate` is not one of them — it is what a *refused* request is stamped with, so it has a
+ *  label but no place on the track. Keeping the two lists separate is what stops a rejection
+ *  rendering as "20% done". */
+export const UPGRADE_PROGRESS_STEPS = ['start', 'backup', 'pull', 'compose', 'verify'] as const;
+
+/** Every step that can reach the page, which is the track plus the refusal stamp. Iterated by
+ *  `i18nEnumKeys.test.ts` — before this existed the page printed the raw shell token. */
+export const UPGRADE_RUN_STEPS = [...UPGRADE_PROGRESS_STEPS, 'validate'] as const;
+export type UpgradeRunStep = (typeof UPGRADE_RUN_STEPS)[number];
+
+/** Read the step defensively, exactly as `runState` reads the state: a newer sidecar may write one
+ *  this build has never heard of, and that must render as *something*. */
+export function runStep(raw: string | undefined | null): UpgradeRunStep | null {
+  return UPGRADE_RUN_STEPS.includes(raw as UpgradeRunStep) ? (raw as UpgradeRunStep) : null;
+}
+
+/**
+ * What the page should be showing about the run, given what the server said and what this browser
+ * asked for.
+ *
+ * `pending` is the run id `POST` returned, or `null` when this browser has not started one. It
+ * exists because **there is a window in which the server can say nothing at all**: core hands the
+ * request to the sidecar, which only looks for it every five seconds and then has to start a
+ * container, so `status.json` does not mention the new run for the first 5–10 seconds. Reading the
+ * server alone during that window returns the *previous, finished* run — which is what made the
+ * page sit silent through an entire upgrade (it armed its poll from `isRunning`, which was false).
+ *
+ * ⚠️ `pending` never decides the **outcome** (ADR-050 decision 3: the browser must not hold it).
+ * It only distinguishes "asked, not visible yet" from "nothing is happening", and it is matched by
+ * id — so a stale `pending` cannot make an unrelated run look like this one's result.
+ *
+ * This is the same problem `watch_step` solves in `crates/yagra-core/src/upgrade.rs`, from the other
+ * side: there, core boots mid-run and must not read the first `running` as "nothing to do"; here,
+ * the browser starts a run and must not read the absence of one as "already finished".
+ */
+export type RunPhase =
+  | { kind: 'idle' }
+  /** Requested, and the sidecar has not picked it up yet. */
+  | { kind: 'starting' }
+  | { kind: 'running'; step: UpgradeRunStep | null; index: number; total: number }
+  | { kind: 'done'; state: UpgradeRunState };
+
+export function runPhase(status: UpgradeStatus, pending: string | null): RunPhase {
+  const last = status.last_run;
+  if (last?.state === 'running') {
+    const step = runStep(last.step);
+    const index = UPGRADE_PROGRESS_STEPS.findIndex((s) => s === step);
+    return { kind: 'running', step, index, total: UPGRADE_PROGRESS_STEPS.length };
+  }
+  // A run this browser started, which the server has now reported an outcome for.
+  if (pending !== null && last?.id === pending) {
+    return { kind: 'done', state: runState(last.state) ?? 'failed' };
+  }
+  // Asked for, but `status.json` still describes the previous run (or none). Not idle.
+  if (pending !== null) return { kind: 'starting' };
+  return { kind: 'idle' };
+}
+
+/** How far along the track, 0…1, or `null` when there is no determinate position.
+ *
+ *  `null` rather than 0 for an unrecognised step: a bar pinned at the left is a claim that nothing
+ *  has happened, and "this build does not know this phase" is not that claim. */
+export function stepProgress(phase: RunPhase): number | null {
+  if (phase.kind === 'done') return 1;
+  if (phase.kind !== 'running' || phase.index < 0) return null;
+  // Count the current step as reached, not as completed: `verify` is the last phase and the run is
+  // not over while it is showing.
+  return (phase.index + 1) / (phase.total + 1);
+}
+
+/** Should the page keep re-reading the status?
+ *
+ *  Driven by **the act of starting**, not by what the server currently says — the inversion that
+ *  was the bug. `DiscoveryPage` arms its interval the same way. */
+export function shouldPoll(status: UpgradeStatus, pending: string | null): boolean {
+  const phase = runPhase(status, pending);
+  return phase.kind === 'starting' || phase.kind === 'running';
+}
+
+/** When the updater last managed to read the registry, in unix seconds.
+ *
+ *  ⚠️ Not `updater.last_seen`, which is the heartbeat and is always fresh — it says the sidecar is
+ *  alive, never that the release list is current. Confusing the two is what would let a list 18
+ *  hours stale present itself as up to date. */
+export function lastChecked(status: UpgradeStatus): number | null {
+  return status.available?.written_at ?? null;
+}
+
 /** May the apply button be offered at all?
  *
  *  `enabled` already folds in the switch and the sidecar's liveness — it is the backend's own
- *  answer to "could a request be accepted right now", so this does not re-derive it. */
-export function canApply(status: UpgradeStatus): boolean {
-  return status.enabled && !isRunning(status);
+ *  answer to "could a request be accepted right now", so this does not re-derive it.
+ *
+ *  ⚠️ **`pending` is part of the answer, not decoration.** For the 5–10 seconds between core
+ *  accepting a request and the sidecar writing a status for it, `isRunning` is false *and the
+ *  backend's own 409 is false too* — both read the same `status.json`. Without this the operator
+ *  can click a second release in that window and the request file is simply overwritten. */
+export function canApply(status: UpgradeStatus, pending: string | null = null): boolean {
+  return status.enabled && !shouldPoll(status, pending);
 }
 
 /** Which way a release moves this deployment. The backend decides — see `release_offers` in
@@ -94,8 +189,12 @@ export function rollbacks(status: UpgradeStatus): Offer[] {
 }
 
 /** May this particular release be installed right now? */
-export function canOffer(status: UpgradeStatus, offer: Offer): boolean {
-  return canApply(status) && !offer.blocked;
+export function canOffer(
+  status: UpgradeStatus,
+  offer: Offer,
+  pending: string | null = null,
+): boolean {
+  return canApply(status, pending) && !offer.blocked;
 }
 
 /** What this deployment's migration history says about going back. */
@@ -150,8 +249,8 @@ export function buildKind(profile: string | null | undefined): BuildKind {
  * contains. The backend says so via the updater's own heartbeat, so this reads the answer rather
  * than inferring one.
  */
-export function canUploadBundle(status: UpgradeStatus): boolean {
-  return canApply(status) && status.updater.allow_bundle;
+export function canUploadBundle(status: UpgradeStatus, pending: string | null = null): boolean {
+  return canApply(status, pending) && status.updater.allow_bundle;
 }
 
 /**

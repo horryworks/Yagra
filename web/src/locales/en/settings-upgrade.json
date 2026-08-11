@@ -21,8 +21,8 @@
   },
   "buildKindHint": {
     "release": "A published release image.",
-    "development": "Built and pushed straight to this server, bypassing the release pipeline. Expected on a test server, not in production.",
-    "unknown": "No build markers found, so this core was most likely started outside a container."
+    "development": "Built straight to this server, bypassing the release pipeline.",
+    "unknown": "No build markers, so this core was started outside a container."
   },
 
   "schema": {
@@ -34,46 +34,50 @@
 
   "rollback": {
     "heading": "Going back",
-    "unrestricted": "Every migration applied to this database is reversible, so an earlier release can still run against it.",
-    "unrestrictedHint": "Nothing is deleted by returning to an earlier version. Columns a newer version added stay in place, unread, and become visible again the moment you upgrade.",
+    "unrestricted": "Every migration here is reversible, so an earlier release still runs — and nothing is deleted by going back.",
     "floored": "This database can only be run by Yagra {{minCore}} or newer.",
     "flooredReason": "Migration {{version}} narrowed the schema: {{reason}}",
-    "flooredHint": "Returning to anything older needs a restore from backup — the schema itself can no longer be read by those versions."
+    "flooredHint": "Anything older needs a restore from backup."
   },
 
   "mechanism": {
     "heading": "Upgrading from here",
     "switch": "Allow upgrading from the WebUI",
-    "switchHint": "Upgrades are carried out by a separate container that holds the Docker socket. Turning this off means no upgrade can be requested and that container stops contacting the registry — it does not remove the container. Removing it means editing the deployment, and note that it returns on the next upgrade, because each version installs its own composition. This setting is stored in the database and survives upgrades.",
+    "switchHint": "Upgrades are carried out by a separate container holding the Docker socket. Off means none can be requested and it stops contacting the registry. Stored in the database, so it survives upgrades.",
     "switchPending": "Saved. The updater applies it within a few seconds.",
     "switchFailed": "The setting could not be saved.",
     "paused": "Upgrading from the WebUI is switched off.",
-    "pausedHint": "Nothing is being checked and nothing can be requested. Turn the switch above back on to use it.",
     "disabled": "No updater has reported on this deployment.",
-    "disabledHint": "Upgrades are carried out by a separate privileged container. It normally ships with the deployment, so either the stack has not finished starting, or the service was removed from this composition.",
-    "disabledHowTo": "Check it with: docker compose -p yagra ps yagra-updater",
+    "disabledHint": "It ships with the deployment, so the stack has not finished starting or the service was removed.",
+    "disabledHowTo": "docker compose -p yagra ps yagra-updater",
     "stopped": "The updater is enabled but has stopped reporting.",
-    "stoppedHint": "It was running at some point, so this is a fault rather than a setting. Check its logs with: docker compose -p yagra logs yagra-updater",
-    "readyFrom": "Releases are fetched from {{repo}}, which is fixed by this server and cannot be changed from the WebUI.",
-    "noNewer": "No release newer than the one running was found.",
-    "noRegistry": "The updater could not reach a registry, so there is no list of releases. This is expected on a closed network."
+    "stoppedHint": "It ran at some point, so this is a fault rather than a setting:",
+    "readyFrom": "Releases come from {{repo}}, fixed by this server.",
+    "lastChecked": "Release list checked {{when}}",
+    "neverChecked": "The release list has not been fetched yet.",
+    "checkNow": "Check now",
+    "checking": "Checking…",
+    "checkFailed": "Could not ask the updater to check.",
+    "checkTimeout": "The updater did not answer. Check that it is running.",
+    "noNewer": "No release newer than the one running.",
+    "noRegistry": "The updater could not reach a registry. Expected on a closed network."
   },
 
   "bundle": {
     "heading": "Install from a file",
-    "intro": "For a site with no registry it can reach. Save the release's images where you can reach one, bring the file here, and the rest of the upgrade is identical — the same backup is taken and the same checks decide whether it worked.",
+    "intro": "For a site with no registry. Save the release's images elsewhere and bring the file here; the rest of the upgrade is identical.",
     "howTo": "docker save -o yagra-v0.2.2.tar ghcr.io/horryworks/yagra-core:v0.2.2 ghcr.io/horryworks/yagra-poller:v0.2.2 ghcr.io/horryworks/yagra-web:v0.2.2",
     "tagLabel": "Release in this file",
-    "needTag": "Enter the release this file contains, for example v0.2.2. It is checked against the images the file actually holds.",
-    "limit": "Up to {{size}} GiB. There must also be room to unpack it — roughly twice the file again.",
+    "needTag": "Enter the release this file contains, for example v0.2.2.",
+    "limit": "Up to {{size}} GiB, plus about twice that again in free space to unpack it.",
     "button": "Upload and install",
     "uploading": "Uploading… {{percent}}%",
     "failed": "The archive could not be uploaded."
   },
 
   "offerAction": {
-    "upgrade": "Upgrade to this",
-    "rollback": "Go back to this"
+    "upgrade": "Upgrade",
+    "rollback": "Downgrade"
   },
   "offerBlock": {
     "below_floor": "This version cannot read the current database.",
@@ -81,24 +85,23 @@
   },
   "rollbackList": {
     "show": "Show {{count}} earlier releases",
-    "hide": "Hide earlier releases",
-    "hint": "Going back is not an upgrade: it stops at the oldest version that can still read this database, and anything older needs a restore from backup."
+    "hide": "Hide earlier releases"
   },
 
   "apply": {
     "confirmTitle": {
       "upgrade": "Upgrade to {{tag}}?",
-      "rollback": "Go back to {{tag}}?"
+      "rollback": "Downgrade to {{tag}}?"
     },
     "confirmBody": {
-      "upgrade": "Every Yagra container will be replaced with {{tag}}. Monitoring stops for the duration and this page will lose its connection until the new version is up.",
-      "rollback": "Every Yagra container will be replaced with {{tag}}, which is older than what is running. Nothing is deleted — columns the newer version added stay in place, unread — but anything only it understood stops being visible until you come forward again. Monitoring stops for the duration and this page will lose its connection."
+      "upgrade": "Every Yagra container is replaced with {{tag}}. Monitoring stops and this page loses its connection until the new version is up.",
+      "rollback": "Every Yagra container is replaced with {{tag}}, which is older. Nothing is deleted, but anything only the newer version understood stops being visible until you come forward again. Monitoring stops and this page loses its connection."
     },
-    "confirmBackup": "A backup is taken first. It is a rollback aid, not a disaster-recovery backup — it lands on this same host, so keep your own copies elsewhere.",
-    "confirmFloor": "Note: this database can only be run by {{minCore}} or newer, so it cannot be taken back past that point.",
+    "confirmBackup": "A backup is taken first. It lands on this host, so it is a rollback aid, not disaster recovery.",
+    "confirmFloor": "This database cannot be taken back past {{minCore}}.",
     "confirm": {
-      "upgrade": "Upgrade now",
-      "rollback": "Go back now"
+      "upgrade": "Upgrade",
+      "rollback": "Downgrade"
     },
     "cancel": "Cancel",
     "failed": "The upgrade could not be started."
@@ -106,16 +109,28 @@
 
   "run": {
     "heading": "Last run",
+    "inFlight": "Upgrade in progress",
     "state": "State",
     "target": "Target",
     "message": "Detail",
     "requestedBy": "Requested by",
-    "disconnectWarning": "This page will stop responding shortly and come back on its own once the new version is serving. Do not reload or restart anything by hand while it is running."
+    "starting": "Handed to the updater; waiting for it to start",
+    "working": "Working",
+    "disconnectWarning": "This page will lose its connection and come back on its own. Do not reload or restart anything.",
+    "reconnecting": "Connection lost — this is the containers being replaced. Waiting for the new version."
   },
   "runState": {
     "running": "Running",
     "succeeded": "Succeeded",
     "failed": "Failed",
     "rejected": "Rejected"
+  },
+  "runStep": {
+    "start": "Starting",
+    "backup": "Backing up",
+    "pull": "Fetching images",
+    "compose": "Replacing containers",
+    "verify": "Verifying",
+    "validate": "Checking the request"
   }
 }

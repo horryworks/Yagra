@@ -496,7 +496,11 @@ fn changes_monitoring_config(path: &str) -> bool {
         // It reads nothing and writes nothing — and an operator iterating on a template will hit
         // it on almost every keystroke-batch, which is the worst possible source of full-fleet
         // rebuilds.
-        || path == "/api/v1/notification-channels/preview")
+        || path == "/api/v1/notification-channels/preview"
+        // Asks the updater to re-read the registry's tag list (ADR-050). It refreshes a cache the
+        // GET beside it serves and changes nothing this deployment monitors — the POST is only
+        // because it reaches out over the network, not because it writes configuration.
+        || path == "/api/v1/system/upgrade/check")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA

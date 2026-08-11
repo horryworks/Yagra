@@ -16326,6 +16326,61 @@
         }
       }
     },
+    "/api/v1/system/upgrade/check": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Ask the updater to re-read the registry's release list now.",
+        "description": "The list is otherwise refreshed on the sidecar's own clock — every 24 hours by default — so the\nhour a release is published is the hour the picker is guaranteed to be out of date. Accepted and\ncarried out asynchronously; the answer arrives as a newer `available.written_at` on `GET`.\n\nChanges nothing about this deployment: no image is installed, no container restarts, and the\nrepository queried is fixed by the host, not by this request.",
+        "operationId": "check_upgrades",
+        "responses": {
+          "202": {
+            "description": "Accepted; the updater will re-read the registry within a few seconds"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks manage-configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An upgrade is already in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The updater is not deployed, not running, switched off, or this core is not the leader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/system/upgrade/enabled": {
       "put": {
         "tags": [
@@ -27468,7 +27523,7 @@
         "properties": {
           "command": {
             "type": "string",
-            "description": "`check`, `apply` or `rollback`."
+            "description": "`apply` or `bundle` — the commands that produce a run. (`refresh` writes no status: it\nchanges nothing, and a status file of its own would blank the last upgrade's outcome.)"
           },
           "finished_at": {
             "type": [

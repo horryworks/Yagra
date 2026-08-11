@@ -1,0 +1,47 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* Progress bar (see ProgressBar.tsx). Tokens only — no literal colors. */
+
+.progressbar {
+  width: 100%;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+}
+
+.progressbar-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent-color);
+  border-radius: 3px;
+  transition: width 0.3s linear;
+}
+
+/* Indeterminate: a short band sweeping the track, so "working, position unknown" reads as motion
+   rather than as a value. */
+.progressbar-fill-idle {
+  width: 35%;
+  animation: progressbar-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes progressbar-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+
+/* Motion-sensitive users get the same information without the movement: the indeterminate band
+   stops sweeping and fills the track instead, which still separates it from a real 0%. */
+@media (prefers-reduced-motion: reduce) {
+  .progressbar-fill {
+    transition: none;
+  }
+  .progressbar-fill-idle {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}

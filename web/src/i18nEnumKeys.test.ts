@@ -106,6 +106,7 @@ import {
   UPGRADE_OFFER_BLOCKS,
   UPGRADE_OFFER_DIRECTIONS,
   UPGRADE_RUN_STATES,
+  UPGRADE_RUN_STEPS,
 } from './pages/upgradeStatus';
 import enSettingsAuth from './locales/en/settings-auth.json';
 import jaSettingsAuth from './locales/ja/settings-auth.json';
@@ -549,6 +550,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
       'offerBlock.',
       UPGRADE_OFFER_BLOCKS,
+    );
+    // The step is what the progress bar names while an operator watches their monitoring go down,
+    // and until it had strings the page printed the sidecar's own shell token — `backup`, `pull` —
+    // untranslated, in both locales, with parity passing. A phase added to the sidecar without
+    // strings would do it again.
+    expectKeys(
+      'upgrade run step',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'runStep.',
+      UPGRADE_RUN_STEPS,
     );
   });
 

@@ -44,7 +44,13 @@ use crate::upgrade::MAINTENANCE_WINDOW_SECS;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(OpenApi)]
-#[openapi(paths(get_upgrade, apply_upgrade, upload_bundle, set_upgrade_enabled))]
+#[openapi(paths(
+    get_upgrade,
+    apply_upgrade,
+    check_upgrades,
+    upload_bundle,
+    set_upgrade_enabled
+))]
 pub(super) struct Doc;
 
 /// The upgrade routes, merged into `/api/v1` by [`super::router`].
@@ -54,6 +60,7 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/system/upgrade",
             get(get_upgrade).post(apply_upgrade),
         )
+        .route("/api/v1/system/upgrade/check", post(check_upgrades))
         .route(
             "/api/v1/system/upgrade/enabled",
             axum::routing::put(set_upgrade_enabled),
@@ -89,6 +96,32 @@ impl FromRequestParts<ApiState> for UpgradeWrite {
     async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
         RequireManageConfig::from_request_parts(parts, st).await?;
         RequireManageCredentials::from_request_parts(parts, st).await?;
+        Leader::from_request_parts(parts, st).await?;
+        Ok(Self)
+    }
+}
+
+/// The authorization for asking the updater to re-read the registry.
+///
+/// Deliberately **weaker than [`UpgradeWrite`]**: no `ManageCredentials`. That permission is on the
+/// write paths because an upgrade replaces the process holding the KEK, and none of that applies
+/// here — this installs nothing, restarts nothing, and carries no argument. Picking the marker by
+/// what the endpoint *is* (api-conventions.md), it is the read's own `ManageConfig`: it refreshes
+/// the cache that `GET` serves, so anyone who can see the page can update what they are seeing.
+///
+/// `Leader` stays. Two cores sharing a hand-off volume must not both write a request file, and a
+/// standby has no business talking to the registry on the deployment's behalf.
+///
+/// Today `ManageConfig` and `ManageCredentials` resolve to the same accounts, so this buys nothing
+/// yet — it is what lets the two come apart later without silently taking the button with them.
+pub(crate) struct UpgradeCheck;
+
+#[async_trait]
+impl FromRequestParts<ApiState> for UpgradeCheck {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        RequireManageConfig::from_request_parts(parts, st).await?;
         Leader::from_request_parts(parts, st).await?;
         Ok(Self)
     }
@@ -298,6 +331,53 @@ async fn apply_upgrade(
         StatusCode::ACCEPTED,
         Json(dispatch(&upgrade, &admin, Command::Apply, &id, tag, &by, now).await?),
     ))
+}
+
+/// Ask the updater to re-read the registry's release list now.
+///
+/// The list is otherwise refreshed on the sidecar's own clock — every 24 hours by default — so the
+/// hour a release is published is the hour the picker is guaranteed to be out of date. Accepted and
+/// carried out asynchronously; the answer arrives as a newer `available.written_at` on `GET`.
+///
+/// Changes nothing about this deployment: no image is installed, no container restarts, and the
+/// repository queried is fixed by the host, not by this request.
+#[utoipa::path(
+    post, path = "/api/v1/system/upgrade/check", tag = "system",
+    responses(
+        (status = 202, description = "Accepted; the updater will re-read the registry within a few seconds"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks manage-configuration", body = super::error::ErrorBody),
+        (status = 409, description = "An upgrade is already in flight", body = super::error::ErrorBody),
+        (status = 503, description = "The updater is not deployed, not running, switched off, or this core is not the leader", body = super::error::ErrorBody),
+    ),
+)]
+async fn check_upgrades(_auth: UpgradeCheck, upgrade: Upgrade) -> ApiResult<StatusCode> {
+    let now = super::util::now_unix_s();
+    reachable(&upgrade, now).await?;
+    // Not through `dispatch`: that opens the fleet-wide maintenance window first, because core is
+    // about to stop. Nothing stops here — and a window opened for a refresh would never be closed,
+    // since `settle_finished_run` waits on a `status.json` this command deliberately never writes.
+    // The fleet would go silent for the 900-second bound over a button that reads a tag list.
+    //
+    // That is not left to discipline: `dispatch` needs `Admin` for the maintenance repo, and this
+    // handler does not take one. Routing this through it means adding a parameter, which is a
+    // decision rather than an oversight.
+    upgrade
+        .request(
+            Command::Refresh,
+            &crate::upgrade::new_run_id(),
+            None,
+            "",
+            now,
+        )
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "ask the updater to re-read the registry",
+                "failed to ask the updater to re-read the registry",
+            )
+        })?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Where an uploaded archive is going.
@@ -518,6 +598,15 @@ async fn preflight(
             "target_tag must be a published release tag such as v0.2.2",
         ));
     }
+    reachable(upgrade, now).await
+}
+
+/// Is there a live, permitted updater with nothing already in flight?
+///
+/// The part of [`preflight`] that is not about a tag, so the check that names no release can share
+/// it. Kept as one function for the reason `preflight` gives: a second copy is how one path ends up
+/// missing the 409.
+async fn reachable(upgrade: &crate::upgrade::UpgradeRepo, now: i64) -> Result<(), ApiError> {
     // The operator's switch, checked here rather than only in the sidecar. The sidecar refuses too,
     // but that is defence in depth: this is the enforcement, because it is the only point that
     // cannot be reached by writing to the shared volume.
@@ -580,13 +669,15 @@ async fn dispatch(
         .map_err(|e| tracing::warn!(error = %e, "could not open the upgrade maintenance window"))
         .ok();
 
-    upgrade.request(command, id, tag, by, now).map_err(|e| {
-        ApiError::from_internal(
-            e.as_ref(),
-            "hand the upgrade request to the updater",
-            "failed to hand the upgrade request to the updater",
-        )
-    })?;
+    upgrade
+        .request(command, id, Some(tag), by, now)
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "hand the upgrade request to the updater",
+                "failed to hand the upgrade request to the updater",
+            )
+        })?;
     tracing::warn!(
         run = %id, target = tag, command = command.as_str(), by = %by,
         "upgrade requested; core will restart"
@@ -621,6 +712,7 @@ mod tests {
             "/api/v1/system/upgrade",
             r#"{"target_tag":"v0.2.2"}"#,
         ),
+        ("POST", "/api/v1/system/upgrade/check", ""),
         (
             "POST",
             "/api/v1/system/upgrade/bundle?target_tag=v0.2.2",

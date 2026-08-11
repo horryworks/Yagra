@@ -1365,6 +1365,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/system/upgrade/check",
+        Global("refreshes the deployment's own view of what releases exist; there is no per-group release list"),
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/system/upgrade/bundle",
         Global("installs an uploaded release across every container in the deployment"),
         NO_MCP_WRITE,

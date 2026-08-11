@@ -1265,6 +1265,11 @@ export const api = {
   applyUpgrade: (targetTag: string): Promise<UpgradeRunAccepted> =>
     apiPost('/api/v1/system/upgrade', { body: { target_tag: targetTag } }),
 
+  /** Ask the updater to re-read the registry now rather than on its own 24-hour clock (ADR-050).
+   *  Accepted asynchronously — the answer arrives as a newer `available.written_at` on the next
+   *  `getUpgradeStatus`, so callers watch that rather than this promise. */
+  checkUpgrades: (): Promise<void> => apiPost('/api/v1/system/upgrade/check', {}),
+
   /** Turn upgrading from the WebUI on or off for this deployment (ADR-050). Stored in the
    *  database, so it survives the upgrades it governs; the updater picks it up within one beat. */
   setUpgradeEnabled: (enabled: boolean): Promise<void> =>
