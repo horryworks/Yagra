@@ -13,11 +13,13 @@ import {
   rollback,
   runState,
   shortRef,
+  switchPending,
 } from './upgradeStatus';
 
 function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
   return {
     enabled: false,
+    upgrade_enabled: true,
     updater: {
       present: false,
       fresh: false,
@@ -26,6 +28,7 @@ function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
       check_interval_secs: null,
       allow_bundle: false,
       bundle_max_bytes: null,
+      paused: false,
     },
     available: null,
     last_run: null,
@@ -41,7 +44,7 @@ function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
   } as UpgradeStatus;
 }
 
-const updater = (present: boolean, fresh: boolean, allowBundle = false) => ({
+const updater = (present: boolean, fresh: boolean, allowBundle = false, paused = false) => ({
   updater: {
     present,
     fresh,
@@ -50,6 +53,7 @@ const updater = (present: boolean, fresh: boolean, allowBundle = false) => ({
     check_interval_secs: 3600,
     allow_bundle: allowBundle,
     bundle_max_bytes: allowBundle ? 4 * 1024 * 1024 * 1024 : null,
+    paused,
   },
 });
 
@@ -60,6 +64,28 @@ describe('mechanism', () => {
     expect(mechanism(status(updater(false, false)))).toBe('absent');
     expect(mechanism(status(updater(true, false)))).toBe('stopped');
     expect(mechanism(status(updater(true, true)))).toBe('ready');
+  });
+
+  // A choice and a fault must never render the same. `paused` is the operator's switch; `stopped`
+  // is the sidecar having died with the switch still on.
+  it('separates switched-off from died', () => {
+    const off = status({ ...updater(true, true, false, true), upgrade_enabled: false });
+    expect(mechanism(off)).toBe('paused');
+    const dead = status({ ...updater(true, false), upgrade_enabled: true });
+    expect(mechanism(dead)).toBe('stopped');
+  });
+
+  // The stored value leads, so a click does not appear to bounce back while the sidecar catches up.
+  it('follows the stored switch rather than what the sidecar last saw', () => {
+    const justSwitchedOff = status({
+      ...updater(true, true, false, false), // the sidecar still reports running
+      upgrade_enabled: false, // …but the operator has switched it off
+    });
+    expect(mechanism(justSwitchedOff)).toBe('paused');
+    expect(switchPending(justSwitchedOff)).toBe(true);
+
+    const settled = status({ ...updater(true, true, false, true), upgrade_enabled: false });
+    expect(switchPending(settled)).toBe(false);
   });
 
   // "The mechanism is off" and "you are on the newest version" are different answers, and the page

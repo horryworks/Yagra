@@ -16326,6 +16326,61 @@
         }
       }
     },
+    "/api/v1/system/upgrade/enabled": {
+      "put": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Turn upgrading from the WebUI on or off for this deployment.",
+        "description": "The updater container ships with the deployment and holds the Docker socket; this decides\nwhether it may be asked to do anything. Off means no upgrade can be requested and the updater\nstops contacting the registry — it does **not** remove the container or its socket, which is a\nchange to the composition.\n\nStored in the database, so it survives the upgrades it governs, and it is the only switch\nreachable without a shell on the host.",
+        "operationId": "set_upgrade_enabled",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpgradeSwitch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Stored; the updater picks it up within one of its beats"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks manage-configuration or manage-credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no metadata store, or this core is not the leader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/thresholds": {
       "get": {
         "tags": [
@@ -29124,7 +29179,8 @@
         "required": [
           "present",
           "fresh",
-          "allow_bundle"
+          "allow_bundle",
+          "paused"
         ],
         "properties": {
           "allow_bundle": {
@@ -29161,6 +29217,10 @@
             "format": "int64",
             "description": "Unix seconds of its last report."
           },
+          "paused": {
+            "type": "boolean",
+            "description": "Whether the sidecar has seen the switch turned off. Distinct from `upgrade_enabled`, which\nis what this deployment *stored*: while the two disagree the change has not reached the\nsidecar yet, which takes at most one of its beats."
+          },
           "present": {
             "type": "boolean",
             "description": "Whether the updater has ever reported. `false` means it is not deployed at all — the\ndefault, since the mechanism is opt-in."
@@ -29179,6 +29239,7 @@
         "description": "The state of the upgrade mechanism and of this deployment's schema.",
         "required": [
           "enabled",
+          "upgrade_enabled",
           "updater",
           "current",
           "schema"
@@ -29201,7 +29262,7 @@
           },
           "enabled": {
             "type": "boolean",
-            "description": "Whether an upgrade can be requested from here — the updater is deployed **and** alive.\nWhen `false`, this response describes only what is already installed."
+            "description": "Whether an upgrade can be requested from here — the updater is deployed, alive, **and** the\noperator's switch is on. When `false`, this response describes only what is installed."
           },
           "last_run": {
             "oneOf": [
@@ -29221,6 +29282,23 @@
           "updater": {
             "$ref": "#/components/schemas/UpdaterInfo",
             "description": "The updater container's own state."
+          },
+          "upgrade_enabled": {
+            "type": "boolean",
+            "description": "The operator's switch, as stored by this deployment. Separate from `enabled`, which also\ndepends on the updater being alive: this one says what was *chosen*, and it is what the\ntoggle in Settings ▸ Upgrade reflects."
+          }
+        }
+      },
+      "UpgradeSwitch": {
+        "type": "object",
+        "description": "The operator's switch.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether upgrading from the WebUI is permitted on this deployment."
           }
         }
       },

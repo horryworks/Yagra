@@ -1370,6 +1370,12 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NO_MCP_WRITE,
     ),
     (
+        "PUT",
+        "/api/v1/system/upgrade/enabled",
+        Global("a deployment-wide switch; there is no per-group upgrade to permit or refuse"),
+        NO_MCP_WRITE,
+    ),
+    (
         "GET",
         "/api/v1/system/support-bundle",
         Global(

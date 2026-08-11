@@ -434,243 +434,281 @@ services:
           sleep "$$YAGRA_IPASN_REFRESH_SECS"
         done
 
-  # ── Upgrade executor (ADR-050) — DISABLED BY DEFAULT. Read this whole block before enabling. ──
+  # ── Upgrade executor (ADR-050) — ON by default. Read this block before changing it. ────────────
   #
-  # Uncommenting gives ONE container the Docker socket, and therefore root on this host. That is the
-  # feature, not a side effect: it is what lets an operator upgrade Yagra from the WebUI on a network
-  # with no shell access (ADR-045's production premise). It also creates a path from Yagra's Admin
-  # role to host root that does not otherwise exist, so it is off unless you decide otherwise.
+  # This container holds the Docker socket, and therefore root on this host. That is the feature,
+  # not a side effect: it is what lets an operator upgrade Yagra from the WebUI on a network with no
+  # shell access (ADR-045's production premise). It also creates a path from Yagra's Admin role to
+  # host root that does not otherwise exist.
   #
   # What bounds it:
   #   * core does NOT get the socket. Two ADRs rejected that (ADR-040, ADR-044) and this does not
   #     overturn them — it changes who holds it, exactly as `ipasn-updater` above holds the only
-  #     outbound network path. Delete this service and the mechanism is gone.
+  #     outbound network path.
   #   * The image repository is fixed HERE, in the host's environment. It cannot be set over the
-  #     API, so no request can name a different registry.
+  #     API, so no request can name a different registry: an Admin can install a tag we published
+  #     and nothing else.
   #   * The only commands are apply and bundle. The request file is `key=value`, every value is
-  #     regex-checked before use, and it is never `.`-sourced or eval'd — that would turn write
-  #     access to a volume into arbitrary code execution.
+  #     regex-checked before use, and it is never `.`-sourced or eval'd.
+  #   * NOTHING IN THE SHARED VOLUME IS EXECUTED, and that is load-bearing. core can write into
+  #     that volume — it must, since a request is a file — so anything executable there would be
+  #     core's to rewrite, and this runs it as root. The apply procedure is therefore held in a
+  #     variable and passed to the throwaway container as an argument. Keep it that way.
   #   * The apply work runs in a THROWAWAY container outside this compose project, because
   #     `docker compose up -d` would otherwise recreate this very container mid-operation.
-  #   * `bundle` — installing an uploaded `docker save` archive — is off even when this service is
-  #     on, and needs YAGRA_UPGRADE_ALLOW_BUNDLE=1 as well. It is the only path that can put an
-  #     image onto this host that nothing here named, so a site with a reachable registry should
-  #     leave it closed. See the note above the variable.
+  #   * `bundle` — installing an uploaded `docker save` archive — is off even though this service is
+  #     on, and needs YAGRA_UPGRADE_ALLOW_BUNDLE=1. See the note above the variable.
   #
-  # To enable: uncomment, then `docker compose -p yagra up -d`. Settings ▸ Upgrade turns live once
-  # the sidecar writes its first heartbeat.
-  #
-  # yagra-updater:
-  #   image: docker:28-cli
-  #   restart: unless-stopped
-  #   # The socket's group on the host. Check with `stat -c %g /var/run/docker.sock` and set
-  #   # YAGRA_DOCKER_GID in .env if it is not 0 — a mismatch shows up as "permission denied" on
-  #   # every docker command in this container's log.
-  #   user: "0:${YAGRA_DOCKER_GID:-0}"
-  #   environment:
-  #     YAGRA_UPGRADE_REPO: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}
-  #     YAGRA_UPGRADE_CHECK_SECS: ${YAGRA_UPGRADE_CHECK_SECS:-21600}
-  #     # Accept an image archive uploaded through the WebUI (ADR-050 Increment 3). For a site with
-  #     # NO registry reachable at all: the operator runs `docker save` where the images are, and
-  #     # uploads the tar. Set it to 1 only if that is your situation — `docker load` installs
-  #     # whatever the archive contains, including images this file never mentions, so this widens
-  #     # the Admin-to-host-root path from "some published tag of our three images" to "any image".
-  #     # Everything after the load is unchanged: same backup, same composition swap, same
-  #     # provenance check, and the archive must contain the tag the operator claimed.
-  #     YAGRA_UPGRADE_ALLOW_BUNDLE: ${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - upgradedata:/data/upgrade
-  #   command:
-  #     - sh
-  #     - -c
-  #     - |
-  #       set -eu
-  #       D=/data/upgrade
-  #       mkdir -p "$$D/bin" "$$D/bundle"
-  #       # core runs as uid 10001 and must be able to write the request file and, when archives
-  #       # are allowed, stream one into $$D/bundle.
-  #       chown -R 10001:10001 "$$D" 2>/dev/null || true
-  #       REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
-  #       IVL="$${YAGRA_UPGRADE_CHECK_SECS:-21600}"
-  #       ALLOW="$${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}"
-  #       SELF="$$(hostname)"
-  #       label() { docker inspect -f "{{index .Config.Labels \"$$1\"}}" "$$SELF" 2>/dev/null || true; }
-  #       PROJ="$$(label com.docker.compose.project)"
-  #       WORKDIR="$$(label com.docker.compose.project.working_dir)"
-  #       : "$${PROJ:=yagra}"
-  #
-  #       # The apply procedure, written out once so the throwaway container can run it and so an
-  #       # operator can read it here. Arguments: <tag> <run-id> <requested-by> [archive].
-  #       # With an archive the images come from `docker load` instead of `docker pull`; every other
-  #       # step is identical, which is the whole design of the offline path.
-  #       cat > "$$D/bin/apply.sh" <<'APPLY'
-  #       set -u
-  #       TAG="$$1"; RUN="$$2"; BY="$$3"; BUNDLE="$${4:-}"; D=/data/upgrade
-  #       say() { # <state> <step> <message>
-  #         printf '{"id":"%s","command":"apply","target":"%s","state":"%s","step":"%s","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
-  #           "$$RUN" "$$TAG" "$$1" "$$2" "$$3" "$$START" "$${FIN:-null}" "$$BY" > "$$D/status.json.tmp"
-  #         mv "$$D/status.json.tmp" "$$D/status.json"
-  #         printf '{"at":%s,"step":"%s","message":"%s"}\n' "$$(date +%s)" "$$2" "$$3" >> "$$D/log.ndjson"
-  #       }
-  #       fail() { FIN=$$(date +%s); say failed "$$1" "$$2"; exit 1; }
-  #       START=$$(date +%s); FIN=
-  #       say running start "requested by $$BY"
-  #
-  #       # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
-  #       #    it. The script ships inside the RUNNING core image, so the backup matches the version
-  #       #    being replaced. NOTE: this is a rollback aid, not a disaster-recovery backup — it
-  #       #    lands beside the database it protects.
-  #       say running backup "backing up before touching anything"
-  #       CORE_CID=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
-  #       [ -n "$$CORE_CID" ] || fail backup "cannot find the running core container"
-  #       docker cp "$$CORE_CID:/usr/share/yagra/yagra-backup.sh" /tmp/backup.sh 2>/dev/null \
-  #         || fail backup "this core image ships no backup script; upgrade from the command line"
-  #       ( cd /project && sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
-  #
-  #       # 2. Get all three images in place BEFORE anything is stopped, so a bad tag, an
-  #       #    unreachable registry or a corrupt archive costs nothing.
-  #       if [ -n "$$BUNDLE" ]; then
-  #         say running pull "loading images from the uploaded archive"
-  #         [ -f "$$BUNDLE" ] || fail pull "the uploaded archive is gone"
-  #         # Deleted either way, and immediately: it is a gigabyte, the load has just written its
-  #         # contents a second time, and there is no way to inspect a bad archive from the WebUI.
-  #         docker load -i "$$BUNDLE" >/dev/null 2>&1 || { rm -f "$$BUNDLE"; fail pull "the uploaded archive could not be read as a docker save file"; }
-  #         rm -f "$$BUNDLE"
-  #         # The operator NAMED a version, and this is what makes the name true. `docker load`
-  #         # restores whatever tags the archive happens to carry, so without this an archive of a
-  #         # different release would either be installed under the label the operator expected or
-  #         # leave the composition pointing at images that are not on the host.
-  #         for i in core poller web; do
-  #           docker image inspect "$$REPO/yagra-$$i:$$TAG" >/dev/null 2>&1 \
-  #             || fail pull "the archive does not contain $$REPO/yagra-$$i:$$TAG"
-  #         done
-  #       else
-  #         say running pull "pulling $$TAG"
-  #         for i in core poller web; do
-  #           docker pull "$$REPO/yagra-$$i:$$TAG" >/dev/null 2>&1 || fail pull "cannot pull yagra-$$i:$$TAG"
-  #         done
-  #       fi
-  #
-  #       # 3. Take the compose file OUT OF THE TARGET IMAGE (ADR-050 decision 5) so the composition
-  #       #    and the images are always the same version. The host's .env is never touched.
-  #       say running compose "installing the $$TAG composition"
-  #       CID=$$(docker create "$$REPO/yagra-core:$$TAG") || fail compose "cannot stage the target image"
-  #       docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" /project/docker-compose.deploy.yml \
-  #         || { docker rm "$$CID" >/dev/null 2>&1; fail compose "the target image ships no compose file"; }
-  #       docker rm "$$CID" >/dev/null 2>&1 || true
-  #
-  #       # 4. Recreate. `-p` is load-bearing: without it compose derives the project from the
-  #       #    directory name, forks a second empty stack and orphans the real volumes.
-  #       say running compose "recreating containers"
-  #       ( cd /project && YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) \
-  #         || fail compose "docker compose up failed; the previous images are still on this host"
-  #
-  #       # 5. Verify the thing that is actually running — not that a command returned 0. A green
-  #       #    pipeline has shipped a stale binary in this project before (ADR-036), so the check is
-  #       #    the running container's own provenance marker, not the tag we asked for.
-  #       say running verify "waiting for core to come back"
-  #       i=0
-  #       while [ $$i -lt 60 ]; do
-  #         NEW=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
-  #         if [ -n "$$NEW" ] && docker exec "$$NEW" yagra-core healthcheck >/dev/null 2>&1; then
-  #           REF=$$(docker exec "$$NEW" cat /etc/yagra-source-ref 2>/dev/null || echo unknown)
-  #           PROF=$$(docker exec "$$NEW" cat /etc/yagra-build-profile 2>/dev/null || echo unknown)
-  #           FIN=$$(date +%s); say succeeded verify "now running $$TAG ($$PROF, $$REF)"; exit 0
-  #         fi
-  #         i=$$((i+1)); sleep 5
-  #       done
-  #       fail verify "core did not become healthy within 5 minutes; it may still be starting"
-  #       APPLY
-  #
-  #       # The heartbeat is also how core learns what this updater will do: `allow_bundle` is
-  #       # reported, never assumed, so the capability is declared by the container that holds the
-  #       # socket rather than inferred by the one that does not.
-  #       heartbeat() {
-  #         if [ "$$ALLOW" = "1" ]; then AB=true; else AB=false; fi
-  #         printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s,"allow_bundle":%s}\n' "$$(date +%s)" "$$REPO" "$$IVL" "$$AB" > "$$D/current.json.tmp"
-  #         mv "$$D/current.json.tmp" "$$D/current.json"
-  #       }
-  #
-  #       # Best effort by design: an air-gapped site has no registry to list, and the operator can
-  #       # still name a tag by hand. A failure here is reported, never fatal.
-  #       list_releases() {
-  #         NAME="$${REPO#*/}/yagra-core"
-  #         TOK=$$(wget -qO- "https://ghcr.io/token?scope=repository:$$NAME:pull&service=ghcr.io" 2>/dev/null \
-  #                | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-  #         TAGS=$$(wget -qO- --header="Authorization: Bearer $$TOK" "https://ghcr.io/v2/$$NAME/tags/list" 2>/dev/null \
-  #                 | tr ',' '\n' | sed -n 's/.*"\(v[0-9][0-9.]*[0-9a-z-]*\)".*/\1/p' | sort -Vr | head -20)
-  #         if [ -z "$$TAGS" ]; then
-  #           printf '{"written_at":%s,"releases":[],"error":"could not reach the registry"}\n' "$$(date +%s)" > "$$D/available.json.tmp"
-  #         else
-  #           ITEMS=$$(for t in $$TAGS; do printf '{"tag":"%s","core_digest":null},' "$$t"; done | sed 's/,$$//')
-  #           printf '{"written_at":%s,"releases":[%s],"error":null}\n' "$$(date +%s)" "$$ITEMS" > "$$D/available.json.tmp"
-  #         fi
-  #         mv "$$D/available.json.tmp" "$$D/available.json"
-  #       }
-  #
-  #       # Read one field out of the request file WITHOUT sourcing it. Sourcing would turn write
-  #       # access to this volume into code execution.
-  #       field() { sed -n "s/^$$1=//p" "$$D/request" | head -1; }
-  #
-  #       # Only ever called with a command this script recognised, so nothing unvalidated from the
-  #       # request file is interpolated into the JSON.
-  #       reject() {
-  #         printf '{"id":"%s","command":"%s","target":null,"state":"rejected","step":"validate","message":"%s","started_at":%s,"finished_at":%s,"requested_by":null}\n' \
-  #           "$${1:-unknown}" "$${CMDSAFE:-unknown}" "$$2" "$$(date +%s)" "$$(date +%s)" > "$$D/status.json.tmp"
-  #         mv "$$D/status.json.tmp" "$$D/status.json"
-  #       }
-  #
-  #       handle() {
-  #         SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
-  #         TAG=$$(field tag); BY=$$(field requested_by)
-  #         rm -f "$$D/request"
-  #         CMDSAFE=unknown; BUNDLE=
-  #         # An upgrade replaces core but NOT this container, so a new core paired with an old
-  #         # updater is structural. Refuse clearly rather than half-executing a misread request.
-  #         [ "$$SCHEMA" = "1" ] || { reject "$$ID" "this updater is older than the core that made the request; update it by hand"; return; }
-  #         # Checked before anything uses it — an archive's path is built from it below.
-  #         echo "$$ID" | grep -Eq '^[0-9a-f-]{36}$$' || { reject unknown "malformed run id"; return; }
-  #         # The command set, mirroring `Command::as_str()` in crates/yagra-core/src/upgrade.rs;
-  #         # `every_command_is_accepted_by_the_sidecar` pins the two lists to each other. Anything
-  #         # else is refused BY NAME, which is what lets core gain a command without a schema bump.
-  #         case "$$CMD" in
-  #           apply)
-  #             CMDSAFE=apply
-  #             ;;
-  #           bundle)
-  #             CMDSAFE=bundle
-  #             [ "$$ALLOW" = "1" ] || { reject "$$ID" "this deployment does not accept uploaded image archives"; return; }
-  #             BUNDLE="$$D/bundle/$$ID.tar"
-  #             [ -f "$$BUNDLE" ] || { reject "$$ID" "the uploaded archive is missing"; return; }
-  #             ;;
-  #           *) reject "$$ID" "unsupported command"; return ;;
-  #         esac
-  #         echo "$$TAG" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' \
-  #           || { reject "$$ID" "not a release tag"; return; }
-  #         echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
-  #         [ -n "$$WORKDIR" ] || { reject "$$ID" "cannot locate the compose project directory"; return; }
-  #         # Detached, outside this compose project, so `up -d --remove-orphans` cannot kill the
-  #         # work — including when it recreates this very container.
-  #         docker run --rm -d --name "yagra-upgrade-$$ID" \
-  #           -v /var/run/docker.sock:/var/run/docker.sock \
-  #           -v "$${PROJ}_upgradedata:/data/upgrade" \
-  #           -v "$$WORKDIR:/project" \
-  #           -e "REPO=$$REPO" -e "PROJ=$$PROJ" \
-  #           docker:28-cli sh /data/upgrade/bin/apply.sh "$$TAG" "$$ID" "$$BY" "$$BUNDLE" >/dev/null \
-  #           || reject "$$ID" "could not start the upgrade container"
-  #       }
-  #
-  #       heartbeat; list_releases
-  #       LAST=$$(date +%s)
-  #       while true; do
-  #         [ -f "$$D/request" ] && handle
-  #         NOW=$$(date +%s)
-  #         if [ $$((NOW - LAST)) -ge "$$IVL" ]; then heartbeat; list_releases; LAST=$$NOW; fi
-  #         # A short beat keeps the request file responsive; the registry check keeps its own clock.
-  #         sleep 5
-  #         heartbeat
-  #       done
+  # Turning it off. Two ways, and they are NOT equally durable:
+  #   * **Settings ▸ Upgrade has a switch.** Stored in PostgreSQL, so it survives upgrades, and it
+  #     is the one an operator with no shell can actually reach. Off means no upgrade can be
+  #     requested and this container makes no outbound call — but it still holds the socket.
+  #   * **Deleting this service** removes the capability structurally. Note that it comes BACK on
+  #     the next upgrade: the composition is taken from the target image (ADR-050 decision 5), so a
+  #     local deletion is undone by the very mechanism it was meant to remove. A deployment that
+  #     wants it gone for good belongs on the command-line upgrade path.
+  yagra-updater:
+    image: docker:28-cli
+    restart: unless-stopped
+    # Root, because it must use the socket and chown the hand-off directory. The group only matters
+    # if you move the uid off 0 (measured: the socket is root:docker and root reaches it whatever
+    # the gid says) — set YAGRA_DOCKER_GID in .env if you do.
+    user: "0:${YAGRA_DOCKER_GID:-0}"
+    environment:
+      YAGRA_UPGRADE_REPO: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}
+      # Daily. The list only fills a picker, so checking more often buys nothing — and a monitoring
+      # product should not reach out to a registry more than it needs to. Switching the mechanism
+      # off in the WebUI stops this call entirely.
+      YAGRA_UPGRADE_CHECK_SECS: ${YAGRA_UPGRADE_CHECK_SECS:-86400}
+      # Accept an image archive uploaded through the WebUI (ADR-050 Increment 3). For a site with
+      # NO registry reachable at all: the operator runs `docker save` where the images are, and
+      # uploads the tar. Set it to 1 only if that is your situation — `docker load` installs
+      # whatever the archive contains, including images this file never mentions, so this widens
+      # the Admin-to-host-root path from "some published tag of our three images" to "any image".
+      # It is deliberately NOT settable from the WebUI: the UI may move within the capability this
+      # host granted, never widen it.
+      # Everything after the load is unchanged: same backup, same composition swap, same
+      # provenance check, and the archive must contain the tag the operator claimed.
+      YAGRA_UPGRADE_ALLOW_BUNDLE: ${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - upgradedata:/data/upgrade
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        D=/data/upgrade
+        mkdir -p "$$D/bundle"
+        # core runs as uid 10001 and must be able to write the request file and, when archives are
+        # allowed, stream one into $$D/bundle. Safe only because nothing here is ever executed.
+        chown -R 10001:10001 "$$D" 2>/dev/null || true
+        REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
+        IVL="$${YAGRA_UPGRADE_CHECK_SECS:-86400}"
+        ALLOW="$${YAGRA_UPGRADE_ALLOW_BUNDLE:-0}"
+        SELF="$$(hostname)"
+        label() { docker inspect -f "{{index .Config.Labels \"$$1\"}}" "$$SELF" 2>/dev/null || true; }
+        PROJ="$$(label com.docker.compose.project)"
+        WORKDIR="$$(label com.docker.compose.project.working_dir)"
+        : "$${PROJ:=yagra}"
+
+        # The operator's switch. core materialises it here from PostgreSQL, which is the source of
+        # truth — so wiping this volume cannot silently re-enable anything, and the setting survives
+        # an upgrade. Absent means enabled: that is the column's default, and a fresh volume must
+        # not read as paused.
+        paused() { [ "$$(sed -n 's/^enabled=//p' "$$D/settings" 2>/dev/null | head -1)" = "0" ]; }
+
+        # The apply procedure. Held in a VARIABLE and passed to the throwaway container as an
+        # argument — never written to the shared volume, because core can write there and this is
+        # executed as root with the socket. Arguments: <tag> <run-id> <requested-by> [archive].
+        # With an archive the images come from `docker load` instead of `docker pull`; every other
+        # step is identical, which is the whole design of the offline path.
+        APPLY=$$(cat <<'APPLY'
+        set -u
+        TAG="$$1"; RUN="$$2"; BY="$$3"; BUNDLE="$${4:-}"; D=/data/upgrade
+        if [ -n "$$BUNDLE" ]; then CMD=bundle; else CMD=apply; fi
+        say() { # <state> <step> <message>
+          printf '{"id":"%s","command":"%s","target":"%s","state":"%s","step":"%s","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
+            "$$RUN" "$$CMD" "$$TAG" "$$1" "$$2" "$$3" "$$START" "$${FIN:-null}" "$$BY" > "$$D/status.json.tmp"
+          mv "$$D/status.json.tmp" "$$D/status.json"
+          printf '{"at":%s,"step":"%s","message":"%s"}\n' "$$(date +%s)" "$$2" "$$3" >> "$$D/log.ndjson"
+        }
+        fail() { FIN=$$(date +%s); say failed "$$1" "$$2"; exit 1; }
+        START=$$(date +%s); FIN=
+        say running start "requested by $$BY"
+
+        # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
+        #    it. The script ships inside the RUNNING core image at a root-owned path, so core
+        #    cannot alter it and the backup matches the version being replaced. NOTE: this is a
+        #    rollback aid, not a disaster-recovery backup — it lands beside the database it protects.
+        say running backup "backing up before touching anything"
+        CORE_CID=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
+        [ -n "$$CORE_CID" ] || fail backup "cannot find the running core container"
+        docker cp "$$CORE_CID:/usr/share/yagra/yagra-backup.sh" /tmp/backup.sh 2>/dev/null \
+          || fail backup "this core image ships no backup script; upgrade from the command line"
+        ( cd /project && sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
+
+        # 2. Get all three images in place BEFORE anything is stopped, so a bad tag, an
+        #    unreachable registry or a corrupt archive costs nothing.
+        if [ -n "$$BUNDLE" ]; then
+          say running pull "loading images from the uploaded archive"
+          [ -f "$$BUNDLE" ] || fail pull "the uploaded archive is gone"
+          # Deleted either way, and immediately: it is a gigabyte, the load has just written its
+          # contents a second time, and there is no way to inspect a bad archive from the WebUI.
+          docker load -i "$$BUNDLE" >/dev/null 2>&1 || { rm -f "$$BUNDLE"; fail pull "the uploaded archive could not be read as a docker save file"; }
+          rm -f "$$BUNDLE"
+          # The operator NAMED a version, and this is what makes the name true. `docker load`
+          # restores whatever tags the archive happens to carry, so without this an archive of a
+          # different release would either be installed under the label the operator expected or
+          # leave the composition pointing at images that are not on the host.
+          for i in core poller web; do
+            docker image inspect "$$REPO/yagra-$$i:$$TAG" >/dev/null 2>&1 \
+              || fail pull "the archive does not contain $$REPO/yagra-$$i:$$TAG"
+          done
+        else
+          say running pull "pulling $$TAG"
+          for i in core poller web; do
+            docker pull "$$REPO/yagra-$$i:$$TAG" >/dev/null 2>&1 || fail pull "cannot pull yagra-$$i:$$TAG"
+          done
+        fi
+
+        # 3. Take the compose file OUT OF THE TARGET IMAGE (ADR-050 decision 5) so the composition
+        #    and the images are always the same version. The host's .env is never touched.
+        say running compose "installing the $$TAG composition"
+        CID=$$(docker create "$$REPO/yagra-core:$$TAG") || fail compose "cannot stage the target image"
+        docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" /project/docker-compose.deploy.yml \
+          || { docker rm "$$CID" >/dev/null 2>&1; fail compose "the target image ships no compose file"; }
+        docker rm "$$CID" >/dev/null 2>&1 || true
+
+        # 4. Recreate. Two variables are passed explicitly and both are load-bearing: `-p` because
+        #    compose otherwise derives the project from the directory name, forks a second empty
+        #    stack and orphans the real volumes; YAGRA_IMAGE_REPO because the composition would
+        #    otherwise resolve it from the host's .env, which can name a different registry from
+        #    the one these images were just fetched from.
+        say running compose "recreating containers"
+        ( cd /project && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) \
+          || fail compose "docker compose up failed; the previous images are still on this host"
+
+        # 5. Verify the thing that is actually running — not that a command returned 0. A green
+        #    pipeline has shipped a stale binary in this project before (ADR-036), so the check is
+        #    the running container's own provenance marker, not the tag we asked for.
+        say running verify "waiting for core to come back"
+        i=0
+        while [ $$i -lt 60 ]; do
+          NEW=$$(docker ps -q -f "label=com.docker.compose.project=$$PROJ" -f "label=com.docker.compose.service=core" | head -1)
+          if [ -n "$$NEW" ] && docker exec "$$NEW" yagra-core healthcheck >/dev/null 2>&1; then
+            REF=$$(docker exec "$$NEW" cat /etc/yagra-source-ref 2>/dev/null || echo unknown)
+            PROF=$$(docker exec "$$NEW" cat /etc/yagra-build-profile 2>/dev/null || echo unknown)
+            FIN=$$(date +%s); say succeeded verify "now running $$TAG ($$PROF, $$REF)"; exit 0
+          fi
+          i=$$((i+1)); sleep 5
+        done
+        fail verify "core did not become healthy within 5 minutes; it may still be starting"
+        APPLY
+        )
+
+        # The heartbeat is how core learns what this updater will do: `allow_bundle` and `paused`
+        # are reported, never assumed, so the capability is declared by the container that holds
+        # the socket rather than inferred by the one that does not. It keeps beating while paused —
+        # "switched off" and "died" must not look the same on the page.
+        heartbeat() {
+          if [ "$$ALLOW" = "1" ]; then AB=true; else AB=false; fi
+          if paused; then PS=true; else PS=false; fi
+          printf '{"written_at":%s,"repo":"%s","check_interval_secs":%s,"allow_bundle":%s,"paused":%s}\n' "$$(date +%s)" "$$REPO" "$$IVL" "$$AB" "$$PS" > "$$D/current.json.tmp"
+          mv "$$D/current.json.tmp" "$$D/current.json"
+        }
+
+        # Best effort by design: an air-gapped site has no registry to list, and the operator can
+        # still name a tag by hand. A failure here is reported, never fatal.
+        list_releases() {
+          NAME="$${REPO#*/}/yagra-core"
+          TOK=$$(wget -qO- "https://ghcr.io/token?scope=repository:$$NAME:pull&service=ghcr.io" 2>/dev/null \
+                 | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          TAGS=$$(wget -qO- --header="Authorization: Bearer $$TOK" "https://ghcr.io/v2/$$NAME/tags/list" 2>/dev/null \
+                  | tr ',' '\n' | sed -n 's/.*"\(v[0-9][0-9.]*[0-9a-z-]*\)".*/\1/p' | sort -Vr | head -20)
+          if [ -z "$$TAGS" ]; then
+            printf '{"written_at":%s,"releases":[],"error":"could not reach the registry"}\n' "$$(date +%s)" > "$$D/available.json.tmp"
+          else
+            ITEMS=$$(for t in $$TAGS; do printf '{"tag":"%s","core_digest":null},' "$$t"; done | sed 's/,$$//')
+            printf '{"written_at":%s,"releases":[%s],"error":null}\n' "$$(date +%s)" "$$ITEMS" > "$$D/available.json.tmp"
+          fi
+          mv "$$D/available.json.tmp" "$$D/available.json"
+        }
+
+        # Read one field out of the request file WITHOUT sourcing it. Sourcing would turn write
+        # access to this volume into code execution.
+        field() { sed -n "s/^$$1=//p" "$$D/request" | head -1; }
+
+        # Only ever called with a command this script recognised, so nothing unvalidated from the
+        # request file is interpolated into the JSON.
+        reject() {
+          printf '{"id":"%s","command":"%s","target":null,"state":"rejected","step":"validate","message":"%s","started_at":%s,"finished_at":%s,"requested_by":null}\n' \
+            "$${1:-unknown}" "$${CMDSAFE:-unknown}" "$$2" "$$(date +%s)" "$$(date +%s)" > "$$D/status.json.tmp"
+          mv "$$D/status.json.tmp" "$$D/status.json"
+        }
+
+        handle() {
+          SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
+          TAG=$$(field tag); BY=$$(field requested_by)
+          rm -f "$$D/request"
+          CMDSAFE=unknown; BUNDLE=
+          # An upgrade replaces core but NOT this container, so a new core paired with an old
+          # updater is structural. Refuse clearly rather than half-executing a misread request.
+          [ "$$SCHEMA" = "1" ] || { reject "$$ID" "this updater is older than the core that made the request; update it by hand"; return; }
+          # Checked before anything uses it — an archive's path is built from it below.
+          echo "$$ID" | grep -Eq '^[0-9a-f-]{36}$$' || { reject unknown "malformed run id"; return; }
+          # The command set, mirroring `Command::as_str()` in crates/yagra-core/src/upgrade.rs;
+          # `every_command_is_accepted_by_the_sidecar` pins the two lists to each other. Anything
+          # else is refused BY NAME, which is what lets core gain a command without a schema bump.
+          case "$$CMD" in
+            apply)
+              CMDSAFE=apply
+              ;;
+            bundle)
+              CMDSAFE=bundle
+              [ "$$ALLOW" = "1" ] || { reject "$$ID" "this deployment does not accept uploaded image archives"; return; }
+              BUNDLE="$$D/bundle/$$ID.tar"
+              [ -f "$$BUNDLE" ] || { reject "$$ID" "the uploaded archive is missing"; return; }
+              ;;
+            *) reject "$$ID" "unsupported command"; return ;;
+          esac
+          # Defence in depth: core refuses to write a request at all while the switch is off, so
+          # reaching here means either a race with the toggle or something else writing the volume.
+          if paused; then reject "$$ID" "the upgrade mechanism is switched off in Settings ▸ Upgrade"; return; fi
+          echo "$$TAG" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' \
+            || { reject "$$ID" "not a release tag"; return; }
+          echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
+          [ -n "$$WORKDIR" ] || { reject "$$ID" "cannot locate the compose project directory"; return; }
+          # Detached, outside this compose project, so `up -d --remove-orphans` cannot kill the
+          # work — including when it recreates this very container. The procedure travels as an
+          # argument; there is no script on disk for anything to tamper with.
+          docker run --rm -d --name "yagra-upgrade-$$ID" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "$${PROJ}_upgradedata:/data/upgrade" \
+            -v "$$WORKDIR:/project" \
+            -e "REPO=$$REPO" -e "PROJ=$$PROJ" \
+            docker:28-cli sh -c "$$APPLY" yagra-upgrade "$$TAG" "$$ID" "$$BY" "$$BUNDLE" >/dev/null \
+            || reject "$$ID" "could not start the upgrade container"
+        }
+
+        # WAS starts at 1 so the first unpaused pass fetches immediately; after that the list is
+        # refreshed on the interval, and again the moment the operator switches the mechanism back
+        # on — otherwise the picker would stay empty until the next daily check.
+        WAS=1; LAST=0
+        heartbeat
+        while true; do
+          if [ -f "$$D/request" ]; then handle; fi
+          NOW=$$(date +%s)
+          if paused; then
+            WAS=1
+          else
+            if [ "$$WAS" != "0" ] || [ $$((NOW - LAST)) -ge "$$IVL" ]; then list_releases; LAST=$$NOW; fi
+            WAS=0
+          fi
+          # A short beat keeps the request file responsive; the registry check keeps its own clock.
+          sleep 5
+          heartbeat
+        done
 
 volumes:
   pgdata:

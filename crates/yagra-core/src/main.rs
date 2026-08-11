@@ -884,6 +884,10 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // An uploaded image archive is a gigabyte, and the paths that abandon one all end with core
     // not running (ADR-050 Increment 3). Startup is therefore the only reliable place to sweep.
     upgrade.prune_stale_bundles();
+    // Republish the operator's switch into the hand-off volume. PostgreSQL is the source of truth
+    // and the file is its cache, so a deleted volume — or one last written by a core that has since
+    // been replaced — converges here rather than silently disagreeing with what was chosen.
+    upgrade.publish_enabled(upgrade.enabled().await);
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {

@@ -43,9 +43,15 @@
 
   "mechanism": {
     "heading": "Upgrading from here",
-    "disabled": "The upgrade mechanism is not enabled on this deployment.",
-    "disabledHint": "Upgrades are applied by a separate privileged container, which is off by default. Until it is enabled, upgrades stay a command-line operation — this page reports what is installed but cannot change it.",
-    "disabledHowTo": "To enable it, uncomment the yagra-updater service in docker-compose.deploy.yml and restart the stack.",
+    "switch": "Allow upgrading from the WebUI",
+    "switchHint": "Upgrades are carried out by a separate container that holds the Docker socket. Turning this off means no upgrade can be requested and that container stops contacting the registry — it does not remove the container. Removing it means editing the deployment, and note that it returns on the next upgrade, because each version installs its own composition. This setting is stored in the database and survives upgrades.",
+    "switchPending": "Saved. The updater applies it within a few seconds.",
+    "switchFailed": "The setting could not be saved.",
+    "paused": "Upgrading from the WebUI is switched off.",
+    "pausedHint": "Nothing is being checked and nothing can be requested. Turn the switch above back on to use it.",
+    "disabled": "No updater has reported on this deployment.",
+    "disabledHint": "Upgrades are carried out by a separate privileged container. It normally ships with the deployment, so either the stack has not finished starting, or the service was removed from this composition.",
+    "disabledHowTo": "Check it with: docker compose -p yagra ps yagra-updater",
     "stopped": "The updater is enabled but has stopped reporting.",
     "stoppedHint": "It was running at some point, so this is a fault rather than a setting. Check its logs with: docker compose -p yagra logs yagra-updater",
     "readyFrom": "Releases are fetched from {{repo}}, which is fixed by this server and cannot be changed from the WebUI.",

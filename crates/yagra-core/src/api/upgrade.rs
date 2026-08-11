@@ -54,7 +54,7 @@ const MAINTENANCE_WINDOW_SECS: i64 = 900;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(OpenApi)]
-#[openapi(paths(get_upgrade, apply_upgrade, upload_bundle))]
+#[openapi(paths(get_upgrade, apply_upgrade, upload_bundle, set_upgrade_enabled))]
 pub(super) struct Doc;
 
 /// The upgrade routes, merged into `/api/v1` by [`super::router`].
@@ -63,6 +63,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/system/upgrade",
             get(get_upgrade).post(apply_upgrade),
+        )
+        .route(
+            "/api/v1/system/upgrade/enabled",
+            axum::routing::put(set_upgrade_enabled),
         )
         .merge(
             Router::new()
@@ -141,14 +145,22 @@ pub(crate) struct UpdaterInfo {
     /// The largest archive core will accept, in bytes. Present whenever `allow_bundle` is, so the
     /// UI can refuse an oversized file before spending an hour uploading it.
     bundle_max_bytes: Option<u64>,
+    /// Whether the sidecar has seen the switch turned off. Distinct from `upgrade_enabled`, which
+    /// is what this deployment *stored*: while the two disagree the change has not reached the
+    /// sidecar yet, which takes at most one of its beats.
+    paused: bool,
 }
 
 /// The state of the upgrade mechanism and of this deployment's schema.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct UpgradeStatusResponse {
-    /// Whether an upgrade can be requested from here — the updater is deployed **and** alive.
-    /// When `false`, this response describes only what is already installed.
+    /// Whether an upgrade can be requested from here — the updater is deployed, alive, **and** the
+    /// operator's switch is on. When `false`, this response describes only what is installed.
     enabled: bool,
+    /// The operator's switch, as stored by this deployment. Separate from `enabled`, which also
+    /// depends on the updater being alive: this one says what was *chosen*, and it is what the
+    /// toggle in Settings ▸ Upgrade reflects.
+    upgrade_enabled: bool,
     /// The updater container's own state.
     updater: UpdaterInfo,
     /// The running build.
@@ -218,6 +230,7 @@ pub(crate) async fn upgrade_status(
     started: std::time::SystemTime,
 ) -> anyhow::Result<UpgradeStatusResponse> {
     let schema = upgrade.schema_state().await?;
+    let switched_on = upgrade.enabled().await;
     let p = crate::support_bundle::provenance(started);
     let beat = upgrade.heartbeat();
     let now = super::util::now_unix_s();
@@ -225,7 +238,8 @@ pub(crate) async fn upgrade_status(
         crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
     Ok(UpgradeStatusResponse {
-        enabled: beat.is_some() && fresh,
+        enabled: beat.is_some() && fresh && switched_on,
+        upgrade_enabled: switched_on,
         updater: UpdaterInfo {
             present: beat.is_some(),
             fresh,
@@ -237,6 +251,7 @@ pub(crate) async fn upgrade_status(
                 .as_ref()
                 .filter(|h| h.allow_bundle)
                 .map(|_| upgrade.bundle_max_bytes()),
+            paused: beat.as_ref().is_some_and(|h| h.paused),
         },
         current: RunningBuild {
             core_version: p.core_version.to_owned(),
@@ -276,7 +291,7 @@ async fn apply_upgrade(
 ) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let tag = body.target_tag.trim();
     let now = super::util::now_unix_s();
-    preflight(&upgrade, tag, now)?;
+    preflight(&upgrade, tag, now).await?;
     let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
     let id = crate::upgrade::new_run_id();
     Ok((
@@ -337,7 +352,7 @@ async fn upload_bundle(
 ) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let tag = q.target_tag.trim().to_owned();
     let now = super::util::now_unix_s();
-    preflight(&upgrade, &tag, now)?;
+    preflight(&upgrade, &tag, now).await?;
     if !upgrade.heartbeat().is_some_and(|h| h.allow_bundle) {
         return Err(ApiError::unavailable(
             "bundle_not_allowed",
@@ -407,6 +422,56 @@ async fn upload_bundle(
     ))
 }
 
+/// The operator's switch.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct UpgradeSwitch {
+    /// Whether upgrading from the WebUI is permitted on this deployment.
+    enabled: bool,
+}
+
+/// Turn upgrading from the WebUI on or off for this deployment.
+///
+/// The updater container ships with the deployment and holds the Docker socket; this decides
+/// whether it may be asked to do anything. Off means no upgrade can be requested and the updater
+/// stops contacting the registry — it does **not** remove the container or its socket, which is a
+/// change to the composition.
+///
+/// Stored in the database, so it survives the upgrades it governs, and it is the only switch
+/// reachable without a shell on the host.
+// Deliberately narrower than it looks: this can withdraw a capability the host granted and restore
+// it, never widen it. Whether an *uploaded* archive may be installed stays a host-side environment
+// variable for that reason — see ADR-050 decision 1.
+#[utoipa::path(
+    put, path = "/api/v1/system/upgrade/enabled", tag = "system",
+    request_body = UpgradeSwitch,
+    responses(
+        (status = 204, description = "Stored; the updater picks it up within one of its beats"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no metadata store, or this core is not the leader", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_upgrade_enabled(
+    _auth: UpgradeWrite,
+    upgrade: Upgrade,
+    Json(body): Json<UpgradeSwitch>,
+) -> ApiResult<StatusCode> {
+    upgrade.set_enabled(body.enabled).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "store the upgrade switch",
+            "failed to store the upgrade switch",
+        )
+    })?;
+    // Worth a line of its own: `audit_mw` records that the endpoint was called, and this records
+    // which way it went — the two together are what an operator needs after the fact.
+    tracing::warn!(
+        enabled = body.enabled,
+        "upgrading from the WebUI was switched"
+    );
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// `413`, worded the same wherever it comes from.
 fn too_large(cap: u64) -> ApiError {
     ApiError::payload_too_large(
@@ -442,11 +507,25 @@ fn bundle_error(e: BundleError) -> ApiError {
 /// One function rather than two copies because the *order* is the security-relevant part — the tag
 /// is validated before anything acts on it — and because a second copy is how one of them ends up
 /// missing the 409 (extensibility.md §3).
-fn preflight(upgrade: &crate::upgrade::UpgradeRepo, tag: &str, now: i64) -> Result<(), ApiError> {
+async fn preflight(
+    upgrade: &crate::upgrade::UpgradeRepo,
+    tag: &str,
+    now: i64,
+) -> Result<(), ApiError> {
     if !crate::upgrade::is_valid_tag(tag) {
         return Err(ApiError::bad_request(
             "invalid_tag",
             "target_tag must be a published release tag such as v0.2.2",
+        ));
+    }
+    // The operator's switch, checked here rather than only in the sidecar. The sidecar refuses too,
+    // but that is defence in depth: this is the enforcement, because it is the only point that
+    // cannot be reached by writing to the shared volume.
+    if !upgrade.enabled().await {
+        return Err(ApiError::unavailable(
+            "upgrade_disabled",
+            "upgrading from the WebUI is switched off for this deployment; turn it on in \
+             Settings ▸ Upgrade",
         ));
     }
     let ready = upgrade.heartbeat().is_some_and(|h| {

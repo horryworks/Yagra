@@ -3239,6 +3239,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/system/upgrade/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn upgrading from the WebUI on or off for this deployment.
+         * @description The updater container ships with the deployment and holds the Docker socket; this decides
+         *     whether it may be asked to do anything. Off means no upgrade can be requested and the updater
+         *     stops contacting the registry — it does **not** remove the container or its socket, which is a
+         *     change to the composition.
+         *
+         *     Stored in the database, so it survives the upgrades it governs, and it is the only switch
+         *     reachable without a shell on the host.
+         */
+        put: operations["set_upgrade_enabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/thresholds": {
         parameters: {
             query?: never;
@@ -8442,6 +8468,12 @@ export interface components {
              */
             last_seen?: number | null;
             /**
+             * @description Whether the sidecar has seen the switch turned off. Distinct from `upgrade_enabled`, which
+             *     is what this deployment *stored*: while the two disagree the change has not reached the
+             *     sidecar yet, which takes at most one of its beats.
+             */
+            paused: boolean;
+            /**
              * @description Whether the updater has ever reported. `false` means it is not deployed at all — the
              *     default, since the mechanism is opt-in.
              */
@@ -8458,8 +8490,8 @@ export interface components {
             /** @description The running build. */
             current: components["schemas"]["RunningBuild"];
             /**
-             * @description Whether an upgrade can be requested from here — the updater is deployed **and** alive.
-             *     When `false`, this response describes only what is already installed.
+             * @description Whether an upgrade can be requested from here — the updater is deployed, alive, **and** the
+             *     operator's switch is on. When `false`, this response describes only what is installed.
              */
             enabled: boolean;
             last_run?: null | components["schemas"]["RunStatus"];
@@ -8467,6 +8499,17 @@ export interface components {
             schema: components["schemas"]["SchemaState"];
             /** @description The updater container's own state. */
             updater: components["schemas"]["UpdaterInfo"];
+            /**
+             * @description The operator's switch, as stored by this deployment. Separate from `enabled`, which also
+             *     depends on the updater being alive: this one says what was *chosen*, and it is what the
+             *     toggle in Settings ▸ Upgrade reflects.
+             */
+            upgrade_enabled: boolean;
+        };
+        /** @description The operator's switch. */
+        UpgradeSwitch: {
+            /** @description Whether upgrading from the WebUI is permitted on this deployment. */
+            enabled: boolean;
         };
         /**
          * @description A node's URL-monitoring configuration (1:1 with the node). No secrets: the optional auth
@@ -21401,6 +21444,55 @@ export interface operations {
             };
             /** @description Not enough free space to store the archive and unpack it */
             507: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_upgrade_enabled: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpgradeSwitch"];
+            };
+        };
+        responses: {
+            /** @description Stored; the updater picks it up within one of its beats */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks manage-configuration or manage-credentials */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no metadata store, or this core is not the leader */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

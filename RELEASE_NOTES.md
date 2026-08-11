@@ -18,13 +18,22 @@
   readable only from inside a support bundle behind three permissions, which meant the question a
   green pipeline cannot answer ("is this actually the binary I built?") had no cheap way to be
   asked. The same answers are on the MCP surface as `get_system_health(section="upgrade")`.
-- **Upgrading from the WebUI, off by default.** A new `yagra-updater` sidecar — shipped **commented
-  out** in `docker-compose.deploy.yml` — carries out backup → pull → compose swap → recreate →
-  verify when `POST /api/v1/system/upgrade` asks it to. **core never gets the Docker socket**; the
-  sidecar holds it, exactly as `ipasn-updater` holds the only outbound network path, and deleting
-  the service removes the capability. Enabling it creates a path from Yagra's Admin role to host
-  root that does not otherwise exist, so read the block before uncommenting it. The write endpoint
-  requires manage-configuration **and** manage-credentials, and stays off the MCP surface.
+- **Upgrade Yagra from the WebUI.** Settings ▸ Upgrade lists the releases it can move to and does
+  the whole thing: backup → pull → install the composition out of the target image → recreate →
+  verify, carried out by a new `yagra-updater` container. **core never gets the Docker socket**; the
+  sidecar holds it, exactly as `ipasn-updater` holds the only outbound network path.
+  **This is now the ordinary way to upgrade** — `/release` no longer deploys anywhere, and a
+  deployment takes a new version when its operator presses the button.
+  - **It ships switched on, and there is a switch on the page to turn it off.** Off means no upgrade
+    can be requested and the updater stops contacting the registry; the container still exists.
+    The setting lives in the database, so it survives the upgrades it governs — deleting the service
+    from your compose file does not, because each version installs its own composition.
+  - ⚠️ **This creates a path from Yagra's Admin role to root on the host**, which did not exist
+    before. What bounds it: the image repository is fixed by the host environment, so an Admin can
+    install a tag we published and nothing else; the command set is closed; and nothing in the
+    shared volume is ever executed. Requesting an upgrade needs manage-configuration **and**
+    manage-credentials, and none of it is on the MCP surface.
+  - The registry is checked once a day.
 - **Upgrading with no registry at all.** `POST /api/v1/system/upgrade/bundle` takes a `docker save`
   archive of a release's three images, streams it to the shared volume and installs it — the same
   backup, the same composition-from-the-target-image, the same provenance check afterwards. Only

@@ -41,6 +41,27 @@
   line-height: 1.5;
 }
 
+/* The operator's on/off, same shape as the Meraki kill switch so the two read as one family. */
+.upgrade-switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: var(--font-sm);
+}
+
+.upgrade-switch input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent-color);
+}
+
+.upgrade-switch input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* Offline bundle: file, tag, go. Wraps rather than scrolls — the file input is the widest thing
    on the page and its rendered width is the browser's, not ours. */
 .upgrade-bundle {

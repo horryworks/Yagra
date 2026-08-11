@@ -28,6 +28,7 @@ import {
   rollback,
   runState,
   shortRef,
+  switchPending,
 } from './upgradeStatus';
 import './UpgradePage.css';
 
@@ -68,6 +69,8 @@ export function UpgradePage() {
   const [bundleError, setBundleError] = useState<string | null>(null);
   // `null` when no upload is in flight; 0…1 while one is.
   const [uploaded, setUploaded] = useState<number | null>(null);
+  const [switching, setSwitching] = useState(false);
+  const [switchError, setSwitchError] = useState<string | null>(null);
   // Sticky: once a run starts, a failed poll means core is restarting — which is the operation
   // working, not an error. Without this the page would flip to "could not read" mid-upgrade.
   const everSeen = useRef(false);
@@ -107,6 +110,21 @@ export function UpgradePage() {
       setApplyError(errMsg(e, t('apply.failed')));
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const toggle = async (next: boolean) => {
+    setSwitching(true);
+    setSwitchError(null);
+    try {
+      await api.setUpgradeEnabled(next);
+      // Re-read rather than patch local state: the sidecar's own view arrives on the next poll and
+      // the page should show what the deployment says, not what this browser just asked for.
+      await load();
+    } catch (e) {
+      setSwitchError(errMsg(e, t('mechanism.switchFailed')));
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -236,8 +254,24 @@ export function UpgradePage() {
       </Card>
 
       <Card title={t('mechanism.heading')}>
-        {/* Three distinct answers — never deployed, deployed but dead, ready — because they call
-            for three different actions. See `mechanism()`. */}
+        {/* Four distinct answers — not deployed, dead, switched off, ready — because they call for
+            four different actions. See `mechanism()`. */}
+        {status.updater.present && (
+          <label className="upgrade-switch">
+            <input
+              type="checkbox"
+              checked={status.upgrade_enabled}
+              disabled={switching || isRunning(status)}
+              onChange={() => void toggle(!status.upgrade_enabled)}
+            />
+            <span>{t('mechanism.switch')}</span>
+          </label>
+        )}
+        {status.updater.present && (
+          <p className="upgrade-hint muted">{t('mechanism.switchHint')}</p>
+        )}
+        {switchError && <p className="upgrade-note">{switchError}</p>}
+
         {state === 'absent' && (
           <>
             <p className="upgrade-note">{t('mechanism.disabled')}</p>
@@ -249,6 +283,15 @@ export function UpgradePage() {
           <>
             <p className="upgrade-note">{t('mechanism.stopped')}</p>
             <p className="upgrade-hint muted">{t('mechanism.stoppedHint')}</p>
+          </>
+        )}
+        {state === 'paused' && (
+          <>
+            <p className="upgrade-note">{t('mechanism.paused')}</p>
+            <p className="upgrade-hint muted">{t('mechanism.pausedHint')}</p>
+            {switchPending(status) && (
+              <p className="upgrade-hint muted">{t('mechanism.switchPending')}</p>
+            )}
           </>
         )}
         {state === 'ready' && (

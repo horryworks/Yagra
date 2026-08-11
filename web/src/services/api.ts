@@ -1265,6 +1265,11 @@ export const api = {
   applyUpgrade: (targetTag: string): Promise<UpgradeRunAccepted> =>
     apiPost('/api/v1/system/upgrade', { body: { target_tag: targetTag } }),
 
+  /** Turn upgrading from the WebUI on or off for this deployment (ADR-050). Stored in the
+   *  database, so it survives the upgrades it governs; the updater picks it up within one beat. */
+  setUpgradeEnabled: (enabled: boolean): Promise<void> =>
+    apiPut('/api/v1/system/upgrade/enabled', { body: { enabled } }),
+
   /** Install a release from a `docker save` archive, for a site with no reachable registry
    *  (ADR-050 Increment 3). The path is written out because the body is raw bytes, not JSON, so
    *  the generated helpers do not cover it — the same reason the two downloads write theirs out. */

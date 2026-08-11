@@ -1,0 +1,32 @@
+-- 0079_upgrade_switch — the operator's on/off for the WebUI upgrade mechanism (ADR-050).
+--
+-- Additive (expand, ADR-017): one column with a DEFAULT on the singleton app_settings row, exactly
+-- like `meraki_polling_enabled` in 0041. Existing rows and an N-1 binary (which never selects it)
+-- keep working unchanged.
+--
+-- WHY THE DEFAULT IS true. The `yagra-updater` sidecar now ships uncommented, so the capability is
+-- present on every deployment and the switch decides whether it can be used. Defaulting to true
+-- makes an upgrade requestable the moment the stack is up, which is the point of the feature: the
+-- production premise (ADR-045) is a closed network with no shell, and a mechanism whose only
+-- enabling act is a shell edit would not exist there.
+--
+-- WHY IT IS A SWITCH AT ALL, rather than just the presence of the sidecar. Deleting the service
+-- from the composition looks like the natural "off", and it is not durable: the composition is
+-- taken from the target image on every upgrade (ADR-050 decision 5), so a local deletion is undone
+-- by the very mechanism it was meant to remove. A row in PostgreSQL survives that. It is also the
+-- only "off" reachable by an operator who has no shell — the same people this feature is for.
+--
+-- WHY IT IS **NOT** IN THE CONFIGURATION BUNDLE. `config_bundle.rs` carries
+-- `default_poll_interval_secs` and `meraki_polling_enabled` from this table and deliberately leaves
+-- the retention windows behind, because those are properties of the target deployment rather than
+-- portable monitoring configuration. This one is further along that same line: importing a bundle
+-- must never open a path from an Admin session to host root on the importing deployment. The export
+-- names its columns explicitly, so this is a property of that SELECT, not of this migration — the
+-- comment there says so.
+--
+-- Read fail-closed (`upgrade.rs`): a missing row or an unreadable value reports "off". That differs
+-- from `meraki_polling_enabled`, which falls back to true, and the difference is the point — one
+-- switch stops collection, this one opens a privileged path.
+
+ALTER TABLE app_settings
+    ADD COLUMN upgrade_enabled BOOLEAN NOT NULL DEFAULT true;

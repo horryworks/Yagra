@@ -91,6 +91,14 @@ pub struct UpdaterHeartbeat {
     /// makes an updater too old to know the field read as `false`, which is the safe direction.
     #[serde(default)]
     pub allow_bundle: bool,
+    /// Whether the sidecar saw the operator's switch turned off on its last pass.
+    ///
+    /// Reported rather than assumed, for the same reason as `allow_bundle`: core stores the setting
+    /// but the sidecar is what acts on it, so this is the sidecar confirming it read the same
+    /// answer. A disagreement between this and the stored value means the two have not converged
+    /// yet — at most one beat.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 /// What core is asking the updater to do.
@@ -243,10 +251,69 @@ impl UpgradeRepo {
         yagra_hoststats::available_bytes(self.dir.as_deref()?)
     }
 
-    /// The updater's heartbeat, or `None` when the mechanism is off or has never run.
+    /// The updater's heartbeat, or `None` when the sidecar is absent or has never run.
     #[must_use]
     pub fn heartbeat(&self) -> Option<UpdaterHeartbeat> {
         self.read_json("current.json")
+    }
+
+    /// Is the operator's switch on? (ADR-050 — Settings ▸ Upgrade.)
+    ///
+    /// **Fail-closed**, unlike `repo.rs`'s `get_meraki_polling_enabled`, which falls back to `true`
+    /// on a missing row. The difference is what the two switches control: that one stops collection
+    /// from a vendor API, this one opens a path from an Admin session to root on the host. A
+    /// database core cannot read is not a reason to leave that open. A *fresh* deployment still
+    /// starts enabled, because the column's own DEFAULT is `true` — the fallback here only covers
+    /// skeleton mode and the moments before the settings row is seeded.
+    pub async fn enabled(&self) -> bool {
+        sqlx::query("SELECT upgrade_enabled FROM app_settings WHERE id = TRUE")
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.try_get::<bool, _>("upgrade_enabled").ok())
+            .unwrap_or(false)
+    }
+
+    /// Store the switch, then republish it where the sidecar can see it.
+    ///
+    /// PostgreSQL is the source of truth and the file is a cache of it — the same relationship
+    /// ADR-044 gave the WebUI certificate. That ordering matters here: if the volume were
+    /// authoritative, wiping it would silently re-enable a privileged path, and the setting would
+    /// not survive the upgrade it governs.
+    pub async fn set_enabled(&self, enabled: bool) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO app_settings (id, upgrade_enabled, updated_at) \
+             VALUES (TRUE, $1, now()) \
+             ON CONFLICT (id) DO UPDATE SET upgrade_enabled = $1, updated_at = now()",
+        )
+        .bind(enabled)
+        .execute(&self.pool)
+        .await?;
+        self.publish_enabled(enabled);
+        Ok(())
+    }
+
+    /// Write the switch into the hand-off volume for the sidecar.
+    ///
+    /// Called on every change and again at startup, so a volume that was deleted, or one written by
+    /// a core that has since been replaced, converges on what the database says.
+    ///
+    /// Best effort: a deployment with no sidecar has no directory to write to, and a failure here
+    /// must not stop core from booting. The sidecar treats an absent file as enabled, matching the
+    /// column default — the safe direction is that a fresh volume does not read as paused, since
+    /// core refuses the request anyway when the stored setting is off.
+    pub fn publish_enabled(&self, enabled: bool) {
+        let Some(dir) = self.dir.as_deref() else {
+            return;
+        };
+        let body = format!("{SETTINGS_ENABLED_KEY}={}\n", u8::from(enabled));
+        let tmp = dir.join("settings.tmp");
+        let write = std::fs::write(&tmp, body)
+            .and_then(|()| std::fs::rename(&tmp, dir.join(SETTINGS_FILE)));
+        if let Err(e) = write {
+            tracing::warn!(error = %e, "could not publish the upgrade switch to the updater");
+        }
     }
 
     /// The releases the updater last saw.
@@ -429,6 +496,13 @@ impl UpgradeRepo {
 
 /// Where staged image archives live inside the hand-off volume.
 const BUNDLE_SUBDIR: &str = "bundle";
+
+/// The file core materialises the operator's switch into, for the sidecar to read.
+const SETTINGS_FILE: &str = "settings";
+
+/// The key inside that file. Pinned to the sidecar's own `sed` expression by
+/// `the_sidecar_reads_the_settings_key_core_writes`.
+const SETTINGS_ENABLED_KEY: &str = "enabled";
 
 /// A fresh run id.
 ///
@@ -805,6 +879,26 @@ mod tests {
                  will refuse"
             );
         }
+    }
+
+    /// The second Rust ⟷ shell mirror: the key core writes into the hand-off volume ⟷ the
+    /// expression the sidecar greps it out with. A drift here fails silently in the worst
+    /// direction — the sidecar would read no value, treat the mechanism as enabled, and the
+    /// operator's switch would appear to work while changing nothing on the side that acts.
+    #[test]
+    fn the_sidecar_reads_the_settings_key_core_writes() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        // Built at runtime from the constants, so the test cannot pass by matching itself.
+        let expr = format!("s/^{SETTINGS_ENABLED_KEY}=//p");
+        assert!(
+            compose.contains(&expr),
+            "the updater does not parse `{expr}`, so core's switch would never reach it"
+        );
+        assert!(
+            compose.contains(&format!("$$D/{SETTINGS_FILE}")),
+            "the updater reads a different file from the one core writes"
+        );
     }
 
     /// The staged file's name is a name because the id cannot be anything else.

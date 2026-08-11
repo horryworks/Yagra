@@ -11,23 +11,36 @@
 
 import type { UpgradeStatus } from '../types/api';
 
-/** Whether the privileged updater sidecar is present and reporting (ADR-050 decision 1). */
-export type Mechanism = 'absent' | 'stopped' | 'ready';
+/** What state the privileged updater sidecar is in (ADR-050 decision 1). */
+export type Mechanism = 'absent' | 'stopped' | 'paused' | 'ready';
 
 /**
- * Three states, not two, and the middle one is the reason.
+ * Four states, and every boundary between them earns its place.
  *
- * `absent` is a deployment choice — the sidecar was never enabled, and the fix is to enable it.
- * `stopped` is a fault — it was enabled and has gone quiet, and the fix is to look at its logs.
- * Rendering those identically would train an operator to ignore the one that matters.
+ * `absent` — no sidecar has ever reported. Since it now ships in the composition, this means it was
+ *   removed, or the stack has not finished starting.
+ * `stopped` — it reported once and has gone quiet. A fault; the fix is to read its logs.
+ * `paused` — alive, and the operator switched the mechanism off. A choice, not a fault.
+ * `ready` — alive and permitted.
  *
- * All three are also kept distinct from "there is no newer version", which is a fourth fact
- * entirely. Same discipline ADR-040 applied to `/flags`: never present an inferred value as a
- * known one.
+ * Rendering any two of these the same would train an operator to ignore the one that matters. All
+ * four are also distinct from "there is no newer version", which is a fifth fact entirely — same
+ * discipline ADR-040 applied to `/flags`: never present an inferred value as a known one.
+ *
+ * Reads `upgrade_enabled` (what this deployment stored) rather than `updater.paused` (what the
+ * sidecar last saw). They converge within one beat, and the stored value is the one the toggle
+ * shows, so following it keeps the switch from appearing to bounce back after a click.
  */
 export function mechanism(status: UpgradeStatus): Mechanism {
   if (!status.updater.present) return 'absent';
-  return status.updater.fresh ? 'ready' : 'stopped';
+  if (!status.updater.fresh) return 'stopped';
+  return status.upgrade_enabled ? 'ready' : 'paused';
+}
+
+/** Has the operator's switch reached the sidecar yet? Drives the "saved, applying…" hint — the two
+ *  disagree for at most one of the sidecar's beats. */
+export function switchPending(status: UpgradeStatus): boolean {
+  return status.updater.present && status.updater.paused === status.upgrade_enabled;
 }
 
 /** The run states the updater writes. Iterated by `i18nEnumKeys.test.ts`, which is what stops a
@@ -46,7 +59,10 @@ export function isRunning(status: UpgradeStatus): boolean {
   return status.last_run?.state === 'running';
 }
 
-/** May the apply button be offered at all? */
+/** May the apply button be offered at all?
+ *
+ *  `enabled` already folds in the switch and the sidecar's liveness — it is the backend's own
+ *  answer to "could a request be accepted right now", so this does not re-derive it. */
 export function canApply(status: UpgradeStatus): boolean {
   return status.enabled && !isRunning(status);
 }
