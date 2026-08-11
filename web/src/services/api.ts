@@ -268,6 +268,17 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   // 204 No Content: only ever returned by endpoints typed `Promise<void>` (DELETEs, PUT
   // toggles), so the `undefined as T` is sound. A body-returning endpoint must not 204.
   if (res.status === 204) return undefined as T;
+  // …but 204 is not the only body-less success. A 202 may or may not carry one — `POST
+  // /system/upgrade/apply` answers with the accepted run, `POST /system/upgrade/check` answers
+  // with nothing at all — so the status cannot decide it and neither can `T`, which is erased.
+  // Ask the response instead. Getting this wrong is not a type error and not a server error: the
+  // request succeeds, the work happens, and `res.json()` throws `Unexpected end of JSON input`
+  // over an empty body, so the caller reports a failure that did not occur. That is exactly how
+  // the check button first behaved — the updater re-read the registry every time it was pressed
+  // while the page said it could not ask.
+  // `headers` is optional-chained because the fetch fakes in `api.test.ts` supply only `status`
+  // and `json`; a fake without headers keeps the parsing path it has always taken.
+  if (res.headers?.get('content-length') === '0') return undefined as T;
   return (await res.json()) as T;
 }
 

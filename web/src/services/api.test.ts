@@ -160,6 +160,38 @@ describe('api client', () => {
     expect(JSON.parse(init.body)).toEqual({ default_poll_interval_secs: 120 });
   });
 
+  // A 202 is not necessarily empty — `upgrade/apply` answers with the accepted run — so the
+  // status alone cannot decide whether there is anything to parse. These two pin both halves:
+  // parsing an empty body threw `Unexpected end of JSON input` and turned a request the server
+  // had accepted, and the updater had already carried out, into a reported failure.
+  it('resolves an accepted request that carries no body instead of failing to parse it', async () => {
+    const json = vi.fn(async () => ({}));
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'content-length': '0' }),
+      json,
+    } as unknown as Response);
+    globalThis.fetch = spy;
+    await expect(api.checkUpgrades()).resolves.toBeUndefined();
+    expect(json).not.toHaveBeenCalled();
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/system/upgrade/check');
+    expect(init.method).toBe('POST');
+  });
+
+  it('still parses an accepted request that does carry a body', async () => {
+    const spy = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 202,
+      headers: new Headers({ 'content-length': '42' }),
+      json: async () => ({ id: 'run-1', target_tag: 'v0.2.2' }),
+    } as unknown as Response);
+    globalThis.fetch = spy;
+    const run = await api.applyUpgrade('v0.2.2');
+    expect(run.id).toBe('run-1');
+  });
+
   it('posts a profile with its poll-interval override in the body', async () => {
     const spy = vi
       .fn()
