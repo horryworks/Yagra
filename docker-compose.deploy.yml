@@ -475,7 +475,12 @@ services:
     # the gid says) — set YAGRA_DOCKER_GID in .env if you do.
     user: "0:${YAGRA_DOCKER_GID:-0}"
     environment:
-      YAGRA_UPGRADE_REPO: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}
+      # Its own variable, deliberately NOT ${YAGRA_IMAGE_REPO}. Where releases live is not where
+      # this deployment's current images came from: a development box pulls SHA-tagged builds from
+      # a private registry, and inheriting that pointed the release picker at a registry holding no
+      # releases at all (measured on the test server, where /flashdeploy sets it to localhost:5000).
+      # Fixed here in the host's environment either way, so no request can name a registry.
+      YAGRA_UPGRADE_REPO: ${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}
       # Daily. The list only fills a picker, so checking more often buys nothing — and a monitoring
       # product should not reach out to a registry more than it needs to. Switching the mechanism
       # off in the WebUI stops this call entirely.
@@ -624,7 +629,13 @@ services:
           NAME="$${REPO#*/}/yagra-core"
           TOK=$$(wget -qO- "https://ghcr.io/token?scope=repository:$$NAME:pull&service=ghcr.io" 2>/dev/null \
                  | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-          TAGS=$$(wget -qO- --header="Authorization: Bearer $$TOK" "https://ghcr.io/v2/$$NAME/tags/list" 2>/dev/null \
+          # `n=1000` is load-bearing, not tidiness. The default page is 100 tags and this repository
+          # publishes an immutable :<sha> tag with every release, so the version tags are a small
+          # minority of the list and GHCR's ordering pushes them off the first page. Measured
+          # 2026-08-11: the default page yielded exactly ONE version tag — v0.1.0, the oldest — so
+          # the picker offered a single downgrade to the first release ever published. With n=1000
+          # the same request returns all 26.
+          TAGS=$$(wget -qO- --header="Authorization: Bearer $$TOK" "https://ghcr.io/v2/$$NAME/tags/list?n=1000" 2>/dev/null \
                   | tr ',' '\n' | sed -n 's/.*"\(v[0-9][0-9.]*[0-9a-z-]*\)".*/\1/p' | sort -Vr | head -20)
           if [ -z "$$TAGS" ]; then
             printf '{"written_at":%s,"releases":[],"error":"could not reach the registry"}\n' "$$(date +%s)" > "$$D/available.json.tmp"
