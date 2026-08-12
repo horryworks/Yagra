@@ -11,6 +11,11 @@
 ## Unreleased
 
 ### Improvements
+- **Troubleshoot ▸ Tools no longer repeats the analysis-run list.** The panel it showed was a
+  verbatim duplicate of Troubleshoot ▸ Analysis runs — the same component over the same job list,
+  unfiltered and untruncated — so it only pushed the tool grid down the page. The tool grid now
+  follows the stat strip directly; the *running now* counter at the top of the page still shows
+  in-flight jobs, and the full list stays one click away under Analysis runs.
 - **Settings ▸ Upgrade no longer offers to upgrade a deployment that cannot be upgraded from
   there.** Upgrading from the WebUI needs a container deployment that runs the `yagra-updater`
   sidecar alongside core — the composition in `docker-compose.deploy.yml`. Every other way of

@@ -7,7 +7,6 @@
       "runsToday": "runs today",
       "avgRuntime": "avg runtime"
     },
-    "viewAll": "View all",
     "toolsHeading": "Diagnostic tools",
     "toolsSub": "Pick a tool, set its scope, and run it as a job."
   },

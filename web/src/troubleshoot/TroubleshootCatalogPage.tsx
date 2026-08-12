@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Troubleshoot landing — the tool catalog (handoff §1). PageHeader + an intro stat strip (now
-// computed from the real job history) + the Analysis runs panel + the diagnostic-tool grid. Owns
-// the launch drawer; live job updates and the completion toast come from AppShell.
+// computed from the real job history) + the diagnostic-tool grid. Owns the launch drawer; live job
+// updates and the completion toast come from AppShell. The run list itself lives only on
+// /troubleshoot/runs — this page used to render the same <AnalysisRuns/> unfiltered, which was a
+// verbatim duplicate of that page pushing the tool grid down.
 
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
-import { Button } from '../components/ui/Button';
 import { TOOLS } from './data';
 import { runningCount, useTroubleshootStore } from './store';
-import { AnalysisRuns } from './AnalysisRuns';
 import { ToolCard } from './ToolCard';
 import { LaunchDrawer } from './LaunchDrawer';
 import { avgRuntime, runsToday } from './catalogStats';
@@ -18,7 +16,6 @@ import './troubleshoot.css';
 
 export function TroubleshootCatalogPage() {
   const { t } = useTranslation('troubleshoot');
-  const navigate = useNavigate();
   const jobs = useTroubleshootStore((s) => s.jobs);
   const running = runningCount(jobs);
 
@@ -51,17 +48,6 @@ export function TroubleshootCatalogPage() {
           <span className="ts-intro-cap">{t('catalog.stat.avgRuntime')}</span>
         </div>
       </div>
-
-      <Card
-        title={t('nav:troubleshoot.runs')}
-        actions={
-          <Button variant="ghost" onClick={() => navigate('/troubleshoot/runs')}>
-            {t('catalog.viewAll')}
-          </Button>
-        }
-      >
-        <AnalysisRuns />
-      </Card>
 
       <div className="ts-section-label">
         <h2>{t('catalog.toolsHeading')}</h2>
