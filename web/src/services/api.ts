@@ -10,6 +10,7 @@
 
 import type {
   Alert,
+  AlertHistoryQuery,
   AlertHistoryRow,
   RankedAlertNodes,
   AlertTransition,
@@ -1383,18 +1384,13 @@ export const api = {
    *  as `before_id`. Both, always — a whole flush of alerts is written in one transaction and
    *  therefore shares one `recorded_at`, so a timestamp-only cursor lands inside that group and
    *  skips its remaining rows. Build it with `pages/historyCursor.ts::nextCursor`. */
-  listAlertHistory: (opts?: {
-    limit?: number;
-    before?: string;
-    before_id?: string;
-  }): Promise<AlertHistoryRow[]> =>
-    apiGet('/api/v1/alerts/history', {
-      query: {
-        limit: opts?.limit,
-        before: opts?.before || undefined,
-        before_id: opts?.before_id || undefined,
-      },
-    }),
+  //
+  //  ⚠️ Takes the **generated** query type and forwards it whole. The hand-written parameter list
+  //  this replaces named only limit/before/before_id, so every filter a caller passed was dropped
+  //  here — silently, because `queryFor()` returns a value rather than an object literal and
+  //  TypeScript's excess-property check does not apply to those. Do not re-list the fields.
+  listAlertHistory: (query?: AlertHistoryQuery): Promise<AlertHistoryRow[]> =>
+    apiGet('/api/v1/alerts/history', { query }),
 
   /** Nodes generating the most alert fires over a trailing window (chronic offenders). */
   getAlertTopNodes: (opts?: { window?: number; limit?: number }): Promise<RankedAlertNodes> =>

@@ -414,8 +414,16 @@ export type ThresholdPage = components['schemas']['ThresholdPage'];
 /** One alert-history row (`GET /api/v1/alerts/history`) — the stored row plus inbound ack state
  *  (the Rust type is `AlertHistoryView`). `metric` is `null` for rows recorded before it was
  *  captured ⇒ render "—"; `observed_value` / `threshold_value` / `direction` are threshold checks
- *  only. `recorded_at` is the keyset cursor: pass the last row's value as `before`. */
+ *  only. The keyset cursor is the **pair** `(recorded_at, id)` — see `pages/historyCursor.ts`. */
 export type AlertHistoryRow = components['schemas']['AlertHistoryView'];
+
+/** Query params for alert history — the cursor pair plus the History toolbar's filters. Derived
+ *  from the operation rather than hand-listed: a hand-written parameter list here silently dropped
+ *  every filter a caller passed, because excess-property checking does not reach a value that came
+ *  out of a function. */
+export type AlertHistoryQuery = NonNullable<
+  paths['/api/v1/alerts/history']['get']['parameters']['query']
+>;
 
 /** A chronic-offender row (`GET /api/v1/alerts/top-nodes`). */
 export type AlertNodeCount = components['schemas']['AlertNodeCount'];

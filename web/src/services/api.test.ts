@@ -701,6 +701,40 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/alerts/history?limit=100');
   });
 
+  it('forwards every alert-history filter, not just the ones the cursor uses', async () => {
+    // The regression this exists for: the client hand-listed limit/before/before_id and built the
+    // query from those three, so every filter the History toolbar set was dropped here. It type-
+    // checked because `queryFor()` returns a value, and TypeScript's excess-property check only
+    // looks at object literals — so the screen filtered nothing and said nothing.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listAlertHistory({
+      limit: 100,
+      severity: 'critical',
+      state: 'unreachable',
+      resolved: false,
+      node_id: 'n1',
+      group_id: 'g1',
+      since: '2026-08-05T00:00:00+00:00',
+    });
+    const url = spy.mock.calls[0][0] as string;
+    for (const expected of [
+      'severity=critical',
+      'state=unreachable',
+      'resolved=false',
+      'node_id=n1',
+      'group_id=g1',
+      'since=2026-08-05',
+    ]) {
+      expect(url, `${expected} missing from ${url}`).toContain(expected);
+    }
+    // `resolved=false` in particular: a falsy value that must survive to the wire, because
+    // "fires only" and "both" are different requests.
+    expect(url).toContain('resolved=false');
+  });
+
   it('sends the audit filters as query parameters, and omits the unset ones', async () => {
     const spy = vi
       .fn()
