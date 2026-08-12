@@ -552,8 +552,27 @@ services:
         #    the test server 2026-08-12, three consecutive applies died here, all reporting "the
         #    pre-upgrade backup failed", because Docker had helpfully created an empty /project on
         #    the host and the backup script found no stack in it.
+        #
+        #    **Every deployment coming from v0.2.3 or earlier arrives here exactly once, and that is
+        #    unavoidable.** The apply that installs a release is executed by the updater of the
+        #    release being replaced, so the fix above cannot apply itself to the upgrade that
+        #    delivers it — and because that fix changes this very service definition, compose is
+        #    guaranteed to recreate the updater during it, which is precisely what stamps the bad
+        #    label. So this message is not an edge case: it is the one every existing operator reads.
+        #
+        #    Two things about the repair, both learned the hard way (2026-08-12, verified with
+        #    `docker compose --dry-run` on the test server):
+        #      * `--force-recreate yagra-updater` is REQUIRED. A plain `up -d` recreates core, web
+        #        and poller — whose image reference changed — and reports the updater as `Running`,
+        #        because its definition is unchanged. But `label()` above inspects `$$SELF`, i.e.
+        #        THIS container: the only label that matters is the only one a plain `up -d` leaves
+        #        alone. The command therefore succeeds and repairs nothing, which is worse than
+        #        failing.
+        #      * Do NOT tell the operator to run it from `$$WORKDIR`. That is the poisoned path —
+        #        the directory that does not hold the compose file is exactly what got us here.
+        #        Name the property ("the directory that holds docker-compose.deploy.yml") instead.
         [ -n "$${WORKDIR:-}" ] && [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
-          || fail start "$${WORKDIR:-the deployment directory} does not hold this deployment's compose file; run docker compose -p $$PROJ -f docker-compose.deploy.yml up -d once from it on the host to repair the labels this reads"
+          || fail start "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml. On the host, from the directory that does, run: docker compose -p $$PROJ -f docker-compose.deploy.yml up -d --force-recreate yagra-updater — a plain 'up -d' will NOT repair it, because this container's definition is unchanged and compose leaves it running with the stale label"
 
         # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
         #    it. The script ships inside the RUNNING core image at a root-owned path, so core

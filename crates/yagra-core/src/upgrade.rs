@@ -1390,6 +1390,45 @@ mod tests {
         }
     }
 
+    /// The repair the guard above prints must actually repair something, and the obvious spelling
+    /// does not.
+    ///
+    /// `docker compose up -d` recreates only containers whose definition changed. After a poisoned
+    /// apply that is core, web and poller — their image reference moved — while the updater reports
+    /// `Running`, because the composition it just installed describes it exactly as it is. But
+    /// `label()` inspects `$SELF`: the updater reads its **own** label, so the one container a plain
+    /// `up -d` leaves alone is the only one whose label is ever read. The command completes, prints
+    /// four green lines, and changes nothing that matters — a repair that reports success while
+    /// leaving the deployment broken is worse than one that fails.
+    ///
+    /// Verified with `docker compose --dry-run` on the test server, 2026-08-12, in exactly the state
+    /// a v0.2.3 → v0.2.4 upgrade leaves behind. `--force-recreate yagra-updater` re-stamps the label
+    /// and the next apply resolves its `WORKDIR` correctly.
+    ///
+    /// This is not a rare path: **every deployment on v0.2.3 or earlier reaches it once.** The apply
+    /// is run by the updater of the release being *replaced*, so a fix to the updater cannot apply
+    /// itself to the upgrade that delivers it, and since the fix edits this service definition the
+    /// recreate — and therefore the bad label — is guaranteed rather than possible.
+    #[test]
+    fn the_repair_the_apply_prints_recreates_the_container_whose_label_is_read() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let step0 = compose
+            .lines()
+            .find(|l| l.contains("does not hold this deployment's docker-compose.deploy.yml"))
+            .expect("step 0 still refuses an apply whose WORKDIR holds no composition");
+        assert!(
+            step0.contains("--force-recreate yagra-updater"),
+            "step 0 must name the only command that re-stamps the label it reads; a bare `up -d` \
+             reports success and repairs nothing. Offending message: {step0}"
+        );
+        assert!(
+            !step0.contains("once from it"),
+            "the repair must not be described as running from $WORKDIR — that is the poisoned path, \
+             and it is the reason this message is being printed. Offending message: {step0}"
+        );
+    }
+
     /// `refresh` must not write a status file, and only the shell can be asked whether it does.
     ///
     /// `status.json` means "a run", and three things read it: the Upgrade page's last-run card, the

@@ -10,6 +10,25 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **The repair instruction a failed upgrade prints did not repair anything.** v0.2.4 made a
+  deployment whose compose labels are stale stop at the first step and name the command that fixes
+  it. The command it named was wrong: `docker compose up -d` recreates only containers whose
+  definition changed, and after a poisoned apply that is core, web and poller — never the updater,
+  whose definition matches the composition it just installed. Since the updater reads its **own**
+  label, the one container the command leaves alone is the only one whose label is ever read. It
+  printed four green lines and changed nothing, which is worse than failing. The message now names
+  `docker compose -p yagra -f docker-compose.deploy.yml up -d --force-recreate yagra-updater`, says
+  why the bare form does not work, and no longer tells you to run it from the directory that is
+  itself the problem.
+  **This affects every deployment on v0.2.3 or earlier**, and it is not avoidable: an upgrade is
+  carried out by the updater of the release being *replaced*, so v0.2.4's fix could not apply itself
+  to the upgrade that delivered it — and because that fix changes the updater's own service
+  definition, the recreate that stamps the bad label is guaranteed rather than possible. So the
+  first upgrade after moving to v0.2.4 stops at the first step. Run the command above once on the
+  host and every upgrade after it is unaffected; nothing is at risk in the meantime, because the
+  run stops before it pulls an image or stops a container.
+
 ## v0.2.4 — the second upgrade works, and the backup it takes first has the metrics in it
 
 Two bug fixes, both in the self-upgrade path that v0.2.2 introduced, and both found the same way:
@@ -31,8 +50,13 @@ already on disk hold no metrics.
   that cannot find the composition says so and names the command that repairs it. Nothing was ever
   damaged — it failed before pulling an image or stopping a container.
   **If a deployment is already affected** — upgrades from Settings ▸ Upgrade fail at the backup step
-  within a second — run `docker compose -p yagra -f docker-compose.deploy.yml up -d` once from the
-  deployment directory on the host. That re-stamps the labels, and the WebUI works from then on.
+  within a second — run, once, on the host, from the directory that holds this deployment's
+  `docker-compose.deploy.yml`:
+  `docker compose -p yagra -f docker-compose.deploy.yml up -d --force-recreate yagra-updater`.
+  That re-stamps the label, and the WebUI works from then on. (Corrected after publication: this
+  originally named a bare `up -d`, which leaves the updater running untouched — its definition has
+  not changed — and therefore repairs nothing. The updater reads its own label, so it is the one
+  container that has to be recreated.)
 - **Pre-upgrade backups contained no metrics, and nothing said so.** `yagra-backup.sh` asks
   VictoriaMetrics for a snapshot over HTTP from inside the stack, and it asked through
   `docker exec core` — but the core runtime image ships neither `wget` nor `curl`, so the call
