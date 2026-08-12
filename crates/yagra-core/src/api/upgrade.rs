@@ -147,12 +147,20 @@ pub(crate) struct RunningBuild {
 /// Whether the privileged updater container is deployed, and whether it is alive.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct UpdaterInfo {
-    /// Whether the updater has ever reported. `false` means it is not deployed at all — the
-    /// default, since the mechanism is opt-in.
+    /// Whether this deployment has an upgrade mechanism at all — that is, whether the host wired
+    /// the hand-off directory in. `false` describes how the deployment was installed rather than
+    /// anything that went wrong: upgrading from the WebUI needs a container composition that
+    /// carries the privileged updater alongside core, so a native installation, or a composition
+    /// that does not ship it, cannot offer it. The command-line upgrade path is unaffected.
+    installed: bool,
+    /// Whether the updater has ever reported. Meaningful only where `installed` is true, and there
+    /// it means the container is missing or has not finished starting — a fault, not a property of
+    /// the deployment.
     present: bool,
     /// Whether its last report is recent enough for it to be considered alive.
-    // Reported separately from `present` because "never deployed" and "deployed but stopped" call
-    // for different actions, and a single flag would force the UI to guess which it is looking at.
+    // `installed` → `present` → `fresh` narrow in that order, and each boundary is one the operator
+    // acts on differently: nothing to run here / it should be running and is not / it ran and
+    // stopped. Collapsing any pair would make the UI guess which of two situations it is in.
     fresh: bool,
     /// The image repository it is pinned to. Fixed by the host environment and not settable over
     /// this API.
@@ -302,6 +310,7 @@ pub(crate) async fn upgrade_status(
         enabled: beat.is_some() && fresh && switched_on,
         upgrade_enabled: switched_on,
         updater: UpdaterInfo {
+            installed: upgrade.installed(),
             present: beat.is_some(),
             fresh,
             repo: beat.as_ref().map(|h| h.repo.clone()),
@@ -352,7 +361,7 @@ pub(crate) async fn upgrade_status(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
         (status = 409, description = "A run is already in flight", body = super::error::ErrorBody),
-        (status = 503, description = "The updater is not deployed, not running, or this core is not the leader", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader", body = super::error::ErrorBody),
     ),
 )]
 async fn apply_upgrade(
@@ -388,7 +397,7 @@ async fn apply_upgrade(
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks manage-configuration", body = super::error::ErrorBody),
         (status = 409, description = "An upgrade is already in flight", body = super::error::ErrorBody),
-        (status = 503, description = "The updater is not deployed, not running, switched off, or this core is not the leader", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader", body = super::error::ErrorBody),
     ),
 )]
 async fn check_upgrades(_auth: UpgradeCheck, upgrade: Upgrade) -> ApiResult<StatusCode> {
@@ -456,7 +465,7 @@ pub(crate) struct BundleQuery {
         (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
         (status = 409, description = "A run is already in flight", body = super::error::ErrorBody),
         (status = 413, description = "The archive is larger than this deployment accepts", body = super::error::ErrorBody),
-        (status = 503, description = "The updater is not deployed, not running, not the leader, or does not accept archives", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`) or does not accept archives (`bundle_not_allowed`), or this core is not the leader", body = super::error::ErrorBody),
         (status = 507, description = "Not enough free space to store the archive and unpack it", body = super::error::ErrorBody),
     ),
 )]
@@ -604,14 +613,28 @@ fn too_large(cap: u64) -> ApiError {
     )
 }
 
+/// `503` for a deployment that was never given an upgrade mechanism, worded the same wherever it
+/// comes from.
+///
+/// Distinct from `upgrade_unavailable`, which means the mechanism exists and its updater is not
+/// answering. The two call for opposite things — one is how the deployment was installed and the
+/// operator should reach for the command line, the other is a container to go and look at — so a
+/// client that branches on the code can say which.
+fn unsupported() -> ApiError {
+    ApiError::unavailable(
+        "upgrade_unsupported",
+        "this deployment cannot be upgraded from the WebUI: it was not installed with the \
+         privileged updater alongside core. Upgrade it from the command line instead",
+    )
+}
+
 /// Map a staging failure onto the status the UI branches on, keeping the I/O cause in the log.
 fn bundle_error(e: BundleError) -> ApiError {
     match e {
         BundleError::TooLarge { cap } => too_large(cap),
-        BundleError::Disabled => ApiError::unavailable(
-            "upgrade_unavailable",
-            "the upgrade mechanism is not enabled on this deployment",
-        ),
+        // Staging is refused for exactly one reason: there is no hand-off directory to stage into.
+        // That is the deployment-shape case by construction, never a stopped sidecar.
+        BundleError::Disabled => unsupported(),
         // Both of these are core's own doing — the id it minted, or a volume it cannot write.
         // Neither tells the client anything useful, and the I/O text must not reach it.
         BundleError::BadRunId | BundleError::Io(_) => ApiError::from_internal(
@@ -647,6 +670,13 @@ async fn preflight(
 /// it. Kept as one function for the reason `preflight` gives: a second copy is how one path ends up
 /// missing the 409.
 async fn reachable(upgrade: &crate::upgrade::UpgradeRepo, now: i64) -> Result<(), ApiError> {
+    // First, because it outranks every check below it. The switch defaults to on, so a deployment
+    // with no mechanism at all would otherwise fall through to `upgrade_unavailable` and be told
+    // its updater is not running — naming a container it was never given, and sending the operator
+    // to look for it.
+    if !upgrade.installed() {
+        return Err(unsupported());
+    }
     // The operator's switch, checked here rather than only in the sidecar. The sidecar refuses too,
     // but that is defence in depth: this is the enforcement, because it is the only point that
     // cannot be reached by writing to the shared volume.
@@ -663,7 +693,7 @@ async fn reachable(upgrade: &crate::upgrade::UpgradeRepo, now: i64) -> Result<()
     if !ready {
         return Err(ApiError::unavailable(
             "upgrade_unavailable",
-            "the upgrade mechanism is not enabled on this deployment, or its updater is not running",
+            "this deployment's updater is not running; check the container alongside core",
         ));
     }
     // One run at a time. The updater would serialize them anyway, but a 409 tells the operator why
@@ -876,9 +906,12 @@ mod tests {
 
     /// Each staging failure maps to the status the page branches on.
     ///
-    /// `Disabled` is the one worth pinning: it renders as `upgrade_unavailable`, **not**
-    /// `upgrade_disabled`. Those two mean different things to the operator — "no updater here" vs
-    /// "there is one and you switched it off" — and the page offers a different next step for each.
+    /// `Disabled` is the one worth pinning, and it now renders as `upgrade_unsupported` — not
+    /// `upgrade_disabled`, and no longer `upgrade_unavailable` either. All three are 503 and all
+    /// three mean something different to the operator: "this deployment has no updater at all" vs
+    /// "there is one and you switched it off" vs "there is one and it stopped answering". The page
+    /// offers a different next step for each, so collapsing any pair sends someone to look for a
+    /// container that was never there.
     #[test]
     fn every_staging_failure_maps_to_the_status_the_page_branches_on() {
         let cases = [
@@ -890,7 +923,7 @@ mod tests {
             (
                 BundleError::Disabled,
                 StatusCode::SERVICE_UNAVAILABLE,
-                "upgrade_unavailable",
+                "upgrade_unsupported",
             ),
             (
                 BundleError::BadRunId,
@@ -931,6 +964,48 @@ mod tests {
             !io.message().contains(leaked),
             "an OS error text reached the client: {}",
             io.message()
+        );
+    }
+
+    /// A repo with no hand-off directory, for the two tests below.
+    ///
+    /// `connect_lazy` builds a handle without touching the network — but it does spawn the pool's
+    /// reaper, so every caller has to be a `#[tokio::test]`. Nothing here reaches the database:
+    /// `installed()` reads a field, and `reachable()` refuses before the one query it would
+    /// otherwise run.
+    fn repo(dir: Option<std::path::PathBuf>) -> crate::upgrade::UpgradeRepo {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://127.0.0.1:1/yagra-test-no-such-db")
+            .expect("a lazy handle needs no server");
+        crate::upgrade::UpgradeRepo::new(pool, dir, crate::upgrade::DEFAULT_BUNDLE_MAX_BYTES)
+    }
+
+    /// The hand-off directory is what says this deployment has a mechanism at all.
+    #[tokio::test]
+    async fn a_deployment_with_no_hand_off_directory_reports_no_mechanism() {
+        assert!(!repo(None).installed());
+        assert!(repo(Some(std::path::PathBuf::from("/data/upgrade"))).installed());
+    }
+
+    /// Not being installed outranks every other refusal, and says so in its own code.
+    ///
+    /// The ordering is the assertion, and this test can make it because of how the *other* checks
+    /// fail here: with no database, `enabled()` fail-closes to `false`, so a `reachable()` that
+    /// consulted the switch first would answer `upgrade_disabled`. Getting `upgrade_unsupported`
+    /// is therefore proof the installed check ran ahead of it — which is what stops a deployment
+    /// that was never given an updater being told to go and look at one.
+    #[tokio::test]
+    async fn a_deployment_with_no_mechanism_is_refused_as_unsupported_not_as_switched_off() {
+        let err = super::reachable(&repo(None), 1_760_000_000)
+            .await
+            .expect_err("a deployment with no mechanism cannot be upgraded from here");
+        assert_eq!(err.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(err.code(), "upgrade_unsupported");
+        // The operator is pointed at the command line, not at a container that does not exist.
+        assert!(
+            !err.message().contains("not running"),
+            "an uninstalled deployment must not be described as a stopped updater: {}",
+            err.message()
         );
     }
 }

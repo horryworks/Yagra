@@ -47,6 +47,8 @@
     "switchPending": "Saved. The updater applies it within a few seconds.",
     "switchFailed": "The setting could not be saved.",
     "paused": "Upgrading from the WebUI is switched off.",
+    "unsupported": "This deployment cannot be upgraded from here.",
+    "unsupportedHint": "Upgrading from the WebUI needs a container deployment that runs the updater alongside Yagra, and this one was not installed that way. Nothing is wrong — upgrade it the way it was installed, from the command line. Everything above stays accurate either way.",
     "disabled": "No updater has reported on this deployment.",
     "disabledHint": "It ships with the deployment, so the stack has not finished starting or the service was removed.",
     "disabledHowTo": "docker compose -p yagra ps yagra-updater",

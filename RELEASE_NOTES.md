@@ -10,6 +10,30 @@
 
 ## Unreleased
 
+### Improvements
+- **Settings ▸ Upgrade no longer offers to upgrade a deployment that cannot be upgraded from
+  there.** Upgrading from the WebUI needs a container deployment that runs the `yagra-updater`
+  sidecar alongside core — the composition in `docker-compose.deploy.yml`. Every other way of
+  installing Yagra (natively, or from a composition without that sidecar) has no such mechanism,
+  and the page did not say so: it showed the release list, the apply button and the on/off switch,
+  and pressing any of them returned a 503. It now says the deployment cannot be upgraded from
+  there, points at the command line, and shows none of those controls. What is running, the applied
+  schema and the downgrade window are unchanged and still shown on every deployment.
+  - Distinct from a deployment that *has* the mechanism whose updater is missing or has stopped —
+    that is a fault, and it is still reported as one, as loudly as before.
+
+### API
+- `GET /api/v1/system/upgrade` (and `get_system_health(section="upgrade")`) gained
+  **`updater.installed`**: whether this deployment has an upgrade mechanism at all. Read it before
+  `updater.present`, which now means only "the updater has reported" and is meaningful only where
+  `installed` is true.
+- A request to upgrade a deployment that has no mechanism now answers **`upgrade_unsupported`**
+  (503) instead of `upgrade_unavailable`. The three 503 codes on this surface are now distinct:
+  `upgrade_unsupported` (no mechanism here), `upgrade_disabled` (there is one and it is switched
+  off) and `upgrade_unavailable` (there is one and its updater is not answering). Uploading an
+  image archive to a deployment with no mechanism answered `upgrade_unavailable` before and answers
+  `upgrade_unsupported` now.
+
 ## v0.2.5 — the tree answers why a row is silent, and lets one node out of a group's window
 
 Suppression was easy to *set* from All nodes and impossible to read or undo there: a row carried a

@@ -16552,7 +16552,7 @@
             }
           },
           "503": {
-            "description": "The updater is not deployed, not running, or this core is not the leader",
+            "description": "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -16661,7 +16661,7 @@
             }
           },
           "503": {
-            "description": "The updater is not deployed, not running, not the leader, or does not accept archives",
+            "description": "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`) or does not accept archives (`bundle_not_allowed`), or this core is not the leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -16726,7 +16726,7 @@
             }
           },
           "503": {
-            "description": "The updater is not deployed, not running, switched off, or this core is not the leader",
+            "description": "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -29765,6 +29765,7 @@
         "type": "object",
         "description": "Whether the privileged updater container is deployed, and whether it is alive.",
         "required": [
+          "installed",
           "present",
           "fresh",
           "allow_bundle",
@@ -29797,6 +29798,10 @@
             "type": "boolean",
             "description": "Whether its last report is recent enough for it to be considered alive."
           },
+          "installed": {
+            "type": "boolean",
+            "description": "Whether this deployment has an upgrade mechanism at all — that is, whether the host wired\nthe hand-off directory in. `false` describes how the deployment was installed rather than\nanything that went wrong: upgrading from the WebUI needs a container composition that\ncarries the privileged updater alongside core, so a native installation, or a composition\nthat does not ship it, cannot offer it. The command-line upgrade path is unaffected."
+          },
           "last_seen": {
             "type": [
               "integer",
@@ -29811,7 +29816,7 @@
           },
           "present": {
             "type": "boolean",
-            "description": "Whether the updater has ever reported. `false` means it is not deployed at all — the\ndefault, since the mechanism is opt-in."
+            "description": "Whether the updater has ever reported. Meaningful only where `installed` is true, and there\nit means the container is missing or has not finished starting — a fault, not a property of\nthe deployment."
           },
           "repo": {
             "type": [

@@ -12,26 +12,55 @@
 import type { UpgradeStatus } from '../types/api';
 
 /** What state the privileged updater sidecar is in (ADR-050 decision 1). */
-export type Mechanism = 'absent' | 'stopped' | 'paused' | 'ready';
+export const MECHANISMS = ['unsupported', 'absent', 'stopped', 'paused', 'ready'] as const;
+export type Mechanism = (typeof MECHANISMS)[number];
 
 /**
- * Four states, and every boundary between them earns its place.
+ * The i18n key stem each state renders under, in the `settings-upgrade` namespace.
  *
- * `absent` — no sidecar has ever reported. Since it now ships in the composition, this means it was
- *   removed, or the stack has not finished starting.
+ * A `Record`, so adding a state to `MECHANISMS` is a compile error until it has somewhere to say
+ * itself, and `i18nEnumKeys.test.ts` iterates this to demand the strings exist in both locales.
+ * Neither guard existed while the union was a bare one: a fifth state could ship rendering nothing
+ * at all, in either language, with every test green.
+ *
+ * It is a map rather than a naming convention because the stems do not match the state names —
+ * `absent` renders under `mechanism.disabled*`, which predates the states being named at all.
+ */
+export const MECHANISM_KEYS: Record<Mechanism, string> = {
+  unsupported: 'unsupported',
+  absent: 'disabled',
+  stopped: 'stopped',
+  paused: 'paused',
+  // `ready` has no headline sentence — the release picker is the message.
+  ready: 'readyFrom',
+};
+
+/**
+ * Five states, and every boundary between them earns its place.
+ *
+ * `unsupported` — this deployment has no upgrade mechanism at all, because of how it was installed:
+ *   the apply half needs a container composition carrying the privileged updater alongside core,
+ *   which a native install (and a composition that does not ship it) has no way to provide. Not a
+ *   fault, and nothing on this host will fix it.
+ * `absent` — there *is* a mechanism and no sidecar has ever reported. Since it ships in the
+ *   composition, this means it was removed, or the stack has not finished starting.
  * `stopped` — it reported once and has gone quiet. A fault; the fix is to read its logs.
  * `paused` — alive, and the operator switched the mechanism off. A choice, not a fault.
  * `ready` — alive and permitted.
  *
- * Rendering any two of these the same would train an operator to ignore the one that matters. All
- * four are also distinct from "there is no newer version", which is a fifth fact entirely — same
- * discipline ADR-040 applied to `/flags`: never present an inferred value as a known one.
+ * Rendering any two of these the same would train an operator to ignore the one that matters. The
+ * first boundary is the one worth guarding hardest: reading `unsupported` off `present` instead of
+ * off `installed` would make a *dead sidecar* vanish from the page that exists to report on it —
+ * the page would go quiet exactly when something broke. All five are also distinct from "there is
+ * no newer version", which is a further fact entirely — same discipline ADR-040 applied to
+ * `/flags`: never present an inferred value as a known one.
  *
  * Reads `upgrade_enabled` (what this deployment stored) rather than `updater.paused` (what the
  * sidecar last saw). They converge within one beat, and the stored value is the one the toggle
  * shows, so following it keeps the switch from appearing to bounce back after a click.
  */
 export function mechanism(status: UpgradeStatus): Mechanism {
+  if (!status.updater.installed) return 'unsupported';
   if (!status.updater.present) return 'absent';
   if (!status.updater.fresh) return 'stopped';
   return status.upgrade_enabled ? 'ready' : 'paused';

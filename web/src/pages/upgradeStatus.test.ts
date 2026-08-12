@@ -33,6 +33,10 @@ function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
     upgrade_enabled: true,
     offers: [],
     updater: {
+      // The deployment shape, not the sidecar's health. `true` throughout these fixtures because
+      // it is the shape every other case here is about — a deployment that *has* a mechanism,
+      // whose sidecar may then be missing, dead, paused or ready.
+      installed: true,
       present: false,
       fresh: false,
       repo: null,
@@ -58,6 +62,7 @@ function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
 
 const updater = (present: boolean, fresh: boolean, allowBundle = false, paused = false) => ({
   updater: {
+    installed: true,
     present,
     fresh,
     repo: 'ghcr.io/horryworks',
@@ -70,6 +75,30 @@ const updater = (present: boolean, fresh: boolean, allowBundle = false, paused =
 });
 
 describe('mechanism', () => {
+  // The boundary that must not collapse into `absent`. A deployment with no mechanism is a
+  // property of how it was installed and nothing on the host will change it; a deployment that has
+  // one and has heard nothing is a container to go and look at. Deriving the first from `present`
+  // would have made the second disappear from the page that reports on it — the page going quiet
+  // at exactly the moment something broke.
+  it('separates a deployment with no mechanism from one whose sidecar never reported', () => {
+    const none = status({ updater: { ...updater(false, false).updater, installed: false } });
+    expect(mechanism(none)).toBe('unsupported');
+    expect(mechanism(status(updater(false, false)))).toBe('absent');
+  });
+
+  // Not being installed outranks the switch, exactly as it does in `reachable()` on the backend.
+  // The switch column defaults to on, so reading it first would tell a deployment that has no
+  // updater that its updater is merely switched off.
+  it('reports no mechanism regardless of the stored switch', () => {
+    for (const upgrade_enabled of [true, false]) {
+      const none = status({
+        updater: { ...updater(true, true).updater, installed: false },
+        upgrade_enabled,
+      });
+      expect(mechanism(none)).toBe('unsupported');
+    }
+  });
+
   // The distinction this test exists for: never deployed vs deployed-and-dead are different
   // problems with different fixes, and one of them is a fault that must not look like a setting.
   it('separates never-enabled from enabled-but-stopped', () => {

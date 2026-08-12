@@ -8653,6 +8653,14 @@ export interface components {
             /** @description Whether its last report is recent enough for it to be considered alive. */
             fresh: boolean;
             /**
+             * @description Whether this deployment has an upgrade mechanism at all — that is, whether the host wired
+             *     the hand-off directory in. `false` describes how the deployment was installed rather than
+             *     anything that went wrong: upgrading from the WebUI needs a container composition that
+             *     carries the privileged updater alongside core, so a native installation, or a composition
+             *     that does not ship it, cannot offer it. The command-line upgrade path is unaffected.
+             */
+            installed: boolean;
+            /**
              * Format: int64
              * @description Unix seconds of its last report.
              */
@@ -8664,8 +8672,9 @@ export interface components {
              */
             paused: boolean;
             /**
-             * @description Whether the updater has ever reported. `false` means it is not deployed at all — the
-             *     default, since the mechanism is opt-in.
+             * @description Whether the updater has ever reported. Meaningful only where `installed` is true, and there
+             *     it means the container is missing or has not finished starting — a fault, not a property of
+             *     the deployment.
              */
             present: boolean;
             /**
@@ -21850,7 +21859,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The updater is not deployed, not running, or this core is not the leader */
+            /** @description This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -21935,7 +21944,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The updater is not deployed, not running, not the leader, or does not accept archives */
+            /** @description This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`) or does not accept archives (`bundle_not_allowed`), or this core is not the leader */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -21998,7 +22007,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description The updater is not deployed, not running, switched off, or this core is not the leader */
+            /** @description This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader */
             503: {
                 headers: {
                     [name: string]: unknown;

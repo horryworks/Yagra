@@ -502,8 +502,12 @@ export function UpgradePage() {
       </Card>
 
       <Card title={t('mechanism.heading')}>
-        {/* Four distinct answers — not deployed, dead, switched off, ready — because they call for
-            four different actions. See `mechanism()`. */}
+        {/* Five distinct answers — no mechanism here, not deployed, dead, switched off, ready —
+            because they call for five different actions. See `mechanism()`.
+
+            Only the first one needs suppressing by hand: every other control on this page is
+            already gated on `updater.present`, `state === 'ready'` or a `last_run` that an
+            uninstalled deployment does not have, so they are absent for free. */}
         {status.updater.present && (
           <label className="upgrade-switch">
             <input
@@ -520,10 +524,18 @@ export function UpgradePage() {
         )}
         {switchError && <p className="upgrade-note">{switchError}</p>}
 
+        {state === 'unsupported' && (
+          <>
+            <p className="upgrade-note">{t('mechanism.unsupported')}</p>
+            <p className="upgrade-hint muted">{t('mechanism.unsupportedHint')}</p>
+          </>
+        )}
         {state === 'absent' && (
           <>
             <p className="upgrade-note">{t('mechanism.disabled')}</p>
             <p className="upgrade-hint muted">{t('mechanism.disabledHint')}</p>
+            {/* A shell command, which only makes sense where there is a composition to run it
+                against — hence no counterpart in the `unsupported` block above. */}
             <p className="upgrade-hint muted mono">{t('mechanism.disabledHowTo')}</p>
           </>
         )}

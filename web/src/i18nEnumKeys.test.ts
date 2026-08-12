@@ -103,6 +103,8 @@ import jaSettingsTls from './locales/ja/settings-tls.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
 import {
+  MECHANISM_KEYS,
+  MECHANISMS,
   UPGRADE_BUILD_KINDS,
   UPGRADE_OFFER_BLOCKS,
   UPGRADE_OFFER_DIRECTIONS,
@@ -577,6 +579,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
       'runStep.',
       UPGRADE_RUN_STEPS,
+    );
+    // The state of the mechanism itself, which until now had no coverage at all: `Mechanism` was a
+    // bare union, so a state could be added with no strings in either locale and nothing would
+    // fail — the page would simply render nothing where the explanation goes. The stems are not
+    // the state names (`absent` renders under `mechanism.disabled`), so this iterates the map
+    // rather than the union.
+    expectKeys(
+      'upgrade mechanism state',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'mechanism.',
+      MECHANISMS.map((m) => MECHANISM_KEYS[m]),
     );
   });
 

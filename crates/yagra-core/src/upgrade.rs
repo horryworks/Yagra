@@ -518,6 +518,20 @@ impl UpgradeRepo {
         self.bundle_max_bytes
     }
 
+    /// Whether the host wired the hand-off directory in at all.
+    ///
+    /// This is the *deployment shape* question, and it is deliberately not the same one as
+    /// [`Self::heartbeat`] being `None`. A deployment that was never given the directory has no
+    /// upgrade mechanism to run — a native install, or a composition that does not carry the
+    /// sidecar — whereas one that has the directory and no heartbeat has a mechanism that is
+    /// broken or removed, which is a fault someone should see rather than a capability to hide.
+    /// Reporting both as "absent" would make a dead sidecar disappear from the page that exists to
+    /// report on it.
+    #[must_use]
+    pub fn installed(&self) -> bool {
+        self.dir.is_some()
+    }
+
     /// Free space on the filesystem holding the hand-off volume, when it can be measured.
     ///
     /// The volume lives under `/var/lib/docker`, so this measures the filesystem `docker load` will
