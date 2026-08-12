@@ -26,6 +26,7 @@ import { alertWhatOf, formatTimestamp, severityColorVar } from '../lib/format';
 import { useViewportMode } from '../lib/viewport';
 import { sortedAlerts, useAlertStore } from '../store';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { AlertSubjectName } from './AlertSubjectName';
 import { AlertWhatText } from './AlertWhatText';
 import './AlertRows.css';
 
@@ -102,14 +103,7 @@ function AlertRow({
     >
       <span className="alertrow-dot" style={{ background: severityColorVar(a.severity) }} />
       <span className="alertrow-node">
-        {subject.kind === 'node' ? (
-          <EntityName name={nodeName(subject.nodeId)} id={subject.nodeId} />
-        ) : (
-          // A pool name is already the human-readable thing — there is no inventory row to resolve
-          // it through, and the label is what tells an operator this row is about Yagra's own
-          // polling rather than about a device.
-          <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: subject.name })}</span>
-        )}
+        <AlertSubjectName alert={a} nodeName={nodeName} />
       </span>
       {/* The check id is still the handle the API takes (RCA, ack), so keep it recoverable on
           hover even though it is no longer the cell's text. */}

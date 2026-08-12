@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import type { NodeGroup, ProfileSummary, ScopeLevel } from '../../types/api';
+import { createNameBatcher, type NameBatcher } from './entityNameBatch';
 import { IconButton } from './IconButton';
 import { CopyIcon } from './icons';
 
@@ -31,49 +32,50 @@ export function isEntityResolved(name: string, id?: string): boolean {
  *  Group and profile inventories are bounded, so they're fetched once eagerly. **Node** names
  *  resolve lazily and in batches: a table only references the ids on its current page, and the fleet
  *  can far exceed a single list page — the old eager `listNodes()` capped at 100, so a reference to
- *  the 101st+ node silently fell back to a raw UUID (S12). `nodeName()` enqueues any unseen id and an
- *  effect batch-resolves it via the whole-fleet `node-names` endpoint. */
+ *  the 101st+ node silently fell back to a raw UUID (S12). `nodeName()` enqueues any unseen id and
+ *  `entityNameBatch.ts` resolves it via the whole-fleet `node-names` endpoint.
+ *
+ *  ⚠️ The batch is scheduled by the enqueue, **not** by an effect here, and that is a fix rather
+ *  than a style choice: the ids are enqueued while the *cells* render, which for a virtualized list
+ *  is a commit this component does not take part in — so the effect that used to send the request
+ *  never ran and the row kept showing a raw UUID. See `entityNameBatch.ts` for the full account. */
 export function useEntityNames() {
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [nodeNames, setNodeNames] = useState<Record<string, string>>({});
-  const pending = useRef<Set<string>>(new Set());
-  const requested = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     api.listNodeGroups().then(setGroups).catch(() => undefined);
     api.listProfiles().then(setProfiles).catch(() => undefined);
   }, []);
 
-  // After a render that referenced not-yet-resolved node ids, resolve them in one batch. Ids are
-  // marked requested (whether or not they come back) so an unresolved reference — e.g. a deleted
-  // node — is asked for once, never re-enqueued into a fetch loop. No dependency array: the enqueue
-  // happens during the same render's `nodeName()` calls, so this must run after every commit and
-  // early-returns when nothing is pending.
-  useEffect(() => {
-    if (pending.current.size === 0) return;
-    const ids = [...pending.current];
-    pending.current.clear();
-    ids.forEach((id) => requested.current.add(id));
-    api
-      .getNodeNames(ids)
-      .then((entries) => {
-        if (entries.length === 0) return;
+  // One batcher per hook instance, created on first render (the lazy-ref idiom — `useState`'s
+  // initializer would work too, but nothing ever sets it). Its dependencies are all stable:
+  // `api.getNodeNames` is module-level and `setNodeNames` is a setState.
+  const batcher = useRef<NameBatcher | null>(null);
+  if (batcher.current === null) {
+    batcher.current = createNameBatcher({
+      fetchNames: (ids) => api.getNodeNames(ids),
+      // A macrotask, not a microtask: everything a whole render pass asks about coalesces into one
+      // request, and the flush lands after the commit rather than part-way through rendering.
+      schedule: (flush) => {
+        setTimeout(flush, 0);
+      },
+      onResolved: (entries) =>
         setNodeNames((prev) => {
           const next = { ...prev };
           for (const e of entries) next[e.id] = e.name;
           return next;
-        });
-      })
-      .catch(() => undefined);
-  });
+        }),
+    });
+  }
 
   const nodeName = useCallback(
     (id: string) => {
       const hit = nodeNames[id];
       if (hit != null) return hit;
-      // Enqueue an unseen id once; return the raw id until the batch resolves it.
-      if (id && !requested.current.has(id)) pending.current.add(id);
+      // Ask for an unseen id; return the raw id until the batch resolves it.
+      batcher.current?.request(id);
       return id;
     },
     [nodeNames],

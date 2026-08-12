@@ -30,6 +30,26 @@
   name, which is unindexed, and searching it would turn every page into a full table scan.
 
 ### Bug Fixes
+- **Node names showed up as raw UUIDs, and whether they did was a coin toss per page load.** Any
+  list that references a node — active alerts, alert history, events, saved findings, pollers —
+  resolves ids to names in one batched request. The request was sent from an effect on the component
+  that owns the resolver, but the ids are collected while the *cells* render, and a virtualized list
+  draws no rows on its first pass and then re-renders **by itself** once it has measured. So the ids
+  arrived in a render the owner took no part in, its effect never ran, and the request was never
+  sent. What usually rescued it was an unrelated fetch landing a moment later and re-rendering the
+  owner — which is why the same screen showed a name on one load and a UUID on the next. The batch
+  is now scheduled by the lookup itself, so it no longer depends on which component re-rendered.
+  Two further ways a name could never arrive are closed with it: a failed request no longer marks
+  those ids as permanently asked (one network blip used to pin them to a UUID until reload, and the
+  retry is bounded so it cannot become a loop), and a batch larger than the endpoint's cap is split
+  rather than silently truncated to its first 1000 ids.
+- **A poller-pool alert appeared in the Flapping watchlist as a broken reference, and took its
+  neighbours' names down with it.** An alert about Yagra's own polling coverage has no node, and
+  carries `pool:<name>` where a node id would be. The widget rendered that string as an unresolvable
+  id instead of naming the pool, and — worse — sent it to the node-name endpoint, where it fails to
+  parse and fails the **whole request**, so every other row batched with it lost its name too. The
+  triage list and the history table already handled this; the widget was the copy that did not, and
+  all three now share one implementation.
 - **Alerts ▸ History skipped rows while scrolling, and did it most often during a fleet-wide
   event.** The page's keyset cursor was the last row's `recorded_at` alone. That column defaults to
   PostgreSQL's `now()`, which is the *transaction* timestamp, and Yagra writes a whole flush of

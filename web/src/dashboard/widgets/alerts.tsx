@@ -16,8 +16,9 @@ import {
 } from '../../lib/format';
 import { api } from '../../services/api';
 import { sortedAlerts, useAlertStore } from '../../store';
-import { EntityName, useEntityNames } from '../../components/ui/EntityName';
+import { useEntityNames } from '../../components/ui/EntityName';
 import { AlertRows } from '../../widgets/AlertRows';
+import { AlertSubjectName } from '../../widgets/AlertSubjectName';
 import { AlertWhatText } from '../../widgets/AlertWhatText';
 import { Donut } from '../primitives/Donut';
 import { Heatmap } from '../primitives/Heatmap';
@@ -77,7 +78,10 @@ export function FlappingWatchlistWidget() {
         <li className="dwl-row" key={`${a.node}|${a.check}|${a.severity}`}>
           <span className="dwl-dot" style={{ background: severityColorVar(a.severity) }} />
           <span className="dwl-name">
-            <EntityName name={nodeName(a.node)} id={a.node} />
+            {/* Was `nodeName(a.node)`, which reads the subject id without asking what kind it is.
+                For a poller-pool alert that is `pool:<name>`, so the row rendered a broken-looking
+                reference AND poisoned the name-resolution batch it was sent in. */}
+            <AlertSubjectName alert={a} nodeName={nodeName} />
           </span>
           <span className="dwl-sub" title={a.check}>
             <AlertWhatText what={alertWhatOf(a)} />

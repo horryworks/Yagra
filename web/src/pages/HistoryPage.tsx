@@ -15,12 +15,11 @@ import {
   stateLabel,
 } from '../lib/format';
 import { api } from '../services/api';
-import { alertSubject } from '../lib/alertSubject';
 import { SEVERITIES, type AlertHistoryRow } from '../types/api';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
-import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import {
   TableToolbar,
@@ -29,6 +28,7 @@ import {
   FilterSelect,
 } from '../components/ui/TableToolbar';
 import { Select } from '../components/ui/Field';
+import { AlertSubjectName } from '../widgets/AlertSubjectName';
 import { AlertWhatText } from '../widgets/AlertWhatText';
 import { appendPage, nextCursor } from './historyCursor';
 import {
@@ -156,14 +156,7 @@ export function HistoryPage() {
         width: '1.4fr',
         // A row whose subject is not a node has nothing to resolve through the inventory — see
         // `lib/alertSubject` for why reading `node` without the kind is the mistake to avoid.
-        render: (r) => {
-          const s = alertSubject(r);
-          return s.kind === 'node' ? (
-            <EntityName name={nodeName(s.nodeId)} id={s.nodeId} />
-          ) : (
-            <span title={t('row.poolSubjectHint')}>{t('row.poolSubject', { pool: s.name })}</span>
-          );
-        },
+        render: (r) => <AlertSubjectName alert={r} nodeName={nodeName} />,
       },
       {
         key: 'what',
