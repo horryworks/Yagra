@@ -243,6 +243,12 @@
       "imported": "{{addr}} is now a monitored node.",
       "err": {
         "import": "failed to start monitoring that endpoint"
+      },
+      "filter": {
+        "searchPlaceholder": "Search address, MAC or neighbour…",
+        "searchAria": "Search discovered endpoints",
+        "unmonitoredOnly": "Not yet monitored",
+        "endpointNoun": "endpoints"
       }
     },
     "scanTitle": "Scan a subnet",
@@ -286,6 +292,12 @@
       "startScan": "failed to start scan",
       "selectOne": "Select at least one device to import.",
       "import": "failed to import"
+    },
+    "filter": {
+      "searchPlaceholder": "Search address or identity…",
+      "searchAria": "Search discovery results",
+      "reachableOnly": "Answered only",
+      "candidateNoun": "addresses"
     }
   }
 }

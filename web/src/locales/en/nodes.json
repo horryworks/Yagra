@@ -292,7 +292,14 @@
     "scaleToggleTitleAuto": "Y-axis auto-fits traffic — click to scale to bandwidth",
     "noData": "No data for this window yet…",
     "errors": "Errors",
-    "errorsUnit": "(In / Out, /s)"
+    "errorsUnit": "(In / Out, /s)",
+    "allStates": "Up and down",
+    "stateAria": "Filter by running state",
+    "state": {
+      "up": "Up",
+      "down": "Down",
+      "unknown": "Unknown"
+    }
   },
   "collection": {
     "statusOk": "Collecting normally",
@@ -326,6 +333,11 @@
       "none": "Node-level",
       "interface": "Per interface",
       "entity": "Per row (node max)"
+    },
+    "filter": {
+      "searchPlaceholder": "Search metrics…",
+      "searchAria": "Search collected metrics",
+      "flowingOnly": "Arriving only"
     }
   },
   "groupDetail": {
@@ -527,6 +539,12 @@
     },
     "err": {
       "load": "failed to load neighbors"
+    },
+    "filter": {
+      "searchPlaceholder": "Search peer or port…",
+      "searchAria": "Search neighbours",
+      "allProtos": "LLDP and CDP",
+      "protoAria": "Filter by protocol"
     }
   }
 }

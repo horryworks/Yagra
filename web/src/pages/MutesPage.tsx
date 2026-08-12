@@ -19,11 +19,24 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { formatScheduleTime } from '../lib/format';
+import {
+  DEFAULT_MUTE_FILTERS,
+  isMuteFiltered,
+  matchesMute,
+  MUTE_STATES,
+  type MuteFilters,
+} from './suppressionFilters';
 import './MutesPage.css';
 
 const COLS = '1.4fr 170px 180px 1fr 92px';
@@ -110,6 +123,15 @@ export function MutesPage() {
         ? nodeName(m.node_id)
         : '—';
 
+  // Client-side because the list is bounded by what an operator typed in, not by fleet size
+  // (ui-conventions). The judgement is in `suppressionFilters.ts`; this is only the wiring. One
+  // clock reading per render, so two rows cannot disagree about a mute expiring between them.
+  const now = Date.now();
+  const [filters, setFilters] = useState<MuteFilters>(DEFAULT_MUTE_FILTERS);
+  const set = <K extends keyof MuteFilters>(key: K, value: MuteFilters[K]) =>
+    setFilters((f) => ({ ...f, [key]: value }));
+  const shown = rows.filter((m) => matchesMute(m, filters, targetName, now));
+
   return (
     <div>
       <PageHeader
@@ -131,8 +153,25 @@ export function MutesPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => set('q', v)}
+              placeholder={t('mutes.filter.searchPlaceholder')}
+              ariaLabel={t('mutes.filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.state}
+              onChange={(v) => set('state', v)}
+              options={MUTE_STATES.map((s) => ({ value: s, label: t(`mutes.state.${s}`) }))}
+              allLabel={t('mutes.filter.allStates')}
+              ariaLabel={t('mutes.filter.stateAria')}
+            />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('mutes.resultNoun')} />
+            <ResultCount
+              shown={shown.length}
+              total={isMuteFiltered(filters) ? rows.length : undefined}
+              noun={t('mutes.resultNoun')}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('mutes.add')}
@@ -150,15 +189,21 @@ export function MutesPage() {
                 <div className="ytable-h right">{t('mutes.cols.actions')}</div>
               </div>
 
-              {rows.length === 0 ? (
+              {shown.length === 0 ? (
                 <div className="yt-empty">
-                  <p className="yt-empty-title">{loading ? t('common:loading') : t('mutes.empty.title')}</p>
-                  {!loading && (
+                  <p className="yt-empty-title">
+                    {loading
+                      ? t('common:loading')
+                      : isMuteFiltered(filters)
+                        ? t('mutes.empty.filtered')
+                        : t('mutes.empty.title')}
+                  </p>
+                  {!loading && !isMuteFiltered(filters) && (
                     <p className="yt-empty-sub">{t('mutes.empty.sub')}</p>
                   )}
                 </div>
               ) : (
-                rows.map((m) => (
+                shown.map((m) => (
                   <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={m.id}>
                     <div className="ytable-cell">
                       <span className="mute-target">

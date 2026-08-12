@@ -45,7 +45,20 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
+import {
+  DEFAULT_TOKEN_FILTERS,
+  isTokenFiltered,
+  matchesToken,
+  TOKEN_STATE_FILTERS,
+  type TokenFilters,
+} from './apiTokenFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
@@ -453,6 +466,12 @@ export function ApiTokensPage() {
   const [created, setCreated] = useState<CreatedApiToken | null>(null);
   const [revoking, setRevoking] = useState<ApiTokenSummary | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
+  // Client-side: the token list is bounded by what an admin issued, not by fleet size
+  // (ui-conventions). One clock reading per render so the state filter and the state badge cannot
+  // disagree about a token lapsing between two rows.
+  const [filters, setFilters] = useState<TokenFilters>(DEFAULT_TOKEN_FILTERS);
+  const now = new Date();
+  const shown = rows.filter((r) => matchesToken(r, filters, now));
 
   const load = useCallback(() => {
     setError(null);
@@ -505,21 +524,38 @@ export function ApiTokensPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('filter.searchPlaceholder')}
+              ariaLabel={t('filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.state}
+              onChange={(v) => setFilters((f) => ({ ...f, state: v }))}
+              options={TOKEN_STATE_FILTERS.map((s) => ({ value: s, label: t(`state.${s}`) }))}
+              allLabel={t('filter.allStates')}
+              ariaLabel={t('filter.stateAria')}
+            />
+            <TableSpacer />
+            <ResultCount
+              shown={shown.length}
+              total={isTokenFiltered(filters) ? rows.length : undefined}
+              noun={t('count', { count: shown.length })}
+            />
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('add.button')}
             </Button>
-            <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('count', { count: rows.length })} />
           </TableToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
-            rows={rows}
+            rows={shown}
             columns={columns}
             rowKey={(r) => r.id}
             loading={loading}
-            empty={t('empty')}
+            empty={isTokenFiltered(filters) ? t('common:filter.noMatch') : t('empty')}
           />
         </>
       )}

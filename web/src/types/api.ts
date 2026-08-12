@@ -64,6 +64,7 @@ const schemaEnumPins: {
   DnsFailureKind: AssertEqual<DnsFailureKind, components['schemas']['DnsFailureKind']>;
   AuditAction: AssertEqual<AuditAction, components['schemas']['AuditAction']>;
   AuditStatusClass: AssertEqual<AuditStatusClass, components['schemas']['AuditStatusClass']>;
+  ChannelKind: AssertEqual<ChannelKind, components['schemas']['ChannelKind']>;
 } = {
   Severity: true,
   Role: true,
@@ -83,6 +84,7 @@ const schemaEnumPins: {
   DnsFailureKind: true,
   AuditAction: true,
   AuditStatusClass: true,
+  ChannelKind: true,
 };
 void schemaEnumPins;
 
@@ -436,8 +438,13 @@ export type AlertTransition = components['schemas']['AlertTransition'];
 
 // ── Notifications ───────────────────────────────────────────────────────────────────────────────
 
-/** A notification channel kind. */
-export type ChannelKind = components['schemas']['ChannelKind'];
+/** Every notification channel kind, in the order the UI offers them. An `as const` array rather
+ *  than a bare union because the Routing screen's kind filter iterates it — a union the compiler
+ *  knows and nothing can enumerate at runtime is exactly what `extensibility.md` §4 is about. */
+export const CHANNEL_KINDS = ['webhook', 'email', 'pagerduty', 'jsm'] as const;
+
+/** A notification channel kind. Pinned to `schemas.ChannelKind`. */
+export type ChannelKind = (typeof CHANNEL_KINDS)[number];
 
 /** Notification channel metadata (`GET /api/v1/notification-channels`) — the secret
  *  connection config is sealed server-side and never returned. */

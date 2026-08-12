@@ -292,7 +292,14 @@
     "scaleToggleTitleAuto": "Y 軸はトラフィックに自動調整 — クリックすると帯域幅基準に切り替わります",
     "noData": "この期間のデータはまだありません…",
     "errors": "エラー",
-    "errorsUnit": "（受信 / 送信, /s）"
+    "errorsUnit": "（受信 / 送信, /s）",
+    "allStates": "アップ・ダウンの両方",
+    "stateAria": "稼働状態で絞り込む",
+    "state": {
+      "up": "アップ",
+      "down": "ダウン",
+      "unknown": "不明"
+    }
   },
   "collection": {
     "statusOk": "正常に収集中",
@@ -326,6 +333,11 @@
       "none": "ノード単位",
       "interface": "インターフェース別",
       "entity": "行別（ノード最大）"
+    },
+    "filter": {
+      "searchPlaceholder": "メトリクスを検索…",
+      "searchAria": "収集中のメトリクスを検索",
+      "flowingOnly": "届いているものだけ"
     }
   },
   "groupDetail": {
@@ -526,6 +538,12 @@
     },
     "err": {
       "load": "隣接情報を読み込めませんでした"
+    },
+    "filter": {
+      "searchPlaceholder": "隣接ノードまたはポートを検索…",
+      "searchAria": "隣接ノードを検索",
+      "allProtos": "LLDP・CDP の両方",
+      "protoAria": "プロトコルで絞り込む"
     }
   }
 }

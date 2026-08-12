@@ -114,7 +114,13 @@ export function ownerChoices(users: readonly UserSummary[], selfUsername: string
  * that "looks fine" needs the actual one. Checked in the order the server checks them, so the
  * answer here matches the 401 they got.
  */
-export type TokenState = 'revoked' | 'expired' | 'no-owner' | 'owner-disabled' | 'active';
+/** Every state a listed token can be in, in the order the server checks them. An `as const` array
+ *  rather than a bare union because the listing's state filter iterates it, and because
+ *  `i18nEnumKeys.test.ts` can then demand the `stateHint.*` strings in both locales
+ *  (`extensibility.md` §4). `active` trails so the dropdown reads "what is wrong with it" first. */
+export const TOKEN_STATES = ['revoked', 'expired', 'no-owner', 'owner-disabled', 'active'] as const;
+
+export type TokenState = (typeof TOKEN_STATES)[number];
 
 export function tokenState(
   token: {

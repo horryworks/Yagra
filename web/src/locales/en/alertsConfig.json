@@ -29,7 +29,11 @@
       "deleteBody": "Delete channel <strong>{{name}}</strong>? Rules that target it will no longer reach this destination.",
       "template": "Edit notification template",
       "templated": "Custom text",
-      "templatedHint": "This channel overrides Yagra's built-in subject or body."
+      "templatedHint": "This channel overrides Yagra's built-in subject or body.",
+      "searchPlaceholder": "Search channels…",
+      "searchAria": "Search notification channels",
+      "allKinds": "All kinds",
+      "kindAria": "Filter by channel kind"
     },
     "rules": {
       "title": "Routing rules",
@@ -49,7 +53,11 @@
       "disable": "Disable rule",
       "delete": "Delete rule",
       "deleteTitle": "Delete routing rule",
-      "deleteBody": "Delete rule <strong>{{name}}</strong>? Matching alerts will fall back to the env default route."
+      "deleteBody": "Delete rule <strong>{{name}}</strong>? Matching alerts will fall back to the env default route.",
+      "searchPlaceholder": "Search rules…",
+      "searchAria": "Search routing rules",
+      "allSeverities": "All severities",
+      "severityAria": "Filter by severity"
     },
     "channelModal": {
       "title": "Add notification channel",

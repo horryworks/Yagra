@@ -25,7 +25,23 @@ import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EntityName } from '../components/ui/EntityName';
-import { coverageOf, isUnmonitored } from './discoveredEndpoints';
+import { coverageOf } from './discoveredEndpoints';
+import {
+  DEFAULT_CANDIDATE_FILTERS,
+  DEFAULT_ENDPOINT_FILTERS,
+  isCandidateFiltered,
+  isEndpointFiltered,
+  matchesCandidate,
+  matchesEndpoint,
+  type CandidateFilters,
+  type EndpointFilters,
+} from './discoveryFilters';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+} from '../components/ui/TableToolbar';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
 import './DiscoveryPage.css';
 
@@ -54,6 +70,8 @@ export function DiscoveryPage() {
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  // Client-side: a sweep's result set is bounded by the range an operator typed in (ui-conventions).
+  const [filters, setFilters] = useState<CandidateFilters>(DEFAULT_CANDIDATE_FILTERS);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -141,6 +159,8 @@ export function DiscoveryPage() {
       })
       .catch(() => undefined);
   };
+
+  const shownCandidates = candidates.filter((c) => matchesCandidate(c, filters));
 
   const patchRow = (addr: string, patch: Partial<RowState>) =>
     setRowState((cur) => ({ ...cur, [addr]: { ...cur[addr], ...patch } }));
@@ -240,6 +260,28 @@ export function DiscoveryPage() {
 
       {candidates.length > 0 && (
         <Card title={t('discovery.resultsTitle')} className="disco-results-card">
+          <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('discovery.filter.searchPlaceholder')}
+              ariaLabel={t('discovery.filter.searchAria')}
+            />
+            <label className="disco-filter-toggle">
+              <input
+                type="checkbox"
+                checked={filters.reachableOnly}
+                onChange={(e) => setFilters((f) => ({ ...f, reachableOnly: e.target.checked }))}
+              />
+              {t('discovery.filter.reachableOnly')}
+            </label>
+            <TableSpacer />
+            <ResultCount
+              shown={shownCandidates.length}
+              total={isCandidateFiltered(filters) ? candidates.length : undefined}
+              noun={t('discovery.filter.candidateNoun')}
+            />
+          </TableToolbar>
           <div className="disco-table">
             <div className="disco-head">
               <div className="disco-h" />
@@ -249,7 +291,7 @@ export function DiscoveryPage() {
               <div className="disco-h">{t('discovery.cols.profile')}</div>
               <div className="disco-h">{t('discovery.cols.credential')}</div>
             </div>
-            {candidates.map((c) => {
+            {shownCandidates.map((c) => {
               const r = rowState[c.address];
               if (!r) return null;
               const isImported = !!imported[c.address];
@@ -371,6 +413,7 @@ function SeenOnNetworkCard({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [epFilters, setEpFilters] = useState<EndpointFilters>(DEFAULT_ENDPOINT_FILTERS);
 
   const load = useCallback(() => {
     api
@@ -402,7 +445,11 @@ function SeenOnNetworkCard({
   };
 
   const coverage = coverageOf(page?.summary as DiscoveredEndpointPage['summary']);
-  const endpoints = (page?.endpoints ?? []).filter(isUnmonitored);
+  const all = page?.endpoints ?? [];
+  // The "unmonitored only" default is what this table has always done, unconditionally and with
+  // nothing on screen saying so — see `discoveryFilters.ts`. It is a control now, so an endpoint
+  // that disappeared because someone else imported it can be told from one no longer being seen.
+  const endpoints = all.filter((e) => matchesEndpoint(e, epFilters));
 
   return (
     <Card title={t('discovery.seen.title')}>
@@ -414,6 +461,30 @@ function SeenOnNetworkCard({
           truncated: page?.summary?.truncated_nodes ?? 0,
         })}
       </p>
+      {all.length > 0 && (
+        <TableToolbar>
+          <SearchInput
+            value={epFilters.q}
+            onChange={(v) => setEpFilters((f) => ({ ...f, q: v }))}
+            placeholder={t('discovery.seen.filter.searchPlaceholder')}
+            ariaLabel={t('discovery.seen.filter.searchAria')}
+          />
+          <label className="disco-filter-toggle">
+            <input
+              type="checkbox"
+              checked={epFilters.unmonitoredOnly}
+              onChange={(e) => setEpFilters((f) => ({ ...f, unmonitoredOnly: e.target.checked }))}
+            />
+            {t('discovery.seen.filter.unmonitoredOnly')}
+          </label>
+          <TableSpacer />
+          <ResultCount
+            shown={endpoints.length}
+            total={isEndpointFiltered(epFilters) ? all.length : undefined}
+            noun={t('discovery.seen.filter.endpointNoun')}
+          />
+        </TableToolbar>
+      )}
       {endpoints.length > 0 && (
         <div className="disco-seen-table">
           <div className="disco-seen-head">

@@ -3,7 +3,10 @@
   "unavailable": "API トークンの管理には管理者ロールが必要です。",
   "signInPrompt": "API トークンを管理するには管理者でサインインしてください。",
   "empty": "API トークンはまだありません。作成すると AI/MCP・API クライアントにアクセスを付与できます。",
-  "add": { "button": "新規トークン", "title": "API トークンを作成" },
+  "add": {
+    "button": "新規トークン",
+    "title": "API トークンを作成"
+  },
   "field": {
     "name": "名前",
     "namePlaceholder": "例: oncall-laptop",
@@ -53,7 +56,10 @@
     "groups_other": "グループ {{count}} 件",
     "none": "グループなし"
   },
-  "status": { "active": "有効", "revoked": "失効" },
+  "status": {
+    "active": "有効",
+    "revoked": "失効"
+  },
   "state": {
     "active": "有効",
     "revoked": "失効",
@@ -66,10 +72,17 @@
     "no-owner": "このトークンを所有していたアカウントが存在しないため、認証されません。失効させて整理してください。",
     "owner-disabled": "所有アカウントが無効化されているため、認証されません。"
   },
-  "expires": { "never": "無期限", "in": "あと {{count}} 日" },
-  "owner": { "none": "—" },
+  "expires": {
+    "never": "無期限",
+    "in": "あと {{count}} 日"
+  },
+  "owner": {
+    "none": "—"
+  },
   "ssoIdle": "このトークンの所有者は SSO でサインインします。IdP 側でアカウントが無効化されても Yagra には通知されないため、SSO 所有のトークンは所有者が一定期間サインインしないと停止します。所有者の沈黙が唯一の手がかりです。",
-  "lastUsed": { "never": "未使用" },
+  "lastUsed": {
+    "never": "未使用"
+  },
   "token": {
     "title": "トークンを作成しました",
     "intro": "このトークンを今すぐコピーしてください。表示は一度きりで、再取得できません。",
@@ -91,5 +104,11 @@
     "revoke": "トークンの失効に失敗しました",
     "duplicate": "同じ名前のトークンが既に存在します",
     "noSurface": "トークンを使用できる面を 1 つ以上選択してください"
+  },
+  "filter": {
+    "searchPlaceholder": "名前または所有者を検索…",
+    "searchAria": "API トークンを検索",
+    "allStates": "すべての状態",
+    "stateAria": "トークンの状態で絞り込む"
   }
 }

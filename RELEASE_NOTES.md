@@ -20,6 +20,18 @@
   no range still gets none.
 
 ### New Features
+- **Thirteen more screens can be narrowed.** Alerts ▸ Maintenance windows and Mutes, the two tables
+  on Alerts ▸ Routing, Settings ▸ Forwarding, API tokens and Pollers, both tables on Nodes ▸
+  Discovery, Troubleshoot ▸ Scheduled, the Reports page's Templates and Schedules tabs, the node
+  detail's Interfaces, Neighbours and Collection tabs, and the add-widget catalog. Each gets a
+  search box and the one or two filters that screen is actually asked about — status, kind, enabled,
+  protocol, pool. These all run in the browser, and legitimately: every one of these lists is
+  bounded by what an operator configured rather than by how many nodes the fleet has. Two are worth
+  calling out. The Discovery endpoint table has always hidden already-imported endpoints with
+  nothing on screen saying so; that is now a control, so an endpoint that disappeared because a
+  colleague imported it can be told from one that stopped being seen. And the add-widget catalog's
+  search matches the words on the card rather than the identifiers behind them, so it works the same
+  in Japanese.
 - **The Events search is no longer case-sensitive.** On a deployment with a log store (ADR-024) a
   plain search term was matched case-sensitively, so `SSH` did not find `ssh` — while the same
   search on a deployment without one did, because PostgreSQL's `ILIKE` never cared. One query, two

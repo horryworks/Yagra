@@ -25,6 +25,12 @@ import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../type
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
+import { SearchInput } from '../ui/TableToolbar';
+import {
+  DEFAULT_METRIC_FILTERS,
+  matchesMetric,
+  type MetricFilters,
+} from './tabFilters';
 import { viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 
@@ -170,6 +176,8 @@ function MetricRow({
 export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: boolean }) {
   const { t } = useTranslation('nodes');
   const [data, setData] = useState<Loaded | null>(null);
+  // Client-side: one node has metrics in the dozens, and the tab already has them all.
+  const [filters, setFilters] = useState<MetricFilters>(DEFAULT_METRIC_FILTERS);
   // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
   // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).
   const range = useRangeStore((s) => s.range);
@@ -208,6 +216,8 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const hasSnmp = !!node.credential_id;
   const flowing = data?.metrics.filter((m) => m.status !== 'no_data') ?? [];
   const state: CollState = !hasSnmp ? 'none' : flowing.length > 0 ? 'ok' : 'failing';
+
+  const shownMetrics = (data?.metrics ?? []).filter((m) => matchesMetric(m, filters));
 
   return (
     <div className="nd-coll">
@@ -270,6 +280,22 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         <section>
           <div className="nd-section-head">
             <div className="nd-section-t">{t('collection.allMetrics')}</div>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('collection.filter.searchPlaceholder')}
+              ariaLabel={t('collection.filter.searchAria')}
+            />
+            <label className="nd-coll-toggle">
+              <input
+                type="checkbox"
+                checked={filters.flowingOnly}
+                onChange={(e) =>
+                  setFilters((f) => ({ ...f, flowingOnly: e.target.checked }))
+                }
+              />
+              {t('collection.filter.flowingOnly')}
+            </label>
             <RangeControl value={range} onChange={setRange} />
           </div>
           <p className="nd-muted nd-coll-editnote">{t('collection.allMetricsNote')}</p>
@@ -280,9 +306,12 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               <div className="nd-coll-mh right">{t('collection.colLastValue')}</div>
               <div className="nd-coll-mh right">{t('collection.colStatus')}</div>
             </div>
-            {data.metrics.map((m) => (
+            {shownMetrics.map((m) => (
               <MetricRow key={m.metric} nodeId={node.id} entry={m} range={range} />
             ))}
+            {shownMetrics.length === 0 && (
+              <p className="nd-muted nd-tabpad">{t('common:filter.noMatch')}</p>
+            )}
           </div>
         </section>
       )}

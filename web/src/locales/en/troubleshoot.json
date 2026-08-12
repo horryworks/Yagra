@@ -65,6 +65,12 @@
       "deleteFailed": "Could not delete the schedule.",
       "unknown_cadence": "Choose how often this should run.",
       "missing_scope": "Choose what this analysis should run over."
+    },
+    "filter": {
+      "searchPlaceholder": "Search tool or scope…",
+      "searchAria": "Search scheduled analyses",
+      "allTools": "All analyses",
+      "toolAria": "Filter by analysis"
     }
   },
   "findings": {

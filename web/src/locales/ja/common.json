@@ -77,5 +77,13 @@
     "mute_other": "ミュート",
     "result_other": "結果",
     "item_other": "項目"
+  },
+  "filter": {
+    "allEnabled": "有効・無効の両方",
+    "enabledAria": "有効・無効で絞り込む",
+    "enabled": "有効",
+    "disabled": "無効",
+    "searchAria": "この一覧を検索",
+    "noMatch": "この絞り込みに一致するものがありません。"
   }
 }

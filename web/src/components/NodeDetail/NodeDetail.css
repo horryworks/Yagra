@@ -1302,3 +1302,15 @@ html[data-viewport='mobile'] .nd-coll-status-r {
   flex-wrap: wrap;
   gap: 12px 20px;
 }
+
+/* Collection tab: the "arriving only" toggle beside the metric search, sized like the section's
+   other controls so the head row reads as one band. */
+.nd-coll-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}

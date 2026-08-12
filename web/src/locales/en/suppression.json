@@ -12,7 +12,8 @@
     },
     "empty": {
       "title": "No maintenance windows",
-      "sub": "Schedule planned work so covered nodes raise no alerts."
+      "sub": "Schedule planned work so covered nodes raise no alerts.",
+      "filtered": "No windows match these filters."
     },
     "status": {
       "disabled": "disabled",
@@ -46,6 +47,12 @@
       "confirmLabel": "Clear",
       "confirm_one": "Delete <b>{{count}}</b> ended maintenance window? Windows that have not ended are kept. This cannot be undone.",
       "confirm_other": "Delete <b>{{count}}</b> ended maintenance windows? Windows that have not ended are kept. This cannot be undone."
+    },
+    "filter": {
+      "searchPlaceholder": "Search name or scope…",
+      "searchAria": "Search maintenance windows",
+      "allStatuses": "All statuses",
+      "statusAria": "Filter by status"
     }
   },
   "maintenanceForm": {
@@ -87,7 +94,8 @@
     },
     "empty": {
       "title": "No active mutes",
-      "sub": "Silence a node (or one check) until a time to suppress its notifications."
+      "sub": "Silence a node (or one check) until a time to suppress its notifications.",
+      "filtered": "No mutes match these filters."
     },
     "badge": {
       "group": "group",
@@ -101,6 +109,16 @@
       "title": "Lift mute",
       "confirmMetric": "Lift the mute on <b>{{target}}</b> (<m>{{metric}}</m>)? Notifications resume immediately.",
       "confirmAll": "Lift the mute on <b>{{target}}</b> (all metrics)? Notifications resume immediately."
+    },
+    "filter": {
+      "searchPlaceholder": "Search target, metric or reason…",
+      "searchAria": "Search mutes",
+      "allStates": "Active and expired",
+      "stateAria": "Filter by whether the mute is still in force"
+    },
+    "state": {
+      "active": "In force",
+      "expired": "Expired"
     }
   },
   "muteForm": {

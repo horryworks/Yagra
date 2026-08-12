@@ -3,12 +3,15 @@
 // an instance to the board. Backing tags (live/rollup) carry over from the catalog so the
 // operator knows what's data-backed. Stays open after an add so several can be placed at once.
 
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { useLayoutStoreContext } from './LayoutStoreContext';
+import { SearchInput } from '../components/ui/TableToolbar';
 import { catalogBySection } from './registry';
+import { countWidgets, filterCatalog } from './catalogFilter';
 import type { Backing } from './types';
 import './CatalogModal.css';
 
@@ -22,14 +25,32 @@ export function CatalogModal({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation('dashboard');
   const useStore = useLayoutStoreContext();
   const addWidget = useStore((s) => s.addWidget);
-  const sections = catalogBySection();
+  const [q, setQ] = useState('');
+  const all = catalogBySection();
+  // Forty-six widgets across nine sections: until now the only way to find one was to read all of
+  // them. Client-side and instant — the registry is already in the bundle, so there is nothing to
+  // debounce. The search runs over the *rendered* words, see `catalogFilter.ts`.
+  const sections = filterCatalog(all, q, t);
+  const shown = countWidgets(sections);
   return (
     <Modal
       title={t('catalog.title')}
       onClose={onClose}
       footer={<Button onClick={onClose}>{t('actions.done')}</Button>}
     >
+      <div className="catalog-search">
+        <SearchInput
+          value={q}
+          onChange={setQ}
+          placeholder={t('catalog.searchPlaceholder')}
+          ariaLabel={t('catalog.searchAria')}
+        />
+        <span className="catalog-count muted">
+          {t('catalog.count', { shown, total: countWidgets(all) })}
+        </span>
+      </div>
       <div className="catalog">
+        {sections.length === 0 && <p className="muted">{t('common:filter.noMatch')}</p>}
         {sections.map(({ section, widgets }) => (
           <div className="catalog-section" key={section}>
             <h3 className="catalog-section-title">{t(section)}</h3>

@@ -61,3 +61,22 @@
   font-size: var(--font-xs);
   color: var(--accent-color);
 }
+
+/* Search row above the sections. Sticky so the box stays reachable while scrolling a long
+   catalog — the list is 46 widgets tall and scrolling away from the filter is what makes a
+   search feel like a one-shot rather than a control. */
+.catalog-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+  background: var(--bg-secondary);
+}
+
+.catalog-count {
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}

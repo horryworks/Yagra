@@ -6,17 +6,17 @@
   "count_one": "destination",
   "count_other": "destinations",
   "securityNote": "Forwarded messages leave Yagra. Syslog bodies routinely carry credentials — send them only to a collector you trust, over a network you trust.",
-
   "add": {
     "button": "New destination",
     "title": "New forwarding destination"
   },
-  "edit": { "title": "Edit forwarding destination" },
+  "edit": {
+    "title": "Edit forwarding destination"
+  },
   "delete": {
     "title": "Delete destination",
     "confirm": "Delete \"{{name}}\"? Nothing further will be forwarded to it."
   },
-
   "cols": {
     "name": "Name",
     "source": "Source",
@@ -27,13 +27,11 @@
     "health": "Health",
     "actions": "Actions"
   },
-
   "actions": {
     "edit": "Edit",
     "test": "Send test message",
     "delete": "Delete"
   },
-
   "source": {
     "syslog": "Syslog",
     "trap": "SNMP trap",
@@ -47,7 +45,9 @@
     "flow_udp": "Flow export over UDP",
     "bigquery": "Rows into Google BigQuery"
   },
-  "scope": { "allPools": "All pools" },
+  "scope": {
+    "allPools": "All pools"
+  },
   "status": {
     "enabled": "Enabled",
     "disabled": "Disabled"
@@ -57,7 +57,6 @@
     "rendered": "Rebuilt",
     "rows": "Structured rows"
   },
-
   "field": {
     "name": "Name",
     "namePlaceholder": "central-siem",
@@ -90,7 +89,6 @@
     "rateLimitPlaceholder": "no limit",
     "rateLimitHint": "Messages per second. Excess is dropped and counted, never queued.",
     "enabled": "Status",
-
     "source_ip": "Source address",
     "kind": "Event kind",
     "facility": "Facility",
@@ -108,7 +106,6 @@
     "src_as": "Source AS",
     "dst_as": "Destination AS"
   },
-
   "valuePlaceholder": {
     "source_ip": "10.0.0.0/8, 192.168.1.5",
     "severity": "4 (warning and worse)",
@@ -122,7 +119,6 @@
     "dst_port": "443",
     "dst_as": "15169"
   },
-
   "op": {
     "eq": "is",
     "ne": "is not",
@@ -137,7 +133,6 @@
     "lte": "at most",
     "gte": "at least"
   },
-
   "filter": {
     "label": "Filter",
     "add": "Add condition",
@@ -151,29 +146,29 @@
     "mode": {
       "all": "all must match",
       "any": "any may match"
-    }
+    },
+    "searchPlaceholder": "Search name or target…",
+    "searchAria": "Search forwarding destinations",
+    "allDestKinds": "All destination kinds",
+    "destKindAria": "Filter by destination kind"
   },
-
   "health": {
     "counts": "{{sent}} sent / {{dropped}} lost",
     "paused": "Paused",
     "degraded": "Rebuilt",
     "degradedHint": "Some messages were rebuilt because no original payload was available."
   },
-
   "test": {
     "title": "Test: {{name}}",
     "ok": "The test message was handed to the collector. Check that it arrived on the other side.",
     "okBigQuery": "One test row was written. Query the table to confirm it landed.",
     "failed": "Delivery failed: {{error}}"
   },
-
   "warn": {
     "noRawCapture": "These pollers do not yet supply the original bytes, so their messages are rebuilt even for destinations set to Original: {{pollers}}. They will start supplying them once upgraded.",
     "noFlowRelay": "These pollers do not yet relay flow datagrams, so nothing at all is forwarded from the exporters they receive: {{pollers}}. Upgrade them to start the relay.",
     "standby": "This core is a standby. Destinations can be edited here, but the active core does the forwarding."
   },
-
   "err": {
     "load": "Could not load forwarding destinations.",
     "save": "Could not save the destination.",

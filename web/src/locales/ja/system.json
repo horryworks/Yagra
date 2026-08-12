@@ -118,6 +118,14 @@
     "err": {
       "remove": "ポーラーの削除に失敗しました",
       "anchor": "アンカーノードの設定に失敗しました"
+    },
+    "filter": {
+      "searchPlaceholder": "ID・プール・バージョンを検索…",
+      "searchAria": "ポーラーを検索",
+      "allStatuses": "オンライン・オフラインの両方",
+      "statusAria": "状態で絞り込む",
+      "allPools": "すべてのプール",
+      "poolAria": "プールで絞り込む"
     }
   },
   "health": {

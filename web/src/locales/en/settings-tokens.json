@@ -3,7 +3,10 @@
   "unavailable": "Managing API tokens requires the admin role.",
   "signInPrompt": "Sign in as an admin to manage API tokens.",
   "empty": "No API tokens yet. Create one to give an AI/MCP or API client access.",
-  "add": { "button": "New token", "title": "Create API token" },
+  "add": {
+    "button": "New token",
+    "title": "Create API token"
+  },
   "field": {
     "name": "Name",
     "namePlaceholder": "e.g. oncall-laptop",
@@ -54,7 +57,10 @@
     "groups_other": "{{count}} groups",
     "none": "No groups"
   },
-  "status": { "active": "Active", "revoked": "Revoked" },
+  "status": {
+    "active": "Active",
+    "revoked": "Revoked"
+  },
   "state": {
     "active": "Active",
     "revoked": "Revoked",
@@ -67,10 +73,17 @@
     "no-owner": "The account that owned this token is gone, so it no longer authenticates. Revoke it to tidy the list.",
     "owner-disabled": "The owning account is disabled, so it no longer authenticates."
   },
-  "expires": { "never": "Never", "in": "In {{count}} days" },
-  "owner": { "none": "—" },
+  "expires": {
+    "never": "Never",
+    "in": "In {{count}} days"
+  },
+  "owner": {
+    "none": "—"
+  },
   "ssoIdle": "This token's owner signs in through SSO. Yagra is never told when an identity provider disables an account, so an SSO-owned token stops working once its owner has been absent too long — the owner's silence is the only signal there is.",
-  "lastUsed": { "never": "Never" },
+  "lastUsed": {
+    "never": "Never"
+  },
   "token": {
     "title": "Token created",
     "intro": "Copy this token now — it is shown only once and cannot be recovered.",
@@ -92,5 +105,11 @@
     "revoke": "Failed to revoke the token",
     "duplicate": "A token with that name already exists",
     "noSurface": "Choose at least one surface the token can be used for"
+  },
+  "filter": {
+    "searchPlaceholder": "Search name or owner…",
+    "searchAria": "Search API tokens",
+    "allStates": "All states",
+    "stateAria": "Filter by token state"
   }
 }

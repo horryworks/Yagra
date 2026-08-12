@@ -23,6 +23,14 @@ import type {
   NodeDetail as NodeDetailData,
 } from '../../types/api';
 import { DataTable, type Column } from '../ui/DataTable';
+import { FilterSelect, SearchInput, TableToolbar, TableSpacer } from '../ui/TableToolbar';
+import { NEIGHBOR_PROTOS } from '../../types/api';
+import {
+  DEFAULT_NEIGHBOR_FILTERS,
+  isNeighborFiltered,
+  matchesNeighbor,
+  type NeighborFilters,
+} from './tabFilters';
 import {
   diffNeighbors,
   emptyReason,
@@ -50,6 +58,8 @@ export function NeighborsTab({ node }: Props) {
   const [collectionEnabled, setCollectionEnabled] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Client-side: one device has neighbours in the dozens, and the tab already has them all.
+  const [filters, setFilters] = useState<NeighborFilters>(DEFAULT_NEIGHBOR_FILTERS);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,6 +144,8 @@ export function NeighborsTab({ node }: Props) {
     },
   ];
 
+  const shownNeighbors = neighbors.filter((n) => matchesNeighbor(n, filters));
+
   return (
     <div className="nd-nb">
       {error && <p className="form-error nd-tabpad">{error}</p>}
@@ -153,13 +165,36 @@ export function NeighborsTab({ node }: Props) {
               <span className="nd-nb-truncated">{t('neighbors.truncated')}</span>
             )}
           </div>
+          <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('neighbors.filter.searchPlaceholder')}
+              ariaLabel={t('neighbors.filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.proto}
+              onChange={(v) => setFilters((f) => ({ ...f, proto: v }))}
+              options={NEIGHBOR_PROTOS.map((pr) => ({
+                value: pr,
+                label: t(`neighbors.proto.${pr}`),
+              }))}
+              allLabel={t('neighbors.filter.allProtos')}
+              ariaLabel={t('neighbors.filter.protoAria')}
+            />
+            <TableSpacer />
+          </TableToolbar>
           <div className="nd-nb-table">
             <DataTable
-              rows={neighbors}
+              rows={shownNeighbors}
               columns={columns}
               rowKey={neighborKey}
               loading={!loaded}
-              empty={t('neighbors.empty.none')}
+              empty={
+                isNeighborFiltered(filters)
+                  ? t('common:filter.noMatch')
+                  : t('neighbors.empty.none')
+              }
             />
           </div>
         </>

@@ -240,6 +240,12 @@
       "imported": "{{addr}} を監視対象ノードにしました。",
       "err": {
         "import": "この端点の監視を開始できませんでした"
+      },
+      "filter": {
+        "searchPlaceholder": "アドレス・MAC・隣接ノードを検索…",
+        "searchAria": "発見したエンドポイントを検索",
+        "unmonitoredOnly": "未監視のものだけ",
+        "endpointNoun": "件のエンドポイント"
       }
     },
     "scanTitle": "サブネットをスキャン",
@@ -280,6 +286,12 @@
       "startScan": "スキャンの開始に失敗しました",
       "selectOne": "インポートするデバイスを 1 つ以上選択してください。",
       "import": "インポートに失敗しました"
+    },
+    "filter": {
+      "searchPlaceholder": "アドレスまたは機種を検索…",
+      "searchAria": "ディスカバリ結果を検索",
+      "reachableOnly": "応答したものだけ",
+      "candidateNoun": "件のアドレス"
     }
   }
 }

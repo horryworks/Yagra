@@ -32,6 +32,44 @@ export function sinceIso(secs: number | null, nowMs: number): string | undefined
 }
 
 /**
+ * "Enabled or not" — the same two-valued filter five config screens need (routing channels and
+ * rules, forwarding destinations, scheduled analyses, report schedules).
+ *
+ * Shared because it is the same question with the same two answers everywhere, and because the
+ * labels are shared with it: `common:filter.enabled` / `.disabled` / `.allEnabled`. Five screens
+ * each inventing a word for "off" is how a UI ends up saying disabled, inactive, paused and
+ * stopped for one boolean.
+ */
+export const ENABLED_STATES = ['enabled', 'disabled'] as const;
+export type EnabledState = (typeof ENABLED_STATES)[number];
+
+/** Whether a row's `enabled` flag satisfies the filter. `''` (no filter) always matches. */
+export function matchesEnabled(state: EnabledState | '', enabled: boolean): boolean {
+  return state === '' || (state === 'enabled') === enabled;
+}
+
+/**
+ * Whether a row's text matches a search term, case-insensitively.
+ *
+ * The one spelling of client-side free-text search. It was hand-written per screen as
+ * `x.toLowerCase().includes(q.trim().toLowerCase())` and had already drifted: some copies searched
+ * one field where the column showed two, some forgot to trim, and the Credentials list is the only
+ * one that thought to match the id as well. `parts` takes anything a cell can hold — a missing or
+ * null field is simply not a candidate rather than a crash.
+ *
+ * An empty term matches everything, so a caller can pass the box's value straight in without
+ * guarding first.
+ *
+ * ⚠️ Client-side only. A list that grows with the fleet filters in the query (`ui-conventions.md`);
+ * this is for the ones bounded by what an operator typed in.
+ */
+export function textMatch(term: string, ...parts: (string | null | undefined)[]): boolean {
+  const q = term.trim().toLowerCase();
+  if (q === '') return true;
+  return parts.some((p) => p != null && p.toLowerCase().includes(q));
+}
+
+/**
  * Whether anything is narrowing the list — which picks the empty state's wording.
  *
  * **Derived from the defaults, never written out by hand.** `findingsQuery.ts::isFiltered` spelled

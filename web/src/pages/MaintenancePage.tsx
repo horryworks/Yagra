@@ -19,12 +19,25 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { formatScheduleTime } from '../lib/format';
 import { isEnded, windowStatus } from './maintenanceStatus';
+import {
+  DEFAULT_MAINTENANCE_FILTERS,
+  isMaintenanceFiltered,
+  MAINTENANCE_STATUS_FILTERS,
+  matchesWindow,
+  type MaintenanceFilters,
+} from './suppressionFilters';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
@@ -161,6 +174,13 @@ export function MaintenancePage() {
     return w.scope_id;
   };
 
+  // Client-side because the list is bounded by what an operator typed in, not by fleet size
+  // (ui-conventions). The judgement is in `suppressionFilters.ts`; this is only the wiring.
+  const [filters, setFilters] = useState<MaintenanceFilters>(DEFAULT_MAINTENANCE_FILTERS);
+  const set = <K extends keyof MaintenanceFilters>(key: K, value: MaintenanceFilters[K]) =>
+    setFilters((f) => ({ ...f, [key]: value }));
+  const shown = rows.filter((w) => matchesWindow(w, filters, scopeLabel, now));
+
   return (
     <div>
       <PageHeader
@@ -182,8 +202,28 @@ export function MaintenancePage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => set('q', v)}
+              placeholder={t('maintenance.filter.searchPlaceholder')}
+              ariaLabel={t('maintenance.filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.status}
+              onChange={(v) => set('status', v)}
+              options={MAINTENANCE_STATUS_FILTERS.map((s) => ({
+                value: s,
+                label: t(`maintenance.status.${s}`),
+              }))}
+              allLabel={t('maintenance.filter.allStatuses')}
+              ariaLabel={t('maintenance.filter.statusAria')}
+            />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('common:noun.window', { count: rows.length })} />
+            <ResultCount
+              shown={shown.length}
+              total={isMaintenanceFiltered(filters) ? rows.length : undefined}
+              noun={t('common:noun.window', { count: shown.length })}
+            />
             {authed && (
               <>
                 {/* Kept mounted and disabled at zero rather than appearing and disappearing: at
@@ -213,17 +253,21 @@ export function MaintenancePage() {
               <div className="ytable-h right">{t('maintenance.cols.actions')}</div>
             </div>
 
-            {rows.length === 0 ? (
+            {shown.length === 0 ? (
               <div className="yt-empty">
                 <p className="yt-empty-title">
-                  {loading ? t('common:loading') : t('maintenance.empty.title')}
+                  {loading
+                    ? t('common:loading')
+                    : isMaintenanceFiltered(filters)
+                      ? t('maintenance.empty.filtered')
+                      : t('maintenance.empty.title')}
                 </p>
-                {!loading && (
+                {!loading && !isMaintenanceFiltered(filters) && (
                   <p className="yt-empty-sub">{t('maintenance.empty.sub')}</p>
                 )}
               </div>
             ) : (
-              rows.map((w) => {
+              shown.map((w) => {
                 const status = windowStatus(w, now);
                 return (
                   <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={w.id}>

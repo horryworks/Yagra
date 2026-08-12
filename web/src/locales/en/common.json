@@ -91,5 +91,13 @@
     "result_other": "results",
     "item_one": "item",
     "item_other": "items"
+  },
+  "filter": {
+    "allEnabled": "Enabled and disabled",
+    "enabledAria": "Filter by enabled or disabled",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "searchAria": "Search this list",
+    "noMatch": "Nothing matches these filters."
   }
 }

@@ -6,17 +6,17 @@
   "count_one": "転送先",
   "count_other": "転送先",
   "securityNote": "転送したメッセージは Yagra の外へ出ます。syslog の本文には認証情報が含まれることがあります。信頼できるコレクタへ、信頼できる経路でのみ送ってください。",
-
   "add": {
     "button": "転送先を追加",
     "title": "転送先の追加"
   },
-  "edit": { "title": "転送先の編集" },
+  "edit": {
+    "title": "転送先の編集"
+  },
   "delete": {
     "title": "転送先の削除",
     "confirm": "「{{name}}」を削除しますか？以後、この宛先へは何も転送しません。"
   },
-
   "cols": {
     "name": "名前",
     "source": "対象",
@@ -27,13 +27,11 @@
     "health": "状態",
     "actions": "操作"
   },
-
   "actions": {
     "edit": "編集",
     "test": "テスト送信",
     "delete": "削除"
   },
-
   "source": {
     "syslog": "Syslog",
     "trap": "SNMP トラップ",
@@ -47,7 +45,9 @@
     "flow_udp": "フローエクスポート (UDP)",
     "bigquery": "Google BigQuery へ行として投入"
   },
-  "scope": { "allPools": "全プール" },
+  "scope": {
+    "allPools": "全プール"
+  },
   "status": {
     "enabled": "有効",
     "disabled": "無効"
@@ -57,7 +57,6 @@
     "rendered": "復元品",
     "rows": "構造化行"
   },
-
   "field": {
     "name": "名前",
     "namePlaceholder": "central-siem",
@@ -90,7 +89,6 @@
     "rateLimitPlaceholder": "無制限",
     "rateLimitHint": "1 秒あたりのメッセージ数。超過分はキューに積まず破棄し、件数を計上します。",
     "enabled": "状態",
-
     "source_ip": "送信元アドレス",
     "kind": "イベント種別",
     "facility": "ファシリティ",
@@ -108,7 +106,6 @@
     "src_as": "送信元 AS",
     "dst_as": "宛先 AS"
   },
-
   "valuePlaceholder": {
     "source_ip": "10.0.0.0/8, 192.168.1.5",
     "severity": "4（warning 以上）",
@@ -122,7 +119,6 @@
     "dst_port": "443",
     "dst_as": "15169"
   },
-
   "op": {
     "eq": "が次と一致",
     "ne": "が次と不一致",
@@ -137,7 +133,6 @@
     "lte": "が次以下",
     "gte": "が次以上"
   },
-
   "filter": {
     "label": "フィルタ",
     "add": "条件を追加",
@@ -151,29 +146,29 @@
     "mode": {
       "all": "すべて一致",
       "any": "いずれか一致"
-    }
+    },
+    "searchPlaceholder": "名前または宛先を検索…",
+    "searchAria": "転送先を検索",
+    "allDestKinds": "すべての宛先種別",
+    "destKindAria": "宛先種別で絞り込む"
   },
-
   "health": {
     "counts": "送信 {{sent}} / 欠落 {{dropped}}",
     "paused": "停止中",
     "degraded": "復元品",
     "degradedHint": "原本が得られなかったため、一部のメッセージを組み立て直して送信しました。"
   },
-
   "test": {
     "title": "テスト: {{name}}",
     "ok": "テストメッセージをコレクタへ送信しました。受信側に届いているか確認してください。",
     "okBigQuery": "テスト行を 1 件書き込みました。テーブルをクエリして着信を確認してください。",
     "failed": "送信に失敗しました: {{error}}"
   },
-
   "warn": {
     "noRawCapture": "次のポーラーはまだ原本のバイト列を送らないため、「原本」設定の宛先でも復元品になります: {{pollers}}。アップグレードすると原本が届くようになります。",
     "noFlowRelay": "次のポーラーはまだフローデータグラムを中継しないため、そのポーラーが受信したエクスポーターからは何も転送されません: {{pollers}}。アップグレードすると中継が始まります。",
     "standby": "このコアはスタンバイです。ここで転送先を編集できますが、実際の送出はアクティブなコアが行います。"
   },
-
   "err": {
     "load": "転送先を読み込めませんでした。",
     "save": "転送先を保存できませんでした。",

@@ -23,6 +23,14 @@ import { usePrefsStore } from '../../prefs';
 import { useIsMobileViewport } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
+import {
+  DEFAULT_INTERFACE_FILTERS,
+  IF_STATES,
+  isInterfaceFiltered,
+  matchesInterface,
+  type InterfaceFilters,
+} from './tabFilters';
+import { FilterSelect } from '../ui/TableToolbar';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
@@ -48,18 +56,13 @@ interface Props {
 
 export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const { t } = useTranslation('nodes');
-  const [filter, setFilter] = useState('');
+  // The predicate lives in `tabFilters.ts`: it was hand-rolled here and searched two fields
+  // where the row shows five, and a `.tsx` is a file no test runs (testing.md).
+  const [filters, setFilters] = useState<InterfaceFilters>(DEFAULT_INTERFACE_FILTERS);
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const q = filter.trim().toLowerCase();
-  const shown = q
-    ? rows.filter(
-        (r) =>
-          (r.if_name ?? `if${r.ifindex}`).toLowerCase().includes(q) ||
-          (r.if_alias ?? '').toLowerCase().includes(q),
-      )
-    : rows;
+  const shown = rows.filter((r) => matchesInterface(r, filters));
   const up = rows.filter((r) => r.oper_status === 1).length;
   const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
 
@@ -116,11 +119,19 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <b>{up}</b> {t('interfaces.ofUp', { total: rows.length })}
           <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
         </span>
+        <FilterSelect
+          value={filters.state}
+          onChange={(v) => setFilters((f) => ({ ...f, state: v }))}
+          options={IF_STATES.map((s) => ({ value: s, label: t(`interfaces.state.${s}`) }))}
+          allLabel={t('interfaces.allStates')}
+          ariaLabel={t('interfaces.stateAria')}
+        />
         <TextInput
           className="nd-if-filter"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          value={filters.q}
+          onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
           placeholder={t('interfaces.filterPlaceholder')}
+          aria-label={t('interfaces.filterPlaceholder')}
         />
       </div>
       {error && <p className="form-error nd-tabpad">{error}</p>}
@@ -166,7 +177,11 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           );
         })}
         {shown.length === 0 && (
-          <p className="nd-muted nd-tabpad">{t('interfaces.noMatch', { filter })}</p>
+          <p className="nd-muted nd-tabpad">
+            {isInterfaceFiltered(filters)
+              ? t('interfaces.noMatch', { filter: filters.q })
+              : t('interfaces.emptyDiscovered')}
+          </p>
         )}
       </div>
 

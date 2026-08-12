@@ -27,7 +27,11 @@
       "deleteBody": "チャネル <strong>{{name}}</strong> を削除しますか？このチャネルを対象とするルールは、この送信先に届かなくなります。",
       "template": "通知テンプレートを編集",
       "templated": "カスタム文面",
-      "templatedHint": "このチャネルは Yagra の組み込みの件名または本文を上書きしています。"
+      "templatedHint": "このチャネルは Yagra の組み込みの件名または本文を上書きしています。",
+      "searchPlaceholder": "チャネルを検索…",
+      "searchAria": "通知チャネルを検索",
+      "allKinds": "すべての種別",
+      "kindAria": "チャネル種別で絞り込む"
     },
     "rules": {
       "title": "ルーティングルール",
@@ -47,7 +51,11 @@
       "disable": "ルールを無効化",
       "delete": "ルールを削除",
       "deleteTitle": "ルーティングルールを削除",
-      "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？一致していたアラートは、環境変数で指定した既定ルートに戻ります。"
+      "deleteBody": "ルール <strong>{{name}}</strong> を削除しますか？一致していたアラートは、環境変数で指定した既定ルートに戻ります。",
+      "searchPlaceholder": "ルールを検索…",
+      "searchAria": "ルーティングルールを検索",
+      "allSeverities": "すべての重大度",
+      "severityAria": "重大度で絞り込む"
     },
     "channelModal": {
       "title": "通知チャネルを追加",

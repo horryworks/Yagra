@@ -47,7 +47,11 @@
     "running": "Running…",
     "newReport": "New report",
     "empty": "No report templates yet.",
-    "emptyAdmin": "No report templates yet. Click \"New report\" to build one."
+    "emptyAdmin": "No report templates yet. Click \"New report\" to build one.",
+    "filter": {
+      "searchPlaceholder": "Search templates…",
+      "searchAria": "Search report templates"
+    }
   },
   "scheds": {
     "cols": {
@@ -60,7 +64,11 @@
     "paused": "Paused",
     "newSchedule": "New schedule",
     "empty": "No schedules yet.",
-    "emptyNoDefs": "Create a report template first, then schedule it."
+    "emptyNoDefs": "Create a report template first, then schedule it.",
+    "filter": {
+      "searchPlaceholder": "Search by report…",
+      "searchAria": "Search report schedules"
+    }
   },
   "confirm": {
     "deleteTemplate": "Delete report template \"{{name}}\"? Saved runs are kept.",

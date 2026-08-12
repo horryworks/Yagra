@@ -20,7 +20,21 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge, type Tone } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
+import { ENABLED_STATES } from '../lib/filterQuery';
+import { TOOLS } from './data';
+import {
+  DEFAULT_SCHEDULE_FILTERS,
+  isScheduleFiltered,
+  matchesSchedule,
+  type ScheduleFilters,
+} from './scheduleFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -128,6 +142,12 @@ export function ScheduledPage() {
   const [editing, setEditing] = useState<AnalysisSchedule | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<AnalysisSchedule | null>(null);
+  // Client-side: the list is bounded by what an operator set up, not by fleet size
+  // (ui-conventions). The judgement is in `scheduleFilters.ts`.
+  const [filters, setFilters] = useState<ScheduleFilters>(DEFAULT_SCHEDULE_FILTERS);
+  const set = <K extends keyof ScheduleFilters>(key: K, value: ScheduleFilters[K]) =>
+    setFilters((f) => ({ ...f, [key]: value }));
+  const shown = rows.filter((r) => matchesSchedule(r, filters));
 
   // Creating or editing a schedule is `AckAlerts` at the edge, like launching a run — so the
   // action is offered only to a role that holds it, rather than failing on save.
@@ -182,8 +202,34 @@ export function ScheduledPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => set('q', v)}
+              placeholder={t('schedule.filter.searchPlaceholder')}
+              ariaLabel={t('schedule.filter.searchAria')}
+            />
+            {/* The tool options come from the catalog the schedule form already offers, so a
+                new analysis appears here without a second list to remember. */}
+            <FilterSelect
+              value={filters.tool}
+              onChange={(v) => set('tool', v)}
+              options={TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) }))}
+              allLabel={t('schedule.filter.allTools')}
+              ariaLabel={t('schedule.filter.toolAria')}
+            />
+            <FilterSelect
+              value={filters.enabled}
+              onChange={(v) => set('enabled', v)}
+              options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
+              allLabel={t('common:filter.allEnabled')}
+              ariaLabel={t('common:filter.enabledAria')}
+            />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('schedule.schedule', { count: rows.length })} />
+            <ResultCount
+              shown={shown.length}
+              total={isScheduleFiltered(filters) ? rows.length : undefined}
+              noun={t('schedule.schedule', { count: shown.length })}
+            />
             {canWrite && (
               <Button variant="primary" onClick={() => setCreating(true)}>
                 {t('schedule.add')}
@@ -194,11 +240,11 @@ export function ScheduledPage() {
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
-            rows={rows}
+            rows={shown}
             columns={columns}
             rowKey={(s) => s.id}
             loading={loading}
-            empty={t('schedule.empty')}
+            empty={isScheduleFiltered(filters) ? t('common:filter.noMatch') : t('schedule.empty')}
           />
         </>
       )}

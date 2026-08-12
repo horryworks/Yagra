@@ -218,3 +218,15 @@ html[data-viewport='mobile'] .disco-seen-row {
   grid-template-columns: 150px 150px 200px 150px 150px 120px;
   width: max-content;
 }
+
+/* Toolbar checkbox filter ("Answered only" / "Not yet monitored"). Sized like the toolbar's other
+   controls so the row reads as one band rather than a select beside a stray checkbox. */
+.disco-filter-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  cursor: pointer;
+}

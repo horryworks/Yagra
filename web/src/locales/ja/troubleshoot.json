@@ -63,6 +63,12 @@
       "deleteFailed": "スケジュールを削除できませんでした。",
       "unknown_cadence": "実行周期を選択してください。",
       "missing_scope": "分析の対象を選択してください。"
+    },
+    "filter": {
+      "searchPlaceholder": "分析または対象を検索…",
+      "searchAria": "スケジュール済みの分析を検索",
+      "allTools": "すべての分析",
+      "toolAria": "分析で絞り込む"
     }
   },
   "findings": {

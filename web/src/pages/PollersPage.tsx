@@ -28,7 +28,20 @@ import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
+import {
+  DEFAULT_POLLER_FILTERS,
+  isPollerFiltered,
+  matchesPoller,
+  POLLER_STATUSES,
+  type PollerFilters,
+} from './pollerFilters';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
@@ -453,6 +466,13 @@ export function PollersPage() {
    *  the operator has to compare by eye. Fetched once — it cannot change without this page
    *  reloading, since core restarting is what changes it. */
   const [coreVersion, setCoreVersion] = useState<string | null>(null);
+  // Client-side: a 50k-node deployment still has a handful of pollers, so the list is bounded by
+  // how many were deployed rather than by fleet size (ui-conventions). The pool choices come from
+  // the pools the page already loaded, not from a second list to keep in step.
+  const [filters, setFilters] = useState<PollerFilters>(DEFAULT_POLLER_FILTERS);
+  const set = <K extends keyof PollerFilters>(key: K, value: PollerFilters[K]) =>
+    setFilters((f) => ({ ...f, [key]: value }));
+  const shown = pollers.filter((x) => matchesPoller(x, filters));
 
   // Refresh without flashing the initial loading state on every poll (loading only gates the very
   // first paint, like the sibling list pages).
@@ -536,10 +556,31 @@ export function PollersPage() {
           )}
 
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => set('q', v)}
+              placeholder={t('pollers.filter.searchPlaceholder')}
+              ariaLabel={t('pollers.filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.status}
+              onChange={(v) => set('status', v)}
+              options={POLLER_STATUSES.map((st) => ({ value: st, label: t(`pollers.status.${st}`) }))}
+              allLabel={t('pollers.filter.allStatuses')}
+              ariaLabel={t('pollers.filter.statusAria')}
+            />
+            <FilterSelect
+              value={filters.pool}
+              onChange={(v) => set('pool', v)}
+              options={pools.map((x) => ({ value: x.pool, label: x.pool }))}
+              allLabel={t('pollers.filter.allPools')}
+              ariaLabel={t('pollers.filter.poolAria')}
+            />
             <TableSpacer />
             <ResultCount
-              shown={pollers.length}
-              noun={t('common:noun.poller', { count: pollers.length })}
+              shown={shown.length}
+              total={isPollerFiltered(filters) ? pollers.length : undefined}
+              noun={t('common:noun.poller', { count: shown.length })}
             />
             {authed && (
               <Button variant="primary" onClick={() => setRegistering(true)}>
@@ -566,12 +607,16 @@ export function PollersPage() {
                 <div className="ytable-h right">{t('pollers.cols.actions')}</div>
               </div>
 
-              {pollers.length === 0 ? (
+              {shown.length === 0 ? (
                 <div className="yt-empty">
                   <p className="yt-empty-title">
-                    {loading ? t('common:loading') : t('pollers.empty.title')}
+                    {loading
+                      ? t('common:loading')
+                      : isPollerFiltered(filters)
+                        ? t('common:filter.noMatch')
+                        : t('pollers.empty.title')}
                   </p>
-                  {!loading && (
+                  {!loading && !isPollerFiltered(filters) && (
                     <p className="yt-empty-sub">
                       <Trans
                         t={t}
@@ -582,7 +627,7 @@ export function PollersPage() {
                   )}
                 </div>
               ) : (
-                pollers.map((p) => {
+                shown.map((p) => {
                   const online = p.status === 'online';
                   return (
                     <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={p.id}>

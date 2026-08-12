@@ -22,7 +22,7 @@ import type {
   ForwardSourceKind,
   ForwardStatus,
 } from '../types/api';
-import { FORWARD_SOURCE_KINDS } from '../types/api';
+import { FORWARD_DEST_KINDS, FORWARD_SOURCE_KINDS } from '../types/api';
 import {
   destKindsForSource,
   fieldsForSource,
@@ -44,7 +44,20 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
+import { ENABLED_STATES } from '../lib/filterQuery';
+import {
+  DEFAULT_FORWARDING_FILTERS,
+  isForwardingFiltered,
+  matchesForwardDestination,
+  type ForwardingFilters,
+} from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import {
@@ -542,6 +555,10 @@ export function ForwardingPage() {
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<ForwardDestination | null>(null);
   const [testResult, setTestResult] = useState<{ name: string; text: string } | null>(null);
+  // Client-side: the destination list is bounded by what an operator configured, not by fleet size
+  // (ui-conventions). The judgement is in `forwardingListFilters.ts`.
+  const [filters, setFilters] = useState<ForwardingFilters>(DEFAULT_FORWARDING_FILTERS);
+  const shown = rows.filter((d) => matchesForwardDestination(d, filters));
 
   const load = useCallback(() => {
     setError(null);
@@ -661,21 +678,45 @@ export function ForwardingPage() {
           )}
 
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('filter.searchPlaceholder')}
+              ariaLabel={t('filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.dest_kind}
+              onChange={(v) => setFilters((f) => ({ ...f, dest_kind: v }))}
+              options={FORWARD_DEST_KINDS.map((k) => ({ value: k, label: t(`dest.${k}`) }))}
+              allLabel={t('filter.allDestKinds')}
+              ariaLabel={t('filter.destKindAria')}
+            />
+            <FilterSelect
+              value={filters.enabled}
+              onChange={(v) => setFilters((f) => ({ ...f, enabled: v }))}
+              options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
+              allLabel={t('common:filter.allEnabled')}
+              ariaLabel={t('common:filter.enabledAria')}
+            />
+            <TableSpacer />
+            <ResultCount
+              shown={shown.length}
+              total={isForwardingFiltered(filters) ? rows.length : undefined}
+              noun={t('count', { count: shown.length })}
+            />
             <Button variant="primary" onClick={() => setAdding(true)}>
               + {t('add.button')}
             </Button>
-            <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('count', { count: rows.length })} />
           </TableToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
           <DataTable
-            rows={rows}
+            rows={shown}
             columns={columns}
             rowKey={(r) => r.id}
             loading={loading}
-            empty={t('empty')}
+            empty={isForwardingFiltered(filters) ? t('common:filter.noMatch') : t('empty')}
           />
         </>
       )}

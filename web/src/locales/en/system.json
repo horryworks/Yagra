@@ -121,6 +121,14 @@
     "err": {
       "remove": "failed to remove poller",
       "anchor": "failed to set the anchor node"
+    },
+    "filter": {
+      "searchPlaceholder": "Search id, pool or version…",
+      "searchAria": "Search pollers",
+      "allStatuses": "Online and offline",
+      "statusAria": "Filter by status",
+      "allPools": "All pools",
+      "poolAria": "Filter by pool"
     }
   },
   "health": {

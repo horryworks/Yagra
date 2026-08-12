@@ -11,7 +11,24 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
+import { ENABLED_STATES } from '../lib/filterQuery';
+import {
+  DEFAULT_DEFINITION_FILTERS,
+  DEFAULT_SCHEDULE_LIST_FILTERS,
+  isDefinitionFiltered,
+  isScheduleListFiltered,
+  matchesDefinition,
+  matchesReportSchedule,
+  type DefinitionFilters,
+  type ScheduleListFilters,
+} from './reportListFilters';
 import { usePolled } from '../dashboard/usePolled';
 import { api } from '../services/api';
 import { subscribeReportRuns } from '../services/sse';
@@ -92,10 +109,19 @@ export function ReportsPage() {
   // Destructive-action consent via the shared ConfirmDeleteModal — a failed delete keeps the
   // dialog open and shows the message rather than closing silently.
   const [confirm, setConfirm] = useState<{ text: string; run: () => Promise<void> } | null>(null);
+  // Client-side: templates and schedules are bounded by what an admin authored, not by fleet
+  // size (ui-conventions). The Saved-reports tab is the one that grows with the fleet and
+  // belongs in the query instead — that is increment 6, not this.
+  const [defFilters, setDefFilters] = useState<DefinitionFilters>(DEFAULT_DEFINITION_FILTERS);
+  const [schedFilters, setSchedFilters] = useState<ScheduleListFilters>(
+    DEFAULT_SCHEDULE_LIST_FILTERS,
+  );
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
   const schedules: ReportSchedule[] = scheds.data ?? [];
+  const shownDefinitions = definitions.filter((d) => matchesDefinition(d, defFilters));
+  const shownSchedules = schedules.filter((x) => matchesReportSchedule(x, schedFilters));
 
   async function runNow(def: ReportDefinition) {
     setBusy(def.id);
@@ -316,10 +342,17 @@ export function ReportsPage() {
       {tab === 'templates' && (
         <>
           <TableToolbar>
+            <SearchInput
+              value={defFilters.q}
+              onChange={(v) => setDefFilters({ q: v })}
+              placeholder={t('defs.filter.searchPlaceholder')}
+              ariaLabel={t('defs.filter.searchAria')}
+            />
             <TableSpacer />
             <ResultCount
-              shown={definitions.length}
-              noun={t('common:noun.template', { count: definitions.length })}
+              shown={shownDefinitions.length}
+              total={isDefinitionFiltered(defFilters) ? definitions.length : undefined}
+              noun={t('common:noun.template', { count: shownDefinitions.length })}
             />
             {isAdmin && (
               <Button variant="primary" onClick={() => setBuilderFor('new')}>
@@ -328,10 +361,16 @@ export function ReportsPage() {
             )}
           </TableToolbar>
           <DataTable
-            rows={definitions}
+            rows={shownDefinitions}
             columns={defColumns}
             rowKey={(d) => d.id}
-            empty={isAdmin ? t('defs.emptyAdmin') : t('defs.empty')}
+            empty={
+              isDefinitionFiltered(defFilters)
+                ? t('common:filter.noMatch')
+                : isAdmin
+                  ? t('defs.emptyAdmin')
+                  : t('defs.empty')
+            }
             loading={defs.loading && definitions.length === 0}
           />
         </>
@@ -340,10 +379,24 @@ export function ReportsPage() {
       {tab === 'schedules' && (
         <>
           <TableToolbar>
+            <SearchInput
+              value={schedFilters.q}
+              onChange={(v) => setSchedFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('scheds.filter.searchPlaceholder')}
+              ariaLabel={t('scheds.filter.searchAria')}
+            />
+            <FilterSelect
+              value={schedFilters.enabled}
+              onChange={(v) => setSchedFilters((f) => ({ ...f, enabled: v }))}
+              options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
+              allLabel={t('common:filter.allEnabled')}
+              ariaLabel={t('common:filter.enabledAria')}
+            />
             <TableSpacer />
             <ResultCount
-              shown={schedules.length}
-              noun={t('noun.schedule', { count: schedules.length })}
+              shown={shownSchedules.length}
+              total={isScheduleListFiltered(schedFilters) ? schedules.length : undefined}
+              noun={t('noun.schedule', { count: shownSchedules.length })}
             />
             {isAdmin && (
               <Button
@@ -356,10 +409,16 @@ export function ReportsPage() {
             )}
           </TableToolbar>
           <DataTable
-            rows={schedules}
+            rows={shownSchedules}
             columns={schedColumns}
             rowKey={(s) => s.id}
-            empty={definitions.length === 0 ? t('scheds.emptyNoDefs') : t('scheds.empty')}
+            empty={
+              isScheduleListFiltered(schedFilters)
+                ? t('common:filter.noMatch')
+                : definitions.length === 0
+                  ? t('scheds.emptyNoDefs')
+                  : t('scheds.empty')
+            }
             loading={scheds.loading && schedules.length === 0}
           />
         </>
