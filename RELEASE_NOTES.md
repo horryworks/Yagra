@@ -10,7 +10,25 @@
 
 ## Unreleased
 
+### Breaking changes
+- **The event log's time range now defaults to the last 24 hours instead of all time**, and the
+  From/To instants have moved under a "Custom…" choice in the new range dropdown. This is what pays
+  for the search change below: over an unbounded range a case-insensitive term costs about ten times
+  a case-sensitive one — 9.4 seconds against 6.7M events on our own test deployment — while over 24
+  hours it is about 1.1×. "All time" is still one click away, and the API is unchanged: `start` and
+  `end` on `GET /api/v1/events` remain optional and unbounded by default, so an API client that sent
+  no range still gets none.
+
 ### New Features
+- **The Events search is no longer case-sensitive.** On a deployment with a log store (ADR-024) a
+  plain search term was matched case-sensitively, so `SSH` did not find `ssh` — while the same
+  search on a deployment without one did, because PostgreSQL's `ILIKE` never cared. One query, two
+  answers, depending on which store the deployment happens to run. Both are now case-insensitive, in
+  plain and regex mode alike. One difference remains and is deliberate: a log store matches whole
+  words where PostgreSQL matches any substring, because a leading substring cannot be served from an
+  inverted word index without scanning every block — that costs ~300× and reaches VictoriaLogs'
+  30-second query ceiling. The search box's regex toggle is the escape hatch for it, and reaches
+  inside words on either store.
 - **Alerts ▸ Active can be narrowed.** The triage screen — the first one open during an incident —
   had no filter at all: a major outage produced thousands of rows and the only way through them was
   to scroll. It now filters by severity, node state, whether the alert has been acknowledged in your

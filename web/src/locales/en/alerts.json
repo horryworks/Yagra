@@ -78,6 +78,13 @@
       "to": "To",
       "clearRange": "Clear time range",
       "toggle": "Filters"
+    },
+    "range": {
+      "24h": "Last 24h",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "all": "All time",
+      "custom": "Custom…"
     }
   },
   "eventLog": {

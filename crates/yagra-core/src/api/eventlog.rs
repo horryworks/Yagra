@@ -249,8 +249,10 @@ pub(super) struct EventsQuery {
     kind: Option<String>,
     node_id: Option<Uuid>,
     matched: Option<bool>,
-    /// Free-text matched against source (node name / IP) or message. With `regex`, it is instead a
-    /// regular expression matched against the message only.
+    /// Free-text matched against source (node name / IP) or message, case-insensitively. Whether
+    /// it also matches inside a word depends on the store this deployment searches: PostgreSQL
+    /// matches any substring, a log store matches whole words. With `regex`, it is instead a
+    /// regular expression matched against the message only, which reaches inside words on either.
     q: Option<String>,
     /// Interpret `q` as a regular expression (message-only) rather than a plain term.
     regex: Option<bool>,

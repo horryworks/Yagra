@@ -12497,8 +12497,10 @@ export interface operations {
                 node_id?: string;
                 matched?: boolean;
                 /**
-                 * @description Free-text matched against source (node name / IP) or message. With `regex`, it is instead a
-                 *     regular expression matched against the message only.
+                 * @description Free-text matched against source (node name / IP) or message, case-insensitively. Whether
+                 *     it also matches inside a word depends on the store this deployment searches: PostgreSQL
+                 *     matches any substring, a log store matches whole words. With `regex`, it is instead a
+                 *     regular expression matched against the message only, which reaches inside words on either.
                  */
                 q?: string;
                 /** @description Interpret `q` as a regular expression (message-only) rather than a plain term. */

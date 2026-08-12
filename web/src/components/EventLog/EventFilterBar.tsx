@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Shared filter controls for the event log, used by both the Alerts ▸ Events page and the
 // NodeDetail ▸ Events tab (same shared-module pattern as useEventLog / eventColumns). Renders the
-// kind / matched selects, an optional node picker, a text search with a regex toggle, and a
-// From/To time-range (both sides optional — empty = unbounded, so the default is "all events").
+// kind / matched selects, an optional node picker, a text search with a regex toggle, and a time
+// range: a preset (default "Last 24 hours"), with the From/To instants appearing under "Custom".
+//
+// ⚠️ The range default is **bounded**, and that is what pays for the search being
+// case-insensitive — see `eventRange.ts`. It used to be "all time" with a From/To pair and nothing
+// else; widening it back turns every search on a busy deployment into a ten-second wait.
 //
 // The component owns only ephemeral input drafts (the search text and the From/To datetime-local
 // strings); the resolved filter values flow up through typed callbacks. Search is debounced here
@@ -17,6 +21,13 @@ import { Select } from '../ui/Field';
 import { SearchInput } from '../ui/TableToolbar';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { localInputToIso } from '../NodeDetail/RangeControl';
+import {
+  boundsFor,
+  DEFAULT_EVENT_RANGE,
+  EVENT_RANGES,
+  rangeIsNarrowing,
+  type EventRange,
+} from './eventRange';
 import './EventFilterBar.css';
 
 export type KindFilter = '' | EventKind;
@@ -56,6 +67,7 @@ export function EventFilterBar({
 }: Props) {
   const { t } = useTranslation(['alerts', 'common', 'nav']);
   const [searchDraft, setSearchDraft] = useState('');
+  const [range, setRange] = useState<EventRange>(DEFAULT_EVENT_RANGE);
   const [fromDraft, setFromDraft] = useState('');
   const [toDraft, setToDraft] = useState('');
   // Mobile only: the filter controls collapse behind a "Filters" toggle so the event list gets the
@@ -71,13 +83,39 @@ export function EventFilterBar({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchDraft]);
 
-  const emitRange = (from: string, to: string) =>
-    onRangeChange(localInputToIso(from), localInputToIso(to));
+  // The default range has to reach the parent, not just sit in this state — otherwise the first
+  // fetch is unbounded and only the second one is narrowed. Resolved once here rather than per
+  // request: see `boundsFor` for why a lower bound that creeps forward breaks keyset paging.
+  useEffect(() => {
+    const b = boundsFor(DEFAULT_EVENT_RANGE, {}, Date.now());
+    onRangeChange(b.start, b.end);
+    // Mount only; every later change goes through `emit`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const emit = (next: EventRange, from: string, to: string) => {
+    const b = boundsFor(next, { from: localInputToIso(from), to: localInputToIso(to) }, Date.now());
+    onRangeChange(b.start, b.end);
+  };
+
+  const pickRange = (next: EventRange) => {
+    setRange(next);
+    // Leaving Custom drops the two instants: keeping them would mean a preset and an absolute
+    // window silently ANDed, so "Last 24 hours" could return nothing because a month-old To was
+    // still set on a control no longer on screen.
+    if (next !== 'custom') {
+      setFromDraft('');
+      setToDraft('');
+      emit(next, '', '');
+    } else {
+      emit(next, fromDraft, toDraft);
+    }
+  };
 
   const clearRange = () => {
     setFromDraft('');
     setToDraft('');
-    onRangeChange(undefined, undefined);
+    emit('custom', '', '');
   };
 
   const hasRange = fromDraft !== '' || toDraft !== '';
@@ -88,7 +126,7 @@ export function EventFilterBar({
     (matched !== '' ? 1 : 0) +
     (searchDraft.trim() !== '' ? 1 : 0) +
     (regex ? 1 : 0) +
-    (hasRange ? 1 : 0) +
+    (rangeIsNarrowing(range, { from: fromDraft, to: toDraft }) ? 1 : 0) +
     (showNodePicker && nodeId ? 1 : 0);
 
   return (
@@ -142,42 +180,60 @@ export function EventFilterBar({
             {t('events.filters.regexLabel')}
           </button>
         </div>
-        <div className="event-range">
-          <input
-            className="field event-range-input"
-            type="datetime-local"
-            value={fromDraft}
-            aria-label={t('events.filters.from')}
-            title={t('events.filters.from')}
-            onChange={(e) => {
-              setFromDraft(e.target.value);
-              emitRange(e.target.value, toDraft);
-            }}
-          />
-          <span className="event-range-sep">–</span>
-          <input
-            className="field event-range-input"
-            type="datetime-local"
-            value={toDraft}
-            aria-label={t('events.filters.to')}
-            title={t('events.filters.to')}
-            onChange={(e) => {
-              setToDraft(e.target.value);
-              emitRange(fromDraft, e.target.value);
-            }}
-          />
-          {hasRange && (
-            <button
-              type="button"
-              className="event-range-clear"
-              title={t('events.filters.clearRange')}
-              aria-label={t('events.filters.clearRange')}
-              onClick={clearRange}
-            >
-              ×
-            </button>
-          )}
-        </div>
+        {/* No extra class: `Select` already carries `.field`, which is what the mobile collapse
+            sizes, and this reads as one more toolbar filter beside kind/matched. */}
+        <Select
+          value={range}
+          onChange={(e) => pickRange(e.target.value as EventRange)}
+          aria-label={t('common:range.timeRange')}
+        >
+          {EVENT_RANGES.map((r) => (
+            <option key={r} value={r}>
+              {t(`events.range.${r}`)}
+            </option>
+          ))}
+        </Select>
+        {/* The two instants belong to Custom only. Kept mounted-on-demand rather than disabled:
+            a From/To pair that is on screen but ignored by the active preset is the control that
+            makes an operator distrust the whole toolbar. */}
+        {range === 'custom' && (
+          <div className="event-range">
+            <input
+              className="field event-range-input"
+              type="datetime-local"
+              value={fromDraft}
+              aria-label={t('events.filters.from')}
+              title={t('events.filters.from')}
+              onChange={(e) => {
+                setFromDraft(e.target.value);
+                emit('custom', e.target.value, toDraft);
+              }}
+            />
+            <span className="event-range-sep">–</span>
+            <input
+              className="field event-range-input"
+              type="datetime-local"
+              value={toDraft}
+              aria-label={t('events.filters.to')}
+              title={t('events.filters.to')}
+              onChange={(e) => {
+                setToDraft(e.target.value);
+                emit('custom', fromDraft, e.target.value);
+              }}
+            />
+            {hasRange && (
+              <button
+                type="button"
+                className="event-range-clear"
+                title={t('events.filters.clearRange')}
+                aria-label={t('events.filters.clearRange')}
+                onClick={clearRange}
+              >
+                ×
+              </button>
+            )}
+          </div>
+        )}
       </div>
     </>
   );

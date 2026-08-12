@@ -1475,8 +1475,10 @@ impl YagraMcp {
 
     #[tool(
         description = "Search received passive events (syslog / SNMP traps / webhooks), newest first. \
-                       Optional `search` (case-insensitive substring over source/message, or a \
-                       message-only regex when `regex` is true), `kind` (syslog|trap|webhook), \
+                       Optional `search` (case-insensitive over source/message; it matches whole \
+                       words on a log-store deployment and any substring otherwise, so set `regex` \
+                       to true for a message-only regex that reaches inside words either way), \
+                       `kind` (syslog|trap|webhook), \
                        `node_id`, `matched` (only rule-matched events), `since`/`until` (RFC 3339), and \
                        `limit` (1–500, default 100). Requires live mode."
     )]
@@ -3483,9 +3485,10 @@ struct SearchFindingsParams {
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub(crate) struct EventSearchParams {
-    /// Case-insensitive substring over source/message (or a message-only regex when `regex` is true).
+    /// Case-insensitive match over source/message: whole words on a log-store deployment, any
+    /// substring otherwise. Use `regex` for a message-only pattern that reaches inside words.
     search: Option<String>,
-    /// Interpret `search` as a regular expression (message-only) rather than a substring.
+    /// Interpret `search` as a regular expression (message-only) rather than a plain term.
     regex: Option<bool>,
     /// Restrict to an event kind: syslog, trap, or webhook.
     kind: Option<String>,

@@ -4470,7 +4470,7 @@
           {
             "name": "q",
             "in": "query",
-            "description": "Free-text matched against source (node name / IP) or message. With `regex`, it is instead a\nregular expression matched against the message only.",
+            "description": "Free-text matched against source (node name / IP) or message, case-insensitively. Whether\nit also matches inside a word depends on the store this deployment searches: PostgreSQL\nmatches any substring, a log store matches whole words. With `regex`, it is instead a\nregular expression matched against the message only, which reaches inside words on either.",
             "required": false,
             "schema": {
               "type": "string"

@@ -333,18 +333,23 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
             // case-sensitive here and case-insensitive there.
             clauses.push(format!("_msg:~{}", logsql_quote(&ci_regex(term))));
         } else {
-            // A phrase filter: whole-token and case-SENSITIVE. Deliberately NOT the SQL path's
-            // `ILIKE '%term%'`, and the one place the two backends are allowed to differ — on two
-            // axes, sub-token granularity and case. Both alternatives were measured against the
-            // live test server (2026-07-28) and cost more than the difference is worth; the
-            // numbers and the reasoning are in `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`.
+            // A case-INSENSITIVE phrase filter: still whole-token, so one axis of difference from
+            // the SQL path's `ILIKE '%term%'` remains (sub-token granularity) and one is now gone.
             //
-            // The operator's escape hatch for either is the search box's existing **regex**
-            // toggle, which is case-insensitive and reaches inside tokens on both backends — at
-            // that scan cost, but only when explicitly asked for.
+            // Case was bought deliberately, and what made it affordable was bounding the Events
+            // page's default range, not a change in the measurement: `i("…")` is ~1.1× a plain
+            // phrase over 24h and ~10× unbounded (re-measured 2026-08-13 on 6.7M events). A search
+            // that no one can spell correctly is not a search — `SSH` not matching `ssh` was the
+            // single most common complaint about this box — so the bounded window is what the
+            // feature is worth paying for. Sub-token matching is *not*: it is ~300× and reached
+            // VictoriaLogs' 30s ceiling on real syslog, which is why
+            // `a_plain_term_stays_a_phrase_filter_not_a_regex_scan` still forbids the regex form
+            // here. That remains the search box's explicit **regex** toggle, opted into per query.
             let mut ors = vec![
-                format!("_msg:{}", logsql_quote(term)),
-                format!("source_ip:{}", logsql_quote(term)),
+                format!("_msg:i({})", logsql_quote(term)),
+                // Case matters here too, and only here: an IPv6 literal is hex, and the poller may
+                // record `FE80::1` where PostgreSQL's `host(inet)` renders `fe80::1`.
+                format!("source_ip:i({})", logsql_quote(term)),
             ];
             if !name_node_ids.is_empty() {
                 let ids = name_node_ids
@@ -490,13 +495,12 @@ fn build_agg_unmatched_signature_logsql(filter: &EventFilter, limit: i64, tier: 
 
 /// `<filter> (<auth signals>) | stats by (source_ip, node_id) count() as n`.
 ///
-/// ⚠️ The phrases use `i("…")`, which `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`
-/// measures at ~40× a plain phrase. It is bought deliberately here and must not be upgraded to
-/// `~"(?i)…"` (~300×, which hit VictoriaLogs' 30s query ceiling on real syslog and was reverted the
-/// day it shipped): unlike the Events page, whose range defaults to unbounded, `run_auth_probe`'s
-/// window is always bounded, always explicitly requested, and admission-controlled by the analysis
-/// semaphore and per-minute cap. Case-insensitivity is worth 40× on a bounded window; substring
-/// matching is not worth 300× on any window.
+/// ⚠️ The phrases use `i("…")`, the same case-insensitive form the search path now uses, and must
+/// not be upgraded to `~"(?i)…"` (~300×, which hit VictoriaLogs' 30s query ceiling on real syslog
+/// and was reverted the day it shipped). `run_auth_probe`'s window is always bounded, always
+/// explicitly requested, and admission-controlled by the analysis semaphore and per-minute cap —
+/// which is the same condition that made case-insensitivity affordable on the Events page once its
+/// default range was bounded. Substring matching is not worth 300× on any window.
 fn build_agg_auth_sources_logsql(filter: &EventFilter, limit: i64) -> String {
     let mut ors = vec![format!(
         "trap_oid:={}",
@@ -885,11 +889,12 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
 /// Whether a stored record satisfies the filter, modelling the **PostgreSQL** contract:
 /// case-insensitive substring for a plain term, case-insensitive regex for a pattern.
 ///
-/// It cannot model both backends, because for a *plain term* they legitimately differ on two axes:
-/// VictoriaLogs matches by whole token rather than substring, and case-sensitively (see
-/// [`build_filter_part`] for the measurements behind accepting that). Everything else — the time
-/// base, regex case-insensitivity, which fields a term searches — is shared, and
-/// `both_backends_filter_on_event_time_with_the_same_case_rules` is what keeps it that way.
+/// It cannot model both backends, because for a *plain term* they legitimately differ on one axis:
+/// VictoriaLogs matches by whole token rather than by substring (see [`build_filter_part`] for the
+/// ~300× measurement behind accepting that). Case used to be a second axis and no longer is —
+/// both are case-insensitive in both modes. Everything else — the time base, which fields a term
+/// searches — is shared, and `both_backends_filter_on_event_time_with_the_same_case_rules` is what
+/// keeps it that way.
 #[cfg(test)]
 fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) -> bool {
     let m = &r.msg;
@@ -1276,34 +1281,37 @@ mod tests {
         assert!(q.contains("kind:=\"syslog\""));
         assert!(q.contains(&format!("node_id:=\"{node}\"")));
         assert!(q.contains("matched:=\"true\""));
-        assert!(q.contains("_msg:\"link down\""));
-        assert!(q.contains("source_ip:\"link down\""));
+        assert!(q.contains("_msg:i(\"link down\")"));
+        assert!(q.contains("source_ip:i(\"link down\")"));
         assert!(q.contains(&format!("node_id:in(\"{}\")", Uuid::from_u128(9))));
         assert!(q.ends_with("| sort by (_time) desc | limit 100"));
     }
 
     #[test]
     fn a_plain_term_stays_a_phrase_filter_not_a_regex_scan() {
-        // Guards a fix that was tried and reverted, and a second one that was measured and
-        // declined. Both would make a plain term match the SQL path's `ILIKE '%term%'` exactly;
-        // both cost too much, measured on the live test server against real syslog (2026-07-28):
+        // Guards a fix that was tried and reverted. Making a plain term match the SQL path's
+        // `ILIKE '%term%'` exactly needs two things, and only one of them is affordable. Measured
+        // on the live test server against real syslog (2026-07-28, and re-measured 2026-08-13 on
+        // 6.7M events — the shape held, the absolute numbers moved with the data volume):
         //
-        //   `_msg:"term"`        phrase, case-SENSITIVE, token-exact   19ms/24h    <- what we ship
-        //   `_msg:i("term")`     case-insensitive, still token-exact   750ms/24h, 7.4s unbounded
-        //   `_msg:~"(?i)term"`   case-insensitive substring            5.6s/24h, 30.1s unbounded
-        //                                                             (= VL's query ceiling)
+        //   `_msg:"term"`        phrase, case-sensitive, token-exact     0.9s/24h, 0.9s unbounded
+        //   `_msg:i("term")`     case-INsensitive, still token-exact     1.0s/24h, 9.4s unbounded
+        //   `_msg:~"(?i)term"`   case-insensitive substring              5.6s/24h, 30.1s unbounded
+        //                                                               (= VL's query ceiling)
         //
         // An inverted word index cannot serve a leading substring, and case folding defeats the
-        // token index too. The Events page defaults to an UNBOUNDED range, so the unbounded column
-        // is the common case, not the corner. Regex mode is the deliberate escape hatch: it is
-        // case-insensitive and sub-token on both backends, and the operator opts into the cost.
+        // token index too. The middle row shipped once the Events page stopped defaulting to an
+        // unbounded range (`web/src/components/EventLog/eventRange.ts`, default 24h): over a
+        // bounded window it is ~1.1×, and a search that only matches the casing the device happened
+        // to send is not a search. The bottom row is still ~300× and still refused — regex mode
+        // remains the escape hatch, sub-token on both backends and opted into per query.
         let filter = EventFilter {
             search: Some("link".into()),
             regex: false,
             ..EventFilter::default()
         };
         let q = build_search_logsql(&filter, &[], 100);
-        assert!(q.contains("_msg:\"link\""), "{q}");
+        assert!(q.contains("_msg:i(\"link\")"), "{q}");
         assert!(
             !q.contains("_msg:~"),
             "plain term must not become a regex scan: {q}"
@@ -1316,10 +1324,12 @@ mod tests {
         // implementations of one `EventFilter` and they drifted on four points at once — time
         // column, substring-vs-phrase, regex case, node-name resolution — with nothing failing.
         //
-        // Three of the four are now shared and asserted here. The fourth, sub-token granularity of
-        // a plain term, is a *permitted* difference: see `a_plain_term_stays_a_phrase_filter_…`
-        // for the 300× measurement behind that decision. Permitted, not forgotten — anything else
-        // that changes the contract has to change both sides or fail here.
+        // Three of the four are now shared and asserted here. The fourth was two axes wearing one
+        // name — *case* and *sub-token granularity* — and only the second is still a permitted
+        // difference: see `a_plain_term_stays_a_phrase_filter_…` for the 300× measurement behind
+        // refusing it, and for why case became affordable once the Events page stopped defaulting
+        // to an unbounded range. Permitted, not forgotten — anything else that changes the contract
+        // has to change both sides or fail here.
         use crate::events::EVENT_FILTER_WHERE;
 
         // 1. Time bounds are event time on both sides. `recorded_at` is ingest time and must not
@@ -1332,9 +1342,10 @@ mod tests {
             "{EVENT_FILTER_WHERE}"
         );
 
-        // 2. An operator-supplied *regex* is case-insensitive on both sides: `~*` there, `(?i)`
-        //    here. This is the axis that CAN be unified for free, because regex mode is already a
-        //    scan on both. A plain term cannot — see `a_plain_term_stays_a_phrase_filter_…`.
+        // 2. Case is now unified in BOTH modes. A regex is case-insensitive either way — `~*`
+        //    there, `(?i)` here — and so is a plain term: `ILIKE` there, `i("…")` here. Neither
+        //    backend may match `SSH` and miss `ssh`, which is what the plain-term side used to do
+        //    on VictoriaLogs only, so the same query answered differently per deployment.
         assert!(EVENT_FILTER_WHERE.contains("ILIKE"));
         assert!(EVENT_FILTER_WHERE.contains("e.message ~* $7"));
         let pattern = build_filter_part(
@@ -1346,6 +1357,16 @@ mod tests {
             &[],
         );
         assert!(pattern.contains("(?i)"), "{pattern}");
+        let plain = build_filter_part(
+            &EventFilter {
+                search: Some("Term".into()),
+                regex: false,
+                ..EventFilter::default()
+            },
+            &[],
+        );
+        assert!(plain.contains("_msg:i(\"Term\")"), "{plain}");
+        assert!(plain.contains("source_ip:i(\"Term\")"), "{plain}");
 
         // 3. Every filter dimension reaches both sides. A field added to one builder only is the
         //    exact failure this catches.
@@ -1550,11 +1571,11 @@ mod tests {
         }
     }
 
-    /// ⚠️ `auth_probe` is the one analytics query that buys case-insensitive matching, and the
-    /// price is measured: `i("term")` is ~40× a plain phrase, while `~"(?i)term"` is ~300× and hit
-    /// VictoriaLogs' 30s ceiling on real syslog (it shipped and was reverted the same day,
-    /// 285f58a → 0497fc2). The purchase is defensible only because `run_auth_probe`'s window is
-    /// always bounded and admission-controlled, unlike the Events page's unbounded default.
+    /// ⚠️ `auth_probe` buys case-insensitive matching, and the price is measured: `~"(?i)term"` is
+    /// ~300× a plain phrase and hit VictoriaLogs' 30s ceiling on real syslog (it shipped and was
+    /// reverted the same day, 285f58a → 0497fc2). The purchase is defensible because
+    /// `run_auth_probe`'s window is always bounded and admission-controlled — the same reason the
+    /// Events search could take it once its default range stopped being unbounded.
     ///
     /// So: phrases, never a regex scan. Same shape as
     /// `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`, which guards the search path.
