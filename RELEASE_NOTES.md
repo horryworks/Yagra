@@ -11,6 +11,12 @@
 ## Unreleased
 
 ### Bug Fixes
+- **An SNMPv3 credential could not be bound to a node from the UI.** Add node and Edit node listed
+  only `snmp_v2c` credentials, so a v3 credential could be stored, and even matched against a device
+  by Discovery's credential finder, and then never attached to the node it had just authenticated
+  against — although the poller has always decrypted and used one. Both pickers now offer v2c and
+  v3, which is what Discovery already did. Only those two kinds are ever offered: an HTTP or Meraki
+  credential bound as a node's SNMP credential would be sent to the device as a community string.
 - **Edit node showed a URL and a DNS monitor an SNMP credential picker they can never use.** The
   dialog rendered the same five device fields — device profile, SNMP credential, maker, model, pool
   — for every kind of node, having never read the node's kind. A URL or DNS monitor is dispatched as
