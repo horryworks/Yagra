@@ -1459,7 +1459,9 @@ impl YagraMcp {
         // A smaller page than the REST default (50): an AI client reads the runs list to orient,
         // not to render a table.
         let limit = p.limit.unwrap_or(20).clamp(1, 100);
-        let jobs = match admin.analysis.list(limit).await {
+        // No filter: `list_analyses` answers "what has run recently", and a model narrows by
+        // reading the rows rather than by re-asking. The seam is shared so the cap cannot differ.
+        let jobs = match admin.analysis.list(limit, &Default::default()).await {
             Ok(js) => js,
             Err(e) => return tool_error("list_analyses", "list analyses", &e),
         };

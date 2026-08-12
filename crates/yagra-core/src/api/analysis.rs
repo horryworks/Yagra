@@ -25,7 +25,6 @@
 
 use super::extract::{Admin, RequireAckAlerts, RequireView, Scoped};
 use super::scope::ScopeTarget;
-use super::util::ListQuery;
 use super::{ApiError, ApiResult, ApiState};
 use crate::analysis::{AnalysisJob, AnalysisTool, CreateError, JobParams, ScopeKind};
 use axum::{
@@ -322,15 +321,39 @@ pub(crate) fn visible_findings(
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-/// Recent analysis jobs (the runs list). `?limit=` (default 50).
+/// Every state an analysis run can be in, as the column stores them.
+///
+/// Written out here rather than derived because the state is a bare `String` on `AnalysisJob` —
+/// the writers set it with `UPDATE … SET state = 'done'` and nothing types it. Validating the
+/// filter against this list is what keeps a typo from being dropped and silently widening the
+/// answer to every run.
+const JOB_STATES: [&str; 5] = ["queued", "running", "done", "failed", "cancelled"];
+
+/// `?limit=` plus the filters, all optional.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct JobsQuery {
+    limit: Option<i64>,
+    /// Only runs of this analysis (e.g. `anomaly`).
+    tool: Option<String>,
+    /// Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`.
+    state: Option<String>,
+    /// Only runs started at or after this instant (RFC 3339).
+    since: Option<String>,
+}
+
+/// Recent analysis jobs (the runs list). `?limit=` (default 50), optionally narrowed.
 ///
 /// Skeleton mode has no runner, so this answers an empty list rather than a 503: the runs list is
-/// a panel on a page that otherwise works, and an error there would break the page.
+/// a panel on a page that otherwise works, and an error there would break the page. **The filter is
+/// validated before that early return**, so a malformed one is a 400 on every deployment rather
+/// than an empty `200` on some — a client bug that reads as "no runs" is worse than an error.
 #[utoipa::path(
     get, path = "/api/v1/analysis/jobs", tag = "analysis",
-    params(ListQuery),
+    params(JobsQuery),
     responses(
-        (status = 200, description = "Recent runs, newest first; empty when this deployment has no runner", body = Vec<AnalysisJob>),
+        (status = 200, description = "Matching runs, newest first; empty when this deployment has no runner", body = Vec<AnalysisJob>),
+        (status = 400, description = "The tool or state is outside its vocabulary, or `since` is not RFC 3339", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
@@ -338,14 +361,56 @@ pub(crate) fn visible_findings(
 async fn list_analysis_jobs(
     _perm: RequireView,
     Scoped(scope): Scoped,
+    Query(q): Query<JobsQuery>,
     State(st): State<ApiState>,
-    Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<Vec<AnalysisJob>>> {
+    // Rejected, never ignored: an unknown token dropped here widens the answer, and the operator
+    // who asked for failed runs would be shown every run believing the narrower thing.
+    let tool = match q.tool.as_deref() {
+        Some(t) => Some(
+            AnalysisTool::from_str(t)
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "invalid_tool",
+                        format!(
+                            "unknown analysis tool; must be one of: {}",
+                            AnalysisTool::token_list()
+                        ),
+                    )
+                })?
+                .as_str(),
+        ),
+        None => None,
+    };
+    let state = match q.state.as_deref() {
+        Some(s) => Some(
+            *JOB_STATES
+                .iter()
+                .find(|known| **known == s)
+                .ok_or_else(|| {
+                    ApiError::bad_request(
+                        "invalid_state",
+                        format!(
+                            "unknown run state; must be one of: {}",
+                            JOB_STATES.join(", ")
+                        ),
+                    )
+                })?,
+        ),
+        None => None,
+    };
+    let since = match q.since.as_deref() {
+        Some(s) => Some(super::util::parse_rfc3339(s).ok_or_else(|| {
+            ApiError::bad_request("invalid_since", "since must be an RFC 3339 timestamp")
+        })?),
+        None => None,
+    };
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Json(Vec::new()));
     };
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let jobs = admin.analysis.list(limit).await.map_err(|e| {
+    let filter = crate::analysis::JobFilter { tool, state, since };
+    let jobs = admin.analysis.list(limit, &filter).await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
             "list analysis jobs",

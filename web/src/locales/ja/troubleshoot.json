@@ -19,12 +19,22 @@
     "findingCount_other": "検出結果 {{count}} 件",
     "state": {
       "failed": "失敗",
-      "cancelled": "キャンセル"
+      "cancelled": "キャンセル",
+      "queued": "待機中",
+      "running": "実行中",
+      "done": "完了"
     },
     "analysisError": "分析エラー",
     "toast": {
       "requeued": "{{name}} を再実行キューに追加しました。",
       "requeueFailed": "分析を再実行できませんでした。"
+    },
+    "noun": "件の実行",
+    "filter": {
+      "searchPlaceholder": "対象または要約を検索…",
+      "searchAria": "分析の実行を検索",
+      "allStates": "すべての状態",
+      "stateAria": "実行状態で絞り込む"
     }
   },
   "schedule": {

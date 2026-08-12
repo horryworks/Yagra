@@ -8,7 +8,23 @@
 // Progress and terminal states arrive over SSE (store.upsertJob); no client-side faking.
 
 import { useNavigate } from 'react-router-dom';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  FilterSelect,
+  ResultCount,
+  SearchInput,
+  TableSpacer,
+  TableToolbar,
+} from '../components/ui/TableToolbar';
+import { TOOLS } from './data';
+import {
+  DEFAULT_RUN_FILTERS,
+  isRunFiltered,
+  matchesRun,
+  RUN_STATES,
+  type RunFilters,
+} from './runFilters';
 import { useTroubleshootStore } from './store';
 import { reportPathFor, toolById } from './data';
 import { relTime, inputFromJob } from './format';
@@ -121,18 +137,61 @@ function RunRow({ job }: { job: AnalysisJob }) {
   );
 }
 
-export function AnalysisRuns({ empty }: { empty?: string }) {
+export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable?: boolean }) {
   const { t } = useTranslation('troubleshoot');
   const jobs = useTroubleshootStore((s) => s.jobs);
   const loaded = useTroubleshootStore((s) => s.loaded);
+  // Only the dedicated Runs page gets the toolbar; the catalog embeds this as a short summary
+  // where three dropdowns above five rows would be noise.
+  const [filters, setFilters] = useState<RunFilters>(DEFAULT_RUN_FILTERS);
+  const set = <K extends keyof RunFilters>(key: K, value: RunFilters[K]) =>
+    setFilters((f) => ({ ...f, [key]: value }));
+  const shown = filterable ? jobs.filter((j) => matchesRun(j, filters)) : jobs;
+
   if (jobs.length === 0) {
     return <p className="muted">{loaded ? (empty ?? t('runs.empty')) : t('common:loading')}</p>;
   }
   return (
-    <div className="ts-runs">
-      {jobs.map((j) => (
-        <RunRow key={j.id} job={j} />
-      ))}
-    </div>
+    <>
+      {filterable && (
+        <TableToolbar>
+          <SearchInput
+            value={filters.q}
+            onChange={(v) => set('q', v)}
+            placeholder={t('runs.filter.searchPlaceholder')}
+            ariaLabel={t('runs.filter.searchAria')}
+          />
+          <FilterSelect
+            value={filters.tool}
+            onChange={(v) => set('tool', v)}
+            options={TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) }))}
+            allLabel={t('schedule.filter.allTools')}
+            ariaLabel={t('schedule.filter.toolAria')}
+          />
+          <FilterSelect
+            value={filters.state}
+            onChange={(v) => set('state', v)}
+            options={RUN_STATES.map((st) => ({ value: st, label: t(`runs.state.${st}`) }))}
+            allLabel={t('runs.filter.allStates')}
+            ariaLabel={t('runs.filter.stateAria')}
+          />
+          <TableSpacer />
+          <ResultCount
+            shown={shown.length}
+            total={isRunFiltered(filters) ? jobs.length : undefined}
+            noun={t('runs.noun', { count: shown.length })}
+          />
+        </TableToolbar>
+      )}
+      {shown.length === 0 ? (
+        <p className="muted">{t('common:filter.noMatch')}</p>
+      ) : (
+        <div className="ts-runs">
+          {shown.map((j) => (
+            <RunRow key={j.id} job={j} />
+          ))}
+        </div>
+      )}
+    </>
   );
 }

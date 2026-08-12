@@ -141,9 +141,11 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Recent analysis jobs (the runs list). `?limit=` (default 50).
+         * Recent analysis jobs (the runs list). `?limit=` (default 50), optionally narrowed.
          * @description Skeleton mode has no runner, so this answers an empty list rather than a 503: the runs list is
-         *     a panel on a page that otherwise works, and an error there would break the page.
+         *     a panel on a page that otherwise works, and an error there would break the page. **The filter is
+         *     validated before that early return**, so a malformed one is a 400 on every deployment rather
+         *     than an empty `200` on some — a client bug that reads as "no runs" is worse than an error.
          */
         get: operations["list_analysis_jobs"];
         put?: never;
@@ -9341,6 +9343,12 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Only runs of this analysis (e.g. `anomaly`). */
+                tool?: string;
+                /** @description Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`. */
+                state?: string;
+                /** @description Only runs started at or after this instant (RFC 3339). */
+                since?: string;
             };
             header?: never;
             path?: never;
@@ -9348,13 +9356,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Recent runs, newest first; empty when this deployment has no runner */
+            /** @description Matching runs, newest first; empty when this deployment has no runner */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["AnalysisJob"][];
+                };
+            };
+            /** @description The tool or state is outside its vocabulary, or `since` is not RFC 3339 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */

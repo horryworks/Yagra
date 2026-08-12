@@ -520,6 +520,27 @@ fn now_s() -> i64 {
 // ── Repository ───────────────────────────────────────────────────────────────────────
 
 /// Columns selected for a job row (timestamps projected to epoch-millis).
+/// What narrows the runs list. Every field optional; all of them ANDed.
+///
+/// A struct rather than three `Option` parameters, because the order of three optionals is exactly
+/// the call-site mistake that compiles, runs, and answers a different question.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct JobFilter<'a> {
+    /// Only runs of this tool. Validated against [`AnalysisTool`] at the API edge.
+    pub tool: Option<&'a str>,
+    /// Only runs in this state (`queued` | `running` | `done` | `failed` | `cancelled`).
+    pub state: Option<&'a str>,
+    /// Only runs started at or after this instant.
+    pub since: Option<DateTime<Utc>>,
+}
+
+/// The runs filter's predicate: one const, every clause always present, every value a nullable
+/// bind. Not assembled conditionally — a `WHERE` built by pushing clauses has a branch per filter
+/// that can be forgotten, and a forgotten one fails open, showing runs the operator did not ask for.
+const JOB_FILTER_WHERE: &str = "($1::text IS NULL OR tool = $1) \
+     AND ($2::text IS NULL OR state = $2) \
+     AND ($3::timestamptz IS NULL OR created_at >= $3)";
+
 const JOB_COLS: &str = "id, tool, scope_kind, scope_id, scope_label, params, state, pct, phase, \
      finding_count, summary, error, \
      (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_ms, \
@@ -746,10 +767,18 @@ impl AnalysisRepo {
     }
 
     /// Recent jobs, newest first (the runs list). `limit` clamped by the caller.
-    pub async fn list(&self, limit: i64) -> anyhow::Result<Vec<AnalysisJob>> {
+    pub async fn list(
+        &self,
+        limit: i64,
+        filter: &JobFilter<'_>,
+    ) -> anyhow::Result<Vec<AnalysisJob>> {
         let rows = sqlx::query(&format!(
-            "SELECT {JOB_COLS} FROM analysis_jobs ORDER BY created_at DESC LIMIT $1"
+            "SELECT {JOB_COLS} FROM analysis_jobs WHERE {JOB_FILTER_WHERE} \
+             ORDER BY created_at DESC LIMIT $4"
         ))
+        .bind(filter.tool.map(str::to_owned))
+        .bind(filter.state.map(str::to_owned))
+        .bind(filter.since)
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -1175,9 +1204,13 @@ impl AnalysisRunner {
         }
     }
 
-    /// Recent jobs (the runs list).
-    pub async fn list(&self, limit: i64) -> anyhow::Result<Vec<AnalysisJob>> {
-        self.repo.list(limit).await
+    /// Recent jobs (the runs list), narrowed.
+    pub async fn list(
+        &self,
+        limit: i64,
+        filter: &JobFilter<'_>,
+    ) -> anyhow::Result<Vec<AnalysisJob>> {
+        self.repo.list(limit, filter).await
     }
 
     /// One job by id.

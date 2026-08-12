@@ -616,8 +616,8 @@
         "tags": [
           "analysis"
         ],
-        "summary": "Recent analysis jobs (the runs list). `?limit=` (default 50).",
-        "description": "Skeleton mode has no runner, so this answers an empty list rather than a 503: the runs list is\na panel on a page that otherwise works, and an error there would break the page.",
+        "summary": "Recent analysis jobs (the runs list). `?limit=` (default 50), optionally narrowed.",
+        "description": "Skeleton mode has no runner, so this answers an empty list rather than a 503: the runs list is\na panel on a page that otherwise works, and an error there would break the page. **The filter is\nvalidated before that early return**, so a malformed one is a 400 on every deployment rather\nthan an empty `200` on some — a client bug that reads as \"no runs\" is worse than an error.",
         "operationId": "list_analysis_jobs",
         "parameters": [
           {
@@ -628,11 +628,38 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "tool",
+            "in": "query",
+            "description": "Only runs of this analysis (e.g. `anomaly`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only runs started at or after this instant (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Recent runs, newest first; empty when this deployment has no runner",
+            "description": "Matching runs, newest first; empty when this deployment has no runner",
             "content": {
               "application/json": {
                 "schema": {
@@ -640,6 +667,16 @@
                   "items": {
                     "$ref": "#/components/schemas/AnalysisJob"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The tool or state is outside its vocabulary, or `since` is not RFC 3339",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }

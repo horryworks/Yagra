@@ -22,7 +22,7 @@ export function RunsPage() {
         note={t('runs.pageNote', { n: running })}
       />
       <Card title={t('runs.card')}>
-        <AnalysisRuns />
+        <AnalysisRuns filterable />
       </Card>
     </div>
   );

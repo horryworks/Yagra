@@ -20,12 +20,22 @@
     "findingCount_other": "{{count}} findings",
     "state": {
       "failed": "failed",
-      "cancelled": "cancelled"
+      "cancelled": "cancelled",
+      "queued": "queued",
+      "running": "running",
+      "done": "done"
     },
     "analysisError": "analysis error",
     "toast": {
       "requeued": "{{name}} re-queued.",
       "requeueFailed": "Could not re-queue the analysis."
+    },
+    "noun": "runs",
+    "filter": {
+      "searchPlaceholder": "Search scope or summary…",
+      "searchAria": "Search analysis runs",
+      "allStates": "All states",
+      "stateAria": "Filter by run state"
     }
   },
   "schedule": {
