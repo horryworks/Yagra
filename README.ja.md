@@ -265,6 +265,12 @@ curl -sN http://<yagra-host>:8080/mcp \
 
 ## デプロイ
 
+**動作要件.** **Docker** と **Docker Compose** プラグインが動く x86-64 / ARM64 ホスト。必須サービス
+のみで評価するなら **2 vCPU / 4 GB RAM / 20 GB のディスク**、全機能を有効にしたフルスタックなら
+**4 vCPU / 8 GB RAM / 100 GB のディスク**が快適です。ディスク使用量はノード数ではなくメトリクスの
+保持期間で決まります — コンテナ別の実測値とサイジングの計算式は
+**[動作要件](https://yagra.pages.dev/ja/docs/reference/requirements/)** を参照してください。
+
 単一ノードのフルスタックを 1 コマンドで起動:
 
 ```bash
