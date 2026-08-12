@@ -70,6 +70,7 @@ describe('bucketAlertsByHour', () => {
     // Pin "now" to a hour boundary so bins are deterministic.
     const now = 100 * HOUR + 123;
     const row = (offsetHours: number, resolved = false): AlertHistoryRow => ({
+      id: `h${offsetHours}${resolved ? 'r' : 'f'}`, // unused by bucketing; required by the type
       node: 'n',
       subject_kind: 'node',
       check: 'c',

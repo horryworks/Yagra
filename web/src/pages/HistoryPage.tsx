@@ -22,14 +22,14 @@ import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { AlertWhatText } from '../widgets/AlertWhatText';
-
-const PAGE_SIZE = 100;
+import { appendPage, nextCursor, PAGE_SIZE } from './historyCursor';
 
 export function HistoryPage() {
   const { t } = useTranslation('alerts');
   const [rows, setRows] = useState<AlertHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [exhausted, setExhausted] = useState(false);
+  /** Keyset cursor for the next (older) page; `null` once the log is exhausted. */
+  const [cursor, setCursor] = useState<{ before: string; before_id: string } | null>(null);
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
@@ -40,7 +40,7 @@ export function HistoryPage() {
       .listAlertHistory({ limit: PAGE_SIZE })
       .then((page) => {
         setRows(page);
-        setExhausted(page.length < PAGE_SIZE);
+        setCursor(nextCursor(page));
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
@@ -48,22 +48,25 @@ export function HistoryPage() {
 
   // Keyset "load older": fetch the next page strictly older than the last loaded row. The log is
   // append-only and can grow without bound, so we page on scroll instead of one capped fetch.
+  //
+  // The cursor is the (recorded_at, id) pair, not the timestamp alone. A whole flush of alerts is
+  // written in one transaction and shares one recorded_at, so the old timestamp-only cursor skipped
+  // that flush's remaining rows whenever a page boundary landed inside it — silently, and most
+  // often during the fleet-wide events this log exists to explain.
   const loadMore = useCallback(() => {
-    if (loadingMore.current || exhausted) return;
-    const last = rows[rows.length - 1];
-    if (!last) return;
+    if (loadingMore.current || cursor === null) return;
     loadingMore.current = true;
     api
-      .listAlertHistory({ limit: PAGE_SIZE, before: last.recorded_at })
+      .listAlertHistory({ limit: PAGE_SIZE, ...cursor })
       .then((page) => {
-        setRows((cur) => [...cur, ...page]);
-        setExhausted(page.length < PAGE_SIZE);
+        setRows((cur) => appendPage(cur, page));
+        setCursor(nextCursor(page));
       })
       .catch(() => undefined)
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [rows, exhausted]);
+  }, [cursor]);
 
   // Columns close over `nodeName`, so rebuild them when the inventory resolves.
   const columns = useMemo<Column<AlertHistoryRow>[]>(
@@ -159,16 +162,17 @@ export function HistoryPage() {
         <TableSpacer />
         <ResultCount
           shown={rows.length}
-          noun={exhausted ? t('history.transitions') : t('history.transitionsLoaded')}
+          noun={cursor === null ? t('history.transitions') : t('history.transitionsLoaded')}
         />
       </TableToolbar>
       <DataTable
         rows={rows}
         columns={columns}
-        rowKey={(r) =>
-          `${r.subject_name ?? r.node}|${r.check}|${r.at_unix_ms}|${r.resolved}`
-        }
-        onReachEnd={loadMore}
+        // The row's own id. The composite key this replaces was not unique — two transitions of the
+        // same subject and check, in the same millisecond, collided — and a duplicate React key is
+        // a silent misrender rather than an error.
+        rowKey={(r) => r.id}
+        onReachEnd={cursor === null ? undefined : loadMore}
         empty={t('history.empty')}
         loading={loading}
       />

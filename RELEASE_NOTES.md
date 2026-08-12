@@ -11,6 +11,21 @@
 ## Unreleased
 
 ### Bug Fixes
+- **Alerts ▸ History skipped rows while scrolling, and did it most often during a fleet-wide
+  event.** The page's keyset cursor was the last row's `recorded_at` alone. That column defaults to
+  PostgreSQL's `now()`, which is the *transaction* timestamp, and Yagra writes a whole flush of
+  alert transitions as one multi-row insert — so every row of a flush carries an identical
+  `recorded_at`. Whenever a page boundary landed inside a flush, the next request asked for rows
+  strictly older than that instant and silently dropped the flush's remaining rows. The bigger the
+  incident, the bigger the flush, and the more was lost. `GET /api/v1/alerts/history` now returns
+  each row's `id` and accepts `before_id` beside `before`; the two together are the cursor.
+  Sending `before` alone still means "strictly before that instant", so an older client is not
+  broken by the change. Migration 0082 replaces the `recorded_at` index with `(recorded_at, id)`.
+- **The MCP `get_alert_history` tool could not page at all, and its instructions pointed at the
+  wrong field.** It advertised a `before` cursor but returned nothing a caller could build one
+  from, and its description told clients to page on `at` — the time the alert fired, which is a
+  different clock from the `recorded_at` the cursor compares. Rows now carry `cursor_at` and
+  `cursor_id`, the tool takes `before_id`, and the description says which fields to use.
 - **Settings ▸ Audit hid older matching entries.** The search box and the action / status / time-range
   filters ran in the browser over the pages already loaded, so "last 30 days, DELETE only" examined
   the newest 100 entries and silently dropped every older match — and Export handed the operator

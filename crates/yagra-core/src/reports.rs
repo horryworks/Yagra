@@ -1387,7 +1387,11 @@ impl ReportRunner {
     async fn render_alert_summary(&self, id: String, from_s: i64, _to_s: i64) -> Section {
         let from_ms = from_s * 1000;
         // Fires in the window, by severity (resolved=false records since `from`).
-        let recent = self.history.recent(1000, None).await.unwrap_or_default();
+        let recent = self
+            .history
+            .recent(1000, None, None)
+            .await
+            .unwrap_or_default();
         let mut fires: HashMap<String, i64> = HashMap::new();
         for r in &recent {
             if !r.resolved && r.at_unix_ms >= from_ms {

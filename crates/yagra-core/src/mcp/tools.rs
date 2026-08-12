@@ -332,8 +332,10 @@ impl YagraMcp {
 
     #[tool(
         description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
-                       (default 100); `before` is an RFC 3339 timestamp for keyset paging (pass the \
-                       oldest row's `at` to fetch the next page). Requires live mode."
+                       (default 100). To page, pass the oldest returned row's `cursor_at` as \
+                       `before` and its `cursor_id` as `before_id` — both, and not its `at`, which \
+                       is when the alert fired rather than when the row was written. Requires live \
+                       mode."
     )]
     async fn get_alert_history(
         &self,
@@ -367,7 +369,7 @@ impl YagraMcp {
             },
             None => None,
         };
-        let rows = match history.recent(limit, before).await {
+        let rows = match history.recent(limit, before, p.before_id).await {
             Ok(r) => r,
             Err(e) => return tool_error("get_alert_history", "load history", &e),
         };
@@ -3248,8 +3250,12 @@ struct ActiveAlertsParams {
 pub(crate) struct AlertHistoryParams {
     /// Max rows to return (1–1000, default 100).
     limit: Option<i64>,
-    /// Only rows recorded before this RFC 3339 timestamp (keyset paging).
+    /// Keyset cursor, first half: the oldest returned row's `cursor_at`. Not its `at` — that is
+    /// event time, a different clock, and paging on it returns the wrong rows.
     before: Option<String>,
+    /// Keyset cursor, second half: the same row's `cursor_id`. Send both — a whole flush of alerts
+    /// shares one `cursor_at`, so a timestamp-only cursor skips that flush's remaining rows.
+    before_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

@@ -25,6 +25,10 @@ fn unreadable_subject_skipped() {
 /// One alert-history row for the API.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct AlertHistoryRow {
+    /// This row's identity, and the second half of the keyset cursor — pass it as `before_id`
+    /// beside `before`. Also the stable key for a list: no other field, or combination of them, is
+    /// unique.
+    pub id: Uuid,
     /// The node this transition was about; `null` when the subject is not a node — read
     /// `subject_kind` first. It is non-null exactly when `subject_kind` is `node`.
     pub node: Option<Uuid>,
@@ -47,9 +51,16 @@ pub struct AlertHistoryRow {
     pub threshold_value: Option<f64>,
     /// Which way the metric crossed its bound (threshold checks only).
     pub direction: Option<Direction>,
-    /// Insertion time as an RFC 3339 timestamp. This is the **keyset cursor**: the WebUI passes
-    /// the last row's `recorded_at` as `before` to fetch the next (older) page (matches the audit
-    /// log's paging). Distinct from `at_unix_ms` (the event time), which can collide across rows.
+    /// Insertion time as an RFC 3339 timestamp, and the first half of the **keyset cursor**: the
+    /// WebUI passes the last row's `recorded_at` as `before` **and its `id` as `before_id`** to
+    /// fetch the next (older) page. Distinct from `at_unix_ms` (the event time).
+    ///
+    /// ⚠️ Both halves are required, and this is not defensive. `recorded_at` defaults to `now()`,
+    /// which in PostgreSQL is the *transaction* timestamp, and [`AlertHistoryStore::record_batch`]
+    /// writes a whole flush as one multi-row `INSERT` — so every row of a flush shares a
+    /// `recorded_at` to the microsecond. A page boundary landing inside a flush and paging on the
+    /// timestamp alone silently **skipped** that flush's remaining rows. A fleet-wide event is
+    /// exactly when a flush is large and exactly when someone is reading this log.
     pub recorded_at: String,
 }
 
@@ -268,23 +279,41 @@ impl AlertHistoryStore {
         Ok(res.rows_affected())
     }
 
-    /// A page of history rows (newest first). `before` is the keyset cursor — when set, only rows
-    /// strictly older than it (by `recorded_at`, the indexed sort column) are returned, so the
-    /// WebUI can page back through the whole log instead of being capped at one fetch.
+    /// A page of history rows (newest first).
+    ///
+    /// `before` + `before_id` are the keyset cursor: when set, only rows strictly older than that
+    /// **(recorded_at, id)** pair are returned, so the WebUI can page back through the whole log
+    /// instead of being capped at one fetch.
+    ///
+    /// ⚠️ **The pair is not belt-and-braces — a timestamp alone loses rows.** `recorded_at` defaults
+    /// to `now()`, which is the *transaction* timestamp, and [`AlertHistoryStore::record_batch`]
+    /// writes an entire flush as one multi-row `INSERT`; every row of a flush therefore carries an
+    /// identical `recorded_at`. With `recorded_at < $1` alone, a page boundary landing inside a
+    /// flush skipped every sibling not yet returned, and did so silently. Migration 0082 replaced
+    /// the single-column index with `(recorded_at DESC, id DESC)` so the composite cursor is an
+    /// index seek rather than a filter.
+    ///
+    /// Passing `before` without `before_id` still means "strictly before this instant": the
+    /// `coalesce` to the nil UUID makes the row comparison degrade to the timestamp, because no
+    /// UUID sorts below nil. That keeps an N-1 client — which sends only `before` — correct rather
+    /// than empty-handed.
     pub async fn recent(
         &self,
         limit: i64,
         before: Option<DateTime<Utc>>,
+        before_id: Option<Uuid>,
     ) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let rows = sqlx::query(
-            "SELECT node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
+            "SELECT id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
                     resolved, metric, observed_value, threshold_value, direction, recorded_at \
              FROM alert_history \
-             WHERE ($2::timestamptz IS NULL OR recorded_at < $2) \
-             ORDER BY recorded_at DESC LIMIT $1",
+             WHERE ($1::timestamptz IS NULL OR (recorded_at, id) < \
+                    ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
+             ORDER BY recorded_at DESC, id DESC LIMIT $3",
         )
-        .bind(limit.clamp(1, 1000))
         .bind(before)
+        .bind(before_id)
+        .bind(limit.clamp(1, 1000))
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::with_capacity(rows.len());
@@ -305,6 +334,7 @@ impl AlertHistoryStore {
             let (node, subject_kind, subject_name) = AlertHistoryRow::project(&subject);
             let recorded_at: DateTime<Utc> = row.try_get("recorded_at")?;
             out.push(AlertHistoryRow {
+                id: row.try_get("id")?,
                 node,
                 subject_kind,
                 subject_name,
@@ -460,6 +490,7 @@ mod tests {
         ] {
             let (node, subject_kind, subject_name) = AlertHistoryRow::project(&subject);
             let row = AlertHistoryRow {
+                id: Uuid::new_v4(),
                 node,
                 subject_kind,
                 subject_name,
@@ -529,9 +560,8 @@ mod tests {
     #[test]
     fn history_paging_is_keyset_and_every_limit_is_clamped() {
         let src = production_source();
-        // The cursor is a bound timestamptz compared with `<`, never an offset.
-        assert!(src.contains("WHERE ($2::timestamptz IS NULL OR recorded_at < $2)"));
-        assert!(src.contains("ORDER BY recorded_at DESC LIMIT $1"));
+        // The cursor is a bound (timestamptz, uuid) pair compared with `<`, never an offset.
+        assert!(src.contains("($1::timestamptz IS NULL OR (recorded_at, id) <"));
         assert!(
             !src.contains("OFFSET"),
             "OFFSET paging reintroduced — rows shift under the reader as alerts fire"
@@ -539,6 +569,39 @@ mod tests {
         // Both caller-supplied limits are clamped: an unbounded top-N is a DoS vector.
         assert!(src.contains("limit.clamp(1, 1000)"));
         assert!(src.contains("limit.clamp(1, 100)"));
+    }
+
+    #[test]
+    fn the_page_orders_by_exactly_the_columns_its_cursor_compares() {
+        // A keyset cursor is only valid for the ordering it was built for. If the ORDER BY and the
+        // cursor ever name different columns — or the same columns in a different direction — paging
+        // skips and repeats rows, and does so without any error.
+        let src = production_source();
+        assert!(src.contains("ORDER BY recorded_at DESC, id DESC"));
+        assert!(
+            !src.contains("ORDER BY recorded_at DESC LIMIT"),
+            "the single-column ordering is back, but the cursor is a pair"
+        );
+    }
+
+    #[test]
+    fn a_timestamp_only_cursor_still_means_strictly_before_that_instant() {
+        // An N-1 WebUI sends `before` and no `before_id`. `(recorded_at, id) < ($1, NULL)` would be
+        // NULL for every row — an empty page, i.e. "you have reached the end" — so the nil-UUID
+        // coalesce is load-bearing, not tidiness. Nothing sorts below the nil UUID, which is what
+        // degrades the row comparison back to `recorded_at < $1`.
+        let src = production_source();
+        assert!(src.contains("coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)"));
+    }
+
+    #[test]
+    fn the_row_carries_the_identity_its_cursor_needs() {
+        // The cursor's second half has to be readable off a row the client already holds, or the
+        // client cannot build the next request. `id` is also the only unique key on the row — the
+        // WebUI's previous composite React key could collide within one flush.
+        let src = production_source();
+        assert!(src.contains("SELECT id, node, subject_kind"));
+        assert!(src.contains("id: row.try_get(\"id\")?"));
     }
 
     #[test]

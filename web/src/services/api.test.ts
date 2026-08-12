@@ -682,6 +682,25 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/audit');
   });
 
+  it('sends both halves of the alert-history cursor', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listAlertHistory({
+      limit: 100,
+      before: '2026-06-12T00:00:00+00:00',
+      before_id: 'a1b2',
+    });
+    // Both, always: a flush of alerts shares one recorded_at, so a timestamp-only cursor lands
+    // inside that group and skips the rest of it.
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/alerts/history?limit=100&before=2026-06-12T00%3A00%3A00%2B00%3A00&before_id=a1b2',
+    );
+    await api.listAlertHistory({ limit: 100 });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/alerts/history?limit=100');
+  });
+
   it('sends the audit filters as query parameters, and omits the unset ones', async () => {
     const spy = vi
       .fn()

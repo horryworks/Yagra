@@ -1377,11 +1377,23 @@ export const api = {
   /** Active alerts. */
   listAlerts: (): Promise<Alert[]> => apiGet('/api/v1/alerts'),
 
-  /** Alert history page, newest first. `before` is the keyset cursor: pass the last row's
-   *  `recorded_at` to fetch the next (older) page (mirrors the audit log's paging). */
-  listAlertHistory: (opts?: { limit?: number; before?: string }): Promise<AlertHistoryRow[]> =>
+  /** Alert history page, newest first.
+   *
+   *  The keyset cursor is a **pair**: pass the last row's `recorded_at` as `before` *and* its `id`
+   *  as `before_id`. Both, always — a whole flush of alerts is written in one transaction and
+   *  therefore shares one `recorded_at`, so a timestamp-only cursor lands inside that group and
+   *  skips its remaining rows. Build it with `pages/historyCursor.ts::nextCursor`. */
+  listAlertHistory: (opts?: {
+    limit?: number;
+    before?: string;
+    before_id?: string;
+  }): Promise<AlertHistoryRow[]> =>
     apiGet('/api/v1/alerts/history', {
-      query: { limit: opts?.limit, before: opts?.before || undefined },
+      query: {
+        limit: opts?.limit,
+        before: opts?.before || undefined,
+        before_id: opts?.before_id || undefined,
+      },
     }),
 
   /** Nodes generating the most alert fires over a trailing window (chronic offenders). */

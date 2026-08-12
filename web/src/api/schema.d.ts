@@ -3824,6 +3824,13 @@ export interface components {
             check: string;
             direction?: null | components["schemas"]["Direction"];
             /**
+             * Format: uuid
+             * @description This row's identity, and the second half of the keyset cursor — pass it as `before_id`
+             *     beside `before`. Also the stable key for a list: no other field, or combination of them, is
+             *     unique.
+             */
+            id: string;
+            /**
              * @description Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel). `None` for
              *     rows recorded before this was captured (legacy) so the WebUI can show "—".
              */
@@ -3840,9 +3847,16 @@ export interface components {
              */
             observed_value?: number | null;
             /**
-             * @description Insertion time as an RFC 3339 timestamp. This is the **keyset cursor**: the WebUI passes
-             *     the last row's `recorded_at` as `before` to fetch the next (older) page (matches the audit
-             *     log's paging). Distinct from `at_unix_ms` (the event time), which can collide across rows.
+             * @description Insertion time as an RFC 3339 timestamp, and the first half of the **keyset cursor**: the
+             *     WebUI passes the last row's `recorded_at` as `before` **and its `id` as `before_id`** to
+             *     fetch the next (older) page. Distinct from `at_unix_ms` (the event time).
+             *
+             *     ⚠️ Both halves are required, and this is not defensive. `recorded_at` defaults to `now()`,
+             *     which in PostgreSQL is the *transaction* timestamp, and [`AlertHistoryStore::record_batch`]
+             *     writes a whole flush as one multi-row `INSERT` — so every row of a flush shares a
+             *     `recorded_at` to the microsecond. A page boundary landing inside a flush and paging on the
+             *     timestamp alone silently **skipped** that flush's remaining rows. A fleet-wide event is
+             *     exactly when a flush is large and exactly when someone is reading this log.
              */
             recorded_at: string;
             resolved: boolean;
@@ -9072,8 +9086,17 @@ export interface operations {
     list_alert_history: {
         parameters: {
             query?: {
+                /** @description Max rows (1–1000, default 100). */
                 limit?: number;
+                /** @description Keyset cursor, first half: the last row's `recorded_at`, as an RFC 3339 timestamp. */
                 before?: string;
+                /**
+                 * @description Keyset cursor, second half: **the same row's `id`**. Send both. A whole flush of alerts is
+                 *     written in one transaction and therefore shares one `recorded_at`, so a timestamp-only
+                 *     cursor lands inside that group and skips its remaining rows. Omitting it is still accepted
+                 *     and means "strictly before that instant", which is what an older client sends.
+                 */
+                before_id?: string;
             };
             header?: never;
             path?: never;

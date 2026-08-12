@@ -231,13 +231,19 @@ async fn list_alerts(
     Json(decorate_alerts(alerts, &acks))
 }
 
-/// Recent alert-history rows: `?limit=` (default 100) + an optional `before` keyset cursor (an
-/// RFC 3339 timestamp — pass the last row's time to page back).
+/// Recent alert-history rows: `?limit=` (default 100) plus the optional keyset cursor.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct HistoryQuery {
+    /// Max rows (1–1000, default 100).
     pub limit: Option<i64>,
+    /// Keyset cursor, first half: the last row's `recorded_at`, as an RFC 3339 timestamp.
     pub before: Option<String>,
+    /// Keyset cursor, second half: **the same row's `id`**. Send both. A whole flush of alerts is
+    /// written in one transaction and therefore shares one `recorded_at`, so a timestamp-only
+    /// cursor lands inside that group and skips its remaining rows. Omitting it is still accepted
+    /// and means "strictly before that instant", which is what an older client sends.
+    pub before_id: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -271,7 +277,7 @@ async fn list_alert_history(
         return Ok(Json(Vec::new()));
     };
     let rows = history
-        .recent(q.limit.unwrap_or(100), before)
+        .recent(q.limit.unwrap_or(100), before, q.before_id)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -620,7 +626,7 @@ pub(crate) async fn recent_transitions(
         return Ok(Vec::new());
     };
     let rows = history
-        .recent(limit.unwrap_or(12), None)
+        .recent(limit.unwrap_or(12), None, None)
         .await
         .map_err(|e| {
             ApiError::from_internal(
@@ -910,6 +916,7 @@ mod tests {
         let node = Uuid::from_u128(1);
         let check = Uuid::from_u128(2);
         let fire = AlertHistoryRow {
+            id: Uuid::new_v4(),
             node: Some(node),
             subject_kind: SubjectKind::Node,
             subject_name: None,
@@ -925,6 +932,7 @@ mod tests {
             recorded_at: "1970-01-01T00:00:10Z".to_owned(),
         };
         let clear = AlertHistoryRow {
+            id: Uuid::new_v4(),
             node: Some(node),
             subject_kind: SubjectKind::Node,
             subject_name: None,
@@ -940,6 +948,7 @@ mod tests {
             recorded_at: "1970-01-01T00:00:20Z".to_owned(),
         };
         let unrelated = AlertHistoryRow {
+            id: Uuid::new_v4(),
             node: Some(Uuid::from_u128(7)),
             subject_kind: SubjectKind::Node,
             subject_name: None,

@@ -176,6 +176,14 @@ pub struct AlertHistoryDto {
     pub threshold_value: Option<f64>,
     /// Breach direction, `above`/`below` (threshold checks only).
     pub direction: Option<String>,
+    /// Keyset cursor for the next page, first half — pass the **oldest** returned row's value as
+    /// `before`. This is insertion time, which is **not** `at`: `at` is when the alert fired, and
+    /// paging on it returns the wrong rows.
+    pub cursor_at: String,
+    /// Keyset cursor, second half — pass the same row's value as `before_id`. Required: a whole
+    /// flush of alerts is written in one transaction and shares one `cursor_at`, so a
+    /// timestamp-only cursor lands inside that group and skips its remaining rows.
+    pub cursor_id: Uuid,
 }
 
 impl AlertHistoryDto {
@@ -195,6 +203,10 @@ impl AlertHistoryDto {
             observed_value: row.observed_value,
             threshold_value: row.threshold_value,
             direction: row.direction.map(|d| d.as_str().to_owned()),
+            // Without these the tool advertised `before` while returning nothing a caller could
+            // build it from — and its description pointed at `at`, which is a different clock.
+            cursor_at: row.recorded_at.clone(),
+            cursor_id: row.id,
         }
     }
 }
@@ -1063,6 +1075,7 @@ mod tests {
 
         let history = AlertHistoryDto::from_row(
             &AlertHistoryRow {
+                id: Uuid::new_v4(),
                 node: Some(node.id.0),
                 subject_kind: yagra_alert::SubjectKind::Node,
                 subject_name: None,
