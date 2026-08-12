@@ -20,6 +20,17 @@
   no range still gets none.
 
 ### New Features
+- **Alerts ▸ Rules can be narrowed, in the database.** This is the one configuration table that
+  grows with the fleet — a node-level override is per node × metric — which is why the list has
+  always been capped at 500 with a "showing N of M" note. It had no filter at all, and one added in
+  the browser would have run over that prefix: "show me the cpu_util rules" would have examined the
+  newest 500 and reported on those. `GET /api/v1/thresholds` now accepts `q` (a metric substring),
+  `scope_level` and `direction`, and `total` counts the rules matching the filter, so the "N of M"
+  stays true. The filters live in the URL, so a narrowed ruleset can be shared.
+- **Troubleshoot ▸ Runs can be narrowed** by analysis, run state and free text over the scope and
+  the summary. `GET /api/v1/analysis/jobs` accepts `tool`, `state` and `since` for API clients; the
+  page itself filters in the browser, because its rows arrive over SSE and a filtered fetch would be
+  undone by the next unfiltered progress frame.
 - **Thirteen more screens can be narrowed.** Alerts ▸ Maintenance windows and Mutes, the two tables
   on Alerts ▸ Routing, Settings ▸ Forwarding, API tokens and Pollers, both tables on Nodes ▸
   Discovery, Troubleshoot ▸ Scheduled, the Reports page's Templates and Schedules tabs, the node
