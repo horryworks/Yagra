@@ -39,6 +39,22 @@
   --role-operator: var(--series-1); /* 青 */
   --role-viewer: var(--series-3); /* 青緑 */
 
+  /* ---- suppression (categorical) — "a maintenance window / a mute is in force on this row",
+     shown as the filled marker chips in the All nodes tree.
+
+     Not a node state, so they do not live on the status channel: a muted node's own dot is usually
+     critical (that is why someone muted it), and a node in maintenance already carries
+     --status-maintenance there. §1.3 reserves --status-up / --status-warning for network state, so
+     borrowing that green and amber here would put two contradictory vocabularies on one row.
+     Values of their own rather than a series alias, because neither hue exists in the series
+     palette and inventing series entries for a non-graph dimension is the same borrowing mistake
+     one level down.
+
+     The maintenance blue is deliberately lighter and more cyan than --status-maintenance: the dot
+     and the chip sit inches apart on the same row and should read as related, not identical. ---- */
+  --supp-maintenance: #2c94c8; /* 空色 — 水色と青の中間 */
+  --supp-mute: #b59a2b; /* 芥子 — 黄 */
+
   /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */
   --status-up: #2e7d32;
   --status-warning: #c77a0b;
@@ -148,4 +164,7 @@
   --series-4: #e59b56;
   --series-5: #bf6d98;
   --series-6: #8bac56;
+
+  --supp-maintenance: #5cb8e0;
+  --supp-mute: #d4bb4a;
 }

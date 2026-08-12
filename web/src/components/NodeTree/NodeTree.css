@@ -354,28 +354,29 @@
   stroke-width: 2.1;
 }
 
-/* Maintenance is a node *state*, so the row's status dot is already showing it, in this same
-   token. The marker's job is to be the handle for the window, not to announce a second time what
-   the dot has already said — so it is a bare glyph: no fill, no border. */
+/* A suppression that is in force is a filled chip; a node released from one is an outline (below).
+   Fill-vs-outline is the primary signal and survives greyscale — the hue then only has to say
+   *which* suppression, which is more than two 16px glyphs can be relied on to do on their own.
+
+   The hues are the `--supp-*` tokens, which sit off the status channel deliberately; the argument
+   is in `tokens.css` beside them. Note especially that the maintenance chip is *not*
+   `--status-maintenance` — that token is what the row's own status dot is already painted with,
+   and the chip is a lighter, more cyan sibling so the two read as related rather than as one fact
+   printed twice. */
 .ntree-supp-icon.maint {
-  color: var(--status-maintenance);
+  color: var(--supp-maintenance);
+  background: color-mix(in srgb, var(--supp-maintenance) 22%, transparent);
 }
 
-/* Mute keeps a bordered chip while maintenance above does not, and the asymmetry is deliberate,
-   not drift. A mute changes nothing else on the row — the dot stays red, the alert still lists on
-   Active Alerts — so this marker is the only thing on screen saying "nobody is being told". It has
-   no status colour to lean on either (mute is an operator action, not an alert state), so the
-   chip is what makes it read at a glance. */
 .ntree-supp-icon.mute {
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-  border: var(--border-width) solid var(--border-color);
+  color: var(--supp-mute);
+  background: color-mix(in srgb, var(--supp-mute) 24%, transparent);
 }
 
-/* A node released from a suppression it inherited: drained of the status colour and outlined in a
-   dashed border. The dash carries the whole meaning, and it is the only border on a maintenance
-   marker, so the three states read on one axis — status colour = in force, dashed outline = there
-   is coverage here and this row is outside it, nothing at all = no coverage.
+/* A node released from a suppression it inherited: drained of the hue and outlined in a dashed
+   border. It is the only marker state with a border and the only one without a fill, so the three
+   states read on one axis — filled chip = in force, dashed outline = there is coverage here and
+   this row is outside it, nothing at all = no coverage.
 
    The wrench used to be struck through as well. That was removed: maintenance is a node state, so
    the status dot has *already* said the node is not in maintenance, and the strike was re-stating
