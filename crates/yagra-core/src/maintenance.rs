@@ -597,6 +597,195 @@ pub fn nodes_covered_by_a_class_window(
         .collect()
 }
 
+// ── Releasing one node from coverage it inherited (migration 0081) ───────────────────────────
+//
+// The release itself is granted at the API edge, but the rule it rests on — *what a node merely
+// inherits*, and *how long a release from it may last* — has three readers: the grant
+// (`api::maintenance`), the alert engine's refresh (`main::resolve_maintenance`), and
+// [`reconcile_exemptions`] below. It lives here because of that, per `api-conventions.md`: a
+// helper shared across domains must not live inside one of them.
+
+/// Parse a timestamp this module rendered with `to_rfc3339`. Same call the API edge's
+/// `parse_rfc3339` makes; duplicated rather than reached for across the layering, since a domain
+/// module must not depend on `api::`.
+fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|t| t.with_timezone(&Utc))
+}
+
+/// A node's coverage-relevant facts, resolved once so the decisions over them are pure.
+pub(crate) struct CoverageFacts {
+    profile: Option<String>,
+    /// Tag *values* — a window's `group` scope matches any of them (ADR-013).
+    tags: Vec<String>,
+    /// This node's folder group plus every group above it.
+    ///
+    /// This is the same question the alert engine answers from the other end (it walks
+    /// `group_subtree` down from each window's group), and both use `groups.rs`' primitives over
+    /// the same edges, so `node ∈ subtree(root)` and `root ∈ containing_groups(node)` agree by
+    /// construction. Walking up is O(depth) for one node instead of O(groups × windows).
+    containing_groups: Vec<Uuid>,
+}
+
+impl CoverageFacts {
+    /// Resolve them for one already-loaded node. `edges` is the whole `(id, parent_id)` set, so a
+    /// caller checking several nodes loads it once.
+    pub(crate) fn of(node: &Node, edges: &[(Uuid, Option<Uuid>)]) -> Self {
+        let mut containing_groups = Vec::new();
+        if let Some(group) = node.group {
+            let gid = group.as_uuid();
+            containing_groups.push(gid);
+            containing_groups.extend(crate::groups::group_ancestors(edges, gid));
+        }
+        Self {
+            profile: node.profile.map(|p| p.to_string()),
+            tags: node.tags.values().cloned().collect(),
+            containing_groups,
+        }
+    }
+}
+
+/// Whether an active window covers this node **without naming it** — the coverage a release may
+/// cancel. Exhaustive over [`WindowScope`]: a new scope has to decide.
+pub(crate) fn window_is_inherited_by(
+    level: WindowScope,
+    scope_id: &str,
+    facts: &CoverageFacts,
+) -> bool {
+    match level {
+        // Names the node. Excluded on purpose: a release never cancels coverage aimed at the node.
+        WindowScope::Node => false,
+        WindowScope::Profile => facts.profile.as_deref() == Some(scope_id),
+        WindowScope::Group => facts.tags.iter().any(|t| t == scope_id),
+        WindowScope::FolderGroup => {
+            Uuid::parse_str(scope_id).is_ok_and(|g| facts.containing_groups.contains(&g))
+        }
+        // The whole fleet is out of service and no node owns that window, so a single box can be
+        // brought back into monitoring without it being cancelled by the window itself.
+        WindowScope::System => true,
+    }
+}
+
+/// When the inherited maintenance coverage on this node runs out, or `None` if none covers it.
+///
+/// The **latest** end, so the exemption lasts as long as the reason for it does. Taking the
+/// earliest would put the node back into maintenance while a longer window still covered it.
+pub(crate) fn inherited_maintenance_end(
+    windows: &[(WindowScope, String, DateTime<Utc>)],
+    facts: &CoverageFacts,
+) -> Option<DateTime<Utc>> {
+    windows
+        .iter()
+        .filter(|(level, scope_id, _)| window_is_inherited_by(*level, scope_id, facts))
+        .map(|(_, _, ends)| *ends)
+        .max()
+}
+
+/// The mute counterpart: a group mute over a folder group containing this node.
+pub(crate) fn inherited_mute_end(
+    mutes: &[StoredMute],
+    facts: &CoverageFacts,
+) -> Option<DateTime<Utc>> {
+    mutes
+        .iter()
+        .filter(|m| match m.scope_kind {
+            // Names the node — same rule as a node-scoped window.
+            MuteScope::Node => false,
+            MuteScope::Group => m
+                .group_id
+                .is_some_and(|g| facts.containing_groups.contains(&g)),
+        })
+        .filter_map(|m| parse_ts(&m.until_at))
+        .max()
+}
+
+/// What a stored exemption is still entitled to, once the coverage in force has been re-derived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExemptionUpdate {
+    Keep,
+    ShortenTo(DateTime<Utc>),
+    Drop,
+}
+
+/// Re-derive one release's expiry against the coverage actually in force.
+///
+/// **It never extends one, and that asymmetry is the safety rule.** Shortening returns a node to
+/// monitoring sooner; lengthening would carry a release into a window the operator never released
+/// it from, which is precisely the blind spot this feature must not create. So the answer is
+/// `min(stored, in force)` — and no coverage in force at all means the reason for the release is
+/// gone and so is the release.
+pub(crate) fn reconcile_exemption(
+    stored_until: DateTime<Utc>,
+    in_force_until: Option<DateTime<Utc>>,
+) -> ExemptionUpdate {
+    match in_force_until {
+        None => ExemptionUpdate::Drop,
+        Some(end) if end < stored_until => ExemptionUpdate::ShortenTo(end),
+        Some(_) => ExemptionUpdate::Keep,
+    }
+}
+
+/// Bring every stored release back in line with the coverage in force. Returns how many rows it
+/// changed, for the caller's log.
+///
+/// An exemption is sized once, when it is granted, to the coverage covering the node at that
+/// instant — but coverage can stop sooner than it said it would: a window **ended early**,
+/// disabled or deleted, a mute lifted. Nothing re-derived the expiry, so the release outlived its
+/// reason. Two things went wrong then, and the second is the one that matters: the tree drew a
+/// "released" marker on a row nothing was suppressing, *and* the stale row stayed live in
+/// [`MaintenanceRepo::exempt_nodes`], so the **next** window over that group would have skipped
+/// the node silently.
+///
+/// Called every refresh cycle (the backstop that catches any path, including one added later) and
+/// inline by the handlers that remove coverage, so the operator's own screen corrects at once.
+/// Cheap when there is nothing to do: one indexed `SELECT` returning no rows.
+pub(crate) async fn reconcile_exemptions(
+    maintenance: &MaintenanceRepo,
+    groups: &crate::groups::GroupRepo,
+    repo: &crate::repo::NodeRepo,
+) -> anyhow::Result<usize> {
+    let rows = maintenance.list_exemptions().await?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let windows = maintenance.active_windows().await?;
+    let mutes = maintenance.list_mutes().await?;
+    let edges = groups.edges().await?;
+    let mut changed = 0;
+    for row in rows {
+        let Some(stored_until) = parse_ts(&row.until_at) else {
+            continue;
+        };
+        // A release whose node is gone releases nothing. The row should have gone with it, so this
+        // is a repair rather than an expected path.
+        let Some(node) = repo.get_node(row.node_id).await? else {
+            maintenance.clear_exemption(row.kind, row.node_id).await?;
+            changed += 1;
+            continue;
+        };
+        let facts = CoverageFacts::of(&node, &edges);
+        let in_force = match row.kind {
+            ExemptionKind::Maintenance => inherited_maintenance_end(&windows, &facts),
+            ExemptionKind::Mute => inherited_mute_end(&mutes, &facts),
+        };
+        match reconcile_exemption(stored_until, in_force) {
+            ExemptionUpdate::Keep => {}
+            ExemptionUpdate::ShortenTo(until) => {
+                maintenance
+                    .set_exemption(row.kind, row.node_id, until)
+                    .await?;
+                changed += 1;
+            }
+            ExemptionUpdate::Drop => {
+                maintenance.clear_exemption(row.kind, row.node_id).await?;
+                changed += 1;
+            }
+        }
+    }
+    Ok(changed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,6 +1043,153 @@ mod tests {
         assert_eq!(
             nodes_covered_by_a_class_window(&scopes, one),
             BTreeSet::from([a.id])
+        );
+    }
+
+    // ── What a release may be granted from, and how long it survives ────────────────────────
+
+    fn facts(profile: Option<&str>, tags: &[&str], groups: &[Uuid]) -> CoverageFacts {
+        CoverageFacts {
+            profile: profile.map(str::to_owned),
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            containing_groups: groups.to_vec(),
+        }
+    }
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        parse_ts(&format!("2026-08-12T{hour:02}:00:00Z")).expect("fixed timestamp parses")
+    }
+
+    fn group_mute(group: Uuid, until: DateTime<Utc>) -> StoredMute {
+        StoredMute {
+            id: Uuid::new_v4(),
+            scope_kind: MuteScope::Group,
+            node_id: None,
+            group_id: Some(group),
+            check_name: None,
+            until_at: until.to_rfc3339(),
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn a_window_that_names_the_node_is_never_inherited() {
+        // Rule 1 of the exemption design, and the one with a visible failure mode: if a release
+        // could cancel a node-scoped window, an operator who released a box and then deliberately
+        // put *that box* into maintenance would get a node that keeps alerting, with nothing on
+        // screen saying why.
+        let f = facts(Some("p1"), &["tokyo"], &[Uuid::from_u128(1)]);
+        assert!(!window_is_inherited_by(
+            WindowScope::Node,
+            &Uuid::from_u128(99).to_string(),
+            &f
+        ));
+        assert!(window_is_inherited_by(WindowScope::Profile, "p1", &f));
+        assert!(!window_is_inherited_by(WindowScope::Profile, "p2", &f));
+        assert!(window_is_inherited_by(WindowScope::Group, "tokyo", &f));
+        assert!(!window_is_inherited_by(WindowScope::Group, "osaka", &f));
+        assert!(window_is_inherited_by(
+            WindowScope::FolderGroup,
+            &Uuid::from_u128(1).to_string(),
+            &f
+        ));
+        assert!(!window_is_inherited_by(
+            WindowScope::FolderGroup,
+            &Uuid::from_u128(2).to_string(),
+            &f
+        ));
+        // A fleet-wide window belongs to nobody, so one box can be brought back without the window
+        // itself cancelling the release.
+        assert!(window_is_inherited_by(
+            WindowScope::System,
+            UPGRADE_SCOPE_ID,
+            &f
+        ));
+        // An unparseable folder id is not a match — fail closed rather than release on a typo.
+        assert!(!window_is_inherited_by(
+            WindowScope::FolderGroup,
+            "not-a-uuid",
+            &f
+        ));
+    }
+
+    #[test]
+    fn the_release_lasts_as_long_as_the_reason_for_it() {
+        // The latest end, not the earliest: while a longer window still covers the node, putting
+        // it back would re-suppress a box the operator has said is back in service.
+        let group = Uuid::from_u128(1);
+        let f = facts(Some("p1"), &[], &[group]);
+        let windows = vec![
+            (WindowScope::FolderGroup, group.to_string(), at(2)),
+            (WindowScope::Profile, "p1".to_owned(), at(5)),
+            // Covers nothing here, and must not extend the release.
+            (WindowScope::Group, "osaka".to_owned(), at(9)),
+            // Names some other node.
+            (WindowScope::Node, Uuid::from_u128(7).to_string(), at(11)),
+        ];
+        assert_eq!(inherited_maintenance_end(&windows, &f), Some(at(5)));
+    }
+
+    #[test]
+    fn a_window_that_only_names_the_node_leaves_nothing_to_release() {
+        // The pure half of the API's `not_suppressed` refusal: storing an exemption here would
+        // leave the operator believing the node was out of a window it is still in.
+        let f = facts(None, &[], &[]);
+        let windows = vec![(WindowScope::Node, Uuid::from_u128(3).to_string(), at(4))];
+        assert!(inherited_maintenance_end(&windows, &f).is_none());
+    }
+
+    #[test]
+    fn only_a_group_mute_can_be_released_from() {
+        let group = Uuid::from_u128(1);
+        let f = facts(None, &[], &[group]);
+        let node_mute = StoredMute {
+            scope_kind: MuteScope::Node,
+            node_id: Some(Uuid::from_u128(5)),
+            group_id: None,
+            ..group_mute(group, at(9))
+        };
+        // The node mute is later and is still ignored — it names the node.
+        assert_eq!(
+            inherited_mute_end(
+                &[
+                    node_mute.clone(),
+                    group_mute(group, at(3)),
+                    group_mute(Uuid::from_u128(2), at(23)),
+                ],
+                &f
+            ),
+            Some(at(3))
+        );
+        assert!(inherited_mute_end(&[node_mute], &f).is_none());
+    }
+
+    #[test]
+    fn a_release_does_not_outlive_the_coverage_it_was_carved_out_of() {
+        // The bug this reconcile exists for, seen on the test server: a group window opened for an
+        // hour, one node released from it, then the window **ended early** from the tree. The
+        // release was sized to the window's original end, nothing re-derived it, and the node
+        // stayed released for the remaining 56 minutes — marked as such on a row nothing was
+        // suppressing, and, worse, invisible to the next window over that group.
+        assert_eq!(reconcile_exemption(at(7), None), ExemptionUpdate::Drop);
+        assert_eq!(
+            reconcile_exemption(at(7), Some(at(4))),
+            ExemptionUpdate::ShortenTo(at(4))
+        );
+    }
+
+    #[test]
+    fn a_release_is_never_extended_by_coverage_it_was_not_granted_from() {
+        // The other direction, and the one that would reintroduce the blind spot: a *later* window
+        // opening over the group must not lengthen a release the operator never asked for against
+        // it. The release runs out on schedule and the node falls back under the new window.
+        assert_eq!(
+            reconcile_exemption(at(7), Some(at(9))),
+            ExemptionUpdate::Keep
+        );
+        assert_eq!(
+            reconcile_exemption(at(7), Some(at(7))),
+            ExemptionUpdate::Keep
         );
     }
 }

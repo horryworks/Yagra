@@ -19,6 +19,7 @@ use super::extract::{
 use super::scope::ScopeTarget;
 use super::util::CreatedId;
 use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
+use crate::maintenance::{inherited_maintenance_end, inherited_mute_end, CoverageFacts};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -429,6 +430,12 @@ async fn set_maintenance_window_enabled(
             )
         })?;
     if found {
+        // Disabling is the third way coverage stops early (after ending and deleting), so a
+        // release carved out of this window must be re-derived too. Enabling one cannot need it:
+        // the reconcile never extends a release.
+        if !body.enabled {
+            reconcile_after_coverage_change(&admin).await;
+        }
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(
@@ -465,6 +472,7 @@ async fn delete_maintenance_window(
         )
     })?;
     if found {
+        reconcile_after_coverage_change(&admin).await;
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(
@@ -504,6 +512,9 @@ async fn end_maintenance_window(
         )
     })?;
     if ended {
+        // The window stops here rather than at its stated end, so any release carved out of it is
+        // now sized to a time that will never arrive. This is the path the bug was found on.
+        reconcile_after_coverage_change(&admin).await;
         Ok(StatusCode::NO_CONTENT)
     } else {
         // Deliberately the same code the delete path uses for a missing id. "Visible but not
@@ -760,6 +771,7 @@ async fn delete_mute(
             ApiError::from_internal(e.as_ref(), "delete mute", "failed to delete mute")
         })?;
     if found {
+        reconcile_after_coverage_change(&admin).await;
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(ApiError::not_found(
@@ -785,23 +797,17 @@ async fn delete_mute(
 //  2. **It expires with the coverage it was carved out of.** The expiry is computed *here* from
 //     what is actually in force, never supplied by the client — an exemption that outlived its
 //     window would silently exclude the node from the next one, which is the monitoring blind spot
-//     this feature must not create.
+//     this feature must not create. Computing it once is not enough, because coverage can stop
+//     sooner than it said it would: ending, disabling or deleting a window, and lifting a mute,
+//     each re-derive every release through `crate::maintenance::reconcile_exemptions`, which is
+//     also run on the refresh cycle so no future path can reopen that hole by forgetting to call
+//     it.
 
-/// A node's coverage-relevant facts, resolved once so the decisions below are pure.
-struct CoverageFacts {
-    profile: Option<String>,
-    /// Tag *values* — a window's `group` scope matches any of them (ADR-013).
-    tags: Vec<String>,
-    /// This node's folder group plus every group above it.
-    ///
-    /// This is the same question the alert engine answers from the other end (it walks
-    /// `group_subtree` down from each window's group), and both use `groups.rs`' primitives over
-    /// the same edges, so `node ∈ subtree(root)` and `root ∈ containing_groups(node)` agree by
-    /// construction. Walking up is O(depth) for one node instead of O(groups × windows).
-    containing_groups: Vec<Uuid>,
-}
-
-/// Resolve the facts above for one node. `404` if the node is gone.
+/// Resolve one node's coverage-relevant facts. `404` if the node is gone.
+///
+/// The facts and the rules over them live in [`crate::maintenance`] — three callers need them
+/// (this grant, the alert engine's refresh, and the reconcile that keeps a release from outliving
+/// its coverage), so they must not live inside any one of the three (`api-conventions.md`).
 async fn coverage_facts(
     admin: &super::AdminState,
     node_id: Uuid,
@@ -814,80 +820,29 @@ async fn coverage_facts(
             ApiError::from_internal(e.as_ref(), "load node for release", "failed to load node")
         })?
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
-    let mut containing_groups = Vec::new();
-    if let Some(group) = node.group {
-        let gid = group.as_uuid();
-        containing_groups.push(gid);
-        let edges = admin.groups.edges().await.map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "load group edges for release",
-                "failed to load groups",
-            )
-        })?;
-        containing_groups.extend(crate::groups::group_ancestors(&edges, gid));
-    }
-    Ok(CoverageFacts {
-        profile: node.profile.map(|p| p.to_string()),
-        tags: node.tags.values().cloned().collect(),
-        containing_groups,
-    })
+    let edges = admin.groups.edges().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "load group edges for release",
+            "failed to load groups",
+        )
+    })?;
+    Ok(CoverageFacts::of(&node, &edges))
 }
 
-/// Whether an active window covers this node **without naming it** — the coverage a release may
-/// cancel. Exhaustive over [`crate::maintenance::WindowScope`]: a new scope has to decide.
-fn window_is_inherited_by(
-    level: crate::maintenance::WindowScope,
-    scope_id: &str,
-    facts: &CoverageFacts,
-) -> bool {
-    use crate::maintenance::WindowScope;
-    match level {
-        // Names the node. Excluded on purpose — see rule 1 in this section's header.
-        WindowScope::Node => false,
-        WindowScope::Profile => facts.profile.as_deref() == Some(scope_id),
-        WindowScope::Group => facts.tags.iter().any(|t| t == scope_id),
-        WindowScope::FolderGroup => {
-            Uuid::parse_str(scope_id).is_ok_and(|g| facts.containing_groups.contains(&g))
-        }
-        // The whole fleet is out of service and no node owns that window, so a single box can be
-        // brought back into monitoring without it being cancelled by the window itself.
-        WindowScope::System => true,
-    }
-}
-
-/// When the inherited maintenance coverage on this node runs out, or `None` if none covers it.
+/// Re-derive every release against the coverage that is left, after this request removed some.
 ///
-/// The **latest** end, so the exemption lasts as long as the reason for it does. Taking the
-/// earliest would put the node back into maintenance while a longer window still covered it.
-fn inherited_maintenance_end(
-    windows: &[(crate::maintenance::WindowScope, String, DateTime<Utc>)],
-    facts: &CoverageFacts,
-) -> Option<DateTime<Utc>> {
-    windows
-        .iter()
-        .filter(|(level, scope_id, _)| window_is_inherited_by(*level, scope_id, facts))
-        .map(|(_, _, ends)| *ends)
-        .max()
-}
-
-/// The mute counterpart: a group mute over a folder group containing this node.
-fn inherited_mute_end(
-    mutes: &[crate::maintenance::StoredMute],
-    facts: &CoverageFacts,
-) -> Option<DateTime<Utc>> {
-    use crate::maintenance::MuteScope;
-    mutes
-        .iter()
-        .filter(|m| match m.scope_kind {
-            // Names the node — same rule as a node-scoped window.
-            MuteScope::Node => false,
-            MuteScope::Group => m
-                .group_id
-                .is_some_and(|g| facts.containing_groups.contains(&g)),
-        })
-        .filter_map(|m| parse_rfc3339(&m.until_at))
-        .max()
+/// Best-effort on purpose: the window or mute is already gone, so failing the request would report
+/// a change that happened as one that did not. The 30s refresh cycle runs the same reconcile, so
+/// the worst case of a failure here is that the operator's markers lag by one cycle. Called inline
+/// anyway because the screen that just ended the window is the screen looking at those markers.
+async fn reconcile_after_coverage_change(admin: &super::AdminState) {
+    if let Err(e) =
+        crate::maintenance::reconcile_exemptions(&admin.maintenance, &admin.groups, &admin.repo)
+            .await
+    {
+        tracing::warn!(error = %e, "failed to reconcile suppression exemptions");
+    }
 }
 
 /// The 400 for "there is nothing here to release".
@@ -1294,116 +1249,19 @@ mod tests {
     }
 
     // ── Exemptions ──────────────────────────────────────────────────────────
-
-    fn facts(profile: Option<&str>, tags: &[&str], groups: &[Uuid]) -> CoverageFacts {
-        CoverageFacts {
-            profile: profile.map(str::to_owned),
-            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
-            containing_groups: groups.to_vec(),
-        }
-    }
-
-    fn at(hour: u32) -> DateTime<Utc> {
-        parse_rfc3339(&format!("2026-08-12T{hour:02}:00:00Z")).expect("fixed timestamp parses")
-    }
-
-    #[test]
-    fn a_window_that_names_the_node_is_never_inherited() {
-        // Rule 1 of the exemption design, and the one with a visible failure mode: if a release
-        // could cancel a node-scoped window, an operator who released a box and then deliberately
-        // put *that box* into maintenance would get a node that keeps alerting, with nothing on
-        // screen saying why. Tested as a pure function because the router cannot reach it —
-        // extractors run in argument order and `Admin` answers 503 in skeleton mode first.
-        use crate::maintenance::WindowScope;
-        let f = facts(Some("p1"), &["tokyo"], &[Uuid::from_u128(1)]);
-        assert!(!window_is_inherited_by(
-            WindowScope::Node,
-            &Uuid::from_u128(99).to_string(),
-            &f
-        ));
-        assert!(window_is_inherited_by(WindowScope::Profile, "p1", &f));
-        assert!(!window_is_inherited_by(WindowScope::Profile, "p2", &f));
-        assert!(window_is_inherited_by(WindowScope::Group, "tokyo", &f));
-        assert!(!window_is_inherited_by(WindowScope::Group, "osaka", &f));
-        assert!(window_is_inherited_by(
-            WindowScope::FolderGroup,
-            &Uuid::from_u128(1).to_string(),
-            &f
-        ));
-        assert!(!window_is_inherited_by(
-            WindowScope::FolderGroup,
-            &Uuid::from_u128(2).to_string(),
-            &f
-        ));
-        // A fleet-wide window belongs to nobody, so one box can be brought back without the window
-        // itself cancelling the release.
-        assert!(window_is_inherited_by(
-            WindowScope::System,
-            crate::maintenance::UPGRADE_SCOPE_ID,
-            &f
-        ));
-        // An unparseable folder id is not a match — fail closed rather than release on a typo.
-        assert!(!window_is_inherited_by(
-            WindowScope::FolderGroup,
-            "not-a-uuid",
-            &f
-        ));
-    }
-
-    #[test]
-    fn the_release_lasts_as_long_as_the_reason_for_it() {
-        // The latest end, not the earliest: while a longer window still covers the node, putting
-        // it back would re-suppress a box the operator has said is back in service.
-        use crate::maintenance::WindowScope;
-        let group = Uuid::from_u128(1);
-        let f = facts(Some("p1"), &[], &[group]);
-        let windows = vec![
-            (WindowScope::FolderGroup, group.to_string(), at(2)),
-            (WindowScope::Profile, "p1".to_owned(), at(5)),
-            // Covers nothing here, and must not extend the release.
-            (WindowScope::Group, "osaka".to_owned(), at(9)),
-            // Names some other node.
-            (WindowScope::Node, Uuid::from_u128(7).to_string(), at(11)),
-        ];
-        assert_eq!(inherited_maintenance_end(&windows, &f), Some(at(5)));
-    }
+    //
+    // What may be released from, and for how long, is `crate::maintenance`'s to answer and is
+    // tested there — three callers share those rules now. What is tested here is the edge: the
+    // refusal, the guards, and the paths.
 
     #[test]
     fn nothing_inherited_is_a_refusal_not_an_empty_release() {
         // A node covered only by a window that *names* it has nothing to be released from, and the
         // honest answer is the 400 that says to end that window instead — storing an exemption
-        // would leave the operator believing the node was out of the window when it is not.
-        use crate::maintenance::WindowScope;
-        let f = facts(None, &[], &[]);
-        let windows = vec![(WindowScope::Node, Uuid::from_u128(3).to_string(), at(4))];
-        assert!(inherited_maintenance_end(&windows, &f).is_none());
+        // would leave the operator believing the node was out of the window when it is not. The
+        // half that decides there is nothing to release is
+        // `maintenance::a_window_that_only_names_the_node_leaves_nothing_to_release`.
         assert_eq!(nothing_inherited("maintenance").code(), "not_suppressed");
-    }
-
-    #[test]
-    fn only_a_group_mute_can_be_released_from() {
-        use crate::maintenance::MuteScope;
-        let group = Uuid::from_u128(1);
-        let f = facts(None, &[], &[group]);
-        let node_mute = StoredMute {
-            until_at: "2026-08-12T09:00:00Z".to_owned(),
-            ..mute(MuteScope::Node, Some(Uuid::from_u128(5)), None)
-        };
-        let group_mute = StoredMute {
-            until_at: "2026-08-12T03:00:00Z".to_owned(),
-            ..mute(MuteScope::Group, None, Some(group))
-        };
-        let other_group = StoredMute {
-            until_at: "2026-08-12T23:00:00Z".to_owned(),
-            ..mute(MuteScope::Group, None, Some(Uuid::from_u128(2)))
-        };
-
-        // The node mute is later and is still ignored — it names the node.
-        assert_eq!(
-            inherited_mute_end(&[node_mute.clone(), group_mute, other_group], &f),
-            Some(at(3))
-        );
-        assert!(inherited_mute_end(&[node_mute], &f).is_none());
     }
 
     /// The two exemption paths, and the node path they hang off.

@@ -40,6 +40,7 @@ import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import {
   buildSuppressionIndex,
+  nextSuppressionExpiry,
   suppressionPanelRows,
   type ReleaseAction,
   type SuppressionTarget,
@@ -258,6 +259,20 @@ export function NodesPage() {
   useEffect(() => {
     reloadSuppression();
   }, [reloadSuppression]);
+
+  // …and again the moment the next one runs out. Without this the three lists were fetched on
+  // mount and after an action and never again, so a tab left open kept drawing the wrench and the
+  // bell for windows that had ended hours earlier. A timer on the earliest expiry costs nothing
+  // while nothing is expiring — and it schedules only instants still ahead, so a server whose
+  // clock disagrees cannot turn this into a refetch loop. `buildSuppressionIndex` already ignores
+  // anything past, so a late or failed refetch leaves the markers correct, not stale.
+  useEffect(() => {
+    const at = nextSuppressionExpiry(windows, mutes, exemptions);
+    if (at === null) return undefined;
+    // A second past the expiry, so the row is gone from the server's answer rather than racing it.
+    const h = setTimeout(reloadSuppression, at - Date.now() + 1000);
+    return () => clearTimeout(h);
+  }, [windows, mutes, exemptions, reloadSuppression]);
 
   // Right-click → maintenance/mute. A preset duration POSTs now → now+duration immediately; the
   // "Custom…" item (durationMs === null) opens the full create form prefilled with the scope.

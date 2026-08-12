@@ -15,6 +15,7 @@ import {
   groupContainers,
   groupSubtree,
   muteTargetFromAlert,
+  nextSuppressionExpiry,
   PANEL_LABEL_KEYS,
   suppressionPanelRows,
   type SuppressionPanelRow,
@@ -41,13 +42,21 @@ const node = (id: string, group_id: string | null): NodeSummary => ({
 });
 const nodes: NodeSummary[] = [node('n1', 'tokyo'), node('n2', 'edge'), node('n3', 'osaka')];
 
+/** The default expiry for every fixture below.
+ *
+ *  It has to be in the future, because the suppression helpers judge a stored expiry against the
+ *  clock rather than trusting the payload's `active` flag — a tab left open past a window's end
+ *  used to keep drawing its marker forever. Tests *about* that judgement pass `now` explicitly and
+ *  say so; every other test just wants "still in force". */
+const FUTURE = '2099-01-02T00:00:00Z';
+
 const window = (over: Partial<MaintenanceWindow>): MaintenanceWindow => ({
   id: 'w',
   name: 'w',
   scope_level: 'node',
   scope_id: 'n1',
   starts_at: '2026-01-01T00:00:00Z',
-  ends_at: '2026-01-02T00:00:00Z',
+  ends_at: FUTURE,
   enabled: true,
   active: true,
   ...over,
@@ -59,7 +68,7 @@ const mute = (over: Partial<Mute>): Mute => ({
   node_id: 'n1',
   group_id: null,
   metric_name: null,
-  until_at: '2026-01-02T00:00:00Z',
+  until_at: FUTURE,
   reason: null,
   ...over,
 });
@@ -179,7 +188,7 @@ const exemption = (over: Partial<SuppressionExemption>): SuppressionExemption =>
   id: 'x',
   kind: 'maintenance',
   node_id: 'n2',
-  until_at: '2026-01-02T00:00:00Z',
+  until_at: FUTURE,
   ...over,
 });
 
@@ -287,7 +296,7 @@ describe('causesFor', () => {
       id: 'w1',
       title: 'sw upgrade',
       labelKey: 'tree.suppression.from.node',
-      endsAt: '2026-01-02T00:00:00Z',
+      endsAt: FUTURE,
     });
   });
 
@@ -473,7 +482,7 @@ describe('suppressionPanelRows', () => {
     expect(row.title).toBe('DC1 planned');
     expect(row.labelKey).toBe('tree.suppression.from.ancestor');
     expect(row.labelParams).toEqual({ name: 'Tokyo' });
-    expect(row.endsAt).toBe('2026-01-02T00:00:00Z');
+    expect(row.endsAt).toBe(FUTURE);
   });
 
   // An exemption cancels inherited coverage only, so a window aimed at the node still suppresses
@@ -506,21 +515,23 @@ describe('suppressionPanelRows', () => {
     ]);
   });
 
-  // The covering window ended before the exemption row was swept. Nothing explains the release, so
-  // the block has no context — but the undo must still be reachable, or the node keeps a release
-  // nobody can see or cancel.
+  // A release from coverage the browser cannot attribute — a profile, tag or fleet-wide window,
+  // resolved server-side against facts this page never loads. Nothing explains the block, so it
+  // has no context; the undo must still be reachable, or the node keeps a release nobody can see
+  // or cancel. (A release whose coverage has *ended* no longer reaches here: the server re-derives
+  // every expiry against what is in force, and the clock filter hides whatever is left.)
   it('can still undo a release nothing explains', () => {
     const rows = suppressionPanelRows(nodeTarget, {
       windows: [],
       mutes: [],
       groups,
       node: n2,
-      exemptions: [exemption({ node_id: 'n2', kind: 'maintenance', until_at: '2026-03-01T00:00:00Z' })],
+      exemptions: [exemption({ node_id: 'n2', kind: 'maintenance', until_at: FUTURE })],
     });
     expect(rows).toHaveLength(1);
     expect(rows[0].headKey).toBe('tree.suppression.head.releasedMaintenance');
     expect(rows[0].labelKey).toBeUndefined();
-    expect(rows[0].endsAt).toBe('2026-03-01T00:00:00Z');
+    expect(rows[0].endsAt).toBe(FUTURE);
   });
 
   it('gives a group covered from above a note instead of a button', () => {
@@ -573,5 +584,116 @@ describe('suppressionPanelRows', () => {
         .filter((k): k is string => !!k),
     );
     expect([...produced].sort()).toEqual([...PANEL_LABEL_KEYS].sort());
+  });
+});
+
+// The page holds these lists for as long as the tab is open and only refetched them after an
+// action, so a window that ended went on marking its rows for hours. The server's `active` flag is
+// a fact about when the payload was built; the clock is the fact about now.
+describe('suppression expires on the clock, not on the payload', () => {
+  const T0 = Date.parse('2026-08-12T06:00:00Z');
+  const ended = '2026-08-12T05:00:00Z';
+
+  it('drops a window whose end has passed, even though the payload still says active', () => {
+    const w = window({ scope_level: 'group_id', scope_id: 'tokyo', ends_at: ended, active: true });
+    const idx = buildSuppressionIndex([w], [], groups, nodes, [], T0);
+    expect(idx.maintenanceGroups.size).toBe(0);
+    expect(idx.maintenanceNodes.size).toBe(0);
+    // Still in force one hour earlier — it is the clock doing this, not the window being ignored.
+    const before = buildSuppressionIndex([w], [], groups, nodes, [], Date.parse(ended) - 1);
+    expect(before.maintenanceNodes.has('n2')).toBe(true);
+  });
+
+  it('drops an expired mute and an expired release', () => {
+    const idx = buildSuppressionIndex(
+      [],
+      [mute({ scope_kind: 'group', node_id: null, group_id: 'tokyo', until_at: ended })],
+      groups,
+      nodes,
+      [exemption({ node_id: 'n2', until_at: ended })],
+      T0,
+    );
+    expect(idx.muteNodes.size).toBe(0);
+    expect(idx.exemptMaintenanceNodes.size).toBe(0);
+  });
+
+  it('keeps a marker whose expiry cannot be parsed', () => {
+    // Failing toward "still suppressed": hiding a marker tells an operator alerts will reach them
+    // when they will not, which is the worse of the two mistakes.
+    const idx = buildSuppressionIndex(
+      [window({ scope_level: 'group_id', scope_id: 'tokyo', ends_at: 'not a date' })],
+      [],
+      groups,
+      nodes,
+      [],
+      T0,
+    );
+    expect(idx.maintenanceNodes.has('n2')).toBe(true);
+  });
+
+  it('says nothing is suppressing a row whose window is over', () => {
+    const rows = suppressionPanelRows(
+      { kind: 'node', id: 'n2', name: 'n2' },
+      {
+        windows: [window({ scope_level: 'group_id', scope_id: 'tokyo', ends_at: ended })],
+        mutes: [],
+        groups,
+        node: node('n2', 'edge'),
+        now: T0,
+      },
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('does not offer to put a node back under a release that has run out', () => {
+    const rows = suppressionPanelRows(
+      { kind: 'node', id: 'n2', name: 'n2' },
+      {
+        windows: [],
+        mutes: [],
+        groups,
+        node: node('n2', 'edge'),
+        exemptions: [exemption({ node_id: 'n2', until_at: ended })],
+        now: T0,
+      },
+    );
+    expect(rows).toEqual([]);
+  });
+});
+
+describe('nextSuppressionExpiry', () => {
+  const T0 = Date.parse('2026-08-12T06:00:00Z');
+  const at = (iso: string) => Date.parse(iso);
+
+  it('is the earliest expiry still ahead, across all three lists', () => {
+    expect(
+      nextSuppressionExpiry(
+        [window({ ends_at: '2026-08-12T09:00:00Z' })],
+        [mute({ until_at: '2026-08-12T07:30:00Z' })],
+        [exemption({ until_at: '2026-08-12T08:00:00Z' })],
+        T0,
+      ),
+    ).toBe(at('2026-08-12T07:30:00Z'));
+  });
+
+  it('ignores what is already past, so a clock the server disagrees with cannot start a refetch loop', () => {
+    expect(
+      nextSuppressionExpiry(
+        [window({ ends_at: '2026-08-12T05:00:00Z' })],
+        [mute({ until_at: '2026-08-12T05:59:00Z' })],
+        [],
+        T0,
+      ),
+    ).toBeNull();
+  });
+
+  it('ignores an inactive window — it is not marking anything to begin with', () => {
+    expect(
+      nextSuppressionExpiry([window({ active: false, ends_at: '2026-08-12T07:00:00Z' })], [], [], T0),
+    ).toBeNull();
+  });
+
+  it('is null when there is nothing to wait for', () => {
+    expect(nextSuppressionExpiry([], [], [], T0)).toBeNull();
   });
 });

@@ -1834,6 +1834,16 @@ async fn run_alert_config_refresh(
             ));
         }
         let base = &cached_base.as_ref().expect("alert base set above").1;
+        // A release from inherited suppression is sized to the coverage in force when it is
+        // granted, and coverage can stop sooner than it said it would. Re-derive them before
+        // resolving: an orphaned release is not just a marker on a quiet row, it is a node the
+        // *next* window over that group would skip. The handlers that remove coverage call this
+        // too — this is the backstop that does not depend on anyone remembering to.
+        match maintenance::reconcile_exemptions(&maintenance, &group_repo, &repo).await {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(count = n, "re-derived suppression exemptions"),
+            Err(e) => tracing::warn!(error = %e, "failed to reconcile suppression exemptions"),
+        }
         let in_maintenance =
             resolve_maintenance(&maintenance, &group_repo, &repo, &base.nodes).await;
         if base_changed || last_maintenance.as_ref() != Some(&in_maintenance) {

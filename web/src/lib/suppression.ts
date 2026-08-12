@@ -141,11 +141,50 @@ export function groupSubtree(groups: NodeGroup[], rootId: string): Set<string> {
 }
 
 /**
+ * Whether something that expires at `iso` is still in force at `now`.
+ *
+ * The server filters expired rows out of every list, but the *browser* holds those lists for as
+ * long as the page is open, and `active` is a value computed when the payload was built — so a tab
+ * left open across a window's end went on drawing the marker forever. Judging against the clock
+ * makes the tree self-correcting; {@link nextSuppressionExpiry} is what makes it re-render.
+ *
+ * An unparseable timestamp counts as **in force**: dropping a marker is the worse of the two
+ * mistakes, since it tells an operator alerts will reach them when they will not.
+ */
+function inForce(iso: string, now: number): boolean {
+  const at = Date.parse(iso);
+  return Number.isNaN(at) || at > now;
+}
+
+/**
+ * When the next thing on this page stops on its own, in epoch ms, or `null` if nothing does.
+ *
+ * Only instants **strictly in the future** — anything already past is hidden by {@link inForce}
+ * and needs no timer, which is also what stops a caller re-fetching in a loop against a server
+ * whose clock disagrees.
+ */
+export function nextSuppressionExpiry(
+  windows: MaintenanceWindow[],
+  mutes: Mute[],
+  exemptions: SuppressionExemption[],
+  now: number = Date.now(),
+): number | null {
+  const at = [
+    ...windows.filter((w) => w.active).map((w) => w.ends_at),
+    ...mutes.map((m) => m.until_at),
+    ...exemptions.map((e) => e.until_at),
+  ]
+    .map((iso) => Date.parse(iso))
+    .filter((t) => !Number.isNaN(t) && t > now);
+  return at.length ? Math.min(...at) : null;
+}
+
+/**
  * Which nodes/groups are currently in maintenance or muted, for the All Nodes icons. A folder-group
  * target propagates down its subtree — the group, all descendant subgroups, and their member nodes
- * (decision: incl. subgroups). Only *active* maintenance windows count; the mutes from the API are
- * already unexpired. Node/profile/tag-scoped windows aren't mapped onto tree rows here — those nodes
- * surface through their `maintenance` state instead.
+ * (decision: incl. subgroups). Only windows that are *active and not yet over at `now`* count, and
+ * likewise mutes and exemptions — see {@link inForce}. Node/profile/tag-scoped windows aren't mapped
+ * onto tree rows here — those nodes surface through their `maintenance` state instead.
  */
 export function buildSuppressionIndex(
   windows: MaintenanceWindow[],
@@ -153,9 +192,13 @@ export function buildSuppressionIndex(
   groups: NodeGroup[],
   nodes: NodeSummary[],
   exemptions: SuppressionExemption[] = [],
+  now: number = Date.now(),
 ): SuppressionIndex {
   const index = emptySuppressionIndex();
-  for (const e of exemptions) {
+  // Filtered once, so the second pass over each list below cannot disagree with the first.
+  const live = windows.filter((w) => w.active && inForce(w.ends_at, now));
+  const liveMutes = mutes.filter((m) => inForce(m.until_at, now));
+  for (const e of exemptions.filter((x) => inForce(x.until_at, now))) {
     if (e.kind === 'maintenance') index.exemptMaintenanceNodes.add(e.node_id);
     else index.exemptMuteNodes.add(e.node_id);
   }
@@ -170,8 +213,7 @@ export function buildSuppressionIndex(
     }
   };
 
-  for (const w of windows) {
-    if (!w.active) continue;
+  for (const w of live) {
     if (w.scope_level === 'node') {
       index.maintenanceNodes.add(w.scope_id);
     } else if (w.scope_level === 'group_id') {
@@ -179,7 +221,7 @@ export function buildSuppressionIndex(
     }
   }
 
-  for (const m of mutes) {
+  for (const m of liveMutes) {
     if (m.scope_kind === 'group' && m.group_id) {
       markSubtree(m.group_id, index.muteGroups, index.muteNodes);
     } else if (m.node_id) {
@@ -194,10 +236,10 @@ export function buildSuppressionIndex(
   // it, which is the one disagreement an operator would read as the icon lying.
   for (const nid of index.exemptMaintenanceNodes) index.maintenanceNodes.delete(nid);
   for (const nid of index.exemptMuteNodes) index.muteNodes.delete(nid);
-  for (const w of windows) {
-    if (w.active && w.scope_level === 'node') index.maintenanceNodes.add(w.scope_id);
+  for (const w of live) {
+    if (w.scope_level === 'node') index.maintenanceNodes.add(w.scope_id);
   }
-  for (const m of mutes) {
+  for (const m of liveMutes) {
     if (m.scope_kind !== 'group' && m.node_id) index.muteNodes.add(m.node_id);
   }
   return index;
@@ -289,12 +331,19 @@ export function causesFor(
     /** Releases already granted to this node, so a cause it has been released from is reported as
      *  such instead of as a live suppression offering a release that has already happened. */
     exemptions?: SuppressionExemption[];
+    /** Epoch ms to judge expiry against; defaults to the wall clock. Injected only by tests. */
+    now?: number;
   },
 ): SuppressionCause[] {
-  const { windows, mutes, groups, node } = ctx;
+  const { groups, node } = ctx;
+  const now = ctx.now ?? Date.now();
+  // Anything already over explains nothing, however recently the page loaded it (see `inForce`).
+  const windows = ctx.windows.filter((w) => w.active && inForce(w.ends_at, now));
+  const mutes = ctx.mutes.filter((m) => inForce(m.until_at, now));
+  const exemptions = (ctx.exemptions ?? []).filter((e) => inForce(e.until_at, now));
   const isGroup = target.kind === 'group';
   const releasedFrom = (kind: 'maintenance' | 'mute') =>
-    !isGroup && (ctx.exemptions ?? []).some((e) => e.node_id === target.id && e.kind === kind);
+    !isGroup && exemptions.some((e) => e.node_id === target.id && e.kind === kind);
   const maintReleased = releasedFrom('maintenance');
   const muteReleased = releasedFrom('mute');
   // The folder groups that contain this row. A group row contains itself, so an ancestor window is
@@ -304,7 +353,6 @@ export function causesFor(
   const out: SuppressionCause[] = [];
 
   for (const w of windows) {
-    if (!w.active) continue;
     const direct =
       (!isGroup && w.scope_level === 'node' && w.scope_id === target.id) ||
       (isGroup && w.scope_level === 'group_id' && w.scope_id === target.id);
@@ -500,9 +548,11 @@ export function suppressionPanelRows(
     groups: NodeGroup[];
     node?: NodeSummary;
     exemptions?: SuppressionExemption[];
+    now?: number;
   },
 ): SuppressionPanelRow[] {
-  const causes = causesFor(target, ctx);
+  const now = ctx.now ?? Date.now();
+  const causes = causesFor(target, { ...ctx, now });
   const explained = new Set<string>();
   const rows: SuppressionPanelRow[] = causes.map((c, i) => {
     if (c.released) explained.add(c.kind);
@@ -520,6 +570,7 @@ export function suppressionPanelRows(
 
   for (const e of ctx.exemptions ?? []) {
     if (target.kind !== 'node' || e.node_id !== target.id || explained.has(e.kind)) continue;
+    if (!inForce(e.until_at, now)) continue;
     rows.push({
       key: `x-${e.kind}`,
       kind: e.kind,

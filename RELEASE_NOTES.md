@@ -27,7 +27,9 @@
     it, so a **node** offers "take this node out of maintenance" — or "unmute this node" — instead:
     that one node returns to normal alerting while the rest of the group stays covered. The release
     expires by itself when the coverage it was carved out of ends — the server computes that, the
-    browser sends no expiry — so it can never silently exclude the node from the *next* window. A
+    browser sends no expiry, and it re-derives it whenever coverage stops sooner than it said it
+    would (a window ended early, disabled or deleted; a mute lifted), so a release can never outlive
+    its reason and silently exclude the node from the *next* window. A
     released node's marker negates itself — a struck-through wrench, or a plain ringing bell where
     the muted one was — and its panel then reports what it is standing outside of and until when,
     with putting it back as the only thing left to do.
@@ -69,6 +71,12 @@
   now rendered *after* the actions rather than before them: a flex row's last child ends flush
   against the right padding whatever happens further left, so the marker cannot move out from under
   a pointer aiming at it, and no row has to give up width to a reserved slot.
+- **All nodes went on marking rows as suppressed after the suppression had ended.** The tree loads
+  the maintenance-window and mute lists when the page opens and after an action taken on it, and
+  nothing refreshed them in between — so a tab left open kept drawing 🔧 and 🔕 on rows that were
+  alerting normally again, until someone reloaded it. A row is now judged against the clock rather
+  than against a flag that was true when the lists were fetched, and the page refetches at the
+  moment the next window or mute runs out. Nothing polls in the meantime.
 
 ## v0.2.4 — the second upgrade works, and the backup it takes first has the metrics in it
 
