@@ -102,6 +102,10 @@ interface Props {
   onAddGroup: (parentId: string | null) => void;
   onEditGroup: (group: NodeGroup) => void;
   onDeleteGroup: (group: NodeGroup) => void;
+  /** Right-click → edit a node (its check, profile, credential, identity, pool) — the same dialog
+   *  the detail pane's "Edit node" opens, reachable without selecting the row first. Omit to hide
+   *  the menu item. */
+  onEditNode?: (node: NodeSummary) => void;
   /** Right-click → add a monitoring node, placed into `groupId` (`null` = top level / Ungrouped).
    *  The manual, Discovery-free way to add a target. Omit to hide the menu item. */
   onAddNode?: (groupId: string | null) => void;
@@ -160,6 +164,7 @@ export function NodeTree({
   onAddGroup,
   onEditGroup,
   onDeleteGroup,
+  onEditNode,
   onAddNode,
   onDeleteNode,
   onRequestMoveNode,
@@ -880,6 +885,11 @@ export function NodeTree({
               <button type="button" onClick={() => { onOpenNode(menu.node); setMenu(null); }}>
                 {t('tree.open')}
               </button>
+              {onEditNode && (
+                <button type="button" onClick={() => { onEditNode(menu.node); setMenu(null); }}>
+                  {t('tree.editNodeEllipsis')}
+                </button>
+              )}
               <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
                 {t('tree.moveToGroup')}
               </button>

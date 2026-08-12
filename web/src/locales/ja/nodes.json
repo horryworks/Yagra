@@ -112,6 +112,7 @@
   },
   "err": {
     "loadNodes": "ノードの読み込みに失敗しました",
+    "loadNode": "ノードの読み込みに失敗しました",
     "setMaintenance": "メンテナンスの設定に失敗しました",
     "mute": "ミュートに失敗しました",
     "release": "抑止の変更に失敗しました",
@@ -374,6 +375,7 @@
     "addNodeHere": "ここにノードを追加…",
     "editMove": "編集 / 移動…",
     "open": "開く",
+    "editNodeEllipsis": "ノードを編集…",
     "addNodeEllipsis": "ノードを追加…",
     "addGroupEllipsis": "グループを追加…",
     "deleteEllipsis": "削除…",

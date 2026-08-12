@@ -56,6 +56,7 @@ import { AddNodeModal } from '../components/AddNodeModal/AddNodeModal';
 import { GroupModal, type GroupModalState } from '../components/GroupModal/GroupModal';
 import { NodeTree, type TreeSelection } from '../components/NodeTree/NodeTree';
 import { NodeDetail, DeleteNodeModal } from '../components/NodeDetail/NodeDetail';
+import { EditNodeModalById } from '../components/NodeDetail/EditNodeModal';
 import { normalizeNodeDetailTab } from '../components/NodeDetail/tabs';
 import { GroupDetail } from '../components/NodeDetail/GroupDetail';
 import { MoveNodeModal } from '../components/MoveNodeModal/MoveNodeModal';
@@ -140,6 +141,15 @@ export function NodesPage() {
   const [deletingGroup, setDeletingGroup] = useState<NodeGroup | null>(null);
   const [deletingNode, setDeletingNode] = useState<NodeSummary | null>(null);
   const [movingNode, setMovingNode] = useState<NodeSummary | null>(null);
+  /** Node whose edit dialog is open, from the tree's right-click. The row is all this page has, so
+   *  the dialog loads the detail itself (`EditNodeModalById`) — like Delete/Move above, editing does
+   *  not move the selection, so the right pane keeps showing whatever the operator was looking at. */
+  const [editingNode, setEditingNode] = useState<NodeSummary | null>(null);
+  /** Bumped when that edit rewrote the node the right pane is showing. It rides in `NodeDetail`'s
+   *  `key`: the pane fetches a node's config once per mount (plus its own post-save refetch), so
+   *  without this an edit from the tree would leave the operator looking at the values they just
+   *  replaced — which reads as a save that did not take. */
+  const [detailNonce, setDetailNonce] = useState(0);
 
   // Suppression: active maintenance windows + mutes drive the per-row icons; the right-click
   // "Custom…" path opens a prefilled create modal (preset durations POST directly).
@@ -589,6 +599,7 @@ export function NodesPage() {
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
+            onEditNode={authed ? (n) => setEditingNode(n) : undefined}
             onAddNode={authed ? openAddNode : undefined}
             onDeleteNode={authed ? (n) => setDeletingNode(n) : undefined}
             onRequestMoveNode={(n) => setMovingNode(n)}
@@ -623,7 +634,7 @@ export function NodesPage() {
             // Render from the selection id so a node whose group isn't loaded still shows detail
             // (the detail pane fetches the node itself). Move needs the loaded summary — guarded.
             <NodeDetail
-              key={selected.id}
+              key={`${selected.id}:${detailNonce}`}
               nodeId={selected.id}
               variant="inline"
               canEdit={authed}
@@ -707,6 +718,21 @@ export function NodesPage() {
             // If the deleted node was the open selection, clear the right pane.
             if (selected?.kind === 'node' && selected.id === deletingNode.id) select(null);
             setDeletingNode(null);
+            void reload();
+          }}
+        />
+      )}
+
+      {editingNode && (
+        <EditNodeModalById
+          nodeId={editingNode.id}
+          name={editingNode.name}
+          onClose={() => setEditingNode(null)}
+          onDone={() => {
+            if (selected?.kind === 'node' && selected.id === editingNode.id) {
+              setDetailNonce((v) => v + 1);
+            }
+            setEditingNode(null);
             void reload();
           }}
         />

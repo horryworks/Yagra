@@ -8,12 +8,15 @@
 //
 // The node arrives as a prop rather than being re-fetched by id. The caller has it (and refetches
 // it after a save), and the version that fetched its own copy swallowed the failure — a slow or
-// failed load left five empty inputs whose Save wrote four NULLs over a working binding.
+// failed load left five empty inputs whose Save wrote four NULLs over a working binding. A caller
+// that holds only a list row gets `EditNodeModalById` at the bottom, which does the load *outside*
+// the form: no fields exist until the node does.
 
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { isValidPoolName } from '../../lib/pool';
+import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary, NodeDetail, ProfileSummary } from '../../types/api';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
@@ -34,9 +37,6 @@ import {
   type NodeEditDraft,
   type NodeEditField,
 } from './nodeEditForm';
-
-/** Credential kinds an SNMP-polled node can bind. */
-const SNMP_CRED_KINDS: string[] = ['snmp_v2c'];
 
 export function EditNodeModal({
   node,
@@ -84,7 +84,7 @@ export function EditNodeModal({
     if (!showsCredential) return;
     api
       .listCredentials()
-      .then((c) => setCredentials(c.filter((cr) => SNMP_CRED_KINDS.includes(cr.kind))))
+      .then((c) => setCredentials(c.filter((cr) => isSnmpCredentialKind(cr.kind))))
       .catch(() => setCredentials([]));
   }, [showsCredential]);
 
@@ -218,6 +218,65 @@ export function EditNodeModal({
         );
       })}
       {error && <p className="form-error">{error}</p>}
+    </Modal>
+  );
+}
+
+/** The same dialog for a caller that holds only a node's list row — the inventory tree's context
+ *  menu, which never fetched the detail the pane has.
+ *
+ *  The load lives out here rather than inside `EditNodeModal` on purpose, and the header comment
+ *  above says why: a dialog that fetches its own copy can paint the form before the answer arrives
+ *  or after it failed, and that form's Save writes the blanks it is showing. So the fields do not
+ *  exist until the node does — until then this is a shell with a Close and, on failure, the
+ *  server's reason. */
+export function EditNodeModalById({
+  nodeId,
+  name,
+  onClose,
+  onDone,
+}: {
+  nodeId: string;
+  /** The row's name, so the shell has a title before the fetch answers. */
+  name: string;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('nodes');
+  const [node, setNode] = useState<NodeDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getNode(nodeId)
+      .then((n) => {
+        if (!cancelled) setNode(n);
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(errMsg(e, t('err.loadNode')));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [nodeId, t]);
+
+  if (node) return <EditNodeModal node={node} onClose={onClose} onDone={onDone} />;
+  return (
+    <Modal
+      title={name}
+      onClose={onClose}
+      footer={
+        <Button variant="outline" onClick={onClose}>
+          {t('common:actions.close')}
+        </Button>
+      }
+    >
+      {error ? (
+        <p className="form-error">{error}</p>
+      ) : (
+        <p className="nd-muted">{t('common:loading')}</p>
+      )}
     </Modal>
   );
 }

@@ -112,6 +112,7 @@
   },
   "err": {
     "loadNodes": "failed to load nodes",
+    "loadNode": "failed to load node",
     "setMaintenance": "failed to set maintenance",
     "mute": "failed to mute",
     "release": "failed to change the suppression",
@@ -374,6 +375,7 @@
     "addNodeHere": "Add node here…",
     "editMove": "Edit / move…",
     "open": "Open",
+    "editNodeEllipsis": "Edit node…",
     "addNodeEllipsis": "Add node…",
     "addGroupEllipsis": "Add group…",
     "deleteEllipsis": "Delete…",

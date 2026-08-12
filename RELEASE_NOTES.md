@@ -27,6 +27,10 @@
   part of Edit node in the header, alongside the profile and pool. The ⋮ menu keeps "Remove
   monitoring". If the monitor settings save and the node settings do not, the dialog stays open and
   says which half landed — saving again is safe, both writes are replacements.
+- **Edit node is on the inventory tree's right-click menu.** Editing a node meant selecting its row
+  first and then finding the button in the detail pane's header. Nodes ▸ All nodes now offers
+  "Edit node…" directly under "Open" in any node row's context menu — the same dialog, without
+  moving the selection, so the pane keeps showing whatever was already open.
 - **Paired fields in a dialog stack on a phone.** Side-by-side pairs inside modals (a DNS
   resolver + port, a URL monitor's status bounds, a credential's kind + name) kept two columns at
   ~390px and squeezed each to half a screen. They now stack, as the non-modal forms already did.
