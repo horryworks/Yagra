@@ -11,7 +11,9 @@
 // instantly at any fleet size. A group's member nodes are fetched only when it is open and visible
 // (`/nodes/by-group`), streaming in per group; collapsed groups are never loaded. An active name
 // filter runs a debounced SERVER-side search (`/nodes?search=`), capped at one page, and drops the
-// matches under their groups — it never loads the fleet into the browser. The left pane is
+// matches under their groups — it never loads the fleet into the browser. A term matching a GROUP's
+// name additionally loads that folder's whole subtree, since the server search matches nodes and
+// knows nothing about groups, and the folder's contents are what the operator asked for. The left pane is
 // virtualized (only on-screen rows in the DOM, S13); node state stays live via the node-state SSE
 // stream (`useNodeStates`) rather than a full refetch.
 
@@ -33,7 +35,12 @@ import type {
   PoolOption,
   SuppressionExemption,
 } from '../types/api';
-import { countsTotal, filterResultsTruncated, type StateCounts } from '../lib/nodeTree';
+import {
+  countsTotal,
+  filterResultsTruncated,
+  mergeNodesById,
+  type StateCounts,
+} from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
@@ -84,7 +91,9 @@ export function NodesPage() {
   // total + attention count without loading the inventory.
   const [groupSummary, setGroupSummary] = useState<FleetGroupSummary | null>(null);
   const [fleetSummary, setFleetSummary] = useState<FleetSummary | null>(null);
-  // Filter mode full-loads the fleet once (then searches client-side); null = not yet loaded.
+  // Filter mode's server-side search page — the nodes whose own name/address matched. null = not
+  // fetched yet. Never the whole fleet: it is one capped page, and the folders a group-name match
+  // reveals arrive separately through the per-group member cache.
   const [allNodes, setAllNodes] = useState<NodeSummary[] | null>(null);
   const [allNodesLoading, setAllNodesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -106,6 +115,10 @@ export function NodesPage() {
   const tabParam = searchParams.get('tab') ?? '';
   const tab = normalizeNodeDetailTab(tabParam);
   const [filter, setFilter] = useState('');
+  // The term the tree has ACTED on. `filter` drives what the tree hides — instant, client-side, off
+  // the group skeleton. This one drives what it FETCHES, so a fast typist fires one round of
+  // per-group loads instead of one per keystroke. Written by the same debounce as the search below.
+  const [appliedFilter, setAppliedFilter] = useState('');
 
   // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).
   // `replace` keeps rapid clicking out of the browser history.
@@ -177,13 +190,18 @@ export function NodesPage() {
     ready: !loading,
     browsing: !filtering,
     selectedGroupId: selected?.kind === 'group' ? selected.id : null,
+    filterTerm: appliedFilter,
   });
   const invalidateMembers = members.invalidate;
 
   // The nodes the tree renders: browse mode = the union of the lazily-loaded per-group members;
-  // filter mode = the server search's single capped page.
+  // filter mode = the server search's single capped page PLUS those same lazily-loaded members, so a
+  // folder matched by name can show its contents (and a selected group can still roll its subtree
+  // up). Deduped by id — a node is routinely in both lists, and `flatRowKey` is `n:<id>`.
+  // `flattenTree` hides anything neither matching nor under a matched group, so the extra members
+  // cost nothing on screen.
   const treeNodes = useMemo(
-    () => (filtering ? allNodes ?? [] : members.nodes),
+    () => (filtering ? mergeNodesById(allNodes ?? [], members.nodes) : members.nodes),
     [filtering, allNodes, members.nodes],
   );
 
@@ -234,11 +252,18 @@ export function NodesPage() {
   // loading it. Re-queries as the term changes; a stale response from an earlier keystroke is
   // dropped. Results are capped at one server page (keep typing to narrow).
   useEffect(() => {
-    if (!filtering) return;
+    if (!filtering) {
+      // Clearing the box must un-reveal the folders the last term opened, not freeze them.
+      setAppliedFilter('');
+      return undefined;
+    }
     const term = filter.trim();
     let cancelled = false;
     setAllNodesLoading(true);
     const h = setTimeout(() => {
+      // Applied as the search is ISSUED, not when it returns, so a matched folder's members load in
+      // parallel with the search page rather than a round-trip behind it.
+      setAppliedFilter(term);
       api
         .listNodesPage({ search: term, limit: FILTER_SEARCH_LIMIT })
         .then((page) => {
@@ -458,8 +483,14 @@ export function NodesPage() {
     : 0;
   const anyGroupTruncated = members.anyTruncated;
   // Filter mode bypasses groups, so the group-truncation notice above never fires for it —
-  // a fleet with more matches than the cap would otherwise show a silently short list.
-  const filterTruncated = filterResultsTruncated(filtering, treeNodes.length, FILTER_SEARCH_LIMIT);
+  // a fleet with more matches than the cap would otherwise show a silently short list. Counts the
+  // SEARCH PAGE, not `treeNodes`: the latter also carries the revealed folders' members, which would
+  // trip the cap notice for a term that never came near it.
+  const filterTruncated = filterResultsTruncated(
+    filtering,
+    allNodes?.length ?? 0,
+    FILTER_SEARCH_LIMIT,
+  );
   // The selected node's summary, if it's among the loaded members (for the Move action). The detail
   // pane itself renders from the id, so it still works for a selection whose group isn't loaded.
   const selectedNode =
@@ -511,6 +542,9 @@ export function NodesPage() {
         <p className="muted nodes-truncated">
           {t('inventory.filterTruncated', { count: FILTER_SEARCH_LIMIT })}
         </p>
+      )}
+      {members.revealTruncated && (
+        <p className="muted nodes-truncated">{t('inventory.revealTruncated')}</p>
       )}
 
       <div
@@ -588,6 +622,7 @@ export function NodesPage() {
             nodes={liveTreeNodes}
             groupCounts={groupCounts}
             loadedGroups={members.loadedGroups}
+            revealedGroups={members.revealedGroups}
             canEdit={authed}
             loading={loading || (filtering && allNodesLoading)}
             showToolbar={false}

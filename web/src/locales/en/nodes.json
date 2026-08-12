@@ -54,6 +54,7 @@
     "needAttention": "{{count}} need attention",
     "filterTruncated": "Showing the first {{count}} matches — narrow the search to see the rest.",
     "groupTruncated": "Some large groups are showing a partial member list. Use search to find a specific node.",
+    "revealTruncated": "Too many groups matched to open them all — narrow the search to see their members.",
     "searchPlaceholder": "Search…",
     "loadingInventory": "Loading inventory…",
     "selectPrompt": "Select a node or group to see its detail.",

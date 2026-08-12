@@ -5,11 +5,14 @@ import {
   buildNodeTree,
   descendantNodes,
   filterResultsTruncated,
+  filterTerm,
   flattenTree,
   flatRowKey,
   groupOptions,
   groupPath,
   isSelfOrDescendant,
+  mergeNodesById,
+  revealedGroupKeys,
   subtreeGroupIds,
   tallyStates,
   UNGROUPED,
@@ -148,6 +151,141 @@ describe('flattenTree lazy load (A-3)', () => {
       loadedGroups: new Set(['g1']), // g1 loaded, g2 not (but empty → no loading row)
     });
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'g:g2', 'ungrouped-head']);
+  });
+});
+
+describe('filterTerm', () => {
+  it('trims and lower-cases', () => {
+    expect(filterTerm('  ToKyo ')).toBe('tokyo');
+  });
+
+  it('reads a blank or whitespace-only box as not filtering', () => {
+    expect(filterTerm('')).toBe('');
+    expect(filterTerm('   ')).toBe('');
+  });
+});
+
+describe('mergeNodesById', () => {
+  it('concatenates in order and keeps the first entry for a repeated id', () => {
+    const a = node('n1', 'sw1', 'g1');
+    const b = node('n2', 'sw2', 'g1');
+    const dupe = node('n1', 'sw1-stale', 'g1');
+    const out = mergeNodesById([a, b], [dupe, node('n3', 'sw3', 'g1')]);
+    expect(out.map((n) => n.id)).toEqual(['n1', 'n2', 'n3']);
+    // First wins: the same node in both lists must not produce two rows keyed `n:n1`.
+    expect(out[0].name).toBe('sw1');
+  });
+});
+
+describe('revealedGroupKeys', () => {
+  const groups = [
+    group('g1', 'Tokyo'),
+    group('g2', 'Rack A', 'g1'),
+    group('g3', 'Rack B', 'g1'),
+    group('g4', 'Osaka'),
+  ];
+
+  it('reveals nothing while browsing', () => {
+    expect(revealedGroupKeys(groups, '   ', 10)).toEqual([]);
+  });
+
+  it('reveals a name-matched group and its whole subtree, case-insensitively', () => {
+    expect(revealedGroupKeys(groups, 'TOKYO', 10)).toEqual(['g1', 'g2', 'g3']);
+  });
+
+  it('reveals nothing for a term that only matches a node name', () => {
+    // Nodes are the server search page's job — revealing folders is what this adds.
+    expect(revealedGroupKeys(groups, 'sw1', 10)).toEqual([]);
+  });
+
+  it('unions two matches and lists an overlapping subtree once', () => {
+    const overlapping = [group('g1', 'Tokyo'), group('g2', 'Tokyo Rack', 'g1'), group('g3', 'Osaka')];
+    expect(revealedGroupKeys(overlapping, 'tokyo', 10)).toEqual(['g1', 'g2']);
+  });
+
+  it('caps the reveal, keeping the deterministic prefix', () => {
+    expect(revealedGroupKeys(groups, 'tokyo', 2)).toEqual(['g1', 'g2']);
+  });
+
+  it('terminates on cyclic parent links', () => {
+    const cyclic = [group('a', 'Alpha', 'b'), group('b', 'Beta', 'a')];
+    expect(revealedGroupKeys(cyclic, 'alpha', 10)).toEqual(['a', 'b']);
+  });
+});
+
+describe('flattenTree — a filter that matches a GROUP reveals its contents', () => {
+  const counts = (partial: Partial<Record<NodeState, number>>): Record<NodeState, number> => ({
+    ok: 0,
+    warning: 0,
+    critical: 0,
+    unreachable: 0,
+    maintenance: 0,
+    unknown: 0,
+    ...partial,
+  });
+
+  it('shows the matched folder’s members and its sub-folders’ members, matching or not', () => {
+    // "Tokyo" matches the folder; not one node name contains it. Osaka is unrelated and stays hidden.
+    const t = buildNodeTree(
+      [group('g1', 'Tokyo'), group('g2', 'Rack A', 'g1'), group('g3', 'Osaka')],
+      [node('n1', 'sw1', 'g2'), node('n2', 'fw1', 'g1'), node('n3', 'sw9', 'g3')],
+    );
+    const rows = flattenTree(t, { collapsed: { g1: true }, filter: 'tokyo' });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'g:g2', 'n:n1', 'n:n2']);
+  });
+
+  it('places the loading row after the matches it already has, for a revealed unloaded group', () => {
+    // The search page carries sw1 (it matched); the folder's other 4 members are still in flight.
+    const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: 'tokyo',
+      groupCounts: { g1: counts({ ok: 5 }) },
+      loadedGroups: new Set(),
+      revealedGroups: new Set(['g1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'loading:g1']);
+  });
+
+  it('never draws a loading row for a group the reveal cap left out', () => {
+    // Past the cap nothing is being fetched, so a placeholder there would spin forever.
+    const t = buildNodeTree([group('g1', 'Tokyo')], [node('n1', 'sw1', 'g1')]);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: 'tokyo',
+      groupCounts: { g1: counts({ ok: 5 }) },
+      loadedGroups: new Set(),
+      revealedGroups: new Set(),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1']);
+  });
+
+  it('drops the loading row once the revealed group’s members are in', () => {
+    // Explicit sort_order pins the member order independent of name.
+    const t = buildNodeTree(
+      [group('g1', 'Tokyo')],
+      [node('n1', 'sw1', 'g1', 1), node('n2', 'fw1', 'g1', 2)],
+    );
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: 'tokyo',
+      groupCounts: { g1: counts({ ok: 2 }) },
+      loadedGroups: new Set(['g1']),
+      revealedGroups: new Set(['g1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:n1', 'n:n2']);
+  });
+
+  it('ignores the revealed set while browsing (the lazy-load rules are unchanged)', () => {
+    const t = buildNodeTree([group('g1', 'Tokyo')], []);
+    const rows = flattenTree(t, {
+      collapsed: {},
+      filter: '',
+      groupCounts: { g1: counts({ ok: 5 }) },
+      loadedGroups: new Set(),
+      revealedGroups: new Set(['g1']),
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'loading:g1', 'ungrouped-head']);
   });
 });
 

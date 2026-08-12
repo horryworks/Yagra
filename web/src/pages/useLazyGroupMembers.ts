@@ -4,21 +4,33 @@
 // The tree paints from the group skeleton plus the server's per-group health rollup, so it is
 // instant at any fleet size; a group's member nodes are fetched only once that group's contents are
 // actually on screen. That policy needs four pieces of state that only make sense together — what
-// is loaded, what is in flight, what came back truncated, and the members themselves — and two
+// is loaded, what is in flight, what came back truncated, and the members themselves — and three
 // effects that must not race each other into fetching the same group twice. Kept out of NodesPage
-// so the page reads as a page, and so "which groups do we want loaded" stays one question with two
-// answers (visible-and-open, and the selected group's subtree) rather than two tangled effects.
+// so the page reads as a page, and so "which groups do we want loaded" stays one question with three
+// answers (visible-and-open, the selected group's subtree, and the subtree a filter revealed) rather
+// than three tangled effects.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../services/api';
-import { subtreeGroupIds, UNGROUPED, visibleOpenGroupKeys } from '../lib/nodeTree';
+import { revealedGroupKeys, subtreeGroupIds, UNGROUPED, visibleOpenGroupKeys } from '../lib/nodeTree';
 import type { NodeGroup, NodeSummary } from '../types/api';
+
+/** Cap on how many groups one filter term may reveal. A one-letter term matches most folders in a
+ *  large fleet and each key is one `/nodes/by-group` request — the fan-out this lazy tree exists to
+ *  avoid, and here it hangs off a text input. */
+const REVEAL_GROUP_CAP = 200;
 
 export interface LazyGroupMembers {
   /** Every member loaded so far, flattened — what the tree renders in browse mode. */
   nodes: NodeSummary[];
   /** Which groups have been fetched. The tree shows a placeholder row under the others. */
   loadedGroups: Set<string>;
+  /** The groups the active filter revealed (see `revealedGroupKeys`). Returned rather than derived
+   *  a second time by the caller, so the set that gets FETCHED and the set the tree draws loading
+   *  rows for cannot disagree. Empty while browsing. */
+  revealedGroups: Set<string>;
+  /** The term matched more groups than the cap, so some matched folders show no members. */
+  revealTruncated: boolean;
   /** Whether any group's members came back capped by the server (the page says so). */
   anyTruncated: boolean;
   /** Drop everything so open groups re-fetch. Call after any write that can change membership. */
@@ -36,8 +48,14 @@ export function useLazyGroupMembers(opts: {
   /** The selected group, if any. Its whole subtree loads so the detail pane can roll it up —
    *  independent of `browsing`, since a group stays selected while the operator types a filter. */
   selectedGroupId: string | null;
+  /** The APPLIED (debounced) inventory filter. A term matching a group's NAME reveals that group's
+   *  whole subtree: its members load so the operator sees the folder's contents rather than an empty
+   *  folder. Loaded independently of `browsing`, like the selected subtree — filter mode is exactly
+   *  when it matters, because the server search page only carries nodes that matched. A plain string
+   *  (not a precomputed array) so a re-render cannot churn the effect on identity alone. */
+  filterTerm: string;
 }): LazyGroupMembers {
-  const { groups, collapsed, ready, browsing, selectedGroupId } = opts;
+  const { groups, collapsed, ready, browsing, selectedGroupId, filterTerm } = opts;
 
   const [loadedNodes, setLoadedNodes] = useState<Record<string, NodeSummary[]>>({});
   const [loadedGroups, setLoadedGroups] = useState<Set<string>>(new Set());
@@ -93,6 +111,19 @@ export function useLazyGroupMembers(opts: {
     loadMissing(subtreeGroupIds(groups, selectedGroupId));
   }, [ready, selectedGroupId, groups, loadMissing]);
 
+  const revealedGroups = useMemo(
+    () => new Set(revealedGroupKeys(groups, filterTerm, REVEAL_GROUP_CAP)),
+    [groups, filterTerm],
+  );
+
+  // The subtree a filter revealed by matching a group's own name. Independent of `browsing` for the
+  // same reason as the selected subtree: filter mode is when it is needed. The in-flight set is what
+  // keeps this from racing the other two into a duplicate request per group.
+  useEffect(() => {
+    if (!ready || revealedGroups.size === 0) return;
+    loadMissing([...revealedGroups]);
+  }, [ready, revealedGroups, loadMissing]);
+
   const invalidate = useCallback(() => {
     setLoadedNodes({});
     setLoadedGroups(new Set());
@@ -102,5 +133,12 @@ export function useLazyGroupMembers(opts: {
 
   const nodes = useMemo(() => Object.values(loadedNodes).flat(), [loadedNodes]);
 
-  return { nodes, loadedGroups, anyTruncated: truncatedGroups.size > 0, invalidate };
+  return {
+    nodes,
+    loadedGroups,
+    revealedGroups,
+    revealTruncated: revealedGroups.size >= REVEAL_GROUP_CAP,
+    anyTruncated: truncatedGroups.size > 0,
+    invalidate,
+  };
 }

@@ -24,6 +24,7 @@ import { NODE_KIND_SPEC } from '../../lib/nodeKind';
 import {
   asGroupType,
   buildNodeTree,
+  filterTerm,
   flattenTree,
   flatRowKey,
   isSelfOrDescendant,
@@ -87,6 +88,10 @@ interface Props {
   /** Ids of groups whose members have been lazily fetched (A-3). An open group not in this set shows
    *  a loading placeholder instead of its members. Omit (with `groupCounts`) ⇒ every group loaded. */
   loadedGroups?: Set<string>;
+  /** Filter mode only: ids of groups whose whole membership is being fetched because the term
+   *  matched the group's own NAME (`revealedGroupKeys`). Only these can show a loading row while
+   *  filtering — every other group is showing the search page's hits and nothing more. */
+  revealedGroups?: Set<string>;
   /** First inventory load in flight — show a loading placeholder, not the empty message. */
   loading?: boolean;
   /** Currently-selected row (highlighted with the inset accent bar); drives the split detail pane. */
@@ -154,6 +159,7 @@ export function NodeTree({
   canEdit,
   groupCounts,
   loadedGroups,
+  revealedGroups,
   loading,
   selected,
   onSelectNode,
@@ -194,15 +200,23 @@ export function NodeTree({
   const [addMenuGroup, setAddMenuGroup] = useState<string | null>(null);
 
   // Active name filter (case-insensitive). While filtering, every group is force-expanded and
-  // non-matching rows are hidden, so matches are always revealed.
-  const q = (filter ?? '').trim().toLowerCase();
+  // non-matching rows are hidden, so matches are always revealed — and a group matched by its own
+  // name reveals its whole subtree, members included.
+  const q = filterTerm(filter ?? '');
   const filtering = q.length > 0;
   // The flattened, display-ordered list of visible rows — the single source of truth the virtualized
   // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
   // a tens-of-thousands-node inventory stays responsive (S13).
   const flat = useMemo(
-    () => flattenTree(tree, { collapsed, filter: filter ?? '', groupCounts, loadedGroups }),
-    [tree, collapsed, filter, groupCounts, loadedGroups],
+    () =>
+      flattenTree(tree, {
+        collapsed,
+        filter: filter ?? '',
+        groupCounts,
+        loadedGroups,
+        revealedGroups,
+      }),
+    [tree, collapsed, filter, groupCounts, loadedGroups, revealedGroups],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({

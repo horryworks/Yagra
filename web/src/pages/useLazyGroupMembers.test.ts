@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeGroup, NodeSummary } from '../types/api';
 
 // The inventory tree's lazy member cache. Its load-bearing property is *not* what it fetches but
-// what it refuses to fetch twice: two effects (visible-and-open groups, and the selected group's
-// subtree) can both want the same group on the same render, and the in-flight set is the only
-// thing standing between that and a duplicated request per group at fleet scale.
+// what it refuses to fetch twice: three effects (visible-and-open groups, the selected group's
+// subtree, and the subtree a filter revealed) can all want the same group on the same render, and
+// the in-flight set is the only thing standing between that and a duplicated request per group at
+// fleet scale.
 //
 // `getGroupNodes` is mocked with a manually-resolved promise so the window where a fetch is
 // in-flight — the exact window the guard exists for — can be held open and asserted on.
@@ -35,6 +36,7 @@ const OPTS = {
   ready: true,
   browsing: true,
   selectedGroupId: null as string | null,
+  filterTerm: '',
 };
 
 describe('useLazyGroupMembers', () => {
@@ -52,10 +54,60 @@ describe('useLazyGroupMembers', () => {
     expect(getGroupNodes).not.toHaveBeenCalled();
   });
 
-  it('fetches nothing in filter mode, where the server-side search owns the tree', async () => {
+  it('fetches nothing in filter mode for a term that matches no group name', async () => {
+    // The server-side search owns the tree here: every match it can find is already in its page.
     const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
-    renderHook(() => useLazyGroupMembers({ ...OPTS, browsing: false }));
+    renderHook(() => useLazyGroupMembers({ ...OPTS, browsing: false, filterTerm: 'zzz' }));
     expect(getGroupNodes).not.toHaveBeenCalled();
+  });
+
+  it("loads a name-matched group's whole subtree, even in filter mode", async () => {
+    // The point of the whole feature: the search page matches node names/addresses and knows
+    // nothing about groups, so a folder matched by name has to fetch its own contents.
+    const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+    const groups = [group('g1'), group('g1a', 'g1'), group('g2')];
+    const { result } = renderHook(() =>
+      useLazyGroupMembers({ ...OPTS, groups, browsing: false, filterTerm: 'g1' }),
+    );
+
+    await waitFor(() => expect(result.current.loadedGroups.has('g1a')).toBe(true));
+    const asked = getGroupNodes.mock.calls.map((c) => c[0]);
+    expect(asked).toContain('g1');
+    expect(asked).toContain('g1a');
+    // g2 did not match and is not under a match — browse mode is off, so nothing should have asked.
+    expect(asked).not.toContain('g2');
+  });
+
+  it('reports the revealed set so the tree can place its loading rows', async () => {
+    // Returned rather than re-derived by the page: the set that is fetched and the set the tree
+    // draws placeholders for must be the same one.
+    const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+    const groups = [group('g1'), group('g1a', 'g1'), group('g2')];
+    const { result } = renderHook(() =>
+      useLazyGroupMembers({ ...OPTS, groups, browsing: false, filterTerm: 'g1' }),
+    );
+    expect([...result.current.revealedGroups].sort()).toEqual(['g1', 'g1a']);
+    expect(result.current.revealTruncated).toBe(false);
+  });
+
+  it('never fetches a group twice when the filter and the selection both want it', async () => {
+    // The third effect joins the same race the in-flight set already guards.
+    const d = deferred<{ nodes: NodeSummary[]; truncated: boolean }>();
+    getGroupNodes.mockReturnValue(d.promise);
+
+    const { useLazyGroupMembers } = await import('./useLazyGroupMembers');
+    const props = { ...OPTS, groups: [group('g1')], browsing: false, filterTerm: 'g1' };
+    const { rerender } = renderHook((p: typeof props) => useLazyGroupMembers(p), {
+      initialProps: props,
+    });
+    await waitFor(() => expect(getGroupNodes).toHaveBeenCalled());
+
+    rerender({ ...props, selectedGroupId: 'g1' });
+    expect(getGroupNodes.mock.calls.filter((c) => c[0] === 'g1')).toHaveLength(1);
+
+    await act(async () => {
+      d.resolve({ nodes: [node('n1')], truncated: false });
+    });
   });
 
   it('flattens every loaded group into one node list', async () => {

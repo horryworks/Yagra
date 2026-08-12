@@ -54,6 +54,7 @@
     "needAttention": "要対応 {{count}} 件",
     "filterTruncated": "一致した先頭 {{count}} 件を表示中 — 検索語を絞ると残りも見られます。",
     "groupTruncated": "大きなグループはメンバーを一部しか表示していません。目的のノードは検索から探してください。",
+    "revealTruncated": "一致したグループが多すぎるため、一部はメンバーを表示していません。検索語を絞ってください。",
     "searchPlaceholder": "検索…",
     "loadingInventory": "インベントリを読み込み中…",
     "selectPrompt": "詳細を表示するにはノードまたはグループを選択してください。",

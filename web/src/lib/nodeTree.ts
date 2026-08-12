@@ -104,6 +104,65 @@ export function flatRowKey(row: FlatRow): string {
   }
 }
 
+/** The inventory filter's comparison form: trimmed and lower-cased; empty means "not filtering".
+ *
+ *  One spelling on purpose. The rule that decides which groups are REVEALED
+ *  ({@link revealedGroupKeys}, which drives what the page fetches) and the rule that decides what is
+ *  SHOWN ({@link flattenTree}) have to agree — a trailing space normalized in one and not the other
+ *  is a group that renders as matched and never loads its members. */
+export function filterTerm(filter: string): string {
+  return filter.trim().toLowerCase();
+}
+
+/** Concatenate node lists, keeping the FIRST entry for a repeated id.
+ *
+ *  Filter mode renders the server search page PLUS the members of the groups the term revealed, and
+ *  a node is routinely in both lists. A duplicate is not a harmless extra row: `flatRowKey` is
+ *  `n:<id>`, so it collides in the React key and in the virtualizer's `getItemKey`. */
+export function mergeNodesById(...lists: NodeSummary[][]): NodeSummary[] {
+  const seen = new Set<string>();
+  const out: NodeSummary[] = [];
+  for (const list of lists) {
+    for (const n of list) {
+      if (seen.has(n.id)) continue;
+      seen.add(n.id);
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+/** The group keys an active filter REVEALS: every group whose own name matches the term, plus that
+ *  group's whole subtree.
+ *
+ *  A group matched by name shows its members even though none of them matched — the operator
+ *  searched for the folder, so the folder's contents are the answer. Those members have to be
+ *  fetched per group: filter mode's server search (`/nodes?search=`) matches a node's name/address
+ *  and knows nothing about groups, so a matched folder's members are simply not in its answer.
+ *
+ *  Never includes {@link UNGROUPED} — nothing can match the bucket's name. Deterministic (the API
+ *  returns groups ordered by sort_order, name, id) and CAPPED: a one-letter term matches most of a
+ *  fleet's folders, and each key is one `/nodes/by-group` request, so this is the one place a
+ *  keystroke can fan out into N requests — the fan-out the lazy tree exists to avoid. Past the cap a
+ *  group degrades to the old behaviour (its matching nodes still show, its other members do not),
+ *  never to a loading placeholder that nothing will ever resolve. */
+export function revealedGroupKeys(groups: NodeGroup[], filter: string, cap: number): string[] {
+  const q = filterTerm(filter);
+  if (!q) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const g of groups) {
+    if (!g.name.toLowerCase().includes(q)) continue;
+    for (const id of subtreeGroupIds(groups, g.id)) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      out.push(id);
+      if (out.length >= cap) return out;
+    }
+  }
+  return out;
+}
+
 /** Whether a group's subtree contains anything matching `q` (its own name, a descendant group's
  *  name, or a member node's name) — so ancestor groups stay visible to reveal a nested match. */
 function subtreeMatches(group: TreeGroup, q: string): boolean {
@@ -121,7 +180,13 @@ function subtreeMatches(group: TreeGroup, q: string): boolean {
  *  up from those — correct over the whole fleet even before members are fetched. `loadedGroups` says
  *  which groups' members have been fetched; an open group that isn't loaded yet emits a single
  *  `group-loading` placeholder instead of its members. Omit both for the legacy full-node path
- *  (rollup from loaded descendants, every group treated as loaded). */
+ *  (rollup from loaded descendants, every group treated as loaded).
+ *
+ *  `revealedGroups` ({@link revealedGroupKeys}) is filter mode's counterpart: the groups whose whole
+ *  membership is being fetched because the term matched the group's own name. Only those can be
+ *  "still loading" while filtering — every other group is showing the search page's hits and nothing
+ *  more, so a group past the reveal cap gets no members rather than a placeholder that never
+ *  resolves. */
 export function flattenTree(
   tree: NodeTreeData,
   opts: {
@@ -129,16 +194,23 @@ export function flattenTree(
     filter: string;
     groupCounts?: Record<string, StateCounts>;
     loadedGroups?: Set<string>;
+    revealedGroups?: Set<string>;
   },
 ): FlatRow[] {
-  const q = opts.filter.trim().toLowerCase();
+  const q = filterTerm(opts.filter);
   const filtering = q.length > 0;
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
   // Per-group subtree tally from the server direct counts (bottom-up over the built, acyclic tree).
   const subtree = counts ? subtreeTallyMap(tree.roots, counts) : null;
-  // Filter mode full-loads the inventory, so every group's members are present — no loading rows.
-  const isLoaded = (id: string) => filtering || !opts.loadedGroups || opts.loadedGroups.has(id);
+  // Browsing: a group whose members haven't been fetched stands in with a placeholder. Filtering:
+  // the server search page carries every match there is, so only a REVEALED group (whose members are
+  // being fetched separately, because the term matched the folder rather than its contents) can be
+  // waiting on anything.
+  const isLoaded = (id: string) =>
+    filtering
+      ? !opts.revealedGroups?.has(id) || (opts.loadedGroups?.has(id) ?? true)
+      : !opts.loadedGroups || opts.loadedGroups.has(id);
 
   const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
     const selfMatch = filtering && group.name.toLowerCase().includes(q);
@@ -156,15 +228,15 @@ export function flattenTree(
     if (!isOpen) return;
     // Children first, then this group's own member nodes — matching the recursive render order.
     for (const child of group.children) walkGroup(child, depth + 1, effMatch);
-    if (!isLoaded(group.id)) {
-      // Members not fetched yet: a single loading placeholder when the group actually has some.
-      if (directTotal > 0) rows.push({ kind: 'group-loading', depth: depth + 1, groupId: group.id });
-      return;
-    }
-    for (const n of group.nodes) {
-      if (!filtering || effMatch || n.name.toLowerCase().includes(q)) {
-        rows.push({ kind: 'node', depth: depth + 1, node: n });
-      }
+    const shown = group.nodes.filter(
+      (n) => !filtering || effMatch || n.name.toLowerCase().includes(q),
+    );
+    for (const n of shown) rows.push({ kind: 'node', depth: depth + 1, node: n });
+    // Members still arriving: one placeholder standing in for the rest. What we already have goes
+    // first — in filter mode the search page already carries this group's MATCHING nodes, and hiding
+    // them behind the placeholder would flicker them out while the rest of the folder loads.
+    if (!isLoaded(group.id) && directTotal > shown.length) {
+      rows.push({ kind: 'group-loading', depth: depth + 1, groupId: group.id });
     }
   };
 
