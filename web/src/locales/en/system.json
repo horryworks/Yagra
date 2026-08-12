@@ -130,9 +130,14 @@
     "overallOk": "All reachable",
     "overallDegraded": "Degraded",
     "noHistory": "No history yet…",
-    "core": "Core",
+    "core": "Core / Web",
     "hostResources": "Host resources",
-    "instanceAria": "Instance",
+    "sectionPool": "Pool {{pool}}",
+    "sectionToggleAria": "Toggle {{section}}",
+    "pollerCount_one": "{{count}} poller",
+    "pollerCount_other": "{{count}} pollers",
+    "offlineCount_one": "{{count}} offline",
+    "offlineCount_other": "{{count}} offline",
     "offlineSuffix": " (offline)",
     "deps": {
       "postgres": "PostgreSQL",
@@ -151,8 +156,10 @@
     "metric": {
       "cpu": "CPU",
       "loadAverage": "Load average",
+      "loadAverage1m": "Load average (1m)",
       "memory": "Memory",
-      "disk": "Disk · {{mount}}"
+      "disk": "Disk · {{mount}}",
+      "diskShort": "Disk"
     },
     "bundle": {
       "help": "One archive of this deployment's build provenance, health, configuration, database state and core's own logs — for diagnosing a site nobody can open a shell on.",

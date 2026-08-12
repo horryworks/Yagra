@@ -64,20 +64,91 @@
   flex-wrap: wrap;
 }
 
-.host-select {
-  background: var(--bg-secondary);
+/* One section per host group: core, then each poller pool. */
+.host-section + .host-section {
+  margin-top: 24px;
+  border-top: var(--border-width) solid var(--border-color);
+  padding-top: 16px;
+}
+
+.host-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+/* The whole title is the hit target, so the caret does not need to be one on touch. */
+.host-section-toggle {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
   color: var(--text-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
   font-family: var(--ui-font-family);
-  font-size: var(--font-sm);
   cursor: pointer;
 }
 
-.host-select:focus {
+/* Only mobile pays the 44px floor — on desktop it would just pad out every section header. */
+html[data-viewport='mobile'] .host-section-toggle {
+  min-height: var(--touch-target);
+}
+
+.host-section-toggle:focus-visible {
   outline: none;
-  border-color: var(--accent-color);
+  color: var(--accent-color);
+}
+
+.host-section-caret {
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+.host-section-title {
+  font-weight: var(--weight-medium);
+}
+
+.host-section-meta {
+  font-size: var(--font-sm);
+}
+
+/* Collapsed: the current readings the inventory call already carries, one row per host. */
+.host-section-summary {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.host-section-summary li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px 16px;
+  flex-wrap: wrap;
+  font-size: var(--font-sm);
+}
+
+.host-section-summary .hs-name {
+  font-family: var(--font-family);
+  flex: 0 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Never colour alone: an offline host also says so in words (see ui-conventions). */
+.host-section-summary .hs-offline .hs-name {
+  color: var(--status-unreachable);
+}
+
+.host-section-summary .hs-val b {
+  font-family: var(--font-family);
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
 }
 
 .host-metrics {

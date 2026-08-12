@@ -127,9 +127,14 @@
     "overallOk": "すべて到達可能",
     "overallDegraded": "劣化",
     "noHistory": "履歴はまだありません…",
-    "core": "コア",
+    "core": "Core / Web",
     "hostResources": "ホストリソース",
-    "instanceAria": "インスタンス",
+    "sectionPool": "プール {{pool}}",
+    "sectionToggleAria": "{{section}} の開閉",
+    "pollerCount_one": "ポーラー {{count}} 台",
+    "pollerCount_other": "ポーラー {{count}} 台",
+    "offlineCount_one": "オフライン {{count}} 台",
+    "offlineCount_other": "オフライン {{count}} 台",
     "offlineSuffix": "（オフライン）",
     "deps": {
       "postgres": "PostgreSQL",
@@ -148,8 +153,10 @@
     "metric": {
       "cpu": "CPU",
       "loadAverage": "ロードアベレージ",
+      "loadAverage1m": "ロードアベレージ (1m)",
       "memory": "メモリ",
-      "disk": "ディスク · {{mount}}"
+      "disk": "ディスク · {{mount}}",
+      "diskShort": "ディスク"
     },
     "bundle": {
       "help": "このデプロイのビルド来歴・健全性・設定・データベースの状態・コア自身のログを、1 つのアーカイブにまとめます。シェルに入れない環境で障害を調べるためのものです。",

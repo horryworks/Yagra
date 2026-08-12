@@ -27,6 +27,16 @@
   category — with any profile already bound kept in the list so an edit cannot silently re-bind it.
 
 ### Improvements
+- **Settings ▸ System health compares hosts instead of showing one at a time.** Host resources was a
+  dropdown of core and every poller, so asking whether a poller was busy — against core, or against
+  its pool-mates — meant switching between them and remembering. It is now one section for core and
+  one per poller pool, with every host in a section drawn on the same CPU, load, memory and disk
+  charts. A section holding one host keeps the 1m/5m/15m load detail; two or more collapse to the
+  1-minute average so the colour can mean the host, and each card's headline names the host reading
+  highest rather than a number that describes none of them. Disk cards are the union of the mounts
+  the section reports, so core's `metrics` and `database` volumes no longer vanish when a poller is
+  selected. Sections fold away, and a folded one still shows each host's current CPU, memory and
+  disk — without fetching any history, which is what bounds the cost on a fleet with many pollers.
 - **A URL or DNS monitor's own settings are now in Edit node.** Changing a monitored URL, its
   expected status, a DNS record type or a resolver previously meant finding a ⋮ menu on the health
   card in the Overview tab, which only appeared while that card was rendered. Those fields are now
