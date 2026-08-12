@@ -20,12 +20,12 @@ import {
   type KindFilter,
   type MatchedFilter,
 } from '../components/EventLog/EventFilterBar';
-import { readNodeIdParam, writeNodeIdParam } from '../components/EventLog/eventFilters';
+import { readIdParam, writeIdParam } from '../lib/filterParams';
 
 export function EventsPage() {
   const { t } = useTranslation('alerts');
   const [searchParams, setSearchParams] = useSearchParams();
-  const nodeId = readNodeIdParam(searchParams);
+  const nodeId = readIdParam(searchParams, 'node_id');
   const { nodeName } = useEntityNames();
   const [kind, setKind] = useState<KindFilter>('');
   const [matched, setMatched] = useState<MatchedFilter>('');
@@ -49,7 +49,7 @@ export function EventsPage() {
 
   const setNode = (node: { id: string; name: string } | null) => {
     const params = new URLSearchParams(searchParams);
-    writeNodeIdParam(params, node?.id ?? null);
+    writeIdParam(params, 'node_id', node?.id ?? null);
     setSearchParams(params, { replace: true });
   };
 

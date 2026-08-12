@@ -44,8 +44,8 @@ export function resolveRange(range: Range): { from: number; to: number } {
 // it to sessionStorage, which is what "a reload restores the same window" needs, and it is shared
 // across the Overview / Interfaces / Flow / DNS panes. A second copy in the query string would be a
 // second source of truth for one piece of state, with the two free to disagree on any navigation
-// that sets only one. (`EventLog/eventFilters.ts` does use search params — that filter has no store
-// behind it, so there the URL *is* the single source.)
+// that sets only one. (`lib/filterParams.ts` does use search params — a list's filters have no store
+// behind them, so there the URL *is* the single source. That file states the rule in general.)
 
 const pad2 = (n: number) => String(n).padStart(2, '0');
 

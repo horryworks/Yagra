@@ -648,6 +648,15 @@ html[data-viewport='mobile'] .ytable {
   border-color: var(--accent-color);
 }
 
+/* Toolbar filter dropdowns (FilterSelect). `.field` already gives the 30px height the search box
+   uses; only the type scale differs — a filter reads as chrome beside the search box, not as a form
+   control. `max-width` keeps a long option label ("All notification channels") from pushing the
+   count and primary action off the row. */
+.table-filter {
+  font-size: var(--font-sm);
+  max-width: 200px;
+}
+
 .table-spacer {
   flex: 1;
 }
