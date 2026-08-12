@@ -446,7 +446,10 @@ async fn upstream_chain(nodes: &NodeRepo, node: &Node) -> Vec<NodeFacts> {
 /// (the existing indexed listing) instead of a `LIKE` scan of the whole table — a config change
 /// older than [`AUDIT_SCAN_ROWS`] entries is not "recent" in any useful sense anyway.
 async fn recent_changes(audit: &AuditRepo, node: Uuid) -> Vec<ChangeFacts> {
-    let rows = audit.list(AUDIT_SCAN_ROWS, None).await.unwrap_or_default();
+    let rows = audit
+        .list(&crate::audit::AuditFilter::newest(AUDIT_SCAN_ROWS))
+        .await
+        .unwrap_or_default();
     filter_changes(&rows, node)
 }
 

@@ -21,6 +21,24 @@ describe('parseAction', () => {
     expect(parseAction('auth.login')).toEqual({ method: 'SIGN IN', path: null, login: true });
   });
 
+  it('labels every sign-in method, not just the local one', () => {
+    // These three were rendered as raw `auth.login.ldap` chips and missed by the "Sign in" filter,
+    // because this matched `=== 'auth.login'` while `api/session.rs` had documented the family as a
+    // prefix. The backend's AuditAction::Login filters on the same prefix, so the chip an operator
+    // sees and the rows the filter returns now cannot disagree.
+    for (const action of [
+      'auth.login.ldap',
+      'auth.login.ldap_unavailable',
+      'auth.login.ldap_conflict',
+    ]) {
+      expect(parseAction(action), action).toEqual({ method: 'SIGN IN', path: null, login: true });
+    }
+  });
+
+  it('does not swallow an unrelated action that merely starts with "auth."', () => {
+    expect(parseAction('auth.logout').login).toBe(false);
+  });
+
   it('shows a bare action name as-is instead of inventing a path', () => {
     expect(parseAction('auth.logout')).toEqual({
       method: 'auth.logout',

@@ -18,9 +18,17 @@ export interface ParsedAction {
 /** Split `"POST /api/v1/nodes"` into its method and path.
  *
  *  Anything without a space is a bare action name (`auth.logout`) and is shown as-is rather than
- *  being forced into a method/path shape it does not have. */
+ *  being forced into a method/path shape it does not have.
+ *
+ *  ⚠️ Sign-in is matched by **prefix**, not equality. `api/session.rs` writes `auth.login` for a
+ *  local sign-in and `auth.login.ldap`, `auth.login.ldap_unavailable` and `auth.login.ldap_conflict`
+ *  for the directory paths — and says so: *"`auth.login` prefix, so an existing `LIKE 'auth.login%'`
+ *  query still finds everything."* The equality this replaces meant every LDAP and OIDC sign-in
+ *  rendered as a raw `auth.login.ldap` chip instead of the localized label, and the "Sign in" filter
+ *  never matched one. The backend's `AuditAction::Login` uses the same prefix, so the chip and the
+ *  filter now agree by construction. */
 export function parseAction(action: string): ParsedAction {
-  if (action === 'auth.login') return { method: 'SIGN IN', path: null, login: true };
+  if (action.startsWith('auth.login')) return { method: 'SIGN IN', path: null, login: true };
   const sp = action.indexOf(' ');
   if (sp < 0) return { method: action, path: null, login: false };
   return { method: action.slice(0, sp), path: action.slice(sp + 1), login: false };

@@ -5,35 +5,45 @@
 //
 // Data-table standard v2: a toolbar (search + action/status/time-range filters + count + Export)
 // over the shared virtualized `DataTable` (windowed for tens of thousands of rows, §4). No row
-// actions (immutable); the primary action is Export, not Add. Filtering is client-side over the
-// loaded pages (the server query stays limit+keyset); scrolling to the end loads the next page.
+// actions (immutable); the primary action is Export, not Add.
+//
+// **The filters are server-side.** They used to narrow the already-loaded pages in this file, which
+// made the toolbar lie: "last 30 days, DELETE only" examined the newest 100 rows and silently hid
+// every older match, and Export handed the operator that same partial set. In a log whose purpose is
+// completeness that is a correctness bug. The controls and their wording are unchanged; what moved
+// is where the predicate runs (`pages/auditQuery.ts` → `GET /api/v1/audit` → SQL).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import type { AuditRow } from '../types/api';
-import { httpStatusTone } from '../lib/format';
+import { AUDIT_ACTIONS, AUDIT_STATUS_CLASSES, type AuditRow } from '../types/api';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  SearchInput,
+  TableSpacer,
+  ResultCount,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
 import { csvField, parseAction } from './auditRow';
-
-const PAGE_SIZE = 100;
-
-/** Window (ms) for the time-range filter; `0` = all loaded. */
-const RANGE_MS: Record<string, number> = {
-  '24h': 86_400_000,
-  '7d': 7 * 86_400_000,
-  '30d': 30 * 86_400_000,
-  all: 0,
-};
+import {
+  appendPage,
+  AUDIT_RANGES,
+  DEFAULT_FILTERS,
+  isFiltered,
+  nextCursor,
+  queryFor,
+  type AuditFilters,
+} from './auditQuery';
 
 /** Columns for the virtualized table. Stateless renderers, but the headers + synthetic "sign in"
  *  label are localized, so build them from the calling component's `t` (rebuild on language
@@ -76,76 +86,75 @@ export function AuditPage() {
   const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<AuditRow[]>([]);
-  const [exhausted, setExhausted] = useState(false);
+  /** Keyset cursor for the next (older) page; `null` once the filtered query is exhausted. */
+  const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
 
-  const [query, setQuery] = useState('');
-  const [methodF, setMethodF] = useState('all');
-  const [statusF, setStatusF] = useState('all');
-  const [rangeF, setRangeF] = useState('all');
+  // The search box settles before it is sent; the selects commit immediately (picking an option is
+  // already a deliberate act, and waiting on it would feel broken).
+  const [draftQ, setDraftQ] = useState(DEFAULT_FILTERS.q);
+  const [filters, setFilters] = useState<AuditFilters>(DEFAULT_FILTERS);
+  const settledQ = useDebouncedValue(draftQ);
+  const active = useMemo<AuditFilters>(() => ({ ...filters, q: settledQ }), [filters, settledQ]);
+  const set = <K extends keyof AuditFilters>(key: K, value: AuditFilters[K]) =>
+    setFilters((f) => ({ ...f, [key]: value }));
 
   // Columns close over the translator, so rebuild them on a language switch.
   const columns = useMemo(() => auditColumns(t), [t]);
 
-  const loadFirst = useCallback(() => {
+  // Refetch from the top whenever the filter changes — the cursor is only meaningful within one
+  // filter, so carrying it across a change would page into the previous query's results.
+  useEffect(() => {
+    if (!authed) return;
+    let cancelled = false;
+    setLoading(true);
     setError(null);
     api
-      .listAudit({ limit: PAGE_SIZE })
+      .listAudit(queryFor(active, null, Date.now()))
       .then((page) => {
+        if (cancelled) return;
         setRows(page);
-        setExhausted(page.length < PAGE_SIZE);
+        setCursor(nextCursor(page));
       })
-      .catch((e: unknown) =>
-        setError(e instanceof ApiError ? e.message : t('audit.err.load')),
-      )
-      .finally(() => setLoading(false));
-  }, [t]);
-
-  useEffect(() => {
-    if (authed) loadFirst();
-  }, [authed, loadFirst]);
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof ApiError ? e.message : t('audit.err.load'));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, active, t]);
 
   const loadMore = useCallback(() => {
-    if (loadingMore.current || exhausted) return;
-    const last = rows[rows.length - 1];
-    if (!last) return;
+    if (loadingMore.current || cursor === null) return;
     loadingMore.current = true;
     api
-      .listAudit({ limit: PAGE_SIZE, before: last.at })
+      .listAudit(queryFor(active, cursor, Date.now()))
       .then((page) => {
-        setRows((cur) => [...cur, ...page]);
-        setExhausted(page.length < PAGE_SIZE);
+        setRows((cur) => appendPage(cur, page));
+        setCursor(nextCursor(page));
       })
       .catch((e: unknown) => setError(e instanceof ApiError ? e.message : t('audit.err.loadMore')))
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [rows, exhausted, t]);
+  }, [active, cursor, t]);
 
-  const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const cutoff = RANGE_MS[rangeF] ? Date.now() - RANGE_MS[rangeF] : 0;
-    return rows.filter((r) => {
-      const a = parseAction(r.action);
-      const matchesQuery = q === '' || `${r.username} ${r.action}`.toLowerCase().includes(q);
-      const matchesMethod =
-        methodF === 'all' || (methodF === 'login' ? a.login : a.method === methodF);
-      const tone = httpStatusTone(r.status);
-      const matchesStatus =
-        statusF === 'all' ||
-        (statusF === 'ok' ? tone === 'up' : statusF === 'client' ? tone === 'warning' : tone === 'critical');
-      const matchesRange = cutoff === 0 || new Date(r.at).getTime() >= cutoff;
-      return matchesQuery && matchesMethod && matchesStatus && matchesRange;
-    });
-  }, [rows, query, methodF, statusF, rangeF]);
-
+  // The export is the loaded rows, and the button says so. Every one of them matches the filter
+  // now, which is a real improvement — but it is still "what has been scrolled through", not
+  // "everything matching". A server-side export would need a second CSV encoder in Rust, and a
+  // duplicated encoder is a duplicated security boundary: this log stores the username submitted to
+  // a *failed* sign-in, so the formula neutralization in `lib/csv` is load-bearing and must stay in
+  // one place. Backlogged rather than half-solved.
   const exportCsv = () => {
     const header = ['time', 'user', 'action', 'status'];
-    const lines = list.map((r) => [r.at, r.username, r.action, r.status].map(csvField).join(','));
+    const lines = rows.map((r) => [r.at, r.username, r.action, r.status].map(csvField).join(','));
     const csv = [header.join(','), ...lines].join('\r\n');
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
     const a = document.createElement('a');
@@ -171,47 +180,73 @@ export function AuditPage() {
         <>
           <TableToolbar>
             <SearchInput
-              value={query}
-              onChange={setQuery}
+              value={draftQ}
+              onChange={setDraftQ}
               placeholder={t('audit.searchPlaceholder')}
               ariaLabel={t('audit.searchAria')}
             />
-            <Select value={methodF} onChange={(e) => setMethodF(e.target.value)} aria-label={t('audit.filterActionAria')}>
-              <option value="all">{t('audit.filter.allActions')}</option>
-              <option value="POST">POST</option>
-              <option value="PUT">PUT</option>
-              <option value="PATCH">PATCH</option>
-              <option value="DELETE">DELETE</option>
-              <option value="login">{t('audit.filter.signIn')}</option>
-            </Select>
-            <Select value={statusF} onChange={(e) => setStatusF(e.target.value)} aria-label={t('audit.filterStatusAria')}>
-              <option value="all">{t('audit.filter.allStatus')}</option>
-              <option value="ok">{t('audit.filter.success')}</option>
-              <option value="client">{t('audit.filter.clientError')}</option>
-              <option value="server">{t('audit.filter.serverError')}</option>
-            </Select>
-            <Select value={rangeF} onChange={(e) => setRangeF(e.target.value)} aria-label={t('common:range.timeRange')}>
-              <option value="all">{t('audit.range.all')}</option>
-              <option value="24h">{t('audit.range.last24h')}</option>
-              <option value="7d">{t('audit.range.last7d')}</option>
-              <option value="30d">{t('audit.range.last30d')}</option>
+            {/* Options come from the `as const` arrays that are pinned to the backend enums, so a
+                variant added in Rust is a compile error here rather than a filter nobody can pick.
+                The method labels stay verbatim — POST/PUT/… are technical, not prose. */}
+            <FilterSelect
+              value={filters.action}
+              onChange={(v) => set('action', v)}
+              options={AUDIT_ACTIONS.map((a) => ({
+                value: a,
+                label: t(`audit.action.${a}`),
+              }))}
+              allLabel={t('audit.filter.allActions')}
+              ariaLabel={t('audit.filterActionAria')}
+            />
+            <FilterSelect
+              value={filters.status}
+              onChange={(v) => set('status', v)}
+              options={AUDIT_STATUS_CLASSES.map((s) => ({
+                value: s,
+                label: t(`audit.statusClass.${s}`),
+              }))}
+              allLabel={t('audit.filter.allStatus')}
+              ariaLabel={t('audit.filterStatusAria')}
+            />
+            {/* Not a FilterSelect: the range has no "no filter" member — `all` *is* one of its
+                options and its default, so the '' sentinel would be a second way to say the same
+                thing. */}
+            <Select
+              value={filters.range}
+              onChange={(e) => set('range', e.target.value as AuditFilters['range'])}
+              className="table-filter"
+              aria-label={t('common:range.timeRange')}
+            >
+              {AUDIT_RANGES.map((r) => (
+                <option key={r} value={r}>
+                  {t(`audit.range.${r}`)}
+                </option>
+              ))}
             </Select>
             <TableSpacer />
-            <ResultCount shown={list.length} noun={t('audit.entry', { count: list.length })} />
-            <Button variant="outline" onClick={exportCsv} disabled={list.length === 0}>
+            <ResultCount shown={rows.length} noun={t('audit.entry', { count: rows.length })} />
+            <Button
+              variant="outline"
+              onClick={exportCsv}
+              disabled={rows.length === 0}
+              title={t('audit.exportHint')}
+            >
               <DownloadIcon width={15} height={15} /> {t('audit.export')}
             </Button>
           </TableToolbar>
 
           {error && <p className="form-error">{error}</p>}
 
+          {/* Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered
+              query that legitimately returns zero is indistinguishable from an empty log, and the
+              screen would claim there is nothing here while a filter is hiding it. */}
           <DataTable
-            rows={list}
+            rows={rows}
             columns={columns}
             rowKey={(r) => r.id}
-            onReachEnd={exhausted ? undefined : loadMore}
+            onReachEnd={cursor === null ? undefined : loadMore}
             loading={loading}
-            empty={rows.length === 0 ? t('audit.empty.none') : t('audit.empty.filtered')}
+            empty={isFiltered(active) ? t('audit.empty.filtered') : t('audit.empty.none')}
           />
         </>
       )}

@@ -4098,6 +4098,11 @@ export interface components {
              */
             target_tag: string;
         };
+        /**
+         * @description What an audit entry was, as the log's filterable vocabulary.
+         * @enum {string}
+         */
+        AuditAction: "post" | "put" | "patch" | "delete" | "login" | "mcp";
         /** @description One audit row (API shape; `at` is RFC 3339 text at the edge). */
         AuditRow: {
             action: string;
@@ -4108,6 +4113,11 @@ export interface components {
             status: number;
             username: string;
         };
+        /**
+         * @description How an audit entry's HTTP status turned out.
+         * @enum {string}
+         */
+        AuditStatusClass: "ok" | "client" | "server";
         /** @description The caller's own identity. */
         AuthMe: {
             role: components["schemas"]["Role"];
@@ -9928,8 +9938,20 @@ export interface operations {
     list_audit: {
         parameters: {
             query?: {
+                /** @description Max rows (1–500, default 100). */
                 limit?: number;
+                /** @description Keyset cursor: return rows strictly older than this RFC 3339 timestamp. */
                 before?: string;
+                /** @description Only entries at or after this RFC 3339 timestamp. */
+                since?: string;
+                /** @description Only entries at or before this RFC 3339 timestamp. */
+                until?: string;
+                /** @description Free text matched against the username and the action (case-insensitive substring). */
+                q?: string;
+                /** @description Only entries of this kind. */
+                action?: components["schemas"]["AuditAction"];
+                /** @description Only entries whose response fell in this class. */
+                status?: components["schemas"]["AuditStatusClass"];
             };
             header?: never;
             path?: never;
@@ -9946,7 +9968,7 @@ export interface operations {
                     "application/json": components["schemas"]["AuditRow"][];
                 };
             };
-            /** @description `before` is not an RFC 3339 timestamp */
+            /** @description A cursor or range bound is not RFC 3339, or `action`/`status` is not one of the listed values */
             400: {
                 headers: {
                     [name: string]: unknown;

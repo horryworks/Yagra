@@ -8,14 +8,19 @@
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireViewAudit};
-use super::util::parse_rfc3339;
+use super::util::{normalize_search, parse_rfc3339};
 use super::ApiState;
+use crate::audit::{AuditAction, AuditFilter, AuditStatusClass};
 use axum::{extract::Query, routing::get, Json, Router};
 use serde::Deserialize;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
+///
+/// The two filter enums are registered as components because `AuditQuery` references them: without
+/// this the generated document would carry a `$ref` to a schema that is not there, and the WebUI's
+/// generated types would lose the closed union that makes the vocabulary un-mirrorable.
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(list_audit))]
+#[openapi(paths(list_audit), components(schemas(AuditAction, AuditStatusClass)))]
 pub(super) struct Doc;
 
 /// The audit routes, merged into `/api/v1` by [`super::router`].
@@ -23,12 +28,27 @@ pub(super) fn routes() -> Router<ApiState> {
     Router::new().route("/api/v1/audit", get(list_audit))
 }
 
-/// Page size plus a keyset cursor (rows strictly older than `before`).
+/// A page of the audit log, with the filters the Settings ▸ Audit toolbar offers.
+///
+/// `before` pages; `since`/`until` bound the window being searched. They are separate parameters on
+/// purpose — one is where this page starts, the other is what the operator asked to look at.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(super) struct AuditQuery {
+    /// Max rows (1–500, default 100).
     limit: Option<i64>,
+    /// Keyset cursor: return rows strictly older than this RFC 3339 timestamp.
     before: Option<String>,
+    /// Only entries at or after this RFC 3339 timestamp.
+    since: Option<String>,
+    /// Only entries at or before this RFC 3339 timestamp.
+    until: Option<String>,
+    /// Free text matched against the username and the action (case-insensitive substring).
+    q: Option<String>,
+    /// Only entries of this kind.
+    action: Option<AuditAction>,
+    /// Only entries whose response fell in this class.
+    status: Option<AuditStatusClass>,
 }
 
 #[utoipa::path(
@@ -36,47 +56,103 @@ pub(super) struct AuditQuery {
     params(AuditQuery),
     responses(
         (status = 200, description = "One page of audit rows, newest first", body = Vec<crate::audit::AuditRow>),
-        (status = 400, description = "`before` is not an RFC 3339 timestamp", body = super::error::ErrorBody),
+        (status = 400, description = "A cursor or range bound is not RFC 3339, or `action`/`status` is not one of the listed values", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the view-audit permission", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode keeps no audit log", body = super::error::ErrorBody),
     ),
 )]
+// Extractor order is `RequireViewAudit` → `Query` → `Admin`, and the middle one is deliberate.
+// The house rule is `Require*` before `Admin` — authenticate first, so an anonymous caller learns
+// only that it is anonymous and never which subsystems this deployment has. `Query` sits between
+// them for the reason `list_alert_history` states about its cursor: a malformed filter is the
+// client's bug whether or not this deployment keeps a log, and answering 503 to it would tell a
+// client walking the log "there is nothing here" when the truth is "your request was wrong".
+// It leaks nothing: whether the parse fails depends only on the request.
+//
+// ⚠️ This buys that behaviour for `action` and `status` only. They are typed, so serde rejects them
+// during extraction; the RFC 3339 bounds are `Option<String>` here and are validated inside
+// `audit_page`, which necessarily runs after `Admin`. So a bad timestamp on a *skeleton* deployment
+// is still a 503. Making it uniform would mean either a newtype with a hand-written `Deserialize`
+// or checking availability inside the handler body — and the latter is exactly what the `Admin`
+// extractor exists to stop being forgettable.
 async fn list_audit(
     _guard: RequireViewAudit,
-    admin: Admin,
     Query(q): Query<AuditQuery>,
+    admin: Admin,
 ) -> ApiResult<Json<Vec<crate::audit::AuditRow>>> {
     Ok(Json(
-        audit_page(&admin, q.limit, q.before.as_deref()).await?,
+        audit_page(
+            &admin,
+            AuditFilterInput {
+                limit: q.limit,
+                before: q.before.as_deref(),
+                since: q.since.as_deref(),
+                until: q.until.as_deref(),
+                q: q.q.as_deref(),
+                action: q.action,
+                status: q.status,
+            },
+        )
+        .await?,
     ))
+}
+
+/// The raw, unvalidated filter fields, as either surface receives them.
+#[derive(Default)]
+pub(crate) struct AuditFilterInput<'a> {
+    pub limit: Option<i64>,
+    pub before: Option<&'a str>,
+    pub since: Option<&'a str>,
+    pub until: Option<&'a str>,
+    pub q: Option<&'a str>,
+    pub action: Option<AuditAction>,
+    pub status: Option<AuditStatusClass>,
 }
 
 /// A page of the audit log, newest first — shared by `GET /api/v1/audit` and the MCP `get_audit`
 /// tool (ADR-042 I3a).
 ///
+/// **The seam is the whole page function, not just a validator.** `parse_event_filter` shares only
+/// the validation with its MCP twin, and the two halves around it drifted anyway — the term cap
+/// existed on the REST side and not on the surface with no human in the loop. With parsing, the
+/// store call and the error mapping all inside, there is nothing left for a second surface to
+/// re-derive.
+///
 /// **`ViewAudit`, not `View`.** Also note this goes through `AuditRepo::list`, which is where the
 /// `1..=MAX_LIMIT` clamp lives — a caller that rebuilt the query itself would inherit no bound.
 pub(crate) async fn audit_page(
     admin: &super::AdminState,
-    limit: Option<i64>,
-    before: Option<&str>,
+    input: AuditFilterInput<'_>,
 ) -> Result<Vec<crate::audit::AuditRow>, ApiError> {
+    // The cursor and the range bounds get different codes: a bad cursor is a client paging bug, a
+    // bad bound is operator input, and the UI surfaces them differently. Same split as the event log.
+    fn ts(
+        value: Option<&str>,
+        field: &str,
+        code: &'static str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
+        match value {
+            None => Ok(None),
+            Some(s) => parse_rfc3339(s).map(Some).ok_or_else(|| {
+                ApiError::bad_request(code, format!("{field} must be an RFC 3339 timestamp"))
+            }),
+        }
+    }
     // An unparseable cursor is rejected, not dropped: silently returning the newest page instead of
     // the requested one makes a paging bug look like "you have reached the end".
-    let before = match before {
-        Some(s) => Some(parse_rfc3339(s).ok_or_else(|| {
-            ApiError::bad_request("invalid_cursor", "before must be an RFC 3339 timestamp")
-        })?),
-        None => None,
+    let filter = AuditFilter {
+        before: ts(input.before, "before", "invalid_cursor")?,
+        since: ts(input.since, "since", "invalid_filter")?,
+        until: ts(input.until, "until", "invalid_filter")?,
+        q: normalize_search(input.q),
+        action: input.action,
+        status: input.status,
+        limit: input.limit.unwrap_or(crate::audit::DEFAULT_LIMIT),
     };
-    admin
-        .audit
-        .list(limit.unwrap_or(crate::audit::DEFAULT_LIMIT), before)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(e.as_ref(), "list audit log", "failed to list the audit log")
-        })
+    admin.audit.list(&filter).await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "list audit log", "failed to list the audit log")
+    })
 }
 
 #[cfg(test)]
@@ -119,6 +195,56 @@ mod tests {
         assert_eq!(
             status_of(public_state(), "/api/v1/audit", None).await,
             StatusCode::UNAUTHORIZED
+        );
+    }
+
+    // The RFC 3339 bounds are **not** checked here, and the test says so rather than pretending.
+    // They are validated inside `audit_page`, behind the live store, so on `private_state()` the
+    // honest answer is the 503 asserted by `a_well_formed_filter_still_reports_the_missing_write_side`.
+    // Naming that beats a test whose name claims more than it checks (the same note `mcp/tools.rs`
+    // leaves on its own audit test).
+
+    #[tokio::test]
+    async fn an_unknown_action_or_status_class_is_rejected_rather_than_ignored() {
+        // Rejecting beats ignoring: a typo that silently dropped the filter would answer with the
+        // whole log while the operator believes they are looking at DELETEs only. The rejection is
+        // serde's, from the closed enum — which is also why the same words cannot mean something
+        // different over MCP.
+        let st = private_state();
+        let token = st
+            .sessions
+            .issue(Uuid::new_v4(), Principal::new(Role::Admin, Scope::All), "a");
+        for bad in [
+            "/api/v1/audit?action=GET",  // real method, not an audited one
+            "/api/v1/audit?action=POST", // right idea, wrong case — tokens are lowercase
+            "/api/v1/audit?action=sign-in",
+            "/api/v1/audit?status=2xx",
+            "/api/v1/audit?status=success",
+        ] {
+            assert_eq!(
+                status_of(st.clone(), bad, Some(&token)).await,
+                StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_well_formed_filter_still_reports_the_missing_write_side() {
+        // The other half of the ordering rule: once the request itself is fine, the answer is about
+        // the deployment again — 503, not a misleading empty page.
+        let st = private_state();
+        let token = st
+            .sessions
+            .issue(Uuid::new_v4(), Principal::new(Role::Admin, Scope::All), "a");
+        assert_eq!(
+            status_of(
+                st,
+                "/api/v1/audit?action=delete&status=ok&q=admin&limit=10",
+                Some(&token)
+            )
+            .await,
+            StatusCode::SERVICE_UNAVAILABLE
         );
     }
 

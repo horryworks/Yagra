@@ -26,6 +26,7 @@
 //! the boundary.
 
 use super::extract::{Admin, RequireView, Scoped};
+use super::util::normalize_search;
 use super::{ApiError, ApiResult, ApiState};
 use crate::events::{EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket};
 use axum::{
@@ -49,9 +50,6 @@ pub(crate) fn routes() -> Router<ApiState> {
         .route("/api/v1/events/stats", get(events_stats))
 }
 
-/// Cap on a free-text search term. Long enough for any real query, short enough that a
-/// pathological input cannot bloat the query sent to either store.
-const SEARCH_TERM_MAX_CHARS: usize = 200;
 /// How many node ids a name search may resolve to. A term matching half the fleet would otherwise
 /// build an unbounded `IN (…)`.
 const NAME_SEARCH_NODE_LIMIT: i64 = 50;
@@ -77,13 +75,6 @@ pub(crate) struct EventFilterInput<'a> {
     pub matched: Option<bool>,
     pub q: Option<&'a str>,
     pub regex: bool,
-}
-
-/// Normalize the free-text filter: trim, drop if empty, and cap the length.
-fn normalize_search(q: Option<&str>) -> Option<String> {
-    q.map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|s| s.chars().take(SEARCH_TERM_MAX_CHARS).collect())
 }
 
 /// Parse and validate the shared event-filter fields — the same set for the event log and
@@ -420,6 +411,9 @@ mod tests {
     use super::*;
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};
+    // Only the tests assert the cap's value; the production path reaches it through
+    // `normalize_search`, which is where the policy lives now (`api/util.rs`).
+    use crate::api::util::SEARCH_TERM_MAX_CHARS;
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
     use tower::ServiceExt;

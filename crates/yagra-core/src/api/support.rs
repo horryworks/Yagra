@@ -263,7 +263,11 @@ async fn build(
         "Every currently-active alert",
         &st.alerts.active_alerts(),
     )?;
-    match admin.audit.list(AUDIT_ROWS, None).await {
+    match admin
+        .audit
+        .list(&crate::audit::AuditFilter::newest(AUDIT_ROWS))
+        .await
+    {
         Ok(rows) => b.add_json(
             "audit/recent.json",
             "The newest audit entries: who changed or acknowledged what",

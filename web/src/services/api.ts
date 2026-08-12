@@ -20,6 +20,7 @@ import type {
   AnalysisScheduleInput,
   ApiErrorBody,
   CalendarBucket,
+  AuditQuery,
   AuditRow,
   AuthMe,
   ChannelConfigInput,
@@ -1884,12 +1885,17 @@ export const api = {
   setUserPassword: (id: string, password: string): Promise<void> =>
     apiPut('/api/v1/users/{id}/password', { path: { id }, body: { password } }),
 
-  /** Audit log page, newest first (admin-only). `before` is the keyset cursor: pass the
-   *  last row's `at` to fetch the next (older) page. */
-  listAudit: (opts?: { limit?: number; before?: string }): Promise<AuditRow[]> =>
-    apiGet('/api/v1/audit', {
-      query: { limit: opts?.limit, before: opts?.before || undefined },
-    }),
+  /** Audit log page, newest first (admin-only).
+   *
+   *  `before` is the keyset cursor: pass the last row's `at` to fetch the next (older) page.
+   *  `since`/`until` are a different thing — the window being searched — so a filtered scroll keeps
+   *  its bounds while the cursor advances.
+   *
+   *  The filters are applied **server-side**. They used to narrow the loaded pages in the browser,
+   *  which meant "last 30 days, DELETE only" examined the newest 100 rows and hid every older match.
+   *  Build the query with `pages/auditQuery.ts::queryFor` so an unset filter is `undefined` and not
+   *  the empty string, which the backend would reject as an unknown value. */
+  listAudit: (query?: AuditQuery): Promise<AuditRow[]> => apiGet('/api/v1/audit', { query }),
 
   /** The caller's saved My Dashboard layout, or `null` if none saved yet (the client then uses
    *  its default). The body is opaque JSON — the client owns and migrates the widget shape

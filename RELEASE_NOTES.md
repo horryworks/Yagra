@@ -11,6 +11,24 @@
 ## Unreleased
 
 ### Bug Fixes
+- **Settings ▸ Audit hid older matching entries.** The search box and the action / status / time-range
+  filters ran in the browser over the pages already loaded, so "last 30 days, DELETE only" examined
+  the newest 100 entries and silently dropped every older match — and Export handed the operator
+  that same partial set. In a log whose purpose is completeness that is a correctness problem, not a
+  missing feature. The filters now run in the database: `GET /api/v1/audit` accepts `q`, `action`,
+  `status`, `since` and `until` alongside the existing `limit` and `before`, and the MCP `get_audit`
+  tool takes the same parameters through the same code path. The toolbar is unchanged. Export still
+  writes the rows loaded so far and now says so.
+- **LDAP and OIDC sign-ins were not recognised as sign-ins in the audit log.** Yagra records a
+  directory sign-in as `auth.login.ldap` (and `auth.login.ldap_unavailable` /
+  `auth.login.ldap_conflict`) beside the local `auth.login`, but the audit view matched the exact
+  string — so those entries showed a raw `auth.login.ldap` chip instead of the "Sign in" label, and
+  the "Sign in" filter never returned one. All sign-in methods are now matched by prefix, in the UI
+  and in the new server-side filter.
+- **Actions taken through the MCP tool surface could not be filtered for.** `/mcp` does not pass
+  through the REST audit middleware, so an acknowledgement or a triggered poll from an AI client is
+  recorded as `mcp.<tool> …` — a shape the action filter's fixed list of HTTP methods could not
+  express. "MCP tool" is now one of the choices.
 - **An SNMPv3 credential could not be bound to a node from the UI.** Add node and Edit node listed
   only `snmp_v2c` credentials, so a v3 credential could be stored, and even matched against a device
   by Discovery's credential finder, and then never attached to the node it had just authenticated

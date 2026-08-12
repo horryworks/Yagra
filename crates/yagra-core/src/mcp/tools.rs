@@ -2115,7 +2115,12 @@ impl YagraMcp {
     #[tool(
         description = "The audit log: who changed, acknowledged or triggered what, newest first. \
                        `limit` is 1–500 (default 100); `before` is an RFC 3339 timestamp for the \
-                       next page. Requires the view-audit permission, which is separate from view."
+                       next page. Narrow with `since`/`until` (the window to search, distinct from \
+                       the `before` cursor), `q` (free text over the username and the action), \
+                       `action` (post|put|patch|delete|login|mcp — `login` covers local, LDAP and \
+                       OIDC sign-ins; `mcp` covers actions taken through this tool surface) and \
+                       `status` (ok|client|server). Requires the view-audit permission, which is \
+                       separate from view."
     )]
     async fn get_audit(
         &self,
@@ -2133,8 +2138,19 @@ impl YagraMcp {
             return tool_unavailable("get_audit", "the audit log requires live mode");
         };
         // An unparseable cursor is a 400 here as it is over REST, never a silent jump back to the
-        // newest page — a client walking the log would otherwise loop forever on page one.
-        match crate::api::audit::audit_page(admin, p.limit, p.before.as_deref()).await {
+        // newest page — a client walking the log would otherwise loop forever on page one. The
+        // whole page function is the shared seam, so the filter cannot be validated more loosely
+        // here than it is over REST (which is the drift `parse_event_filter` already paid for).
+        let input = crate::api::audit::AuditFilterInput {
+            limit: p.limit,
+            before: p.before.as_deref(),
+            since: p.since.as_deref(),
+            until: p.until.as_deref(),
+            q: p.q.as_deref(),
+            action: p.action,
+            status: p.status,
+        };
+        match crate::api::audit::audit_page(admin, input).await {
             Ok(rows) => ok_json("get_audit", &rows),
             Err(e) => tool_api_error("get_audit", &e),
         }
@@ -3164,6 +3180,16 @@ struct AuditParams {
     limit: Option<i64>,
     /// Keyset cursor: return rows older than this RFC 3339 timestamp.
     before: Option<String>,
+    /// Only entries at or after this RFC 3339 timestamp.
+    since: Option<String>,
+    /// Only entries at or before this RFC 3339 timestamp.
+    until: Option<String>,
+    /// Free text matched against the username and the action (case-insensitive substring).
+    q: Option<String>,
+    /// Only entries of this kind: `post` | `put` | `patch` | `delete` | `login` | `mcp`.
+    action: Option<crate::audit::AuditAction>,
+    /// Only entries whose response fell in this class: `ok` | `client` | `server`.
+    status: Option<crate::audit::AuditStatusClass>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -4836,6 +4862,11 @@ mod tests {
             .audit_in(AuditParams {
                 limit: None,
                 before: Some("yesterday".to_owned()),
+                since: None,
+                until: None,
+                q: None,
+                action: None,
+                status: None,
             })
             .await
             .expect("ok result");

@@ -682,6 +682,29 @@ describe('api client', () => {
     expect(spy).toHaveBeenLastCalledWith('/api/v1/audit');
   });
 
+  it('sends the audit filters as query parameters, and omits the unset ones', async () => {
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
+    globalThis.fetch = spy;
+    await api.listAudit({
+      limit: 100,
+      q: 'admin',
+      action: 'delete',
+      status: 'client',
+      since: '2026-07-13T00:00:00+00:00',
+    });
+    expect(spy).toHaveBeenCalledWith(
+      '/api/v1/audit?limit=100&q=admin&action=delete&status=client' +
+        '&since=2026-07-13T00%3A00%3A00%2B00%3A00',
+    );
+    // An unset filter must be absent, not present and empty: `action=` reaches the backend as an
+    // unknown action and 400s a request nobody meant to filter. `queryFor` maps '' to undefined,
+    // and `buildUrl` drops undefined while deliberately keeping ''.
+    await api.listAudit({ limit: 100, q: undefined, action: undefined, status: undefined });
+    expect(spy).toHaveBeenLastCalledWith('/api/v1/audit?limit=100');
+  });
+
   it('starts a discovery scan with targets, communities and credential ids', async () => {
     const spy = vi
       .fn()

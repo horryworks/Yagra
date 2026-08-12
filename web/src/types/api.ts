@@ -62,6 +62,8 @@ const schemaEnumPins: {
   EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
   EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
   DnsFailureKind: AssertEqual<DnsFailureKind, components['schemas']['DnsFailureKind']>;
+  AuditAction: AssertEqual<AuditAction, components['schemas']['AuditAction']>;
+  AuditStatusClass: AssertEqual<AuditStatusClass, components['schemas']['AuditStatusClass']>;
 } = {
   Severity: true,
   Role: true,
@@ -79,6 +81,8 @@ const schemaEnumPins: {
   EventAction: true,
   EventMatchKind: true,
   DnsFailureKind: true,
+  AuditAction: true,
+  AuditStatusClass: true,
 };
 void schemaEnumPins;
 
@@ -663,9 +667,28 @@ export type InterfaceSeries = components['schemas']['InterfaceSeries'];
 
 // ── Fleet, audit, self-observability ────────────────────────────────────────────────────────────
 
-/** One audit-log row (`GET /api/v1/audit`). Admin-only. `action` is either `METHOD /api/v1/...`
- *  (mutating request) or `auth.login`; `at` is RFC 3339. */
+/** One audit-log row (`GET /api/v1/audit`). Admin-only; `at` is RFC 3339. `action` is one of
+ *  `METHOD /api/v1/...` (a mutating request), `auth.login[.ldap…]` (a sign-in, by any method) or
+ *  `mcp.<tool> key=value` (an action taken through the MCP surface, which does not pass through the
+ *  REST audit middleware). */
 export type AuditRow = components['schemas']['AuditRow'];
+
+/** The audit log's filterable action kinds. Iterated by the toolbar and by `i18nEnumKeys.test.ts`,
+ *  so it must exist at runtime; pinned to the generated union by `schemaEnumPins`.
+ *
+ *  ⚠️ These are **prefix** classes, not exact action strings — `login` covers `auth.login.ldap` and
+ *  its siblings, `mcp` covers every tool. The backend owns the prefixes
+ *  (`yagra_core::audit::AuditAction::sql_prefix`); nothing here re-derives them from `action`. */
+export const AUDIT_ACTIONS = ['post', 'put', 'patch', 'delete', 'login', 'mcp'] as const;
+export type AuditAction = (typeof AUDIT_ACTIONS)[number];
+
+/** How an audit entry's response turned out. Boundaries are decided server-side
+ *  (`AuditStatusClass::bounds`); `lib/format.ts::httpStatusTone` only picks the badge colour. */
+export const AUDIT_STATUS_CLASSES = ['ok', 'client', 'server'] as const;
+export type AuditStatusClass = (typeof AUDIT_STATUS_CLASSES)[number];
+
+/** Query params for the audit log — keyset-paged on `before`, filtered by the rest. */
+export type AuditQuery = NonNullable<paths['/api/v1/audit']['get']['parameters']['query']>;
 
 /** Fleet state-count timeline (`GET /api/v1/fleet/state-history`): per-state series aligned to a
  *  shared `timestamps` axis (Unix seconds). `series` is keyed by node state. */

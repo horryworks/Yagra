@@ -1326,6 +1326,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Max rows (1–500, default 100).",
             "required": false,
             "schema": {
               "type": "integer",
@@ -1335,9 +1336,55 @@
           {
             "name": "before",
             "in": "query",
+            "description": "Keyset cursor: return rows strictly older than this RFC 3339 timestamp.",
             "required": false,
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only entries at or after this RFC 3339 timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only entries at or before this RFC 3339 timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free text matched against the username and the action (case-insensitive substring).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Only entries of this kind.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditAction"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only entries whose response fell in this class.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditStatusClass"
             }
           }
         ],
@@ -1356,7 +1403,7 @@
             }
           },
           "400": {
-            "description": "`before` is not an RFC 3339 timestamp",
+            "description": "A cursor or range bound is not RFC 3339, or `action`/`status` is not one of the listed values",
             "content": {
               "application/json": {
                 "schema": {
@@ -19083,6 +19130,18 @@
           }
         }
       },
+      "AuditAction": {
+        "type": "string",
+        "description": "What an audit entry was, as the log's filterable vocabulary.",
+        "enum": [
+          "post",
+          "put",
+          "patch",
+          "delete",
+          "login",
+          "mcp"
+        ]
+      },
       "AuditRow": {
         "type": "object",
         "description": "One audit row (API shape; `at` is RFC 3339 text at the edge).",
@@ -19112,6 +19171,15 @@
             "type": "string"
           }
         }
+      },
+      "AuditStatusClass": {
+        "type": "string",
+        "description": "How an audit entry's HTTP status turned out.",
+        "enum": [
+          "ok",
+          "client",
+          "server"
+        ]
       },
       "AuthMe": {
         "type": "object",

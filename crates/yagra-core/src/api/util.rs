@@ -214,6 +214,24 @@ pub(crate) fn is_valid_oid_prefix(s: &str) -> bool {
     is_valid_oid(s.strip_suffix('.').unwrap_or(s))
 }
 
+/// Cap on a free-text search term. Long enough for any real query, short enough that a
+/// pathological input cannot bloat the query sent to any store.
+///
+/// Here rather than in the event-log domain, which declared it while the audit log needed the same
+/// bound — the cross-domain reach that keeps turning up as a migration tripwire. It is one policy,
+/// not a coincidence: both terms are operator text that becomes an `ILIKE` pattern.
+pub(crate) const SEARCH_TERM_MAX_CHARS: usize = 200;
+
+/// Normalize a free-text filter: trim, drop if empty, and cap the length.
+///
+/// The blank-is-absent rule matters at the edge: a UI that clears its search box sends `q=`, and a
+/// filter nobody set must not become a filter matching everything-or-nothing depending on the store.
+pub(crate) fn normalize_search(q: Option<&str>) -> Option<String> {
+    q.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.chars().take(SEARCH_TERM_MAX_CHARS).collect())
+}
+
 /// Parse an RFC 3339 timestamp from the API edge into UTC.
 ///
 /// `None` on anything unparseable: callers reject the request rather than substituting a default,

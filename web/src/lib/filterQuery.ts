@@ -44,9 +44,14 @@ export function sinceIso(secs: number | null, nowMs: number): string | undefined
  * works only while everything is loaded — the moment the filter moves into the query, a filtered
  * query that legitimately returns zero is indistinguishable from an empty store.
  */
-export function isFiltered<T extends Record<string, string | boolean | number>>(
+export function isFiltered<T extends Record<keyof T, string | number | boolean>>(
   filters: T,
   defaults: T,
 ): boolean {
   return (Object.keys(defaults) as (keyof T)[]).some((k) => filters[k] !== defaults[k]);
 }
+// The constraint is `Record<keyof T, primitive>` rather than `Record<string, primitive>` on purpose.
+// The latter demands an index signature, which an `interface` never has — so every caller would have
+// had to declare its filters as a type alias, a papercut with no upside. This spelling accepts both
+// while still rejecting a nested object, where `!==` compares references and would report "filtered"
+// on every render.

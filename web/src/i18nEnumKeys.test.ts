@@ -21,6 +21,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  AUDIT_ACTIONS,
+  AUDIT_STATUS_CLASSES,
   DIRECTIONS,
   FORWARD_DEST_KINDS,
   FORWARD_FILTER_MODES,
@@ -65,6 +67,7 @@ import { LDAP_FORM_PROBLEMS } from './pages/ldapConfigForm';
 import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundle';
 import { IMPORT_BLOCKS } from './pages/tlsSettingsForm';
 import { MAINTENANCE_STATUSES } from './pages/maintenanceStatus';
+import { AUDIT_RANGES } from './pages/auditQuery';
 import { SCHEDULE_FORM_PROBLEMS } from './troubleshoot/scheduleForm';
 import {
   CORRELATION_DIRECTIONS,
@@ -213,6 +216,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // these kinds; a kind with no strings would offer the operator a raw key while they choose
     // what to store.
     expectKeys('credential kind', { en: enAccess, ja: jaAccess }, 'cred.kind.', CREDENTIAL_KINDS);
+  });
+
+  it('every audit action and status class has a label (access:audit.*)', () => {
+    // The toolbar builds `audit.action.${a}` / `audit.statusClass.${s}` from the arrays pinned to
+    // the Rust enums, so a variant added there ships as a raw key in *both* locales — which parity
+    // passes and nobody notices until an operator is staring at `audit.action.head` in a filter.
+    const locales = { en: enAccess, ja: jaAccess };
+    expectKeys('audit action', locales, 'audit.action.', AUDIT_ACTIONS);
+    expectKeys('audit status class', locales, 'audit.statusClass.', AUDIT_STATUS_CLASSES);
+    // The ranges are the screen's own, not a backend enum — but the key is built the same way, so
+    // the same hole exists.
+    expectKeys('audit range', locales, 'audit.range.', AUDIT_RANGES);
   });
 
   it('every HTTP auth scheme has a label (access:cred.http.schemeName.*)', () => {

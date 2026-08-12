@@ -222,17 +222,26 @@
     "signIn": "SIGN IN",
     "filter": {
       "allActions": "All actions",
-      "signIn": "Sign in",
-      "allStatus": "All status",
-      "success": "Success (2xx)",
-      "clientError": "Client error (4xx)",
-      "serverError": "Server error (5xx)"
+      "allStatus": "All status"
+    },
+    "action": {
+      "post": "Create (POST)",
+      "put": "Replace (PUT)",
+      "patch": "Update (PATCH)",
+      "delete": "Delete (DELETE)",
+      "login": "Sign in",
+      "mcp": "MCP tool"
+    },
+    "statusClass": {
+      "ok": "Success (2xx)",
+      "client": "Refused (3xx–4xx)",
+      "server": "Server error (5xx)"
     },
     "range": {
       "all": "All time",
-      "last24h": "Last 24h",
-      "last7d": "Last 7 days",
-      "last30d": "Last 30 days"
+      "24h": "Last 24h",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days"
     },
     "cols": {
       "time": "Time",
@@ -243,6 +252,7 @@
     "entry_one": "entry",
     "entry_other": "entries",
     "export": "Export",
+    "exportHint": "Exports the rows loaded so far — scroll to load more before exporting.",
     "empty": {
       "none": "No audit entries yet",
       "filtered": "No matching entries — adjust the filters or time range."

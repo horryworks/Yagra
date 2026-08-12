@@ -219,17 +219,26 @@
     "signIn": "サインイン",
     "filter": {
       "allActions": "すべての操作",
-      "signIn": "サインイン",
-      "allStatus": "すべてのステータス",
-      "success": "成功 (2xx)",
-      "clientError": "クライアントエラー (4xx)",
-      "serverError": "サーバーエラー (5xx)"
+      "allStatus": "すべてのステータス"
+    },
+    "action": {
+      "post": "作成 (POST)",
+      "put": "置換 (PUT)",
+      "patch": "更新 (PATCH)",
+      "delete": "削除 (DELETE)",
+      "login": "サインイン",
+      "mcp": "MCP ツール"
+    },
+    "statusClass": {
+      "ok": "成功 (2xx)",
+      "client": "拒否 (3xx〜4xx)",
+      "server": "サーバーエラー (5xx)"
     },
     "range": {
       "all": "全期間",
-      "last24h": "過去 24 時間",
-      "last7d": "過去 7 日間",
-      "last30d": "過去 30 日間"
+      "24h": "過去 24 時間",
+      "7d": "過去 7 日間",
+      "30d": "過去 30 日間"
     },
     "cols": {
       "time": "時刻",
@@ -239,6 +248,7 @@
     },
     "entry_other": "エントリ",
     "export": "エクスポート",
+    "exportHint": "ここまでに読み込んだ行を出力します。すべて必要なときは先にスクロールしてください。",
     "empty": {
       "none": "監査エントリはまだありません",
       "filtered": "一致するエントリがありません — フィルタか期間を調整してください。"
