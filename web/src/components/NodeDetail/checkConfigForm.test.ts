@@ -9,6 +9,10 @@ import {
   dnsDraftFrom,
   urlBodyFrom,
   urlDraftFrom,
+  withExtract,
+  withExtractAdded,
+  withExtractRemoved,
+  MAX_EXTRACT_ROWS,
   type DnsCheckDraft,
   type UrlCheckDraft,
 } from './checkConfigForm';
@@ -393,5 +397,66 @@ describe('urlBodyFrom JSON extraction (ADR-047 Inc.3)', () => {
     const many = Array.from({ length: 9 }, (_, i) => ({ metric: `m${i}`, path: 'a.b' }));
     expect(urlBodyFrom(urlDraft({ extracts: many }))).toEqual({ error: 'tooManyExtracts' });
     expect(body(urlBodyFrom(urlDraft({ extracts: many.slice(0, 8) }))).json_extract).toHaveLength(8);
+  });
+
+  // The form hides "add" at this count and the validator above refuses the save at it. They were
+  // two literals in two files; one export means a row can never be offered and then rejected.
+  it('exports the row cap the validator enforces', () => {
+    const atCap = Array.from({ length: MAX_EXTRACT_ROWS }, (_, i) => ({
+      metric: `m${i}`,
+      path: 'a.b',
+    }));
+    expect(body(urlBodyFrom(urlDraft({ extracts: atCap }))).json_extract).toHaveLength(
+      MAX_EXTRACT_ROWS,
+    );
+    expect(
+      urlBodyFrom(urlDraft({ extracts: [...atCap, { metric: 'over', path: 'a.b' }] })),
+    ).toEqual({ error: 'tooManyExtracts' });
+  });
+});
+
+// The row edits the dialog used to do inline. They are here so a test can reach them at all: the
+// component that held them is a `.tsx`, which Vitest never runs.
+describe('extraction row edits', () => {
+  const rows = (d: UrlCheckDraft) => d.extracts.map((e) => `${e.metric}:${e.path}`);
+  const three = urlDraft({
+    extracts: [
+      { metric: 'a', path: 'x' },
+      { metric: 'b', path: 'y' },
+      { metric: 'c', path: 'z' },
+    ],
+  });
+
+  it('patches one row shallowly and leaves its siblings alone', () => {
+    expect(rows(withExtract(three, 1, { path: 'Y2' }))).toEqual(['a:x', 'b:Y2', 'c:z']);
+    expect(rows(withExtract(three, 0, { metric: 'A2' }))).toEqual(['A2:x', 'b:y', 'c:z']);
+  });
+
+  it('leaves the draft alone for an index that is not there', () => {
+    // A stale index means the row is already gone; throwing would take the dialog down with it.
+    expect(rows(withExtract(three, 7, { path: 'nope' }))).toEqual(['a:x', 'b:y', 'c:z']);
+  });
+
+  it('never mutates the draft it was given', () => {
+    // React state: mutating in place gives the same object reference back and the dialog stops
+    // re-rendering, which reads as "typing does nothing".
+    const before = rows(three);
+    withExtract(three, 0, { metric: 'zzz' });
+    withExtractAdded(three);
+    withExtractRemoved(three, 0);
+    expect(rows(three)).toEqual(before);
+  });
+
+  it('appends a blank row, which the save then drops if it stays blank', () => {
+    const added = withExtractAdded(three);
+    expect(added.extracts).toHaveLength(4);
+    expect(added.extracts[3]).toEqual({ metric: '', path: '' });
+    expect(body(urlBodyFrom(added)).json_extract).toHaveLength(3);
+  });
+
+  it('removes by position without disturbing the rest', () => {
+    expect(rows(withExtractRemoved(three, 1))).toEqual(['a:x', 'c:z']);
+    expect(rows(withExtractRemoved(three, 0))).toEqual(['b:y', 'c:z']);
+    expect(rows(withExtractRemoved(three, 9))).toEqual(['a:x', 'b:y', 'c:z']);
   });
 });

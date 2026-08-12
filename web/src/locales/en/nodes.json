@@ -5,6 +5,7 @@
     "url": "URL",
     "ipAddress": "IP address",
     "deviceProfile": "Device profile",
+    "monitorProfile": "Monitoring profile",
     "snmpCredential": "SNMP credential",
     "maker": "Maker",
     "model": "Model",
@@ -190,6 +191,16 @@
     "empty": "No flow data yet. Configure this device to export NetFlow v9 / IPFIX to the poller (default UDP :2055).",
     "disabled": "Flow monitoring is not enabled. Configure a ClickHouse flow store (YAGRA_CLICKHOUSE_URL on core) and a flow listener (YAGRA_FLOW_BIND on the poller) to collect traffic flows.",
     "loadError": "Failed to load flow data."
+  },
+  "editNode": {
+    "section": {
+      "check": "What this monitors",
+      "node": "Node settings"
+    },
+    "profileOffKind": "This profile belongs to another kind of node. It is listed only because it is the one currently bound.",
+    "err": {
+      "bindingsAfterCheck": "The monitor settings were saved, but the node settings were not: {{reason}}. Saving again is safe."
+    }
   },
   "deleteNode": {
     "title": "Delete node",

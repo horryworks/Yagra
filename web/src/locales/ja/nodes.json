@@ -5,6 +5,7 @@
     "url": "URL",
     "ipAddress": "IP アドレス",
     "deviceProfile": "デバイスプロファイル",
+    "monitorProfile": "監視プロファイル",
     "snmpCredential": "SNMP 認証情報",
     "maker": "メーカー",
     "model": "モデル",
@@ -190,6 +191,16 @@
     "empty": "フローデータがまだありません。この機器から NetFlow v9 / IPFIX をポーラー（既定 UDP :2055）へエクスポートするよう設定してください。",
     "disabled": "フロー監視は有効になっていません。ClickHouse のフローストア（コアの YAGRA_CLICKHOUSE_URL）とフローリスナー（ポーラーの YAGRA_FLOW_BIND）を設定すると、トラフィックフローを収集できます。",
     "loadError": "フローデータの読み込みに失敗しました。"
+  },
+  "editNode": {
+    "section": {
+      "check": "監視の内容",
+      "node": "ノードの設定"
+    },
+    "profileOffKind": "このプロファイルは別の種別のノード向けです。現在割り当てられているため候補に残しています。",
+    "err": {
+      "bindingsAfterCheck": "監視の内容は保存しましたが、ノードの設定は保存できませんでした: {{reason}}。もう一度保存しても安全です。"
+    }
   },
   "deleteNode": {
     "title": "ノードを削除",

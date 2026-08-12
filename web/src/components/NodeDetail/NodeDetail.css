@@ -282,6 +282,23 @@
   cursor: pointer;
 }
 
+/* Heading for one half of the Edit-node dialog. Only drawn when a kind has both halves (a URL
+   monitor's check settings and the node's own), so a device's single-part form stays unheaded.
+   The first one carries no rule above it — the modal header is already the line. */
+.nd-edit-section {
+  margin: 0 0 12px;
+  padding-top: 14px;
+  border-top: var(--border-width) solid var(--border-color);
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.nd-edit-section:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
 /* JSON-extraction rows: metric name, path, and the button that drops the row. Stacks on mobile so
    neither input collapses below a usable width. */
 .nd-extract-rows {

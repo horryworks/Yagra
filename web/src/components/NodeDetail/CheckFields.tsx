@@ -1,44 +1,40 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Edit an existing URL / DNS monitor's configuration (ui-conventions §Modals case 3: focused
-// editing). The add-node dialog creates these; before this dialog existed there was no way to
-// change one afterwards short of deleting the node and making it again.
+// The fields of a URL / DNS monitor's configuration, as one implementation.
 //
-// The form's judgement — defaults, parsing, what blank means, the `expected_status` union — lives
-// in `checkConfigForm.ts` where a test can reach it. This file is layout plus the call.
+// They were the body of a standalone `UrlCheckModal`/`DnsCheckModal` reachable only from the ⋮ menu
+// on the Overview health card. "Edit node" now renders them for those kinds, so they live here as
+// presentational components: the parent owns the draft, the error and the save, and these own the
+// layout and the one dictionary fetch a URL form needs.
+//
+// The judgement stays where it was — `checkConfigForm.ts` — because Vitest never runs a `.tsx`.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg } from '../../services/api';
+import { api } from '../../services/api';
 import { Button } from '../ui/Button';
-import { Modal } from '../ui/Modal';
 import { FieldHint, RequiredMark, Select, TextInput } from '../ui/Field';
-import type { CredentialSummary, DnsCheckConfig, UrlCheckConfig } from '../../types/api';
+import type { CredentialSummary } from '../../types/api';
 import {
-  dnsBodyFrom,
-  dnsDraftFrom,
-  urlBodyFrom,
-  urlDraftFrom,
+  withExtract,
+  withExtractAdded,
+  withExtractRemoved,
   BODY_MATCH_MODES,
   EXPECTED_STATUS_MODES,
+  MAX_EXTRACT_ROWS,
   type DnsCheckDraft,
-  type JsonExtractDraft,
   type UrlCheckDraft,
 } from './checkConfigForm';
 
 const HTTP_METHODS = ['GET', 'HEAD', 'POST'] as const;
-
-/** Mirrors `yagra_common::MAX_JSON_EXTRACTS` — hides "add" once the server would refuse the next
- *  row anyway. The form's own validation is what actually reports it. */
-const MAX_EXTRACT_ROWS = 8;
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME'] as const;
 
 /** Credential kinds a URL monitor can present. `http_auth` is the current kind; `api_token`
  *  predates it and is accepted as a bearer token (see `secrets.rs::KIND_API_TOKEN`). */
 const HTTP_CRED_KINDS: string[] = ['http_auth', 'api_token'];
 
-/** One labelled row. Local to this dialog because the shared `Field` exports the controls, not the
- *  label+hint wrapper, and every other modal spells this out the same way. */
-function Row({
+/** One labelled row. Exported because both this file's forms and the dialog that hosts them spell
+ *  a field the same way; the shared `Field` exports the controls, not the label+hint wrapper. */
+export function Row({
   label,
   required,
   hint,
@@ -47,7 +43,7 @@ function Row({
   label: string;
   required?: boolean;
   hint?: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
     <label className="modal-field">
@@ -60,21 +56,15 @@ function Row({
   );
 }
 
-export function UrlCheckModal({
-  nodeId,
-  config,
-  onClose,
-  onSaved,
+/** What a URL monitor probes and what counts as healthy. */
+export function UrlCheckFields({
+  draft: d,
+  onChange,
 }: {
-  nodeId: string;
-  config: UrlCheckConfig;
-  onClose: () => void;
-  onSaved: () => void;
+  draft: UrlCheckDraft;
+  onChange: (next: UrlCheckDraft) => void;
 }) {
   const { t } = useTranslation('nodes');
-  const [d, setD] = useState<UrlCheckDraft>(() => urlDraftFrom(config));
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   // Credentials a URL monitor can present. Filtered to the kinds the probe understands, so the
   // picker cannot offer an SNMP community that would be rejected at poll time.
   const [creds, setCreds] = useState<CredentialSummary[]>([]);
@@ -84,56 +74,16 @@ export function UrlCheckModal({
       .then((list) => setCreds(list.filter((c) => HTTP_CRED_KINDS.includes(c.kind))))
       .catch(() => setCreds([]));
   }, []);
-  const set = <K extends keyof UrlCheckDraft>(k: K, v: UrlCheckDraft[K]) =>
-    setD((prev) => ({ ...prev, [k]: v }));
 
-  // Extraction rows are a list, so they need their own three edits rather than `set`.
-  const setExtract = (i: number, patch: Partial<JsonExtractDraft>) =>
-    setD((prev) => ({
-      ...prev,
-      extracts: prev.extracts.map((row, j) => (j === i ? { ...row, ...patch } : row)),
-    }));
-  const addExtract = () =>
-    setD((prev) => ({ ...prev, extracts: [...prev.extracts, { metric: '', path: '' }] }));
-  const removeExtract = (i: number) =>
-    setD((prev) => ({ ...prev, extracts: prev.extracts.filter((_, j) => j !== i) }));
+  const set = <K extends keyof UrlCheckDraft>(k: K, v: UrlCheckDraft[K]) =>
+    onChange({ ...d, [k]: v });
 
   // The read budget only means anything when something reads the body, so it is shown only then —
   // one budget shared by both features, which is why this is not asked twice.
   const readsBody = d.bodyMatchEnabled || d.extracts.length > 0;
 
-  const save = () => {
-    const built = urlBodyFrom(d);
-    if ('error' in built) {
-      setError(t(`checkEdit.err.${built.error}`));
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    api
-      .setUrlCheck(nodeId, built.body)
-      .then(onSaved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('checkEdit.err.save')));
-        setSaving(false);
-      });
-  };
-
   return (
-    <Modal
-      title={t('checkEdit.urlTitle')}
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose} disabled={saving}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={saving}>
-            {saving ? t('checkEdit.saving') : t('common:actions.save')}
-          </Button>
-        </>
-      }
-    >
+    <>
       <Row label={t('checkEdit.url')} required>
         <TextInput value={d.url} onChange={(e) => set('url', e.target.value)} />
       </Row>
@@ -215,10 +165,7 @@ export function UrlCheckModal({
         <span>{t('checkEdit.followRedirects')}</span>
       </label>
       <Row label={t('checkEdit.credential')}>
-        <Select
-          value={d.credentialId}
-          onChange={(e) => set('credentialId', e.target.value)}
-        >
+        <Select value={d.credentialId} onChange={(e) => set('credentialId', e.target.value)}>
           <option value="">{t('checkEdit.credentialNone')}</option>
           {creds.map((c) => (
             <option key={c.id} value={c.id}>
@@ -255,11 +202,7 @@ export function UrlCheckModal({
               ))}
             </Select>
           </Row>
-          <Row
-            label={t('checkEdit.bodyPattern')}
-            required
-            hint={t('checkEdit.bodyPatternHint')}
-          >
+          <Row label={t('checkEdit.bodyPattern')} required hint={t('checkEdit.bodyPatternHint')}>
             <TextInput
               value={d.bodyPattern}
               placeholder={'"status":"ok"'}
@@ -276,19 +219,25 @@ export function UrlCheckModal({
                 value={row.metric}
                 placeholder={t('checkEdit.extractMetricPlaceholder')}
                 aria-label={t('checkEdit.extractMetric')}
-                onChange={(e) => setExtract(i, { metric: e.target.value })}
+                onChange={(e) => onChange(withExtract(d, i, { metric: e.target.value }))}
               />
               <TextInput
                 value={row.path}
                 placeholder="data.queue.depth"
                 aria-label={t('checkEdit.extractPath')}
-                onChange={(e) => setExtract(i, { path: e.target.value })}
+                onChange={(e) => onChange(withExtract(d, i, { path: e.target.value }))}
               />
-              <Button onClick={() => removeExtract(i)}>{t('common:actions.remove')}</Button>
+              <Button onClick={() => onChange(withExtractRemoved(d, i))}>
+                {t('common:actions.remove')}
+              </Button>
             </div>
           ))}
+          {/* Hidden at the cap the validator enforces — one exported constant, so the form cannot
+              offer a row the save would then refuse. */}
           {d.extracts.length < MAX_EXTRACT_ROWS && (
-            <Button onClick={addExtract}>{t('checkEdit.extractAdd')}</Button>
+            <Button onClick={() => onChange(withExtractAdded(d))}>
+              {t('checkEdit.extractAdd')}
+            </Button>
           )}
         </div>
       </Row>
@@ -305,61 +254,24 @@ export function UrlCheckModal({
           {d.method === 'HEAD' && <FieldHint error>{t('checkEdit.bodyMatchNeedsBody')}</FieldHint>}
         </>
       )}
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+    </>
   );
 }
 
-export function DnsCheckModal({
-  nodeId,
-  config,
-  onClose,
-  onSaved,
+/** What a DNS monitor resolves, and against which resolver. */
+export function DnsCheckFields({
+  draft: d,
+  onChange,
 }: {
-  nodeId: string;
-  config: DnsCheckConfig;
-  onClose: () => void;
-  onSaved: () => void;
+  draft: DnsCheckDraft;
+  onChange: (next: DnsCheckDraft) => void;
 }) {
   const { t } = useTranslation('nodes');
-  const [d, setD] = useState<DnsCheckDraft>(() => dnsDraftFrom(config));
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const set = <K extends keyof DnsCheckDraft>(k: K, v: DnsCheckDraft[K]) =>
-    setD((prev) => ({ ...prev, [k]: v }));
-
-  const save = () => {
-    const built = dnsBodyFrom(d);
-    if ('error' in built) {
-      setError(t(`checkEdit.err.${built.error}`));
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    api
-      .setDnsCheck(nodeId, built.body)
-      .then(onSaved)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('checkEdit.err.save')));
-        setSaving(false);
-      });
-  };
+    onChange({ ...d, [k]: v });
 
   return (
-    <Modal
-      title={t('checkEdit.dnsTitle')}
-      onClose={onClose}
-      footer={
-        <>
-          <Button onClick={onClose} disabled={saving}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={saving}>
-            {saving ? t('checkEdit.saving') : t('common:actions.save')}
-          </Button>
-        </>
-      }
-    >
+    <>
       <Row label={t('checkEdit.dnsName')} required>
         <TextInput value={d.name} onChange={(e) => set('name', e.target.value)} />
       </Row>
@@ -407,7 +319,6 @@ export function DnsCheckModal({
           />
         </Row>
       </div>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
+    </>
   );
 }

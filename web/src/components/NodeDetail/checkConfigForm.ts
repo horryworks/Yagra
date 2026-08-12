@@ -82,6 +82,13 @@ const BODY_LIMITS = {
   pathMaxLen: 256,
   metricMaxLen: 96,
 } as const;
+
+/** How many extraction rows the form offers before hiding "add".
+ *
+ *  Exported from here rather than restated beside the inputs: the form uses it to hide the button
+ *  and [`jsonExtractFrom`] uses it to refuse the save, and two copies drift into a button that
+ *  offers a row the validator then rejects. */
+export const MAX_EXTRACT_ROWS = BODY_LIMITS.maxExtracts;
 const BODY_DEFAULTS = { mode: 'contains', maxBytes: 64 * 1024 } as const;
 
 /** Metric names a URL monitor reports on its own, which an extraction rule may not claim.
@@ -264,6 +271,28 @@ function jsonExtractFrom(d: UrlCheckDraft): { ok: JsonExtract[] } | { err: Check
     out.push({ metric, path });
   }
   return { ok: out };
+}
+
+/** Edit one extraction row. Shallow-merged, so a caller can change just the metric or just the
+ *  path. An out-of-range index is a no-op rather than an error — the rows are keyed by position and
+ *  a stale index means the row is already gone. */
+export function withExtract(
+  d: UrlCheckDraft,
+  i: number,
+  patch: Partial<JsonExtractDraft>,
+): UrlCheckDraft {
+  return { ...d, extracts: d.extracts.map((row, j) => (j === i ? { ...row, ...patch } : row)) };
+}
+
+/** Append a blank extraction row. Blank rather than pre-filled: an all-blank row is dropped at save
+ *  time (see [`filledExtracts`]), so clicking "add" and changing your mind costs nothing. */
+export function withExtractAdded(d: UrlCheckDraft): UrlCheckDraft {
+  return { ...d, extracts: [...d.extracts, { metric: '', path: '' }] };
+}
+
+/** Drop the row at `i`, leaving its siblings untouched. */
+export function withExtractRemoved(d: UrlCheckDraft, i: number): UrlCheckDraft {
+  return { ...d, extracts: d.extracts.filter((_, j) => j !== i) };
 }
 
 /** The draft → the `PUT` body, or the first reason it cannot be sent.

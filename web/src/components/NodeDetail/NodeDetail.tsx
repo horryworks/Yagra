@@ -11,23 +11,19 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { pointsToSeries, relativeTime, stateColorVar, stateLabel } from '../../lib/format';
 import { groupPath } from '../../lib/nodeTree';
-import { isValidPoolName } from '../../lib/pool';
 import { useRefreshTick } from '../../lib/refreshTick';
 import type {
-  CredentialSummary,
   InterfaceRow,
   NodeDetail as NodeDetailData,
   NodeGroup,
   NodeState,
   NodeStatus,
   NodeSummary,
-  ProfileSummary,
 } from '../../types/api';
 import { Button } from '../ui/Button';
 import { ConfirmDeleteModal } from '../ui/ConfirmDeleteModal';
-import { Modal } from '../ui/Modal';
-import { Select, TextInput } from '../ui/Field';
 import { BoxIcon } from '../ui/icons';
+import { EditNodeModal } from './EditNodeModal';
 import { OverviewTab } from './OverviewTab';
 import { InterfacesTab } from './InterfacesTab';
 import { NeighborsTab } from './NeighborsTab';
@@ -374,8 +370,8 @@ export function NodeDetail({
       <div className="nd-body">{tabBodies[activeTab]}</div>
 
       {editingBindings && (
-        <BindingsModal
-          nodeId={nodeId}
+        <EditNodeModal
+          node={node}
           onClose={() => setEditingBindings(false)}
           onDone={() => {
             setEditingBindings(false);
@@ -441,152 +437,5 @@ export function DeleteNodeModal({
     >
       <Trans t={t} i18nKey="deleteNode.body" values={{ name }} components={{ b: <strong /> }} />
     </ConfirmDeleteModal>
-  );
-}
-
-/** Edit a node: device profile + SNMP credential bindings and its descriptive maker/model.
- *  Pre-fills the current values; saving resends all so an unchanged field is preserved. */
-function BindingsModal({
-  nodeId,
-  onClose,
-  onDone,
-}: {
-  nodeId: string;
-  onClose: () => void;
-  onDone: () => void;
-}) {
-  const { t } = useTranslation('nodes');
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [credentials, setCredentials] = useState<CredentialSummary[]>([]);
-  const [profileId, setProfileId] = useState('');
-  const [credentialId, setCredentialId] = useState('');
-  const [vendor, setVendor] = useState('');
-  const [model, setModel] = useState('');
-  // The node's OWN pool ('' ⇒ inherited), plus what it would inherit if cleared — used as the
-  // field placeholder so blanking it is a visible choice rather than a mystery.
-  const [pool, setPool] = useState('');
-  const [inheritedPool, setInheritedPool] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const poolInvalid = !isValidPoolName(pool);
-
-  useEffect(() => {
-    api
-      .getNode(nodeId)
-      .then((n) => {
-        setProfileId(n.profile_id ?? '');
-        setCredentialId(n.credential_id ?? '');
-        setVendor(n.vendor ?? '');
-        setModel(n.model ?? '');
-        setPool(n.pool ?? '');
-      })
-      .catch(() => undefined);
-    // The effective pool doubles as the "what you'd inherit" hint. Asking the server keeps the
-    // folder walk in one place (yagra-core's resolver) instead of duplicating it here.
-    api
-      .getNodeAssignment(nodeId)
-      .then((a) => setInheritedPool(a.pool_source === 'node' ? null : a.pool))
-      .catch(() => undefined);
-    api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
-    api
-      .listCredentials()
-      .then((c) => setCredentials(c.filter((cr) => cr.kind === 'snmp_v2c')))
-      .catch(() => setCredentials([]));
-  }, [nodeId]);
-
-  const save = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .setNodeBindings(nodeId, {
-        profile_id: profileId || null,
-        credential_id: credentialId || null,
-        vendor: vendor.trim() || null,
-        model: model.trim() || null,
-        // Always sent (never null): '' clears the assignment back to inherited. A JSON null would
-        // read server-side as "leave unchanged" and silently drop the edit.
-        pool: pool.trim(),
-      })
-      .then(onDone)
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('err.saveNode')));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <Modal
-      title={t('detail.editNode')}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={save} disabled={busy || poolInvalid}>
-            {t('common:actions.save')}
-          </Button>
-        </>
-      }
-    >
-      <div className="form-stack">
-        <label className="form-label">
-          {t('field.deviceProfile')}
-          <Select value={profileId} onChange={(e) => setProfileId(e.target.value)}>
-            <option value="">{t('add.none')}</option>
-            {profiles.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <label className="form-label">
-          {t('field.snmpCredential')}
-          <Select value={credentialId} onChange={(e) => setCredentialId(e.target.value)}>
-            <option value="">{t('add.none')}</option>
-            {credentials.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
-        </label>
-        <div className="form-row">
-          <label className="form-label">
-            {t('field.maker')}
-            <TextInput
-              value={vendor}
-              onChange={(e) => setVendor(e.target.value)}
-              placeholder={t('field.makerPlaceholder')}
-            />
-          </label>
-          <label className="form-label">
-            {t('field.model')}
-            <TextInput
-              className="mono"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={t('field.modelPlaceholder')}
-            />
-          </label>
-        </div>
-        <label className="form-label">
-          {t('field.pool')}
-          <TextInput
-            className="mono"
-            value={pool}
-            onChange={(e) => setPool(e.target.value)}
-            placeholder={
-              inheritedPool ? t('field.poolInheritPlaceholder', { pool: inheritedPool }) : ''
-            }
-          />
-          <span className={`form-hint${poolInvalid ? ' form-hint-error' : ''}`}>
-            {poolInvalid ? t('field.poolInvalid') : t('field.poolHint')}
-          </span>
-        </label>
-        {error && <p className="form-error">{error}</p>}
-      </div>
-    </Modal>
   );
 }

@@ -10,7 +10,26 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **Edit node showed a URL and a DNS monitor an SNMP credential picker they can never use.** The
+  dialog rendered the same five device fields — device profile, SNMP credential, maker, model, pool
+  — for every kind of node, having never read the node's kind. A URL or DNS monitor is dispatched as
+  one HTTP/DNS job and is never SNMP-walked, so a credential bound there was stored, counted against
+  that credential's "in use" total (which blocks deleting it), and read by nothing. Each kind now
+  gets the fields it actually has: an SNMP credential only on an ordinary device, maker/model only
+  where a device reports them, and the device-profile picker restricted to profiles of a matching
+  category — with any profile already bound kept in the list so an edit cannot silently re-bind it.
+
 ### Improvements
+- **A URL or DNS monitor's own settings are now in Edit node.** Changing a monitored URL, its
+  expected status, a DNS record type or a resolver previously meant finding a ⋮ menu on the health
+  card in the Overview tab, which only appeared while that card was rendered. Those fields are now
+  part of Edit node in the header, alongside the profile and pool. The ⋮ menu keeps "Remove
+  monitoring". If the monitor settings save and the node settings do not, the dialog stays open and
+  says which half landed — saving again is safe, both writes are replacements.
+- **Paired fields in a dialog stack on a phone.** Side-by-side pairs inside modals (a DNS
+  resolver + port, a URL monitor's status bounds, a credential's kind + name) kept two columns at
+  ~390px and squeezed each to half a screen. They now stack, as the non-modal forms already did.
 - **Troubleshoot ▸ Tools no longer repeats the analysis-run list.** The panel it showed was a
   verbatim duplicate of Troubleshoot ▸ Analysis runs — the same component over the same job list,
   unfiltered and untruncated — so it only pushed the tool grid down the page. The tool grid now

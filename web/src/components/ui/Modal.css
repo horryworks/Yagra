@@ -105,6 +105,21 @@
   min-width: 0;
 }
 
+/* Stack the pair on mobile — side-by-side fields do not fit ~390px. `.form-row` (index.css) has
+   always had this; this one did not, so every paired row in a modal (DNS resolver + port, the URL
+   status bounds, a credential's kind + name) was squeezed to about half a screen each.
+   Stacked, the pair is spaced by the fields' own margin rather than the row gap, so the second one
+   gets its margin back — `.modal-field:last-child` zeroes it for the horizontal case, where only
+   the first child's margin sets the row's spacing. */
+html[data-viewport='mobile'] .modal-field-row {
+  flex-direction: column;
+  gap: 0;
+}
+
+html[data-viewport='mobile'] .modal-field-row .modal-field {
+  margin-bottom: 14px;
+}
+
 .modal-hint {
   font-size: var(--font-xs);
   color: var(--text-tertiary);

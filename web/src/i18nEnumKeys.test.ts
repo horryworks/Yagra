@@ -51,6 +51,10 @@ import {
   NODE_KINDS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
+import {
+  NODE_EDIT_KIND_SPEC,
+  NODE_EDIT_SECTIONS,
+} from './components/NodeDetail/nodeEditForm';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
@@ -386,6 +390,25 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // wording that says which of "end this window", "take this node out" and "put it back" the
     // click will do. `suppression.test.ts` pins the produced set to this list from the other side.
     expectKeys('suppression panel label', { en: enNodes, ja: jaNodes }, '', PANEL_LABEL_KEYS);
+  });
+
+  it('every node kind has an edit-dialog title and profile label (nodes:*)', () => {
+    // Both are read out of NODE_EDIT_KIND_SPEC at render time, so a fifth kind added without its
+    // strings would put a raw key in the dialog's own header.
+    const keys = NODE_KINDS.flatMap((k) => [
+      NODE_EDIT_KIND_SPEC[k].titleKey,
+      NODE_EDIT_KIND_SPEC[k].profileLabelKey,
+    ]);
+    expectKeys('node edit dialog', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every node-edit section has a heading (nodes:editNode.section.*)', () => {
+    expectKeys(
+      'node edit section',
+      { en: enNodes, ja: jaNodes },
+      'editNode.section.',
+      NODE_EDIT_SECTIONS,
+    );
   });
 
   it('every node kind has a label (nodes:kind.*)', () => {

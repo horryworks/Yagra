@@ -160,14 +160,7 @@ export function OverviewTab({
           // exist — they are not in any allowlist, by design (ADR-047 Inc.3).
           extracts={node.url_check.json_extract ?? []}
           actions={
-            canEdit ? (
-              <CheckConfigActions
-                nodeId={node.id}
-                kind="url"
-                config={node.url_check}
-                onChanged={onChanged}
-              />
-            ) : null
+            canEdit ? <CheckConfigActions nodeId={node.id} kind="url" onChanged={onChanged} /> : null
           }
         />
       )}
@@ -176,14 +169,7 @@ export function OverviewTab({
           nodeId={node.id}
           check={node.dns_check}
           actions={
-            canEdit ? (
-              <CheckConfigActions
-                nodeId={node.id}
-                kind="dns"
-                config={node.dns_check}
-                onChanged={onChanged}
-              />
-            ) : null
+            canEdit ? <CheckConfigActions nodeId={node.id} kind="dns" onChanged={onChanged} /> : null
           }
         />
       )}
