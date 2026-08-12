@@ -131,13 +131,30 @@ else
   if [ -z "$SNAP_NAME" ]; then
     log "snapshot API returned no name — skipping metrics (response: ${SNAP_JSON:-none})"
   else
-    docker cp "$VM_CID:/victoria-metrics-data/snapshots/$SNAP_NAME" "$OUT/vm/$SNAP_NAME"
-    tar -C "$OUT/vm" -czf "$OUT/vm/snapshot.tar.gz" "$SNAP_NAME"
-    rm -rf "${OUT:?}/vm/${SNAP_NAME:?}"
-    # Delete the server-side snapshot: VM keeps them forever otherwise, and they are hard links that
-    # pin disk as parts are merged away.
-    http "http://victoriametrics:8428/snapshot/delete?snapshot=$SNAP_NAME" >/dev/null
-    log "vm/snapshot.tar.gz ($(du -h "$OUT/vm/snapshot.tar.gz" | cut -f1))"
+    SNAP_CREATED="$SNAP_NAME"
+    # Stream the snapshot out as an archive instead of `docker cp`-ing the directory. A VM snapshot
+    # is not a directory of files: its parts are symlinks pointing back up into the live data
+    # directory, and docker cp refuses a symlink whose target escapes what it is copying —
+    #   invalid symlink ".../vm/<snap>/data/big" -> "../../../data/big/snapshots/<snap>"
+    # `tar -h` resolves them in the only place they still mean anything, which is inside the
+    # container. This was never reached until the HTTP call above started working, so the two bugs
+    # shipped together and only the first one was visible.
+    if docker exec "$VM_CID" tar -C /victoria-metrics-data/snapshots -czhf - "$SNAP_NAME" \
+         > "$OUT/vm/snapshot.tar.gz"; then
+      log "vm/snapshot.tar.gz ($(du -h "$OUT/vm/snapshot.tar.gz" | cut -f1))"
+    else
+      # Not fatal, for the same reason the two branches above are not: a backup that captured the
+      # configuration and the KEK is worth keeping even when the metrics could not be read. It is
+      # recorded rather than swallowed — `metrics_snapshot` goes null and the summary says so.
+      # ⚠️ It must not become fatal by accident either: under `set -e` an abort here would take the
+      # pre-upgrade backup with it, and with it the upgrade.
+      rm -f "$OUT/vm/snapshot.tar.gz"
+      SNAP_NAME=""
+      log "the snapshot could not be read out of the container — this backup has no metrics"
+    fi
+    # Delete the server-side snapshot whether or not it was captured: VM keeps them forever
+    # otherwise, and they pin disk as the parts they point at are merged away.
+    http "http://victoriametrics:8428/snapshot/delete?snapshot=$SNAP_CREATED" >/dev/null
   fi
 fi
 
