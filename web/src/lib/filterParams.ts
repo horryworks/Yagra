@@ -13,13 +13,17 @@
 // Callers must write with `setSearchParams(params, { replace: true })` — otherwise every settled
 // keystroke pushes a history entry and Back stops meaning "the previous screen".
 
-/** Read an id-valued filter: a trimmed, non-empty value, or `null` when absent or blank. */
+/** Read an open-valued filter: a trimmed, non-empty value, or `null` when absent or blank.
+ *
+ *  Named for the first two callers, which were ids, but the codec is about the *shape* — an opaque
+ *  string with no closed set to validate against — so a free-text search term uses it too. Anything
+ *  with a fixed vocabulary belongs in `readEnumParam` instead, where an unknown value falls back. */
 export function readIdParam(params: URLSearchParams, key: string): string | null {
   const v = params.get(key)?.trim();
   return v ? v : null;
 }
 
-/** Write (or clear) an id-valued filter. Clearing **deletes the key** rather than writing an empty
+/** Write (or clear) an open-valued filter. Clearing **deletes the key** rather than writing an empty
  *  value, so the URL stays clean and "is anything set" can be read off the params. */
 export function writeIdParam(params: URLSearchParams, key: string, id: string | null): void {
   if (id) params.set(key, id);

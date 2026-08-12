@@ -36,11 +36,29 @@ type SortedAlert = ReturnType<typeof sortedAlerts>[number];
  *  `useEntityNames()` resolver in the page, duplicating the batch this list already runs. */
 type RowActions = (alert: SortedAlert, nodeName: string) => ReactNode;
 
+/** Optional row predicate (Alerts ▸ Active). Receives the id→name *resolver* rather than an
+ *  already-resolved name, which is the whole reason the filter can live here: `nodeName()` enqueues
+ *  every id it is asked about for the next batch request, so a predicate that only needs names when
+ *  something is typed can decline to ask. See `pages/activeAlertFilters.ts`. */
+type RowFilter = (alert: SortedAlert, nameOf: NameOf) => boolean;
+
+/** Toolbar rendered above the list. A render prop, not a plain node, because the counts it shows
+ *  are derived from the store *and* the filter and are known only here — and because it must keep
+ *  rendering when the filter matches nothing, or the controls that would undo the filter vanish
+ *  along with the rows. */
+type ToolbarSlot = (counts: { shown: number; total: number }) => ReactNode;
+
 interface Props {
   /** Cap the number of rows (e.g. dashboard widget). */
   limit?: number;
   actions?: RowActions;
+  filter?: RowFilter;
+  toolbar?: ToolbarSlot;
   empty?: ReactNode;
+  /** Shown when there are alerts but none match `filter`. Distinguishing the two is safe here —
+   *  and only here — because the whole set is in the browser; a server-side list must key its empty
+   *  state off the filter instead (`lib/filterQuery.ts`). */
+  emptyFiltered?: ReactNode;
 }
 
 const rowKey = (a: SortedAlert) => `${a.node}|${a.check}|${a.severity}`;
@@ -172,7 +190,7 @@ function VirtualAlertRows({
   );
 }
 
-export function AlertRows({ limit, actions, empty }: Props) {
+export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltered }: Props) {
   const { t } = useTranslation('alerts');
   const alerts = useAlertStore((s) => s.alerts);
   // One resolver for the whole list. `nodeName` enqueues only the ids the current render actually
@@ -181,22 +199,37 @@ export function AlertRows({ limit, actions, empty }: Props) {
   const { nodeName } = useEntityNames();
   // Sort once per store change, not on every SSE-driven render.
   const all = useMemo(() => sortedAlerts(alerts), [alerts]);
+  // Filter after sorting, before windowing — the virtualizer must count only the rows that will be
+  // drawn. Recomputes when `nodeName` gains a batch of resolutions, which is what lets a search on
+  // a node name settle rather than matching only the ids resolved so far.
+  const shown = useMemo(
+    () => (filter ? all.filter((a) => filter(a, nodeName)) : all),
+    [all, filter, nodeName],
+  );
 
-  if (all.length === 0) {
-    return <p className="alertrows-empty">{empty ?? t('active.empty')}</p>;
-  }
-
-  // Capped use (dashboard widget): a small fixed slice — render inline so the widget keeps its
-  // natural height (no bounded scroll region).
-  if (limit) {
-    return (
+  const body =
+    all.length === 0 ? (
+      <p className="alertrows-empty">{empty ?? t('active.empty')}</p>
+    ) : shown.length === 0 ? (
+      <p className="alertrows-empty">{emptyFiltered ?? empty ?? t('active.empty')}</p>
+    ) : limit ? (
+      // Capped use (dashboard widget): a small fixed slice — render inline so the widget keeps its
+      // natural height (no bounded scroll region).
       <div className="alertrows">
-        {all.slice(0, limit).map((a) => (
+        {shown.slice(0, limit).map((a) => (
           <AlertRow key={rowKey(a)} a={a} actions={actions} nodeName={nodeName} />
         ))}
       </div>
+    ) : (
+      <VirtualAlertRows alerts={shown} actions={actions} nodeName={nodeName} />
     );
-  }
 
-  return <VirtualAlertRows alerts={all} actions={actions} nodeName={nodeName} />;
+  // No toolbar (every dashboard widget) ⇒ the same single element as before, not a fragment.
+  if (!toolbar) return body;
+  return (
+    <>
+      {toolbar({ shown: shown.length, total: all.length })}
+      {body}
+    </>
+  );
 }

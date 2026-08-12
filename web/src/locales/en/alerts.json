@@ -3,6 +3,15 @@
     "card": "Active",
     "note": "{{count}} active · triage view (ack & escalation are handled in your external tool)",
     "empty": "No active alerts.",
+    "emptyFiltered": "No active alerts match these filters.",
+    "searchPlaceholder": "Search node or metric…",
+    "searchAria": "Search active alerts",
+    "ack": {
+      "all": "Acked and not",
+      "aria": "Filter by acknowledgement",
+      "acked": "Acked",
+      "unacked": "Not acked"
+    },
     "mute": "Mute",
     "muteHint": "Silence notifications for this check on this node until a time you choose"
   },

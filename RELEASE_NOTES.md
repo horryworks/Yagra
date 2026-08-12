@@ -11,6 +11,14 @@
 ## Unreleased
 
 ### New Features
+- **Alerts ▸ Active can be narrowed.** The triage screen — the first one open during an incident —
+  had no filter at all: a major outage produced thousands of rows and the only way through them was
+  to scroll. It now filters by severity, node state, whether the alert has been acknowledged in your
+  external on-call tool, and free text over the node name, the node's id and the metric that fired.
+  The filters live in the URL, so a narrowed view survives a reload and can be pasted to whoever is
+  looking at the same incident. Unlike History and Audit these run in the browser, and deliberately:
+  the whole active-alert set is already there over SSE, so there is no page boundary for a filter to
+  hide matches behind. The dashboard's alert widgets are unaffected.
 - **Alerts ▸ History can be narrowed.** The screen had no filter of any kind: an append-only log
   that only grows, readable by scrolling and nothing else. It now filters by severity, state, fire
   or clear, node or folder group, and a time window — all applied in the database, so a filter
