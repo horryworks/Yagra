@@ -3702,6 +3702,12 @@ async fn load_alert_config_base(
 /// list, not a fresh DB scan. Folder-group scopes expand against the inventory tree (recursive incl.
 /// subgroups, ADR-022) — the same chain the Troubleshoot scope uses; only touches the DB when one is
 /// actually active.
+///
+/// **An exemption (migration 0081) subtracts from the *inherited* half only.** A window that names
+/// a node — `WindowScope::Node` — always applies, so an operator who released a box from its
+/// group's window and then deliberately opened one on that box gets the suppression they asked
+/// for. Were exemptions applied to the union, that second window would do nothing and there would
+/// be nothing on screen saying why.
 async fn resolve_maintenance(
     maintenance: &MaintenanceRepo,
     groups: &groups::GroupRepo,
@@ -3712,7 +3718,8 @@ async fn resolve_maintenance(
         tracing::warn!(error = %e, "failed to load maintenance windows");
         Vec::new()
     });
-    let mut in_maintenance = maintenance::nodes_in_maintenance(&scopes, nodes);
+    let named = maintenance::nodes_named_by_a_window(&scopes, nodes);
+    let mut inherited = maintenance::nodes_covered_by_a_class_window(&scopes, nodes);
     let folder_groups: Vec<Uuid> = scopes
         .iter()
         .filter(|(level, _)| *level == maintenance::WindowScope::FolderGroup)
@@ -3726,8 +3733,10 @@ async fn resolve_maintenance(
                     group_ids.extend(groups::group_subtree(&edges, root));
                 }
                 match repo.nodes_in_groups(&group_ids).await {
+                    // Folder-group coverage is inherited too: the window names the folder, not the
+                    // node, so releasing one member must be able to cancel it.
                     Ok(node_ids) => {
-                        in_maintenance.extend(node_ids.into_iter().map(yagra_common::NodeId::from))
+                        inherited.extend(node_ids.into_iter().map(yagra_common::NodeId::from))
                     }
                     Err(e) => {
                         tracing::warn!(error = %e, "failed to resolve folder-group maintenance");
@@ -3737,7 +3746,29 @@ async fn resolve_maintenance(
             Err(e) => tracing::warn!(error = %e, "failed to load group edges for maintenance"),
         }
     }
-    in_maintenance
+    for node in exempt_nodes(maintenance, maintenance::ExemptionKind::Maintenance).await {
+        inherited.remove(&node);
+    }
+    named.union(&inherited).copied().collect()
+}
+
+/// The nodes released from `kind`, or an empty set if the read fails.
+///
+/// Degrading to "nobody is exempt" keeps a database hiccup on the side that **suppresses more**,
+/// which is the same direction every other failure in this refresh takes: a lost exemption means
+/// an operator's release stops applying and they see the node go quiet again, whereas inventing
+/// one would silently un-suppress a node during planned work.
+async fn exempt_nodes(
+    maintenance: &MaintenanceRepo,
+    kind: maintenance::ExemptionKind,
+) -> std::collections::BTreeSet<NodeId> {
+    match maintenance.exempt_nodes(kind).await {
+        Ok(ids) => ids.into_iter().map(yagra_common::NodeId::from).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, kind = kind.as_str(), "failed to load suppression exemptions");
+            std::collections::BTreeSet::new()
+        }
+    }
 }
 
 /// Assemble the full alert config (config base + current maintenance). Used for the initial
@@ -3799,9 +3830,18 @@ async fn load_mutes(
                     group_ids.extend(groups::group_subtree(&edges, root));
                 }
                 match repo.nodes_in_groups(&group_ids).await {
-                    // A group mute silences the whole node (check=None).
+                    // A group mute silences the whole node (check=None) — and, being inherited
+                    // rather than named, is the half a release can cancel. The node mutes pushed
+                    // above are deliberately not filtered: a mute naming this node always applies.
                     Ok(node_ids) => {
-                        active.extend(node_ids.into_iter().map(|n| ActiveMute::new(n, None)));
+                        let exempt =
+                            exempt_nodes(maintenance, maintenance::ExemptionKind::Mute).await;
+                        active.extend(
+                            node_ids
+                                .into_iter()
+                                .filter(|n| !exempt.contains(&yagra_common::NodeId::from(*n)))
+                                .map(|n| ActiveMute::new(n, None)),
+                        );
                     }
                     Err(e) => tracing::warn!(error = %e, "failed to resolve group mute nodes"),
                 }

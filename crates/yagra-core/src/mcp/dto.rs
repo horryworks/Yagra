@@ -349,13 +349,18 @@ impl NodeGroupDto {
 
 /// What is currently suppressing alerts: planned maintenance windows and reactive mutes.
 ///
-/// Both arrays in one result rather than a `kind` parameter, because "is the fleet quiet or is it
+/// Every array in one result rather than a `kind` parameter, because "is the fleet quiet or is it
 /// silenced" is one question — the same reasoning `get_neighbors` uses for current + history. The
-/// rows are the REST types; neither carries a secret, and the canary checks that by type.
+/// rows are the REST types; none carries a secret, and the canary checks that by type.
+///
+/// `exemptions` is the negative half and belongs here for the same reason: a node released from
+/// its group's window is *not* silenced, and a reader that saw only the window would conclude the
+/// opposite.
 #[derive(Debug, Clone, Serialize)]
 pub struct SuppressionsDto {
     pub maintenance_windows: Vec<crate::maintenance::StoredWindow>,
     pub mutes: Vec<crate::maintenance::StoredMute>,
+    pub exemptions: Vec<crate::maintenance::StoredExemption>,
 }
 
 /// A Troubleshoot analysis job (ADR-022), sanitized for AI consumption — identity, tool, scope, and
@@ -1135,6 +1140,12 @@ mod tests {
                 check_name: Some("icmp_rtt_ms".to_owned()),
                 until_at: "1970-01-01T02:00:00Z".to_owned(),
                 reason: Some("known noisy link".to_owned()),
+            }],
+            exemptions: vec![crate::maintenance::StoredExemption {
+                id: uuid::Uuid::new_v4(),
+                kind: crate::maintenance::ExemptionKind::Maintenance,
+                node_id: node.id.0,
+                until_at: "1970-01-01T01:00:00Z".to_owned(),
             }],
         };
         assert_no_forbidden_keys(

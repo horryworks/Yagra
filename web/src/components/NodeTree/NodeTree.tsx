@@ -34,9 +34,12 @@ import {
 import { usePrefsStore } from '../../prefs';
 import {
   DURATION_PRESETS,
+  type ReleaseAction,
+  type SuppressionCause,
   type SuppressionIndex,
   type SuppressionTarget,
 } from '../../lib/suppression';
+import { formatScheduleTime } from '../../lib/format';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
 import { ActionMenu } from '../ui/ActionMenu';
@@ -67,6 +70,11 @@ type Menu =
   | { x: number; y: number; kind: 'group'; group: TreeGroup }
   | { x: number; y: number; kind: 'node'; node: NodeSummary }
   | { x: number; y: number; kind: 'root' }
+  // Opened by clicking a suppression marker: what is silencing this row, and what can be done
+  // about it. A `Menu` variant rather than its own popover because `.ntree-menu` is already
+  // rendered at the component root — a `position: fixed` element placed inside a row would take
+  // that row's virtualization `transform` as its containing block and lay itself out off screen.
+  | { x: number; y: number; kind: 'suppress'; target: SuppressionTarget; node?: NodeSummary }
   | null;
 
 interface Props {
@@ -117,6 +125,12 @@ interface Props {
   ) => void;
   /** Which nodes/groups are currently in maintenance or muted (drives the per-row markers). */
   suppression?: SuppressionIndex;
+  /** Why a row is suppressed right now — resolved by the page, which holds the window and mute
+   *  lists. Omit and the markers stay decorative, as they were before the release panel. */
+  suppressionCauses?: (target: SuppressionTarget, node?: NodeSummary) => SuppressionCause[];
+  /** Act on a suppression from the panel or the context menu. One callback over a union so the
+   *  page answers with a single exhaustive switch. Omit to hide every release control. */
+  onRelease?: (action: ReleaseAction) => void;
   /** Right-click → put a node/group into maintenance. `durationMs` = preset length from now;
    *  `null` = open the full create form prefilled with the scope ("Custom…"). */
   onSetMaintenance?: (target: SuppressionTarget, durationMs: number | null) => void;
@@ -154,6 +168,8 @@ export function NodeTree({
   onReorderNode,
   onReorderGroup,
   suppression,
+  suppressionCauses,
+  onRelease,
   onSetMaintenance,
   onSetMute,
   pools,
@@ -196,28 +212,193 @@ export function NodeTree({
   const selectNode = (node: NodeSummary) => (onSelectNode ? onSelectNode(node) : onOpenNode(node));
   const selectGroup = (group: NodeGroup) => onSelectGroup?.(group);
 
-  // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active.
-  const suppressionMarks = (maint: boolean, muted: boolean): React.ReactNode => {
-    if (!maint && !muted) return null;
+  // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
+  // the struck-through variant for a node released from a suppression it inherited. Each is a
+  // button: clicking one opens the panel below, which is the only place in the UI that answers
+  // "why is this row silent".
+  const suppressionMarks = (m: {
+    target: SuppressionTarget;
+    node?: NodeSummary;
+    maint: boolean;
+    muted: boolean;
+    releasedMaint?: boolean;
+    releasedMute?: boolean;
+  }): React.ReactNode => {
+    if (!m.maint && !m.muted && !m.releasedMaint && !m.releasedMute) return null;
+    const open = (e: React.MouseEvent) => {
+      e.preventDefault();
+      // Without this the document-level closer installed below runs in the same click and shuts
+      // the panel on the frame it opened.
+      e.stopPropagation();
+      setMenu({ x: e.clientX, y: e.clientY, kind: 'suppress', target: m.target, node: m.node });
+    };
+    const mark = (cls: string, title: string, icon: React.ReactNode) => (
+      <button type="button" className={`ntree-supp-icon ${cls}`} title={title} onClick={open}>
+        {icon}
+      </button>
+    );
     return (
       <span className="ntree-supp">
-        {maint && (
-          <span className="ntree-supp-icon maint" title={t('tree.maintTitle')}>
-            <WrenchIcon />
-          </span>
-        )}
-        {muted && (
-          <span className="ntree-supp-icon mute" title={t('tree.muteTitle')}>
-            <BellOffIcon />
-          </span>
-        )}
+        {m.maint && mark('maint', t('tree.suppression.markMaint'), <WrenchIcon />)}
+        {m.muted && mark('mute', t('tree.suppression.markMute'), <BellOffIcon />)}
+        {m.releasedMaint &&
+          mark('maint released', t('tree.suppression.markReleasedMaint'), <WrenchIcon />)}
+        {m.releasedMute &&
+          mark('mute released', t('tree.suppression.markReleasedMute'), <BellOffIcon />)}
       </span>
+    );
+  };
+
+  /** One release control, or the note explaining why there is none. */
+  const causeAction = (
+    cause: SuppressionCause,
+    target: SuppressionTarget,
+    node: NodeSummary | undefined,
+    act: (a: ReleaseAction) => void,
+  ): React.ReactNode => {
+    if (cause.source === 'direct' && cause.id) {
+      // A window is ended, not deleted — the label says so, because the row it leaves behind on the
+      // Maintenance page is the difference. A mute has nothing to preserve, so it goes.
+      const action: ReleaseAction =
+        cause.kind === 'maintenance'
+          ? { action: 'end-window', windowId: cause.id }
+          : { action: 'lift-mute', muteId: cause.id };
+      const label =
+        cause.kind === 'maintenance'
+          ? t('tree.suppression.act.endNow')
+          : t('tree.suppression.act.release');
+      return (
+        <div className="ntree-supp-act">
+          <button type="button" onClick={() => act(action)}>
+            {label}
+          </button>
+        </div>
+      );
+    }
+    if (target.kind === 'node' && node) {
+      return (
+        <div className="ntree-supp-act">
+          <button
+            type="button"
+            onClick={() =>
+              act({ action: 'release-node', nodeId: node.id, kind: cause.kind })
+            }
+          >
+            {t('tree.suppression.act.releaseNode')}
+          </button>
+        </div>
+      );
+    }
+    // A group covered by an ancestor's window. Ending it from here would release every sibling
+    // under that ancestor too, so this says where the control is rather than quietly offering it.
+    return (
+      <div className="ntree-supp-note">
+        {t('tree.suppression.releaseOnAncestor', cause.labelParams)}
+      </div>
+    );
+  };
+
+  /** The panel a marker click opens: every suppression on this row, and what can be done to it. */
+  const suppressionPanel = (m: Extract<Menu, { kind: 'suppress' }>): React.ReactNode => {
+    const act = (a: ReleaseAction) => {
+      onRelease?.(a);
+      setMenu(null);
+    };
+    const causes = suppressionCauses?.(m.target, m.node) ?? [];
+    const released: Array<'maintenance' | 'mute'> = [];
+    if (m.node && suppression?.exemptMaintenanceNodes.has(m.node.id)) released.push('maintenance');
+    if (m.node && suppression?.exemptMuteNodes.has(m.node.id)) released.push('mute');
+
+    const rows: React.ReactNode[] = causes.map((c, i) => (
+      <div className="ntree-supp-cause" key={`c${i}`}>
+        <div className="ntree-supp-head">
+          {t(
+            c.kind === 'maintenance'
+              ? 'tree.suppression.head.maintenance'
+              : 'tree.suppression.head.mute',
+          )}
+        </div>
+        {c.title && <div className="ntree-supp-title">{c.title}</div>}
+        <div className="ntree-supp-meta">
+          {t(c.labelKey, c.labelParams)}
+          {c.endsAt && ` · ${t('tree.suppression.until', { time: formatScheduleTime(c.endsAt) })}`}
+        </div>
+        {canEdit && onRelease && causeAction(c, m.target, m.node, act)}
+      </div>
+    ));
+
+    for (const kind of released) {
+      const node = m.node;
+      if (!node) continue;
+      rows.push(
+        <div className="ntree-supp-cause" key={`r${kind}`}>
+          <div className="ntree-supp-head">
+            {t(
+              kind === 'maintenance'
+                ? 'tree.suppression.head.releasedMaintenance'
+                : 'tree.suppression.head.releasedMute',
+            )}
+          </div>
+          {canEdit && onRelease && (
+            <div className="ntree-supp-act">
+              <button
+                type="button"
+                onClick={() => act({ action: 'undo-release', nodeId: node.id, kind })}
+              >
+                {t(
+                  kind === 'maintenance'
+                    ? 'tree.suppression.act.undoMaintenance'
+                    : 'tree.suppression.act.undoMute',
+                )}
+              </button>
+            </div>
+          )}
+        </div>,
+      );
+    }
+
+    if (rows.length === 0) {
+      // Reachable as a race — the window ended between the render that lit the marker and the
+      // click. Saying so beats an empty box.
+      rows.push(
+        <div className="ntree-supp-cause" key="none">
+          <div className="ntree-supp-note">{t('tree.suppression.none')}</div>
+        </div>,
+      );
+    }
+    return <div className="ntree-supp-panel">{rows}</div>;
+  };
+
+  /** Whether this row currently has anything the release panel could act on or explain. */
+  const hasSuppression = (target: SuppressionTarget, node?: NodeSummary): boolean => {
+    if (target.kind === 'group') {
+      return (
+        !!suppression?.maintenanceGroups.has(target.id) ||
+        !!suppression?.muteGroups.has(target.id)
+      );
+    }
+    return (
+      !!suppression?.maintenanceNodes.has(target.id) ||
+      !!suppression?.muteNodes.has(target.id) ||
+      !!suppression?.exemptMaintenanceNodes.has(target.id) ||
+      !!suppression?.exemptMuteNodes.has(target.id) ||
+      node?.state === 'maintenance'
     );
   };
 
   // The Maintenance/Mute quick-duration section appended to a row's context menu. A preset fires
   // immediately (now + length); "Custom…" opens the full create form prefilled with the scope.
-  const suppressionMenu = (target: SuppressionTarget): React.ReactNode => {
+  //
+  // Releasing is *not* a fourth chip beside them. It switches this menu to the panel at the same
+  // coordinates, so the decision of what a release does to each cause lives in exactly one place —
+  // and so a mis-aimed click lands on a panel that names what it would release rather than on an
+  // action. The chips create suppression, which is safe to get wrong; releasing is what makes a
+  // fleet page during planned work.
+  const suppressionMenu = (
+    target: SuppressionTarget,
+    node: NodeSummary | undefined,
+    at: { x: number; y: number },
+  ): React.ReactNode => {
     if (!onSetMaintenance && !onSetMute) return null;
     const row = (label: string, handler: (t: SuppressionTarget, ms: number | null) => void) => (
       <div className="ntree-menu-section">
@@ -254,6 +435,16 @@ export function NodeTree({
         <div className="ntree-menu-sep" />
         {onSetMaintenance && row(t('tree.maintenance'), onSetMaintenance)}
         {onSetMute && row(t('tree.mute'), onSetMute)}
+        {onRelease && hasSuppression(target, node) && (
+          <button
+            type="button"
+            onClick={() =>
+              setMenu({ x: at.x, y: at.y, kind: 'suppress', target, node })
+            }
+          >
+            {t('tree.suppression.act.open')}
+          </button>
+        )}
       </>
     );
   };
@@ -455,10 +646,11 @@ export function NodeTree({
         </button>
         <HealthBar tally={tally} className="ntree-health" />
         <span className="ntree-count">{tally.total}</span>
-        {suppressionMarks(
-          !!suppression?.maintenanceGroups.has(group.id),
-          !!suppression?.muteGroups.has(group.id),
-        )}
+        {suppressionMarks({
+          target: { kind: 'group', id: group.id, name: group.name },
+          maint: !!suppression?.maintenanceGroups.has(group.id),
+          muted: !!suppression?.muteGroups.has(group.id),
+        })}
         {canEdit && (
           // `menu-open` keeps the hover-revealed actions rendered while this row's ＋ menu is up:
           // the menu opens BELOW the row, so reaching it takes the pointer off the row, and the
@@ -573,10 +765,20 @@ export function NodeTree({
             {NODE_KIND_SPEC[node.kind].badge}
           </span>
         )}
-        {suppressionMarks(
-          node.state === 'maintenance' || !!suppression?.maintenanceNodes.has(node.id),
-          !!suppression?.muteNodes.has(node.id),
-        )}
+        {suppressionMarks({
+          target: { kind: 'node', id: node.id, name: node.name },
+          node,
+          // The index already accounts for a release, including re-adding a window that names the
+          // node. `state` is the engine's rolled-up opinion and lags a release by up to one refresh
+          // (~30s), so it is only consulted while the row is *not* released — otherwise the wrench
+          // would sit next to the struck-through one for half a minute after every release.
+          maint:
+            !!suppression?.maintenanceNodes.has(node.id) ||
+            (node.state === 'maintenance' && !suppression?.exemptMaintenanceNodes.has(node.id)),
+          muted: !!suppression?.muteNodes.has(node.id),
+          releasedMaint: !!suppression?.exemptMaintenanceNodes.has(node.id),
+          releasedMute: !!suppression?.exemptMuteNodes.has(node.id),
+        })}
         {canEdit && (
           <span className="ntree-actions">
             <button
@@ -704,7 +906,9 @@ export function NodeTree({
 
       {menu && (
         <div className="ntree-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          {menu.kind === 'group' ? (
+          {menu.kind === 'suppress' ? (
+            suppressionPanel(menu)
+          ) : menu.kind === 'group' ? (
             <>
               <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
                 {t('group.addSubgroup')}
@@ -721,7 +925,11 @@ export function NodeTree({
                 { kind: 'group', id: menu.group.id, name: menu.group.name },
                 menu.group.pool,
               )}
-              {suppressionMenu({ kind: 'group', id: menu.group.id, name: menu.group.name })}
+              {suppressionMenu(
+                { kind: 'group', id: menu.group.id, name: menu.group.name },
+                undefined,
+                menu,
+              )}
               <div className="ntree-menu-sep" />
               <button type="button" className="danger" onClick={() => { onDeleteGroup(menu.group); setMenu(null); }}>
                 {t('common:actions.delete')}
@@ -741,7 +949,11 @@ export function NodeTree({
                 </button>
               )}
               {poolMenu({ kind: 'node', id: menu.node.id, name: menu.node.name }, menu.node.pool)}
-              {suppressionMenu({ kind: 'node', id: menu.node.id, name: menu.node.name })}
+              {suppressionMenu(
+                { kind: 'node', id: menu.node.id, name: menu.node.name },
+                menu.node,
+                menu,
+              )}
               {onDeleteNode && (
                 <>
                   <div className="ntree-menu-sep" />

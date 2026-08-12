@@ -114,6 +114,7 @@ import type {
   ScopeLevel,
   Severity,
   StateHistory,
+  SuppressionExemption,
   ThroughputRange,
   StoredCollectionItem,
   ThresholdPage,
@@ -1789,6 +1790,12 @@ export const api = {
   deleteMaintenanceWindow: (id: string): Promise<void> =>
     apiDelete('/api/v1/maintenance-windows/{id}', { path: { id } }),
 
+  /** End an **active** maintenance window now. The row stays, as a record of the maintenance that
+   *  actually happened, and reads as `ended` afterwards — the inventory tree's release for a
+   *  window it can act on. `404` if the window is not currently active. */
+  endMaintenanceWindow: (id: string): Promise<void> =>
+    apiPost('/api/v1/maintenance-windows/{id}/end', { path: { id } }),
+
   /** Delete every *ended* maintenance window this account can see, and answer how many went.
    *  The browser sends only the discriminator: the server's clock decides what has ended and the
    *  caller's group scope decides which rows are eligible. */
@@ -1811,6 +1818,32 @@ export const api = {
 
   /** Delete (lift) a mute. */
   deleteMute: (id: string): Promise<void> => apiDelete('/api/v1/mutes/{id}', { path: { id } }),
+
+  /** Nodes currently released from a suppression they only inherited. Fetched alongside the window
+   *  and mute lists — a released node is not suppressed, so the tree needs all three to be right. */
+  listSuppressionExemptions: (): Promise<SuppressionExemption[]> =>
+    apiGet('/api/v1/suppression-exemptions'),
+
+  /** Release one node from the maintenance it *inherits* (its folder group, profile, a tag, or a
+   *  fleet-wide window), or put it back. The rest of the group stays covered.
+   *
+   *  The browser sends no expiry: the server sizes the release to the coverage actually in force,
+   *  so it can never outlive the window and quietly exclude the node from the next one. `400
+   *  not_suppressed` when nothing is inherited — including when the only window *names* this node,
+   *  which is ended directly instead. */
+  setNodeMaintenanceExemption: (nodeId: string, exempt: boolean): Promise<void> =>
+    apiPut('/api/v1/nodes/{node_id}/maintenance-exemption', {
+      path: { node_id: nodeId },
+      body: { exempt },
+    }),
+
+  /** The mute counterpart of {@link api.setNodeMaintenanceExemption} — releases one node from a
+   *  group mute. A mute naming the node is lifted directly instead. */
+  setNodeMuteExemption: (nodeId: string, exempt: boolean): Promise<void> =>
+    apiPut('/api/v1/nodes/{node_id}/mute-exemption', {
+      path: { node_id: nodeId },
+      body: { exempt },
+    }),
 
   /** The role-vs-privilege matrix: which permissions each role grants. Read-only (View). */
   listRoles: (): Promise<RoleMatrix> => apiGet('/api/v1/roles'),

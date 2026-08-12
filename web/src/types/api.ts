@@ -506,6 +506,13 @@ export type MaintenanceWindow = components['schemas']['StoredWindow'];
  *  one of `node_id` / `group_id` is set, per `scope_kind`. */
 export type Mute = components['schemas']['StoredMute'];
 
+/** A node released from a suppression it only *inherited* (`GET /api/v1/suppression-exemptions`,
+ *  Rust `StoredExemption`). Its group's window or mute still stands for everyone else; this node
+ *  alerts normally until `until_at`, which the server sizes to the coverage it was carved out of.
+ *
+ *  ⚠️ Not `Node.suppression_opt_out`, which is about derived *dependency* suppression (ADR-043). */
+export type SuppressionExemption = components['schemas']['StoredExemption'];
+
 // ── URL & DNS monitors ──────────────────────────────────────────────────────────────────────────
 
 /** Which HTTP status codes count as "up" for a URL monitor (a tagged object). */

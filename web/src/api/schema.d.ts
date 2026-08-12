@@ -1275,6 +1275,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/maintenance-windows/{id}/end": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["end_maintenance_window"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/meraki/import": {
         parameters: {
             query?: never;
@@ -2066,6 +2082,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/maintenance-exemption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_node_maintenance_exemption"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/metrics": {
         parameters: {
             query?: never;
@@ -2112,6 +2144,22 @@ export interface paths {
         };
         get: operations["get_node_metric_range"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nodes/{node_id}/mute-exemption": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: operations["set_node_mute_exemption"];
         post?: never;
         delete?: never;
         options?: never;
@@ -3101,6 +3149,22 @@ export interface paths {
          *     to refetch instead of silently showing a stale run forever.
          */
         get: operations["stream_report_runs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/suppression-exemptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["list_suppression_exemptions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -5245,6 +5309,23 @@ export interface components {
             /** Format: int64 */
             ts_unix_ms: number;
         };
+        /** @description Whether a node is released from the suppression it inherits. */
+        ExemptionBody: {
+            /**
+             * @description `true` releases the node until the coverage it was carved out of ends. `false` puts it
+             *     back, and is accepted whether or not it was released — this is a state, not a toggle.
+             */
+            exempt: boolean;
+        };
+        /**
+         * @description Which kind of suppression a node has been released from.
+         *
+         *     ⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived
+         *     dependency* suppression (ADR-043). This is about maintenance windows and mutes, and the two must
+         *     not be wired to each other.
+         * @enum {string}
+         */
+        ExemptionKind: "maintenance" | "mute";
         /**
          * @description Which HTTP status codes count as "up". Serialized as a tagged object (the `expected_status`
          *     JSONB column), e.g. `{"kind":"two_xx"}` / `{"kind":"exact","codes":[200,204]}`.
@@ -8036,6 +8117,16 @@ export interface components {
             ttl_secs: number;
             /** Format: int32 */
             window_secs: number;
+        };
+        /** @description A node released from an inherited suppression, until the suppression it was carved out of ends. */
+        StoredExemption: {
+            /** Format: uuid */
+            id: string;
+            kind: components["schemas"]["ExemptionKind"];
+            /** Format: uuid */
+            node_id: string;
+            /** @description RFC 3339. Server-computed from the coverage in force when the release was made. */
+            until_at: string;
         };
         /**
          * @description A stored mute (API shape). A `node` mute silences one node (optionally one check via
@@ -13827,6 +13918,63 @@ export interface operations {
             };
         };
     };
+    end_maintenance_window: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Maintenance window id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Window ended; the row stays as a record of the maintenance that happened */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the ManageMaintenance permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such maintenance window, or it is not currently active (disabled, already over, or not yet started) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     import_meraki_devices: {
         parameters: {
             query?: never;
@@ -17025,6 +17173,76 @@ export interface operations {
             };
         };
     };
+    set_node_maintenance_exemption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExemptionBody"];
+            };
+        };
+        responses: {
+            /** @description Node released from, or returned to, inherited maintenance */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The node inherits no maintenance right now (`not_suppressed`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the ManageMaintenance permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     list_node_metrics: {
         parameters: {
             query?: {
@@ -17203,6 +17421,76 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_node_mute_exemption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExemptionBody"];
+            };
+        };
+        responses: {
+            /** @description Node released from, or returned to, an inherited group mute */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The node inherits no mute right now (`not_suppressed`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the AckAlerts permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such node */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21208,6 +21496,53 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode: no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_suppression_exemptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every unexpired exemption */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StoredExemption"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the View permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This core has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

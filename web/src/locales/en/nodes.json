@@ -113,6 +113,7 @@
     "loadNodes": "failed to load nodes",
     "setMaintenance": "failed to set maintenance",
     "mute": "failed to mute",
+    "release": "failed to change the suppression",
     "setPool": "failed to set poller pool",
     "addUrlMonitor": "failed to add URL monitor",
     "addNode": "failed to add node",
@@ -321,8 +322,35 @@
     "noDirectMembers": "No direct member nodes — see subgroups."
   },
   "tree": {
-    "maintTitle": "In a maintenance window",
-    "muteTitle": "Muted — notifications suppressed",
+    "suppression": {
+      "markMaint": "In maintenance — click for details",
+      "markMute": "Muted — click for details",
+      "markReleasedMaint": "Released from maintenance — click to put it back",
+      "markReleasedMute": "Released from the mute — click to put it back",
+      "head": {
+        "maintenance": "In maintenance",
+        "mute": "Muted",
+        "releasedMaintenance": "Released from maintenance",
+        "releasedMute": "Released from the mute"
+      },
+      "from": {
+        "node": "This node",
+        "group": "This group",
+        "ancestor": "From group \"{{name}}\"",
+        "elsewhere": "From a profile, tag or fleet-wide window"
+      },
+      "until": "until {{time}}",
+      "act": {
+        "open": "Suppression…",
+        "endNow": "End now",
+        "release": "Release",
+        "releaseNode": "Release this node",
+        "undoMaintenance": "Put back in maintenance",
+        "undoMute": "Mute again"
+      },
+      "releaseOnAncestor": "Release it on group \"{{name}}\"",
+      "none": "Nothing is suppressing this any more."
+    },
     "maintenance": "Maintenance",
     "mute": "Mute",
     "custom": "Custom…",

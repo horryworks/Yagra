@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import type { Alert, MaintenanceWindow, Mute, NodeGroup, NodeSummary } from '../types/api';
-import { buildSuppressionIndex, groupSubtree, muteTargetFromAlert } from './suppression';
+import type {
+  Alert,
+  MaintenanceWindow,
+  Mute,
+  NodeGroup,
+  NodeSummary,
+  SuppressionExemption,
+} from '../types/api';
+import {
+  buildSuppressionIndex,
+  CAUSE_LABEL_KEYS,
+  causesFor,
+  groupContainers,
+  groupSubtree,
+  muteTargetFromAlert,
+} from './suppression';
 import { LIVENESS_METRIC } from './format';
 
 // Tree: tokyo ⊃ edge ⊃ (n2); tokyo also holds n1. osaka is a separate top-level group with n3.
@@ -155,5 +169,237 @@ describe('buildSuppressionIndex', () => {
     expect([...idx.muteGroups].sort()).toEqual(['edge', 'tokyo']);
     expect(idx.muteNodes.has('n1')).toBe(true);
     expect(idx.muteNodes.has('n2')).toBe(true);
+  });
+});
+
+const exemption = (over: Partial<SuppressionExemption>): SuppressionExemption => ({
+  id: 'x',
+  kind: 'maintenance',
+  node_id: 'n2',
+  until_at: '2026-01-02T00:00:00Z',
+  ...over,
+});
+
+describe('groupContainers', () => {
+  it('is the group itself plus every group above it', () => {
+    expect(groupContainers(groups, 'edge')).toEqual(['edge', 'tokyo']);
+    expect(groupContainers(groups, 'tokyo')).toEqual(['tokyo']);
+    expect(groupContainers(groups, null)).toEqual([]);
+  });
+
+  // The mirror image of groupSubtree, and the property the release path relies on: the server
+  // decides folder coverage by walking *down* from the window's group, the tree by walking *up*
+  // from the row. They must agree, or the panel offers a release the server then refuses.
+  it('agrees with groupSubtree in the other direction', () => {
+    for (const root of ['tokyo', 'edge', 'osaka']) {
+      for (const g of ['tokyo', 'edge', 'osaka']) {
+        expect(groupContainers(groups, g).includes(root)).toBe(
+          [...groupSubtree(groups, root)].includes(g),
+        );
+      }
+    }
+  });
+
+  it('cannot loop forever on cyclic data', () => {
+    const cyclic: NodeGroup[] = [
+      { ...groups[0], id: 'a', parent_id: 'b' },
+      { ...groups[0], id: 'b', parent_id: 'a' },
+    ];
+    expect(groupContainers(cyclic, 'a').sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('buildSuppressionIndex with exemptions', () => {
+  it('takes a released node out of the inherited marks but leaves its siblings', () => {
+    const idx = buildSuppressionIndex(
+      [window({ scope_level: 'group_id', scope_id: 'tokyo' })],
+      [],
+      groups,
+      nodes,
+      [exemption({ node_id: 'n2' })],
+    );
+    expect(idx.maintenanceNodes.has('n2')).toBe(false);
+    expect(idx.exemptMaintenanceNodes.has('n2')).toBe(true);
+    expect(idx.maintenanceNodes.has('n1')).toBe(true);
+    // The group itself is still under the window — one member being out does not release it.
+    expect([...idx.maintenanceGroups].sort()).toEqual(['edge', 'tokyo']);
+  });
+
+  // The disagreement an operator would read as the icon lying: the engine keeps applying a window
+  // that names the node, so the row must keep showing it.
+  it('does not release a node from a window that names it', () => {
+    const idx = buildSuppressionIndex(
+      [
+        window({ scope_level: 'group_id', scope_id: 'tokyo' }),
+        window({ id: 'w2', scope_level: 'node', scope_id: 'n2' }),
+      ],
+      [],
+      groups,
+      nodes,
+      [exemption({ node_id: 'n2' })],
+    );
+    expect(idx.maintenanceNodes.has('n2')).toBe(true);
+  });
+
+  it('keeps the two kinds apart', () => {
+    const idx = buildSuppressionIndex(
+      [window({ scope_level: 'group_id', scope_id: 'tokyo' })],
+      [mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'tokyo' })],
+      groups,
+      nodes,
+      [exemption({ node_id: 'n2', kind: 'mute' })],
+    );
+    // Released from the group mute only — still in the group's maintenance window.
+    expect(idx.muteNodes.has('n2')).toBe(false);
+    expect(idx.maintenanceNodes.has('n2')).toBe(true);
+    expect(idx.exemptMuteNodes.has('n2')).toBe(true);
+    expect(idx.exemptMaintenanceNodes.size).toBe(0);
+  });
+
+  it('a node mute still applies to a node released from its group mute', () => {
+    const idx = buildSuppressionIndex(
+      [],
+      [
+        mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
+        mute({ id: 'm3', scope_kind: 'node', node_id: 'n2', group_id: null }),
+      ],
+      groups,
+      nodes,
+      [exemption({ node_id: 'n2', kind: 'mute' })],
+    );
+    expect(idx.muteNodes.has('n2')).toBe(true);
+  });
+});
+
+describe('causesFor', () => {
+  const nodeTarget = { kind: 'node' as const, id: 'n2', name: 'n2' };
+  const groupTarget = { kind: 'group' as const, id: 'edge', name: 'Edge' };
+
+  it('calls a window that names the node direct, and carries its id so it can be ended', () => {
+    const w = window({ id: 'w1', name: 'sw upgrade', scope_level: 'node', scope_id: 'n2' });
+    const [cause] = causesFor(nodeTarget, { windows: [w], mutes: [], groups });
+    expect(cause).toMatchObject({
+      kind: 'maintenance',
+      source: 'direct',
+      id: 'w1',
+      title: 'sw upgrade',
+      labelKey: 'tree.suppression.from.node',
+      endsAt: '2026-01-02T00:00:00Z',
+    });
+  });
+
+  it('names the ancestor group an inherited window comes from, and offers no row to act on', () => {
+    const w = window({ id: 'w1', scope_level: 'group_id', scope_id: 'tokyo' });
+    const [cause] = causesFor(nodeTarget, {
+      windows: [w],
+      mutes: [],
+      groups,
+      node: node('n2', 'edge'),
+    });
+    expect(cause.source).toBe('inherited');
+    expect(cause.id).toBeUndefined();
+    expect(cause.labelKey).toBe('tree.suppression.from.ancestor');
+    expect(cause.labelParams).toEqual({ name: 'Tokyo' });
+  });
+
+  it("reads a group's own window as direct and its parent's as inherited", () => {
+    const own = window({ id: 'own', scope_level: 'group_id', scope_id: 'edge' });
+    const above = window({ id: 'above', scope_level: 'group_id', scope_id: 'tokyo' });
+    const causes = causesFor(groupTarget, { windows: [own, above], mutes: [], groups });
+    expect(causes.map((c) => [c.id, c.source])).toEqual([
+      ['own', 'direct'],
+      [undefined, 'inherited'],
+    ]);
+  });
+
+  // The honest fallback. A profile/tag/fleet-wide window is resolved server-side against facts the
+  // tree never loads, so the state is all the browser has — saying "something else" beats both
+  // inventing a cause and showing an empty panel under a lit icon.
+  it('reports an unexplained maintenance state rather than an empty panel', () => {
+    const causes = causesFor(nodeTarget, {
+      windows: [],
+      mutes: [],
+      groups,
+      node: { ...node('n2', 'edge'), state: 'maintenance' },
+    });
+    expect(causes).toHaveLength(1);
+    expect(causes[0]).toMatchObject({
+      source: 'unattributed',
+      labelKey: 'tree.suppression.from.elsewhere',
+      endsAt: '',
+    });
+  });
+
+  it('does not add the unexplained cause when a window already accounts for the state', () => {
+    const w = window({ scope_level: 'node', scope_id: 'n2' });
+    const causes = causesFor(nodeTarget, {
+      windows: [w],
+      mutes: [],
+      groups,
+      node: { ...node('n2', 'edge'), state: 'maintenance' },
+    });
+    expect(causes.map((c) => c.source)).toEqual(['direct']);
+  });
+
+  it('ignores an inactive window and another branch of the tree', () => {
+    const causes = causesFor(nodeTarget, {
+      windows: [
+        window({ id: 'off', scope_level: 'group_id', scope_id: 'tokyo', active: false }),
+        window({ id: 'elsewhere', scope_level: 'group_id', scope_id: 'osaka' }),
+      ],
+      mutes: [mute({ id: 'm2', scope_kind: 'group', node_id: null, group_id: 'osaka' })],
+      groups,
+      node: node('n2', 'edge'),
+    });
+    expect(causes).toEqual([]);
+  });
+
+  it('separates a node mute from an inherited group mute', () => {
+    const causes = causesFor(nodeTarget, {
+      windows: [],
+      mutes: [
+        mute({ id: 'own', scope_kind: 'node', node_id: 'n2', metric_name: 'icmp_rtt_ms' }),
+        mute({ id: 'up', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
+      ],
+      groups,
+      node: node('n2', 'edge'),
+    });
+    expect(causes.map((c) => [c.source, c.id])).toEqual([
+      ['direct', 'own'],
+      ['inherited', undefined],
+    ]);
+    expect(causes[0].title).toBe('icmp_rtt_ms');
+  });
+
+  // A key built at runtime is missing from *both* locales when forgotten, so parity passes and the
+  // operator sees the raw key. This pins the produced set to the list `i18nEnumKeys` checks.
+  it('only ever produces a key from CAUSE_LABEL_KEYS', () => {
+    const causes = causesFor(nodeTarget, {
+      windows: [
+        window({ id: 'a', scope_level: 'node', scope_id: 'n2' }),
+        window({ id: 'b', scope_level: 'group_id', scope_id: 'tokyo' }),
+      ],
+      mutes: [
+        mute({ id: 'c', scope_kind: 'node', node_id: 'n2' }),
+        mute({ id: 'd', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
+      ],
+      groups,
+      node: node('n2', 'edge'),
+    });
+    const groupCauses = causesFor(groupTarget, {
+      windows: [window({ id: 'e', scope_level: 'group_id', scope_id: 'edge' })],
+      mutes: [],
+      groups,
+    });
+    const unexplained = causesFor(nodeTarget, {
+      windows: [],
+      mutes: [],
+      groups,
+      node: { ...node('n2', 'edge'), state: 'maintenance' },
+    });
+    const produced = new Set(
+      [...causes, ...groupCauses, ...unexplained].map((c) => c.labelKey),
+    );
+    expect([...produced].sort()).toEqual([...CAUSE_LABEL_KEYS].sort());
   });
 });

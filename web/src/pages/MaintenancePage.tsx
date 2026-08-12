@@ -23,20 +23,11 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { formatScheduleTime } from '../lib/format';
 import { isEnded, windowStatus } from './maintenanceStatus';
 import './MaintenancePage.css';
 
 const COLS = '120px 1.4fr 1fr 230px 120px';
-
-/** RFC 3339 → compact local display. */
-const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
 function DeleteWindowModal({
@@ -249,7 +240,7 @@ export function MaintenancePage() {
                       </span>
                     </div>
                     <div className="ytable-cell mono">
-                      {fmtTime(w.starts_at)} → {fmtTime(w.ends_at)}
+                      {formatScheduleTime(w.starts_at)} → {formatScheduleTime(w.ends_at)}
                     </div>
                     <div className="ytable-cell right">
                       {authed && (

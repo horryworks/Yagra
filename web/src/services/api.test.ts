@@ -484,6 +484,38 @@ describe('api client', () => {
     expect(res).toEqual({ deleted: 3 });
   });
 
+  it('ends a maintenance window through its own sub-resource, not by deleting it', async () => {
+    // The distinction is visible to the operator afterwards: the window stays on the Maintenance
+    // page reading "ended". A client that reached for DELETE would silently lose that record.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.endMaintenanceWindow('w1');
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/maintenance-windows/w1/end');
+    expect(init.method).toBe('POST');
+  });
+
+  it('releases a node from inherited suppression without sending an expiry', async () => {
+    // Load-bearing: the server sizes the release to the coverage actually in force. A client-chosen
+    // expiry could outlive the window and silently exclude the node from the next one.
+    const spy = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 204, json: async () => ({}) } as Response);
+    globalThis.fetch = spy;
+    await api.setNodeMaintenanceExemption('n1', true);
+    const [url, init] = spy.mock.calls[0];
+    expect(url).toBe('/api/v1/nodes/n1/maintenance-exemption');
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({ exempt: true });
+
+    await api.setNodeMuteExemption('n1', false);
+    const [muteUrl, muteInit] = spy.mock.calls[1];
+    expect(muteUrl).toBe('/api/v1/nodes/n1/mute-exemption');
+    expect(JSON.parse(muteInit.body as string)).toEqual({ exempt: false });
+  });
+
   it('replaces a profile’s templates with a PUT body', async () => {
     const spy = vi
       .fn()

@@ -91,6 +91,23 @@ export function formatExactTime(iso: string): string {
   return new Date(iso).toLocaleString('sv-SE').replace('T', ' ');
 }
 
+/** A scheduled boundary — a maintenance window's start/end, a mute's expiry — in the browser's
+ *  locale and zone, to the minute. Suppression is scheduled to the minute, so seconds would be
+ *  noise on a row an operator scans.
+ *
+ *  Shared because the Maintenance page, the Mutes page and the inventory tree's release panel all
+ *  render the same instants and had two byte-identical local copies between them; a third would
+ *  have been the point where they started to disagree (`extensibility.md` §3). */
+export function formatScheduleTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /** Date-only `YYYY-MM-DD` in the local zone (en-CA renders ISO-like). */
 export function dateOnly(iso: string): string {
   return new Date(iso).toLocaleDateString('en-CA');

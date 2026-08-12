@@ -101,6 +101,53 @@ impl MuteScope {
     }
 }
 
+/// Which kind of suppression a node has been released from.
+///
+/// ⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived
+/// dependency* suppression (ADR-043). This is about maintenance windows and mutes, and the two must
+/// not be wired to each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ExemptionKind {
+    Maintenance,
+    Mute,
+}
+
+impl ExemptionKind {
+    /// The stored token, which must match the serde tag — the column and the JSON field are
+    /// produced by two different mechanisms (`testing.md`), and a disagreement means rows the
+    /// writer produces are rows the reader cannot parse.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExemptionKind::Maintenance => "maintenance",
+            ExemptionKind::Mute => "mute",
+        }
+    }
+
+    /// Parse the stored token. Like [`WindowScope::parse`] this is lenient over a `&str` from the
+    /// database rather than a wildcard over this enum: one unrecognised row must not fail a whole
+    /// page. It falls back to `Maintenance` — the narrower of the two, since a mute-only exemption
+    /// read as a maintenance one releases a node from planned suppression it was already visible
+    /// in, rather than silently un-muting notifications nobody asked to hear.
+    fn parse(s: &str) -> Self {
+        match s {
+            "mute" => ExemptionKind::Mute,
+            _ => ExemptionKind::Maintenance,
+        }
+    }
+}
+
+/// A node released from an inherited suppression, until the suppression it was carved out of ends.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct StoredExemption {
+    pub id: Uuid,
+    pub kind: ExemptionKind,
+    pub node_id: Uuid,
+    /// RFC 3339. Server-computed from the coverage in force when the release was made.
+    pub until_at: String,
+}
+
 /// A stored maintenance window (API shape; times are RFC 3339 text at the edge).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct StoredWindow {
@@ -206,6 +253,31 @@ impl MaintenanceRepo {
         Ok(res.rows_affected() > 0)
     }
 
+    /// End an **active** window now, leaving the row as a record of the maintenance that actually
+    /// happened. Returns whether a row moved.
+    ///
+    /// This is what the inventory tree's "release" does to a window it can act on, and it is
+    /// deliberately not a delete: the operator asked for the suppression to stop, not for the
+    /// evidence that it existed to disappear. What is left reads as `ended` and is swept by
+    /// [`Self::delete_ended_windows`] when someone wants it gone.
+    ///
+    /// ⚠️ **The `starts_at <= now()` clause is load-bearing, not symmetry.** Writing `ends_at =
+    /// now()` on a window that has not begun yet would store `ends_at < starts_at` — precisely the
+    /// inversion `api::maintenance::check_order` rejects at the edge, and the one that suppresses
+    /// nothing while looking to the operator like it worked. The UI only offers this on an active
+    /// window; this predicate is what makes that true of *any* caller. A window outside the
+    /// predicate reports `false`, and the handler turns that into a 404.
+    pub async fn end_window_now(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE maintenance_windows SET ends_at = now() \
+             WHERE id = $1 AND enabled AND starts_at <= now() AND ends_at > now()",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Delete a window. Returns whether a row was removed.
     pub async fn delete_window(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM maintenance_windows WHERE id = $1")
@@ -258,6 +330,33 @@ impl MaintenanceRepo {
             .collect()
     }
 
+    /// The scopes of windows active right now **with the instant each stops**.
+    ///
+    /// [`Self::active_scopes`] answers "which nodes are suppressed", which is all the alert engine
+    /// needs. Releasing one node from an inherited window needs the other half — *when* that
+    /// coverage runs out — because the exemption is sized to it. Kept as a second query rather than
+    /// widening `active_scopes`, whose result is rebuilt on every refresh cycle for the whole fleet
+    /// and does not need the extra column.
+    pub async fn active_windows(
+        &self,
+    ) -> anyhow::Result<Vec<(WindowScope, String, DateTime<Utc>)>> {
+        let rows = sqlx::query(
+            "SELECT scope_level, scope_id, ends_at FROM maintenance_windows \
+             WHERE enabled AND starts_at <= now() AND ends_at > now()",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok((
+                    WindowScope::parse(&row.try_get::<String, _>("scope_level")?),
+                    row.try_get("scope_id")?,
+                    row.try_get("ends_at")?,
+                ))
+            })
+            .collect()
+    }
+
     /// End every still-open upgrade window now. Returns how many were closed.
     ///
     /// Called by the core that comes back after an upgrade, once the run has reported an outcome
@@ -272,6 +371,12 @@ impl MaintenanceRepo {
     /// That is a rule about *this* path only, not a guarantee the row survives: an operator may
     /// delete a closed window by hand or clear the ended ones in bulk
     /// ([`Self::delete_ended_windows`]), and both are audited.
+    ///
+    /// [`Self::end_window_now`] closes one window by id the same way and for the same reason. The
+    /// two are not merged because their predicates are the *point* of each: this one matches the
+    /// upgrade family and no id, and does not care whether the window has started, because the
+    /// upgrade path opens it starting now. The other matches one id and must refuse a window that
+    /// has not begun.
     pub async fn end_upgrade_windows(&self) -> anyhow::Result<u64> {
         let res = sqlx::query(
             "UPDATE maintenance_windows SET ends_at = now() \
@@ -345,6 +450,82 @@ impl MaintenanceRepo {
         Ok(id)
     }
 
+    // ── Exemptions: one node released from a suppression it inherited (migration 0081) ──────
+
+    /// The nodes currently exempt from `kind`. Expired rows are dropped lazily on read — the same
+    /// shape as [`Self::list_mutes`], and for the same reason: they are inert either way.
+    pub async fn exempt_nodes(&self, kind: ExemptionKind) -> anyhow::Result<Vec<Uuid>> {
+        sqlx::query("DELETE FROM suppression_exemptions WHERE until_at <= now()")
+            .execute(&self.pool)
+            .await?;
+        let rows = sqlx::query(
+            "SELECT node_id FROM suppression_exemptions WHERE kind = $1 AND until_at > now()",
+        )
+        .bind(kind.as_str())
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| Ok(row.try_get("node_id")?))
+            .collect()
+    }
+
+    /// Every unexpired exemption, for the read surface.
+    pub async fn list_exemptions(&self) -> anyhow::Result<Vec<StoredExemption>> {
+        let rows = sqlx::query(
+            "SELECT id, kind, node_id, until_at FROM suppression_exemptions \
+             WHERE until_at > now() ORDER BY until_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                let until: DateTime<Utc> = row.try_get("until_at")?;
+                Ok(StoredExemption {
+                    id: row.try_get("id")?,
+                    kind: ExemptionKind::parse(&row.try_get::<String, _>("kind")?),
+                    node_id: row.try_get("node_id")?,
+                    until_at: until.to_rfc3339(),
+                })
+            })
+            .collect()
+    }
+
+    /// Release `node` from `kind` until `until`.
+    ///
+    /// Upserts on `(kind, node_id)`: releasing a node twice extends the expiry rather than leaving
+    /// two rows for the reader to reconcile. `until` is the caller's computation over the coverage
+    /// actually in force — see `api::maintenance::inherited_coverage_end`.
+    pub async fn set_exemption(
+        &self,
+        kind: ExemptionKind,
+        node: Uuid,
+        until: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO suppression_exemptions (id, kind, node_id, until_at) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (kind, node_id) DO UPDATE SET until_at = EXCLUDED.until_at",
+        )
+        .bind(Uuid::new_v4())
+        .bind(kind.as_str())
+        .bind(node)
+        .bind(until)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Put `node` back under `kind`. Returns whether a row was removed.
+    pub async fn clear_exemption(&self, kind: ExemptionKind, node: Uuid) -> anyhow::Result<bool> {
+        let res =
+            sqlx::query("DELETE FROM suppression_exemptions WHERE kind = $1 AND node_id = $2")
+                .bind(kind.as_str())
+                .bind(node)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Delete a mute. Returns whether a row was removed.
     pub async fn delete_mute(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM mutes WHERE id = $1")
@@ -355,31 +536,65 @@ impl MaintenanceRepo {
     }
 }
 
-/// Resolve active window scopes against the inventory: the set of nodes currently in
-/// maintenance. Scope semantics mirror threshold resolution (ADR-013): node = the node id,
-/// profile = the node's profile id, group = any tag value. The hierarchical
-/// [`WindowScope::FolderGroup`] scope is resolved separately by the caller (it needs the group
-/// edges + DB membership, via [`crate::groups::group_subtree`] + `NodeRepo::nodes_in_groups`),
-/// so it is ignored here.
+/// Whether a window scope covers `node`, and whether it does so *by naming it*.
+///
+/// Exhaustive over [`WindowScope`] on purpose — a new scope must decide both answers rather than
+/// falling into a wildcard. The hierarchical [`WindowScope::FolderGroup`] scope is resolved
+/// separately by the caller (it needs the group edges + DB membership, via
+/// [`crate::groups::group_subtree`] + `NodeRepo::nodes_in_groups`), so it is never covered here.
 #[must_use]
-pub fn nodes_in_maintenance(scopes: &[(WindowScope, String)], nodes: &[Node]) -> BTreeSet<NodeId> {
-    let mut out = BTreeSet::new();
-    for node in nodes {
-        let covered = scopes.iter().any(|(level, scope_id)| match level {
-            WindowScope::Node => *scope_id == node.id.to_string(),
-            WindowScope::Profile => {
-                node.profile.map(|p| p.to_string()).as_deref() == Some(scope_id.as_str())
-            }
-            WindowScope::Group => node.tags.values().any(|v| v == scope_id),
-            WindowScope::FolderGroup => false,
-            // No id to match: the deployment itself is out of service, so every node is.
-            WindowScope::System => true,
-        });
-        if covered {
-            out.insert(node.id);
-        }
+fn scope_covers(level: WindowScope, scope_id: &str, node: &Node) -> bool {
+    match level {
+        WindowScope::Node => scope_id == node.id.to_string(),
+        WindowScope::Profile => node.profile.map(|p| p.to_string()).as_deref() == Some(scope_id),
+        WindowScope::Group => node.tags.values().any(|v| v == scope_id),
+        WindowScope::FolderGroup => false,
+        // No id to match: the deployment itself is out of service, so every node is.
+        WindowScope::System => true,
     }
-    out
+}
+
+/// The nodes an active window names **directly** — a [`WindowScope::Node`] window on that node.
+///
+/// Split out because a [`StoredExemption`] must not cancel one. An operator who released a node
+/// from its group's window and then deliberately opened a window on *that one node* is asking for
+/// it to be suppressed; if the exemption still applied, they would get an unsuppressed node with
+/// nothing on screen explaining why.
+#[must_use]
+pub fn nodes_named_by_a_window(
+    scopes: &[(WindowScope, String)],
+    nodes: &[Node],
+) -> BTreeSet<NodeId> {
+    nodes
+        .iter()
+        .filter(|node| {
+            scopes
+                .iter()
+                .any(|(level, id)| *level == WindowScope::Node && scope_covers(*level, id, node))
+        })
+        .map(|node| node.id)
+        .collect()
+}
+
+/// The nodes an active window covers **as part of a class** — profile, tag, or the whole fleet.
+///
+/// The other half of [`nodes_named_by_a_window`], and the half an exemption may cancel.
+/// Folder-group coverage is also inherited but is resolved by the caller against the group tree, so
+/// it is added to this set there rather than computed here.
+#[must_use]
+pub fn nodes_covered_by_a_class_window(
+    scopes: &[(WindowScope, String)],
+    nodes: &[Node],
+) -> BTreeSet<NodeId> {
+    nodes
+        .iter()
+        .filter(|node| {
+            scopes
+                .iter()
+                .any(|(level, id)| *level != WindowScope::Node && scope_covers(*level, id, node))
+        })
+        .map(|node| node.id)
+        .collect()
 }
 
 #[cfg(test)]
@@ -436,6 +651,52 @@ mod tests {
         );
     }
 
+    /// [`production_source`] with line continuations and indentation collapsed, so a needle can
+    /// name a SQL statement the way it reads rather than the way `cargo fmt` happened to wrap it.
+    fn flattened_source() -> String {
+        production_source()
+            .replace('\\', " ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
+    #[test]
+    fn ending_a_window_early_cannot_invert_it() {
+        // `ends_at = now()` on a window that has not started yet stores `ends_at < starts_at`, and
+        // a window whose end precedes its start matches no instant — it suppresses nothing while
+        // the operator believes the release "worked". `check_order` refuses that shape at the edge
+        // on the way in, so this statement must refuse to create it on the way out. There is no
+        // database in unit tests and both guards live inside one SQL string.
+        let flat = flattened_source();
+        let stmt = flat
+            .split_once("UPDATE maintenance_windows SET ends_at = now() WHERE id = $1")
+            .expect("the early-end statement is still here")
+            .1;
+        let stmt = &stmt[..stmt.find('"').expect("the statement is a string literal")];
+        assert!(
+            stmt.contains("starts_at <= now()"),
+            "ending a window early must refuse one that has not begun, found: {stmt}"
+        );
+        assert!(
+            stmt.contains("ends_at > now()"),
+            "ending a window early must refuse one already over, found: {stmt}"
+        );
+    }
+
+    /// Every node an active window covers, however it covers them.
+    ///
+    /// Production deliberately has no such function: `resolve_maintenance` keeps the two halves
+    /// apart because an exemption cancels only the class half. The scope-semantics tests below are
+    /// about the *rule* rather than about that split, so they read over the union — and
+    /// [`a_direct_window_and_a_class_window_are_told_apart`] is what pins the split itself.
+    fn covered(scopes: &[(WindowScope, String)], nodes: &[Node]) -> BTreeSet<NodeId> {
+        nodes_named_by_a_window(scopes, nodes)
+            .union(&nodes_covered_by_a_class_window(scopes, nodes))
+            .copied()
+            .collect()
+    }
+
     fn node(profile: Option<ProfileId>, tags: &[(&str, &str)]) -> Node {
         Node {
             id: NodeId::new(),
@@ -460,7 +721,7 @@ mod tests {
         let a = node(None, &[]);
         let b = node(None, &[]);
         let scopes = vec![(WindowScope::Node, a.id.to_string())];
-        let set = nodes_in_maintenance(&scopes, &[a.clone(), b.clone()]);
+        let set = covered(&scopes, &[a.clone(), b.clone()]);
         assert!(set.contains(&a.id));
         assert!(!set.contains(&b.id));
     }
@@ -471,7 +732,7 @@ mod tests {
         let a = node(Some(profile), &[]);
         let b = node(None, &[]);
         let scopes = vec![(WindowScope::Profile, profile.to_string())];
-        let set = nodes_in_maintenance(&scopes, &[a.clone(), b.clone()]);
+        let set = covered(&scopes, &[a.clone(), b.clone()]);
         assert!(set.contains(&a.id));
         assert!(!set.contains(&b.id));
     }
@@ -481,19 +742,19 @@ mod tests {
         let a = node(None, &[("site", "tokyo")]);
         let b = node(None, &[("site", "osaka")]);
         let scopes = vec![(WindowScope::Group, "tokyo".to_owned())];
-        let set = nodes_in_maintenance(&scopes, &[a.clone(), b.clone()]);
+        let set = covered(&scopes, &[a.clone(), b.clone()]);
         assert!(set.contains(&a.id));
         assert!(!set.contains(&b.id));
     }
 
     #[test]
     fn folder_group_scope_is_resolved_elsewhere() {
-        // FolderGroup needs the group tree + DB membership, so `nodes_in_maintenance` (in-memory,
-        // tag-only) must ignore it — the caller unions the resolved node set. A folder-group scope
-        // alone therefore yields nothing here, even for a node that happens to carry the id as a tag.
+        // FolderGroup needs the group tree + DB membership, so the in-memory, tag-only resolution
+        // must ignore it — the caller unions the resolved node set. A folder-group scope alone
+        // therefore yields nothing here, even for a node that happens to carry the id as a tag.
         let a = node(None, &[("site", "tokyo")]);
         let scopes = vec![(WindowScope::FolderGroup, Uuid::new_v4().to_string())];
-        assert!(nodes_in_maintenance(&scopes, &[a]).is_empty());
+        assert!(covered(&scopes, &[a]).is_empty());
     }
 
     #[test]
@@ -529,6 +790,70 @@ mod tests {
     #[test]
     fn no_active_scopes_means_no_maintenance() {
         let a = node(None, &[("site", "tokyo")]);
-        assert!(nodes_in_maintenance(&[], &[a]).is_empty());
+        assert!(covered(&[], &[a]).is_empty());
+    }
+
+    #[test]
+    fn exemption_kind_round_trips() {
+        for (s, kind) in [
+            ("maintenance", ExemptionKind::Maintenance),
+            ("mute", ExemptionKind::Mute),
+        ] {
+            assert_eq!(ExemptionKind::parse(s), kind);
+            assert_eq!(kind.as_str(), s);
+            // The column token and the JSON tag come from two different mechanisms; a
+            // disagreement means rows this writes are rows it cannot read back.
+            assert_eq!(
+                serde_json::to_value(kind).unwrap(),
+                serde_json::Value::String(s.to_owned())
+            );
+        }
+        assert_eq!(ExemptionKind::parse("bogus"), ExemptionKind::Maintenance);
+    }
+
+    #[test]
+    fn a_direct_window_and_a_class_window_are_told_apart() {
+        // The whole exemption design rests on this split: releasing a node cancels the class half
+        // and never the half that names it. Both halves together must still be exactly what the
+        // engine used to compute in one pass — no node gained, none lost.
+        let profile = ProfileId::new();
+        let named = node(Some(profile), &[]);
+        let by_profile = node(Some(profile), &[]);
+        let by_tag = node(None, &[("site", "tokyo")]);
+        let untouched = node(None, &[("site", "osaka")]);
+        let nodes = [named.clone(), by_profile.clone(), by_tag.clone(), untouched];
+        let scopes = vec![
+            (WindowScope::Node, named.id.to_string()),
+            (WindowScope::Profile, profile.to_string()),
+            (WindowScope::Group, "tokyo".to_owned()),
+        ];
+
+        let direct = nodes_named_by_a_window(&scopes, &nodes);
+        assert_eq!(direct, BTreeSet::from([named.id]));
+
+        let class = nodes_covered_by_a_class_window(&scopes, &nodes);
+        assert_eq!(class, BTreeSet::from([named.id, by_profile.id, by_tag.id]));
+
+        // `named` is in both — it is named *and* a member of the covered profile — which is the
+        // case that matters: releasing it must still leave the direct window in force. And the two
+        // halves together are the whole answer, with the node no window touches still outside it.
+        assert_eq!(
+            covered(&scopes, &nodes),
+            BTreeSet::from([named.id, by_profile.id, by_tag.id])
+        );
+    }
+
+    #[test]
+    fn a_fleet_wide_window_is_inherited_by_every_node() {
+        // `System` names no id, so no node "owns" it — an operator can release one box from the
+        // upgrade window without the release being cancelled by the window itself.
+        let a = node(None, &[]);
+        let one = std::slice::from_ref(&a);
+        let scopes = vec![(WindowScope::System, UPGRADE_SCOPE_ID.to_owned())];
+        assert!(nodes_named_by_a_window(&scopes, one).is_empty());
+        assert_eq!(
+            nodes_covered_by_a_class_window(&scopes, one),
+            BTreeSet::from([a.id])
+        );
     }
 }

@@ -880,11 +880,13 @@ impl YagraMcp {
 
     #[tool(
         description = "What is currently suppressing alerts, in one answer: planned maintenance \
-                       windows (each with its scope, start/end, and whether it covers now) and \
-                       reactive mutes (node or folder, with an expiry). Check this before \
-                       concluding a fleet is healthy — a quiet fleet and a silenced one look the \
-                       same in get_active_alerts. Windows opened with open_maintenance appear \
-                       here. Requires live mode."
+                       windows (each with its scope, start/end, and whether it covers now), \
+                       reactive mutes (node or folder, with an expiry), and exemptions — nodes an \
+                       operator has released from a window or mute they only inherited, which are \
+                       alerting normally despite it. Check this before concluding a fleet is \
+                       healthy — a quiet fleet and a silenced one look the same in \
+                       get_active_alerts. Windows opened with open_maintenance appear here. \
+                       Requires live mode."
     )]
     async fn list_suppressions(
         &self,
@@ -912,11 +914,19 @@ impl YagraMcp {
             Ok(m) => m,
             Err(e) => return tool_api_error("list_suppressions", &e),
         };
+        // The negative half. Without it a released node reads as suppressed, which is the wrong
+        // way round for a tool whose whole point is telling a quiet fleet from a silenced one.
+        let exemptions =
+            match crate::api::maintenance::visible_exemptions(&self.state, scope, admin).await {
+                Ok(x) => x,
+                Err(e) => return tool_api_error("list_suppressions", &e),
+            };
         ok_json(
             "list_suppressions",
             &crate::mcp::dto::SuppressionsDto {
                 maintenance_windows: windows,
                 mutes,
+                exemptions,
             },
         )
     }

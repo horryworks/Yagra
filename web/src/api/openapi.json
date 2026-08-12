@@ -6513,6 +6513,71 @@
         }
       }
     },
+    "/api/v1/maintenance-windows/{id}/end": {
+      "post": {
+        "tags": [
+          "maintenance"
+        ],
+        "operationId": "end_maintenance_window",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Maintenance window id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Window ended; the row stays as a record of the maintenance that happened"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageMaintenance permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such maintenance window, or it is not currently active (disabled, already over, or not yet started)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/meraki/import": {
       "post": {
         "tags": [
@@ -10908,6 +10973,91 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/maintenance-exemption": {
+      "put": {
+        "tags": [
+          "maintenance"
+        ],
+        "operationId": "set_node_maintenance_exemption",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExemptionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Node released from, or returned to, inherited maintenance"
+          },
+          "400": {
+            "description": "The node inherits no maintenance right now (`not_suppressed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageMaintenance permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/metrics": {
       "get": {
         "tags": [
@@ -11190,6 +11340,91 @@
           },
           "403": {
             "description": "Role lacks the read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/nodes/{node_id}/mute-exemption": {
+      "put": {
+        "tags": [
+          "maintenance"
+        ],
+        "operationId": "set_node_mute_exemption",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExemptionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Node released from, or returned to, an inherited group mute"
+          },
+          "400": {
+            "description": "The node inherits no mute right now (`not_suppressed`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the AckAlerts permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -15889,6 +16124,59 @@
           },
           "503": {
             "description": "Skeleton mode: no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/suppression-exemptions": {
+      "get": {
+        "tags": [
+          "maintenance"
+        ],
+        "operationId": "list_suppression_exemptions",
+        "responses": {
+          "200": {
+            "description": "Every unexpired exemption",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StoredExemption"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the View permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core has no write side (skeleton mode)",
             "content": {
               "application/json": {
                 "schema": {
@@ -21922,6 +22210,27 @@
             "format": "int64"
           }
         }
+      },
+      "ExemptionBody": {
+        "type": "object",
+        "description": "Whether a node is released from the suppression it inherits.",
+        "required": [
+          "exempt"
+        ],
+        "properties": {
+          "exempt": {
+            "type": "boolean",
+            "description": "`true` releases the node until the coverage it was carved out of ends. `false` puts it\nback, and is accepted whether or not it was released — this is a state, not a toggle."
+          }
+        }
+      },
+      "ExemptionKind": {
+        "type": "string",
+        "description": "Which kind of suppression a node has been released from.\n\n⚠️ Not [`yagra_common::Node`]'s `suppression_opt_out` (migration 0069), which is about *derived\ndependency* suppression (ADR-043). This is about maintenance windows and mutes, and the two must\nnot be wired to each other.",
+        "enum": [
+          "maintenance",
+          "mute"
+        ]
       },
       "ExpectedStatus": {
         "oneOf": [
@@ -28389,6 +28698,33 @@
           "window_secs": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "StoredExemption": {
+        "type": "object",
+        "description": "A node released from an inherited suppression, until the suppression it was carved out of ends.",
+        "required": [
+          "id",
+          "kind",
+          "node_id",
+          "until_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ExemptionKind"
+          },
+          "node_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "until_at": {
+            "type": "string",
+            "description": "RFC 3339. Server-computed from the coverage in force when the release was made."
           }
         }
       },

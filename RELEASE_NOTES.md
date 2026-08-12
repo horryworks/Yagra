@@ -10,6 +10,36 @@
 
 ## Unreleased
 
+### New Features
+- **Suppression can now be released from the tree it was set in, including for one node inside a
+  suppressed group.** All nodes ▸ the maintenance (🔧) and mute (🔕) markers are now buttons: click
+  one and a panel names what is silencing that row — the window's name, whether it comes from the
+  row itself or from a folder group above it, and when it stops. Until now the tree could set
+  suppression in one click but never say *why* a row was silent, and removing it meant finding the
+  row by name on Alerts ▸ Maintenance windows or Alerts ▸ Mutes. The same panel is reachable from
+  the right-click menu.
+  What each control does depends on where the suppression comes from, and the labels say so:
+  - A window that names the row is **ended now** rather than deleted — `ends_at` moves to the
+    current time, so the row survives on the Maintenance page as a record of the maintenance that
+    actually happened and is swept by the existing "clear ended" button. A mute naming the row is
+    lifted, as it always was.
+  - A window or mute the row only *inherits* cannot be ended without releasing every sibling under
+    it, so a **node** offers "release this node" instead: that one node returns to normal alerting
+    while the rest of the group stays covered. The release expires by itself when the coverage it
+    was carved out of ends — the server computes that, the browser sends no expiry — so it can
+    never silently exclude the node from the *next* window. A released node shows a struck-through
+    marker and can be put back from the same panel.
+  - A **group** covered by an ancestor's window shows the cause read-only and names the group to
+    release it on. Ending an ancestor's window from a child row would silence-and-unsilence a set
+    the operator cannot see from there.
+  New endpoints: `POST /api/v1/maintenance-windows/{id}/end` (ManageMaintenance; `404` unless the
+  window is currently active, which is also what stops an unstarted window being given an end date
+  before its start), `PUT /api/v1/nodes/{node_id}/maintenance-exemption` (ManageMaintenance) and
+  `PUT /api/v1/nodes/{node_id}/mute-exemption` (AckAlerts) taking `{"exempt": bool}` and answering
+  `400 not_suppressed` when the node inherits nothing, and `GET /api/v1/suppression-exemptions`
+  (View). The MCP `list_suppressions` tool gains an `exemptions` array — a released node is not
+  silenced, and a reader that saw only the window would conclude the opposite.
+
 ### Bug Fixes
 - **The repair instruction a failed upgrade prints did not repair anything.** v0.2.4 made a
   deployment whose compose labels are stale stop at the first step and name the command that fixes

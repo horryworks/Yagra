@@ -13,14 +13,16 @@
 //! that ends before it starts, or a mute already in the past, silences nothing while looking to the
 //! operator like it worked. That is a worse failure than a rejection.
 
-use super::extract::{Admin, RequireAckAlerts, RequireManageMaintenance, RequireView, Scoped};
+use super::extract::{
+    Admin, RequireAckAlerts, RequireManageMaintenance, RequireView, Scoped, VisibleNode,
+};
 use super::scope::ScopeTarget;
 use super::util::CreatedId;
 use super::{is_valid_metric_name, parse_rfc3339, ApiError, ApiResult, ApiState};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -34,10 +36,14 @@ use uuid::Uuid;
     create_maintenance_window,
     clear_ended_maintenance_windows,
     set_maintenance_window_enabled,
+    end_maintenance_window,
     delete_maintenance_window,
     list_mutes,
     create_mute,
-    delete_mute
+    delete_mute,
+    list_suppression_exemptions,
+    set_node_maintenance_exemption,
+    set_node_mute_exemption
 ))]
 pub(super) struct Doc;
 
@@ -54,8 +60,28 @@ pub(crate) fn routes() -> Router<ApiState> {
             "/api/v1/maintenance-windows/:id",
             put(set_maintenance_window_enabled).delete(delete_maintenance_window),
         )
+        .route(
+            "/api/v1/maintenance-windows/:id/end",
+            post(end_maintenance_window),
+        )
         .route("/api/v1/mutes", get(list_mutes).post(create_mute))
         .route("/api/v1/mutes/:id", delete(delete_mute))
+        // Suppression exemptions. The two writes hang off `/nodes/:node_id/…` because that is what
+        // they address — and it is what earns them the `VisibleNode` extractor — but they belong to
+        // this domain, not `api/nodes.rs`: what they mean is defined by windows and mutes, and the
+        // permission each asks for is the one its suppression kind asks for.
+        .route(
+            "/api/v1/nodes/:node_id/maintenance-exemption",
+            put(set_node_maintenance_exemption),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/mute-exemption",
+            put(set_node_mute_exemption),
+        )
+        .route(
+            "/api/v1/suppression-exemptions",
+            get(list_suppression_exemptions),
+        )
 }
 
 /// The scope levels a maintenance window may target. `group_id` is a folder-group UUID (resolved
@@ -448,6 +474,49 @@ async fn delete_maintenance_window(
     }
 }
 
+#[utoipa::path(
+    post, path = "/api/v1/maintenance-windows/{id}/end", tag = "maintenance",
+    params(("id" = Uuid, Path, description = "Maintenance window id")),
+    responses(
+        (status = 204, description = "Window ended; the row stays as a record of the maintenance that happened"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such maintenance window, or it is not currently active (disabled, already over, or not yet started)", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn end_maintenance_window(
+    _perm: RequireManageMaintenance,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    // Ending a window makes the covered nodes page again, exactly as deleting it would, so it is
+    // gated the same way. The 404 is the same answer a nonexistent id gets, so this is not an
+    // id-enumeration oracle for a scoped caller.
+    require_visible_window(&st, &scope, &admin, id).await?;
+    let ended = admin.maintenance.end_window_now(id).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "end maintenance window",
+            "failed to end maintenance window",
+        )
+    })?;
+    if ended {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        // Deliberately the same code the delete path uses for a missing id. "Visible but not
+        // active" is a race — someone else ended it, or it expired between the page load and the
+        // click — and the honest answer to "release this suppression" in that case is that there
+        // is no longer one to release, not that the window is gone.
+        Err(ApiError::not_found(
+            "window_not_found",
+            format!("no active maintenance window {id}"),
+        ))
+    }
+}
+
 /// The one value `status` may carry on a bulk clear.
 const CLEARABLE_STATUS: &str = "ended";
 
@@ -700,6 +769,305 @@ async fn delete_mute(
     }
 }
 
+// ── Exemptions: releasing one node from a suppression it inherited (migration 0081) ──────────
+//
+// A window or mute that *names* a row can simply be ended or deleted, and the inventory tree does
+// exactly that. Coverage a node merely inherits — from its folder group, its profile, a tag, the
+// fleet-wide upgrade window, or a group mute — cannot be, because the row belongs to everyone else
+// under it too. An exemption is the carve-out, and it exists only for that case.
+//
+// Two rules make it safe to hand to an operator, and both are enforced here rather than in the
+// browser:
+//
+//  1. **It never cancels coverage that names the node.** `crate::maintenance::scope_covers`'
+//     `WindowScope::Node` arm and a `MuteScope::Node` mute are excluded below, so an operator can
+//     still put a released node into maintenance deliberately.
+//  2. **It expires with the coverage it was carved out of.** The expiry is computed *here* from
+//     what is actually in force, never supplied by the client — an exemption that outlived its
+//     window would silently exclude the node from the next one, which is the monitoring blind spot
+//     this feature must not create.
+
+/// A node's coverage-relevant facts, resolved once so the decisions below are pure.
+struct CoverageFacts {
+    profile: Option<String>,
+    /// Tag *values* — a window's `group` scope matches any of them (ADR-013).
+    tags: Vec<String>,
+    /// This node's folder group plus every group above it.
+    ///
+    /// This is the same question the alert engine answers from the other end (it walks
+    /// `group_subtree` down from each window's group), and both use `groups.rs`' primitives over
+    /// the same edges, so `node ∈ subtree(root)` and `root ∈ containing_groups(node)` agree by
+    /// construction. Walking up is O(depth) for one node instead of O(groups × windows).
+    containing_groups: Vec<Uuid>,
+}
+
+/// Resolve the facts above for one node. `404` if the node is gone.
+async fn coverage_facts(
+    admin: &super::AdminState,
+    node_id: Uuid,
+) -> Result<CoverageFacts, ApiError> {
+    let node = admin
+        .repo
+        .get_node(node_id)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "load node for release", "failed to load node")
+        })?
+        .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
+    let mut containing_groups = Vec::new();
+    if let Some(group) = node.group {
+        let gid = group.as_uuid();
+        containing_groups.push(gid);
+        let edges = admin.groups.edges().await.map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "load group edges for release",
+                "failed to load groups",
+            )
+        })?;
+        containing_groups.extend(crate::groups::group_ancestors(&edges, gid));
+    }
+    Ok(CoverageFacts {
+        profile: node.profile.map(|p| p.to_string()),
+        tags: node.tags.values().cloned().collect(),
+        containing_groups,
+    })
+}
+
+/// Whether an active window covers this node **without naming it** — the coverage a release may
+/// cancel. Exhaustive over [`crate::maintenance::WindowScope`]: a new scope has to decide.
+fn window_is_inherited_by(
+    level: crate::maintenance::WindowScope,
+    scope_id: &str,
+    facts: &CoverageFacts,
+) -> bool {
+    use crate::maintenance::WindowScope;
+    match level {
+        // Names the node. Excluded on purpose — see rule 1 in this section's header.
+        WindowScope::Node => false,
+        WindowScope::Profile => facts.profile.as_deref() == Some(scope_id),
+        WindowScope::Group => facts.tags.iter().any(|t| t == scope_id),
+        WindowScope::FolderGroup => {
+            Uuid::parse_str(scope_id).is_ok_and(|g| facts.containing_groups.contains(&g))
+        }
+        // The whole fleet is out of service and no node owns that window, so a single box can be
+        // brought back into monitoring without it being cancelled by the window itself.
+        WindowScope::System => true,
+    }
+}
+
+/// When the inherited maintenance coverage on this node runs out, or `None` if none covers it.
+///
+/// The **latest** end, so the exemption lasts as long as the reason for it does. Taking the
+/// earliest would put the node back into maintenance while a longer window still covered it.
+fn inherited_maintenance_end(
+    windows: &[(crate::maintenance::WindowScope, String, DateTime<Utc>)],
+    facts: &CoverageFacts,
+) -> Option<DateTime<Utc>> {
+    windows
+        .iter()
+        .filter(|(level, scope_id, _)| window_is_inherited_by(*level, scope_id, facts))
+        .map(|(_, _, ends)| *ends)
+        .max()
+}
+
+/// The mute counterpart: a group mute over a folder group containing this node.
+fn inherited_mute_end(
+    mutes: &[crate::maintenance::StoredMute],
+    facts: &CoverageFacts,
+) -> Option<DateTime<Utc>> {
+    use crate::maintenance::MuteScope;
+    mutes
+        .iter()
+        .filter(|m| match m.scope_kind {
+            // Names the node — same rule as a node-scoped window.
+            MuteScope::Node => false,
+            MuteScope::Group => m
+                .group_id
+                .is_some_and(|g| facts.containing_groups.contains(&g)),
+        })
+        .filter_map(|m| parse_rfc3339(&m.until_at))
+        .max()
+}
+
+/// The 400 for "there is nothing here to release".
+///
+/// Deliberately not a silent 204. A release that stored nothing would leave the operator believing
+/// the node was out of the window; and the likeliest way to reach it is a node covered only by a
+/// window that *names* it, where the honest instruction is to end that window instead.
+fn nothing_inherited(kind: &str) -> ApiError {
+    ApiError::bad_request(
+        "not_suppressed",
+        format!(
+            "this node inherits no {kind} suppression right now; a window or mute naming the node \
+             is ended or lifted directly instead"
+        ),
+    )
+}
+
+/// Whether a node is released from the suppression it inherits.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(super) struct ExemptionBody {
+    /// `true` releases the node until the coverage it was carved out of ends. `false` puts it
+    /// back, and is accepted whether or not it was released — this is a state, not a toggle.
+    exempt: bool,
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/maintenance-exemption", tag = "maintenance",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = ExemptionBody,
+    responses(
+        (status = 204, description = "Node released from, or returned to, inherited maintenance"),
+        (status = 400, description = "The node inherits no maintenance right now (`not_suppressed`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageMaintenance permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_maintenance_exemption(
+    _perm: RequireManageMaintenance,
+    _visible: VisibleNode,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<ExemptionBody>,
+) -> ApiResult<StatusCode> {
+    use crate::maintenance::ExemptionKind;
+    if !body.exempt {
+        admin
+            .maintenance
+            .clear_exemption(ExemptionKind::Maintenance, node_id)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "clear maintenance exemption",
+                    "failed to return the node to maintenance",
+                )
+            })?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let facts = coverage_facts(&admin, node_id).await?;
+    let windows = admin.maintenance.active_windows().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "load active windows for release",
+            "failed to load maintenance windows",
+        )
+    })?;
+    let until = inherited_maintenance_end(&windows, &facts)
+        .ok_or_else(|| nothing_inherited("maintenance"))?;
+    admin
+        .maintenance
+        .set_exemption(ExemptionKind::Maintenance, node_id, until)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set maintenance exemption",
+                "failed to release the node from maintenance",
+            )
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/nodes/{node_id}/mute-exemption", tag = "maintenance",
+    params(("node_id" = Uuid, Path, description = "Node id")),
+    request_body = ExemptionBody,
+    responses(
+        (status = 204, description = "Node released from, or returned to, an inherited group mute"),
+        (status = 400, description = "The node inherits no mute right now (`not_suppressed`)", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the AckAlerts permission", body = super::error::ErrorBody),
+        (status = 404, description = "No such node", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_node_mute_exemption(
+    // ⚠️ `AckAlerts`, not `ManageMaintenance`. The two resolve to Operator-and-up today so this
+    // buys nothing yet; it is what lets a future role hold one without the other, and it is why
+    // these are two endpoints rather than one taking a `kind`.
+    _perm: RequireAckAlerts,
+    _visible: VisibleNode,
+    admin: Admin,
+    Path(node_id): Path<Uuid>,
+    Json(body): Json<ExemptionBody>,
+) -> ApiResult<StatusCode> {
+    use crate::maintenance::ExemptionKind;
+    if !body.exempt {
+        admin
+            .maintenance
+            .clear_exemption(ExemptionKind::Mute, node_id)
+            .await
+            .map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "clear mute exemption",
+                    "failed to return the node to the mute",
+                )
+            })?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+    let facts = coverage_facts(&admin, node_id).await?;
+    let mutes = admin.maintenance.list_mutes().await.map_err(|e| {
+        ApiError::from_internal(e.as_ref(), "load mutes for release", "failed to load mutes")
+    })?;
+    let until = inherited_mute_end(&mutes, &facts).ok_or_else(|| nothing_inherited("mute"))?;
+    admin
+        .maintenance
+        .set_exemption(ExemptionKind::Mute, node_id, until)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set mute exemption",
+                "failed to release the node from the mute",
+            )
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/suppression-exemptions", tag = "maintenance",
+    responses(
+        (status = 200, description = "Every unexpired exemption", body = Vec<crate::maintenance::StoredExemption>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
+        (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_suppression_exemptions(
+    _perm: RequireView,
+    Scoped(scope): Scoped,
+    State(st): State<ApiState>,
+    admin: Admin,
+) -> ApiResult<Json<Vec<crate::maintenance::StoredExemption>>> {
+    Ok(Json(visible_exemptions(&st, &scope, &admin).await?))
+}
+
+/// The exemptions `scope` may see. Each row names one node, so this is the same post-filter the
+/// window and mute lists use — and the seam the MCP tool reads, so neither surface can show a row
+/// the other would hide.
+pub(crate) async fn visible_exemptions(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    admin: &super::AdminState,
+) -> Result<Vec<crate::maintenance::StoredExemption>, ApiError> {
+    let rows = admin.maintenance.list_exemptions().await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list suppression exemptions",
+            "failed to list suppression exemptions",
+        )
+    })?;
+    Ok(rows
+        .into_iter()
+        .filter(|e| scope.allows_node(st, yagra_common::NodeId::from(e.node_id)))
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -911,6 +1279,202 @@ mod tests {
             .await,
             StatusCode::UNAUTHORIZED
         );
+        // Ending a window early makes the fleet page again. That is a write however it is spelled,
+        // and reachable from a single click in the inventory tree, so it is closed here too.
+        assert_eq!(
+            status_of(public_state(), "POST", &end_path(), None).await,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    /// A concrete `/end` path. The id never resolves in these tests — the guards answer first,
+    /// which is the property under test.
+    fn end_path() -> String {
+        format!("/api/v1/maintenance-windows/{}/end", Uuid::from_u128(9))
+    }
+
+    // ── Exemptions ──────────────────────────────────────────────────────────
+
+    fn facts(profile: Option<&str>, tags: &[&str], groups: &[Uuid]) -> CoverageFacts {
+        CoverageFacts {
+            profile: profile.map(str::to_owned),
+            tags: tags.iter().map(|t| (*t).to_owned()).collect(),
+            containing_groups: groups.to_vec(),
+        }
+    }
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        parse_rfc3339(&format!("2026-08-12T{hour:02}:00:00Z")).expect("fixed timestamp parses")
+    }
+
+    #[test]
+    fn a_window_that_names_the_node_is_never_inherited() {
+        // Rule 1 of the exemption design, and the one with a visible failure mode: if a release
+        // could cancel a node-scoped window, an operator who released a box and then deliberately
+        // put *that box* into maintenance would get a node that keeps alerting, with nothing on
+        // screen saying why. Tested as a pure function because the router cannot reach it —
+        // extractors run in argument order and `Admin` answers 503 in skeleton mode first.
+        use crate::maintenance::WindowScope;
+        let f = facts(Some("p1"), &["tokyo"], &[Uuid::from_u128(1)]);
+        assert!(!window_is_inherited_by(
+            WindowScope::Node,
+            &Uuid::from_u128(99).to_string(),
+            &f
+        ));
+        assert!(window_is_inherited_by(WindowScope::Profile, "p1", &f));
+        assert!(!window_is_inherited_by(WindowScope::Profile, "p2", &f));
+        assert!(window_is_inherited_by(WindowScope::Group, "tokyo", &f));
+        assert!(!window_is_inherited_by(WindowScope::Group, "osaka", &f));
+        assert!(window_is_inherited_by(
+            WindowScope::FolderGroup,
+            &Uuid::from_u128(1).to_string(),
+            &f
+        ));
+        assert!(!window_is_inherited_by(
+            WindowScope::FolderGroup,
+            &Uuid::from_u128(2).to_string(),
+            &f
+        ));
+        // A fleet-wide window belongs to nobody, so one box can be brought back without the window
+        // itself cancelling the release.
+        assert!(window_is_inherited_by(
+            WindowScope::System,
+            crate::maintenance::UPGRADE_SCOPE_ID,
+            &f
+        ));
+        // An unparseable folder id is not a match — fail closed rather than release on a typo.
+        assert!(!window_is_inherited_by(
+            WindowScope::FolderGroup,
+            "not-a-uuid",
+            &f
+        ));
+    }
+
+    #[test]
+    fn the_release_lasts_as_long_as_the_reason_for_it() {
+        // The latest end, not the earliest: while a longer window still covers the node, putting
+        // it back would re-suppress a box the operator has said is back in service.
+        use crate::maintenance::WindowScope;
+        let group = Uuid::from_u128(1);
+        let f = facts(Some("p1"), &[], &[group]);
+        let windows = vec![
+            (WindowScope::FolderGroup, group.to_string(), at(2)),
+            (WindowScope::Profile, "p1".to_owned(), at(5)),
+            // Covers nothing here, and must not extend the release.
+            (WindowScope::Group, "osaka".to_owned(), at(9)),
+            // Names some other node.
+            (WindowScope::Node, Uuid::from_u128(7).to_string(), at(11)),
+        ];
+        assert_eq!(inherited_maintenance_end(&windows, &f), Some(at(5)));
+    }
+
+    #[test]
+    fn nothing_inherited_is_a_refusal_not_an_empty_release() {
+        // A node covered only by a window that *names* it has nothing to be released from, and the
+        // honest answer is the 400 that says to end that window instead — storing an exemption
+        // would leave the operator believing the node was out of the window when it is not.
+        use crate::maintenance::WindowScope;
+        let f = facts(None, &[], &[]);
+        let windows = vec![(WindowScope::Node, Uuid::from_u128(3).to_string(), at(4))];
+        assert!(inherited_maintenance_end(&windows, &f).is_none());
+        assert_eq!(nothing_inherited("maintenance").code(), "not_suppressed");
+    }
+
+    #[test]
+    fn only_a_group_mute_can_be_released_from() {
+        use crate::maintenance::MuteScope;
+        let group = Uuid::from_u128(1);
+        let f = facts(None, &[], &[group]);
+        let node_mute = StoredMute {
+            until_at: "2026-08-12T09:00:00Z".to_owned(),
+            ..mute(MuteScope::Node, Some(Uuid::from_u128(5)), None)
+        };
+        let group_mute = StoredMute {
+            until_at: "2026-08-12T03:00:00Z".to_owned(),
+            ..mute(MuteScope::Group, None, Some(group))
+        };
+        let other_group = StoredMute {
+            until_at: "2026-08-12T23:00:00Z".to_owned(),
+            ..mute(MuteScope::Group, None, Some(Uuid::from_u128(2)))
+        };
+
+        // The node mute is later and is still ignored — it names the node.
+        assert_eq!(
+            inherited_mute_end(&[node_mute.clone(), group_mute, other_group], &f),
+            Some(at(3))
+        );
+        assert!(inherited_mute_end(&[node_mute], &f).is_none());
+    }
+
+    /// The two exemption paths, and the node path they hang off.
+    fn exemption_paths() -> [String; 2] {
+        let n = Uuid::from_u128(11);
+        [
+            format!("/api/v1/nodes/{n}/maintenance-exemption"),
+            format!("/api/v1/nodes/{n}/mute-exemption"),
+        ]
+    }
+
+    #[tokio::test]
+    async fn releasing_a_node_is_a_write_and_is_gated_like_one() {
+        // Releasing a node makes it page again during planned work, so it is closed to an
+        // anonymous caller on a public dashboard exactly as opening a suppression is.
+        for path in exemption_paths() {
+            assert_eq!(
+                status_of(public_state(), "PUT", &path, None).await,
+                StatusCode::UNAUTHORIZED,
+                "{path}"
+            );
+        }
+
+        let st = private_state();
+        let viewer = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer2",
+        );
+        for path in exemption_paths() {
+            assert_eq!(
+                status_of(st.clone(), "PUT", &path, Some(&viewer)).await,
+                StatusCode::FORBIDDEN,
+                "{path}"
+            );
+        }
+
+        // An operator holds both `ManageMaintenance` and `AckAlerts` today, so both endpoints get
+        // past the permission and stop at availability — which also pins the extractor order.
+        let op = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Operator, Scope::All),
+            "op2",
+        );
+        for path in exemption_paths() {
+            assert_eq!(
+                status_of(st.clone(), "PUT", &path, Some(&op)).await,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "{path}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_exemption_list_is_a_read_and_is_gated_like_one() {
+        let st = private_state();
+        assert_eq!(
+            status_of(st.clone(), "GET", "/api/v1/suppression-exemptions", None).await,
+            StatusCode::UNAUTHORIZED
+        );
+        let viewer = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Viewer, Scope::All),
+            "viewer3",
+        );
+        // A viewer may read it — knowing a node has been released is part of reading the fleet's
+        // suppression state, and it stops at availability rather than at the permission.
+        assert_eq!(
+            status_of(st, "GET", "/api/v1/suppression-exemptions", Some(&viewer)).await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
     }
 
     #[tokio::test]
@@ -932,12 +1496,16 @@ mod tests {
         // maintenance history would be a write dressed as a tidy-up.
         assert_eq!(
             status_of(
-                st,
+                st.clone(),
                 "DELETE",
                 "/api/v1/maintenance-windows?status=ended",
                 Some(&token)
             )
             .await,
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            status_of(st, "POST", &end_path(), Some(&token)).await,
             StatusCode::FORBIDDEN
         );
     }
@@ -965,12 +1533,16 @@ mod tests {
         // query is parsed, so a valid `status` cannot make a skeleton core answer anything else.
         assert_eq!(
             status_of(
-                st,
+                st.clone(),
                 "DELETE",
                 "/api/v1/maintenance-windows?status=ended",
                 Some(&token)
             )
             .await,
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(
+            status_of(st, "POST", &end_path(), Some(&token)).await,
             StatusCode::SERVICE_UNAVAILABLE
         );
     }

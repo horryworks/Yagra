@@ -23,18 +23,10 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
+import { formatScheduleTime } from '../lib/format';
 import './MutesPage.css';
 
 const COLS = '1.4fr 170px 180px 1fr 92px';
-
-const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
 
 /** Confirm + lift a mute. Destructive-consent chrome comes from the shared modal; only the
  *  sentence and the confirm label are this dialog's own (the action is "lift", not "delete"). */
@@ -188,7 +180,7 @@ export function MutesPage() {
                         <Badge tone="info">{t('mutes.badge.allMetrics')}</Badge>
                       )}
                     </div>
-                    <div className="ytable-cell mono">{fmtTime(m.until_at)}</div>
+                    <div className="ytable-cell mono">{formatScheduleTime(m.until_at)}</div>
                     <div className="ytable-cell ellipsis muted">{m.reason}</div>
                     <div className="ytable-cell right">
                       {authed && (

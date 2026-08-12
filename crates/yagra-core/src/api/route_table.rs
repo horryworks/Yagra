@@ -660,6 +660,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         NO_MCP_WRITE,
     ),
+    (
+        "POST",
+        "/api/v1/maintenance-windows/:id/end",
+        // Same row, same visibility rule as deleting it — `require_visible_window`.
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
     ("POST", "/api/v1/meraki/import", ADMIN_CFG, NO_MCP_WRITE),
     ("GET", "/api/v1/meraki/orgs", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/meraki/orgs", ADMIN_CFG, NO_MCP_WRITE),
@@ -922,6 +929,18 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/nodes/:node_id/metrics/:metric/range",
         NodeScoped,
         Tool("query_metrics"),
+    ),
+    (
+        "PUT",
+        "/api/v1/nodes/:node_id/maintenance-exemption",
+        NodeScoped,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
+        "/api/v1/nodes/:node_id/mute-exemption",
+        NodeScoped,
+        NO_MCP_WRITE,
     ),
     (
         "GET",
@@ -1337,6 +1356,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         PENDING_STREAM,
     ),
     ("GET", "/api/v1/stream/report-runs", REPORT, PENDING_STREAM),
+    (
+        "GET",
+        "/api/v1/suppression-exemptions",
+        // Each row names one node, so the rows are read and filtered afterwards — the same shape as
+        // the window and mute lists it belongs beside.
+        PostFiltered,
+        // Folded into the existing tool rather than given its own: "what is currently suppressing
+        // alerts" and "which node has been taken out of that" are one question, and a model that
+        // reads the first without the second concludes a released node is still silenced.
+        Tool("list_suppressions"),
+    ),
     (
         "GET",
         "/api/v1/system-health",

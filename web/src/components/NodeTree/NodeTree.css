@@ -360,6 +360,102 @@
   border: var(--border-width) solid var(--border-color);
 }
 
+/* A node released from a suppression it inherited: same glyph, struck through and drained of the
+   status tint, so "not suppressed, but there is a suppression around it" reads at a glance and is
+   never carried by colour alone. */
+.ntree-supp-icon.released {
+  color: var(--text-tertiary);
+  background: transparent;
+  border: var(--border-width) dashed var(--border-color);
+  position: relative;
+}
+
+.ntree-supp-icon.released::after {
+  content: '';
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 50%;
+  border-top: 2px solid currentColor;
+  transform: rotate(-45deg);
+}
+
+/* The markers are buttons — clicking one opens the panel that says what is suppressing the row. */
+button.ntree-supp-icon {
+  padding: 0;
+  cursor: pointer;
+}
+
+button.ntree-supp-icon:hover {
+  border-color: var(--accent-color);
+}
+
+/* The suppression panel: opened by a marker click, positioned like the context menu and rendered
+   in the same place — outside the virtualized rows, whose `transform` would otherwise become the
+   containing block for a `position: fixed` child and lay it out somewhere off screen. */
+.ntree-supp-panel {
+  min-width: 240px;
+  max-width: 320px;
+  padding: 4px 0;
+}
+
+.ntree-supp-cause {
+  padding: 6px 14px;
+}
+
+.ntree-supp-cause + .ntree-supp-cause {
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.ntree-supp-head {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.ntree-supp-title {
+  font-size: var(--font-sm);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ntree-supp-meta {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.ntree-supp-note {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* The action row sits right-aligned under its cause, so a panel listing several suppressions never
+   leaves any doubt about which one a button acts on. */
+.ntree-supp-act {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+.ntree-menu .ntree-supp-act button {
+  padding: 3px 8px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.ntree-menu .ntree-supp-act button:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}
+
 /* Monitoring-source badge (e.g. Cisco Meraki) shown after a node name in the tree. */
 .ntree-badge {
   flex: 0 0 auto;

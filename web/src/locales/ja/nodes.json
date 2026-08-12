@@ -113,6 +113,7 @@
     "loadNodes": "ノードの読み込みに失敗しました",
     "setMaintenance": "メンテナンスの設定に失敗しました",
     "mute": "ミュートに失敗しました",
+    "release": "抑止の変更に失敗しました",
     "setPool": "ポーラープールの設定に失敗しました",
     "addUrlMonitor": "URL 監視の追加に失敗しました",
     "addNode": "ノードの追加に失敗しました",
@@ -321,8 +322,35 @@
     "noDirectMembers": "直接のメンバーノードはありません — サブグループを参照してください。"
   },
   "tree": {
-    "maintTitle": "メンテナンスウィンドウ中",
-    "muteTitle": "ミュート中 — 通知が抑制されています",
+    "suppression": {
+      "markMaint": "メンテナンス中 — クリックで詳細",
+      "markMute": "ミュート中 — クリックで詳細",
+      "markReleasedMaint": "メンテナンス対象から除外中 — クリックで戻す",
+      "markReleasedMute": "ミュート対象から除外中 — クリックで戻す",
+      "head": {
+        "maintenance": "メンテナンス中",
+        "mute": "ミュート中",
+        "releasedMaintenance": "メンテナンス対象から除外中",
+        "releasedMute": "ミュート対象から除外中"
+      },
+      "from": {
+        "node": "このノード",
+        "group": "このグループ",
+        "ancestor": "グループ「{{name}}」から",
+        "elsewhere": "プロファイル・タグ・システム全体のウィンドウによる"
+      },
+      "until": "{{time}} まで",
+      "act": {
+        "open": "抑止の詳細…",
+        "endNow": "今すぐ終了",
+        "release": "解除",
+        "releaseNode": "このノードだけ解除",
+        "undoMaintenance": "メンテナンスに戻す",
+        "undoMute": "ミュートに戻す"
+      },
+      "releaseOnAncestor": "グループ「{{name}}」側で解除してください",
+      "none": "現在この行を抑止しているものはありません。"
+    },
     "maintenance": "メンテナンス",
     "mute": "ミュート",
     "custom": "カスタム…",

@@ -31,13 +31,19 @@ import type {
   NodeGroup,
   NodeSummary,
   PoolOption,
+  SuppressionExemption,
 } from '../types/api';
 import { countsTotal, filterResultsTruncated, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
-import { buildSuppressionIndex, type SuppressionTarget } from '../lib/suppression';
+import {
+  buildSuppressionIndex,
+  causesFor,
+  type ReleaseAction,
+  type SuppressionTarget,
+} from '../lib/suppression';
 import { inheritedGroupPool } from '../lib/pool';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -138,6 +144,10 @@ export function NodesPage() {
   // "Custom…" path opens a prefilled create modal (preset durations POST directly).
   const [windows, setWindows] = useState<MaintenanceWindow[]>([]);
   const [mutes, setMutes] = useState<Mute[]>([]);
+  // Nodes an operator has released from a suppression they only inherited. Loaded with the two
+  // lists above because a released node is *not* suppressed — the tree needs all three to draw the
+  // markers correctly, and the release panel needs them to offer the undo.
+  const [exemptions, setExemptions] = useState<SuppressionExemption[]>([]);
   const [maintenanceTarget, setMaintenanceTarget] = useState<SuppressionTarget | null>(null);
   const [muteTarget, setMuteTarget] = useState<SuppressionTarget | null>(null);
   // Poll-pool assignment from the tree's right-click chips (ADR-009/020). `pools` feeds the chips;
@@ -179,8 +189,8 @@ export function NodesPage() {
   }, [treeNodes, live]);
 
   const suppression = useMemo(
-    () => buildSuppressionIndex(windows, mutes, groups, treeNodes),
-    [windows, mutes, groups, treeNodes],
+    () => buildSuppressionIndex(windows, mutes, groups, treeNodes, exemptions),
+    [windows, mutes, groups, treeNodes, exemptions],
   );
 
   // Load the group skeleton + server rollups (fast at any fleet size). Members load lazily below.
@@ -242,6 +252,7 @@ export function NodesPage() {
   const reloadSuppression = useCallback(() => {
     api.listMaintenanceWindows().then(setWindows).catch(() => undefined);
     api.listMutes().then(setMutes).catch(() => undefined);
+    api.listSuppressionExemptions().then(setExemptions).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -283,6 +294,38 @@ export function NodesPage() {
       })
       .then(reloadSuppression)
       .catch((e: unknown) => scopeError(e, t('err.mute')));
+  };
+
+  // Why a tree row is suppressed. Resolved here because this page holds the window and mute lists;
+  // the tree renders the answer and owns none of the data (its header comment).
+  const suppressionCauses = useCallback(
+    (target: SuppressionTarget, node?: NodeSummary) =>
+      causesFor(target, { windows, mutes, groups, node }),
+    [windows, mutes, groups],
+  );
+
+  // Right-click / marker click → release. One exhaustive switch, so a new `ReleaseAction` cannot
+  // ship half-wired. Every arm refreshes the suppression lists; releasing a *node* also touches
+  // the node's rolled-up state, which the engine recomputes on its own ~30s cycle — the markers
+  // update immediately from the exemption list, the status dot catches up with the engine.
+  const release = (a: ReleaseAction) => {
+    const call = (() => {
+      switch (a.action) {
+        case 'end-window':
+          return api.endMaintenanceWindow(a.windowId);
+        case 'lift-mute':
+          return api.deleteMute(a.muteId);
+        case 'release-node':
+          return a.kind === 'maintenance'
+            ? api.setNodeMaintenanceExemption(a.nodeId, true)
+            : api.setNodeMuteExemption(a.nodeId, true);
+        case 'undo-release':
+          return a.kind === 'maintenance'
+            ? api.setNodeMaintenanceExemption(a.nodeId, false)
+            : api.setNodeMuteExemption(a.nodeId, false);
+      }
+    })();
+    call.then(reloadSuppression).catch((e: unknown) => scopeError(e, t('err.release')));
   };
 
   // The pools the chips offer. Cheap (two indexed DISTINCTs server-side), so it is refreshed with
@@ -538,6 +581,8 @@ export function NodesPage() {
             onReorderNode={reorderNode}
             onReorderGroup={reorderGroup}
             suppression={suppression}
+            suppressionCauses={suppressionCauses}
+            onRelease={authed ? release : undefined}
             onSetMaintenance={authed ? setMaintenance : undefined}
             onSetMute={authed ? setMute : undefined}
             pools={pools}

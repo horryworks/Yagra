@@ -78,6 +78,7 @@ import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
+import { CAUSE_LABEL_KEYS } from './lib/suppression';
 import { RUN_STATUS } from './reports/runStatus';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
@@ -367,6 +368,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // control that creates nodes. EN/JA parity cannot catch it: a key missing from both is "in
     // parity".
     expectKeys('add menu label', { en: enNodes, ja: jaNodes }, '', ADD_MENU_LABEL_KEYS);
+  });
+
+  it('every suppression-cause label resolves (nodes:tree.suppression.from.*)', () => {
+    // `causesFor` picks the "where does this come from" line at runtime, and it is the sentence
+    // that tells an operator whether releasing acts on this row or on a group above it. A raw key
+    // there would leave the panel's buttons unexplained. `suppression.test.ts` pins the produced
+    // set to this list from the other side.
+    expectKeys('suppression cause label', { en: enNodes, ja: jaNodes }, '', CAUSE_LABEL_KEYS);
   });
 
   it('every node kind has a label (nodes:kind.*)', () => {
