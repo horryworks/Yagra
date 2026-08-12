@@ -64,6 +64,26 @@ echo "[1/4] keys"
 CORE_CID="$(dc ps -q core)"
 [ -n "$CORE_CID" ] || die "core container not found"
 
+# Two things below are asked over HTTP from inside the stack: VictoriaMetrics' snapshot API, which
+# is only reachable on the compose network, and core's own /version. Neither can be asked through
+# `docker exec core` — the runtime image ships no HTTP client at all (`command -v curl wget nc`
+# returns nothing; checked on the test server 2026-08-12). It used to try exactly that, and the
+# failure was invisible: the snapshot step took its "no name in the response" branch, logged a line
+# nobody reads because the updater discards the upgrade container's output, and wrote a backup with
+# an EMPTY vm/ directory and "yagra_version": "unknown". Every pre-upgrade backup this deployment
+# had taken was missing the metrics that ADR-040 calls tier 1.
+#
+# So borrow a client from alpine — which the composition already runs (ipasn-updater), so it is on
+# any host running this stack — and join core's network namespace, which reaches both the compose
+# network and core's own loopback. It never pulls: on a host that does not have the image, these
+# probes degrade to what they did before rather than blocking a backup on a registry that an
+# air-gapped site cannot reach anyway.
+HTTP_IMAGE="${HTTP_IMAGE:-alpine:3.20}"
+http() {  # http <wget args…> — empty output on any failure, never fatal
+  docker image inspect "$HTTP_IMAGE" >/dev/null 2>&1 || return 0
+  docker run --rm --network "container:$CORE_CID" "$HTTP_IMAGE" wget -qO- "$@" 2>/dev/null || true
+}
+
 copy_key() {  # copy_key <env var> <destination basename>
   local var="$1" dest="$2" path
   path="$(docker exec "$CORE_CID" printenv "$var" 2>/dev/null || true)"
@@ -95,14 +115,18 @@ log "nodes=$NODE_COUNT credentials=$CRED_COUNT audit_log=$AUDIT_COUNT"
 # ── 3. VictoriaMetrics ──────────────────────────────────────────────────────────────────────────
 # Snapshot via VM's own API, then copy the snapshot directory out of the container. VM has no
 # in-container shell in some images, so the copy is done with `docker cp` on the data path.
+#
+# Every skip below is non-fatal — a site with no metrics store still needs its configuration backed
+# up — but it is now RECORDED, in the manifest and in the closing summary. It was neither before,
+# which is how a stack whose metrics had never once been captured looked exactly like one whose
+# metrics were fine.
 echo "[3/4] victoriametrics"
+SNAP_NAME=""
 VM_CID="$(dc ps -q victoriametrics || true)"
 if [ -z "$VM_CID" ]; then
   log "victoriametrics not running — skipping (metrics will be missing from this backup)"
 else
-  SNAP_JSON="$(docker exec "$CORE_CID" sh -c \
-    'wget -qO- --post-data="" http://victoriametrics:8428/snapshot/create 2>/dev/null || \
-     curl -fsS -XPOST http://victoriametrics:8428/snapshot/create' 2>/dev/null || true)"
+  SNAP_JSON="$(http --post-data= http://victoriametrics:8428/snapshot/create)"
   SNAP_NAME="$(printf '%s' "$SNAP_JSON" | sed -n 's/.*"snapshot":"\([^"]*\)".*/\1/p')"
   if [ -z "$SNAP_NAME" ]; then
     log "snapshot API returned no name — skipping metrics (response: ${SNAP_JSON:-none})"
@@ -112,8 +136,7 @@ else
     rm -rf "${OUT:?}/vm/${SNAP_NAME:?}"
     # Delete the server-side snapshot: VM keeps them forever otherwise, and they are hard links that
     # pin disk as parts are merged away.
-    docker exec "$CORE_CID" sh -c \
-      "wget -qO- 'http://victoriametrics:8428/snapshot/delete?snapshot=$SNAP_NAME' >/dev/null 2>&1 || true"
+    http "http://victoriametrics:8428/snapshot/delete?snapshot=$SNAP_NAME" >/dev/null
     log "vm/snapshot.tar.gz ($(du -h "$OUT/vm/snapshot.tar.gz" | cut -f1))"
   fi
 fi
@@ -124,8 +147,7 @@ fi
 echo "[4/4] manifest"
 VERSION="$(docker exec "$CORE_CID" cat /etc/yagra-source-ref 2>/dev/null | tr -d '[:space:]' || true)"
 IMAGE_TAG="$(docker inspect --format '{{.Config.Image}}' "$CORE_CID" 2>/dev/null || echo unknown)"
-CORE_VERSION="$(docker exec "$CORE_CID" sh -c \
-  'wget -qO- http://127.0.0.1:8080/api/v1/version 2>/dev/null' | sed -n 's/.*"core":"\([^"]*\)".*/\1/p' || true)"
+CORE_VERSION="$(http http://127.0.0.1:8080/api/v1/version | sed -n 's/.*"core":"\([^"]*\)".*/\1/p' || true)"
 
 {
   printf '{\n'
@@ -136,6 +158,10 @@ CORE_VERSION="$(docker exec "$CORE_CID" sh -c \
   printf '  "node_count": %s,\n' "${NODE_COUNT:-0}"
   printf '  "credential_count": %s,\n' "${CRED_COUNT:-0}"
   printf '  "audit_row_count": %s,\n' "${AUDIT_COUNT:-0}"
+  # null is a claim, not an omission: this backup holds no metrics and says so, so a restore that
+  # comes back without them knows whether they were lost or never taken.
+  if [ -n "$SNAP_NAME" ]; then printf '  "metrics_snapshot": "%s",\n' "$SNAP_NAME"
+  else printf '  "metrics_snapshot": null,\n'; fi
   printf '  "artifacts": [\n'
   first=1
   while IFS= read -r f; do
@@ -152,6 +178,7 @@ cat <<EOF
 
 Backup complete: $OUT
   nodes=$NODE_COUNT credentials=$CRED_COUNT audit_log=$AUDIT_COUNT  version=${CORE_VERSION:-unknown}
+  metrics=${SNAP_NAME:-NOT CAPTURED — this backup restores configuration and history, not metrics}
 
   !! Store $OUT/kek/ somewhere the database dump is NOT.
      Losing the KEK makes every stored credential permanently undecryptable, and a backup that

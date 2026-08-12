@@ -542,6 +542,19 @@ services:
         START=$$(date +%s); FIN=
         say running start "requested by $$BY"
 
+        # 0. The deployment directory, at the path the HOST knows it by — this container has it
+        #    bind-mounted at that same path deliberately, and the reason is step 4. `docker compose
+        #    up -d` stamps its own working directory into every container it creates
+        #    (com.docker.compose.project.working_dir), and the updater reads that label back to find
+        #    this directory next time. Mount it anywhere else and the label records a path that
+        #    exists only inside a container that is already gone: the first WebUI upgrade that
+        #    recreates the updater poisons every upgrade after it. That was not theory — measured on
+        #    the test server 2026-08-12, three consecutive applies died here, all reporting "the
+        #    pre-upgrade backup failed", because Docker had helpfully created an empty /project on
+        #    the host and the backup script found no stack in it.
+        [ -n "$${WORKDIR:-}" ] && [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
+          || fail start "$${WORKDIR:-the deployment directory} does not hold this deployment's compose file; run docker compose -p $$PROJ -f docker-compose.deploy.yml up -d once from it on the host to repair the labels this reads"
+
         # 1. Back up first, using the procedure of record (ADR-040) rather than a second copy of
         #    it. The script ships inside the RUNNING core image at a root-owned path, so core
         #    cannot alter it and the backup matches the version being replaced. NOTE: this is a
@@ -551,7 +564,7 @@ services:
         [ -n "$$CORE_CID" ] || fail backup "cannot find the running core container"
         docker cp "$$CORE_CID:/usr/share/yagra/yagra-backup.sh" /tmp/backup.sh 2>/dev/null \
           || fail backup "this core image ships no backup script; upgrade from the command line"
-        ( cd /project && sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
+        ( cd "$$WORKDIR" && sh /tmp/backup.sh ) || fail backup "the pre-upgrade backup failed"
 
         # 2. Get all three images in place BEFORE anything is stopped, so a bad tag, an
         #    unreachable registry or a corrupt archive costs nothing.
@@ -581,7 +594,7 @@ services:
         #    and the images are always the same version. The host's .env is never touched.
         say running compose "installing the $$TAG composition"
         CID=$$(docker create "$$REPO/yagra-core:$$TAG") || fail compose "cannot stage the target image"
-        docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" /project/docker-compose.deploy.yml \
+        docker cp "$$CID:/usr/share/yagra/docker-compose.deploy.yml" "$$WORKDIR/docker-compose.deploy.yml" \
           || { docker rm "$$CID" >/dev/null 2>&1; fail compose "the target image ships no compose file"; }
         docker rm "$$CID" >/dev/null 2>&1 || true
 
@@ -591,7 +604,7 @@ services:
         #    otherwise resolve it from the host's .env, which can name a different registry from
         #    the one these images were just fetched from.
         say running compose "recreating containers"
-        ( cd /project && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) \
+        ( cd "$$WORKDIR" && YAGRA_IMAGE_REPO="$$REPO" YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d ) \
           || fail compose "docker compose up failed; the previous images are still on this host"
 
         # 5. Verify the thing that is actually running — not that a command returned 0. A green
@@ -728,11 +741,16 @@ services:
           # Detached, outside this compose project, so `up -d --remove-orphans` cannot kill the
           # work — including when it recreates this very container. The procedure travels as an
           # argument; there is no script on disk for anything to tamper with.
+          #
+          # The deployment directory is mounted at ITS OWN PATH, not at a tidy /project. Everything
+          # that container runs `docker compose` for lands a working_dir label on the host's
+          # containers, and this very line reads that label back next time — so a container-local
+          # mount point becomes a host path that does not exist. See step 0 of APPLY.
           docker run --rm -d --name "yagra-upgrade-$$ID" \
             -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$${PROJ}_upgradedata:/data/upgrade" \
-            -v "$$WORKDIR:/project" \
-            -e "REPO=$$REPO" -e "PROJ=$$PROJ" \
+            -v "$$WORKDIR:$$WORKDIR" \
+            -e "REPO=$$REPO" -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" \
             docker:28-cli sh -c "$$APPLY" yagra-upgrade "$$TAG" "$$ID" "$$BY" "$$BUNDLE" >/dev/null \
             || reject "$$ID" "could not start the upgrade container"
         }

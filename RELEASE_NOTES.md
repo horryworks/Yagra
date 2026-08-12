@@ -10,6 +10,31 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **A deployment that had upgraded itself from the WebUI could not do it a second time.** The
+  updater finds the deployment directory by reading the compose label its own container carries, and
+  an upgrade recreates the stack by running `docker compose up -d` from inside a throwaway container
+  — which stamps *that container's* directory onto every container it creates, rather than the
+  host's. As soon as one of those recreated containers was the updater, the next upgrade mounted a
+  directory that exists on no host, Docker obligingly created it empty, and the run died at the
+  first step reporting `the pre-upgrade backup failed`: the wrong step, in the wrong component. The
+  upgrade container now sees the deployment directory at the path the host knows it by, and a run
+  that cannot find the composition says so and names the command that repairs it. Nothing was ever
+  damaged — it failed before pulling an image or stopping a container.
+  **If a deployment is already affected** — upgrades from Settings ▸ Upgrade fail at the backup step
+  within a second — run `docker compose -p yagra -f docker-compose.deploy.yml up -d` once from the
+  deployment directory on the host. That re-stamps the labels, and the WebUI works from then on.
+- **Pre-upgrade backups contained no metrics, and nothing said so.** `yagra-backup.sh` asks
+  VictoriaMetrics for a snapshot over HTTP from inside the stack, and it asked through
+  `docker exec core` — but the core runtime image ships neither `wget` nor `curl`, so the call
+  returned nothing and the script took its "no snapshot name in the response" branch. That branch is
+  deliberately not fatal (a site with no metrics store still needs its configuration backed up), it
+  reports itself in a line of output, and the updater discards the upgrade container's output — so
+  every backup taken this way held the database and the KEK, an empty `vm/` directory, and
+  `"yagra_version": "unknown"`. Both calls now go through a container that has an HTTP client, the
+  manifest carries `metrics_snapshot` (a name, or `null` — a claim rather than an omission), and the
+  closing summary says in words when a backup carries no metrics.
+
 ## v0.2.3 — the upgrade reaches every site, one poller at a time, and a handover no longer costs samples
 
 ### New Features

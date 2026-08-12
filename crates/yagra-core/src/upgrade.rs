@@ -1356,6 +1356,38 @@ mod tests {
         }
     }
 
+    /// The deployment directory must be mounted into the upgrade container at the path the **host**
+    /// knows it by, because `docker compose up -d` stamps its own working directory onto every
+    /// container it creates and the updater reads that label back to find the directory next time.
+    ///
+    /// Mount it at a tidy `/project` and the label records a path that exists only inside a
+    /// container that has since exited. Nothing notices until the *next* upgrade, which mounts that
+    /// path, gets the empty directory Docker helpfully creates, and dies in the backup step against
+    /// a stack it cannot find. Measured on the test server 2026-08-12: v0.2.2 → v0.2.3 and back
+    /// both succeeded, and every attempt after them failed in under a second reporting "the
+    /// pre-upgrade backup failed" — which named the wrong step, in the wrong component.
+    ///
+    /// The poison lands only when an apply recreates the *updater itself*, i.e. when the two
+    /// releases spell that service differently. That is why it survived the feature's first two
+    /// real upgrades: nothing here is exercised until the composition changes.
+    #[test]
+    fn the_upgrade_container_sees_the_deployment_directory_at_its_host_path() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        assert!(
+            compose.contains(r#"-v "$$WORKDIR:$$WORKDIR""#),
+            "the upgrade container must bind the deployment directory onto itself, or the compose \
+             labels it writes name a path that does not exist on the host"
+        );
+        for stale in [r#"WORKDIR:/project"#, "cd /project"] {
+            assert!(
+                !compose.contains(stale),
+                "`{stale}` is the mount point that poisoned the labels; the apply steps address \
+                 the deployment directory by $WORKDIR now"
+            );
+        }
+    }
+
     /// `refresh` must not write a status file, and only the shell can be asked whether it does.
     ///
     /// `status.json` means "a run", and three things read it: the Upgrade page's last-run card, the
