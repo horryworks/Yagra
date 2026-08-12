@@ -25,6 +25,13 @@
   gets the fields it actually has: an SNMP credential only on an ordinary device, maker/model only
   where a device reports them, and the device-profile picker restricted to profiles of a matching
   category — with any profile already bound kept in the list so an edit cannot silently re-bind it.
+- **Editing a node while the inventory search box held a term emptied the tree.** On Nodes ▸ All
+  nodes, every add / edit / move / delete — and every drag inside the tree — reloads the inventory,
+  which drops both of the tree's caches: the per-group members and the server-side search page. Only
+  the first was re-fetched, so the matches disappeared and did not return until the term was
+  retyped, leaving a pane that read as "nothing matches this search" rather than as a failed
+  refresh. The search is now re-issued with the rest of the inventory, and the previous matches stay
+  on screen until the fresh ones land, so the tree no longer blinks empty.
 
 ### Improvements
 - **Settings ▸ System health compares hosts instead of showing one at a time.** Host resources was a

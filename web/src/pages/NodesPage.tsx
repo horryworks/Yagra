@@ -35,13 +35,9 @@ import type {
   PoolOption,
   SuppressionExemption,
 } from '../types/api';
-import {
-  countsTotal,
-  filterResultsTruncated,
-  mergeNodesById,
-  type StateCounts,
-} from '../lib/nodeTree';
+import { countsTotal, mergeNodesById, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
+import { FILTER_SEARCH_LIMIT, useFilterSearch } from './useFilterSearch';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
@@ -72,12 +68,6 @@ import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintena
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import './NodesPage.css';
 
-/** Cap on filter-mode results — one server page of matches (the server's max). Beyond this the
- *  operator narrows the term; the fleet is never loaded into the browser. */
-const FILTER_SEARCH_LIMIT = 500;
-/** Debounce for the filter-mode server search so a fast typist fires one request, not one per key. */
-const FILTER_DEBOUNCE_MS = 200;
-
 /** Stable empty per-group counts (avoids a fresh `{}` each render churning the tree memo). */
 const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
 
@@ -91,11 +81,6 @@ export function NodesPage() {
   // total + attention count without loading the inventory.
   const [groupSummary, setGroupSummary] = useState<FleetGroupSummary | null>(null);
   const [fleetSummary, setFleetSummary] = useState<FleetSummary | null>(null);
-  // Filter mode's server-side search page — the nodes whose own name/address matched. null = not
-  // fetched yet. Never the whole fleet: it is one capped page, and the folders a group-name match
-  // reveals arrive separately through the per-group member cache.
-  const [allNodes, setAllNodes] = useState<NodeSummary[] | null>(null);
-  const [allNodesLoading, setAllNodesLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // The user's collapsed-group set (prefs) decides which groups are open → which members to load.
@@ -115,10 +100,6 @@ export function NodesPage() {
   const tabParam = searchParams.get('tab') ?? '';
   const tab = normalizeNodeDetailTab(tabParam);
   const [filter, setFilter] = useState('');
-  // The term the tree has ACTED on. `filter` drives what the tree hides — instant, client-side, off
-  // the group skeleton. This one drives what it FETCHES, so a fast typist fires one round of
-  // per-group loads instead of one per keystroke. Written by the same debounce as the search below.
-  const [appliedFilter, setAppliedFilter] = useState('');
 
   // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).
   // `replace` keeps rapid clicking out of the browser history.
@@ -184,13 +165,19 @@ export function NodesPage() {
   // Members load lazily, per group, only once that group's contents are on screen (A-3). The hook
   // owns that cache; this page only says what is currently worth having loaded.
   const filtering = filter.trim().length > 0;
+  // Filter mode's server-side search page — the nodes whose own name/address matched. One capped
+  // page, never the fleet; the folders a group-name match reveals arrive separately through the
+  // per-group member cache below. `appliedTerm` is the debounced term the search was issued for, so
+  // the reveal loads in step with the search rather than once per keystroke.
+  const search = useFilterSearch(filter);
+  const refetchSearch = search.refetch;
   const members = useLazyGroupMembers({
     groups,
     collapsed,
     ready: !loading,
     browsing: !filtering,
     selectedGroupId: selected?.kind === 'group' ? selected.id : null,
-    filterTerm: appliedFilter,
+    filterTerm: search.appliedTerm,
   });
   const invalidateMembers = members.invalidate;
 
@@ -201,8 +188,8 @@ export function NodesPage() {
   // `flattenTree` hides anything neither matching nor under a matched group, so the extra members
   // cost nothing on screen.
   const treeNodes = useMemo(
-    () => (filtering ? mergeNodesById(allNodes ?? [], members.nodes) : members.nodes),
-    [filtering, allNodes, members.nodes],
+    () => (filtering ? mergeNodesById(search.nodes, members.nodes) : members.nodes),
+    [filtering, search.nodes, members.nodes],
   );
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.
@@ -234,53 +221,22 @@ export function NodesPage() {
       setGroups(g);
       setGroupSummary(gs);
       setFleetSummary(fs);
-      // Invalidate the lazily-loaded members + filter cache so open groups re-fetch fresh.
+      // Both member caches are now stale, and both have to be told so. Dropping the per-group
+      // members alone left filter mode showing an empty tree after any edit: the search page was
+      // cleared but nothing re-issued the search, so it stayed cleared until the operator retyped
+      // the term. They are invalidated the same way, side by side, for that reason.
       invalidateMembers();
-      setAllNodes(null);
+      refetchSearch();
     } catch (e: unknown) {
       setError(errMsg(e, t('err.loadNodes')));
     } finally {
       setLoading(false);
     }
-  }, [t, invalidateMembers]);
+  }, [t, invalidateMembers, refetchSearch]);
 
   useEffect(() => {
     void reload();
   }, [reload]);
-
-  // Filter mode: debounced SERVER-side name/address search — the tree searches the fleet without
-  // loading it. Re-queries as the term changes; a stale response from an earlier keystroke is
-  // dropped. Results are capped at one server page (keep typing to narrow).
-  useEffect(() => {
-    if (!filtering) {
-      // Clearing the box must un-reveal the folders the last term opened, not freeze them.
-      setAppliedFilter('');
-      return undefined;
-    }
-    const term = filter.trim();
-    let cancelled = false;
-    setAllNodesLoading(true);
-    const h = setTimeout(() => {
-      // Applied as the search is ISSUED, not when it returns, so a matched folder's members load in
-      // parallel with the search page rather than a round-trip behind it.
-      setAppliedFilter(term);
-      api
-        .listNodesPage({ search: term, limit: FILTER_SEARCH_LIMIT })
-        .then((page) => {
-          if (!cancelled) setAllNodes(page.nodes);
-        })
-        .catch(() => {
-          if (!cancelled) setAllNodes([]);
-        })
-        .finally(() => {
-          if (!cancelled) setAllNodesLoading(false);
-        });
-    }, FILTER_DEBOUNCE_MS);
-    return () => {
-      cancelled = true;
-      clearTimeout(h);
-    };
-  }, [filtering, filter]);
 
   // Active maintenance windows + mutes for the per-row suppression icons. Refetched after any
   // maintenance/mute action from the tree so the icons update immediately (node `maintenance`
@@ -486,11 +442,7 @@ export function NodesPage() {
   // a fleet with more matches than the cap would otherwise show a silently short list. Counts the
   // SEARCH PAGE, not `treeNodes`: the latter also carries the revealed folders' members, which would
   // trip the cap notice for a term that never came near it.
-  const filterTruncated = filterResultsTruncated(
-    filtering,
-    allNodes?.length ?? 0,
-    FILTER_SEARCH_LIMIT,
-  );
+  const filterTruncated = search.truncated;
   // The selected node's summary, if it's among the loaded members (for the Move action). The detail
   // pane itself renders from the id, so it still works for a selection whose group isn't loaded.
   const selectedNode =
@@ -624,7 +576,7 @@ export function NodesPage() {
             loadedGroups={members.loadedGroups}
             revealedGroups={members.revealedGroups}
             canEdit={authed}
-            loading={loading || (filtering && allNodesLoading)}
+            loading={loading || (filtering && search.loading)}
             showToolbar={false}
             selected={selected}
             filter={filter}
