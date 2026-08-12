@@ -329,7 +329,8 @@
 }
 
 /* Per-row suppression markers (maintenance wrench + mute bell-off), always visible when active.
-   Each is a tinted, rounded chip so it reads at a glance against the row. */
+   Each is a 22px hit target holding a 16px glyph; how much decoration it carries differs per
+   marker and is argued at each rule below. */
 .ntree-supp {
   flex: none;
   display: inline-flex;
@@ -353,44 +354,43 @@
   stroke-width: 2.1;
 }
 
+/* Maintenance is a node *state*, so the row's status dot is already showing it, in this same
+   token. The marker's job is to be the handle for the window, not to announce a second time what
+   the dot has already said — so it is a bare glyph: no fill, no border. */
 .ntree-supp-icon.maint {
   color: var(--status-maintenance);
-  background: color-mix(in srgb, var(--status-maintenance) 18%, transparent);
 }
 
-/* Mute is an operator action, not an alert state — keep it neutral (no status colour) but give
-   the chip a clear border + fill so it still reads at a glance. */
+/* Mute keeps a bordered chip while maintenance above does not, and the asymmetry is deliberate,
+   not drift. A mute changes nothing else on the row — the dot stays red, the alert still lists on
+   Active Alerts — so this marker is the only thing on screen saying "nobody is being told". It has
+   no status colour to lean on either (mute is an operator action, not an alert state), so the
+   chip is what makes it read at a glance. */
 .ntree-supp-icon.mute {
   color: var(--text-secondary);
   background: var(--bg-tertiary);
   border: var(--border-width) solid var(--border-color);
 }
 
-/* A node released from a suppression it inherited: drained of the status tint and outlined in a
-   dashed border, so "not suppressed, but there is a suppression around it" reads at a glance and is
-   never carried by colour alone. The glyph is negated too — see the strike below, and `BellIcon`
-   for why the mute pair negates by dropping its slash instead of gaining a second line. */
+/* A node released from a suppression it inherited: drained of the status colour and outlined in a
+   dashed border. The dash carries the whole meaning, and it is the only border on a maintenance
+   marker, so the three states read on one axis — status colour = in force, dashed outline = there
+   is coverage here and this row is outside it, nothing at all = no coverage.
+
+   The wrench used to be struck through as well. That was removed: maintenance is a node state, so
+   the status dot has *already* said the node is not in maintenance, and the strike was re-stating
+   a fact nothing disputed — three negations stacked (drained, dashed, struck) read as grey mush at
+   16px rather than as emphasis. (`BellIcon` is the same argument on the mute side, which negates
+   by dropping its slash instead of gaining a second crossing line.) */
 .ntree-supp-icon.released {
   color: var(--text-tertiary);
   background: transparent;
   border: var(--border-width) dashed var(--border-color);
-  position: relative;
 }
 
-/* Maintenance only. A wrench means nothing on its own, so the strike is what negates it; a bell
-   already carries a slash, and a second crossing line at 16px reads as the muted icon it is meant
-   to be the opposite of. */
-.ntree-supp-icon.maint.released::after {
-  content: '';
-  position: absolute;
-  left: 2px;
-  right: 2px;
-  top: 50%;
-  border-top: 2px solid currentColor;
-  transform: rotate(-45deg);
-}
-
-/* The markers are buttons — clicking one opens the panel that says what is suppressing the row. */
+/* The markers are buttons — clicking one opens the panel that says what is suppressing the row.
+   The hover cue has to be the fill, not the border: the maintenance marker has no border to tint,
+   so tinting one was a rule that quietly did nothing on the marker most rows carry. */
 button.ntree-supp-icon {
   padding: 0;
   cursor: pointer;
@@ -398,6 +398,7 @@ button.ntree-supp-icon {
 
 button.ntree-supp-icon:hover {
   border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, transparent);
 }
 
 /* The suppression panel: opened by a marker click, positioned like the context menu and rendered

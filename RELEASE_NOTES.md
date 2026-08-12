@@ -30,9 +30,9 @@
     browser sends no expiry, and it re-derives it whenever coverage stops sooner than it said it
     would (a window ended early, disabled or deleted; a mute lifted), so a release can never outlive
     its reason and silently exclude the node from the *next* window. A
-    released node's marker negates itself — a struck-through wrench, or a plain ringing bell where
-    the muted one was — and its panel then reports what it is standing outside of and until when,
-    with putting it back as the only thing left to do.
+    released node's marker says so on its own — a dashed outline where the coverage's own marker is
+    solid, and a plain ringing bell where the muted one was — and its panel then reports what it is
+    standing outside of and until when, with putting it back as the only thing left to do.
   - A **group** covered by an ancestor's window shows the cause read-only and names the group to
     release it on. Ending an ancestor's window from a child row would silence-and-unsilence a set
     the operator cannot see from there.

@@ -213,7 +213,7 @@ export function NodeTree({
   const selectGroup = (group: NodeGroup) => onSelectGroup?.(group);
 
   // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
-  // the struck-through variant for a node released from a suppression it inherited. Each is a
+  // the dashed-outline variant for a node released from a suppression it inherited. Each is a
   // button: clicking one opens the panel below, which is the only place in the UI that answers
   // "why is this row silent".
   const suppressionMarks = (m: {
