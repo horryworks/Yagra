@@ -417,8 +417,10 @@ pub(super) struct NodeSearchQuery {
     limit: Option<i64>,
 }
 
+// The exclusion is security.md's rule; it stays in `//` because `///` on a `ToSchema` is published
+// verbatim to API clients, who cannot open a file that is not in the repository.
 /// One node-picker result: id + display name + address. Deliberately excludes credentials and
-/// bindings (security.md — the picker only needs to show and select a node).
+/// bindings — the picker only needs to show and select a node.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct NodeSearchResult {
     id: Uuid,

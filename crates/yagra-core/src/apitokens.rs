@@ -52,8 +52,11 @@ pub fn is_api_token_shape(token: &str) -> bool {
     token.starts_with(TOKEN_PREFIX)
 }
 
-/// One API token's metadata for the admin listing — **never** the raw token or its hash
-/// (security.md: a credential is never returned in an API response after issuance).
+// The rule behind the shape is security.md's: a credential is never returned in an API response
+// after issuance. It stays in `//` because `///` on a `ToSchema` is published verbatim to API
+// clients, and an external reader cannot open a file that is not in the repository.
+/// One API token's metadata for the admin listing — **never** the raw token or its hash. A
+/// credential is not returned in an API response after it has been issued.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ApiTokenInfo {
     pub id: Uuid,

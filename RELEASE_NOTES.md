@@ -10,6 +10,15 @@
 
 ## Unreleased
 
+## v0.2.4 — the second upgrade works, and the backup it takes first has the metrics in it
+
+Two bug fixes, both in the self-upgrade path that v0.2.2 introduced, and both found the same way:
+by upgrading a real deployment more than twice. Neither damaged anything, and that is most of the
+problem — one failed loudly at the wrong step, and the other succeeded while quietly writing an
+incomplete backup. **Anyone running v0.2.2 or v0.2.3 who has upgraded from the WebUI should read
+both entries**: the first names a one-command repair, and the second means the pre-upgrade backups
+already on disk hold no metrics.
+
 ### Bug Fixes
 - **A deployment that had upgraded itself from the WebUI could not do it a second time.** The
   updater finds the deployment directory by reading the compose label its own container carries, and

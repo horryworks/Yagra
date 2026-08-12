@@ -296,13 +296,15 @@ pub fn poller_upgrade_plan(pollers: &[PollerBuild], local: &[String]) -> PollerU
     PollerUpgradePlan { with_core, manual }
 }
 
-/// A release the operator could move to, with the direction and the verdict already decided.
-///
-/// Computed here rather than in the WebUI on purpose. The comparison is semver — `0.2.10` is newer
-/// than `0.2.9` — and it is the same rule that decides whether a rollback is safe, so it lives in
-/// the one place that already owns [`binding_floor`]. A second implementation in TypeScript would
-/// be the drift `.claude/rules/extensibility.md` §2 names, on the question where being subtly wrong
-/// costs the most.
+// Why it is computed here rather than in the WebUI: the comparison is semver — `0.2.10` is newer
+// than `0.2.9` — and it is the same rule that decides whether a rollback is safe, so it lives in
+// the one place that already owns `binding_floor`. A second implementation in TypeScript would be
+// the drift `.claude/rules/extensibility.md` §2 names, on the question where being subtly wrong
+// costs the most. This reasoning stays in `//`: a `///` on a `ToSchema` is published verbatim to
+// API clients, and it would name a file that is not in the repository.
+/// A release the operator could move to, with the direction and the verdict already decided by the
+/// server — the comparison is semver, and it is the same rule that decides whether a rollback is
+/// safe.
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct ReleaseOffer {
     /// The release tag.

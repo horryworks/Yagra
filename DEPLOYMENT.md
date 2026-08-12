@@ -539,6 +539,12 @@ URL/DNS checks, users, alert history and the audit log.
 ./scripts/yagra-backup.sh /srv/backups/yagra          # writes the tier-1 set + a manifest
 ```
 
+The metrics snapshot is the one part that can be skipped without failing the run — a site with no
+metrics store still needs its configuration backed up. From v0.2.4 a skip is **stated** rather than
+inferred: the manifest carries `metrics_snapshot` (a snapshot name, or `null`), and the closing
+summary says in words when a backup holds no metrics. Read that line before treating a backup as
+complete.
+
 ### Verifying it — this is the part that matters
 
 ```bash

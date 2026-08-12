@@ -3972,8 +3972,8 @@ export interface components {
             error: components["schemas"]["ErrorDetail"];
         };
         /**
-         * @description One API token's metadata for the admin listing — **never** the raw token or its hash
-         *     (security.md: a credential is never returned in an API response after issuance).
+         * @description One API token's metadata for the admin listing — **never** the raw token or its hash. A
+         *     credential is not returned in an API response after it has been issued.
          */
         ApiTokenInfo: {
             /** Format: date-time */
@@ -6832,7 +6832,7 @@ export interface components {
         };
         /**
          * @description One node-picker result: id + display name + address. Deliberately excludes credentials and
-         *     bindings (security.md — the picker only needs to show and select a node).
+         *     bindings — the picker only needs to show and select a node.
          */
         NodeSearchResult: {
             address: string;
@@ -7441,13 +7441,9 @@ export interface components {
             summary: string;
         };
         /**
-         * @description A release the operator could move to, with the direction and the verdict already decided.
-         *
-         *     Computed here rather than in the WebUI on purpose. The comparison is semver — `0.2.10` is newer
-         *     than `0.2.9` — and it is the same rule that decides whether a rollback is safe, so it lives in
-         *     the one place that already owns [`binding_floor`]. A second implementation in TypeScript would
-         *     be the drift `.claude/rules/extensibility.md` §2 names, on the question where being subtly wrong
-         *     costs the most.
+         * @description A release the operator could move to, with the direction and the verdict already decided by the
+         *     server — the comparison is semver, and it is the same rule that decides whether a rollback is
+         *     safe.
          */
         ReleaseOffer: {
             blocked?: null | components["schemas"]["OfferBlock"];
@@ -8653,7 +8649,10 @@ export interface components {
             timeout_ms?: number;
             /** @description Full URL to probe, e.g. `https://api.example.com/health`. */
             url: string;
-            /** @description Verify the TLS certificate chain (default `true`; never silently disabled — security.md). */
+            /**
+             * @description Verify the TLS certificate chain (default `true`). Turning it off is an explicit operator
+             *     choice — it is never disabled silently.
+             */
             verify_tls?: boolean;
         };
         /** @description A URL / HTTP endpoint monitor's configuration (1:1 with its node). */

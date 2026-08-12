@@ -402,7 +402,10 @@ pub struct UrlCheckConfig {
     /// Which status codes count as healthy (default: any 2xx).
     #[serde(default)]
     pub expected_status: ExpectedStatus,
-    /// Verify the TLS certificate chain (default `true`; never silently disabled — security.md).
+    // security.md is what forbids the silent-disable; the citation stays in `//` because this
+    // `///` is published verbatim to API clients, who cannot open that file.
+    /// Verify the TLS certificate chain (default `true`). Turning it off is an explicit operator
+    /// choice — it is never disabled silently.
     #[serde(default = "default_true")]
     pub verify_tls: bool,
     /// Follow 3xx redirects (default `true`).
