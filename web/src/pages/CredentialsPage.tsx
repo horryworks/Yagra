@@ -51,10 +51,14 @@ import {
   type CredentialSort,
   type CredentialSortKey,
 } from './credentialList';
+import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
 import './CredentialsPage.css';
 
-const KINDS = ['snmp_v2c', 'snmp_v3', 'http_auth', 'api_token'] as const;
-type Kind = (typeof KINDS)[number];
+/** The creatable kinds and their type come from `lib/credentialKinds.ts`, which is also what the
+ *  node-binding, URL-monitor and discovery pickers filter on — one list, so a kind added here
+ *  cannot be one those pickers refuse to offer. */
+const KINDS = CREDENTIAL_KINDS;
+type Kind = CredentialKind;
 
 // Kind → { i18n label key, icon }. The label is resolved with `t` at the call site (never at
 // module load) so it follows the active language.

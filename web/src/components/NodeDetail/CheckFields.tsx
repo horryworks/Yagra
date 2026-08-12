@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { Button } from '../ui/Button';
 import { FieldHint, RequiredMark, Select, TextInput } from '../ui/Field';
+import { isHttpCredentialKind } from '../../lib/credentialKinds';
 import type { CredentialSummary } from '../../types/api';
 import {
   withExtract,
@@ -27,10 +28,6 @@ import {
 
 const HTTP_METHODS = ['GET', 'HEAD', 'POST'] as const;
 const DNS_RECORD_TYPES = ['A', 'AAAA', 'CNAME'] as const;
-
-/** Credential kinds a URL monitor can present. `http_auth` is the current kind; `api_token`
- *  predates it and is accepted as a bearer token (see `secrets.rs::KIND_API_TOKEN`). */
-const HTTP_CRED_KINDS: string[] = ['http_auth', 'api_token'];
 
 /** One labelled row. Exported because both this file's forms and the dialog that hosts them spell
  *  a field the same way; the shared `Field` exports the controls, not the label+hint wrapper. */
@@ -71,7 +68,7 @@ export function UrlCheckFields({
   useEffect(() => {
     api
       .listCredentials()
-      .then((list) => setCreds(list.filter((c) => HTTP_CRED_KINDS.includes(c.kind))))
+      .then((list) => setCreds(list.filter((c) => isHttpCredentialKind(c.kind))))
       .catch(() => setCreds([]));
   }, []);
 

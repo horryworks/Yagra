@@ -26,10 +26,8 @@ import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EntityName } from '../components/ui/EntityName';
 import { coverageOf, isUnmonitored } from './discoveredEndpoints';
+import { isSnmpCredentialKind } from '../lib/credentialKinds';
 import './DiscoveryPage.css';
-
-/** Credential kinds that make sense as SNMP scan candidates. */
-const SNMP_KINDS = ['snmp_v2c', 'snmp_v3'];
 
 interface RowState {
   selected: boolean;
@@ -65,7 +63,7 @@ export function DiscoveryPage() {
       .then((list) => {
         setCreds(list);
         // Preselect every SNMP credential — the common case is "try all my secrets".
-        setSelectedCredIds(list.filter((c) => SNMP_KINDS.includes(c.kind)).map((c) => c.id));
+        setSelectedCredIds(list.filter((c) => isSnmpCredentialKind(c.kind)).map((c) => c.id));
       })
       .catch(() => undefined);
     return () => {
@@ -73,7 +71,7 @@ export function DiscoveryPage() {
     };
   }, []);
 
-  const snmpCreds = creds.filter((c) => SNMP_KINDS.includes(c.kind));
+  const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
 
   // Seed per-row form state when new candidates arrive. The suggested profile is resolved
   // server-side (by sysObjectID/sysDescr → classification rules) and arrives as an id, so we

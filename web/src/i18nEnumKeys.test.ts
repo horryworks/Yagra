@@ -55,6 +55,7 @@ import {
   NODE_EDIT_KIND_SPEC,
   NODE_EDIT_SECTIONS,
 } from './components/NodeDetail/nodeEditForm';
+import { CREDENTIAL_KINDS } from './lib/credentialKinds';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
@@ -205,6 +206,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', SCOPE_LEVELS);
     expectKeys('scope id noun', locales, 'thresholds.addModal.scopeIdNoun.', SCOPE_LEVELS);
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
+  });
+
+  it('every credential kind has a label (access:cred.kind.*)', () => {
+    // The label names the secret in the list, the create dialog and every picker that filters on
+    // these kinds; a kind with no strings would offer the operator a raw key while they choose
+    // what to store.
+    expectKeys('credential kind', { en: enAccess, ja: jaAccess }, 'cred.kind.', CREDENTIAL_KINDS);
   });
 
   it('every HTTP auth scheme has a label (access:cred.http.schemeName.*)', () => {

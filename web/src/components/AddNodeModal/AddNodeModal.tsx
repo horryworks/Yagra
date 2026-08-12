@@ -11,6 +11,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { isValidPoolName } from '../../lib/pool';
+import { isSnmpCredentialKind } from '../../lib/credentialKinds';
 import { groupOptions } from '../../lib/nodeTree';
 import {
   isAddableKind,
@@ -74,7 +75,7 @@ export function AddNodeModal({
     api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
     api
       .listCredentials()
-      .then((c) => setCredentials(c.filter((cr) => cr.kind === 'snmp_v2c')))
+      .then((c) => setCredentials(c.filter((cr) => isSnmpCredentialKind(cr.kind))))
       .catch(() => setCredentials([]));
   }, []);
 
