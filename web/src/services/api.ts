@@ -120,6 +120,7 @@ import type {
   ThroughputRange,
   StoredCollectionItem,
   ThresholdPage,
+  ThresholdQuery,
   RankedNodes,
   TopologyNode,
   TopologyMode,
@@ -1140,7 +1141,13 @@ export const api = {
   deleteProfile: (id: string): Promise<void> => apiDelete('/api/v1/profiles/{id}', { path: { id } }),
 
   /** Threshold rules (hierarchical overrides; most-specific scope wins). */
-  listThresholds: (): Promise<ThresholdPage> => apiGet('/api/v1/thresholds'),
+  /** A capped page of threshold rules, narrowed server-side.
+   *
+   *  ⚠️ Takes the whole query object rather than naming fields: hand-listing them is how
+   *  `listAlertHistory` silently dropped every History filter — TypeScript checks excess
+   *  properties on object *literals* only, and a value returned by `queryFor()` is not one. */
+  listThresholds: (query?: ThresholdQuery): Promise<ThresholdPage> =>
+    apiGet('/api/v1/thresholds', { query }),
 
   /** Create a threshold rule. */
   createThreshold: (body: {

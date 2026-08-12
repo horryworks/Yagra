@@ -8282,18 +8282,18 @@ export interface components {
         /**
          * @description A capped page of threshold rules.
          *
-         *     `total` is the unfiltered row count, not `items.len()`, so the UI can say *how many* it is not
-         *     showing. `truncated` is derived rather than left to the client comparing the two — a client that
-         *     forgets the comparison shows a complete-looking list.
+         *     `total` is the count of rules **matching the filter**, not `items.len()`, so the UI can say *how
+         *     many* it is not showing. `truncated` is derived rather than left to the client comparing the
+         *     two — a client that forgets the comparison shows a complete-looking list.
          */
         ThresholdPage: {
             items: components["schemas"]["StoredThreshold"][];
             /**
              * Format: int64
-             * @description Rules stored in total, ignoring the cap.
+             * @description Rules matching the filter, ignoring the cap.
              */
             total: number;
-            /** @description Whether `items` is a prefix of the ruleset rather than all of it. */
+            /** @description Whether `items` is a prefix of the matching rules rather than all of them. */
             truncated: boolean;
         };
         /** @description A threshold rule. */
@@ -22154,6 +22154,12 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Case-insensitive substring of the metric name. */
+                q?: string;
+                /** @description Only rules defined at this scope level (`profile` | `group` | `node`). */
+                scope_level?: components["schemas"]["ScopeLevel"];
+                /** @description Only rules breaching in this direction (`above` | `below`). */
+                direction?: components["schemas"]["Direction"];
             };
             header?: never;
             path?: never;
@@ -22161,7 +22167,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A capped page of rules, with the unfiltered total */
+            /** @description A capped page of matching rules, with the matching total */
             200: {
                 headers: {
                     [name: string]: unknown;

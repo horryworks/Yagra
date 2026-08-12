@@ -87,6 +87,26 @@ pub enum ScopeLevel {
     Node,
 }
 
+impl ScopeLevel {
+    /// Every level, broadest first — the order the threshold list is sorted in and the order a
+    /// picker should offer them.
+    pub const ALL: [ScopeLevel; 3] = [ScopeLevel::Profile, ScopeLevel::Group, ScopeLevel::Node];
+
+    /// Stable lowercase string for API payloads, DB columns, and logs.
+    ///
+    /// The `thresholds.scope_level` column holds exactly these three, written verbatim from the
+    /// create request and read back by `ThresholdStore::parse_level`, so anything that binds a
+    /// level into SQL must go through here rather than formatting the enum.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ScopeLevel::Profile => "profile",
+            ScopeLevel::Group => "group",
+            ScopeLevel::Node => "node",
+        }
+    }
+}
+
 /// A threshold rule for a single metric.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ThresholdRule {
@@ -208,6 +228,28 @@ fn restrictive(a: Option<f64>, b: Option<f64>, dir: Direction) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_scope_level_agrees_with_its_serde_tag_and_covers_the_enum() {
+        // The same value is both a DB column (`as_str`) and a JSON field (`#[serde(rename_all)]`),
+        // produced by two different mechanisms with nothing making them agree — so a disagreement
+        // means the API writes rules the store reads back as a *different scope*, which is a
+        // node-level override silently behaving as a fleet-wide profile rule (testing.md).
+        for level in ScopeLevel::ALL {
+            let json = serde_json::to_string(&level).expect("serializable");
+            assert_eq!(json, format!("\"{}\"", level.as_str()), "{level:?}");
+            let back: ScopeLevel =
+                serde_json::from_str(&json).expect("round-trips through its own tag");
+            assert_eq!(back, level);
+        }
+        // ALL is the whole enum, not a list someone forgot to extend when a level was added.
+        assert_eq!(ScopeLevel::ALL.len(), 3);
+        assert_eq!(
+            ScopeLevel::ALL.map(ScopeLevel::as_str),
+            ["profile", "group", "node"],
+            "ALL is ordered broadest-first — the threshold list and its filter both rely on it"
+        );
+    }
 
     fn rule(level: ScopeLevel, warning: f64, critical: f64) -> ScopedThreshold {
         ScopedThreshold::new(

@@ -13,7 +13,7 @@
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageConfig};
-use super::util::{CreatedId, ListQuery};
+use super::util::{normalize_search, CreatedId};
 use super::{is_valid_metric_name, ApiState};
 use axum::{
     extract::{Path, Query},
@@ -46,23 +46,40 @@ pub(super) fn routes() -> Router<ApiState> {
 
 /// A capped page of threshold rules.
 ///
-/// `total` is the unfiltered row count, not `items.len()`, so the UI can say *how many* it is not
-/// showing. `truncated` is derived rather than left to the client comparing the two — a client that
-/// forgets the comparison shows a complete-looking list.
+/// `total` is the count of rules **matching the filter**, not `items.len()`, so the UI can say *how
+/// many* it is not showing. `truncated` is derived rather than left to the client comparing the
+/// two — a client that forgets the comparison shows a complete-looking list.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct ThresholdPage {
     items: Vec<crate::thresholds::StoredThreshold>,
-    /// Rules stored in total, ignoring the cap.
+    /// Rules matching the filter, ignoring the cap.
     total: i64,
-    /// Whether `items` is a prefix of the ruleset rather than all of it.
+    /// Whether `items` is a prefix of the matching rules rather than all of them.
     truncated: bool,
+}
+
+/// `?limit=` plus the filters, all optional.
+///
+/// The two enums are parsed at the edge rather than taken as strings: an unknown token is a `400`,
+/// never a filter silently dropped. Dropping it here would *widen* the answer — the operator asked
+/// for node-level rules and would be shown every rule in the fleet, believing the narrower thing.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct ThresholdQuery {
+    limit: Option<i64>,
+    /// Case-insensitive substring of the metric name.
+    q: Option<String>,
+    /// Only rules defined at this scope level (`profile` | `group` | `node`).
+    scope_level: Option<yagra_common::ScopeLevel>,
+    /// Only rules breaching in this direction (`above` | `below`).
+    direction: Option<yagra_common::Direction>,
 }
 
 #[utoipa::path(
     get, path = "/api/v1/thresholds", tag = "thresholds",
-    params(ListQuery),
+    params(ThresholdQuery),
     responses(
-        (status = 200, description = "A capped page of rules, with the unfiltered total", body = ThresholdPage),
+        (status = 200, description = "A capped page of matching rules, with the matching total", body = ThresholdPage),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin — the ruleset decides when the fleet pages someone", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -70,10 +87,22 @@ pub(crate) struct ThresholdPage {
 )]
 async fn list_thresholds(
     _guard: RequireManageConfig,
+    Query(q): Query<ThresholdQuery>,
     admin: Admin,
-    Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<ThresholdPage>> {
-    Ok(Json(threshold_page(&admin, q.limit).await?))
+    let metric = normalize_search(q.q.as_deref());
+    Ok(Json(
+        threshold_page(
+            &admin,
+            q.limit,
+            &crate::thresholds::ThresholdFilter {
+                metric: metric.as_deref(),
+                level: q.scope_level,
+                direction: q.direction,
+            },
+        )
+        .await?,
+    ))
 }
 
 /// A capped page of rules — the seam both edges call.
@@ -82,14 +111,25 @@ async fn list_thresholds(
 /// cannot serve an uncapped list, and cannot report a complete-looking one either. `truncated` is
 /// the load-bearing half: a silently short ruleset reads as "these are all the rules", which is
 /// exactly the wrong belief to hold about alerting configuration.
+///
+/// **The filter is deliberately not exposed on the MCP side.** `get_config(kind=thresholds)` is a
+/// configuration dump — its callers ask "what is the ruleset", not "show me the CPU ones" — so the
+/// filters are a UI narrowing rather than a question MCP cannot otherwise answer (ADR-042 asks for
+/// parity on *questions*, and records the reason when a read has no tool of its own). It still
+/// comes through this seam, so the cap and `truncated` can never differ between the two edges.
 pub(crate) async fn threshold_page(
     admin: &super::AdminState,
     limit: Option<i64>,
+    filter: &crate::thresholds::ThresholdFilter<'_>,
 ) -> ApiResult<ThresholdPage> {
     let limit = limit.unwrap_or(THRESHOLDS_MAX).clamp(1, THRESHOLDS_MAX);
-    let (items, total) = admin.thresholds.list_page(limit).await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "list thresholds", "failed to list thresholds")
-    })?;
+    let (items, total) = admin
+        .thresholds
+        .list_page(limit, filter)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "list thresholds", "failed to list thresholds")
+        })?;
     let truncated = total > i64::try_from(items.len()).unwrap_or(i64::MAX);
     if truncated {
         tracing::info!(total, limit, "threshold list capped to the page limit");

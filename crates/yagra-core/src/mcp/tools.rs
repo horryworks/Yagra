@@ -2377,7 +2377,10 @@ impl YagraMcp {
         match kind {
             // ── alerting / notification ──────────────────────────────────────
             ConfigKind::Thresholds => {
-                match crate::api::thresholds::threshold_page(a, p.limit).await {
+                // No filter: `get_config` is a configuration dump, and its callers ask for the
+                // ruleset rather than a slice of it — see `threshold_page` for the reasoning.
+                match crate::api::thresholds::threshold_page(a, p.limit, &Default::default()).await
+                {
                     Ok(page) => ok_json(TOOL, &page),
                     Err(e) => tool_api_error(TOOL, &e),
                 }

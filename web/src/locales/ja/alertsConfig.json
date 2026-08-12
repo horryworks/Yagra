@@ -172,6 +172,15 @@
     "err": {
       "add": "追加に失敗しました",
       "delete": "削除に失敗しました"
+    },
+    "emptyFiltered": "この絞り込みに一致するルールがありません。",
+    "filter": {
+      "searchPlaceholder": "メトリクスを検索…",
+      "searchAria": "しきい値ルールをメトリクスで検索",
+      "allScopes": "すべての適用範囲",
+      "scopeAria": "適用範囲で絞り込む",
+      "allDirections": "上振れ・下振れの両方",
+      "directionAria": "方向で絞り込む"
     }
   },
   "eventRules": {

@@ -14,7 +14,8 @@
 // server caps the response. When the cap bites, the toolbar says so: a silently short ruleset reads
 // as "these are all the rules", which is exactly the wrong belief to hold about alerting config.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -35,7 +36,20 @@ import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import {
+  TableToolbar,
+  TableSpacer,
+  ResultCount,
+  SearchInput,
+  FilterSelect,
+} from '../components/ui/TableToolbar';
+import {
+  isFiltered,
+  queryFor,
+  readFilters,
+  writeFilters,
+  type ThresholdFilters,
+} from './thresholdQuery';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
@@ -224,9 +238,27 @@ export function ThresholdsPage() {
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
   const { scopeName } = useEntityNames();
 
+  // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
+  // reload and can be shared. `replace: true` because a settled filter is not a place you
+  // navigated to: pushing one per keystroke would make Back walk through every intermediate
+  // state instead of leaving the screen.
+  const [params, setParams] = useSearchParams();
+  const filters = useMemo(
+    () => readFilters(params, SCOPE_LEVELS, DIRECTIONS),
+    [params],
+  );
+  const set = <K extends keyof ThresholdFilters>(key: K, value: ThresholdFilters[K]) => {
+    const next = new URLSearchParams(params);
+    writeFilters(next, { ...filters, [key]: value });
+    setParams(next, { replace: true });
+  };
+
+  // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
+  // narrowing would only ever examine the 500 rules already on screen — which is the whole
+  // reason this screen filters server-side (see `thresholdQuery.ts`).
   const load = useCallback(() => {
     api
-      .listThresholds()
+      .listThresholds(queryFor(filters))
       .then((p) => {
         setRows(p.items);
         setPage({ total: p.total, truncated: p.truncated });
@@ -236,7 +268,7 @@ export function ThresholdsPage() {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
       })
       .finally(() => setLoading(false));
-  }, []);
+  }, [filters]);
 
   useEffect(() => {
     load();
@@ -328,6 +360,26 @@ export function ThresholdsPage() {
       ) : (
         <>
           <TableToolbar>
+            <SearchInput
+              value={filters.q}
+              onChange={(v) => set('q', v)}
+              placeholder={t('thresholds.filter.searchPlaceholder')}
+              ariaLabel={t('thresholds.filter.searchAria')}
+            />
+            <FilterSelect
+              value={filters.scopeLevel}
+              onChange={(v) => set('scopeLevel', v)}
+              options={SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) }))}
+              allLabel={t('thresholds.filter.allScopes')}
+              ariaLabel={t('thresholds.filter.scopeAria')}
+            />
+            <FilterSelect
+              value={filters.direction}
+              onChange={(v) => set('direction', v)}
+              options={DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) }))}
+              allLabel={t('thresholds.filter.allDirections')}
+              ariaLabel={t('thresholds.filter.directionAria')}
+            />
             <TableSpacer />
             {/* Says how many of how many when the server capped the response — never a bare count
                 that would read as the whole ruleset. */}
@@ -336,7 +388,11 @@ export function ThresholdsPage() {
                 {t('thresholds.truncated', { shown: rows.length, total: page.total })}
               </span>
             )}
-            <ResultCount shown={rows.length} noun={t('common:noun.rule', { count: rows.length })} />
+            <ResultCount
+              shown={rows.length}
+              total={isFiltered(filters) ? page.total : undefined}
+              noun={t('common:noun.rule', { count: rows.length })}
+            />
             {authed && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('thresholds.add')}
@@ -351,11 +407,20 @@ export function ThresholdsPage() {
             columns={columns}
             rowKey={(r) => r.id}
             loading={loading}
+            // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a
+            // filtered query that legitimately returns zero is indistinguishable from a
+            // ruleset that has no rules at all — and on this table those read very differently.
             empty={
-              <div className="yt-empty">
-                <p className="yt-empty-title">{t('thresholds.empty')}</p>
-                <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>
-              </div>
+              isFiltered(filters) ? (
+                <div className="yt-empty">
+                  <p className="yt-empty-title">{t('thresholds.emptyFiltered')}</p>
+                </div>
+              ) : (
+                <div className="yt-empty">
+                  <p className="yt-empty-title">{t('thresholds.empty')}</p>
+                  <p className="yt-empty-sub">{t('thresholds.emptySub')}</p>
+                </div>
+              )
             }
           />
         </>

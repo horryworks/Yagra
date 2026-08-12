@@ -38,6 +38,20 @@ fn parse_direction(s: &str) -> Direction {
     }
 }
 
+/// What narrows a page of the ruleset. Every field is optional; all of them are ANDed.
+///
+/// A struct rather than three parameters because the order of three `Option`s is exactly the kind
+/// of call-site mistake that compiles, runs, and answers a different question.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ThresholdFilter<'a> {
+    /// Case-insensitive substring of the metric name.
+    pub metric: Option<&'a str>,
+    /// Only rules defined at this scope level.
+    pub level: Option<ScopeLevel>,
+    /// Only rules breaching in this direction.
+    pub direction: Option<Direction>,
+}
+
 /// PostgreSQL-backed threshold store.
 pub struct ThresholdStore {
     pool: PgPool,
@@ -66,22 +80,54 @@ impl ThresholdStore {
         rows.into_iter().map(Self::row_to_threshold).collect()
     }
 
-    /// One page of threshold rules for the API, plus the total, so the caller can tell the operator
-    /// how many were withheld rather than silently showing a prefix.
+    /// The filter's predicate: one const, every clause always present, every value a nullable bind.
+    ///
+    /// Not assembled conditionally, and that is the point — a `WHERE` built by pushing clauses has
+    /// a branch per filter that can be forgotten, and a forgotten clause on *this* table fails
+    /// open: the operator sees more rules than they asked for, which reads as a wrong answer about
+    /// what pages the fleet. One const also keeps the count query and the page query asking the
+    /// same question, so "500 of 3,200" cannot count a different set from the one it is showing.
+    const FILTER_WHERE: &'static str = "($1::text IS NULL OR metric ILIKE '%' || $1 || '%') \
+         AND ($2::text IS NULL OR scope_level = $2) \
+         AND ($3::text IS NULL OR direction = $3)";
+
+    /// One page of threshold rules for the API, plus how many matched, so the caller can tell the
+    /// operator how many were withheld rather than silently showing a prefix.
     ///
     /// Ordered so the page is stable and readable: broadest scope first (profile → group → node),
     /// then by metric. Without an `ORDER BY`, PostgreSQL is free to return a different arbitrary
     /// subset each time the same page is fetched.
-    pub async fn list_page(&self, limit: i64) -> anyhow::Result<(Vec<StoredThreshold>, i64)> {
-        let total: i64 = sqlx::query_scalar("SELECT count(*) FROM thresholds")
-            .fetch_one(&self.pool)
-            .await?;
-        let rows = sqlx::query(&format!(
-            "SELECT {} FROM thresholds \
-             ORDER BY CASE scope_level WHEN 'profile' THEN 0 WHEN 'group' THEN 1 ELSE 2 END, \
-             metric, scope_id LIMIT $1",
-            Self::COLUMNS
-        ))
+    ///
+    /// ⚠️ The total counts the rows **matching the filter**, not every row in the table. That is
+    /// what makes `truncated` mean something once a filter exists: "showing 500 of 3,200" has to be
+    /// 3,200 matches, or the operator cannot tell whether narrowing further would help.
+    pub async fn list_page(
+        &self,
+        limit: i64,
+        filter: &ThresholdFilter<'_>,
+    ) -> anyhow::Result<(Vec<StoredThreshold>, i64)> {
+        // `query` rather than `query_scalar` so both statements bind through the same helper —
+        // two binder shapes would be two places to get the positional order wrong.
+        let total: i64 = Self::bind_filter(
+            sqlx::query(&format!(
+                "SELECT count(*) FROM thresholds WHERE {}",
+                Self::FILTER_WHERE
+            )),
+            filter,
+        )
+        .fetch_one(&self.pool)
+        .await?
+        .try_get(0)?;
+        let rows = Self::bind_filter(
+            sqlx::query(&format!(
+                "SELECT {} FROM thresholds WHERE {} \
+                 ORDER BY CASE scope_level WHEN 'profile' THEN 0 WHEN 'group' THEN 1 ELSE 2 END, \
+                 metric, scope_id LIMIT $4",
+                Self::COLUMNS,
+                Self::FILTER_WHERE
+            )),
+            filter,
+        )
         .bind(limit)
         .fetch_all(&self.pool)
         .await?;
@@ -90,6 +136,21 @@ impl ThresholdStore {
             .map(Self::row_to_threshold)
             .collect::<anyhow::Result<Vec<_>>>()?;
         Ok((items, total))
+    }
+
+    /// Bind `$1..=$3` of [`Self::FILTER_WHERE`], in the one order that matches it.
+    ///
+    /// One helper because the sequence is positional and silent when wrong: swapping two binds
+    /// still compiles, still runs, and just answers a different question. The metric goes in as a
+    /// *value*, never interpolated — `%` and `_` are wildcards to `ILIKE`, so a raw pattern would
+    /// be an operator-supplied search turning into a table scan of everything.
+    fn bind_filter<'q>(
+        q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+        f: &ThresholdFilter<'_>,
+    ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+        q.bind(f.metric.map(str::to_owned))
+            .bind(f.level.map(|l| l.as_str().to_owned()))
+            .bind(f.direction.map(|d| d.as_str().to_owned()))
     }
 
     fn row_to_threshold(row: sqlx::postgres::PgRow) -> anyhow::Result<StoredThreshold> {
@@ -238,8 +299,52 @@ mod tests {
             !all_body.contains("LIMIT"),
             "list_all must stay uncapped — a truncated snapshot silently stops alerting"
         );
-        // The API page is capped and bound, never interpolated.
-        assert!(src.contains("metric, scope_id LIMIT $1"));
+        // The API page is capped and bound, never interpolated. `$4` because the filter takes the
+        // first three placeholders — see `FILTER_WHERE`.
+        assert!(src.contains("metric, scope_id LIMIT $4"), "{src}");
+    }
+
+    #[test]
+    fn the_filter_binds_every_placeholder_it_names_and_interpolates_none() {
+        // The predicate is one const with a nullable bind per clause, and the count and the page
+        // must ask the *same* question — "500 of 3,200" counting a different set from the one it
+        // shows is a wrong answer about what pages the fleet. The needles are built from the
+        // constants at runtime: a literal needle in a test that reads its own file matches itself
+        // and passes forever.
+        let src = production_source();
+        let placeholders = (1..=3)
+            .filter(|n| ThresholdStore::FILTER_WHERE.contains(&format!("${n}")))
+            .count();
+        assert_eq!(placeholders, 3, "{}", ThresholdStore::FILTER_WHERE);
+        let after = src
+            .split_once("fn bind_filter")
+            .expect("bind_filter exists")
+            .1;
+        // Stop at the function's own closing brace — everything after it is other statements that
+        // bind too, and counting those would make this assertion pass for the wrong reason.
+        let binder = after.split_once("\n    }").map_or(after, |(b, _)| b);
+        assert_eq!(
+            binder.matches(".bind(").count(),
+            placeholders,
+            "one bind per placeholder, in the one order that matches the predicate"
+        );
+        // The operator's search term is a value, never part of the pattern: `%` and `_` are ILIKE
+        // wildcards, so an interpolated term would let a typed `%` scan the whole table.
+        assert!(
+            !ThresholdStore::FILTER_WHERE.contains("{}"),
+            "the predicate must not be a format string"
+        );
+        // Both statements filter, so the total describes the rows being shown.
+        let page = src
+            .split_once("pub async fn list_page")
+            .expect("list_page exists")
+            .1;
+        let body = page.split_once("fn bind_filter").map_or(page, |(b, _)| b);
+        assert_eq!(
+            body.matches("Self::FILTER_WHERE").count(),
+            2,
+            "the count and the page must share the predicate"
+        );
     }
 
     #[test]

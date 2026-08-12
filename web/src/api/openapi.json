@@ -16942,11 +16942,38 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring of the metric name.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "scope_level",
+            "in": "query",
+            "description": "Only rules defined at this scope level (`profile` | `group` | `node`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ScopeLevel"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Only rules breaching in this direction (`above` | `below`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Direction"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "A capped page of rules, with the unfiltered total",
+            "description": "A capped page of matching rules, with the matching total",
             "content": {
               "application/json": {
                 "schema": {
@@ -29215,7 +29242,7 @@
       },
       "ThresholdPage": {
         "type": "object",
-        "description": "A capped page of threshold rules.\n\n`total` is the unfiltered row count, not `items.len()`, so the UI can say *how many* it is not\nshowing. `truncated` is derived rather than left to the client comparing the two — a client that\nforgets the comparison shows a complete-looking list.",
+        "description": "A capped page of threshold rules.\n\n`total` is the count of rules **matching the filter**, not `items.len()`, so the UI can say *how\nmany* it is not showing. `truncated` is derived rather than left to the client comparing the\ntwo — a client that forgets the comparison shows a complete-looking list.",
         "required": [
           "items",
           "total",
@@ -29231,11 +29258,11 @@
           "total": {
             "type": "integer",
             "format": "int64",
-            "description": "Rules stored in total, ignoring the cap."
+            "description": "Rules matching the filter, ignoring the cap."
           },
           "truncated": {
             "type": "boolean",
-            "description": "Whether `items` is a prefix of the ruleset rather than all of it."
+            "description": "Whether `items` is a prefix of the matching rules rather than all of them."
           }
         }
       },

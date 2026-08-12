@@ -413,6 +413,13 @@ export type StoredThreshold = components['schemas']['StoredThreshold'];
  *  from `items.length` (which is wrong when the ruleset is exactly the cap). */
 export type ThresholdPage = components['schemas']['ThresholdPage'];
 
+/** The query `GET /api/v1/thresholds` accepts, derived from the operation rather than hand-listed
+ *  — the client passes it through whole, so a filter cannot be dropped on the way (the bug
+ *  `listAlertHistory` shipped with). */
+export type ThresholdQuery = NonNullable<
+  paths['/api/v1/thresholds']['get']['parameters']['query']
+>;
+
 /** One alert-history row (`GET /api/v1/alerts/history`) — the stored row plus inbound ack state
  *  (the Rust type is `AlertHistoryView`). `metric` is `null` for rows recorded before it was
  *  captured ⇒ render "—"; `observed_value` / `threshold_value` / `direction` are threshold checks
