@@ -10,6 +10,19 @@
 
 ## Unreleased
 
+## v0.2.5 — the tree answers why a row is silent, and lets one node out of a group's window
+
+Suppression was easy to *set* from All nodes and impossible to read or undo there: a row carried a
+🔧 or a 🔕 and said nothing about which window put it there, whether it came from the row itself or
+from a folder group above it, or when it would stop. This release makes both markers open a panel
+that answers all three and offers exactly the one control that fits where the suppression comes
+from — including taking a single node out of a group's window without disturbing its siblings.
+
+The rest is the same feature meeting a real screen: two of the three bug fixes below came from using
+it on the test server rather than from a test, and one of those — a hover that moved the buttons
+already under the pointer — had been in the tree long before any of this and only became dangerous
+once the markers became clickable.
+
 ### New Features
 - **Suppression can now be released from the tree it was set in, including for one node inside a
   suppressed group.** All nodes ▸ the maintenance (🔧) and mute (🔕) markers are now buttons: click
@@ -30,9 +43,12 @@
     browser sends no expiry, and it re-derives it whenever coverage stops sooner than it said it
     would (a window ended early, disabled or deleted; a mute lifted), so a release can never outlive
     its reason and silently exclude the node from the *next* window. A
-    released node's marker says so on its own — a dashed outline where the coverage's own marker is
-    solid, and a plain ringing bell where the muted one was — and its panel then reports what it is
-    standing outside of and until when, with putting it back as the only thing left to do.
+    released node's marker says so on its own: a suppression **in force** is a filled chip — blue
+    for maintenance, yellow for a mute — and a row released from one is drained of the colour and
+    outlined in a dashed border instead. Fill-versus-outline is the primary signal and survives
+    greyscale, so the hue only has to say *which* of the two it is; the mute glyph also loses its
+    slash and goes back to a plain ringing bell. The panel then reports what the row is standing
+    outside of and until when, with putting it back as the only thing left to do.
   - A **group** covered by an ancestor's window shows the cause read-only and names the group to
     release it on. Ending an ancestor's window from a child row would silence-and-unsilence a set
     the operator cannot see from there.
@@ -43,6 +59,14 @@
   `400 not_suppressed` when the node inherits nothing, and `GET /api/v1/suppression-exemptions`
   (View). The MCP `list_suppressions` tool gains an `exemptions` array — a released node is not
   silenced, and a reader that saw only the window would conclude the opposite.
+
+### Improvements
+- **Downloading a support bundle no longer stalls the rest of the API while it is assembled.** The
+  last stretch of the request reads up to 24 MB of rotated log files off disk and then runs the
+  redaction scan and the gzip over those same bytes — all of it synchronous, and until now all of
+  it on a request-handling thread. It now runs on the blocking pool. The bundle itself is
+  unchanged; what changes is that a deployment stays responsive while producing one, which is the
+  case that matters, because a bundle is requested when something is already wrong.
 
 ### Bug Fixes
 - **The repair instruction a failed upgrade prints did not repair anything.** v0.2.4 made a

@@ -290,10 +290,24 @@ async fn build(
         ),
     }
 
-    // ── Logs ──────────────────────────────────────────────────────────────────────────────────
-    collect_logs(&mut b, hours);
-
-    b.finish(&SecretScan::from_env(), now)
+    // ── Logs, then assembly ───────────────────────────────────────────────────────────────────
+    // Everything from here is synchronous and unbounded-ish: `collect_logs` reads up to
+    // MAX_LOG_BYTES (24 MB) of rotated log files off disk, and `finish` then runs the redaction
+    // scan and the gzip over those same bytes. There are no awaits left in `build`, so on a Tokio
+    // worker that stretch is a straight stall of one runtime thread — on a support bundle, i.e.
+    // exactly when the deployment is already unwell and someone is watching. Onto the blocking
+    // pool, the same discipline the IP→ASN reloader (`main.rs`) and the store-and-forward disk
+    // read (`yagra-poller`) already follow.
+    let scan = SecretScan::from_env();
+    tokio::task::spawn_blocking(move || {
+        collect_logs(&mut b, hours);
+        b.finish(&scan, now)
+    })
+    .await
+    // A `JoinError` here means the assembly panicked or was cancelled — the bundle genuinely was
+    // not produced, which is what `Archive` already means to the caller. Reusing it keeps
+    // `BundleError` (and so the 500 it maps to) unchanged.
+    .map_err(|e| BundleError::Archive(std::io::Error::other(e)))?
 }
 
 /// How many audit rows to carry. The store's own page maximum — enough to cover the change that
@@ -486,5 +500,19 @@ mod tests {
         )));
         assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
         assert!(!err.message().contains("secret-path"));
+    }
+
+    /// Assembly runs on the blocking pool, so a panic in it arrives as a `JoinError` rather than
+    /// unwinding the handler. It must land on the same silent 500 as any other I/O failure — a
+    /// panic message is the one internal string most likely to carry a path or a fragment of the
+    /// very log the redaction scan exists to keep out of the response.
+    #[tokio::test]
+    async fn a_panic_while_assembling_is_a_silent_500_too() {
+        let join_err = tokio::task::spawn_blocking(|| panic!("/var/lib/yagra/kek.bin exploded"))
+            .await
+            .expect_err("the task panicked, so the join must fail");
+        let err = to_api_error(BundleError::Archive(std::io::Error::other(join_err)));
+        assert_eq!(err.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(!err.message().contains("kek.bin"));
     }
 }

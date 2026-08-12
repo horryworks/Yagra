@@ -1804,9 +1804,14 @@ impl EventEngine {
                 bump(&mut planned, EventAction::Refreshed, rule.id);
                 continue;
             }
+            // Only Warning and Critical reach here — Info is recorded and `continue`d above,
+            // because the alert engine has no Info state. Listed rather than `_ => Warning` so a
+            // fourth severity has to be decided here (and, if it is another non-alerting one, sent
+            // down the same short-circuit) instead of silently inheriting Warning and paging
+            // someone (coding-conventions: no wildcard over a domain enum).
             let state = match rule.severity {
                 Severity::Critical => NodeState::Critical,
-                _ => NodeState::Warning,
+                Severity::Warning | Severity::Info => NodeState::Warning,
             };
             let alert = Alert {
                 subject: yagra_alert::Subject::Node(node_id),

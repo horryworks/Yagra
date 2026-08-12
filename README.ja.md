@@ -17,8 +17,8 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 > **現時点では Pull Request は受け付けていません** — [CONTRIBUTING.md](CONTRIBUTING.md) を参照して
 > ください。
 
-> ステータス: **v0.2.4 — WebUI からのアップグレードが 2 回目も通り、その前に取るバックアップに
-> メトリクスが入ります。** ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
+> ステータス: **v0.2.5 — ツリーが「なぜこの行は黙っているのか」に答え、グループの窓から 1 台だけ
+> 外せます。** ICMP / SNMP v2c+v3 / URL 監視 / DNS 監視 / Cisco Meraki（読み取り専用 Dashboard
 > API）、受動イベント監視、探索・分類、アラート、ダッシュボード、レポートを備えたスタックが、
 > PostgreSQL / Redis / NATS / VictoriaMetrics 上で Docker Compose により動作します。既定は単一
 > ノードですが、**分散ポーラプール**（拠点に配置したリモートポーラをロケーション親和で割り当て、

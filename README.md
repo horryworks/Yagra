@@ -19,8 +19,8 @@ polling**. Users access it through the WebUI.
 > instead of a public issue. **Pull requests are not being accepted at this time** — see
 > [CONTRIBUTING.md](CONTRIBUTING.md).
 
-> Status: **v0.2.4 — the WebUI upgrade works the second time, and the backup it takes first has the
-> metrics in it.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
+> Status: **v0.2.5 — the tree answers why a row is silent, and lets one node out of a group's
+> window.** A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
 > Single-node by default, it now scales out with **distributed poller pools** — remote pollers at
