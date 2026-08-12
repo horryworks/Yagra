@@ -283,26 +283,60 @@ driven by metric retention rather than node count — see
 **[System requirements](https://yagra.pages.dev/docs/reference/requirements/)** for the measured
 per-container footprints and the sizing formula.
 
-Bring up a full single-node stack in one command:
+Yagra ships as three published container images. Make a directory for the deployment, fetch the
+composition, and start it:
 
 ```bash
-docker compose up --build   # core + poller + web, plus PostgreSQL, Redis, NATS,
-                            # VictoriaMetrics, VictoriaLogs and ClickHouse
+mkdir yagra && cd yagra
+curl -fsSLO https://raw.githubusercontent.com/horryworks/Yagra/main/docker-compose.deploy.yml
+printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > .env
+docker compose -f docker-compose.deploy.yml up -d
 ```
 
-WebUI on **https://localhost:8443**, API on **http://localhost:8080**. On first start core prints a
-one-time `admin` password in its logs (`docker compose logs core`).
+That is the whole install — no checkout, no build. The composition pulls `core`, `poller` and `web`
+from GHCR and brings up PostgreSQL, Redis, NATS, VictoriaMetrics, VictoriaLogs and ClickHouse
+alongside them.
+
+WebUI on **https://localhost**, API on **http://localhost:8080**. On first start core prints a
+one-time `admin` password in its logs
+(`docker compose -f docker-compose.deploy.yml logs core`).
+
+Two things about that directory are worth knowing up front. **Keep `docker-compose.deploy.yml` in
+it under that name** — in-place upgrades read the path back from the container labels. And **set
+`POSTGRES_PASSWORD` before the first start**, because it is baked into the database volume then;
+changing it afterwards takes an `ALTER ROLE`, not just an edit. Everything else is optional —
+`YAGRA_WEB_PORT` moves the WebUI off 443, and [`.env.example`](.env.example) is the full reference.
+
+**Upgrades happen in the WebUI.** **Settings ▸ Upgrade** lists the releases this deployment can move
+to and does the whole thing — back up, pull, install the composition carried inside the target
+image, recreate, verify — in a sidecar that holds the Docker socket so core never has to. Remote
+pollers can opt into the same treatment.
 
 The WebUI is HTTPS by default. Core generates a self-signed certificate on first start, so your
 browser will warn once — import a real one at **Settings ▸ TLS** and it takes effect in seconds
 without a restart.
 
-For everything else — production images, running **natively** without Docker, and **distributed
-pollers** across remote sites — see **[DEPLOYMENT.md](DEPLOYMENT.md)** (日本語:
-[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)). It covers all four combinations: single-node / distributed ×
-Docker / native, plus the full environment-variable reference and upgrade/backup guidance.
+For **distributed pollers** across remote sites, running **natively** without Docker, high
+availability, and the full environment-variable reference, see **[DEPLOYMENT.md](DEPLOYMENT.md)**
+(日本語: [DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)). It covers all four combinations: single-node /
+distributed × Docker / native, plus upgrade and backup guidance.
 
-Local development:
+### Building from source
+
+Yagra is AGPL-3.0 and builds from a clean checkout. That is the path for **developing on it,
+auditing it, or making a custom build** — not for running a monitoring system you depend on:
+
+```bash
+git clone https://github.com/horryworks/Yagra.git && cd Yagra
+docker compose up --build   # same stack, images built locally and tagged :dev
+```
+
+WebUI on **https://localhost:8443**. Two differences from the deployment above are deliberate and
+matter: this composition has no updater sidecar, so **Settings ▸ Upgrade does not work on it**, and
+its key-encryption key is **ephemeral** — regenerated on every restart, so stored device credentials
+do not survive one. Use the published images for anything real.
+
+Working on the code itself:
 
 ```bash
 cargo build && cargo test              # backend (Rust workspace)

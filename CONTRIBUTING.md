@@ -66,5 +66,12 @@ The repository conventions, should they be useful to you:
 
 ## Running it
 
-`README.md` has the quickstart; `DEPLOYMENT.md` covers a real deployment. `docker compose up
---build` from a clean clone needs no configuration.
+`docker compose up --build` from a clean clone needs no configuration and gives you the whole stack
+with locally built `:dev` images — that is the development composition, and it is the one to use
+while working on the code. WebUI on `https://localhost:8443`.
+
+Note what it deliberately is not: it has no `yagra-updater` sidecar, so Settings ▸ Upgrade does not
+work on it, and its KEK is ephemeral, so stored device credentials do not survive a restart. Those
+are properties of the *deployment* composition (`docker-compose.deploy.yml`, published images),
+which is what `README.md` documents for running Yagra for real and what `DEPLOYMENT.md` covers in
+full. Test anything touching upgrades or credential persistence against that one.

@@ -55,6 +55,29 @@
   schema and the downgrade window are unchanged and still shown on every deployment.
   - Distinct from a deployment that *has* the mechanism whose updater is missing or has stopped —
     that is a fault, and it is still reported as one, as loudly as before.
+- **The documented way to install Yagra is now the published images, and it no longer asks you to
+  clone anything.** Every install path in the README, the deployment guide and the website led with
+  `docker compose up --build` — a from-source build of `docker-compose.yml`, which is precisely the
+  composition that has no updater sidecar and no persistent KEK. So the documented first step landed
+  new users on a deployment that cannot upgrade itself and loses stored device credentials on
+  restart, and, since the change above, says so on the Upgrade page with nothing nearby to explain
+  why. The recommended path is now `docker-compose.deploy.yml` — fetched with `curl`, started with
+  `docker compose up -d`. It needs no checkout and no build: every variable it interpolates has a
+  default, and it bind-mounts nothing outside the Docker socket. `POSTGRES_PASSWORD` is the one
+  setting worth choosing before the first start, because Postgres bakes it into the data volume
+  then.
+  - Building from source is unchanged and still fully documented — it is now addressed to people
+    developing on Yagra, auditing it, or making a custom build, with its two limits stated where
+    the instructions are rather than a section away.
+  - The two Docker compositions swapped letters in `DEPLOYMENT.md`: **A** is now the pre-built
+    images and **B** the source build. In-page anchors moved with them; `C`/`D`/`E` did not change.
+- **Searching the inventory tree for a group name now shows that group's contents.** On Nodes ▸ All
+  nodes, a search term matching a folder returned the folder row and nothing under it: the search
+  runs on the server against node names and addresses, so a matched folder's members were never in
+  the answer and the row rendered empty next to a health bar saying it had members. A group matched
+  by name now loads its whole subtree — sub-folders and every member node, whether or not the node
+  itself matches — while a term matching only node names behaves exactly as before. A term matching
+  more folders than can be opened at once says so rather than showing some of them empty.
 
 ### API
 - `GET /api/v1/system/upgrade` (and `get_system_health(section="upgrade")`) gained

@@ -4,10 +4,12 @@ This guide covers **how to deploy Yagra**, not how to use it. It spans the full 
 
 |                     | **Docker Compose**                        | **Native (no Docker)**       |
 |---------------------|-------------------------------------------|------------------------------|
-| **Single node**     | [A](#a--single-node-docker-build) · [B](#b--single-node-docker-pull) | [C](#c--single-node-native)  |
+| **Single node**     | [A — pre-built images](#a--single-node-docker-pull) · [B — build from source](#b--single-node-docker-build) | [C](#c--single-node-native)  |
 | **Distributed pollers** | [D](#d--distributed-pollers-docker)   | [E](#e--distributed-pollers-native) |
 
-New to Yagra? Start with **[A](#a--single-node-docker-build)** (one command) or **[B](#b--single-node-docker-pull)** (production-style, pulls pre-built images). Reach for **[D](#d--distributed-pollers-docker)** once you need pollers at remote sites.
+**Start with [A](#a--single-node-docker-pull)** — it pulls the published images, needs no checkout and no build, and is the only single-node composition that can upgrade itself from the WebUI. Reach for **[D](#d--distributed-pollers-docker)** once you need pollers at remote sites.
+
+The other three are for narrower audiences. **[B](#b--single-node-docker-build)** builds from source: the path for developing on Yagra, auditing it, or making a custom build. **[C](#c--single-node-native)** and **[E](#e--distributed-pollers-native)** run the binaries directly, for hosts where Docker is not an option. All of them are supported and all are documented here — but if you are standing up a monitoring system, A is the one you want.
 
 日本語版: **[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)**.
 
@@ -101,54 +103,30 @@ Yagra is two long-running binaries plus a static WebUI, backed by five stores pl
 
 ---
 
-## A — Single node, Docker (build from source)<a id="a--single-node-docker-build"></a>
+## A — Single node, Docker (pre-built images)<a id="a--single-node-docker-pull"></a>
 
-The developer / all-in-one box. `docker-compose.yml` **builds** the images locally (tagged `:dev`) and runs the whole stack — core, poller, web, and all five stores — on one host.
+**The recommended deployment, and the one the rest of this guide assumes.** `docker-compose.deploy.yml` **pulls** the published images from GHCR (no local build), is fully env-parameterized via `.env`, adds a one-shot `kek-init` that writes a persistent key-encryption key so stored monitoring credentials survive redeploys, and ships the `yagra-updater` sidecar that makes **Settings ▸ Upgrade** work.
 
-```bash
-git clone https://github.com/horryworks/Yagra.git
-cd Yagra
-docker compose up --build          # build + start the full single-node stack
-```
-
-Then open the WebUI at **https://localhost:8443** (API at http://localhost:8080).
-
-Your browser will warn: the certificate is the self-signed one core generated on first start. Accept it for now and import a real one at Settings ▸ TLS. (This developer stack publishes `8443` rather than `443` because a laptop usually has `443` taken and rootless Docker cannot bind below 1024 at all; **B** below uses `443`.)
-
-**First login.** `YAGRA_ADMIN_PASSWORD` is unset by default, so core generates a one-time random `admin` password and prints it **once** in its logs:
+It needs no repository checkout — the composition is a single self-contained file, with a default for every variable it interpolates and no bind mounts outside `/var/run/docker.sock`:
 
 ```bash
-docker compose logs core | grep -i password
+mkdir yagra && cd yagra
+curl -fsSLO https://raw.githubusercontent.com/horryworks/Yagra/main/docker-compose.deploy.yml
+printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > .env
+docker compose -f docker-compose.deploy.yml up -d
 ```
 
-Log in as `admin` with it and change it. To choose your own instead, uncomment `YAGRA_ADMIN_PASSWORD` under the `core` service in `docker-compose.yml`.
+`up -d` pulls on its own — the images carry `pull_policy: always`, so there is no separate `pull` step. Open **https://\<host\>/** once it is up (API on `:8080`). The certificate is self-signed until you import your own at Settings ▸ TLS.
 
-**What's running.** Web on host `:8443` (HTTPS), API on `:8080` (plaintext); the poller listens for syslog on `:514/udp` and SNMP traps on `:162/udp`; PostgreSQL/Redis/NATS/VictoriaMetrics stay on the internal Docker network. Migrations run automatically on core startup — no manual step. Named volumes `pgdata` and `vmdata` persist data across `docker compose down`/`up`.
+**Keep the file where you started it, under that name.** In-place upgrades read the directory back from the `com.docker.compose.project.working_dir` label on their own container and refuse to run if it no longer holds a `docker-compose.deploy.yml`. The compose *project* name is not at risk — the file pins `name: yagra` itself — but the path is.
 
-⚠️ This stack mounts **no KEK**, so the key that encrypts stored secrets is regenerated on every restart. A self-signed certificate is simply regenerated with it; an **imported** one cannot be decrypted afterwards, and core will say so and keep serving the last materialized certificate rather than silently replacing yours. Import real certificates only on a stack with a persistent KEK — that is **B**.
+**Set `POSTGRES_PASSWORD` before the first start**, as the snippet does. It is baked into the database volume on initialization; changing it later needs an `ALTER ROLE` as well as an `.env` edit.
 
-> This composition is fine for evaluation and dev. For anything you care about, use **B** (pinned images + a persistent KEK so stored credentials survive restarts).
-
----
-
-## B — Single node, Docker (pull pre-built images)<a id="b--single-node-docker-pull"></a>
-
-The production-style single-node deployment. `docker-compose.deploy.yml` **pulls** images from GHCR (no local build), is fully env-parameterized via `.env`, and adds a one-shot `kek-init` that writes a persistent key-encryption key so stored monitoring credentials survive redeploys.
-
-```bash
-git clone https://github.com/horryworks/Yagra.git
-cd Yagra
-cp .env.example .env                # then edit .env (see below)
-
-YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml pull
-YAGRA_IMAGE_TAG=latest docker compose -f docker-compose.deploy.yml up -d
-```
-
-`YAGRA_IMAGE_TAG` selects the image tag: `latest` is the latest **stable** release (pre-releases never move it); a `v<version>` tag pins one release; the `<git-sha>` of a release is an immutable reference to exactly that build (rollback = re-run with an older tag). Only releases are published — development builds never reach the registry, so every tag you can pull is a release.
+`YAGRA_IMAGE_TAG` selects the image tag and defaults to `latest`: `latest` is the latest **stable** release (pre-releases never move it); a `v<version>` tag pins one release; the `<git-sha>` of a release is an immutable reference to exactly that build (rollback = re-run with an older tag). Only releases are published — development builds never reach the registry, so every tag you can pull is a release.
 
 Want to know what a running container was built from? `docker exec yagra-core-1 cat /etc/yagra-source-ref` prints the commit, and `/etc/yagra-build-profile` prints the compile profile.
 
-**Configure `.env`** (copied from `.env.example`). The essentials:
+**Configure `.env`** — optional beyond the password above. [`.env.example`](.env.example) documents every key; fetch it alongside the composition (`curl -fsSL .../.env.example -o .env`) if you want the annotated version. The essentials:
 
 ```ini
 POSTGRES_PASSWORD=change-me            # change for any non-throwaway box
@@ -160,22 +138,53 @@ YAGRA_WEB_PORT=443                     # host port for the WebUI (HTTPS)
 # YAGRA_API_BIND=127.0.0.1             # close core's plaintext port to the LAN — see below
 ```
 
-Open **https://\<host\>/** once it is up. The certificate is self-signed until you import your own at Settings ▸ TLS.
-
 **Upgrading from before v0.1.22?** `YAGRA_WEB_PORT` did not change meaning, but the scheme on it did. If your `.env` still says `3000` you keep port 3000 and it becomes `https://<host>:3000` — `http://` no longer answers there. Delete the line to land on `443`.
 
 **Closing core's API port — do this second, not first.** `YAGRA_API_BIND=127.0.0.1` takes the plaintext API off the LAN, leaving the TLS edge as the only way in. Browsers are unaffected either way (the web container proxies `/api/` and `/mcp` internally), but Prometheus scrapes, webhook senders and API scripts use that port directly. Move them to `https://<host>/api/v1` with a certificate they trust **first**; doing both at once means every machine client fails simultaneously with two overlapping causes.
 
 **Credential persistence (important).** The `kek-init` service writes a 32-byte KEK into the `kekdata` volume once and never overwrites it; core mounts it read-only at `YAGRA_KEK_FILE=/kek/key`. Without a persistent KEK, core falls back to an **ephemeral** key regenerated on every restart, and all stored credentials (SNMP communities, API tokens) become undecryptable after a redeploy. The compose file wires this up for you — just don't delete the `kekdata` volume.
 
-**Upgrades.** From v0.2.2 the ordinary way is **Settings ▸ Upgrade in the WebUI** — this composition ships a `yagra-updater` sidecar that does the whole thing, and no shell is required. The command line below still works and is the way back if the sidecar is switched off or cannot run:
+**Upgrades.** From v0.2.2 the ordinary way is **Settings ▸ Upgrade in the WebUI** — this composition ships a `yagra-updater` sidecar that does the whole thing (back up, pull, install the composition carried inside the target image, recreate, verify), and no shell is required. This is the reason to prefer this deployment over **B**: it is the only single-node composition that can upgrade itself. The command line still works and is the way back if the sidecar is switched off or cannot run:
 
 ```bash
-YAGRA_IMAGE_TAG=v0.1.4 docker compose -f docker-compose.deploy.yml pull
-YAGRA_IMAGE_TAG=v0.1.4 docker compose -f docker-compose.deploy.yml up -d
+YAGRA_IMAGE_TAG=v0.2.5 docker compose -f docker-compose.deploy.yml pull
+YAGRA_IMAGE_TAG=v0.2.5 docker compose -f docker-compose.deploy.yml up -d
 ```
 
 Migrations are expand-contract and run automatically; `pgdata`/`vmdata`/`kekdata` are preserved. See [Upgrades & backups](#upgrades--backups).
+
+---
+
+## B — Single node, Docker (build from source)<a id="b--single-node-docker-build"></a>
+
+The developer / all-in-one box, for **working on Yagra, auditing it, or making a custom build**. `docker-compose.yml` **builds** the images locally (tagged `:dev`) and runs the whole stack — core, poller, web, and all five stores — on one host.
+
+```bash
+git clone https://github.com/horryworks/Yagra.git
+cd Yagra
+docker compose up --build          # build + start the full single-node stack
+```
+
+Then open the WebUI at **https://localhost:8443** (API at http://localhost:8080).
+
+Your browser will warn: the certificate is the self-signed one core generated on first start. Accept it for now and import a real one at Settings ▸ TLS. (This developer stack publishes `8443` rather than `443` because a laptop usually has `443` taken and rootless Docker cannot bind below 1024 at all; **A** above uses `443`.)
+
+**First login.** `YAGRA_ADMIN_PASSWORD` is unset by default, so core generates a one-time random `admin` password and prints it **once** in its logs:
+
+```bash
+docker compose logs core | grep -i password
+```
+
+Log in as `admin` with it and change it. To choose your own instead, uncomment `YAGRA_ADMIN_PASSWORD` under the `core` service in `docker-compose.yml`.
+
+**What's running.** Web on host `:8443` (HTTPS), API on `:8080` (plaintext); the poller listens for syslog on `:514/udp` and SNMP traps on `:162/udp`; PostgreSQL/Redis/NATS/VictoriaMetrics stay on the internal Docker network. Migrations run automatically on core startup — no manual step. Named volumes `pgdata` and `vmdata` persist data across `docker compose down`/`up`.
+
+⚠️ **Two limits make this the wrong choice for a system you depend on**, and both are deliberate rather than oversights:
+
+- **It cannot upgrade itself.** There is no `yagra-updater` sidecar here, and the `:dev` tags it builds are never published, so there is no release for an updater to move to. Settings ▸ Upgrade says so rather than offering controls that would fail.
+- **The KEK is ephemeral**, so the key that encrypts stored secrets is regenerated on every restart. A self-signed certificate is simply regenerated with it; an **imported** one cannot be decrypted afterwards, and core will say so and keep serving the last materialized certificate rather than silently replacing yours. Import real certificates only on a stack with a persistent KEK — that is **A**.
+
+> Fine for development and evaluation. For anything you care about, use **A** (published images, a persistent KEK so stored credentials survive restarts, and in-place upgrades from the WebUI).
 
 ---
 
@@ -261,7 +270,7 @@ The poller exposes its own Prometheus `/metrics` on `0.0.0.0:9100`.
 
 ## D — Distributed pollers, Docker<a id="d--distributed-pollers-docker"></a>
 
-Run the full stack centrally (as in **B**) and add pollers at remote sites. Each poller polls its site's devices locally and streams results back over the bus. Nodes carry a `pool` attribute; core's coordinator assigns each pool's nodes across its live pollers by consistent hashing and fails them over automatically.
+Run the full stack centrally (as in **A**) and add pollers at remote sites. Each poller polls its site's devices locally and streams results back over the bus. Nodes carry a `pool` attribute; core's coordinator assigns each pool's nodes across its live pollers by consistent hashing and fails them over automatically.
 
 > **The bus carries plaintext device credentials.** On one host that's fine (internal Docker network, nothing exposed). The moment the bus crosses a trust boundary to a remote site, it **must** be TLS-encrypted and authenticated first. Do **not** publish `:4222` plaintext.
 
@@ -413,7 +422,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_RCA_CACHE_SECS` | `900` | RCA report cache lifetime (seconds); `force` bypasses the cache but not the caps |
 | `YAGRA_RCA_MAX_TURNS` | `6` | How many tool-calling turns an LLM root-cause analysis may take before it must answer. **`1` restores the pre-v0.1.23 single-shot behaviour exactly** — no tools are offered and the provider request is byte-identical to before |
 | `YAGRA_RCA_TASK_BUDGET_SECS` | `240` | Wall-clock ceiling for one root-cause analysis including its tool calls. Hitting it returns the model's last answer rather than failing the request |
-| **Upgrade from the WebUI** (deployment **B**; the last four are read by the `yagra-updater` sidecar, not by core) | | |
+| **Upgrade from the WebUI** (deployment **A**; the last four are read by the `yagra-updater` sidecar, not by core) | | |
 | `YAGRA_UPGRADE_DIR` | unset ⇒ apply half off | Directory core and the sidecar hand requests through (`/data/upgrade` in `docker-compose.deploy.yml`, on a shared volume). Setting it is what tells this deployment it *has* an upgrade mechanism: unset, Settings ▸ Upgrade still answers what is running and what schema it carries, but says the deployment cannot be upgraded from the WebUI and offers no releases, no apply button and no switch — a release list can only come from the sidecar, so there is nothing to move to. Note this is distinct from the directory being set with no sidecar answering, which the page reports as a fault rather than as a property of the deployment. **Nothing in this directory is ever executed** — it carries a request file, a heartbeat and uploaded archives only |
 | `YAGRA_UPGRADE_BUNDLE_MAX_BYTES` | `4294967296` (4 GiB) | Ceiling on an uploaded image archive, enforced as the bytes land. Three release images saved together come to roughly a gigabyte, so this is not a working limit — it is what catches the wrong file being dragged into the browser before it fills the filesystem PostgreSQL is on |
 | `YAGRA_UPGRADE_REPO` | `ghcr.io/horryworks` | Where **releases** are looked for. Deliberately its own variable and not `YAGRA_IMAGE_REPO`: where releases live is not necessarily where this deployment's current images came from, and a box pulling SHA-tagged builds from a private mirror would otherwise point the release picker at a registry holding none. Fixed by the host either way — no API request can name a registry |
@@ -498,12 +507,12 @@ Every binary emits structured logs and a Prometheus `/metrics` endpoint out of t
 
 Upgrades are designed to be low-effort and **never** lose or corrupt data:
 
-- **Settings ▸ Upgrade does it for you (v0.2.2+, deployment **B** only).** The page lists the releases this deployment can move to and runs backup → pull → install the composition carried inside the target image → recreate → verify. The work is done by a `yagra-updater` sidecar, which is the only container holding the Docker socket — core never has it. Requesting an upgrade needs **manage-configuration and manage-credentials**, it is audited, and it is not on the MCP surface. A switch on the same page turns the mechanism off; the setting lives in PostgreSQL, so it survives the upgrades it governs.
+- **Settings ▸ Upgrade does it for you — the ordinary way to upgrade (v0.2.2+, deployment **A**).** Every other way of installing Yagra — from source, natively, or from a composition without the `yagra-updater` sidecar — has no such mechanism, and the page says so plainly instead of offering controls that would fail. The page lists the releases this deployment can move to and runs backup → pull → install the composition carried inside the target image → recreate → verify. The work is done by a `yagra-updater` sidecar, which is the only container holding the Docker socket — core never has it. Requesting an upgrade needs **manage-configuration and manage-credentials**, it is audited, and it is not on the MCP surface. A switch on the same page turns the mechanism off; the setting lives in PostgreSQL, so it survives the upgrades it governs.
   - **A release older than the running one is a downgrade, and it is offered only when it can actually boot.** A migration may declare a *compatibility floor* — the oldest version that can still run once it has been applied — and anything below the current floor is shown greyed out with the reason rather than hidden. Nothing is deleted by going back: columns the newer version added stay in place, unread.
   - **No registry reachable?** Run `docker save` on the three release images where you can reach them, and upload the archive at the same page. It needs `YAGRA_UPGRADE_ALLOW_BUNDLE=1` on the host as a second, deliberate opt-in, because `docker load` installs whatever the archive contains — see the variable reference below before turning it on.
 - **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; `yagra-core migrations` prints the set a binary embeds as JSON with no database and no configuration, so an upgrade can be planned by running it inside the target image first.
 - **The bus is version-tolerant (N/N-1).** A new core works with old pollers during a rollout, so you can upgrade core first and pollers after.
-- **Rolling upgrades.** Pollers are stateless — replace them in any order. For Docker, pull the new tag and `up -d` (see **B**). Remote pollers: pull and `up -d` per site; a pool briefly down falls back to legacy publish, so no node goes dark.
+- **Rolling upgrades.** Pollers are stateless — replace them in any order. For Docker, pull the new tag and `up -d` (see **A**). Remote pollers: pull and `up -d` per site; a pool briefly down falls back to legacy publish, so no node goes dark.
 - **Take a backup before a major upgrade** — see [Backup & restore](#backup--restore) below.
 
 ---

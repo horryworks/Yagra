@@ -1,9 +1,15 @@
-# Yagra — single-node MVP composition.
+# Yagra — single-node DEVELOPMENT composition. Builds the images from this checkout and
+# tags them `:dev`, which is never published anywhere.
 #
-# MVP runs all components co-located in a few containers; scaling out (distributed
-# pollers, HA stores) is a config change, not a rewrite (see CLAUDE.md "Architecture").
-# This is a skeleton: image build contexts and env wiring are stubs to be filled in
-# as the crates land. Pin image tags before any real deployment.
+# All components run co-located in a few containers; scaling out (distributed pollers,
+# HA stores) is a config change, not a rewrite (see CLAUDE.md "Architecture").
+#
+# ⚠️ To RUN Yagra rather than work on it, use `docker-compose.deploy.yml` instead. Two
+# differences here are deliberate and disqualifying for a real deployment:
+#   * No `yagra-updater` sidecar, so Settings ▸ Upgrade does not work — and could not, since
+#     the `:dev` tags this builds are never published, so there is no release to move to.
+#   * No kek-init, so the KEK is EPHEMERAL — see the longer note on the `core` service below.
+# `docker-compose.deploy.yml` has both, pulls published releases, and needs no checkout.
 
 name: yagra
 

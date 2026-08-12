@@ -271,25 +271,59 @@ curl -sN http://<yagra-host>:8080/mcp \
 保持期間で決まります — コンテナ別の実測値とサイジングの計算式は
 **[動作要件](https://yagra.pages.dev/ja/docs/reference/requirements/)** を参照してください。
 
-単一ノードのフルスタックを 1 コマンドで起動:
+Yagra は 3 つの公開コンテナイメージとして配布しています。デプロイ用のディレクトリを作り、compose
+ファイルを取得して起動してください:
 
 ```bash
-docker compose up --build   # core + poller + web、および PostgreSQL / Redis / NATS /
-                            # VictoriaMetrics / VictoriaLogs / ClickHouse
+mkdir yagra && cd yagra
+curl -fsSLO https://raw.githubusercontent.com/horryworks/Yagra/main/docker-compose.deploy.yml
+printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > .env
+docker compose -f docker-compose.deploy.yml up -d
 ```
 
-WebUI は **https://localhost:8443**、API は **http://localhost:8080**。初回起動時、core は一度限りの
-`admin` パスワードをログに出力します（`docker compose logs core`）。
+インストールはこれだけです — チェックアウトもビルドも要りません。この compose ファイルが `core` /
+`poller` / `web` を GHCR から取得し、PostgreSQL / Redis / NATS / VictoriaMetrics / VictoriaLogs /
+ClickHouse を併せて起動します。
+
+WebUI は **https://localhost**、API は **http://localhost:8080**。初回起動時、core は一度限りの
+`admin` パスワードをログに出力します（`docker compose -f docker-compose.deploy.yml logs core`）。
+
+このディレクトリについて、最初に知っておくとよいことが 2 つあります。**`docker-compose.deploy.yml`
+はこの名前のままここに置いておいてください** — 無停止アップグレードがコンテナのラベルからこのパスを
+読み戻します。そして **`POSTGRES_PASSWORD` は初回起動より前に設定してください** — 初回起動時に
+データベースのボリュームへ焼き込まれるため、後から変えるには編集だけでなく `ALTER ROLE` が要ります。
+それ以外は任意です — `YAGRA_WEB_PORT` で WebUI を 443 以外に移せますし、
+[`.env.example`](.env.example) が設定項目の完全なリファレンスです。
+
+**アップグレードは WebUI で行います。** **Settings ▸ Upgrade** にこの環境が移行できるリリースが並び、
+バックアップ → 取得 → 対象イメージに同梱された compose 構成の適用 → 再作成 → 検証まで一式を実行します。
+実行するのは Docker ソケットを持つサイドカーで、core 自身は socket を持ちません。リモートポーラも同じ
+仕組みに参加させられます。
 
 WebUI は既定で HTTPS です。core が初回起動時に自己署名証明書を生成するのでブラウザが一度警告を出しますが、
 **Settings ▸ TLS** で正式な証明書を取り込めば再起動なしで数秒で切り替わります。
 
-それ以外 — 本番イメージ、Docker を使わない**ネイティブ**実行、リモート拠点への**分散ポーラ** — は
-**[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)**（English: [DEPLOYMENT.md](DEPLOYMENT.md)）を参照してください。
-単一ノード / 分散 × Docker / ネイティブの 4 通りすべてに加え、環境変数の完全リファレンスと
-アップグレード/バックアップ手順を扱います。
+リモート拠点への**分散ポーラ**、Docker を使わない**ネイティブ**実行、高可用性構成、環境変数の完全
+リファレンスは **[DEPLOYMENT.ja.md](DEPLOYMENT.ja.md)**（English: [DEPLOYMENT.md](DEPLOYMENT.md)）を
+参照してください。単一ノード / 分散 × Docker / ネイティブの 4 通りすべてに加え、アップグレードと
+バックアップの手順を扱います。
 
-ローカル開発:
+### ソースからビルドする
+
+Yagra は AGPL-3.0 で、クリーンなチェックアウトからビルドできます。これは**開発する・監査する・独自
+ビルドを作る**ための経路であり、業務で依存する監視システムを動かすためのものではありません:
+
+```bash
+git clone https://github.com/horryworks/Yagra.git && cd Yagra
+docker compose up --build   # 同じスタックを、ローカルビルドした :dev タグのイメージで起動
+```
+
+WebUI は **https://localhost:8443**。上のデプロイ構成との違いが 2 つあり、どちらも意図的で、かつ重要
+です。この構成にはアップデータのサイドカーが無いため **Settings ▸ Upgrade は動きません**。また鍵暗号化
+鍵（KEK）が**揮発**で、再起動のたびに再生成されるため、保存済みの機器資格情報は再起動をまたげません。
+実運用には上の公開イメージを使ってください。
+
+コードそのものに手を入れる場合:
 
 ```bash
 cargo build && cargo test              # バックエンド（Rust ワークスペース）
