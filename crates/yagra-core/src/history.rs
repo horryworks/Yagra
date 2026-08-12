@@ -108,6 +108,93 @@ fn breach_columns(alert: &Alert) -> (Option<String>, Option<f64>, Option<f64>, O
     (metric, value, threshold, direction)
 }
 
+/// A validated alert-history query. Built at the API edge by `api::alerts::history_page`.
+#[derive(Debug, Default, Clone)]
+pub struct HistoryFilter<'a> {
+    /// Keyset cursor, paired with [`Self::before_id`]. Distinct from `since`/`until`, which bound
+    /// the window being searched rather than where this page starts.
+    pub before: Option<DateTime<Utc>>,
+    pub before_id: Option<Uuid>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+    pub severity: Option<Severity>,
+    pub state: Option<NodeState>,
+    /// `Some(false)` = fires only, `Some(true)` = clears only.
+    pub resolved: Option<bool>,
+    /// Restrict to one node subject.
+    pub node_id: Option<Uuid>,
+    /// Restrict to node subjects currently in these folder groups — the **caller's requested**
+    /// group, already expanded to its subtree. Not the caller's RBAC scope; see the const below.
+    pub in_group: Option<&'a [Uuid]>,
+    /// Rows per page; clamped to `1..=1000` by [`AlertHistoryStore::search`].
+    pub limit: i64,
+}
+
+/// The `WHERE` of a page of alert history. Binds `$1..=$9` in the order [`bind_history_filter`]
+/// writes them; `$10` is the page size.
+///
+/// Every clause is **always present** with a `NULL` bind meaning "no filter", rather than being
+/// appended when set — the same rule [`AlertHistoryStore::SCOPE_PREDICATE`] is written to, and for
+/// the reason stated there: a conditionally-built predicate has a branch that can be forgotten, and
+/// forgetting one fails **open**.
+///
+/// ⚠️ **`node` is a subject identity, not a node reference** (migration 0075). `$8` and `$9` are
+/// therefore each paired with `subject_kind = 'node'`. A bare `node = $8` would also match the
+/// derived UUID of a pool subject, and a group filter that admitted pool rows would put Yagra's own
+/// coverage alerts into an answer about one site's devices.
+///
+/// ⚠️ **The caller's RBAC scope is deliberately NOT here, and must not be added.**
+/// [`AlertHistoryStore::SCOPE_PREDICATE`] fails *closed* for a non-node subject — pool→group
+/// resolution lives in `poolres.rs` and not in SQL — while the Rust post-filter in
+/// `api::alerts::history_page` goes through `scope::allows_subject`, which resolves pools properly.
+/// Pushing the scope in here would hide pool-coverage alerts from exactly the scoped operator whose
+/// site had gone dark. `$9` is the caller's *requested* group, which can only ever narrow what that
+/// post-filter already allowed (`require_visible_group` refuses anything wider), so the two are
+/// separate binds on purpose — the same split `analysis::FINDING_SEARCH_WHERE` makes.
+const HISTORY_FILTER_WHERE: &str = "\
+     ($1::timestamptz IS NULL OR (recorded_at, id) < \
+        ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
+     AND ($3::timestamptz IS NULL OR recorded_at >= $3) \
+     AND ($4::timestamptz IS NULL OR recorded_at <= $4) \
+     AND ($5::text IS NULL OR severity = $5) \
+     AND ($6::text IS NULL OR state = $6) \
+     AND ($7::boolean IS NULL OR resolved = $7) \
+     AND ($8::uuid IS NULL OR (subject_kind = 'node' AND node = $8)) \
+     AND ($9::uuid[] IS NULL OR (subject_kind = 'node' \
+          AND node IN (SELECT id FROM nodes WHERE group_id = ANY($9))))";
+
+/// The one statement that reads a page of history. `ORDER BY` names the cursor's columns in the
+/// cursor's direction — a keyset cursor is only valid for the ordering it was built for, and
+/// `alert_history_cursor_idx` (migration 0082) serves exactly this pair.
+fn history_page_sql() -> String {
+    format!(
+        "SELECT id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
+                resolved, metric, observed_value, threshold_value, direction, recorded_at \
+         FROM alert_history \
+         WHERE {HISTORY_FILTER_WHERE} \
+         ORDER BY recorded_at DESC, id DESC LIMIT $10"
+    )
+}
+
+/// Bind `$1..=$9` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
+///
+/// One helper because the sequence is positional and silent when wrong: swapping `$3` and `$4`
+/// still compiles, still runs, and just answers a different question.
+fn bind_history_filter<'q>(
+    q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
+    f: &'q HistoryFilter<'_>,
+) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    q.bind(f.before)
+        .bind(f.before_id)
+        .bind(f.since)
+        .bind(f.until)
+        .bind(f.severity.map(|s| s.as_str()))
+        .bind(f.state.map(|s| s.as_str()))
+        .bind(f.resolved)
+        .bind(f.node_id)
+        .bind(f.in_group)
+}
+
 /// PostgreSQL-backed alert history.
 pub struct AlertHistoryStore {
     pool: PgPool,
@@ -279,6 +366,20 @@ impl AlertHistoryStore {
         Ok(res.rows_affected())
     }
 
+    /// A page of history rows (newest first), narrowed by `filter`.
+    ///
+    /// See [`HISTORY_FILTER_WHERE`] for what each field means in SQL, and for the two things that
+    /// are easy to get wrong here: `node` is a *subject* identity rather than a node reference, and
+    /// the caller's RBAC scope is deliberately **not** part of this query.
+    pub async fn search(&self, filter: &HistoryFilter<'_>) -> anyhow::Result<Vec<AlertHistoryRow>> {
+        let sql = history_page_sql();
+        let rows = bind_history_filter(sqlx::query(&sql), filter)
+            .bind(filter.limit.clamp(1, 1000))
+            .fetch_all(&self.pool)
+            .await?;
+        Self::read_rows(rows)
+    }
+
     /// A page of history rows (newest first).
     ///
     /// `before` + `before_id` are the keyset cursor: when set, only rows strictly older than that
@@ -303,19 +404,18 @@ impl AlertHistoryStore {
         before: Option<DateTime<Utc>>,
         before_id: Option<Uuid>,
     ) -> anyhow::Result<Vec<AlertHistoryRow>> {
-        let rows = sqlx::query(
-            "SELECT id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
-                    resolved, metric, observed_value, threshold_value, direction, recorded_at \
-             FROM alert_history \
-             WHERE ($1::timestamptz IS NULL OR (recorded_at, id) < \
-                    ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
-             ORDER BY recorded_at DESC, id DESC LIMIT $3",
-        )
-        .bind(before)
-        .bind(before_id)
-        .bind(limit.clamp(1, 1000))
-        .fetch_all(&self.pool)
-        .await?;
+        self.search(&HistoryFilter {
+            before,
+            before_id,
+            limit,
+            ..HistoryFilter::default()
+        })
+        .await
+    }
+
+    /// Turn raw rows into [`AlertHistoryRow`]s. One reader for one statement — the projection is
+    /// where the subject columns are interpreted, and a second copy could interpret them differently.
+    fn read_rows(rows: Vec<sqlx::postgres::PgRow>) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             // The subject is read first and as a whole. A row whose `subject_kind` this binary does
@@ -592,6 +692,84 @@ mod tests {
         // degrades the row comparison back to `recorded_at < $1`.
         let src = production_source();
         assert!(src.contains("coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid)"));
+    }
+
+    #[test]
+    fn a_node_or_group_filter_names_the_subject_kind_beside_the_id() {
+        // The migration-0075 trap: `alert_history.node` is a *subject* identity, not a node
+        // reference. A bare `node = $8` would also match the derived UUID of a pool subject, and a
+        // group filter admitting pool rows would put Yagra's own coverage alerts into an answer
+        // about one site's devices. Nothing but a source check can catch this without a database.
+        for bind in ["$8", "$9"] {
+            let clause = HISTORY_FILTER_WHERE
+                .split(&format!("({bind}::"))
+                .nth(1)
+                .unwrap_or_else(|| panic!("{bind} clause"));
+            let clause = clause.split(" AND (").next().unwrap_or(clause);
+            assert!(
+                clause.contains("subject_kind = 'node'"),
+                "{bind} filters on `node` without restricting to node subjects: {clause}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_history_filter_binds_every_placeholder_it_names() {
+        // Positional and silent when wrong: swapping two binds still compiles, still runs, and just
+        // answers a different question.
+        let named = (1..=9)
+            .filter(|n| HISTORY_FILTER_WHERE.contains(&format!("${n}")))
+            .count();
+        assert_eq!(named, 9, "the predicate should name exactly $1..=$9");
+        let binds = production_source()
+            .split("fn bind_history_filter")
+            .nth(1)
+            .expect("the bind helper")
+            .split("pub struct AlertHistoryStore")
+            .next()
+            .expect("split always yields a first element")
+            .matches(".bind(")
+            .count();
+        assert_eq!(binds, named, "one bind per placeholder");
+        assert!(history_page_sql().contains("LIMIT $10"));
+    }
+
+    #[test]
+    fn the_history_filter_carries_the_requested_group_and_not_the_callers_scope() {
+        // The decision this pins: `SCOPE_PREDICATE` fails *closed* for a non-node subject, because
+        // pool→group resolution lives in `poolres.rs` and not in SQL. Pushing the caller's scope in
+        // here would therefore hide pool-coverage alerts from exactly the scoped operator whose site
+        // had gone dark. The handler post-filters instead, through `allows_subject`, which resolves
+        // pools properly. Exactly one `nodes` subquery — the *requested* group — belongs here.
+        assert_eq!(
+            HISTORY_FILTER_WHERE.matches("SELECT id FROM nodes").count(),
+            1,
+            "a second nodes subquery means the caller's scope was pushed into this predicate"
+        );
+        assert!(
+            !HISTORY_FILTER_WHERE.contains("subject_kind <> 'node'"),
+            "the fail-closed scope arm belongs to SCOPE_PREDICATE, not to the filter"
+        );
+    }
+
+    #[test]
+    fn the_filter_is_always_present_rather_than_appended_when_set() {
+        // The fail-open shape: a conditionally-built WHERE has a branch someone can forget, and the
+        // branch that gets forgotten returns *more* rows, not fewer.
+        //
+        // Eight arms for nine binds, and `$2` is the deliberate exception: `before_id` has no
+        // meaning without `before`, so instead of its own "no filter" arm it is absorbed by the
+        // `coalesce` inside `$1`'s. That is what makes a cursor of `before` alone degrade to
+        // "strictly before this instant" rather than matching nothing.
+        assert_eq!(
+            HISTORY_FILTER_WHERE.matches(" IS NULL").count(),
+            8,
+            "every bind but the cursor's second half must carry its own 'no filter' arm"
+        );
+        assert!(
+            !HISTORY_FILTER_WHERE.contains("$2::uuid IS NULL"),
+            "before_id gained its own arm — then a cursor without it matches nothing"
+        );
     }
 
     #[test]

@@ -10,6 +10,17 @@
 
 ## Unreleased
 
+### New Features
+- **Alerts ▸ History can be narrowed.** The screen had no filter of any kind: an append-only log
+  that only grows, readable by scrolling and nothing else. It now filters by severity, state, fire
+  or clear, node or folder group, and a time window — all applied in the database, so a filter
+  reaches the whole log rather than the pages already on screen. The filters live in the URL, so a
+  narrowed view survives a reload and can be shared, and a link can point straight at one node's
+  alert history. `GET /api/v1/alerts/history` accepts `severity`, `state`, `resolved`, `node_id`,
+  `group_id`, `since` and `until`; the MCP `get_alert_history` tool takes the same set through the
+  same code path. There is deliberately no free-text search: the only free-text column is the metric
+  name, which is unindexed, and searching it would turn every page into a full table scan.
+
 ### Bug Fixes
 - **Alerts ▸ History skipped rows while scrolling, and did it most often during a fleet-wide
   event.** The page's keyset cursor was the last row's `recorded_at` alone. That column defaults to

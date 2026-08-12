@@ -33,6 +33,21 @@
     "phase": {
       "fired": "発生",
       "cleared": "解消"
+    },
+    "emptyFiltered": "この絞り込みに一致する遷移がありません。",
+    "filter": {
+      "allSeverities": "すべての重大度",
+      "severityAria": "重大度で絞り込む",
+      "allPhases": "発生と解消",
+      "phaseAria": "発生・解消で絞り込む",
+      "allStates": "すべての状態",
+      "stateAria": "状態で絞り込む"
+    },
+    "range": {
+      "all": "全期間",
+      "24h": "過去 24 時間",
+      "7d": "過去 7 日間",
+      "30d": "過去 30 日間"
     }
   },
   "events": {

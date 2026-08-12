@@ -226,6 +226,71 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only transitions recorded at or after this RFC 3339 timestamp.\n\nBounds `recorded_at` (when the row was written), not `at_unix_ms` (when the alert fired), so\none index serves the ordering, the cursor and the range. The two differ by the ingest\nwriter's flush latency — under a second — so a row may sit marginally outside the window its\ndisplayed time suggests.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only transitions recorded at or before this RFC 3339 timestamp. Bounds `recorded_at`; see\n`since`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Only transitions at this severity.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/Severity"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only transitions into this state.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeState"
+            }
+          },
+          {
+            "name": "resolved",
+            "in": "query",
+            "description": "`false` for fires only, `true` for clears only. Omit for both.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "node_id",
+            "in": "query",
+            "description": "Only transitions about this node. Rows about something other than a node (a poller pool)\nare excluded by construction.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "group_id",
+            "in": "query",
+            "description": "Only transitions about nodes in this folder group **or any group beneath it**.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
@@ -243,7 +308,7 @@
             }
           },
           "400": {
-            "description": "`before` is not an RFC 3339 timestamp",
+            "description": "A cursor or range bound is not RFC 3339, or `severity`/`state` is not one of the listed values",
             "content": {
               "application/json": {
                 "schema": {
@@ -264,6 +329,16 @@
           },
           "403": {
             "description": "Role lacks the read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The requested `node_id` or `group_id` is outside the caller's scope",
             "content": {
               "application/json": {
                 "schema": {

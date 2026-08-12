@@ -332,10 +332,12 @@ impl YagraMcp {
 
     #[tool(
         description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
-                       (default 100). To page, pass the oldest returned row's `cursor_at` as \
-                       `before` and its `cursor_id` as `before_id` — both, and not its `at`, which \
-                       is when the alert fired rather than when the row was written. Requires live \
-                       mode."
+                       (default 100). Narrow with `severity`, `state`, `resolved` (false=fires, \
+                       true=clears), `node_id`, `group_id` (that folder and everything beneath it) \
+                       and `since`/`until` — the window to search, which is separate from the \
+                       cursor. To page, pass the oldest returned row's `cursor_at` as `before` and \
+                       its `cursor_id` as `before_id` — both, and not its `at`, which is when the \
+                       alert fired rather than when the row was written. Requires live mode."
     )]
     async fn get_alert_history(
         &self,
@@ -353,36 +355,36 @@ impl YagraMcp {
         p: AlertHistoryParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
-        let Some(history) = self.state.history.as_ref() else {
+        if self.state.history.is_none() {
             return tool_unavailable("get_alert_history", "alert history requires live mode");
+        }
+        // The whole page function is the shared seam — parsing, the scope checks on `node_id` /
+        // `group_id`, the store call and the post-filter — so this surface cannot validate more
+        // loosely than REST does. That is the drift `parse_event_filter` already paid for, on the
+        // surface with no human in the loop.
+        let (severity, state) = match (
+            crate::api::alerts::parse_severity(p.severity.as_deref()),
+            crate::api::alerts::parse_state(p.state.as_deref()),
+        ) {
+            (Ok(sev), Ok(st)) => (sev, st),
+            (Err(e), _) | (_, Err(e)) => return tool_api_error("get_alert_history", &e),
         };
-        let limit = p.limit.unwrap_or(100).clamp(1, 1000);
-        let before = match p.before.as_deref() {
-            Some(s) => match chrono::DateTime::parse_from_rfc3339(s) {
-                Ok(dt) => Some(dt.with_timezone(&Utc)),
-                Err(_) => {
-                    return tool_bad_params(
-                        "get_alert_history",
-                        "`before` must be an RFC 3339 timestamp",
-                    )
-                }
-            },
-            None => None,
+        let input = crate::api::alerts::HistoryFilterInput {
+            limit: p.limit,
+            before: p.before.as_deref(),
+            before_id: p.before_id,
+            since: p.since.as_deref(),
+            until: p.until.as_deref(),
+            severity,
+            state,
+            resolved: p.resolved,
+            node_id: p.node_id,
+            group_id: p.group_id,
         };
-        let rows = match history.recent(limit, before, p.before_id).await {
+        let rows = match crate::api::alerts::history_page(&self.state, scope, input).await {
             Ok(r) => r,
-            Err(e) => return tool_error("get_alert_history", "load history", &e),
+            Err(e) => return tool_api_error("get_alert_history", &e),
         };
-        // Post-filtered, matching `GET /api/v1/alerts/history`: the store pages by timestamp and
-        // knows nothing about groups, so a scoped caller's page can come back short. Short is the
-        // correct answer here — `before` still advances by the oldest row returned.
-        let rows: Vec<_> = rows
-            .into_iter()
-            .filter(|r| {
-                r.subject()
-                    .is_some_and(|s| scope.allows_subject(&self.state, &s))
-            })
-            .collect();
         let names = self
             .resolve_names(scope, rows.iter().filter_map(|r| r.node))
             .await;
@@ -3256,6 +3258,20 @@ pub(crate) struct AlertHistoryParams {
     /// Keyset cursor, second half: the same row's `cursor_id`. Send both — a whole flush of alerts
     /// shares one `cursor_at`, so a timestamp-only cursor skips that flush's remaining rows.
     before_id: Option<Uuid>,
+    /// Only transitions recorded at or after this RFC 3339 timestamp.
+    since: Option<String>,
+    /// Only transitions recorded at or before this RFC 3339 timestamp.
+    until: Option<String>,
+    /// Only transitions at this severity: `info` | `warning` | `critical`.
+    severity: Option<String>,
+    /// Only transitions into this node state, e.g. `ok` | `warning` | `critical` | `unreachable`.
+    state: Option<String>,
+    /// `false` for fires only, `true` for clears only. Omit for both.
+    resolved: Option<bool>,
+    /// Only transitions about this node.
+    node_id: Option<Uuid>,
+    /// Only transitions about nodes in this folder group or any group beneath it.
+    group_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

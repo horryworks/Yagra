@@ -33,6 +33,21 @@
     "phase": {
       "fired": "fired",
       "cleared": "cleared"
+    },
+    "emptyFiltered": "No transitions match these filters.",
+    "filter": {
+      "allSeverities": "All severities",
+      "severityAria": "Filter by severity",
+      "allPhases": "Fires and clears",
+      "phaseAria": "Filter by fire or clear",
+      "allStates": "All states",
+      "stateAria": "Filter by state"
+    },
+    "range": {
+      "all": "All time",
+      "24h": "Last 24h",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days"
     }
   },
   "events": {

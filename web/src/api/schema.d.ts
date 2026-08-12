@@ -9097,6 +9097,33 @@ export interface operations {
                  *     and means "strictly before that instant", which is what an older client sends.
                  */
                 before_id?: string;
+                /**
+                 * @description Only transitions recorded at or after this RFC 3339 timestamp.
+                 *
+                 *     Bounds `recorded_at` (when the row was written), not `at_unix_ms` (when the alert fired), so
+                 *     one index serves the ordering, the cursor and the range. The two differ by the ingest
+                 *     writer's flush latency — under a second — so a row may sit marginally outside the window its
+                 *     displayed time suggests.
+                 */
+                since?: string;
+                /**
+                 * @description Only transitions recorded at or before this RFC 3339 timestamp. Bounds `recorded_at`; see
+                 *     `since`.
+                 */
+                until?: string;
+                /** @description Only transitions at this severity. */
+                severity?: components["schemas"]["Severity"];
+                /** @description Only transitions into this state. */
+                state?: components["schemas"]["NodeState"];
+                /** @description `false` for fires only, `true` for clears only. Omit for both. */
+                resolved?: boolean;
+                /**
+                 * @description Only transitions about this node. Rows about something other than a node (a poller pool)
+                 *     are excluded by construction.
+                 */
+                node_id?: string;
+                /** @description Only transitions about nodes in this folder group **or any group beneath it**. */
+                group_id?: string;
             };
             header?: never;
             path?: never;
@@ -9113,7 +9140,7 @@ export interface operations {
                     "application/json": components["schemas"]["AlertHistoryView"][];
                 };
             };
-            /** @description `before` is not an RFC 3339 timestamp */
+            /** @description A cursor or range bound is not RFC 3339, or `severity`/`state` is not one of the listed values */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -9133,6 +9160,15 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The requested `node_id` or `group_id` is outside the caller's scope */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

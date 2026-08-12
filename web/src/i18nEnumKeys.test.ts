@@ -68,6 +68,7 @@ import { BUNDLE_IMPORT_REASONS, bundleImportErrorKey } from './pages/configBundl
 import { IMPORT_BLOCKS } from './pages/tlsSettingsForm';
 import { MAINTENANCE_STATUSES } from './pages/maintenanceStatus';
 import { AUDIT_RANGES } from './pages/auditQuery';
+import { HISTORY_RANGES } from './pages/historyQuery';
 import { SCHEDULE_FORM_PROBLEMS } from './troubleshoot/scheduleForm';
 import {
   CORRELATION_DIRECTIONS,
@@ -216,6 +217,16 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // these kinds; a kind with no strings would offer the operator a raw key while they choose
     // what to store.
     expectKeys('credential kind', { en: enAccess, ja: jaAccess }, 'cred.kind.', CREDENTIAL_KINDS);
+  });
+
+  it('every alert-history range and phase has a label (alerts:history.*)', () => {
+    // Built at runtime from the `as const` arrays, so a range or phase added without strings ships
+    // as a raw key in *both* locales — which parity passes and nobody notices until an operator is
+    // staring at `history.range.90d` in a filter.
+    const locales = { en: enAlerts, ja: jaAlerts };
+    expectKeys('history range', locales, 'history.range.', HISTORY_RANGES);
+    // The phase filter's two options and the row badge read the same keys, so one miss shows twice.
+    expectKeys('history phase', locales, 'history.phase.', ['fired', 'cleared'] as const);
   });
 
   it('every audit action and status class has a label (access:audit.*)', () => {

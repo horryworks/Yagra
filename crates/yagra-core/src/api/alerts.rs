@@ -231,7 +231,12 @@ async fn list_alerts(
     Json(decorate_alerts(alerts, &acks))
 }
 
-/// Recent alert-history rows: `?limit=` (default 100) plus the optional keyset cursor.
+/// A page of alert history: `?limit=`, the keyset cursor, and the filters the History toolbar
+/// offers.
+///
+/// `before`/`before_id` page; `since`/`until` bound the window being searched. They are separate
+/// parameters on purpose — one is where this page starts, the other is what the operator asked to
+/// look at — so a filtered scroll keeps its window while the cursor advances.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct HistoryQuery {
@@ -244,6 +249,27 @@ pub(crate) struct HistoryQuery {
     /// cursor lands inside that group and skips its remaining rows. Omitting it is still accepted
     /// and means "strictly before that instant", which is what an older client sends.
     pub before_id: Option<Uuid>,
+    /// Only transitions recorded at or after this RFC 3339 timestamp.
+    ///
+    /// Bounds `recorded_at` (when the row was written), not `at_unix_ms` (when the alert fired), so
+    /// one index serves the ordering, the cursor and the range. The two differ by the ingest
+    /// writer's flush latency — under a second — so a row may sit marginally outside the window its
+    /// displayed time suggests.
+    pub since: Option<String>,
+    /// Only transitions recorded at or before this RFC 3339 timestamp. Bounds `recorded_at`; see
+    /// `since`.
+    pub until: Option<String>,
+    /// Only transitions at this severity.
+    pub severity: Option<Severity>,
+    /// Only transitions into this state.
+    pub state: Option<NodeState>,
+    /// `false` for fires only, `true` for clears only. Omit for both.
+    pub resolved: Option<bool>,
+    /// Only transitions about this node. Rows about something other than a node (a poller pool)
+    /// are excluded by construction.
+    pub node_id: Option<Uuid>,
+    /// Only transitions about nodes in this folder group **or any group beneath it**.
+    pub group_id: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -251,9 +277,10 @@ pub(crate) struct HistoryQuery {
     params(HistoryQuery),
     responses(
         (status = 200, description = "A page of history rows, newest first; empty when this deployment keeps no history", body = Vec<AlertHistoryView>),
-        (status = 400, description = "`before` is not an RFC 3339 timestamp", body = super::error::ErrorBody),
+        (status = 400, description = "A cursor or range bound is not RFC 3339, or `severity`/`state` is not one of the listed values", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
+        (status = 404, description = "The requested `node_id` or `group_id` is outside the caller's scope", body = super::error::ErrorBody),
     ),
 )]
 async fn list_alert_history(
@@ -262,44 +289,151 @@ async fn list_alert_history(
     State(st): State<ApiState>,
     Query(q): Query<HistoryQuery>,
 ) -> ApiResult<Json<Vec<AlertHistoryView>>> {
-    // Parse before checking for a store: a malformed cursor is the client's bug whether or not
-    // this deployment has history, and answering `200 []` to it would let a paging bug look like
-    // "you have reached the end".
-    let before = match q.before.as_deref() {
-        Some(s) => Some(super::parse_rfc3339(s).ok_or_else(|| {
-            ApiError::bad_request("invalid_cursor", "before must be an RFC 3339 timestamp")
-        })?),
+    let rows = history_page(
+        &st,
+        &scope,
+        HistoryFilterInput {
+            limit: q.limit,
+            before: q.before.as_deref(),
+            before_id: q.before_id,
+            since: q.since.as_deref(),
+            until: q.until.as_deref(),
+            severity: q.severity,
+            state: q.state,
+            resolved: q.resolved,
+            node_id: q.node_id,
+            group_id: q.group_id,
+        },
+    )
+    .await?;
+    let acks = ack_map(&st).await;
+    Ok(Json(decorate_history(rows, &acks)))
+}
+
+/// The raw filter fields, as either surface receives them.
+pub(crate) struct HistoryFilterInput<'a> {
+    pub limit: Option<i64>,
+    pub before: Option<&'a str>,
+    pub before_id: Option<Uuid>,
+    pub since: Option<&'a str>,
+    pub until: Option<&'a str>,
+    pub severity: Option<Severity>,
+    pub state: Option<NodeState>,
+    pub resolved: Option<bool>,
+    pub node_id: Option<Uuid>,
+    pub group_id: Option<Uuid>,
+}
+
+/// Parse a severity or state token from a surface that receives it as text (MCP).
+///
+/// Here rather than in `mcp/tools.rs` so both surfaces accept exactly the same vocabulary. REST
+/// takes the enum directly — serde does this parse — and this is the one extra step MCP needs
+/// because its parameter schemas are `schemars`, which `yagra-common` deliberately does not derive.
+pub(crate) fn parse_severity(s: Option<&str>) -> Result<Option<Severity>, ApiError> {
+    s.map(|v| {
+        Severity::from_token(v).ok_or_else(|| {
+            ApiError::bad_request("invalid_severity", "severity must be info|warning|critical")
+        })
+    })
+    .transpose()
+}
+
+/// See [`parse_severity`].
+pub(crate) fn parse_state(s: Option<&str>) -> Result<Option<NodeState>, ApiError> {
+    s.map(|v| {
+        NodeState::from_token(v).ok_or_else(|| {
+            ApiError::bad_request("invalid_state", "state is not a known node state")
+        })
+    })
+    .transpose()
+}
+
+/// A page of alert history, newest first — shared by `GET /api/v1/alerts/history` and the MCP
+/// `get_alert_history` tool.
+///
+/// **The seam is the whole page function, not just a validator.** `parse_event_filter` shares only
+/// the validation with its MCP twin, and the halves around it drifted anyway — the term cap existed
+/// on the REST side and not on the surface with no human in the loop. With parsing, the scope
+/// checks, the store call and the post-filter all inside, there is nothing left to re-derive.
+pub(crate) async fn history_page(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    input: HistoryFilterInput<'_>,
+) -> Result<Vec<AlertHistoryRow>, ApiError> {
+    // The cursor and the range bounds get different codes: a bad cursor is a client paging bug, a
+    // bad bound is operator input, and the UI surfaces them differently.
+    fn ts(
+        value: Option<&str>,
+        field: &str,
+        code: &'static str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ApiError> {
+        match value {
+            None => Ok(None),
+            Some(s) => super::parse_rfc3339(s).map(Some).ok_or_else(|| {
+                ApiError::bad_request(code, format!("{field} must be an RFC 3339 timestamp"))
+            }),
+        }
+    }
+    // Parse before checking for a store: a malformed cursor is the client's bug whether or not this
+    // deployment has history, and answering `200 []` to it would let a paging bug look like "you
+    // have reached the end".
+    let before = ts(input.before, "before", "invalid_cursor")?;
+    let since = ts(input.since, "since", "invalid_filter")?;
+    let until = ts(input.until, "until", "invalid_filter")?;
+
+    // Filtering *by* a node or a group is still naming one, so both go through the same visibility
+    // check the rest of the surface uses — the shape `search_saved_findings` established. Answering
+    // `200 []` instead would be a slower way of saying the same thing for a group that exists, and a
+    // way of confirming one that does not.
+    if let Some(n) = input.node_id {
+        super::scope::require_visible_node(st, scope, yagra_common::NodeId::from(n))?;
+    }
+    let in_group = match input.group_id {
         None => None,
+        Some(g) => {
+            super::scope::require_visible_group(scope, g)?;
+            Some(super::scope::subtree_of(st, g).await?)
+        }
     };
+
     // Skeleton mode has no history store. An empty page rather than a 503: the alerts page renders
     // with an empty history panel instead of an error, matching the runs list in `api/analysis.rs`.
     let Some(history) = st.history.as_ref() else {
-        return Ok(Json(Vec::new()));
+        return Ok(Vec::new());
     };
-    let rows = history
-        .recent(q.limit.unwrap_or(100), before, q.before_id)
-        .await
-        .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "list alert history",
-                "failed to list alert history",
-            )
-        })?;
-    // Post-filtered rather than pushed into the query: history rows are keyed by subject id, not by
-    // group, and a scoped caller pages by timestamp — so a page may come back short. That is
-    // correct (the cursor is the timestamp, so paging still terminates) and is the same trade the
-    // TSDB rankings make. A group predicate here would mean joining `nodes` on every history read.
+    let filter = crate::history::HistoryFilter {
+        before,
+        before_id: input.before_id,
+        since,
+        until,
+        severity: input.severity,
+        state: input.state,
+        resolved: input.resolved,
+        node_id: input.node_id,
+        in_group: in_group.as_deref(),
+        limit: input.limit.unwrap_or(100),
+    };
+    let rows = history.search(&filter).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "list alert history",
+            "failed to list alert history",
+        )
+    })?;
+    // The caller's **scope** stays post-filtered rather than pushed into the query, and that is a
+    // decision rather than an omission: `AlertHistoryStore::SCOPE_PREDICATE` fails closed for a
+    // non-node subject, while `allows_subject` resolves pools properly — so pushing it in would hide
+    // pool-coverage alerts from exactly the scoped operator whose site had gone dark. A page may
+    // therefore come back short, which is correct: the cursor is the last row returned, so paging
+    // still terminates. The *requested* `group_id` above is a different thing and does go into SQL.
     //
     // A row whose subject could not be read at all (a newer core's `subject_kind`) is dropped for
-    // everyone: `recent` already drops those, so `subject()` is `Some` here — but spelling the
+    // everyone: `search` already drops those, so `subject()` is `Some` here — but spelling the
     // `None` case as "not visible" keeps the fail-closed direction if that ever changes.
-    let rows = rows
+    Ok(rows
         .into_iter()
-        .filter(|r| r.subject().is_some_and(|s| scope.allows_subject(&st, &s)))
-        .collect();
-    let acks = ack_map(&st).await;
-    Ok(Json(decorate_history(rows, &acks)))
+        .filter(|r| r.subject().is_some_and(|s| scope.allows_subject(st, &s)))
+        .collect())
 }
 
 // ── Inbound ack (ADR-015, A1) ────────────────────────────────────────────────
@@ -1046,6 +1180,73 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["error"]["code"], "invalid_cursor");
+    }
+
+    /// The status of a history request, and its typed error code when the body is the ADR-019
+    /// envelope.
+    ///
+    /// The code is `None` for a rejection axum produced itself — a typed query field that failed to
+    /// deserialize answers with plain text, not the envelope. That is the accepted cost of declaring
+    /// `severity`/`state` as the real enums: the generated OpenAPI union is worth more than the
+    /// envelope on a request the WebUI's own `<select>` cannot produce, and `?limit=abc` already
+    /// behaved this way.
+    async fn history_error(query: &str) -> (StatusCode, Option<String>) {
+        let resp = router(public_state())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/v1/alerts/history?{query}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let code = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|j| j["error"]["code"].as_str().map(str::to_owned));
+        (status, code)
+    }
+
+    #[tokio::test]
+    async fn a_bad_range_bound_is_a_filter_error_not_a_cursor_error() {
+        // The cursor is the client's paging state; the range is what the operator typed. The UI
+        // surfaces them differently, so they must not collapse into one code.
+        for bad in ["since=yesterday", "until=2026-07-28"] {
+            assert_eq!(
+                history_error(bad).await,
+                (StatusCode::BAD_REQUEST, Some("invalid_filter".to_owned())),
+                "{bad}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn an_unknown_severity_or_state_is_rejected_rather_than_ignored() {
+        // Rejecting beats ignoring: a typo that silently dropped the filter would answer with the
+        // whole log while the operator believes they are looking at criticals only. serde does this
+        // rejection because the parameter is the real enum — which is also what stops the same word
+        // meaning something different over MCP. (Hence no typed code: see `history_error`.)
+        for bad in ["severity=fatal", "severity=CRITICAL", "state=broken"] {
+            assert_eq!(history_error(bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_malformed_filter_is_rejected_even_with_no_history_store() {
+        // `public_state()` keeps no history, and this endpoint answers an empty page rather than a
+        // 503 for that. So the parse has to happen first, or a client bug reads as "you have
+        // reached the end of the log" — the one wrong answer a paging API can give.
+        assert_eq!(
+            history_error("before=yesterday").await.0,
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(history_error("since=nope").await.0, StatusCode::BAD_REQUEST);
+        // …while a well-formed filter still gets the empty page.
+        assert_eq!(
+            history_error("severity=critical&resolved=false").await.0,
+            StatusCode::OK
+        );
     }
 
     // ── Live streams ────────────────────────────────────────────────────────
