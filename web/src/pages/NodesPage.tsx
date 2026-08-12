@@ -40,7 +40,7 @@ import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
 import {
   buildSuppressionIndex,
-  causesFor,
+  suppressionPanelRows,
   type ReleaseAction,
   type SuppressionTarget,
 } from '../lib/suppression';
@@ -296,12 +296,13 @@ export function NodesPage() {
       .catch((e: unknown) => scopeError(e, t('err.mute')));
   };
 
-  // Why a tree row is suppressed. Resolved here because this page holds the window and mute lists;
-  // the tree renders the answer and owns none of the data (its header comment).
-  const suppressionCauses = useCallback(
+  // What the release panel shows for a tree row. Resolved here because this page holds the window,
+  // mute and exemption lists; the tree renders the answer and owns none of the data (its header
+  // comment). The exemptions are what stop a released node being offered a release it already has.
+  const suppressionRows = useCallback(
     (target: SuppressionTarget, node?: NodeSummary) =>
-      causesFor(target, { windows, mutes, groups, node }),
-    [windows, mutes, groups],
+      suppressionPanelRows(target, { windows, mutes, groups, node, exemptions }),
+    [windows, mutes, groups, exemptions],
   );
 
   // Right-click / marker click → release. One exhaustive switch, so a new `ReleaseAction` cannot
@@ -581,7 +582,7 @@ export function NodesPage() {
             onReorderNode={reorderNode}
             onReorderGroup={reorderGroup}
             suppression={suppression}
-            suppressionCauses={suppressionCauses}
+            suppressionRows={suppressionRows}
             onRelease={authed ? release : undefined}
             onSetMaintenance={authed ? setMaintenance : undefined}
             onSetMute={authed ? setMute : undefined}

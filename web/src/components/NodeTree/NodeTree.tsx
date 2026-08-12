@@ -35,8 +35,8 @@ import { usePrefsStore } from '../../prefs';
 import {
   DURATION_PRESETS,
   type ReleaseAction,
-  type SuppressionCause,
   type SuppressionIndex,
+  type SuppressionPanelRow,
   type SuppressionTarget,
 } from '../../lib/suppression';
 import { formatScheduleTime } from '../../lib/format';
@@ -125,9 +125,9 @@ interface Props {
   ) => void;
   /** Which nodes/groups are currently in maintenance or muted (drives the per-row markers). */
   suppression?: SuppressionIndex;
-  /** Why a row is suppressed right now — resolved by the page, which holds the window and mute
-   *  lists. Omit and the markers stay decorative, as they were before the release panel. */
-  suppressionCauses?: (target: SuppressionTarget, node?: NodeSummary) => SuppressionCause[];
+  /** What the release panel shows for a row — resolved by the page, which holds the window, mute
+   *  and exemption lists. Omit and the markers stay decorative, as they were before the panel. */
+  suppressionRows?: (target: SuppressionTarget, node?: NodeSummary) => SuppressionPanelRow[];
   /** Act on a suppression from the panel or the context menu. One callback over a union so the
    *  page answers with a single exhaustive switch. Omit to hide every release control. */
   onRelease?: (action: ReleaseAction) => void;
@@ -168,7 +168,7 @@ export function NodeTree({
   onReorderNode,
   onReorderGroup,
   suppression,
-  suppressionCauses,
+  suppressionRows,
   onRelease,
   onSetMaintenance,
   onSetMute,
@@ -249,124 +249,57 @@ export function NodeTree({
     );
   };
 
-  /** One release control, or the note explaining why there is none. */
-  const causeAction = (
-    cause: SuppressionCause,
-    target: SuppressionTarget,
-    node: NodeSummary | undefined,
-    act: (a: ReleaseAction) => void,
-  ): React.ReactNode => {
-    if (cause.source === 'direct' && cause.id) {
-      // A window is ended, not deleted — the label says so, because the row it leaves behind on the
-      // Maintenance page is the difference. A mute has nothing to preserve, so it goes.
-      const action: ReleaseAction =
-        cause.kind === 'maintenance'
-          ? { action: 'end-window', windowId: cause.id }
-          : { action: 'lift-mute', muteId: cause.id };
-      const label =
-        cause.kind === 'maintenance'
-          ? t('tree.suppression.act.endNow')
-          : t('tree.suppression.act.release');
-      return (
-        <div className="ntree-supp-act">
-          <button type="button" onClick={() => act(action)}>
-            {label}
-          </button>
-        </div>
-      );
-    }
-    if (target.kind === 'node' && node) {
-      return (
-        <div className="ntree-supp-act">
-          <button
-            type="button"
-            onClick={() =>
-              act({ action: 'release-node', nodeId: node.id, kind: cause.kind })
-            }
-          >
-            {t('tree.suppression.act.releaseNode')}
-          </button>
-        </div>
-      );
-    }
-    // A group covered by an ancestor's window. Ending it from here would release every sibling
-    // under that ancestor too, so this says where the control is rather than quietly offering it.
-    return (
-      <div className="ntree-supp-note">
-        {t('tree.suppression.releaseOnAncestor', cause.labelParams)}
-      </div>
-    );
-  };
-
-  /** The panel a marker click opens: every suppression on this row, and what can be done to it. */
+  /** The panel a marker click opens: every suppression on this row, and what can be done to it.
+   *  Which blocks appear and what each one offers is decided by `lib/suppression`; this renders
+   *  what it returns. That split is not cosmetic — Vitest never loads a `.tsx`, so a judgement made
+   *  here is a judgement nothing tests, and the first version of this panel got exactly that wrong
+   *  (a released node was offered a release it already had). */
   const suppressionPanel = (m: Extract<Menu, { kind: 'suppress' }>): React.ReactNode => {
     const act = (a: ReleaseAction) => {
       onRelease?.(a);
       setMenu(null);
     };
-    const causes = suppressionCauses?.(m.target, m.node) ?? [];
-    const released: Array<'maintenance' | 'mute'> = [];
-    if (m.node && suppression?.exemptMaintenanceNodes.has(m.node.id)) released.push('maintenance');
-    if (m.node && suppression?.exemptMuteNodes.has(m.node.id)) released.push('mute');
-
-    const rows: React.ReactNode[] = causes.map((c, i) => (
-      <div className="ntree-supp-cause" key={`c${i}`}>
-        <div className="ntree-supp-head">
-          {t(
-            c.kind === 'maintenance'
-              ? 'tree.suppression.head.maintenance'
-              : 'tree.suppression.head.mute',
-          )}
-        </div>
-        {c.title && <div className="ntree-supp-title">{c.title}</div>}
-        <div className="ntree-supp-meta">
-          {t(c.labelKey, c.labelParams)}
-          {c.endsAt && ` · ${t('tree.suppression.until', { time: formatScheduleTime(c.endsAt) })}`}
-        </div>
-        {canEdit && onRelease && causeAction(c, m.target, m.node, act)}
-      </div>
-    ));
-
-    for (const kind of released) {
-      const node = m.node;
-      if (!node) continue;
-      rows.push(
-        <div className="ntree-supp-cause" key={`r${kind}`}>
-          <div className="ntree-supp-head">
-            {t(
-              kind === 'maintenance'
-                ? 'tree.suppression.head.releasedMaintenance'
-                : 'tree.suppression.head.releasedMute',
-            )}
+    const rows = suppressionRows?.(m.target, m.node) ?? [];
+    return (
+      <div className="ntree-supp-panel">
+        {rows.length === 0 ? (
+          // Reachable as a race — the window ended between the render that lit the marker and the
+          // click. Saying so beats an empty box.
+          <div className="ntree-supp-cause">
+            <div className="ntree-supp-note">{t('tree.suppression.none')}</div>
           </div>
-          {canEdit && onRelease && (
-            <div className="ntree-supp-act">
-              <button
-                type="button"
-                onClick={() => act({ action: 'undo-release', nodeId: node.id, kind })}
-              >
-                {t(
-                  kind === 'maintenance'
-                    ? 'tree.suppression.act.undoMaintenance'
-                    : 'tree.suppression.act.undoMute',
+        ) : (
+          rows.map((r) => {
+            // Bound before the closure: TypeScript drops a property narrowing inside a callback.
+            const control = r.action;
+            return (
+              <div className="ntree-supp-cause" key={r.key}>
+                <div className="ntree-supp-head">{t(r.headKey)}</div>
+                {r.title && <div className="ntree-supp-title">{r.title}</div>}
+                {(r.labelKey || r.endsAt) && (
+                  <div className="ntree-supp-meta">
+                    {r.labelKey && t(r.labelKey, r.labelParams)}
+                    {r.labelKey && r.endsAt && ' · '}
+                    {r.endsAt &&
+                      t('tree.suppression.until', { time: formatScheduleTime(r.endsAt) })}
+                  </div>
                 )}
-              </button>
-            </div>
-          )}
-        </div>,
-      );
-    }
-
-    if (rows.length === 0) {
-      // Reachable as a race — the window ended between the render that lit the marker and the
-      // click. Saying so beats an empty box.
-      rows.push(
-        <div className="ntree-supp-cause" key="none">
-          <div className="ntree-supp-note">{t('tree.suppression.none')}</div>
-        </div>,
-      );
-    }
-    return <div className="ntree-supp-panel">{rows}</div>;
+                {canEdit && onRelease && control && (
+                  <div className="ntree-supp-act">
+                    <button type="button" onClick={() => act(control.action)}>
+                      {t(control.labelKey)}
+                    </button>
+                  </div>
+                )}
+                {canEdit && onRelease && !control && r.noteKey && (
+                  <div className="ntree-supp-note">{t(r.noteKey, r.noteParams)}</div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
   };
 
   /** Whether this row currently has anything the release panel could act on or explain. */

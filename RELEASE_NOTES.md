@@ -24,11 +24,12 @@
     actually happened and is swept by the existing "clear ended" button. A mute naming the row is
     lifted, as it always was.
   - A window or mute the row only *inherits* cannot be ended without releasing every sibling under
-    it, so a **node** offers "release this node" instead: that one node returns to normal alerting
-    while the rest of the group stays covered. The release expires by itself when the coverage it
-    was carved out of ends — the server computes that, the browser sends no expiry — so it can
-    never silently exclude the node from the *next* window. A released node shows a struck-through
-    marker and can be put back from the same panel.
+    it, so a **node** offers "take this node out of maintenance" — or "unmute this node" — instead:
+    that one node returns to normal alerting while the rest of the group stays covered. The release
+    expires by itself when the coverage it was carved out of ends — the server computes that, the
+    browser sends no expiry — so it can never silently exclude the node from the *next* window. A
+    released node shows a struck-through marker, and its panel then reports what it is standing
+    outside of and until when, with putting it back as the only thing left to do.
   - A **group** covered by an ancestor's window shows the cause read-only and names the group to
     release it on. Ending an ancestor's window from a child row would silence-and-unsilence a set
     the operator cannot see from there.
@@ -58,6 +59,14 @@
   first upgrade after moving to v0.2.4 stops at the first step. Run the command above once on the
   host and every upgrade after it is unaffected; nothing is at risk in the meantime, because the
   run stops before it pulls an image or stops a container.
+- **Hovering a row in All nodes moved the buttons that were already on it.** The inventory tree
+  reveals its per-row actions on hover (＋ / ✎ / 🗑 on a group, ↗ on a node), and revealing them
+  *inserted* them into the row: everything to their left — the maintenance and mute markers, the
+  member count, the health bar — slid about 80px across at the moment the pointer arrived. It had
+  always done this, and it became dangerous when the markers became buttons, because aiming at a
+  group's wrench put **Delete group** under the pointer before the click landed. The slot is now
+  laid out at all times and only its contents are revealed, so nothing moves; as a side effect the
+  markers line up in one column across every row.
 
 ## v0.2.4 — the second upgrade works, and the backup it takes first has the metrics in it
 

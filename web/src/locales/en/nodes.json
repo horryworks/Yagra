@@ -341,10 +341,11 @@
       },
       "until": "until {{time}}",
       "act": {
-        "open": "Suppression…",
-        "endNow": "End now",
-        "release": "Release",
-        "releaseNode": "Release this node",
+        "open": "Release maintenance / mute…",
+        "endNow": "End maintenance now",
+        "unmute": "Unmute",
+        "excludeNode": "Take this node out of maintenance",
+        "unmuteNode": "Unmute this node",
         "undoMaintenance": "Put back in maintenance",
         "undoMute": "Mute again"
       },

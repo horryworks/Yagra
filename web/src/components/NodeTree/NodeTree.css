@@ -154,10 +154,20 @@
   text-align: center;
 }
 
-/* Per-row actions appear on hover (keyboard users reach them via the context menu / Move). */
+/* Per-row actions appear on hover (keyboard users reach them via the context menu / Move).
+   The slot is laid out ALWAYS and only its contents are revealed. It used to be `display: none`,
+   which meant hovering a row inserted ~78px of buttons into a flex row and slid everything left of
+   them across — including the suppression markers, which are buttons themselves. Aiming at a
+   group's wrench put 🗑 Delete group under the pointer by the time it went down. Reserving the slot
+   is the fix; an absolutely-positioned overlay would have covered those same markers instead.
+   `min-width` is the widest row's three buttons, so every row's markers line up in one column. */
 .ntree-actions {
-  display: none;
+  display: inline-flex;
+  visibility: hidden;
+  flex: none;
+  min-width: 78px;
   align-items: center;
+  justify-content: flex-end;
   gap: 2px;
   margin-left: auto;
 }
@@ -165,7 +175,7 @@
 .ntree-row:hover .ntree-actions,
 /* Its own ＋ menu is open — the pointer has to leave the row to reach it. */
 .ntree-actions.menu-open {
-  display: inline-flex;
+  visibility: visible;
 }
 
 .ntree-act {

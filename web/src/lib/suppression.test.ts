@@ -15,6 +15,9 @@ import {
   groupContainers,
   groupSubtree,
   muteTargetFromAlert,
+  PANEL_LABEL_KEYS,
+  suppressionPanelRows,
+  type SuppressionPanelRow,
 } from './suppression';
 import { LIVENESS_METRIC } from './format';
 
@@ -401,5 +404,174 @@ describe('causesFor', () => {
       [...causes, ...groupCauses, ...unexplained].map((c) => c.labelKey),
     );
     expect([...produced].sort()).toEqual([...CAUSE_LABEL_KEYS].sort());
+  });
+});
+
+describe('suppressionPanelRows', () => {
+  const nodeTarget = { kind: 'node' as const, id: 'n2', name: 'n2' };
+  const groupTarget = { kind: 'group' as const, id: 'edge', name: 'Edge' };
+  const groupWindow = window({ id: 'w1', name: 'DC1 planned', scope_level: 'group_id', scope_id: 'tokyo' });
+  const n2 = node('n2', 'edge');
+
+  it('offers to end a window that names the row, and to lift a mute that does', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [window({ id: 'w', scope_level: 'node', scope_id: 'n2' })],
+      mutes: [mute({ id: 'm', scope_kind: 'node', node_id: 'n2' })],
+      groups,
+      node: n2,
+    });
+    expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
+      ['tree.suppression.head.maintenance', 'tree.suppression.act.endNow'],
+      ['tree.suppression.head.mute', 'tree.suppression.act.unmute'],
+    ]);
+    expect(rows[0].action?.action).toEqual({ action: 'end-window', windowId: 'w' });
+    expect(rows[1].action?.action).toEqual({ action: 'lift-mute', muteId: 'm' });
+  });
+
+  it('offers a node its own way out of coverage it only inherits', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [groupWindow],
+      mutes: [],
+      groups,
+      node: n2,
+    });
+    expect(rows[0].action).toEqual({
+      action: { action: 'release-node', nodeId: 'n2', kind: 'maintenance' },
+      labelKey: 'tree.suppression.act.excludeNode',
+    });
+  });
+
+  // The bug this function exists to make untestable-in-a-.tsx: the panel used to show a live
+  // "in maintenance" block offering a release the node had already been given, directly above the
+  // block saying it was released. One block, one action, and the action is the undo.
+  it('shows a released node one block, and the only action is putting it back', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [groupWindow],
+      mutes: [],
+      groups,
+      node: n2,
+      exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].headKey).toBe('tree.suppression.head.releasedMaintenance');
+    expect(rows[0].action).toEqual({
+      action: { action: 'undo-release', nodeId: 'n2', kind: 'maintenance' },
+      labelKey: 'tree.suppression.act.undoMaintenance',
+    });
+  });
+
+  // Being released is not the same as there being nothing to be released from: the operator needs
+  // to see which window they are standing outside of, and until when.
+  it('keeps the window a release was carved out of on screen', () => {
+    const [row] = suppressionPanelRows(nodeTarget, {
+      windows: [groupWindow],
+      mutes: [],
+      groups,
+      node: n2,
+      exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
+    });
+    expect(row.title).toBe('DC1 planned');
+    expect(row.labelKey).toBe('tree.suppression.from.ancestor');
+    expect(row.labelParams).toEqual({ name: 'Tokyo' });
+    expect(row.endsAt).toBe('2026-01-02T00:00:00Z');
+  });
+
+  // An exemption cancels inherited coverage only, so a window aimed at the node still suppresses
+  // it. Both facts are true at once and the panel says both, in that order.
+  it('still reports a window that names a released node as suppressing it', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [window({ id: 'own', scope_level: 'node', scope_id: 'n2' }), groupWindow],
+      mutes: [],
+      groups,
+      node: n2,
+      exemptions: [exemption({ node_id: 'n2', kind: 'maintenance' })],
+    });
+    expect(rows.map((r) => [r.headKey, r.action?.labelKey])).toEqual([
+      ['tree.suppression.head.maintenance', 'tree.suppression.act.endNow'],
+      ['tree.suppression.head.releasedMaintenance', 'tree.suppression.act.undoMaintenance'],
+    ]);
+  });
+
+  it('releases the two kinds independently', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [groupWindow],
+      mutes: [mute({ id: 'gm', scope_kind: 'group', node_id: null, group_id: 'tokyo' })],
+      groups,
+      node: n2,
+      exemptions: [exemption({ node_id: 'n2', kind: 'mute' })],
+    });
+    expect(rows.map((r) => [r.kind, r.headKey, r.action?.labelKey])).toEqual([
+      ['maintenance', 'tree.suppression.head.maintenance', 'tree.suppression.act.excludeNode'],
+      ['mute', 'tree.suppression.head.releasedMute', 'tree.suppression.act.undoMute'],
+    ]);
+  });
+
+  // The covering window ended before the exemption row was swept. Nothing explains the release, so
+  // the block has no context — but the undo must still be reachable, or the node keeps a release
+  // nobody can see or cancel.
+  it('can still undo a release nothing explains', () => {
+    const rows = suppressionPanelRows(nodeTarget, {
+      windows: [],
+      mutes: [],
+      groups,
+      node: n2,
+      exemptions: [exemption({ node_id: 'n2', kind: 'maintenance', until_at: '2026-03-01T00:00:00Z' })],
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].headKey).toBe('tree.suppression.head.releasedMaintenance');
+    expect(rows[0].labelKey).toBeUndefined();
+    expect(rows[0].endsAt).toBe('2026-03-01T00:00:00Z');
+  });
+
+  it('gives a group covered from above a note instead of a button', () => {
+    const [row] = suppressionPanelRows(groupTarget, {
+      windows: [groupWindow],
+      mutes: [],
+      groups,
+    });
+    expect(row.action).toBeNull();
+    expect(row.noteKey).toBe('tree.suppression.releaseOnAncestor');
+    expect(row.noteParams).toEqual({ name: 'Tokyo' });
+  });
+
+  it('is empty when nothing suppresses the row', () => {
+    expect(suppressionPanelRows(nodeTarget, { windows: [], mutes: [], groups, node: n2 })).toEqual(
+      [],
+    );
+  });
+
+  // Same guard as the cause labels, one level up: every heading, button and note the panel renders
+  // is assembled from a value at runtime, so a forgotten string is missing from both locales and
+  // renders as a raw key.
+  it('only ever produces a key from PANEL_LABEL_KEYS', () => {
+    const cases: SuppressionPanelRow[][] = [
+      suppressionPanelRows(nodeTarget, {
+        windows: [window({ id: 'own', scope_level: 'node', scope_id: 'n2' }), groupWindow],
+        mutes: [
+          mute({ id: 'own', scope_kind: 'node', node_id: 'n2' }),
+          mute({ id: 'gm', scope_kind: 'group', node_id: null, group_id: 'tokyo' }),
+        ],
+        groups,
+        node: n2,
+      }),
+      suppressionPanelRows(nodeTarget, {
+        windows: [groupWindow],
+        mutes: [mute({ id: 'gm', scope_kind: 'group', node_id: null, group_id: 'tokyo' })],
+        groups,
+        node: n2,
+        exemptions: [
+          exemption({ node_id: 'n2', kind: 'maintenance' }),
+          exemption({ id: 'x2', node_id: 'n2', kind: 'mute' }),
+        ],
+      }),
+      suppressionPanelRows(groupTarget, { windows: [groupWindow], mutes: [], groups }),
+    ];
+    const produced = new Set(
+      cases
+        .flat()
+        .flatMap((r) => [r.headKey, r.action?.labelKey, r.noteKey])
+        .filter((k): k is string => !!k),
+    );
+    expect([...produced].sort()).toEqual([...PANEL_LABEL_KEYS].sort());
   });
 });

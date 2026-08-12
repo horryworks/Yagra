@@ -233,6 +233,11 @@ export interface SuppressionCause {
   labelParams?: Record<string, string>;
   /** RFC 3339. When this cause stops on its own. Empty when the browser cannot attribute one. */
   endsAt: string;
+  /** The node has been released from this coverage: it is *not* being suppressed by it, and the
+   *  only thing left to do is put it back. Never set on a `direct` cause — an exemption cancels
+   *  coverage a node merely belongs to, never coverage aimed at it — and never on a group row,
+   *  since exemptions are per node. Mirrors {@link buildSuppressionIndex} and the server. */
+  released?: boolean;
 }
 
 /**
@@ -281,10 +286,17 @@ export function causesFor(
     /** The node behind a `node` target, when the tree has it loaded. Supplies the folder group the
      *  ancestor walk starts from and the rolled-up state that reveals an unattributed window. */
     node?: NodeSummary;
+    /** Releases already granted to this node, so a cause it has been released from is reported as
+     *  such instead of as a live suppression offering a release that has already happened. */
+    exemptions?: SuppressionExemption[];
   },
 ): SuppressionCause[] {
   const { windows, mutes, groups, node } = ctx;
   const isGroup = target.kind === 'group';
+  const releasedFrom = (kind: 'maintenance' | 'mute') =>
+    !isGroup && (ctx.exemptions ?? []).some((e) => e.node_id === target.id && e.kind === kind);
+  const maintReleased = releasedFrom('maintenance');
+  const muteReleased = releasedFrom('mute');
   // The folder groups that contain this row. A group row contains itself, so an ancestor window is
   // found the same way for both kinds; the `direct` test below is what tells them apart.
   const containers = groupContainers(groups, isGroup ? target.id : (node?.group_id ?? null));
@@ -313,6 +325,7 @@ export function causesFor(
         labelKey: 'tree.suppression.from.ancestor',
         labelParams: { name: groupName(w.scope_id) },
         endsAt: w.ends_at,
+        released: maintReleased,
       });
     }
   }
@@ -338,6 +351,7 @@ export function causesFor(
         labelKey: 'tree.suppression.from.ancestor',
         labelParams: { name: groupName(m.group_id) },
         endsAt: m.until_at,
+        released: muteReleased,
       });
     }
   }
@@ -351,7 +365,172 @@ export function causesFor(
       title: '',
       labelKey: 'tree.suppression.from.elsewhere',
       endsAt: '',
+      released: maintReleased,
     });
   }
   return out;
+}
+
+/**
+ * One block of the release panel: what is (or was) silencing the row, and the single control it
+ * offers.
+ *
+ * Built here rather than in `NodeTree.tsx` for the reason `testing.md` gives — Vitest runs
+ * `src/**\/*.test.ts` in a node environment and never loads a `.tsx`. The panel's first bug was
+ * exactly a decision made where no test could reach it: `causesFor` knew nothing about exemptions,
+ * so a released node was shown a live "in maintenance" block offering a release it had already
+ * been given, directly above the block saying it was released.
+ */
+export interface SuppressionPanelRow {
+  /** React key. Stable within one render of one row; not an entity id. */
+  key: string;
+  kind: 'maintenance' | 'mute';
+  /** i18n key for the block's heading — which of the four states this block reports. */
+  headKey: string;
+  /** The window's name (or the muted check), when there is one to show. */
+  title: string;
+  /** i18n key + params for the "where does this come from" line, when a cause explains it. */
+  labelKey?: string;
+  labelParams?: Record<string, string>;
+  /** RFC 3339. When this stops on its own; empty when nothing can be attributed. */
+  endsAt: string;
+  /** The one control this block offers, with the i18n key naming what it does. `null` when the
+   *  block can only explain — a group covered by an ancestor's window. */
+  action: { action: ReleaseAction; labelKey: string } | null;
+  /** Shown in place of a button when `action` is null. */
+  noteKey?: string;
+  noteParams?: Record<string, string>;
+}
+
+/** Every i18n key {@link suppressionPanelRows} can emit. A key assembled at runtime is missing
+ *  from *both* locales when it is forgotten, so EN/JA parity passes and the operator sees the raw
+ *  key (`extensibility.md` §4); `i18nEnumKeys.test.ts` reads this list and demands both. */
+export const PANEL_LABEL_KEYS = [
+  'tree.suppression.head.maintenance',
+  'tree.suppression.head.mute',
+  'tree.suppression.head.releasedMaintenance',
+  'tree.suppression.head.releasedMute',
+  'tree.suppression.act.endNow',
+  'tree.suppression.act.unmute',
+  'tree.suppression.act.excludeNode',
+  'tree.suppression.act.unmuteNode',
+  'tree.suppression.act.undoMaintenance',
+  'tree.suppression.act.undoMute',
+  'tree.suppression.releaseOnAncestor',
+] as const;
+
+const HEAD_KEY = {
+  maintenance: 'tree.suppression.head.maintenance',
+  mute: 'tree.suppression.head.mute',
+} as const;
+const RELEASED_HEAD_KEY = {
+  maintenance: 'tree.suppression.head.releasedMaintenance',
+  mute: 'tree.suppression.head.releasedMute',
+} as const;
+const UNDO_KEY = {
+  maintenance: 'tree.suppression.act.undoMaintenance',
+  mute: 'tree.suppression.act.undoMute',
+} as const;
+const EXCLUDE_KEY = {
+  maintenance: 'tree.suppression.act.excludeNode',
+  mute: 'tree.suppression.act.unmuteNode',
+} as const;
+
+/** The control a single cause offers, given who is asking. */
+function actionFor(
+  cause: SuppressionCause,
+  target: SuppressionTarget,
+): Pick<SuppressionPanelRow, 'action' | 'noteKey' | 'noteParams'> {
+  if (cause.released) {
+    return {
+      action: {
+        action: { action: 'undo-release', nodeId: target.id, kind: cause.kind },
+        labelKey: UNDO_KEY[cause.kind],
+      },
+    };
+  }
+  if (cause.source === 'direct' && cause.id) {
+    // A window is ended, not deleted — the label says so, because the row it leaves behind on the
+    // Maintenance page is the difference. A mute has nothing to preserve, so it goes.
+    return {
+      action:
+        cause.kind === 'maintenance'
+          ? {
+              action: { action: 'end-window', windowId: cause.id },
+              labelKey: 'tree.suppression.act.endNow',
+            }
+          : {
+              action: { action: 'lift-mute', muteId: cause.id },
+              labelKey: 'tree.suppression.act.unmute',
+            },
+    };
+  }
+  if (target.kind === 'node') {
+    return {
+      action: {
+        action: { action: 'release-node', nodeId: target.id, kind: cause.kind },
+        labelKey: EXCLUDE_KEY[cause.kind],
+      },
+    };
+  }
+  // A group covered by an ancestor's window. Ending it from here would release every sibling under
+  // that ancestor too, so this says where the control is rather than quietly offering it.
+  return {
+    action: null,
+    noteKey: 'tree.suppression.releaseOnAncestor',
+    noteParams: cause.labelParams,
+  };
+}
+
+/**
+ * Everything the release panel shows for one row, in order: what is suppressing it, then what it
+ * has been released from. An empty array means nothing is — the caller says so in its own words.
+ *
+ * A release the node already holds produces **one** block, not two: the coverage it was carved out
+ * of is reported under the "released" heading, keeping the window's name and expiry on screen (the
+ * operator still wants to know what they are outside of), with putting it back as the only action.
+ * A standalone block is appended only for a release nothing else explains — the coverage ended
+ * before the exemption row was swept, which is the one state where the undo has no context.
+ */
+export function suppressionPanelRows(
+  target: SuppressionTarget,
+  ctx: {
+    windows: MaintenanceWindow[];
+    mutes: Mute[];
+    groups: NodeGroup[];
+    node?: NodeSummary;
+    exemptions?: SuppressionExemption[];
+  },
+): SuppressionPanelRow[] {
+  const causes = causesFor(target, ctx);
+  const explained = new Set<string>();
+  const rows: SuppressionPanelRow[] = causes.map((c, i) => {
+    if (c.released) explained.add(c.kind);
+    return {
+      key: `c${i}`,
+      kind: c.kind,
+      headKey: c.released ? RELEASED_HEAD_KEY[c.kind] : HEAD_KEY[c.kind],
+      title: c.title,
+      labelKey: c.labelKey,
+      labelParams: c.labelParams,
+      endsAt: c.endsAt,
+      ...actionFor(c, target),
+    };
+  });
+
+  for (const e of ctx.exemptions ?? []) {
+    if (target.kind !== 'node' || e.node_id !== target.id || explained.has(e.kind)) continue;
+    rows.push({
+      key: `x-${e.kind}`,
+      kind: e.kind,
+      headKey: RELEASED_HEAD_KEY[e.kind],
+      title: '',
+      endsAt: e.until_at,
+      action: {
+        action: { action: 'undo-release', nodeId: target.id, kind: e.kind },
+        labelKey: UNDO_KEY[e.kind],
+      },
+    });
+  }
+  return rows;
 }

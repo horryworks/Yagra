@@ -78,7 +78,7 @@ import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
-import { CAUSE_LABEL_KEYS } from './lib/suppression';
+import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
 import { RUN_STATUS } from './reports/runStatus';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
@@ -376,6 +376,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // there would leave the panel's buttons unexplained. `suppression.test.ts` pins the produced
     // set to this list from the other side.
     expectKeys('suppression cause label', { en: enNodes, ja: jaNodes }, '', CAUSE_LABEL_KEYS);
+  });
+
+  it('every suppression-panel heading, button and note resolves (nodes:tree.suppression.*)', () => {
+    // The panel picks its heading and its one control per block at runtime, from what is actually
+    // silencing the row. A raw key here is on the button that changes alerting — and it is the
+    // wording that says which of "end this window", "take this node out" and "put it back" the
+    // click will do. `suppression.test.ts` pins the produced set to this list from the other side.
+    expectKeys('suppression panel label', { en: enNodes, ja: jaNodes }, '', PANEL_LABEL_KEYS);
   });
 
   it('every node kind has a label (nodes:kind.*)', () => {

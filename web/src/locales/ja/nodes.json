@@ -341,12 +341,13 @@
       },
       "until": "{{time}} まで",
       "act": {
-        "open": "抑止の詳細…",
-        "endNow": "今すぐ終了",
-        "release": "解除",
-        "releaseNode": "このノードだけ解除",
-        "undoMaintenance": "メンテナンスに戻す",
-        "undoMute": "ミュートに戻す"
+        "open": "メンテナンス / ミュートを解除…",
+        "endNow": "メンテナンスを今すぐ終了",
+        "unmute": "ミュート解除",
+        "excludeNode": "このノードをメンテナンス対象から外す",
+        "unmuteNode": "このノードをミュート対象から外す",
+        "undoMaintenance": "メンテナンス対象に戻す",
+        "undoMute": "ミュート対象に戻す"
       },
       "releaseOnAncestor": "グループ「{{name}}」側で解除してください",
       "none": "現在この行を抑止しているものはありません。"
