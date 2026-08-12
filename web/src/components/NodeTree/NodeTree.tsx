@@ -43,7 +43,7 @@ import { formatScheduleTime } from '../../lib/format';
 import { StatusDot } from '../ui/StatusDot';
 import { Button } from '../ui/Button';
 import { ActionMenu } from '../ui/ActionMenu';
-import { WrenchIcon, BellOffIcon } from '../ui/icons';
+import { WrenchIcon, BellIcon, BellOffIcon } from '../ui/icons';
 import { HealthBar } from '../HealthBar/HealthBar';
 import { GroupIcon } from './GroupIcon';
 import './NodeTree.css';
@@ -243,8 +243,11 @@ export function NodeTree({
         {m.muted && mark('mute', t('tree.suppression.markMute'), <BellOffIcon />)}
         {m.releasedMaint &&
           mark('maint released', t('tree.suppression.markReleasedMaint'), <WrenchIcon />)}
+        {/* A plain bell, not a struck-through bell-off: the mute glyph is *already* a negation, so
+            negating it again gave two icons that differ by one faint diagonal at 16px and were
+            reported as indistinguishable. Un-slashing says "this node rings again" outright. */}
         {m.releasedMute &&
-          mark('mute released', t('tree.suppression.markReleasedMute'), <BellOffIcon />)}
+          mark('mute released', t('tree.suppression.markReleasedMute'), <BellIcon />)}
       </span>
     );
   };
@@ -579,11 +582,9 @@ export function NodeTree({
         </button>
         <HealthBar tally={tally} className="ntree-health" />
         <span className="ntree-count">{tally.total}</span>
-        {suppressionMarks({
-          target: { kind: 'group', id: group.id, name: group.name },
-          maint: !!suppression?.maintenanceGroups.has(group.id),
-          muted: !!suppression?.muteGroups.has(group.id),
-        })}
+        {/* The hover-revealed actions come BEFORE the markers on purpose — see `.ntree-actions` in
+            the stylesheet. Revealing them shifts everything to their left, and a marker that moves
+            under the pointer is a mis-click onto Delete group. */}
         {canEdit && (
           // `menu-open` keeps the hover-revealed actions rendered while this row's ＋ menu is up:
           // the menu opens BELOW the row, so reaching it takes the pointer off the row, and the
@@ -647,6 +648,11 @@ export function NodeTree({
             </button>
           </span>
         )}
+        {suppressionMarks({
+          target: { kind: 'group', id: group.id, name: group.name },
+          maint: !!suppression?.maintenanceGroups.has(group.id),
+          muted: !!suppression?.muteGroups.has(group.id),
+        })}
       </div>
     );
   };
@@ -698,20 +704,7 @@ export function NodeTree({
             {NODE_KIND_SPEC[node.kind].badge}
           </span>
         )}
-        {suppressionMarks({
-          target: { kind: 'node', id: node.id, name: node.name },
-          node,
-          // The index already accounts for a release, including re-adding a window that names the
-          // node. `state` is the engine's rolled-up opinion and lags a release by up to one refresh
-          // (~30s), so it is only consulted while the row is *not* released — otherwise the wrench
-          // would sit next to the struck-through one for half a minute after every release.
-          maint:
-            !!suppression?.maintenanceNodes.has(node.id) ||
-            (node.state === 'maintenance' && !suppression?.exemptMaintenanceNodes.has(node.id)),
-          muted: !!suppression?.muteNodes.has(node.id),
-          releasedMaint: !!suppression?.exemptMaintenanceNodes.has(node.id),
-          releasedMute: !!suppression?.exemptMuteNodes.has(node.id),
-        })}
+        {/* Before the markers — see `.ntree-actions` in the stylesheet. */}
         {canEdit && (
           <span className="ntree-actions">
             <button
@@ -727,6 +720,20 @@ export function NodeTree({
             </button>
           </span>
         )}
+        {suppressionMarks({
+          target: { kind: 'node', id: node.id, name: node.name },
+          node,
+          // The index already accounts for a release, including re-adding a window that names the
+          // node. `state` is the engine's rolled-up opinion and lags a release by up to one refresh
+          // (~30s), so it is only consulted while the row is *not* released — otherwise the wrench
+          // would sit next to the struck-through one for half a minute after every release.
+          maint:
+            !!suppression?.maintenanceNodes.has(node.id) ||
+            (node.state === 'maintenance' && !suppression?.exemptMaintenanceNodes.has(node.id)),
+          muted: !!suppression?.muteNodes.has(node.id),
+          releasedMaint: !!suppression?.exemptMaintenanceNodes.has(node.id),
+          releasedMute: !!suppression?.exemptMuteNodes.has(node.id),
+        })}
       </div>
     );
   };

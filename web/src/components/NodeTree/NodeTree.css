@@ -155,27 +155,23 @@
 }
 
 /* Per-row actions appear on hover (keyboard users reach them via the context menu / Move).
-   The slot is laid out ALWAYS and only its contents are revealed. It used to be `display: none`,
-   which meant hovering a row inserted ~78px of buttons into a flex row and slid everything left of
-   them across — including the suppression markers, which are buttons themselves. Aiming at a
-   group's wrench put 🗑 Delete group under the pointer by the time it went down. Reserving the slot
-   is the fix; an absolutely-positioned overlay would have covered those same markers instead.
-   `min-width` is the widest row's three buttons, so every row's markers line up in one column. */
+   Revealing them inserts ~78px into the row, which the name absorbs by shrinking — so everything
+   AFTER the name slides left by that much on hover. That is why the suppression markers are
+   rendered *after* this block and not before it: the row's last child ends flush against
+   `padding-right` whatever happens further left, so a marker cannot move out from under a pointer
+   that is aiming at it. (It used to be second-to-last, and aiming at a group's wrench put
+   🗑 Delete group under the pointer by the time the click landed.) Order here is load-bearing;
+   reserving the space instead works too but costs every row a permanent right margin. */
 .ntree-actions {
-  display: inline-flex;
-  visibility: hidden;
-  flex: none;
-  min-width: 78px;
+  display: none;
   align-items: center;
-  justify-content: flex-end;
   gap: 2px;
-  margin-left: auto;
 }
 
 .ntree-row:hover .ntree-actions,
 /* Its own ＋ menu is open — the pointer has to leave the row to reach it. */
 .ntree-actions.menu-open {
-  visibility: visible;
+  display: inline-flex;
 }
 
 .ntree-act {
@@ -370,9 +366,10 @@
   border: var(--border-width) solid var(--border-color);
 }
 
-/* A node released from a suppression it inherited: same glyph, struck through and drained of the
-   status tint, so "not suppressed, but there is a suppression around it" reads at a glance and is
-   never carried by colour alone. */
+/* A node released from a suppression it inherited: drained of the status tint and outlined in a
+   dashed border, so "not suppressed, but there is a suppression around it" reads at a glance and is
+   never carried by colour alone. The glyph is negated too — see the strike below, and `BellIcon`
+   for why the mute pair negates by dropping its slash instead of gaining a second line. */
 .ntree-supp-icon.released {
   color: var(--text-tertiary);
   background: transparent;
@@ -380,7 +377,10 @@
   position: relative;
 }
 
-.ntree-supp-icon.released::after {
+/* Maintenance only. A wrench means nothing on its own, so the strike is what negates it; a bell
+   already carries a slash, and a second crossing line at 16px reads as the muted icon it is meant
+   to be the opposite of. */
+.ntree-supp-icon.maint.released::after {
   content: '';
   position: absolute;
   left: 2px;

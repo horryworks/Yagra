@@ -156,6 +156,21 @@ export function BellOffIcon(props: IconProps) {
   );
 }
 
+/** Bell, un-slashed — notifications reach this node again (All Nodes: released from a mute).
+ *
+ * The companion to {@link BellOffIcon}, and the reason it exists: a released marker is drawn as the
+ * negation of the active one, and for maintenance that is a struck-through wrench. Striking through
+ * a bell that already carries a slash produces two crossing lines that read as "muted" at 16px, so
+ * the mute pair negates the other way — the slash comes off instead. */
+export function BellIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+    </svg>
+  );
+}
+
 /** Vertical ellipsis (⋮) — the "more actions" overflow-menu trigger on mobile cards.
  * The shared `base` sets fill:none, so the dots override fill explicitly. */
 export function MoreIcon(props: IconProps) {

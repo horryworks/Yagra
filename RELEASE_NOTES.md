@@ -28,8 +28,9 @@
     that one node returns to normal alerting while the rest of the group stays covered. The release
     expires by itself when the coverage it was carved out of ends — the server computes that, the
     browser sends no expiry — so it can never silently exclude the node from the *next* window. A
-    released node shows a struck-through marker, and its panel then reports what it is standing
-    outside of and until when, with putting it back as the only thing left to do.
+    released node's marker negates itself — a struck-through wrench, or a plain ringing bell where
+    the muted one was — and its panel then reports what it is standing outside of and until when,
+    with putting it back as the only thing left to do.
   - A **group** covered by an ancestor's window shows the cause read-only and names the group to
     release it on. Ending an ancestor's window from a child row would silence-and-unsilence a set
     the operator cannot see from there.
@@ -64,9 +65,10 @@
   *inserted* them into the row: everything to their left — the maintenance and mute markers, the
   member count, the health bar — slid about 80px across at the moment the pointer arrived. It had
   always done this, and it became dangerous when the markers became buttons, because aiming at a
-  group's wrench put **Delete group** under the pointer before the click landed. The slot is now
-  laid out at all times and only its contents are revealed, so nothing moves; as a side effect the
-  markers line up in one column across every row.
+  group's wrench put **Delete group** under the pointer before the click landed. The markers are
+  now rendered *after* the actions rather than before them: a flex row's last child ends flush
+  against the right padding whatever happens further left, so the marker cannot move out from under
+  a pointer aiming at it, and no row has to give up width to a reserved slot.
 
 ## v0.2.4 — the second upgrade works, and the backup it takes first has the metrics in it
 
