@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // The one debounce. Before this, the same `setTimeout` + cleanup was hand-written in eight places
-// (EventFilterBar, MibRepositoryPage, NodesPage, NodePicker, GlobalSearch, ScopePicker, FlowTab,
+// (the column filter row, MibRepositoryPage, NodesPage, NodePicker, GlobalSearch, ScopePicker, FlowTab,
 // CollectionEditor) — and the filter work was about to add twenty more.
 //
 // Deliberately holds no judgement, because nothing can test it: Vitest runs `environment: 'node'`

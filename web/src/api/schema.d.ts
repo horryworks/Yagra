@@ -5324,6 +5324,13 @@ export interface components {
             pattern: string;
             sample: string;
         };
+        /**
+         * @description How a plain (non-regex) search term matches on this deployment. Which one applies depends on
+         *     the store that answers event searches, so a client that wants a term to behave the same
+         *     everywhere should use a regular expression instead.
+         * @enum {string}
+         */
+        EventSearchSemantics: "token" | "substring";
         /** @description A passive-event ingest source. */
         EventSourceRow: {
             enabled: boolean;
@@ -8267,6 +8274,12 @@ export interface components {
             overall: string;
             /** @description PostgreSQL (metadata store) — `SELECT 1`. */
             postgres: components["schemas"]["DependencyHealth"];
+            /**
+             * @description How a plain event-search term matches here: whole words on a log-store deployment,
+             *     any substring on PostgreSQL. Reported rather than assumed — see `EventSearchSemantics`,
+             *     which explains both why the two differ and why a client checks for this field's presence.
+             */
+            search_semantics: components["schemas"]["EventSearchSemantics"];
             /** @description VictoriaMetrics (TSDB) — `/-/healthy`. */
             tsdb: components["schemas"]["DependencyHealth"];
             /**
@@ -12635,9 +12648,24 @@ export interface operations {
                 /** @description Time-range upper bound (inclusive, RFC 3339). */
                 end?: string;
                 limit?: number;
+                /**
+                 * @description Event kinds to include, comma-separated (`syslog,trap`). A single value is the long-standing
+                 *     spelling and still works; an empty value or an absent parameter means every kind.
+                 */
                 kind?: string;
                 node_id?: string;
+                /**
+                 * @description Only rule-matched events (or only unmatched ones). Superseded by `action`, which says *what*
+                 *     the rule did; kept because it is a narrower question some clients still ask.
+                 */
                 matched?: boolean;
+                /** @description Rule outcomes to include, comma-separated (`fired,cleared`); empty or absent means all. */
+                action?: string;
+                /**
+                 * @description Syslog severities (0–7) to include, comma-separated; empty or absent means all. An event
+                 *     with no syslog severity — a trap, a webhook — matches no severity filter.
+                 */
+                severity?: string;
                 /**
                  * @description Free-text matched against source (node name / IP) or message, case-insensitively. Whether
                  *     it also matches inside a word depends on the store this deployment searches: PostgreSQL
@@ -12647,6 +12675,20 @@ export interface operations {
                 q?: string;
                 /** @description Interpret `q` as a regular expression (message-only) rather than a plain term. */
                 regex?: boolean;
+                /** @description Message-only condition, matched with the same store-dependent word rules as `q`. */
+                msg?: string;
+                /** @description Interpret `msg` as a regular expression, which reaches inside words on either store. */
+                msg_regex?: boolean;
+                /** @description Keep the events whose message does **not** match `msg`. */
+                msg_not?: boolean;
+                /**
+                 * @description Condition on the event's source: its IP, or the name of the node it is attributed to. There
+                 *     is no regex form — the node-name half is resolved against PostgreSQL and has no counterpart
+                 *     in a log store, so a pattern would mean two different things on the two backends.
+                 */
+                src?: string;
+                /** @description Keep the events whose source does **not** match `src`. */
+                src_not?: boolean;
             };
             header?: never;
             path?: never;
@@ -12706,11 +12748,26 @@ export interface operations {
             query?: {
                 start?: string;
                 end?: string;
+                /** @description Event kinds to include, comma-separated; empty or absent means every kind. */
                 kind?: string;
                 node_id?: string;
                 matched?: boolean;
+                /** @description Rule outcomes to include, comma-separated; empty or absent means all. */
+                action?: string;
+                /** @description Syslog severities (0–7) to include, comma-separated; empty or absent means all. */
+                severity?: string;
                 q?: string;
                 regex?: boolean;
+                /** @description Message-only condition (see `GET /events`). */
+                msg?: string;
+                /** @description Interpret `msg` as a regular expression. */
+                msg_regex?: boolean;
+                /** @description Keep the events whose message does **not** match `msg`. */
+                msg_not?: boolean;
+                /** @description Condition on the event's source IP or attributed node name (see `GET /events`). */
+                src?: string;
+                /** @description Keep the events whose source does **not** match `src`. */
+                src_not?: boolean;
                 group_by?: string;
                 limit?: number;
                 bucket_secs?: number;

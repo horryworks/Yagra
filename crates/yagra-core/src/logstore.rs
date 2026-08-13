@@ -48,6 +48,23 @@ fn logsql_quote(v: &str) -> String {
     format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// Node ids the API resolved from the filter's free-text terms, so a term can still find events by
+/// **node name** without the name ever entering the log store (ADR-011 keeps names out of the TSDB
+/// and log tiers).
+///
+/// Two sets, not one, and they must not be merged: each is ORed into a *different* clause, so a
+/// single combined list would let the Source column's term widen the whole-row search and vice
+/// versa. That is the additive/subtractive confusion [`EventFilter::visible_node_ids`] warns about,
+/// in its other direction — here the failure is a widening rather than a leak, but it is just as
+/// silent.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NameIds<'a> {
+    /// Ids whose node name matched [`EventFilter::search`] (the whole-row term).
+    pub search: &'a [Uuid],
+    /// Ids whose node name matched [`EventFilter::source`]'s term (the Source column condition).
+    pub source: &'a [Uuid],
+}
+
 /// The event-log persistence + search seam (ADR-024). See the module docs.
 #[async_trait]
 pub trait LogStore: Send + Sync {
@@ -66,13 +83,11 @@ pub trait LogStore: Send + Sync {
     }
     /// Persist a batch of received events (best-effort — a store hiccup must not stop alerting).
     async fn ingest_batch(&self, records: &[PersistRecord]);
-    /// Search the event log, newest first. `name_node_ids` are node ids the API resolved from a
-    /// node-name match (so free-text search still finds events by node name without the name ever
-    /// entering the store).
+    /// Search the event log, newest first. See [`NameIds`] for the resolved node-name sets.
     async fn search(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>>;
     /// Categorical summary counts (kind / action / trap / source) honoring the filter, ordered by
@@ -80,7 +95,7 @@ pub trait LogStore: Send + Sync {
     async fn stats_grouped(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         group: EventStatGroup,
         limit: i64,
     ) -> anyhow::Result<Vec<EventStatBucket>>;
@@ -89,7 +104,7 @@ pub trait LogStore: Send + Sync {
     async fn stats_series(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         bucket_secs: i64,
         split_kind: bool,
     ) -> anyhow::Result<Vec<EventTimeBucket>>;
@@ -101,8 +116,8 @@ pub trait LogStore: Send + Sync {
     // store is configured (ADR-024) — so `rule_gap`, whose entire job is finding *unmatched* events,
     // was structurally guaranteed to return nothing on exactly the deployments that need it.
     //
-    // No `name_node_ids` parameter, unlike `search`/`stats_*`: none of these is driven by a free-text
-    // term, so the additive widening set has no meaning here. Omitting it makes the additive /
+    // No [`NameIds`] parameter, unlike `search`/`stats_*`: none of these is driven by a free-text
+    // term, so the additive widening sets have no meaning here. Omitting them makes the additive /
     // subtractive confusion `EventFilter::visible_node_ids` warns about unreachable on this path.
 
     /// Per-(node, time-bucket) event counts. Events with no node are excluded (`event_storm`
@@ -298,11 +313,47 @@ fn ci_regex(pattern: &str) -> String {
     format!("(?i){pattern}")
 }
 
+/// A closed-set clause for one field: nothing when the set is empty (unfiltered), the exact-match
+/// form for a single value, `in(…)` for a real set. One helper for `kind` / `action` /
+/// `syslog_severity` so the three cannot drift into three spellings.
+fn set_clause<'a>(field: &str, values: impl Iterator<Item = &'a str>) -> Option<String> {
+    let quoted: Vec<String> = values.map(logsql_quote).collect();
+    match quoted.len() {
+        0 => None,
+        1 => Some(format!("{field}:={}", quoted[0])),
+        _ => Some(format!("{field}:in({})", quoted.join(","))),
+    }
+}
+
+/// `node_id:in("…","…")` for a non-empty id set, or nothing. Distinct from [`set_clause`] because
+/// an id set is never collapsed to the exact-match form — the two call sites OR it into a larger
+/// disjunction, where a mixed spelling would be one more thing to read carefully.
+fn id_set_clause(ids: &[Uuid]) -> Option<String> {
+    if ids.is_empty() {
+        return None;
+    }
+    let list = ids
+        .iter()
+        .map(|i| logsql_quote(&i.to_string()))
+        .collect::<Vec<_>>()
+        .join(",");
+    Some(format!("node_id:in({list})"))
+}
+
+/// Wrap a clause in LogsQL's `NOT` when the condition is negated.
+fn negate(clause: String, not: bool) -> String {
+    if not {
+        format!("NOT {clause}")
+    } else {
+        clause
+    }
+}
+
 /// Compile an [`EventFilter`] (+ resolved node-name ids) into the LogsQL *filter part* (the leading
 /// query before any `|` pipe). Space-separated clauses are ANDed; the free-text term ORs a `_msg`
 /// phrase, a `source_ip` phrase, and the resolved `node_id` set (the current 3-way search). Shared
 /// by search (`| sort … | limit`) and stats (`| stats by … `), so both filter identically.
-fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
+fn build_filter_part(filter: &EventFilter, names: NameIds<'_>) -> String {
     let mut clauses: Vec<String> = Vec::new();
     if let Some(before) = filter.before {
         clauses.push(format!("_time:<{}", fmt_vl_time_dt(before)));
@@ -313,8 +364,21 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
     if let Some(until) = filter.until {
         clauses.push(format!("_time:<={}", fmt_vl_time_dt(until)));
     }
-    if let Some(kind) = &filter.kind {
-        clauses.push(format!("kind:={}", logsql_quote(kind)));
+    // The three set dimensions share one spelling rule (`set_clause`) rather than three: a single
+    // value keeps the exact-match form the guards have always asserted, and only a real set becomes
+    // `in(…)`. Measured on 6.7M events, `in(…)` over a list covering every stored value costs what
+    // a single value costs, so the split is about keeping the assertions honest, not about speed.
+    if let Some(c) = set_clause("kind", filter.kinds.iter().map(String::as_str)) {
+        clauses.push(c);
+    }
+    if let Some(c) = set_clause("action", filter.actions.iter().map(String::as_str)) {
+        clauses.push(c);
+    }
+    // ⚠️ `syslog_severity` is stored as a *string* (`record_to_json`), so the decimal spelling is
+    // load-bearing: comparing against an unquoted number matches nothing, silently.
+    let sev: Vec<String> = filter.severities.iter().map(i16::to_string).collect();
+    if let Some(c) = set_clause("syslog_severity", sev.iter().map(String::as_str)) {
+        clauses.push(c);
     }
     if let Some(node) = filter.node_id {
         clauses.push(format!("node_id:={}", logsql_quote(&node.to_string())));
@@ -351,22 +415,38 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
                 // record `FE80::1` where PostgreSQL's `host(inet)` renders `fe80::1`.
                 format!("source_ip:i({})", logsql_quote(term)),
             ];
-            if !name_node_ids.is_empty() {
-                let ids = name_node_ids
-                    .iter()
-                    .map(|i| logsql_quote(&i.to_string()))
-                    .collect::<Vec<_>>()
-                    .join(",");
-                ors.push(format!("node_id:in({ids})"));
+            if let Some(ids) = id_set_clause(names.search) {
+                ors.push(ids);
             }
             clauses.push(format!("({})", ors.join(" OR ")));
         }
     }
+    // The per-column conditions (ADR-053). Negation is a `NOT` around the whole clause, measured at
+    // parity with the form it negates before it shipped — so it is offered in both modes rather
+    // than only for the regex one.
+    if let Some(c) = &filter.message {
+        let inner = if c.regex {
+            format!("_msg:~{}", logsql_quote(&ci_regex(&c.term)))
+        } else {
+            format!("_msg:i({})", logsql_quote(&c.term))
+        };
+        clauses.push(negate(inner, c.not));
+    }
+    if let Some(c) = &filter.source {
+        // The Source column shows a node name when the event is attributed and the raw IP when it
+        // is not, so the filter has to cover both — the ids are the name half, resolved by the API.
+        let mut ors = vec![format!("source_ip:i({})", logsql_quote(&c.term))];
+        if let Some(ids) = id_set_clause(names.source) {
+            ors.push(ids);
+        }
+        clauses.push(negate(format!("({})", ors.join(" OR ")), c.not));
+    }
     // The RBAC group scope (ADR-014), already resolved to node ids by the API.
     //
     // ⚠️ Pushed **after** the free-text clause and as its own space-separated (i.e. ANDed) term, not
-    // into the `ors` above. `name_node_ids` a few lines up is the *opposite* operation — it widens
-    // the search to nodes whose name matches — and putting the two in the same list would turn a
+    // into the `ors` above. The `NameIds` sets a few lines up are the *opposite* operation — they
+    // widen the search to nodes whose name matches — and putting the two in the same list would
+    // turn a
     // restriction into a widening, which is precisely the failure mode the field's doc warns about.
     // The mirror of this clause is `events::EVENT_FILTER_WHERE`'s `$9`, and
     // `both_backends_restrict_to_the_same_visible_node_set` pins the two together.
@@ -393,10 +473,10 @@ fn build_filter_part(filter: &EventFilter, name_node_ids: &[Uuid]) -> String {
 }
 
 /// Compile an [`EventFilter`] (+ resolved node-name ids) into a LogsQL query, newest first.
-fn build_search_logsql(filter: &EventFilter, name_node_ids: &[Uuid], limit: i64) -> String {
+fn build_search_logsql(filter: &EventFilter, names: NameIds<'_>, limit: i64) -> String {
     format!(
         "{} | sort by (_time) desc | limit {}",
-        build_filter_part(filter, name_node_ids),
+        build_filter_part(filter, names),
         limit.clamp(1, 500)
     )
 }
@@ -416,14 +496,14 @@ fn stats_group_fields(group: EventStatGroup) -> (&'static str, &'static str) {
 /// Compile a categorical stats query: `<filter> | stats by (<fields>) count() as n | sort …`.
 fn build_stats_grouped_logsql(
     filter: &EventFilter,
-    name_node_ids: &[Uuid],
+    names: NameIds<'_>,
     group: EventStatGroup,
     limit: i64,
 ) -> String {
     let (extra, by) = stats_group_fields(group);
     format!(
         "{}{extra} | stats by ({by}) count() as n | sort by (n) desc | limit {}",
-        build_filter_part(filter, name_node_ids),
+        build_filter_part(filter, names),
         limit.clamp(1, 500)
     )
 }
@@ -431,7 +511,7 @@ fn build_stats_grouped_logsql(
 /// Compile the event-volume time series: `<filter> | stats by (_time:Ns[, kind]) count() as n`.
 fn build_stats_series_logsql(
     filter: &EventFilter,
-    name_node_ids: &[Uuid],
+    names: NameIds<'_>,
     bucket_secs: i64,
     split_kind: bool,
 ) -> String {
@@ -443,7 +523,7 @@ fn build_stats_series_logsql(
     };
     format!(
         "{} | stats by ({by}) count() as n | sort by (_time) asc",
-        build_filter_part(filter, name_node_ids)
+        build_filter_part(filter, names)
     )
 }
 
@@ -458,7 +538,7 @@ fn build_agg_counts_by_bucket_logsql(filter: &EventFilter, bucket_secs: i64) -> 
     let b = bucket_secs.clamp(1, 86_400);
     format!(
         "{} node_id:* | stats by (_time:{b}s, node_id) count() as n | sort by (_time) asc",
-        build_filter_part(filter, &[])
+        build_filter_part(filter, NameIds::default())
     )
 }
 
@@ -467,7 +547,7 @@ fn build_agg_severity_counts_logsql(filter: &EventFilter) -> String {
     format!(
         "{} kind:=\"syslog\" node_id:* syslog_severity:* \
          | stats by (node_id, syslog_severity) count() as n",
-        build_filter_part(filter, &[])
+        build_filter_part(filter, NameIds::default())
     )
 }
 
@@ -488,7 +568,7 @@ fn build_agg_unmatched_signature_logsql(filter: &EventFilter, limit: i64, tier: 
     format!(
         "{} matched:=\"false\" {field}:*{excluded} | stats by (kind, {field}) count() as n \
          | sort by (n) desc | limit {}",
-        build_filter_part(filter, &[]),
+        build_filter_part(filter, NameIds::default()),
         limit.clamp(1, 500)
     )
 }
@@ -513,7 +593,7 @@ fn build_agg_auth_sources_logsql(filter: &EventFilter, limit: i64) -> String {
     );
     format!(
         "{} ({}) | stats by (source_ip, node_id) count() as n | sort by (n) desc | limit {}",
-        build_filter_part(filter, &[]),
+        build_filter_part(filter, NameIds::default()),
         ors.join(" OR "),
         limit.clamp(1, 500)
     )
@@ -714,10 +794,10 @@ impl LogStore for VlStore {
     async fn search(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
-        let query = build_search_logsql(filter, name_node_ids, limit);
+        let query = build_search_logsql(filter, names, limit);
         let lines = self.query_lines(&query).await?;
         Ok(lines.iter().filter_map(|l| parse_ndjson_row(l)).collect())
     }
@@ -725,11 +805,11 @@ impl LogStore for VlStore {
     async fn stats_grouped(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         group: EventStatGroup,
         limit: i64,
     ) -> anyhow::Result<Vec<EventStatBucket>> {
-        let query = build_stats_grouped_logsql(filter, name_node_ids, group, limit);
+        let query = build_stats_grouped_logsql(filter, names, group, limit);
         let lines = self.query_lines(&query).await?;
         Ok(lines
             .iter()
@@ -740,11 +820,11 @@ impl LogStore for VlStore {
     async fn stats_series(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         bucket_secs: i64,
         split_kind: bool,
     ) -> anyhow::Result<Vec<EventTimeBucket>> {
-        let query = build_stats_series_logsql(filter, name_node_ids, bucket_secs, split_kind);
+        let query = build_stats_series_logsql(filter, names, bucket_secs, split_kind);
         let lines = self.query_lines(&query).await?;
         let parsed = lines
             .iter()
@@ -896,7 +976,7 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
 /// searches — is shared, and `both_backends_filter_on_event_time_with_the_same_case_rules` is what
 /// keeps it that way.
 #[cfg(test)]
-fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) -> bool {
+fn record_matches(r: &PersistRecord, f: &EventFilter, names: NameIds<'_>) -> bool {
     let m = &r.msg;
     let ts = DateTime::<Utc>::from_timestamp_millis(m.at_unix_ms).unwrap_or_else(Utc::now);
     if let Some(before) = f.before {
@@ -914,10 +994,20 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) ->
             return false;
         }
     }
-    if let Some(kind) = &f.kind {
-        if m.kind.as_str() != kind {
-            return false;
-        }
+    if !f.kinds.is_empty() && !f.kinds.iter().any(|k| k == m.kind.as_str()) {
+        return false;
+    }
+    if !f.actions.is_empty() && !f.actions.iter().any(|a| a == r.action.as_str()) {
+        return false;
+    }
+    // A trap has no syslog severity, so it cannot satisfy a severity filter — same as `NULL = ANY`
+    // in SQL and a missing field in LogsQL.
+    if !f.severities.is_empty()
+        && !m
+            .syslog_severity
+            .is_some_and(|s| f.severities.contains(&i16::from(s)))
+    {
+        return false;
     }
     if let Some(node) = f.node_id {
         if r.node_id != Some(node) {
@@ -945,10 +1035,33 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, name_node_ids: &[Uuid]) ->
                 .source_ip
                 .map(|ip| ip.to_string().to_lowercase().contains(&t))
                 .unwrap_or(false);
-            let hit_name = r.node_id.is_some_and(|n| name_node_ids.contains(&n));
+            let hit_name = r.node_id.is_some_and(|n| names.search.contains(&n));
             if !(hit_msg || hit_ip || hit_name) {
                 return false;
             }
+        }
+    }
+    // The per-column conditions (ADR-053), modelling the PostgreSQL contract on the same axis the
+    // whole-row term already differs on. Negation is applied to the whole match, not inside it —
+    // "not (a or b)", never "(not a) or b", which is the reading that quietly returns everything.
+    if let Some(c) = &f.message {
+        let hit = if c.regex {
+            regex::Regex::new(&ci_regex(&c.term)).is_ok_and(|re| re.is_match(&m.message))
+        } else {
+            m.message.to_lowercase().contains(&c.term.to_lowercase())
+        };
+        if hit == c.not {
+            return false;
+        }
+    }
+    if let Some(c) = &f.source {
+        let t = c.term.to_lowercase();
+        let hit = m
+            .source_ip
+            .is_some_and(|ip| ip.to_string().to_lowercase().contains(&t))
+            || r.node_id.is_some_and(|n| names.source.contains(&n));
+        if hit == c.not {
+            return false;
         }
     }
     // The RBAC restriction, applied last and independently of the search — the third
@@ -998,13 +1111,13 @@ impl LogStore for InMemoryLogStore {
     async fn search(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         limit: i64,
     ) -> anyhow::Result<Vec<EventRow>> {
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let mut rows: Vec<EventRow> = guard
             .iter()
-            .filter(|r| record_matches(r, filter, name_node_ids))
+            .filter(|r| record_matches(r, filter, names))
             .map(record_to_event_row)
             .collect();
         rows.sort_by_key(|r| std::cmp::Reverse(r.at_unix_ms));
@@ -1015,7 +1128,7 @@ impl LogStore for InMemoryLogStore {
     async fn stats_grouped(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         group: EventStatGroup,
         limit: i64,
     ) -> anyhow::Result<Vec<EventStatBucket>> {
@@ -1023,10 +1136,7 @@ impl LogStore for InMemoryLogStore {
         let guard = self.records.lock().expect("log fake mutex poisoned");
         // Aggregate a count per group identity, carrying the label/node for the DTO (first seen).
         let mut agg: HashMap<String, (Option<String>, Option<Uuid>, i64)> = HashMap::new();
-        for r in guard
-            .iter()
-            .filter(|r| record_matches(r, filter, name_node_ids))
-        {
+        for r in guard.iter().filter(|r| record_matches(r, filter, names)) {
             let m = &r.msg;
             let (key, label, node): (String, Option<String>, Option<Uuid>) = match group {
                 EventStatGroup::Kind => (m.kind.as_str().to_owned(), None, None),
@@ -1065,7 +1175,7 @@ impl LogStore for InMemoryLogStore {
     async fn stats_series(
         &self,
         filter: &EventFilter,
-        name_node_ids: &[Uuid],
+        names: NameIds<'_>,
         bucket_secs: i64,
         split_kind: bool,
     ) -> anyhow::Result<Vec<EventTimeBucket>> {
@@ -1073,7 +1183,7 @@ impl LogStore for InMemoryLogStore {
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let rows = guard
             .iter()
-            .filter(|r| record_matches(r, filter, name_node_ids))
+            .filter(|r| record_matches(r, filter, names))
             .map(|r| {
                 let bucket_ms = (r.msg.at_unix_ms / 1000 / b) * b * 1000;
                 let kind = split_kind.then(|| r.msg.kind.as_str().to_owned());
@@ -1095,7 +1205,10 @@ impl LogStore for InMemoryLogStore {
         let b = bucket_secs.max(1);
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let mut agg: HashMap<(Uuid, i64), i64> = HashMap::new();
-        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+        for r in guard
+            .iter()
+            .filter(|r| record_matches(r, filter, NameIds::default()))
+        {
             let Some(node) = r.node_id else { continue };
             *agg.entry((node, (r.msg.at_unix_ms / 1000 / b) * b))
                 .or_insert(0) += 1;
@@ -1117,7 +1230,10 @@ impl LogStore for InMemoryLogStore {
         use std::collections::HashMap;
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let mut agg: HashMap<(Uuid, i16), i64> = HashMap::new();
-        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+        for r in guard
+            .iter()
+            .filter(|r| record_matches(r, filter, NameIds::default()))
+        {
             if r.msg.kind != yagra_bus::EventKind::Syslog {
                 continue;
             }
@@ -1144,7 +1260,10 @@ impl LogStore for InMemoryLogStore {
         use std::collections::HashMap;
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let mut agg: HashMap<(String, String), i64> = HashMap::new();
-        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+        for r in guard
+            .iter()
+            .filter(|r| record_matches(r, filter, NameIds::default()))
+        {
             if r.matched_rule_id.is_some() {
                 continue;
             }
@@ -1178,7 +1297,10 @@ impl LogStore for InMemoryLogStore {
         use std::collections::HashMap;
         let guard = self.records.lock().expect("log fake mutex poisoned");
         let mut agg: HashMap<(Option<String>, Option<Uuid>), i64> = HashMap::new();
-        for r in guard.iter().filter(|r| record_matches(r, filter, &[])) {
+        for r in guard
+            .iter()
+            .filter(|r| record_matches(r, filter, NameIds::default()))
+        {
             let lower = r.msg.message.to_lowercase();
             let is_auth = r.msg.trap_oid.as_deref() == Some(crate::events::AUTH_FAILURE_TRAP_OID)
                 || crate::events::AUTH_FAILURE_PHRASES
@@ -1207,6 +1329,7 @@ impl LogStore for InMemoryLogStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::TextCond;
     use yagra_bus::{EventKind, EventMsg};
 
     fn msg(id: Uuid, message: &str, at_unix_ms: i64) -> EventMsg {
@@ -1243,6 +1366,14 @@ mod tests {
         }
     }
 
+    /// [`NameIds`] carrying only the whole-row term's ids — the shape most of these cases want.
+    fn search_names(ids: &[Uuid]) -> NameIds<'_> {
+        NameIds {
+            search: ids,
+            source: &[],
+        }
+    }
+
     #[test]
     fn logsql_quote_escapes_quotes_and_backslashes() {
         assert_eq!(logsql_quote("plain"), "\"plain\"");
@@ -1266,15 +1397,16 @@ mod tests {
             before: Some(before),
             since: Some(since),
             until: Some(until),
-            kind: Some("syslog".into()),
+            kinds: vec!["syslog".into()],
             node_id: Some(node),
             matched: Some(true),
             search: Some("link down".into()),
             regex: false,
             visible_node_ids: None,
+            ..Default::default()
         };
         let name_ids = [Uuid::from_u128(9)];
-        let q = build_search_logsql(&filter, &name_ids, 100);
+        let q = build_search_logsql(&filter, search_names(&name_ids), 100);
         assert!(q.contains("_time:<2024-01-02T03:04:05.000Z"));
         assert!(q.contains("_time:>=2024-01-01T00:00:00.000Z"));
         assert!(q.contains("_time:<=2024-01-02T00:00:00.000Z"));
@@ -1310,7 +1442,7 @@ mod tests {
             regex: false,
             ..EventFilter::default()
         };
-        let q = build_search_logsql(&filter, &[], 100);
+        let q = build_search_logsql(&filter, NameIds::default(), 100);
         assert!(q.contains("_msg:i(\"link\")"), "{q}");
         assert!(
             !q.contains("_msg:~"),
@@ -1330,7 +1462,7 @@ mod tests {
         // refusing it, and for why case became affordable once the Events page stopped defaulting
         // to an unbounded range. Permitted, not forgotten — anything else that changes the contract
         // has to change both sides or fail here.
-        use crate::events::EVENT_FILTER_WHERE;
+        use crate::events::{EVENT_FILTER_BINDS, EVENT_FILTER_WHERE};
 
         // 1. Time bounds are event time on both sides. `recorded_at` is ingest time and must not
         //    appear in the predicate at all — VictoriaLogs has no equivalent to compare against.
@@ -1354,7 +1486,7 @@ mod tests {
                 regex: true,
                 ..EventFilter::default()
             },
-            &[],
+            NameIds::default(),
         );
         assert!(pattern.contains("(?i)"), "{pattern}");
         let plain = build_filter_part(
@@ -1363,39 +1495,196 @@ mod tests {
                 regex: false,
                 ..EventFilter::default()
             },
-            &[],
+            NameIds::default(),
         );
         assert!(plain.contains("_msg:i(\"Term\")"), "{plain}");
         assert!(plain.contains("source_ip:i(\"Term\")"), "{plain}");
 
         // 3. Every filter dimension reaches both sides. A field added to one builder only is the
-        //    exact failure this catches.
+        //    exact failure this catches, and it is why the per-column conditions and the three set
+        //    dimensions are in this fixture rather than in a test of their own.
         let full = EventFilter {
             before: Some(Utc::now()),
             since: Some(Utc::now()),
             until: Some(Utc::now()),
-            kind: Some("trap".into()),
+            kinds: vec!["trap".into()],
+            actions: vec!["fired".into()],
+            severities: vec![3],
             node_id: Some(Uuid::from_u128(3)),
             matched: Some(false),
             search: Some("x".into()),
             regex: false,
+            message: Some(TextCond {
+                term: "boom".into(),
+                regex: false,
+                not: true,
+            }),
+            source: Some(TextCond {
+                term: "10.0.0.1".into(),
+                regex: false,
+                not: false,
+            }),
             visible_node_ids: None,
         };
-        let logsql = build_filter_part(&full, &[]);
+        let logsql = build_filter_part(&full, NameIds::default());
         for clause in [
             "_time:<",
             "_time:>=",
             "_time:<=",
             "kind:=",
+            "action:=",
+            "syslog_severity:=",
             "node_id:=",
             "matched:=",
             "_msg:",
+            "NOT _msg:i(\"boom\")",
+            "source_ip:i(\"10.0.0.1\")",
         ] {
             assert!(logsql.contains(clause), "LogsQL missing {clause}: {logsql}");
         }
-        for bind in ["$1", "$2", "$3", "$4", "$5", "$6", "$7", "$8", "$9"] {
-            assert!(EVENT_FILTER_WHERE.contains(bind), "SQL missing {bind}");
+        // Every bind the predicate declares is present, and the count is the one the consumers'
+        // own trailing bind is derived from — so widening the filter cannot leave a `$n` behind.
+        for n in 1..=EVENT_FILTER_BINDS {
+            assert!(
+                EVENT_FILTER_WHERE.contains(&format!("${n}")),
+                "SQL missing ${n}"
+            );
         }
+        for col in ["e.action", "e.syslog_severity", "e.message", "n.name"] {
+            assert!(EVENT_FILTER_WHERE.contains(col), "SQL missing {col}");
+        }
+    }
+
+    #[test]
+    fn a_negated_term_stays_a_phrase_filter_too() {
+        // The sibling of `a_plain_term_stays_a_phrase_filter_not_a_regex_scan`, for the dimension
+        // ADR-053 added. Negation must not become the back door through which a substring scan
+        // ships: `NOT _msg:i("…")` is the phrase form inverted, `NOT _msg:~"…"` is a scan of every
+        // block. The two were measured at parity on 6.7M events (0.152s vs 0.156s over 24h), which
+        // is *why* negation is offered in both modes — not a reason to spell it the expensive way.
+        let plain = build_filter_part(
+            &EventFilter {
+                message: Some(TextCond {
+                    term: "policypermit".into(),
+                    regex: false,
+                    not: true,
+                }),
+                ..EventFilter::default()
+            },
+            NameIds::default(),
+        );
+        assert!(plain.contains("NOT _msg:i(\"policypermit\")"), "{plain}");
+        assert!(!plain.contains("_msg:~"), "{plain}");
+
+        // The regex mode still negates the regex, and still case-folds it.
+        let pattern = build_filter_part(
+            &EventFilter {
+                message: Some(TextCond {
+                    term: "^LINK".into(),
+                    regex: true,
+                    not: true,
+                }),
+                ..EventFilter::default()
+            },
+            NameIds::default(),
+        );
+        assert!(pattern.contains("NOT _msg:~\"(?i)^LINK\""), "{pattern}");
+    }
+
+    #[test]
+    fn a_single_value_keeps_the_exact_form_and_a_set_becomes_in() {
+        // The exact form is what every existing guard asserts, and `kind:="syslog"` is also what a
+        // v0.2.6 client's single-value request produced — so the two spellings are not
+        // interchangeable for the purposes of *reading* this file, whatever VictoriaLogs makes of
+        // them.
+        let one = build_filter_part(
+            &EventFilter {
+                kinds: vec!["syslog".into()],
+                ..EventFilter::default()
+            },
+            NameIds::default(),
+        );
+        assert!(one.contains("kind:=\"syslog\""), "{one}");
+        let many = build_filter_part(
+            &EventFilter {
+                kinds: vec!["syslog".into(), "trap".into()],
+                ..EventFilter::default()
+            },
+            NameIds::default(),
+        );
+        assert!(many.contains("kind:in(\"syslog\",\"trap\")"), "{many}");
+    }
+
+    #[test]
+    fn severity_is_quoted_as_its_decimal_string() {
+        // `record_to_json` stores `syslog_severity` as a string. Comparing against a bare number
+        // matches nothing at all, and nothing about that failure says so — the page just empties.
+        let q = build_filter_part(
+            &EventFilter {
+                severities: vec![4, 6],
+                ..EventFilter::default()
+            },
+            NameIds::default(),
+        );
+        assert!(q.contains("syslog_severity:in(\"4\",\"6\")"), "{q}");
+        assert!(!q.contains("syslog_severity:in(4"), "{q}");
+    }
+
+    #[test]
+    fn a_source_condition_covers_the_ip_and_the_resolved_node_names() {
+        // The Source column shows a node name where the event is attributed and the raw IP where it
+        // is not, so a filter that only matched one of them would return nothing for values the
+        // operator can plainly see in the column they typed into.
+        let ids = [Uuid::from_u128(11)];
+        let q = build_filter_part(
+            &EventFilter {
+                source: Some(TextCond {
+                    term: "rtr".into(),
+                    regex: false,
+                    not: false,
+                }),
+                ..EventFilter::default()
+            },
+            NameIds {
+                search: &[],
+                source: &ids,
+            },
+        );
+        assert!(q.contains("source_ip:i(\"rtr\")"), "{q}");
+        assert!(q.contains(&format!("node_id:in(\"{}\")", ids[0])), "{q}");
+
+        // ⚠️ The inversion that matters here: the *source* term's ids must not leak into the
+        // whole-row term's OR group, and vice versa. Resolving one term and ORing it into the
+        // other's clause widens that clause by a set nobody asked it to include.
+        let split = build_filter_part(
+            &EventFilter {
+                search: Some("down".into()),
+                source: Some(TextCond {
+                    term: "rtr".into(),
+                    regex: false,
+                    not: false,
+                }),
+                ..EventFilter::default()
+            },
+            NameIds {
+                search: &[Uuid::from_u128(22)],
+                source: &ids,
+            },
+        );
+        assert!(
+            split.contains(&format!(
+                "(_msg:i(\"down\") OR source_ip:i(\"down\") OR node_id:in(\"{}\"))",
+                Uuid::from_u128(22)
+            )),
+            "{split}"
+        );
+        assert!(
+            split.contains(&format!(
+                "(source_ip:i(\"rtr\") OR node_id:in(\"{}\"))",
+                ids[0]
+            )),
+            "{split}"
+        );
     }
 
     #[test]
@@ -1411,9 +1700,50 @@ mod tests {
         // 1. The SQL side restricts on the array, and does it at the top level — not folded into
         //    the `$7` search alternation, where an `OR` would let non-matching rows back in.
         assert!(EVENT_FILTER_WHERE.contains("($9::uuid[] IS NULL OR e.node_id = ANY($9))"));
+
+        // This used to assert the restriction was the *last* conjunct, which was a proxy for what
+        // actually matters and stopped being available the moment ADR-053 appended per-column
+        // conditions after it. The real invariant is stronger and is now checked directly: every
+        // top-level conjunct is a balanced parenthesised group, so no clause's `OR` can reach out
+        // of its own group and widen a neighbour — whatever order they are written in.
+        let mut depth = 0i32;
+        let mut conjuncts: Vec<String> = Vec::new();
+        let mut current = String::new();
+        let chars: Vec<char> = EVENT_FILTER_WHERE.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            match chars[i] {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            // A top-level " AND " ends a conjunct; one inside parentheses belongs to it.
+            if depth == 0 && chars[i..].starts_with(&[' ', 'A', 'N', 'D', ' ']) {
+                conjuncts.push(std::mem::take(&mut current));
+                i += 5;
+                continue;
+            }
+            current.push(chars[i]);
+            i += 1;
+        }
+        conjuncts.push(current);
         assert!(
-            EVENT_FILTER_WHERE.trim_end().ends_with("= ANY($9))"),
-            "the restriction must be the last top-level AND: {EVENT_FILTER_WHERE}"
+            conjuncts.len() >= 9,
+            "the predicate stopped parsing as a conjunction: {conjuncts:?}"
+        );
+        for c in &conjuncts {
+            let c = c.trim();
+            assert!(
+                c.starts_with('(') && c.ends_with(')'),
+                "a top-level conjunct is not self-contained, so a neighbouring OR could widen it: \
+                 {c}"
+            );
+        }
+        assert!(
+            conjuncts
+                .iter()
+                .any(|c| c.contains("$9::uuid[]") && c.contains("= ANY($9)")),
+            "the group-scope restriction is not a top-level conjunct: {EVENT_FILTER_WHERE}"
         );
 
         // 2. The LogsQL side emits an ANDed `in(…)` term, separate from the free-text `OR` group.
@@ -1421,7 +1751,7 @@ mod tests {
             visible_node_ids: Some(vec![mine]),
             ..EventFilter::default()
         };
-        let q = build_filter_part(&scoped, &[]);
+        let q = build_filter_part(&scoped, NameIds::default());
         assert!(q.contains(&format!("node_id:in(\"{mine}\")")), "{q}");
 
         // ⚠️ The inversion that matters. `name_node_ids` is the *additive* term — it widens a text
@@ -1433,7 +1763,7 @@ mod tests {
             visible_node_ids: Some(vec![mine]),
             ..EventFilter::default()
         };
-        let q = build_filter_part(&both, &[theirs]);
+        let q = build_filter_part(&both, search_names(&[theirs]));
         assert!(q.contains(&format!("node_id:in(\"{theirs}\")")), "{q}"); // widening, inside the OR
         assert!(q.contains(&format!("node_id:in(\"{mine}\")")), "{q}"); // restriction, ANDed
         let or_group = q.split(" OR ").count();
@@ -1448,7 +1778,7 @@ mod tests {
             visible_node_ids: Some(Vec::new()),
             ..EventFilter::default()
         };
-        let q = build_filter_part(&none_visible, &[]);
+        let q = build_filter_part(&none_visible, NameIds::default());
         assert!(
             q.contains("node_id:in(\"\")"),
             "an empty scope must emit an unsatisfiable filter, never no filter: {q}"
@@ -1792,19 +2122,35 @@ mod tests {
             visible_node_ids: Some(vec![mine]),
             ..EventFilter::default()
         };
-        assert!(record_matches(&rec(Some(mine)), &scoped, &[]));
-        assert!(!record_matches(&rec(Some(theirs)), &scoped, &[]));
+        assert!(record_matches(
+            &rec(Some(mine)),
+            &scoped,
+            NameIds::default()
+        ));
+        assert!(!record_matches(
+            &rec(Some(theirs)),
+            &scoped,
+            NameIds::default()
+        ));
         // An unattributed event is hidden from a scoped caller — the same rule an ungrouped node
         // gets, and it matters most here because syslog bodies routinely carry credentials.
-        assert!(!record_matches(&rec(None), &scoped, &[]));
+        assert!(!record_matches(&rec(None), &scoped, NameIds::default()));
         // …but is still visible when unrestricted, which is the behaviour that must not regress.
-        assert!(record_matches(&rec(None), &EventFilter::default(), &[]));
+        assert!(record_matches(
+            &rec(None),
+            &EventFilter::default(),
+            NameIds::default()
+        ));
         // An empty scope sees nothing at all.
         let empty = EventFilter {
             visible_node_ids: Some(Vec::new()),
             ..EventFilter::default()
         };
-        assert!(!record_matches(&rec(Some(mine)), &empty, &[]));
+        assert!(!record_matches(
+            &rec(Some(mine)),
+            &empty,
+            NameIds::default()
+        ));
     }
 
     #[test]
@@ -1815,7 +2161,7 @@ mod tests {
             ..EventFilter::default()
         };
         // Even with resolved name ids, regex mode restricts to the message field.
-        let q = build_search_logsql(&filter, &[Uuid::from_u128(9)], 100);
+        let q = build_search_logsql(&filter, search_names(&[Uuid::from_u128(9)]), 100);
         // `(?i)` mirrors the SQL path's `~*`; the operator's pattern is otherwise passed through.
         assert!(q.contains("_msg:~\"(?i)^%LINK-3\""), "{q}");
         assert!(!q.contains("source_ip:"));
@@ -1824,46 +2170,46 @@ mod tests {
 
     #[test]
     fn build_logsql_matches_all_when_no_filters() {
-        let q = build_search_logsql(&EventFilter::default(), &[], 50);
+        let q = build_search_logsql(&EventFilter::default(), NameIds::default(), 50);
         assert_eq!(q, "* | sort by (_time) desc | limit 50");
     }
 
     #[test]
     fn build_stats_grouped_logsql_maps_each_group() {
         let none = EventFilter::default();
-        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Kind, 10);
+        let q = build_stats_grouped_logsql(&none, NameIds::default(), EventStatGroup::Kind, 10);
         assert!(q.contains("| stats by (kind) count() as n"), "{q}");
         assert!(q.ends_with("| sort by (n) desc | limit 10"), "{q}");
-        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Action, 10);
+        let q = build_stats_grouped_logsql(&none, NameIds::default(), EventStatGroup::Action, 10);
         assert!(q.contains("| stats by (action) count() as n"), "{q}");
         // Trap grouping requires the OID present, then groups on it.
-        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Trap, 8);
+        let q = build_stats_grouped_logsql(&none, NameIds::default(), EventStatGroup::Trap, 8);
         assert!(
             q.contains("trap_oid:* | stats by (trap_oid) count() as n"),
             "{q}"
         );
         // Source groups by node + source IP together.
-        let q = build_stats_grouped_logsql(&none, &[], EventStatGroup::Source, 8);
+        let q = build_stats_grouped_logsql(&none, NameIds::default(), EventStatGroup::Source, 8);
         assert!(
             q.contains("| stats by (node_id, source_ip) count() as n"),
             "{q}"
         );
         // The shared filter part still applies (e.g. a kind filter).
         let filtered = EventFilter {
-            kind: Some("trap".into()),
+            kinds: vec!["trap".into()],
             ..EventFilter::default()
         };
-        let q = build_stats_grouped_logsql(&filtered, &[], EventStatGroup::Trap, 8);
+        let q = build_stats_grouped_logsql(&filtered, NameIds::default(), EventStatGroup::Trap, 8);
         assert!(q.contains("kind:=\"trap\""), "{q}");
     }
 
     #[test]
     fn build_stats_series_logsql_buckets_and_splits() {
         let none = EventFilter::default();
-        let q = build_stats_series_logsql(&none, &[], 3600, false);
+        let q = build_stats_series_logsql(&none, NameIds::default(), 3600, false);
         assert!(q.contains("| stats by (_time:3600s) count() as n"), "{q}");
         assert!(q.ends_with("| sort by (_time) asc"), "{q}");
-        let q = build_stats_series_logsql(&none, &[], 3600, true);
+        let q = build_stats_series_logsql(&none, NameIds::default(), 3600, true);
         assert!(
             q.contains("| stats by (_time:3600s, kind) count() as n"),
             "{q}"
@@ -1882,7 +2228,12 @@ mod tests {
             .await;
         // By kind: all three are syslog (the test `msg()` helper).
         let by_kind = store
-            .stats_grouped(&EventFilter::default(), &[], EventStatGroup::Kind, 10)
+            .stats_grouped(
+                &EventFilter::default(),
+                NameIds::default(),
+                EventStatGroup::Kind,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(by_kind.len(), 1);
@@ -1890,14 +2241,19 @@ mod tests {
         assert_eq!(by_kind[0].count, 3);
         // By action: three distinct outcomes, one each.
         let by_action = store
-            .stats_grouped(&EventFilter::default(), &[], EventStatGroup::Action, 10)
+            .stats_grouped(
+                &EventFilter::default(),
+                NameIds::default(),
+                EventStatGroup::Action,
+                10,
+            )
             .await
             .unwrap();
         assert_eq!(by_action.len(), 3);
         assert_eq!(by_action.iter().map(|b| b.count).sum::<i64>(), 3);
         // Volume series bucketed at 1s: three distinct buckets, no split.
         let series = store
-            .stats_series(&EventFilter::default(), &[], 1, false)
+            .stats_series(&EventFilter::default(), NameIds::default(), 1, false)
             .await
             .unwrap();
         assert_eq!(series.len(), 3);
@@ -1905,7 +2261,7 @@ mod tests {
         assert!(series[0].by_kind.is_none());
         // Split by kind populates the per-kind map.
         let split = store
-            .stats_series(&EventFilter::default(), &[], 1, true)
+            .stats_series(&EventFilter::default(), NameIds::default(), 1, true)
             .await
             .unwrap();
         assert!(split[0]
@@ -1972,7 +2328,7 @@ mod tests {
 
         // Newest first, all rows.
         let all = store
-            .search(&EventFilter::default(), &[], 100)
+            .search(&EventFilter::default(), NameIds::default(), 100)
             .await
             .unwrap();
         assert_eq!(all.len(), 3);
@@ -1983,14 +2339,21 @@ mod tests {
             search: Some("link".into()),
             ..EventFilter::default()
         };
-        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
+        assert_eq!(
+            store
+                .search(&f, NameIds::default(), 100)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
 
         // matched=false selects the unmatched record only.
         f = EventFilter {
             matched: Some(false),
             ..EventFilter::default()
         };
-        let unmatched = store.search(&f, &[], 100).await.unwrap();
+        let unmatched = store.search(&f, NameIds::default(), 100).await.unwrap();
         assert_eq!(unmatched.len(), 1);
         assert_eq!(unmatched[0].message, "config changed");
     }
@@ -2011,10 +2374,17 @@ mod tests {
             search: Some("core-rtr".into()),
             ..EventFilter::default()
         };
-        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 0);
         assert_eq!(
             store
-                .search(&f, &[Uuid::from_u128(1)], 100)
+                .search(&f, NameIds::default(), 100)
+                .await
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            store
+                .search(&f, search_names(&[Uuid::from_u128(1)]), 100)
                 .await
                 .unwrap()
                 .len(),
@@ -2039,14 +2409,28 @@ mod tests {
             since: Some(at(1_500)),
             ..EventFilter::default()
         };
-        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
+        assert_eq!(
+            store
+                .search(&f, NameIds::default(), 100)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
 
         // until only: keep 1_000 and 2_000.
         let f = EventFilter {
             until: Some(at(2_500)),
             ..EventFilter::default()
         };
-        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
+        assert_eq!(
+            store
+                .search(&f, NameIds::default(), 100)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
 
         // both bounds: only the 2_000 record falls inside [1_500, 2_500].
         let f = EventFilter {
@@ -2054,7 +2438,7 @@ mod tests {
             until: Some(at(2_500)),
             ..EventFilter::default()
         };
-        let rows = store.search(&f, &[], 100).await.unwrap();
+        let rows = store.search(&f, NameIds::default(), 100).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].message, "second");
     }
@@ -2089,6 +2473,13 @@ mod tests {
             regex: true,
             ..EventFilter::default()
         };
-        assert_eq!(store.search(&f, &[], 100).await.unwrap().len(), 2);
+        assert_eq!(
+            store
+                .search(&f, NameIds::default(), 100)
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }

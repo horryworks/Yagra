@@ -105,7 +105,9 @@
     "tokenHint": "このデプロイでは語単位で一致します。語の中に当てるには正規表現を使ってください。",
     "sheet": "フィルタ",
     "sheetButton": "フィルタ",
-    "sheetButtonCount": "フィルタ ({{count}})"
+    "sheetButtonCount": "フィルタ ({{count}})",
+    "from": "開始",
+    "to": "終了"
   },
   "scope": {
     "all": "全ノード",

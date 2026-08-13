@@ -12,6 +12,7 @@
 // are selected has lost the thing the redesign was for.
 
 import {
+  decodeRange,
   decodeSet,
   type ColumnFilterSpec,
   type FilterOption,
@@ -49,11 +50,14 @@ export function summarize<T>(spec: ColumnFilterSpec<T>, raw: string): FilterSumm
     if (!conditionIsActive(c)) return { kind: 'none' };
     return { kind: 'text', term: c.term, mode: c.mode, not: c.not };
   }
-  const value = raw || spec.defaultPreset;
   // A range always shows its window, even at the default. The default is 24h, which *narrows* —
   // a trigger reading "All time" or nothing at all while a day-long window is hiding rows is the
   // same lie the empty state had to be fixed for.
-  return { kind: 'preset', label: labelOf(spec.presets, value) };
+  //
+  // Decoded rather than read raw: a custom window's value carries its two instants, so matching the
+  // preset list against the raw string would fall through to `?? value` and render
+  // `custom:2026-08-01T00:00|…` inside a 90px trigger.
+  return { kind: 'preset', label: labelOf(spec.presets, decodeRange(raw, spec).preset) };
 }
 
 /** Whether the trigger should render in its "active" style (accent border + clear button). Note

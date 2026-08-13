@@ -201,10 +201,17 @@ impl EventAction {
     /// field is absent.
     #[must_use]
     pub fn from_stored(s: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|v| v.as_str() == s)
-            .unwrap_or(Self::None)
+        Self::from_token(s).unwrap_or(Self::None)
+    }
+
+    /// Parse a token strictly, for **request** input.
+    ///
+    /// Separate from [`from_stored`](Self::from_stored) because the two want opposite failure
+    /// modes: a row this build cannot read is honestly `none`, but a *filter* that degrades a typo
+    /// to `none` answers a different question than the one asked and looks like a correct answer.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
     }
 
     /// Whether this outcome ties the row to an alert, which is what makes it survive in PostgreSQL
@@ -490,6 +497,10 @@ pub enum TokenVerify {
 /// a row can appear *behind* a cursor a client has already paged past. That is inherent to
 /// ordering a log by event time, and matches what the VictoriaLogs path has always done.
 ///
+/// See [`TextCond`] for the per-column conditions, and note that they are ANDed with `search`
+/// rather than replacing it: the WebUI stopped sending `search` when the filter row shipped, but
+/// the parameter is unchanged for MCP and for any client written against it.
+///
 /// **A plain `search` term is the one place the backends are permitted to differ**, and the
 /// difference is now one axis rather than two. Here it is a case-insensitive substring
 /// (`ILIKE '%term%'`); on VictoriaLogs it is a case-insensitive whole-token phrase (`i("term")`),
@@ -499,6 +510,11 @@ pub enum TokenVerify {
 /// still declined at ~300× (5.6s per 24h, 30.1s unbounded = VictoriaLogs' query ceiling) — an
 /// inverted word index cannot serve a leading substring without a full scan. The operator's escape
 /// hatch for that axis is `regex`, which reaches inside tokens on either backend.
+///
+/// The per-column conditions added by ADR-053 (`message`, `source`) inherit that same permitted
+/// axis and add negation, which was measured before it shipped: on 6.7M real events `NOT` costs
+/// what the form it negates costs, in both the phrase and the regex mode, so there was no reason to
+/// restrict it to one of them.
 #[derive(Debug, Default)]
 pub struct EventFilter {
     /// Keyset pagination cursor (exclusive upper bound, event time). Distinct from `until` (a
@@ -508,9 +524,24 @@ pub struct EventFilter {
     pub since: Option<DateTime<Utc>>,
     /// User-facing time-range upper bound (inclusive, event time), or `None` for unbounded.
     pub until: Option<DateTime<Utc>>,
-    pub kind: Option<String>,
+    /// Event kinds to include. **Empty means every kind**, not "no kinds" — the three multi-value
+    /// dimensions are `Vec` rather than `Option<Vec>` precisely so there is no second spelling of
+    /// "unfiltered" to get wrong. `visible_node_ids` below is the one that stays `Option`, because
+    /// there an empty set genuinely means *nothing is visible*.
+    pub kinds: Vec<String>,
     pub node_id: Option<Uuid>,
     pub matched: Option<bool>,
+    /// Rule outcomes to include ([`EventAction`] tokens); empty means every outcome.
+    pub actions: Vec<String>,
+    /// Syslog severities (0–7) to include; empty means every severity. A non-syslog event has no
+    /// severity and is therefore excluded whenever this is non-empty, on both backends.
+    pub severities: Vec<i16>,
+    /// Per-column condition on the message text (Excel-style filter row, ADR-053). Independent of
+    /// `search`, and ANDed with it: `search` is the whole-row term the API has always taken.
+    pub message: Option<TextCond>,
+    /// Per-column condition on the event's source — its IP **or** the name of the node it is
+    /// attributed to, which is what the Source column displays.
+    pub source: Option<TextCond>,
     /// Case-insensitive substring matched against source (node name / IP) or message. When
     /// `regex` is set, `search` is instead a regular expression matched against the message only.
     pub search: Option<String>,
@@ -561,11 +592,37 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-/// The shared `WHERE` predicate for the event log + summary-stats queries. Binds $1..=$9:
-/// $1 before (paging cursor), $2 since, $3 until, $4 kind, $5 node_id, $6 matched, $7 search,
-/// $8 regex, $9 the RBAC visible-node restriction. Kept in one place so `list_events` and
-/// `/events/stats` filter identically (the dashboard summaries must line up with the log). Uses the
-/// `e` (events) / `n` (nodes) aliases — every consumer joins `nodes n` (the name search needs it).
+/// How many binds [`EVENT_FILTER_WHERE`] consumes.
+///
+/// Every consumer needs one more of its own — a page size, a row cap, a bucket width — and writes
+/// it as `${EVENT_FILTER_BINDS + 1}` rather than as a literal. Widening the predicate used to mean
+/// renumbering six unrelated `$10`s by hand across five builders, and a missed one is neither a
+/// compile error nor a crash: PostgreSQL happily binds the page size into a filter slot and answers
+/// a different question. `the_extra_bind_follows_the_predicate` pins the derivation.
+pub(crate) const EVENT_FILTER_BINDS: usize = 16;
+
+/// `$N` for a consumer's own trailing bind — see [`EVENT_FILTER_BINDS`].
+fn extra_bind() -> String {
+    format!("${}", EVENT_FILTER_BINDS + 1)
+}
+
+/// The shared `WHERE` predicate for the event log + summary-stats queries. Binds $1..=$16:
+/// $1 before (paging cursor), $2 since, $3 until, $4 kinds, $5 node_id, $6 matched, $7 search,
+/// $8 regex, $9 the RBAC visible-node restriction, $10 actions, $11 syslog severities, $12–$14 the
+/// message condition (term / is-regex / negated), $15–$16 the source condition (term / negated).
+/// Kept in one place so `list_events` and `/events/stats` filter identically (the dashboard
+/// summaries must line up with the log). Uses the `e` (events) / `n` (nodes) aliases — every
+/// consumer joins `nodes n` (the name search needs it).
+///
+/// The three set dimensions are spelled `cardinality(…) = 0 OR … = ANY(…)` rather than as a
+/// nullable scalar, so "unfiltered" has exactly one representation (an empty array) on the wire,
+/// in the struct and in the SQL. `e.syslog_severity` is nullable and `NULL = ANY(…)` is NULL, so a
+/// trap is excluded by a severity filter — which is the honest answer, since it has no severity.
+///
+/// Negation is `<> $not`: boolean inequality is XOR, so one clause serves both directions. The
+/// source disjunction is wrapped in `COALESCE(…, FALSE)` first — without it a row with no source IP
+/// and no attributed node yields NULL, and a NULL cannot satisfy a *negated* condition it plainly
+/// does not match.
 ///
 /// The three time bounds are **event time** in epoch milliseconds, matching what the VictoriaLogs
 /// builder filters on (`logstore::build_filter_part`) — see [`EventFilter`] for why. Callers bind
@@ -578,7 +635,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub(crate) const EVENT_FILTER_WHERE: &str = "($1::bigint IS NULL OR e.at_unix_ms < $1) \
      AND ($2::bigint IS NULL OR e.at_unix_ms >= $2) \
      AND ($3::bigint IS NULL OR e.at_unix_ms <= $3) \
-     AND ($4::text IS NULL OR e.kind = $4) \
+     AND (cardinality($4::text[]) = 0 OR e.kind = ANY($4)) \
      AND ($5::uuid IS NULL OR e.node_id = $5) \
      AND ($6::boolean IS NULL OR (e.matched_rule_id IS NOT NULL) = $6) \
      AND ($7::text IS NULL \
@@ -586,7 +643,15 @@ pub(crate) const EVENT_FILTER_WHERE: &str = "($1::bigint IS NULL OR e.at_unix_ms
                                        OR host(e.source_ip) ILIKE '%' || $7 || '%' \
                                        OR n.name ILIKE '%' || $7 || '%')) \
           OR ($8::boolean = TRUE AND e.message ~* $7)) \
-     AND ($9::uuid[] IS NULL OR e.node_id = ANY($9))";
+     AND ($9::uuid[] IS NULL OR e.node_id = ANY($9)) \
+     AND (cardinality($10::text[]) = 0 OR e.action = ANY($10)) \
+     AND (cardinality($11::int2[]) = 0 OR e.syslog_severity = ANY($11)) \
+     AND ($12::text IS NULL \
+          OR (CASE WHEN $13::boolean THEN e.message ~* $12 \
+                   ELSE e.message ILIKE '%' || $12 || '%' END) <> $14::boolean) \
+     AND ($15::text IS NULL \
+          OR (COALESCE(host(e.source_ip) ILIKE '%' || $15 || '%', FALSE) \
+              OR COALESCE(n.name ILIKE '%' || $15 || '%', FALSE)) <> $16::boolean)";
 
 /// The SNMP `authenticationFailure` trap OID (RFC 3418), the unambiguous half of the auth signal.
 pub(crate) const AUTH_FAILURE_TRAP_OID: &str = "1.3.6.1.6.3.1.1.5.5";
@@ -617,57 +682,123 @@ fn auth_signal_predicate() -> String {
     parts.join(" OR ")
 }
 
+/// How a plain (non-regex) search term matches on this deployment. Which one applies depends on
+/// the store that answers event searches, so a client that wants a term to behave the same
+/// everywhere should use a regular expression instead.
+//  Kept short deliberately: a `ToSchema` doc comment is published verbatim to API clients and lands
+//  in the public API reference, so the design rationale goes in `//` lines like these. There are two
+//  reasons this is *reported* rather than merely documented, and the second is why it must never be
+//  removed:
+//
+//  1. The empty result is otherwise unexplainable. `%%01POLICY/6/POLICYPERMIT` tokenizes to
+//     `01policy` and `policypermit`, so searching `POLICY` returns nothing on a log-store deployment
+//     while the operator is looking at the word on screen. "Nothing matches these filters" is a true
+//     sentence that explains none of that.
+//  2. It is how a new WebUI detects an old core. axum's `Query<T>` drops unknown parameters
+//     silently, so a WebUI carrying the ADR-053 filters, pointed at a core that predates them, would
+//     have every new filter quietly do nothing. The presence of this field is the signal that the
+//     core understands them; its absence makes the UI say less rather than guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EventSearchSemantics {
+    /// A term matches whole words (a log store's inverted index). `POLICY` will not find
+    /// `POLICYPERMIT`; the regex mode will.
+    Token,
+    /// A term matches any substring (PostgreSQL `ILIKE '%term%'`).
+    Substring,
+}
+
+// No `as_str`/`ALL` here, unlike every other enum in this file. Those exist where a value is *both*
+// a database column and a JSON field, produced by two mechanisms that nothing makes agree. This one
+// is only ever serialized, so its `as_str` would have no production caller and the
+// `token_and_serde_agree` pairing would be an indirection with one real side. What does need pinning
+// is the spelling itself — the WebUI's `SearchSemantics` union hardcodes these two strings — and
+// `the_search_semantics_spelling_is_what_the_webui_expects` does that directly.
+
+/// A per-column text condition from the filter row (ADR-053): a term, how it is matched, and
+/// whether the match is negated.
+///
+/// `regex` is **message-only**, and there is deliberately no `src_regex` parameter to set it on a
+/// source condition. A source match covers the event's IP *and* the name of the node it is
+/// attributed to; the node name lives in PostgreSQL's `nodes` join and has no counterpart in the
+/// log store, which is handed resolved ids instead. A regex there would therefore mean "IP or name"
+/// on one backend and "IP only" on the other — a divergence nobody asked for, on an axis the
+/// backends are not permitted to differ on. `the_source_condition_is_never_a_regex` pins it.
+#[derive(Debug, Clone, Default)]
+pub struct TextCond {
+    /// The term or pattern. Already trimmed and length-capped by the API edge.
+    pub term: String,
+    /// Interpret `term` as a regular expression rather than as a phrase/substring.
+    pub regex: bool,
+    /// Invert the match — the row is kept when the term does **not** match.
+    pub not: bool,
+}
+
 /// A time bound as the epoch milliseconds [`EVENT_FILTER_WHERE`] compares against. One helper so
 /// the three bounds can never be bound in different units.
 fn ms_bound(at: Option<DateTime<Utc>>) -> Option<i64> {
     at.map(|t| t.timestamp_millis())
 }
 
-/// Bind `$1..=$9` of [`EVENT_FILTER_WHERE`] onto a query, in the one order that matches it.
+/// Bind `$1..=$16` of [`EVENT_FILTER_WHERE`] onto a query, in the one order that matches it.
 ///
 /// One helper because the sequence is positional and silent when wrong: swapping `$5` and `$6`
 /// still compiles, still runs, and just answers a different question. Every consumer of the shared
-/// predicate binds through here so there is a single place the order is stated.
+/// predicate binds through here so there is a single place the order is stated, and
+/// `the_where_clause_binds_every_parameter_it_names` counts the two against each other.
 fn bind_event_filter<'q>(
     q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     filter: &'q EventFilter,
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+    // A condition contributes its term as NULL when absent, which is what switches its clause off.
+    fn term(c: Option<&TextCond>) -> Option<&str> {
+        c.map(|c| c.term.as_str())
+    }
     q.bind(ms_bound(filter.before))
         .bind(ms_bound(filter.since))
         .bind(ms_bound(filter.until))
-        .bind(filter.kind.as_deref())
+        .bind(&filter.kinds)
         .bind(filter.node_id)
         .bind(filter.matched)
         .bind(filter.search.as_deref())
         .bind(filter.regex)
         .bind(filter.visible_node_ids.as_deref())
+        .bind(&filter.actions)
+        .bind(&filter.severities)
+        .bind(term(filter.message.as_ref()))
+        .bind(filter.message.as_ref().is_some_and(|c| c.regex))
+        .bind(filter.message.as_ref().is_some_and(|c| c.not))
+        .bind(term(filter.source.as_ref()))
+        .bind(filter.source.as_ref().is_some_and(|c| c.not))
 }
 
-/// Build the keyset-paged event-list SQL. Binds are $1..=$9 (filter) + $10 (page size).
+/// Build the keyset-paged event-list SQL. Binds are the filter's, plus one for the page size.
 ///
 /// Extracted like the two stats builders so the **ordering column** is assertable: it has to be the
 /// one `EVENT_FILTER_WHERE`'s cursor compares against, and the same one VictoriaLogs sorts by, or
 /// paging skips and repeats rows. See `logstore::tests::both_backends_filter_on_event_time_…`.
 fn list_events_sql() -> String {
+    let limit = extra_bind();
     format!(
         "SELECT e.id, e.kind, e.at_unix_ms, e.recorded_at, host(e.source_ip) AS source_ip, \
                 e.node_id, e.source_id, e.pool, e.facility, e.syslog_severity, e.hostname, \
                 e.app_name, e.trap_oid, e.varbinds, e.message, e.matched_rule_id, e.action \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} \
-         ORDER BY e.at_unix_ms DESC LIMIT $10"
+         ORDER BY e.at_unix_ms DESC LIMIT {limit}"
     )
 }
 
 // ── Troubleshoot analytics SQL (ADR-022) ────────────────────────────────────────────────────────
 // Extracted like the two `/events/stats` builders so the shared predicate and the group-scope bind
 // are assertable without a database — see `the_analytics_aggregates_share_the_event_filter_predicate`.
-// Every one binds $1..=$9 (the filter) plus $10 where it needs a cap or a bucket width.
+// Every one binds the filter, plus one more where it needs a cap or a bucket width.
 
 /// Per-(node, bucket) event counts. Uncorrelated events are excluded — a storm has a device.
 fn agg_counts_by_bucket_sql() -> String {
+    let secs = extra_bind();
     format!(
-        "SELECT e.node_id, (e.at_unix_ms / 1000 / $10) * $10 AS bucket, count(*) AS n \
+        "SELECT e.node_id, (e.at_unix_ms / 1000 / {secs}) * {secs} AS bucket, count(*) AS n \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} AND e.node_id IS NOT NULL \
          GROUP BY e.node_id, bucket"
@@ -713,29 +844,31 @@ pub(crate) fn agg_unmatched_signatures_sql() -> String {
     // text form — the canonical lowercase-hyphenated uuid sorts identically to the binary ordering,
     // and NULL node_ids are ignored by the aggregate (sample_node stays optional).
     let sig = signature_coalesce_sql();
+    let limit = extra_bind();
     format!(
         "SELECT e.kind, {sig} AS sig, count(*) AS n, \
                 min(e.node_id::text)::uuid AS sample_node \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} AND e.matched_rule_id IS NULL \
            AND {sig} IS NOT NULL \
-         GROUP BY e.kind, sig ORDER BY n DESC LIMIT $10"
+         GROUP BY e.kind, sig ORDER BY n DESC LIMIT {limit}"
     )
 }
 
 /// Authentication-failure volume by (source IP, node).
 fn agg_auth_sources_sql() -> String {
     let auth = auth_signal_predicate();
+    let limit = extra_bind();
     format!(
         "SELECT host(e.source_ip) AS src, e.node_id, count(*) AS n \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} AND ({auth}) \
-         GROUP BY src, e.node_id ORDER BY n DESC LIMIT $10"
+         GROUP BY src, e.node_id ORDER BY n DESC LIMIT {limit}"
     )
 }
 
 /// Build the categorical `/events/stats` SQL for a group dimension. All identifiers are fixed
-/// (chosen by the enum, never from the request); binds are $1..=$9 (filter) + $10 (row cap).
+/// (chosen by the enum, never from the request); binds are the filter's plus one row cap.
 fn stats_grouped_sql(group: EventStatGroup) -> String {
     let (select, group_by, extra) = match group {
         EventStatGroup::Kind => ("e.kind AS key", "e.kind", ""),
@@ -751,24 +884,26 @@ fn stats_grouped_sql(group: EventStatGroup) -> String {
             "",
         ),
     };
+    let limit = extra_bind();
     format!(
         "SELECT {select}, count(*) AS n \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE}{extra} \
-         GROUP BY {group_by} ORDER BY n DESC LIMIT $10"
+         GROUP BY {group_by} ORDER BY n DESC LIMIT {limit}"
     )
 }
 
-/// Build the time-series `/events/stats` SQL. Buckets on event time (`at_unix_ms`) into $10-wide
-/// windows; binds are $1..=$9 (filter) + $10 (bucket seconds).
+/// Build the time-series `/events/stats` SQL. Buckets on event time (`at_unix_ms`) into windows
+/// whose width is the trailing bind; the leading binds are the filter's.
 fn stats_series_sql(split_kind: bool) -> String {
     let (select_kind, group_kind) = if split_kind {
         (", e.kind AS kind", ", e.kind")
     } else {
         ("", "")
     };
+    let secs = extra_bind();
     format!(
-        "SELECT (e.at_unix_ms / 1000 / $10) * $10 AS bucket{select_kind}, count(*) AS n \
+        "SELECT (e.at_unix_ms / 1000 / {secs}) * {secs} AS bucket{select_kind}, count(*) AS n \
          FROM events e LEFT JOIN nodes n ON n.id = e.node_id \
          WHERE {EVENT_FILTER_WHERE} \
          GROUP BY bucket{group_kind} ORDER BY bucket ASC"
@@ -2166,12 +2301,17 @@ mod tests {
         // ordering used `recorded_at` while the bucketing used `at_unix_ms`.
         let sql = list_events_sql();
         assert!(
-            sql.contains("ORDER BY e.at_unix_ms DESC LIMIT $10"),
+            sql.contains(&format!(
+                "ORDER BY e.at_unix_ms DESC LIMIT {}",
+                extra_bind()
+            )),
             "{sql}"
         );
         assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
         assert!(EVENT_FILTER_WHERE.contains("e.at_unix_ms < $1"));
-        assert!(stats_series_sql(false).contains("(e.at_unix_ms / 1000 / $10)"));
+        assert!(
+            stats_series_sql(false).contains(&format!("(e.at_unix_ms / 1000 / {})", extra_bind()))
+        );
         // `recorded_at` is still selected and returned (it is real information), just never
         // filtered or ordered on.
         assert!(sql.contains("e.recorded_at,"), "{sql}");
@@ -2265,8 +2405,99 @@ mod tests {
             assert!(sql.contains("count(*) AS n"), "{sql}");
         }
         // The two capped ones take their cap as the bind after the filter, like the stats builders.
-        assert!(agg_unmatched_signatures_sql().contains("LIMIT $10"));
-        assert!(agg_auth_sources_sql().contains("LIMIT $10"));
+        let cap = format!("LIMIT {}", extra_bind());
+        assert!(agg_unmatched_signatures_sql().contains(&cap));
+        assert!(agg_auth_sources_sql().contains(&cap));
+    }
+
+    /// The predicate declares `$1..=$N` and [`bind_event_filter`] supplies N values; nothing makes
+    /// the two agree.
+    ///
+    /// This is the `the_events_insert_binds_every_column_it_names` failure in its other location,
+    /// and it is worse here: a short bind list is a runtime error PostgreSQL reports, but a
+    /// *reordered* or miscounted one runs fine and answers a different question — a page of events
+    /// filtered by something the operator did not ask for, with nothing in the logs.
+    #[test]
+    fn the_where_clause_binds_every_parameter_it_names() {
+        // Needles built at runtime: a literal `$16` in this file would also match itself in the
+        // source scan below, and a literal `.bind(` would match this comment's own text.
+        for n in 1..=EVENT_FILTER_BINDS {
+            assert!(
+                EVENT_FILTER_WHERE.contains(&format!("${n}")),
+                "the predicate never mentions ${n}, so EVENT_FILTER_BINDS is too high"
+            );
+        }
+        assert!(
+            !EVENT_FILTER_WHERE.contains(&format!("${}", EVENT_FILTER_BINDS + 1)),
+            "the predicate reaches past EVENT_FILTER_BINDS, which is what every consumer's own \
+             trailing bind is derived from — it would collide with the page size"
+        );
+
+        let src = include_str!("events.rs");
+        let body = src
+            .split("fn bind_event_filter<'q>(")
+            .nth(1)
+            .expect("bind_event_filter is in this file");
+        let body = &body[..body.find("\n}\n").expect("the function ends")];
+        let binds = body.matches(&format!(".{}(", "bind")).count();
+        assert_eq!(
+            binds, EVENT_FILTER_BINDS,
+            "the predicate names {EVENT_FILTER_BINDS} parameters and the binder supplies {binds}"
+        );
+    }
+
+    /// Every consumer's own trailing bind sits immediately after the filter's.
+    ///
+    /// Written as a derivation rather than a literal because it *was* a literal: six `$10`s in five
+    /// builders, so widening the filter meant finding all six. Missing one is silent — the page
+    /// size lands in a filter slot and the cap lands nowhere.
+    #[test]
+    fn the_extra_bind_follows_the_predicate() {
+        let extra = extra_bind();
+        for sql in [
+            list_events_sql(),
+            agg_counts_by_bucket_sql(),
+            agg_unmatched_signatures_sql(),
+            agg_auth_sources_sql(),
+            stats_grouped_sql(EventStatGroup::Kind),
+            stats_series_sql(false),
+        ] {
+            assert!(sql.contains(&extra), "no {extra} in: {sql}");
+            // Nothing may reach past it either — a second extra bind would need a second constant.
+            let beyond = format!("${}", EVENT_FILTER_BINDS + 2);
+            assert!(!sql.contains(&beyond), "{beyond} in: {sql}");
+        }
+    }
+
+    /// The WebUI branches on these two strings, and it hardcodes them.
+    ///
+    /// `web/src/components/EventLog/eventFilterSpec.ts` declares `'token' | 'substring'` — the one
+    /// shape ADR-035's generation does not reach, because a client that *narrows* a generated union
+    /// still has to spell the members. Renaming a variant here would leave that comparison silently
+    /// false, so the mode label and the empty state would both fall back to their unknown-core
+    /// wording on a core that knows perfectly well.
+    #[test]
+    fn the_search_semantics_spelling_is_what_the_webui_expects() {
+        assert_eq!(
+            serde_json::to_string(&EventSearchSemantics::Token).expect("serializes"),
+            "\"token\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EventSearchSemantics::Substring).expect("serializes"),
+            "\"substring\""
+        );
+    }
+
+    /// A strict token parse for request input, distinct from the lenient stored-row one.
+    #[test]
+    fn an_action_token_parses_strictly_for_requests_and_leniently_for_rows() {
+        for a in EventAction::ALL {
+            assert_eq!(EventAction::from_token(a.as_str()), Some(a));
+        }
+        // A typo in a *filter* must be refused; the same string read out of a row is honestly
+        // `none`, because that is what this build can say about an outcome it cannot name.
+        assert_eq!(EventAction::from_token("fried"), None);
+        assert_eq!(EventAction::from_stored("fried"), EventAction::None);
     }
 
     /// Every [`SIGNATURE_TIERS`] entry can actually be read off a record.
@@ -2329,7 +2560,10 @@ mod tests {
             let sql = stats_grouped_sql(g);
             assert!(sql.contains(EVENT_FILTER_WHERE), "{sql}");
             assert!(sql.contains("count(*) AS n"), "{sql}");
-            assert!(sql.contains("ORDER BY n DESC LIMIT $10"), "{sql}");
+            assert!(
+                sql.contains(&format!("ORDER BY n DESC LIMIT {}", extra_bind())),
+                "{sql}"
+            );
         }
         // Trap grouping drops NULL OIDs; source grouping carries node_id + source_ip for the UI.
         assert!(stats_grouped_sql(EventStatGroup::Trap).contains("e.trap_oid IS NOT NULL"));
@@ -2343,7 +2577,10 @@ mod tests {
     fn stats_series_sql_buckets_and_optionally_splits_by_kind() {
         let plain = stats_series_sql(false);
         assert!(
-            plain.contains("(e.at_unix_ms / 1000 / $10) * $10 AS bucket"),
+            plain.contains(&format!(
+                "(e.at_unix_ms / 1000 / {b}) * {b} AS bucket",
+                b = extra_bind()
+            )),
             "{plain}"
         );
         assert!(plain.contains(EVENT_FILTER_WHERE), "{plain}");

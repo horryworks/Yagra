@@ -10,6 +10,8 @@
 // predicate becomes one function. `filterQuery.ts`'s header now says which half is which.
 
 import {
+  CUSTOM_RANGE,
+  decodeRange,
   decodeSet,
   type FilterState,
   type FilterableColumn,
@@ -38,11 +40,23 @@ function compileColumn<T>(
   }
   // range
   if (!spec.readTime) return null; // server-side: the window is already in the query, not here
-  const preset = spec.presets.find((p) => p.value === (raw || spec.defaultPreset));
-  const secs = preset?.seconds ?? null;
+  const at = spec.readTime;
+  const value = decodeRange(raw, spec);
+  if (value.preset === CUSTOM_RANGE) {
+    // A bare `datetime-local` string has no zone, which JS reads as local time — the same reading
+    // the input itself uses, so the window means what the operator saw when they typed it.
+    const from = value.from ? Date.parse(value.from) : null;
+    const to = value.to ? Date.parse(value.to) : null;
+    if (from === null && to === null) return null;
+    return (row) => {
+      const ms = at(row);
+      if (ms == null) return false;
+      return (from === null || ms >= from) && (to === null || ms <= to);
+    };
+  }
+  const secs = spec.presets.find((p) => p.value === value.preset)?.seconds ?? null;
   if (secs === null) return null; // "all time", or a preset a stale URL named that no longer exists
   const floor = nowMs - secs * 1000;
-  const at = spec.readTime;
   return (row) => {
     const ms = at(row);
     return ms != null && ms >= floor;

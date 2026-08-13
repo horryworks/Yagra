@@ -11,6 +11,7 @@ import type { EventRow } from '../../types/api';
 import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
 import { formatTimestamp } from '../../lib/format';
+import { eventFilters, type SearchSemantics } from './eventFilterSpec';
 import './eventColumns.css';
 
 const ACTION_TONE: Record<EventRow['action'], 'critical' | 'warning' | 'up' | 'neutral' | 'info'> = {
@@ -28,14 +29,18 @@ const ACTION_TONE: Record<EventRow['action'], 'critical' | 'warning' | 'up' | 'n
 export function eventColumns(
   nodeName: (id: string) => string,
   t: TFunction,
-  opts?: { showSource?: boolean },
+  opts?: { showSource?: boolean; semantics?: SearchSemantics },
 ): Column<EventRow>[] {
   const showSource = opts?.showSource ?? true;
+  // The filter descriptors live in a `.ts` next door because they carry judgement (which modes a
+  // column offers, what its terms become on the wire) and a `.tsx` test is never executed.
+  const filters = eventFilters(t, opts);
   const cols: Column<EventRow>[] = [
     {
       key: 'kind',
       header: t('alerts:eventLog.cols.kind'),
       width: '90px',
+      filter: filters.kind,
       render: (r) => <Badge tone="neutral">{r.kind}</Badge>,
     },
   ];
@@ -44,6 +49,7 @@ export function eventColumns(
       key: 'source',
       header: t('alerts:eventLog.cols.source'),
       width: '160px',
+      filter: filters.source,
       render: (r) =>
         r.node_id ? (
           <EntityName name={nodeName(r.node_id)} id={r.node_id} />
@@ -57,6 +63,7 @@ export function eventColumns(
       key: 'message',
       header: t('alerts:eventLog.cols.message'),
       width: '2fr',
+      filter: filters.message,
       render: (r) => (
         <span className="events-msg-cell" title={r.message}>
           {r.trap_name && (
@@ -72,6 +79,7 @@ export function eventColumns(
       key: 'action',
       header: t('alerts:eventLog.cols.result'),
       width: '110px',
+      filter: filters.action,
       render: (r) =>
         r.action === 'none' ? (
           <span className="muted">—</span>
@@ -83,6 +91,7 @@ export function eventColumns(
       key: 'at',
       header: t('alerts:eventLog.cols.when'),
       width: '1fr',
+      filter: filters.at,
       render: (r) => <span className="muted">{formatTimestamp(r.at_unix_ms)}</span>,
     },
   );

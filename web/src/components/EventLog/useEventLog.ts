@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../../services/api';
-import type { EventKind, EventRow } from '../../types/api';
+import type { EventRow } from '../../types/api';
 
 export const EVENT_PAGE_SIZE = 100;
 
@@ -21,7 +21,10 @@ export function eventCursor(row: EventRow): string {
 }
 
 export interface EventLogFilter {
-  kind?: EventKind;
+  /** One kind or several, comma-joined (ADR-053). */
+  kind?: string;
+  /** Rule outcomes, comma-joined. */
+  action?: string;
   node_id?: string;
   /** Already resolved to a boolean (the UI string ↔ boolean mapping stays at the call site). */
   matched?: boolean;
@@ -30,11 +33,22 @@ export interface EventLogFilter {
    *  Matching depends on the backend: substring and case-insensitive on PostgreSQL, whole-token
    *  and case-sensitive on a VictoriaLogs deployment (an inverted word index cannot do either
    *  cheaply — see `logstore::build_filter_part`). `regex` is the escape hatch that behaves the
-   *  same on both. */
+   *  same on both.
+   *
+   *  ⚠️ **The filter row does not use this.** It sends `msg`/`src`, which say *which column* the
+   *  term is about; `search` remains for MCP and for clients written against it, and the two are
+   *  ANDed if both arrive. */
   search?: string;
   /** Interpret `search` as a regular expression (message-only). Case-insensitive on both
    *  backends, and unlike a plain term it matches inside tokens — at a scan cost. */
   regex?: boolean;
+  /** The Message column's condition. */
+  msg?: string;
+  msg_regex?: boolean;
+  msg_not?: boolean;
+  /** The Source column's condition (source IP or attributed node name). No regex form. */
+  src?: string;
+  src_not?: boolean;
   /** Time-range lower bound (inclusive, RFC 3339), or undefined for unbounded. */
   start?: string;
   /** Time-range upper bound (inclusive, RFC 3339), or undefined for unbounded. */
@@ -52,10 +66,16 @@ export interface EventLog {
 
 export function useEventLog({
   kind,
+  action,
   node_id,
   matched,
   search,
   regex,
+  msg,
+  msg_regex,
+  msg_not,
+  src,
+  src_not,
   start,
   end,
 }: EventLogFilter): EventLog {
@@ -70,14 +90,22 @@ export function useEventLog({
       limit: EVENT_PAGE_SIZE,
       ...(before ? { before } : {}),
       ...(kind ? { kind } : {}),
+      ...(action ? { action } : {}),
       ...(node_id ? { node_id } : {}),
       ...(matched != null ? { matched } : {}),
       ...(search ? { q: search } : {}),
       ...(search && regex ? { regex: true } : {}),
+      ...(msg ? { msg } : {}),
+      ...(msg && msg_regex ? { msg_regex: true } : {}),
+      ...(msg && msg_not ? { msg_not: true } : {}),
+      ...(src ? { src } : {}),
+      ...(src && src_not ? { src_not: true } : {}),
       ...(start ? { start } : {}),
       ...(end ? { end } : {}),
     }),
-    [kind, node_id, matched, search, regex, start, end],
+    // Primitives only — an inline object here would be a new identity every render and would
+    // re-fire the reload effect below on every keystroke anywhere on the page.
+    [kind, action, node_id, matched, search, regex, msg, msg_regex, msg_not, src, src_not, start, end],
   );
 
   // Reload from the top whenever a filter changes (or reload() bumps the nonce).

@@ -61,7 +61,7 @@ export interface FilterOption<V extends string> {
  *    Audit and Credentials. Only `''` works with the `unset()` mapping (`lib/filterQuery.ts`), so
  *    this component supplies that option itself rather than trusting each caller to pick it.
  * 2. **`aria-label` was silently optional and had already been forgotten** (both selects in
- *    `EventFilterBar`). A toolbar select has no visible label, so it is required here.
+ *    the event log). A toolbar select has no visible label, so it is required here.
  * 3. It takes the value, not the event — which is what lets `options` come from an `as const` array
  *    (`extensibility.md` §4) instead of being hand-mapped per screen.
  *

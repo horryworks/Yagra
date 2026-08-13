@@ -203,6 +203,10 @@ pub(crate) struct SystemHealth {
     /// The WebUI's TLS certificate. Reported unhealthy only when someone has to act: it has expired,
     /// or an imported certificate is inside its last 30 days. A self-signed one renews itself.
     web_tls: DependencyHealth,
+    /// How a plain event-search term matches here: whole words on a log-store deployment,
+    /// any substring on PostgreSQL. Reported rather than assumed — see `EventSearchSemantics`,
+    /// which explains both why the two differ and why a client checks for this field's presence.
+    search_semantics: crate::events::EventSearchSemantics,
 }
 
 /// Whether the last scheduler sweep is recent enough to treat the bus as healthy.
@@ -366,6 +370,13 @@ pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
         flow,
         bus,
         web_tls,
+        // Derived from the same handle the search itself routes on, so the report cannot describe a
+        // store the query does not use. Note this is not the `logs` field above: that one says
+        // *reachable*, and an unreachable log store is still the store being searched.
+        search_semantics: match st.logs.as_ref() {
+            Some(_) => crate::events::EventSearchSemantics::Token,
+            None => crate::events::EventSearchSemantics::Substring,
+        },
     }
 }
 

@@ -1025,7 +1025,11 @@ describe('api client', () => {
       .mockResolvedValue({ ok: true, status: 200, json: async () => [] } as Response);
     globalThis.fetch = spy;
     await api.listEvents({ limit: 100, kind: 'syslog', matched: true });
-    expect(spy).toHaveBeenCalledWith('/api/v1/events?limit=100&kind=syslog&matched=true');
+    // The filter parameters lead and the paging ones trail, because both endpoints now build their
+    // filter half from one shared function — see `EventStatsFilter` for why they must stay the same
+    // set. The order is what `params.set` produces; it is pinned here only so a reordering is a
+    // visible diff rather than a silent one.
+    expect(spy).toHaveBeenCalledWith('/api/v1/events?kind=syslog&matched=true&limit=100');
     await api.listEvents();
     expect(spy).toHaveBeenLastCalledWith('/api/v1/events');
     // Free-text search rides along as `q`; an empty string is omitted.

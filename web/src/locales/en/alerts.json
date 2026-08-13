@@ -64,20 +64,9 @@
     "empty": "No events received yet.",
     "events": "events",
     "eventsLoaded": "events loaded",
-    "searchPlaceholder": "Search source or message…",
-    "searchAria": "Search events",
     "filters": {
       "allKinds": "All kinds",
-      "allEvents": "All events",
-      "matched": "Matched a rule",
-      "unmatched": "Unmatched",
-      "regexLabel": ".*",
-      "regexAria": "Search message by regular expression",
-      "searchPlaceholderRegex": "Regex over message…",
-      "from": "From",
-      "to": "To",
-      "clearRange": "Clear time range",
-      "toggle": "Filters"
+      "allEvents": "All events"
     },
     "range": {
       "24h": "Last 24h",
@@ -85,7 +74,9 @@
       "30d": "Last 30 days",
       "all": "All time",
       "custom": "Custom…"
-    }
+    },
+    "emptyWindow": "No events in the last 24 hours. The window is what keeps searching fast — widen it under When.",
+    "emptyTokenMiss": "Nothing matches a whole word here. This deployment matches whole words, so a term inside a longer word finds nothing — switch the message filter to Regex."
   },
   "eventLog": {
     "openInEvents": "Open in Events",
@@ -104,6 +95,7 @@
       "suppressed": "suppressed",
       "info": "info",
       "none": "unmatched"
-    }
+    },
+    "emptyNodeWindow": "No events from this node in the last 24 hours. Widen the window under When."
   }
 }

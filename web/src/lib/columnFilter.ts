@@ -83,6 +83,9 @@ export interface TextFilterSpec<T> {
 export interface RangeFilterSpec<T> {
   kind: 'range';
   presets: readonly RangePreset[];
+  /** Whether the [`CUSTOM_RANGE`] preset reveals two absolute instants. A column without it offers
+   *  presets only, which is all a client-side list has ever needed. */
+  custom?: boolean;
   /** The preset that is "no filter" for URL purposes. ⚠️ Not necessarily a *widening* value: the
    *  Events page defaults to 24h precisely because an unbounded default made case-insensitive
    *  search unaffordable. Narrowing-by-default is why the empty state must name the window. */
@@ -139,8 +142,9 @@ export function isAnyFiltered<T>(
 
 /** How many columns are narrowing — the `フィルタ (N)` badge on mobile, and the clear-all affordance.
  *
- *  ⚠️ One column counts once however many dimensions its condition carries. `EventFilterBar` counts
- *  `regex` as a filter of its own today, so a regex search reads as two. A mode is not a filter. */
+ *  ⚠️ One column counts once however many dimensions its condition carries. The Events toolbar this
+ *  replaced counted `regex` as a filter of its own, so a regex search read as two. A mode is not a
+ *  filter. */
 export function activeFilterCount<T>(
   columns: readonly FilterableColumn<T>[],
   state: FilterState,
@@ -199,6 +203,93 @@ export function reservedKeyCollisions<T>(columns: readonly FilterableColumn<T>[]
     seen.add(c.key);
   }
   return [...bad].sort();
+}
+
+// ---------------------------------------------------------------------------
+// The URL codec. One key per column, deleted at its default.
+
+/** Read the filter state out of a query string, defaulting anything absent.
+ *
+ *  A value this build does not understand is left as-is rather than rejected — each kind's own
+ *  decoder falls back (an unknown token drops out of a set, an unknown preset becomes the default),
+ *  which is `readEnumParam`'s rule and the opposite of the API edge's. A stale bookmark must show
+ *  the default view, never a 400 and never a control displaying a value it does not offer. */
+export function readFilterParams<T>(
+  columns: readonly FilterableColumn<T>[],
+  params: URLSearchParams,
+): FilterState {
+  const out = defaultFilters(columns);
+  for (const c of columns) {
+    const v = params.get(c.key);
+    if (v !== null) out[c.key] = v;
+  }
+  return out;
+}
+
+/** Write the filter state into a query string, **deleting** anything at its default.
+ *
+ *  So a bare URL is always the default view and a `?` always means something is narrowing the list.
+ *  Mutates `params` in place, like `writeIdParam`; the caller still owes
+ *  `setSearchParams(params, { replace: true })` or every keystroke becomes a history entry. */
+export function writeFilterParams<T>(
+  columns: readonly FilterableColumn<T>[],
+  params: URLSearchParams,
+  next: FilterState,
+): void {
+  for (const c of columns) {
+    const value = next[c.key] ?? '';
+    if (value === defaultValue(c.filter)) params.delete(c.key);
+    else params.set(c.key, value);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ranges — the `range` kind's transport.
+
+/** The preset that means "an absolute window the operator typed", rather than a relative one. */
+export const CUSTOM_RANGE = 'custom';
+
+/** The part of a range spec the codec reads. Named separately, and *not* `RangeFilterSpec<T>`,
+ *  because the codec has nothing to say about the row type — asking for the full spec would force
+ *  every caller to name a `T` it does not have, or to cast one away. */
+export interface RangeShape {
+  presets: readonly RangePreset[];
+  defaultPreset: string;
+  custom?: boolean;
+}
+
+/** A range column's decoded value: which preset, and the two instants when it is the custom one. */
+export interface RangeValue {
+  preset: string;
+  /** `<input type="datetime-local">` values (local wall clock), empty when that side is unbounded. */
+  from: string;
+  to: string;
+}
+
+/**
+ * Encode a range selection into the column's single primitive value.
+ *
+ * The instants ride **inside** the one value rather than in sibling `from`/`to` query keys. Two
+ * reasons, and the second is the load-bearing one: `FilterState` is flat by construction (see the
+ * header), so a column that needed three keys would be the first to break that; and `from`/`to` are
+ * already in `RESERVED_URL_KEYS`, which exists because pages own those names.
+ */
+export function encodeRange(v: RangeValue): string {
+  if (v.preset !== CUSTOM_RANGE) return v.preset;
+  return v.from || v.to ? `${CUSTOM_RANGE}:${v.from}|${v.to}` : CUSTOM_RANGE;
+}
+
+/** Decode a range column's value, falling back to the spec's default for anything unrecognised —
+ *  a stale bookmark from a build with different presets must land on the default view, never on a
+ *  control showing a value it does not offer (`filterParams.ts::readEnumParam`'s rule). */
+export function decodeRange(raw: string, spec: RangeShape): RangeValue {
+  const value = raw || spec.defaultPreset;
+  if (spec.custom && (value === CUSTOM_RANGE || value.startsWith(`${CUSTOM_RANGE}:`))) {
+    const [from = '', to = ''] = value.slice(CUSTOM_RANGE.length + 1).split('|');
+    return { preset: CUSTOM_RANGE, from, to };
+  }
+  const known = spec.presets.some((p) => p.value === value);
+  return { preset: known ? value : spec.defaultPreset, from: '', to: '' };
 }
 
 // ---------------------------------------------------------------------------

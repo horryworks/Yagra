@@ -119,7 +119,9 @@
     "tokenHint": "This deployment matches whole words. Use Regex to match inside a word.",
     "sheet": "Filters",
     "sheetButton": "Filter",
-    "sheetButtonCount": "Filter ({{count}})"
+    "sheetButtonCount": "Filter ({{count}})",
+    "from": "From",
+    "to": "To"
   },
   "scope": {
     "all": "All nodes",

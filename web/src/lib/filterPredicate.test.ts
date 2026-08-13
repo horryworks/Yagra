@@ -141,8 +141,16 @@ describe('range columns', () => {
     expect(applyFilters(ROWS, serverSide, { at: '6h' }, NOW)).toHaveLength(4);
   });
 
-  it('widens rather than empties when a stale URL names a preset that no longer exists', () => {
-    expect(msgs({ at: 'fortnight' })).toHaveLength(4);
+  it('falls back to the default window when a stale URL names a preset that no longer exists', () => {
+    // ⚠️ This **changed** when the range gained a custom window (ADR-053 Inc.2), and the change is
+    // deliberate. It used to widen to everything, on the reasoning that a stale bookmark should not
+    // hide rows. But the Events range default is a *performance contract* — bounded so that a
+    // case-insensitive term stays affordable — and widening on an unrecognised token is exactly the
+    // unbounded query that default exists to prevent, triggered by a URL nobody typed. Landing on
+    // the default view is also what `filterParams.ts::readEnumParam` already does for every other
+    // closed-set filter, so the two now agree.
+    expect(msgs({ at: 'fortnight' })).toHaveLength(3);
+    expect(msgs({ at: 'fortnight' })).toEqual(msgs({ at: rangeSpec.defaultPreset }));
   });
 });
 

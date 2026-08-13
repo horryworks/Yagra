@@ -17,10 +17,14 @@ import { AnchoredPopover, focusPopoverTrigger } from './AnchoredPopover';
 import { MultiSelectList } from './MultiSelectList';
 import { TextConditionEditor } from './TextConditionEditor';
 import {
+  CUSTOM_RANGE,
+  decodeRange,
   decodeSet,
   defaultValue,
+  encodeRange,
   toggleSetValue,
   type ColumnFilterSpec,
+  type RangeFilterSpec,
 } from '../../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../../lib/filterCondition';
 import { summarize, summaryIsActive } from '../../lib/filterSummary';
@@ -65,17 +69,63 @@ export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus 
       />
     );
   }
-  const current = value || spec.defaultPreset;
+  return <RangeBody spec={spec} value={value} onChange={onChange} label={label} />;
+}
+
+/** The range kind's body: the presets, plus the two instants when the custom one is chosen.
+ *
+ *  Its own component because it needs `useTranslation` for the instant labels, and `FilterBody` is
+ *  a plain `switch` that must stay callable from both the popover and the mobile sheet. */
+function RangeBody<T>({
+  spec,
+  value,
+  onChange,
+  label,
+}: {
+  spec: RangeFilterSpec<T>;
+  value: string;
+  onChange: (next: string) => void;
+  label: string;
+}) {
+  const { t } = useTranslation('common');
+  const current = decodeRange(value, spec);
   return (
-    <MultiSelectList
-      options={spec.presets}
-      selected={[current]}
-      // A range is single-valued: picking one replaces rather than adds. Re-using the list keeps the
-      // popover's look and keyboard behaviour identical across all three kinds.
-      onToggle={(v) => onChange(v)}
-      onClear={() => onChange(spec.defaultPreset)}
-      label={label}
-    />
+    <div className="dt-f-range">
+      <MultiSelectList
+        options={spec.presets}
+        selected={[current.preset]}
+        // A range is single-valued: picking one replaces rather than adds. Re-using the list keeps
+        // the popover's look and keyboard behaviour identical across all three kinds.
+        onToggle={(v) => onChange(encodeRange({ preset: v, from: '', to: '' }))}
+        onClear={() => onChange(spec.defaultPreset)}
+        label={label}
+      />
+      {/* Mounted only under the custom preset, never disabled. A From/To pair on screen but ignored
+          by the active preset is the control that makes an operator distrust the whole filter. */}
+      {spec.custom && current.preset === CUSTOM_RANGE && (
+        <div className="dt-f-instants">
+          <input
+            className="field dt-f-instant"
+            type="datetime-local"
+            value={current.from}
+            aria-label={t('filter.from')}
+            title={t('filter.from')}
+            onChange={(e) => onChange(encodeRange({ ...current, from: e.target.value }))}
+          />
+          <span className="dt-f-instant-sep" aria-hidden="true">
+            –
+          </span>
+          <input
+            className="field dt-f-instant"
+            type="datetime-local"
+            value={current.to}
+            aria-label={t('filter.to')}
+            title={t('filter.to')}
+            onChange={(e) => onChange(encodeRange({ ...current, to: e.target.value }))}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 

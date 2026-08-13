@@ -9,7 +9,7 @@
 // search on a busy deployment into a ten-second wait. See
 // `logstore::a_plain_term_stays_a_phrase_filter_not_a_regex_scan` for the measurements.
 //
-// Here rather than in `EventFilterBar.tsx` because Vitest runs `environment: 'node'` and never
+// Here rather than in a component because Vitest runs `environment: 'node'` and never
 // executes a `.tsx` test (testing.md).
 
 import { sinceIso } from '../../lib/filterQuery';

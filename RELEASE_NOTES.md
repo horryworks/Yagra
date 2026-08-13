@@ -10,6 +10,41 @@
 
 ## Unreleased
 
+### Breaking changes
+- **The Events screens' filters have moved from the toolbar into a filter row under the column
+  headers**, and the toolbar is now an action row. Each column carries its own control: Kind and
+  Result are multi-selects with counts, Message and Source take a condition that can be a substring,
+  a regular expression (Message only) or an exclusion, and When keeps the range presets with the
+  From/To instants under "Custom…". The single search box that matched *either* the source or the
+  message is gone from the UI — ask about the column you mean instead. `q` and `regex` are unchanged
+  on the API and are what the MCP `search_events` tool still calls `search`.
+- **The Events "All events / Matched a rule / Unmatched" selector has been replaced by the Result
+  column's multi-select**, which says *what* the rule did rather than only whether one matched.
+  `matched=true|false` is unchanged on `GET /api/v1/events` and `GET /api/v1/events/stats`; the
+  equivalent selection is `action=fired,refreshed,cleared,suppressed`.
+- **Every Events filter is now in the URL**, so a filtered view can be linked. A filter at its
+  default has no key at all, which means a bare `/alerts/events` is always the default view.
+
+### New Features
+- `GET /api/v1/events` and `GET /api/v1/events/stats` take five new optional filters, and the MCP
+  `search_events` tool takes the same five: `action` and `severity` (comma-separated sets, like
+  `kind` now is), `msg` + `msg_regex` + `msg_not` for a message-only condition, and `src` +
+  `src_not` for a condition on the event's source IP or the name of the node it came from. An
+  unknown token in any set is a 400 rather than a silently widened search, and each set accepts at
+  most 32 values.
+- `kind` now accepts several values (`kind=syslog,trap`). A single value is unchanged.
+- `GET /api/v1/system-health` gained **`search_semantics`** (`token` | `substring`): how a plain
+  search term matches on this deployment. On a VictoriaLogs deployment a term matches whole words,
+  so `POLICY` does not find `POLICYPERMIT` — the Events page now says so beside the filter, and its
+  empty state names that specific case instead of "nothing matches these filters".
+
+### Improvements
+- Negation is offered for both plain terms and regular expressions. It was measured on 6.7M real
+  events before it shipped: excluding costs what including costs, on both stores and in both modes.
+- The Events empty state distinguishes three cases — nothing in the window, nothing matching the
+  filters, and nothing matching *as a whole word* — because the default range narrows, so "no
+  events" was never the right sentence.
+
 ## v0.2.6 — every check on a device runs again, and twenty-two lists can be narrowed
 
 **⚠️ If you are running v0.2.3, v0.2.4 or v0.2.5, upgrade as soon as you can.** Those three

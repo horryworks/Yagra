@@ -4587,6 +4587,7 @@
           {
             "name": "kind",
             "in": "query",
+            "description": "Event kinds to include, comma-separated (`syslog,trap`). A single value is the long-standing\nspelling and still works; an empty value or an absent parameter means every kind.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4604,9 +4605,28 @@
           {
             "name": "matched",
             "in": "query",
+            "description": "Only rule-matched events (or only unmatched ones). Superseded by `action`, which says *what*\nthe rule did; kept because it is a narrower question some clients still ask.",
             "required": false,
             "schema": {
               "type": "boolean"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Rule outcomes to include, comma-separated (`fired,cleared`); empty or absent means all.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Syslog severities (0–7) to include, comma-separated; empty or absent means all. An event\nwith no syslog severity — a trap, a webhook — matches no severity filter.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -4622,6 +4642,51 @@
             "name": "regex",
             "in": "query",
             "description": "Interpret `q` as a regular expression (message-only) rather than a plain term.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "msg",
+            "in": "query",
+            "description": "Message-only condition, matched with the same store-dependent word rules as `q`.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msg_regex",
+            "in": "query",
+            "description": "Interpret `msg` as a regular expression, which reaches inside words on either store.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "msg_not",
+            "in": "query",
+            "description": "Keep the events whose message does **not** match `msg`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "src",
+            "in": "query",
+            "description": "Condition on the event's source: its IP, or the name of the node it is attributed to. There\nis no regex form — the node-name half is resolved against PostgreSQL and has no counterpart\nin a log store, so a pattern would mean two different things on the two backends.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "src_not",
+            "in": "query",
+            "description": "Keep the events whose source does **not** match `src`.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -4713,6 +4778,7 @@
           {
             "name": "kind",
             "in": "query",
+            "description": "Event kinds to include, comma-separated; empty or absent means every kind.",
             "required": false,
             "schema": {
               "type": "string"
@@ -4736,6 +4802,24 @@
             }
           },
           {
+            "name": "action",
+            "in": "query",
+            "description": "Rule outcomes to include, comma-separated; empty or absent means all.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "severity",
+            "in": "query",
+            "description": "Syslog severities (0–7) to include, comma-separated; empty or absent means all.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -4746,6 +4830,51 @@
           {
             "name": "regex",
             "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "msg",
+            "in": "query",
+            "description": "Message-only condition (see `GET /events`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "msg_regex",
+            "in": "query",
+            "description": "Interpret `msg` as a regular expression.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "msg_not",
+            "in": "query",
+            "description": "Keep the events whose message does **not** match `msg`.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "src",
+            "in": "query",
+            "description": "Condition on the event's source IP or attributed node name (see `GET /events`).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "src_not",
+            "in": "query",
+            "description": "Keep the events whose source does **not** match `src`.",
             "required": false,
             "schema": {
               "type": "boolean"
@@ -22499,6 +22628,14 @@
           }
         }
       },
+      "EventSearchSemantics": {
+        "type": "string",
+        "description": "How a plain (non-regex) search term matches on this deployment. Which one applies depends on\nthe store that answers event searches, so a client that wants a term to behave the same\neverywhere should use a regular expression instead.",
+        "enum": [
+          "token",
+          "substring"
+        ]
+      },
       "EventSourceRow": {
         "type": "object",
         "description": "A passive-event ingest source.",
@@ -29305,7 +29442,8 @@
           "logs",
           "flow",
           "bus",
-          "web_tls"
+          "web_tls",
+          "search_semantics"
         ],
         "properties": {
           "bus": {
@@ -29327,6 +29465,10 @@
           "postgres": {
             "$ref": "#/components/schemas/DependencyHealth",
             "description": "PostgreSQL (metadata store) — `SELECT 1`."
+          },
+          "search_semantics": {
+            "$ref": "#/components/schemas/EventSearchSemantics",
+            "description": "How a plain event-search term matches here: whole words on a log-store deployment,\nany substring on PostgreSQL. Reported rather than assumed — see `EventSearchSemantics`,\nwhich explains both why the two differ and why a client checks for this field's presence."
           },
           "tsdb": {
             "$ref": "#/components/schemas/DependencyHealth",

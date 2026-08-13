@@ -2811,7 +2811,10 @@ impl AnalysisRunner {
             ..Default::default()
         };
         let events = match self.logs.as_ref() {
-            Some(logs) => logs.search(&filter, &[], 20).await,
+            Some(logs) => {
+                logs.search(&filter, crate::logstore::NameIds::default(), 20)
+                    .await
+            }
             None => self.events.list_events(&filter, 20).await,
         }
         .unwrap_or_default();

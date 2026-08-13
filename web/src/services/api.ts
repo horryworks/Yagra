@@ -34,7 +34,6 @@ import type {
   Direction,
   DiscoveryCandidate,
   DiscoveryScan,
-  EventKind,
   EventRow,
   EventRule,
   EventRuleInput,
@@ -449,16 +448,35 @@ function flowQuery(
   };
 }
 
-/** Shared filter for the `/events/stats` summary endpoint — mirrors the event-log filter (no paging
- *  cursor). Blank fields are dropped; core parses/validates them. */
+/** Every filter dimension the event log and its aggregates share (no paging cursor).
+ *
+ *  One interface for both because they must stay the same set: a facet count that ignored a filter
+ *  the list applies would put numbers beside the list that disagree with it. The Rust side asserts
+ *  the same thing from its end (`every_query_surface_offers_the_same_event_filter_dimensions`).
+ *  Blank fields are dropped; core parses and validates them. */
 export interface EventStatsFilter {
   start?: string;
   end?: string;
-  kind?: EventKind;
+  /** One kind, or several comma-joined. Commas rather than repeated parameters because `buildUrl`
+   *  uses `params.set` and every token is a closed-set `[a-z_]` word, so there is nothing to
+   *  collide (ADR-053). */
+  kind?: string;
+  /** Rule outcomes, comma-joined. */
+  action?: string;
+  /** Syslog severities (0–7), comma-joined. */
+  severity?: string;
   node_id?: string;
   matched?: boolean;
   q?: string;
   regex?: boolean;
+  /** Message-only condition, with the same word rules as `q`. */
+  msg?: string;
+  msg_regex?: boolean;
+  msg_not?: boolean;
+  /** Source condition: the event's IP or the attributed node's name. No regex form — see the API
+   *  docs for why the node-name half makes one mean two different things per deployment. */
+  src?: string;
+  src_not?: boolean;
 }
 
 function eventStatsQuery(f: EventStatsFilter) {
@@ -466,10 +484,17 @@ function eventStatsQuery(f: EventStatsFilter) {
     start: f.start || undefined,
     end: f.end || undefined,
     kind: f.kind || undefined,
+    action: f.action || undefined,
+    severity: f.severity || undefined,
     node_id: f.node_id || undefined,
     matched: f.matched ?? undefined,
     q: f.q || undefined,
     regex: f.regex ? true : undefined,
+    msg: f.msg || undefined,
+    msg_regex: f.msg_regex ? true : undefined,
+    msg_not: f.msg_not ? true : undefined,
+    src: f.src || undefined,
+    src_not: f.src_not ? true : undefined,
   };
 }
 
@@ -1647,33 +1672,19 @@ export const api = {
   }): Promise<EventRuleTestResult> => apiPost('/api/v1/event-rules/test', { body }),
 
   /** Received events, keyset-paged on `recorded_at` (newest first) with optional filters. */
-  listEvents: (opts?: {
-    limit?: number;
-    before?: string;
-    kind?: EventKind;
-    node_id?: string;
-    matched?: boolean;
-    /** Free-text substring matched against source (node name / IP) or message. With `regex`
-     *  set, it is instead a regular expression matched against the message only. */
-    q?: string;
-    /** Interpret `q` as a regular expression (message-only) rather than a substring. */
-    regex?: boolean;
-    /** Time-range lower bound (inclusive, RFC 3339). Distinct from `before` (the paging cursor). */
-    start?: string;
-    /** Time-range upper bound (inclusive, RFC 3339). */
-    end?: string;
-  }): Promise<EventRow[]> =>
+  listEvents: (
+    opts?: EventStatsFilter & {
+      limit?: number;
+      /** Keyset paging cursor — rows strictly older than this. Distinct from `start`/`end`, which
+       *  bound the range being searched. */
+      before?: string;
+    },
+  ): Promise<EventRow[]> =>
     apiGet('/api/v1/events', {
       query: {
+        ...eventStatsQuery(opts ?? {}),
         limit: opts?.limit,
         before: opts?.before || undefined,
-        kind: opts?.kind || undefined,
-        node_id: opts?.node_id || undefined,
-        matched: opts?.matched ?? undefined,
-        q: opts?.q || undefined,
-        regex: opts?.regex ? true : undefined,
-        start: opts?.start || undefined,
-        end: opts?.end || undefined,
       },
     }),
 

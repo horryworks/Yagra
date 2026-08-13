@@ -6,15 +6,20 @@ import {
   activeFilterCount,
   activeFilterKeys,
   clearFilter,
+  decodeRange,
   decodeSet,
   defaultFilters,
+  encodeRange,
   encodeSet,
   filterableColumns,
   isAnyFiltered,
+  readFilterParams,
   reservedKeyCollisions,
   toggleSetValue,
+  writeFilterParams,
   TEXT_MODES,
   type FilterableColumn,
+  type RangeShape,
 } from './columnFilter';
 
 interface Row {
@@ -78,8 +83,8 @@ describe('defaults are derived, never written out', () => {
 
 describe('activeFilterCount', () => {
   it('counts columns, not dimensions', () => {
-    // `EventFilterBar` counts `regex` as a filter of its own, so a regex search reads as two. A
-    // mode is not a filter.
+    // The Events toolbar this replaced counted `regex` as a filter of its own, so a regex search
+    // read as two. A mode is not a filter.
     expect(activeFilterCount(COLUMNS, defaultFilters(COLUMNS))).toBe(0);
     expect(activeFilterCount(COLUMNS, { kind: 'syslog,trap', message: '!~^LINK', at: '24h' })).toBe(
       2,
@@ -147,6 +152,74 @@ describe('reservedKeyCollisions', () => {
   it('catches a duplicated column key', () => {
     const dup = [...COLUMNS, { key: 'kind', filter: COLUMNS[0].filter }];
     expect(reservedKeyCollisions(dup)).toEqual(['kind']);
+  });
+});
+
+describe('the URL codec', () => {
+  it('round-trips through a query string', () => {
+    const state = { kind: 'syslog,trap', message: '!~^LINK', at: 'all' };
+    const params = new URLSearchParams();
+    writeFilterParams(COLUMNS, params, state);
+    expect(readFilterParams(COLUMNS, params)).toEqual(state);
+  });
+
+  it('deletes a column at its default rather than writing it', () => {
+    // So a bare URL is always the default view and a `?` always means something is narrowing the
+    // list — the same contract `writeEnumParam` established for the single-filter screens.
+    const params = new URLSearchParams('kind=trap&at=all&message=x');
+    writeFilterParams(COLUMNS, params, defaultFilters(COLUMNS));
+    expect(params.toString()).toBe('');
+  });
+
+  it('leaves keys it does not own alone', () => {
+    // The page's own params (`node_id` here) share the query string with the filter row.
+    const params = new URLSearchParams('node_id=abc&kind=trap');
+    writeFilterParams(COLUMNS, params, { ...defaultFilters(COLUMNS), kind: 'syslog' });
+    expect(params.get('node_id')).toBe('abc');
+    expect(params.get('kind')).toBe('syslog');
+  });
+
+  it('reads an explicitly empty value as cleared, not as absent', () => {
+    // `?kind=` is what a half-applied clear looks like. For a set that is the same as unfiltered;
+    // for the range it must NOT be, or an empty value would silently widen a bounded default.
+    const params = new URLSearchParams('kind=&at=');
+    const read = readFilterParams(COLUMNS, params);
+    expect(read.kind).toBe('');
+    expect(read.at).toBe('');
+    expect(isAnyFiltered(COLUMNS, read)).toBe(true); // `at: ''` differs from the '24h' default
+  });
+});
+
+describe('the range codec', () => {
+  const spec = COLUMNS[2].filter as RangeShape;
+
+  it('encodes a preset as itself and a custom window inside the one value', () => {
+    expect(encodeRange({ preset: '1h', from: '', to: '' })).toBe('1h');
+    expect(encodeRange({ preset: 'custom', from: '', to: '' })).toBe('custom');
+    expect(encodeRange({ preset: 'custom', from: '2026-08-01T00:00', to: '' })).toBe(
+      'custom:2026-08-01T00:00|',
+    );
+  });
+
+  it('round-trips a custom window', () => {
+    const v = { preset: 'custom', from: '2026-08-01T00:00', to: '2026-08-02T12:30' };
+    expect(decodeRange(encodeRange(v), { ...spec, custom: true })).toEqual(v);
+  });
+
+  it('ignores a custom value on a column that does not offer one', () => {
+    // Without `custom`, `custom:…` is just an unknown preset — and an unknown preset lands on the
+    // default, never on "all time". Widening on a token nobody typed is how a stale bookmark turns
+    // into the unbounded query a bounded default exists to prevent.
+    expect(decodeRange('custom:2026-08-01T00:00|', spec)).toEqual({
+      preset: spec.defaultPreset,
+      from: '',
+      to: '',
+    });
+    expect(decodeRange('fortnight', spec).preset).toBe(spec.defaultPreset);
+  });
+
+  it('reads an empty value as the default', () => {
+    expect(decodeRange('', spec).preset).toBe(spec.defaultPreset);
   });
 });
 

@@ -99,3 +99,27 @@
   outline: none;
   box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
 }
+
+/* The range kind's body: presets, plus the two absolute instants under the custom preset. */
+.dt-f-range {
+  display: flex;
+  flex-direction: column;
+}
+
+.dt-f-instants {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  border-top: 1px solid var(--border-color);
+}
+
+.dt-f-instant {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-xs);
+}
+
+.dt-f-instant-sep {
+  color: var(--text-tertiary);
+}

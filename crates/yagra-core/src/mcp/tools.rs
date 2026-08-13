@@ -1524,9 +1524,12 @@ impl YagraMcp {
                        Optional `search` (case-insensitive over source/message; it matches whole \
                        words on a log-store deployment and any substring otherwise, so set `regex` \
                        to true for a message-only regex that reaches inside words either way), \
-                       `kind` (syslog|trap|webhook), \
+                       `kind` (syslog|trap|webhook), `action` (none|info|suppressed|cleared|\
+                       refreshed|fired) and `severity` (0–7), each taking a comma-separated set, \
                        `node_id`, `matched` (only rule-matched events), `since`/`until` (RFC 3339), and \
-                       `limit` (1–500, default 100). Requires live mode."
+                       `limit` (1–500, default 100). Per-column conditions narrow one field at a \
+                       time and can be negated: `msg` + `msg_regex` + `msg_not` on the message, \
+                       `src` + `src_not` on the source IP or node name. Requires live mode."
     )]
     async fn search_events(
         &self,
@@ -1556,11 +1559,18 @@ impl YagraMcp {
                 before: None,
                 start: p.since.as_deref(),
                 end: p.until.as_deref(),
-                kind: p.kind.clone(),
+                kind: p.kind.as_deref(),
+                action: p.action.as_deref(),
+                severity: p.severity.as_deref(),
                 node_id: p.node_id,
                 matched: p.matched,
                 q: p.search.as_deref(),
                 regex: p.regex.unwrap_or(false),
+                msg: p.msg.as_deref(),
+                msg_regex: p.msg_regex.unwrap_or(false),
+                msg_not: p.msg_not.unwrap_or(false),
+                src: p.src.as_deref(),
+                src_not: p.src_not.unwrap_or(false),
             }) {
                 Ok(f) => f,
                 Err(e) => return tool_api_error("search_events", &e),
@@ -3567,12 +3577,29 @@ pub(crate) struct EventSearchParams {
     search: Option<String>,
     /// Interpret `search` as a regular expression (message-only) rather than a plain term.
     regex: Option<bool>,
-    /// Restrict to an event kind: syslog, trap, or webhook.
+    /// Restrict to one or more event kinds, comma-separated: syslog, trap, webhook.
     kind: Option<String>,
+    /// Restrict to one or more rule outcomes, comma-separated: none, info, suppressed, cleared,
+    /// refreshed, fired. `fired,refreshed,cleared,suppressed` is what `matched: true` means.
+    action: Option<String>,
+    /// Restrict to one or more syslog severities (0–7), comma-separated. Traps and webhooks carry
+    /// no severity and are excluded whenever this is set.
+    severity: Option<String>,
     /// Restrict to one node's events (UUID).
     node_id: Option<Uuid>,
     /// Only events that matched an event rule (raised/cleared an alert).
     matched: Option<bool>,
+    /// Condition on the message alone, with the same word rules as `search`.
+    msg: Option<String>,
+    /// Interpret `msg` as a regular expression, which reaches inside words on either store.
+    msg_regex: Option<bool>,
+    /// Return the events whose message does **not** match `msg`.
+    msg_not: Option<bool>,
+    /// Condition on the event's source: its IP, or the name of the node it is attributed to.
+    /// There is no regex form for this one.
+    src: Option<String>,
+    /// Return the events whose source does **not** match `src`.
+    src_not: Option<bool>,
     /// Time-range lower bound, RFC 3339.
     since: Option<String>,
     /// Time-range upper bound, RFC 3339.
