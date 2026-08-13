@@ -23,6 +23,84 @@ use uuid::Uuid;
 /// which would have become a compile error the moment either domain moved out.
 pub(crate) const MAX_JSON_DOC_BYTES: usize = 262_144;
 
+/// How many tokens one comma-separated set parameter may name.
+///
+/// Not a query-cost guard — that was measured and there isn't one: on 6.7M events an `in(…)` list
+/// covering every stored value cost what a single value cost. It is a **request-size** guard, the
+/// same reason a term is capped in chars, and it is deliberately far above the largest closed set
+/// this API has (`syslog_severity`, 8 values). Do not read it as a sibling of `NAME_SEARCH_NODE_LIMIT`
+/// or `STATS_SCOPE_NODE_LIMIT` in [`super::eventlog`]: those two bound how much *work* a query does,
+/// and their values were chosen from that.
+pub(crate) const FILTER_SET_MAX_TOKENS: usize = 32;
+
+/// Split a comma-separated set parameter into trimmed, de-duplicated tokens, preserving order.
+///
+/// `Some("")` yields an empty set, which means *unfiltered* — the same as omitting the parameter.
+/// That is deliberate: the WebUI clears a filter by writing an empty value before it removes the
+/// key, and a client that sends `kind=` should get the unfiltered list rather than a 400 or,
+/// worse, a set containing one empty string that matches nothing.
+pub(crate) fn split_set(raw: Option<&str>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for tok in raw.unwrap_or_default().split(',') {
+        let tok = tok.trim();
+        if !tok.is_empty() && !out.iter().any(|v| v == tok) {
+            out.push(tok.to_owned());
+        }
+    }
+    out
+}
+
+/// Validate one set parameter: cap its size, then map each token through `parse`, rejecting the
+/// first one that is not a member. Rejecting rather than dropping is the whole point — a dropped
+/// token silently widens the result to everything, and the operator reads the widened list as the
+/// answer to the question they asked.
+///
+/// **This lives here rather than in one domain because the spelling is the contract.** It was
+/// `eventlog`'s private helper while events were the only multi-value surface; when alert history,
+/// audit, thresholds and findings each gained set parameters (ADR-053 Inc.4b), a second copy would
+/// have been four chances to differ from Events on the empty-string case, the cap, or whether an
+/// unknown token is rejected or dropped — and the *dropped* spelling is the one that fails silently.
+pub(crate) fn parse_set<T>(
+    field: &str,
+    raw: Option<&str>,
+    allowed: &str,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<T>, ApiError> {
+    parse_set_with(
+        "invalid_filter",
+        field,
+        raw,
+        |_| format!("{field} must be {allowed}"),
+        parse,
+    )
+}
+
+/// [`parse_set`] with the rejection's error code and message chosen by the caller.
+///
+/// For the endpoints whose single-value predecessors answered a *specific* code the WebUI branches
+/// on — `invalid_tool`, `invalid_severity` on the findings search. Widening those to the shared
+/// `invalid_filter` while adding multi-value support would have been a silent contract change on a
+/// surface that already had a client reading the code.
+pub(crate) fn parse_set_with<T>(
+    code: &'static str,
+    field: &str,
+    raw: Option<&str>,
+    message: impl Fn(&str) -> String,
+    parse: impl Fn(&str) -> Option<T>,
+) -> Result<Vec<T>, ApiError> {
+    let tokens = split_set(raw);
+    if tokens.len() > FILTER_SET_MAX_TOKENS {
+        return Err(ApiError::bad_request(
+            "invalid_filter",
+            format!("{field} may name at most {FILTER_SET_MAX_TOKENS} values"),
+        ));
+    }
+    tokens
+        .iter()
+        .map(|t| parse(t).ok_or_else(|| ApiError::bad_request(code, message(t))))
+        .collect()
+}
+
 /// The id of a freshly created resource — the whole body of a `201`.
 ///
 /// Deliberately one shape for every creator. The `json!({"id": …})` literal it replaces was written

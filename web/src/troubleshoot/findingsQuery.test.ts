@@ -49,7 +49,9 @@ describe('queryFor', () => {
     const q = queryFor({ ...DEFAULT_FILTERS, range: 'all' }, null, NOW);
     expect(q.tool).toBeUndefined();
     expect(q.severity).toBeUndefined();
+    expect(q.q).toBeUndefined();
     expect(q.node_id).toBeUndefined();
+    expect(q.node_q).toBeUndefined();
     expect(q.group_id).toBeUndefined();
     expect(q.since).toBeUndefined();
     expect(q.before).toBeUndefined();
@@ -59,16 +61,22 @@ describe('queryFor', () => {
 
   it('carries every set filter through', () => {
     const f: FindingFilters = {
-      tool: 'flap',
+      // Several tools in one request — the joined spelling is what the API takes, so `queryFor`
+      // passes it straight through rather than re-encoding a list at the last moment.
+      tool: 'flap,capacity',
       severity: 'warn',
+      q: 'cpu',
+      nodeQ: 'core-sw',
       range: '24h',
       nodeId: 'node-7',
       groupId: 'group-3',
     };
     expect(queryFor(f, { before: '2026-08-02T01:00:00Z', before_id: 'f9' }, NOW)).toEqual({
-      tool: 'flap',
+      tool: 'flap,capacity',
       severity: 'warn',
+      q: 'cpu',
       node_id: 'node-7',
+      node_q: 'core-sw',
       group_id: 'group-3',
       since: '2026-08-01T12:00:00.000Z',
       before: '2026-08-02T01:00:00Z',

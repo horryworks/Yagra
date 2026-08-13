@@ -60,19 +60,24 @@ pub(crate) struct ThresholdPage {
 
 /// `?limit=` plus the filters, all optional.
 ///
-/// The two enums are parsed at the edge rather than taken as strings: an unknown token is a `400`,
-/// never a filter silently dropped. Dropping it here would *widen* the answer — the operator asked
-/// for node-level rules and would be shown every rule in the fleet, believing the narrower thing.
+/// The two enums are parsed at the edge, and an unknown token is a `400` rather than a filter
+/// silently dropped. Dropping one would *widen* the answer — the operator asked for node-level
+/// rules and would be shown every rule in the fleet, believing the narrower thing.
+///
+/// Since ADR-053 Inc.4b they are comma-separated strings rather than typed serde fields, so several
+/// values can be named at once; the parse moved from serde to [`super::util::parse_set`]. The
+/// rejection property is unchanged, which is the half that matters.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(super) struct ThresholdQuery {
     limit: Option<i64>,
     /// Case-insensitive substring of the metric name.
     q: Option<String>,
-    /// Only rules defined at this scope level (`profile` | `group` | `node`).
-    scope_level: Option<yagra_common::ScopeLevel>,
-    /// Only rules breaching in this direction (`above` | `below`).
-    direction: Option<yagra_common::Direction>,
+    /// Comma-separated scope levels (`profile` | `group` | `node`); empty or absent means every
+    /// level.
+    scope_level: Option<String>,
+    /// Comma-separated directions (`above` | `below`); empty or absent means both.
+    direction: Option<String>,
 }
 
 #[utoipa::path(
@@ -80,6 +85,7 @@ pub(super) struct ThresholdQuery {
     params(ThresholdQuery),
     responses(
         (status = 200, description = "A capped page of matching rules, with the matching total", body = ThresholdPage),
+        (status = 400, description = "`scope_level` or `direction` names a value outside its vocabulary", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role below Admin — the ruleset decides when the fleet pages someone", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -91,14 +97,26 @@ async fn list_thresholds(
     admin: Admin,
 ) -> ApiResult<Json<ThresholdPage>> {
     let metric = normalize_search(q.q.as_deref());
+    let levels = super::util::parse_set(
+        "scope_level",
+        q.scope_level.as_deref(),
+        "profile, group or node",
+        yagra_common::ScopeLevel::from_token,
+    )?;
+    let directions = super::util::parse_set(
+        "direction",
+        q.direction.as_deref(),
+        "above or below",
+        yagra_common::Direction::from_token,
+    )?;
     Ok(Json(
         threshold_page(
             &admin,
             q.limit,
             &crate::thresholds::ThresholdFilter {
                 metric: metric.as_deref(),
-                level: q.scope_level,
-                direction: q.direction,
+                level: &levels,
+                direction: &directions,
             },
         )
         .await?,

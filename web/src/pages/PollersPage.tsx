@@ -9,7 +9,7 @@
 // Settings ▸ Pollers trail, a TableToolbar (count + primary action) over the shared `.ytable`, and
 // destructive-consent via the shared Modal.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError, errMsg } from '../services/api';
@@ -28,20 +28,12 @@ import { Modal } from '../components/ui/Modal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
 import { TextInput, FieldHint } from '../components/ui/Field';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import {
-  DEFAULT_POLLER_FILTERS,
-  isPollerFiltered,
-  matchesPoller,
-  POLLER_STATUSES,
-  type PollerFilters,
-} from './pollerFilters';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { pollerFilters } from './pollerFilters';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
@@ -57,7 +49,6 @@ import {
 } from '../lib/pollers';
 import './PollersPage.css';
 
-const COLS = '1.2fr 120px 108px 92px 150px 82px 64px 64px 64px 96px 112px 130px 58px';
 const REFRESH_MS = 10_000;
 
 /** One pool card in the summary strip: name + node/poller counts + mode, with a warning chip when
@@ -469,10 +460,182 @@ export function PollersPage() {
   // Client-side: a 50k-node deployment still has a handful of pollers, so the list is bounded by
   // how many were deployed rather than by fleet size (ui-conventions). The pool choices come from
   // the pools the page already loaded, not from a second list to keep in step.
-  const [filters, setFilters] = useState<PollerFilters>(DEFAULT_POLLER_FILTERS);
-  const set = <K extends keyof PollerFilters>(key: K, value: PollerFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = pollers.filter((x) => matchesPoller(x, filters));
+  const [sheet, setSheet] = useState(false);
+  const columns = useMemo<Column<PollerInfo>[]>(() => {
+    const specs = pollerFilters(t, pools.map((p) => p.pool));
+    const cols: Column<PollerInfo>[] = [
+      {
+        key: 'poller',
+        header: t('pollers.cols.poller'),
+        width: '1.2fr',
+        render: (p) => (
+          // A button, not a clickable row: a row click would fight the drill-down toggle, and a
+          // button is keyboard-reachable by construction.
+          <button
+            type="button"
+            className="poller-drill mono"
+            onClick={() => setDrillId((cur) => (cur === p.id ? null : p.id))}
+          >
+            {p.id}
+          </button>
+        ),
+      },
+      {
+        key: 'pool',
+        header: t('pollers.cols.pool'),
+        width: '120px',
+        render: (p) => <Badge tone="neutral">{p.pool}</Badge>,
+      },
+      {
+        key: 'status',
+        header: t('pollers.cols.status'),
+        width: '108px',
+        render: (p) => {
+          const online = p.status === 'online';
+          return (
+            <span className={`poller-status ${online ? 'online' : 'offline'}`}>
+              <span className="poller-status-dot" />
+              {online ? t('pollers.status.online') : t('pollers.status.offline')}
+            </span>
+          );
+        },
+      },
+      {
+        // Version skew, not just a version. A remote-site poller is upgraded on its own host, so
+        // drifting behind core is the normal outcome of an upgrade and the operator has no other
+        // place to notice it (ADR-051).
+        key: 'version',
+        header: t('pollers.cols.version'),
+        width: '150px',
+        render: (p) => {
+          const online = p.status === 'online';
+          return (
+            <span className="mono">
+              {p.version ?? '—'}
+              {online && p.version && coreVersion && p.version !== coreVersion && (
+                <>
+                  {' '}
+                  <Badge tone="warning" title={t('pollers.skewHint', { core: coreVersion })}>
+                    {t('pollers.skew')}
+                  </Badge>
+                </>
+              )}
+              {online && p.caps.includes('self-upgrade') && (
+                <>
+                  {' '}
+                  <Badge tone="neutral" title={t('pollers.selfUpgradeHint')}>
+                    {t('pollers.selfUpgrade')}
+                  </Badge>
+                </>
+              )}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'workingSet',
+        header: t('pollers.cols.workingSet'),
+        width: '150px',
+        render: (p) =>
+          workingSetLabel(p.working_set_nodes, p.working_set_specs, p.status === 'online', t),
+      },
+      {
+        key: 'results',
+        header: t('pollers.cols.results'),
+        width: '82px',
+        align: 'right',
+        render: (p) => <span className="mono">{formatCount(p.results_total)}</span>,
+      },
+      {
+        key: 'cpu',
+        header: t('pollers.cols.cpu'),
+        width: '64px',
+        align: 'right',
+        render: (p) => <span className="mono">{formatUtil(p.cpu_pct ?? null)}</span>,
+      },
+      {
+        key: 'mem',
+        header: t('pollers.cols.mem'),
+        width: '64px',
+        align: 'right',
+        render: (p) => <span className="mono">{formatUtil(p.mem_used_pct ?? null)}</span>,
+      },
+      {
+        key: 'disk',
+        header: t('pollers.cols.disk'),
+        width: '64px',
+        align: 'right',
+        render: (p) => <span className="mono">{formatUtil(p.disk_used_pct ?? null)}</span>,
+      },
+      {
+        // Date only: this is inventory ("since when has this poller existed"), so a registration
+        // date beats a relative age. Exact instant on hover.
+        key: 'firstSeen',
+        header: t('pollers.cols.firstSeen'),
+        width: '96px',
+        render: (p) => (
+          <span className="mono" title={p.first_seen ? formatExactTime(p.first_seen) : undefined}>
+            {p.first_seen ? dateOnly(p.first_seen) : '—'}
+          </span>
+        ),
+      },
+      {
+        key: 'lastSeen',
+        header: t('pollers.cols.lastSeen'),
+        width: '112px',
+        render: (p) => lastSeenLabel(p.last_seen ?? null, p.status === 'online', t),
+      },
+      {
+        // Editable even while the poller is online, unlike Remove: this is the operator's column,
+        // not the poller's, and it is what unblocks derived suppression.
+        key: 'anchor',
+        header: t('pollers.cols.anchor'),
+        width: '130px',
+        render: (p) =>
+          authed ? (
+            <button type="button" className="poller-drill" onClick={() => setAnchoring(p)}>
+              {p.anchor_node_id ? (
+                <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
+              ) : (
+                t('pollers.anchor.set')
+              )}
+            </button>
+          ) : p.anchor_node_id ? (
+            <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
+          ) : (
+            '—'
+          ),
+      },
+      {
+        key: 'actions',
+        header: t('pollers.cols.actions'),
+        width: '58px',
+        align: 'right',
+        render: (p) =>
+          authed && p.status !== 'online' ? (
+            <span className="ytable-actions">
+              <IconButton
+                title={t('pollers.remove.title')}
+                danger
+                onClick={() => setDeleting(p)}
+              >
+                <TrashIcon />
+              </IconButton>
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [t, authed, pools, coreVersion, nodeName]);
+
+  // URL-backed: the pollers table is the only filtered table on this route — the gap and
+  // drill-down subsections below carry no filters of their own.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    pollers,
+    { url: true },
+  );
 
   // Refresh without flashing the initial loading state on every poll (loading only gates the very
   // first paint, like the sibling list pages).
@@ -556,30 +719,16 @@ export function PollersPage() {
           )}
 
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => set('q', v)}
-              placeholder={t('pollers.filter.searchPlaceholder')}
-              ariaLabel={t('pollers.filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.status}
-              onChange={(v) => set('status', v)}
-              options={POLLER_STATUSES.map((st) => ({ value: st, label: t(`pollers.status.${st}`) }))}
-              allLabel={t('pollers.filter.allStatuses')}
-              ariaLabel={t('pollers.filter.statusAria')}
-            />
-            <FilterSelect
-              value={filters.pool}
-              onChange={(v) => set('pool', v)}
-              options={pools.map((x) => ({ value: x.pool, label: x.pool }))}
-              allLabel={t('pollers.filter.allPools')}
-              ariaLabel={t('pollers.filter.poolAria')}
-            />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
               shown={shown.length}
-              total={isPollerFiltered(filters) ? pollers.length : undefined}
+              total={anyFiltered ? pollers.length : undefined}
               noun={t('common:noun.poller', { count: shown.length })}
             />
             {authed && (
@@ -589,144 +738,26 @@ export function PollersPage() {
             )}
           </TableToolbar>
 
-          <div className="ytable">
-            <div className="ytable-scroll">
-              <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h">{t('pollers.cols.poller')}</div>
-                <div className="ytable-h">{t('pollers.cols.pool')}</div>
-                <div className="ytable-h">{t('pollers.cols.status')}</div>
-                <div className="ytable-h">{t('pollers.cols.version')}</div>
-                <div className="ytable-h">{t('pollers.cols.workingSet')}</div>
-                <div className="ytable-h right">{t('pollers.cols.results')}</div>
-                <div className="ytable-h right">{t('pollers.cols.cpu')}</div>
-                <div className="ytable-h right">{t('pollers.cols.mem')}</div>
-                <div className="ytable-h right">{t('pollers.cols.disk')}</div>
-                <div className="ytable-h">{t('pollers.cols.firstSeen')}</div>
-                <div className="ytable-h">{t('pollers.cols.lastSeen')}</div>
-                <div className="ytable-h">{t('pollers.cols.anchor')}</div>
-                <div className="ytable-h right">{t('pollers.cols.actions')}</div>
-              </div>
-
-              {shown.length === 0 ? (
-                <div className="yt-empty">
-                  <p className="yt-empty-title">
-                    {loading
-                      ? t('common:loading')
-                      : isPollerFiltered(filters)
-                        ? t('common:filter.noMatch')
-                        : t('pollers.empty.title')}
-                  </p>
-                  {!loading && !isPollerFiltered(filters) && (
-                    <p className="yt-empty-sub">
-                      <Trans
-                        t={t}
-                        i18nKey="pollers.empty.sub"
-                        components={{ b: <strong /> }}
-                      />
-                    </p>
-                  )}
-                </div>
-              ) : (
-                shown.map((p) => {
-                  const online = p.status === 'online';
-                  return (
-                    <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={p.id}>
-                      <div className="ytable-cell">
-                        {/* A button, not a clickable row: `.ytable-row` has no clickable variant,
-                            and a button is keyboard-reachable by construction. */}
-                        <button
-                          type="button"
-                          className="poller-drill mono"
-                          onClick={() => setDrillId(drillId === p.id ? null : p.id)}
-                        >
-                          {p.id}
-                        </button>
-                      </div>
-                      <div className="ytable-cell">
-                        <Badge tone="neutral">{p.pool}</Badge>
-                      </div>
-                      <div className="ytable-cell">
-                        <span className={`poller-status ${online ? 'online' : 'offline'}`}>
-                          <span className="poller-status-dot" />
-                          {online ? t('pollers.status.online') : t('pollers.status.offline')}
-                        </span>
-                      </div>
-                      {/* Version skew, not just a version. A remote-site poller is upgraded on its
-                          own host, so drifting behind core is the normal outcome of an upgrade and
-                          the operator has no other place to notice it (ADR-051). */}
-                      <div className="ytable-cell mono">
-                        {p.version ?? '—'}
-                        {online && p.version && coreVersion && p.version !== coreVersion && (
-                          <>
-                            {' '}
-                            <Badge tone="warning" title={t('pollers.skewHint', { core: coreVersion })}>
-                              {t('pollers.skew')}
-                            </Badge>
-                          </>
-                        )}
-                        {online && p.caps.includes('self-upgrade') && (
-                          <>
-                            {' '}
-                            <Badge tone="neutral" title={t('pollers.selfUpgradeHint')}>
-                              {t('pollers.selfUpgrade')}
-                            </Badge>
-                          </>
-                        )}
-                      </div>
-                      <div className="ytable-cell">
-                        {workingSetLabel(p.working_set_nodes, p.working_set_specs, online, t)}
-                      </div>
-                      <div className="ytable-cell right mono">{formatCount(p.results_total)}</div>
-                      <div className="ytable-cell right mono">{formatUtil(p.cpu_pct ?? null)}</div>
-                      <div className="ytable-cell right mono">{formatUtil(p.mem_used_pct ?? null)}</div>
-                      <div className="ytable-cell right mono">{formatUtil(p.disk_used_pct ?? null)}</div>
-                      {/* Date only: this is inventory ("since when has this poller existed"), so a
-                          registration date beats a relative age. Exact instant on hover. */}
-                      <div className="ytable-cell mono" title={p.first_seen ? formatExactTime(p.first_seen) : undefined}>
-                        {p.first_seen ? dateOnly(p.first_seen) : '—'}
-                      </div>
-                      <div className="ytable-cell">{lastSeenLabel(p.last_seen ?? null, online, t)}</div>
-                      <div className="ytable-cell">
-                        {/* Editable even while the poller is online, unlike Remove: this is the
-                            operator's column, not the poller's, and it is what unblocks derived
-                            suppression. */}
-                        {authed ? (
-                          <button
-                            type="button"
-                            className="poller-drill"
-                            onClick={() => setAnchoring(p)}
-                          >
-                            {p.anchor_node_id ? (
-                              <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
-                            ) : (
-                              t('pollers.anchor.set')
-                            )}
-                          </button>
-                        ) : p.anchor_node_id ? (
-                          <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
-                        ) : (
-                          '—'
-                        )}
-                      </div>
-                      <div className="ytable-cell right">
-                        {authed && !online && (
-                          <span className="ytable-actions">
-                            <IconButton
-                              title={t('pollers.remove.title')}
-                              danger
-                              onClick={() => setDeleting(p)}
-                            >
-                              <TrashIcon />
-                            </IconButton>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(p) => p.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('common:filter.noMatch') : t('pollers.empty.title')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
 
           {drill && <PollerNodesSection data={drill} onClose={() => setDrillId(null)} />}
 

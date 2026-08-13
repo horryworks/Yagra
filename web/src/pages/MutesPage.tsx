@@ -3,11 +3,17 @@
 // check (metric name) — until a given time. The alert still fires and shows in the UI and
 // history; only the page is suppressed. Expired mutes drop off automatically.
 //
-// Data-table standard v2: a toolbar (count + "+ Add mute") over the shared `.ytable`. Adding a
-// mute and lifting one both go through modals — the add form picks a node + optional check and an
-// expiry; lifting is a destructive-consent confirm.
+// Data-table standard v2: an action row (count + "+ Add mute") over the shared `DataTable`, with
+// the narrowing controls in the filter row under the header (ADR-053 Inc.5). Adding a mute and
+// lifting one both go through modals — the add form picks a node + optional check and an expiry;
+// lifting is a destructive-consent confirm.
+//
+// The migration off hand-rolled `ytable-head` markup also buys virtualization, which this screen
+// did not have and the stated tens-of-thousands-of-rows requirement asks for. A mute list is not
+// fleet-scaled, so that is insurance rather than a fix — the reason to do it here is that the
+// filter row and the hand-rolled grid could not coexist (three grids share one template).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, ApiError } from '../services/api';
@@ -19,27 +25,17 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
 import { TrashIcon } from '../components/ui/icons';
 import { AddMuteModal } from '../components/suppression/AddMuteModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { formatScheduleTime } from '../lib/format';
-import {
-  DEFAULT_MUTE_FILTERS,
-  isMuteFiltered,
-  matchesMute,
-  MUTE_STATES,
-  type MuteFilters,
-} from './suppressionFilters';
+import { muteFilters } from './suppressionFilters';
 import './MutesPage.css';
-
-const COLS = '1.4fr 170px 180px 1fr 92px';
 
 /** Confirm + lift a mute. Destructive-consent chrome comes from the shared modal; only the
  *  sentence and the confirm label are this dialog's own (the action is "lift", not "delete"). */
@@ -92,6 +88,7 @@ export function MutesPage() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [lifting, setLifting] = useState<Mute | null>(null);
+  const [sheet, setSheet] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -124,13 +121,89 @@ export function MutesPage() {
         : '—';
 
   // Client-side because the list is bounded by what an operator typed in, not by fleet size
-  // (ui-conventions). The judgement is in `suppressionFilters.ts`; this is only the wiring. One
-  // clock reading per render, so two rows cannot disagree about a mute expiring between them.
-  const now = Date.now();
-  const [filters, setFilters] = useState<MuteFilters>(DEFAULT_MUTE_FILTERS);
-  const set = <K extends keyof MuteFilters>(key: K, value: MuteFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = rows.filter((m) => matchesMute(m, filters, targetName, now));
+  // (ui-conventions). The judgement is in `suppressionFilters.ts`; this is only the wiring.
+  //
+  // One clock reading, pinned to the row list rather than re-read each render, so a mute cannot
+  // expire *while the operator reads the screen* and move between the two facet counts. A ref
+  // rather than a memo: a memo is a cache the runtime may drop, not a guarantee.
+  const clock = useRef<{ rows: unknown; at: number } | null>(null);
+  if (!clock.current || clock.current.rows !== rows) clock.current = { rows, at: Date.now() };
+  const now = clock.current.at;
+
+  const columns = useMemo<Column<Mute>[]>(() => {
+    const specs = muteFilters(t, targetName, now);
+    const cols: Column<Mute>[] = [
+      {
+        key: 'target',
+        header: t('mutes.cols.target'),
+        width: '1.4fr',
+        render: (m) => (
+          <span className="mute-target">
+            {m.scope_kind === 'group' && <Badge>{t('mutes.badge.group')}</Badge>}
+            <EntityName
+              name={targetName(m)}
+              id={(m.scope_kind === 'group' ? m.group_id : m.node_id) ?? undefined}
+            />
+          </span>
+        ),
+      },
+      {
+        key: 'metric',
+        header: t('mutes.cols.metric'),
+        width: '170px',
+        render: (m) =>
+          m.scope_kind === 'group' ? (
+            <Badge tone="info">{t('mutes.badge.subgroups')}</Badge>
+          ) : m.metric_name ? (
+            <Badge tone="neutral">
+              <span className="mono">{m.metric_name}</span>
+            </Badge>
+          ) : (
+            <Badge tone="info">{t('mutes.badge.allMetrics')}</Badge>
+          ),
+      },
+      {
+        key: 'until',
+        header: t('mutes.cols.until'),
+        width: '180px',
+        render: (m) => <span className="mono">{formatScheduleTime(m.until_at)}</span>,
+      },
+      {
+        key: 'reason',
+        header: t('mutes.cols.reason'),
+        width: '1fr',
+        render: (m) => <span className="ellipsis muted">{m.reason}</span>,
+      },
+      {
+        key: 'actions',
+        header: t('mutes.cols.actions'),
+        width: '92px',
+        align: 'right',
+        render: (m) =>
+          authed ? (
+            <span className="ytable-actions">
+              <IconButton title={t('mutes.lift.title')} danger onClick={() => setLifting(m)}>
+                <TrashIcon />
+              </IconButton>
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `targetName` closes over `groups` and the name resolver, so it is not stable across renders;
+    // depending on it would rebuild the columns every render and re-run the predicate. The two
+    // things it actually reads are in the list instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, now, authed, groups, nodeName]);
+
+  // URL-backed: one table on this route, so the column keys are free and a narrowed view can be
+  // sent to someone.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
+  );
 
   return (
     <div>
@@ -153,23 +226,16 @@ export function MutesPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => set('q', v)}
-              placeholder={t('mutes.filter.searchPlaceholder')}
-              ariaLabel={t('mutes.filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.state}
-              onChange={(v) => set('state', v)}
-              options={MUTE_STATES.map((s) => ({ value: s, label: t(`mutes.state.${s}`) }))}
-              allLabel={t('mutes.filter.allStates')}
-              ariaLabel={t('mutes.filter.stateAria')}
-            />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
               shown={shown.length}
-              total={isMuteFiltered(filters) ? rows.length : undefined}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('mutes.resultNoun')}
             />
             {authed && (
@@ -179,68 +245,26 @@ export function MutesPage() {
             )}
           </TableToolbar>
 
-          <div className="ytable">
-            <div className="ytable-scroll">
-              <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h">{t('mutes.cols.target')}</div>
-                <div className="ytable-h">{t('mutes.cols.metric')}</div>
-                <div className="ytable-h">{t('mutes.cols.until')}</div>
-                <div className="ytable-h">{t('mutes.cols.reason')}</div>
-                <div className="ytable-h right">{t('mutes.cols.actions')}</div>
-              </div>
-
-              {shown.length === 0 ? (
-                <div className="yt-empty">
-                  <p className="yt-empty-title">
-                    {loading
-                      ? t('common:loading')
-                      : isMuteFiltered(filters)
-                        ? t('mutes.empty.filtered')
-                        : t('mutes.empty.title')}
-                  </p>
-                  {!loading && !isMuteFiltered(filters) && (
-                    <p className="yt-empty-sub">{t('mutes.empty.sub')}</p>
-                  )}
-                </div>
-              ) : (
-                shown.map((m) => (
-                  <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={m.id}>
-                    <div className="ytable-cell">
-                      <span className="mute-target">
-                        {m.scope_kind === 'group' && <Badge>{t('mutes.badge.group')}</Badge>}
-                        <EntityName
-                          name={targetName(m)}
-                          id={(m.scope_kind === 'group' ? m.group_id : m.node_id) ?? undefined}
-                        />
-                      </span>
-                    </div>
-                    <div className="ytable-cell">
-                      {m.scope_kind === 'group' ? (
-                        <Badge tone="info">{t('mutes.badge.subgroups')}</Badge>
-                      ) : m.metric_name ? (
-                        <Badge tone="neutral">
-                          <span className="mono">{m.metric_name}</span>
-                        </Badge>
-                      ) : (
-                        <Badge tone="info">{t('mutes.badge.allMetrics')}</Badge>
-                      )}
-                    </div>
-                    <div className="ytable-cell mono">{formatScheduleTime(m.until_at)}</div>
-                    <div className="ytable-cell ellipsis muted">{m.reason}</div>
-                    <div className="ytable-cell right">
-                      {authed && (
-                        <span className="ytable-actions">
-                          <IconButton title={t('mutes.lift.title')} danger onClick={() => setLifting(m)}>
-                            <TrashIcon />
-                          </IconButton>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(m) => m.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('mutes.empty.filtered') : t('mutes.empty.title')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, t(`mutes.cols.${c.key}`)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

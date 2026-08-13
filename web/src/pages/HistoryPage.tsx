@@ -156,7 +156,11 @@ export function HistoryPage() {
         ),
       },
       {
-        key: 'node',
+        // ⚠️ Keyed `node_q`, not `node`: the column key **is** the filter's URL key (ADR-053
+        // decision 12) and this one carries a node-*name* substring, not the id `node_id` already
+        // means. Nothing type-checks the `specs[c.key]` lookup below — a mismatch here silently
+        // ships a column with no filter row cell.
+        key: 'node_q',
         header: t('history.cols.node'),
         width: '1.4fr',
         // A row whose subject is not a node has nothing to resolve through the inventory — see
@@ -164,7 +168,9 @@ export function HistoryPage() {
         render: (r) => <AlertSubjectName alert={r} nodeName={nodeName} />,
       },
       {
-        key: 'what',
+        // `metric` rather than `what`: the API parameter is the metric name, and the column key is
+        // the URL key.
+        key: 'metric',
         header: t('history.cols.what'),
         width: '1.6fr',
         render: (r) => <AlertWhatText what={alertWhat(r)} />,

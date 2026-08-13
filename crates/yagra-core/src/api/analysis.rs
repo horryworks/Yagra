@@ -536,12 +536,19 @@ pub(crate) struct SavedFindingsQuery {
     pub(crate) before_id: Option<Uuid>,
     /// Inclusive lower bound on finding time, RFC 3339 — the range filter, not the cursor.
     pub(crate) since: Option<String>,
-    /// Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`).
+    /// Comma-separated diagnostics (`AnalysisTool` tokens, e.g. `anomaly,capacity`); empty or
+    /// absent means every tool. An unknown token is rejected rather than ignored.
     pub(crate) tool: Option<String>,
-    /// Restrict to `crit`, `warn` or `info`.
+    /// Comma-separated severities (`crit`, `warn`, `info`); empty or absent means every severity.
     pub(crate) severity: Option<String>,
+    /// Case-insensitive substring of the metric name **or** the finding kind — the two halves the
+    /// *What* column shows.
+    pub(crate) q: Option<String>,
     /// Restrict to findings about one node.
     pub(crate) node_id: Option<Uuid>,
+    /// Case-insensitive substring of the node's current name. Distinct from `node_id`, which names
+    /// exactly one node; fleet-wide findings never match this.
+    pub(crate) node_q: Option<String>,
     /// Restrict to findings about nodes in one folder group **and everything beneath it**.
     pub(crate) group_id: Option<Uuid>,
     /// Page size, clamped to 200 (default 100).
@@ -592,33 +599,40 @@ pub(crate) async fn search_saved_findings(
     // Validate before consulting availability, unlike the plain reads. A malformed filter is the
     // caller's own request being wrong, and answering `200 []` for it would mean a client with a
     // typo in its cursor pages forever through an empty result and never learns why.
-    let tool = q
-        .tool
-        .as_deref()
-        .map(|t| {
-            AnalysisTool::from_str(t).ok_or_else(|| {
-                ApiError::bad_request(
-                    "invalid_tool",
-                    format!(
-                        "unknown analysis tool {t:?}; must be one of: {}",
-                        AnalysisTool::token_list()
-                    ),
-                )
-            })
-        })
-        .transpose()?;
+    // Same set spelling as events, alert history and the audit log (ADR-053): comma-separated,
+    // empty means unfiltered, an unknown token is a 400. The error codes stay `invalid_tool` /
+    // `invalid_severity` rather than becoming the shared `invalid_filter`, because the WebUI
+    // branches on them.
+    let tool = super::util::parse_set_with(
+        "invalid_tool",
+        "tool",
+        q.tool.as_deref(),
+        |t| {
+            format!(
+                "unknown analysis tool {t:?}; must be one of: {}",
+                AnalysisTool::token_list()
+            )
+        },
+        AnalysisTool::from_str,
+    )?;
     // Validated against the list the engine writes from, not against a copy of it.
-    if let Some(sev) = q.severity.as_deref() {
-        if !crate::analysis::FINDING_SEVERITIES.contains(&sev) {
-            return Err(ApiError::bad_request(
-                "invalid_severity",
-                format!(
-                    "unknown severity {sev:?}; must be one of: {}",
-                    crate::analysis::FINDING_SEVERITIES.join(", ")
-                ),
-            ));
-        }
-    }
+    let severity = super::util::parse_set_with(
+        "invalid_severity",
+        "severity",
+        q.severity.as_deref(),
+        |s| {
+            format!(
+                "unknown severity {s:?}; must be one of: {}",
+                crate::analysis::FINDING_SEVERITIES.join(", ")
+            )
+        },
+        |t| {
+            crate::analysis::FINDING_SEVERITIES
+                .iter()
+                .copied()
+                .find(|s| *s == t)
+        },
+    )?;
     // Filtering *by* a node or a group is still naming one, so both go through the same check the
     // rest of the surface uses. Answering `200 []` instead would be a slower way of saying the same
     // thing for a group that exists, and a way of confirming one that does not.
@@ -639,13 +653,17 @@ pub(crate) async fn search_saved_findings(
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Vec::new());
     };
+    let text = super::util::normalize_search(q.q.as_deref());
+    let node_q = super::util::normalize_search(q.node_q.as_deref());
     let filter = crate::analysis::FindingSearch {
         before,
         before_id: q.before_id,
         since,
-        tool,
-        severity: q.severity.as_deref(),
+        tool: &tool,
+        severity: &severity,
+        q: text.as_deref(),
         node_id: q.node_id,
+        node_q: node_q.as_deref(),
         groups: scope.group_filter(),
         in_group: in_group.as_deref(),
         limit: q.limit.unwrap_or(100).clamp(1, FINDINGS_PAGE_MAX),

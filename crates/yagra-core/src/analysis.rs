@@ -515,12 +515,24 @@ pub struct FindingSearch<'a> {
     pub before_id: Option<Uuid>,
     /// Inclusive lower bound on the finding's own timestamp (the range filter, not the cursor).
     pub since: Option<DateTime<Utc>>,
-    /// Restrict to one diagnostic.
-    pub tool: Option<AnalysisTool>,
-    /// Restrict to one of [`FINDING_SEVERITIES`]; validated at the API edge.
-    pub severity: Option<&'a str>,
+    /// Any of these diagnostics. Empty means unfiltered — never an empty array in SQL, which
+    /// `= ANY(…)` would match nothing against.
+    pub tool: &'a [AnalysisTool],
+    /// Any of [`FINDING_SEVERITIES`]; validated at the API edge. Empty means unfiltered.
+    pub severity: &'a [&'a str],
+    /// Case-insensitive substring of **either** the metric name or the finding kind.
+    ///
+    /// Both, because the Saved-findings *What* column renders both and a filter mounted on a column
+    /// should match what that column shows. The same shape as the audit log's `q` over username and
+    /// action — and the same imprecision, stated rather than hidden: a term can match on the half
+    /// the operator was not thinking of.
+    pub q: Option<&'a str>,
     /// Restrict to findings about one node.
     pub node_id: Option<Uuid>,
+    /// Case-insensitive substring of the node's **current** name. Fleet-wide findings have no node
+    /// and are therefore excluded whenever this is set, which is correct: they are not about a node
+    /// whose name could match.
+    pub node_q: Option<&'a str>,
     /// The **caller's** group scope (ADR-014). `None` is unrestricted; `Some(&[])` matches nothing.
     pub groups: crate::repo::GroupFilter<'a>,
     /// The folder-group subtree the caller asked to filter *by* — a request, unlike `groups`.
@@ -630,11 +642,15 @@ const FINDING_SEARCH_WHERE: &str = "\
      ($1::timestamptz IS NULL OR (f.created_at, f.id) < \
         ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
      AND ($3::timestamptz IS NULL OR f.created_at >= $3) \
-     AND ($4::text IS NULL OR j.tool = $4) \
-     AND ($5::text IS NULL OR f.severity = $5) \
+     AND ($4::text[] IS NULL OR j.tool = ANY($4)) \
+     AND ($5::text[] IS NULL OR f.severity = ANY($5)) \
      AND ($6::uuid IS NULL OR f.node_id = $6) \
      AND ($7::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($7))) \
-     AND ($8::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($8)))";
+     AND ($8::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($8))) \
+     AND ($9::text IS NULL \
+          OR (f.metric ILIKE '%' || $9 || '%' OR f.kind ILIKE '%' || $9 || '%')) \
+     AND ($10::text IS NULL \
+          OR f.node_id IN (SELECT id FROM nodes WHERE name ILIKE '%' || $10 || '%'))";
 
 /// The cross-run findings query. `ORDER BY` matches the cursor in [`FINDING_SEARCH_WHERE`] column
 /// for column, and both match `analysis_findings_created_idx` (migration 0058) — if those three
@@ -645,7 +661,7 @@ fn finding_search_sql() -> String {
          f.metric, f.kind, f.when_label, f.duration, f.created_at \
          FROM analysis_findings f JOIN analysis_jobs j ON j.id = f.job_id \
          WHERE {FINDING_SEARCH_WHERE} \
-         ORDER BY f.created_at DESC, f.id DESC LIMIT $9"
+         ORDER BY f.created_at DESC, f.id DESC LIMIT $11"
     )
 }
 
@@ -900,15 +916,23 @@ impl AnalysisRepo {
         &self,
         q: &FindingSearch<'_>,
     ) -> anyhow::Result<Vec<SavedFinding>> {
+        // An empty set means *unfiltered*, which is a NULL bind — an empty array would make
+        // `= ANY(…)` match nothing and turn "no filter" into "no results".
+        fn set<'s>(tokens: impl Iterator<Item = &'s str>) -> Option<Vec<String>> {
+            let v: Vec<String> = tokens.map(str::to_owned).collect();
+            (!v.is_empty()).then_some(v)
+        }
         let rows = sqlx::query(&finding_search_sql())
             .bind(q.before)
             .bind(q.before_id)
             .bind(q.since)
-            .bind(q.tool.map(AnalysisTool::as_str))
-            .bind(q.severity)
+            .bind(set(q.tool.iter().map(|t| t.as_str())))
+            .bind(set(q.severity.iter().copied()))
             .bind(q.node_id)
             .bind(q.groups.map(<[Uuid]>::to_vec))
             .bind(q.in_group.map(<[Uuid]>::to_vec))
+            .bind(q.q)
+            .bind(q.node_q)
             .bind(q.limit)
             .fetch_all(&self.pool)
             .await?;
@@ -4096,7 +4120,7 @@ mod tests {
         // test because the same disagreement shipped there once.
         let sql = finding_search_sql();
         assert!(
-            sql.contains("ORDER BY f.created_at DESC, f.id DESC LIMIT $9"),
+            sql.contains("ORDER BY f.created_at DESC, f.id DESC LIMIT $11"),
             "{sql}"
         );
         assert!(sql.contains(FINDING_SEARCH_WHERE), "{sql}");
@@ -4122,14 +4146,23 @@ mod tests {
         // …and the group the caller *asked* for is a separate bind, so dropping the request cannot
         // drop the restriction.
         assert!(FINDING_SEARCH_WHERE.contains("ANY($8)"));
-        // The only quoted literal in the predicate is the cursor's nil-uuid floor. Anything else
-        // would mean a value reached SQL as text instead of as a bind.
+        // Two kinds of quoted literal are allowed here and nothing else: the cursor's nil-uuid
+        // floor, and the `'%'` wildcards the substring filters concatenate around a *bound* value.
+        // Anything left after removing those means a request value reached SQL as text.
+        let without_wildcards = FINDING_SEARCH_WHERE.replace("'%'", "");
         assert_eq!(
-            FINDING_SEARCH_WHERE.matches('\'').count(),
+            without_wildcards.matches('\'').count(),
             2,
-            "the nil-uuid cursor floor is the only literal that belongs here: \
+            "the nil-uuid cursor floor is the only non-wildcard literal that belongs here: \
              {FINDING_SEARCH_WHERE}"
         );
+        // …and each wildcard sits beside a placeholder, never beside inlined text.
+        for bind in ["$9", "$10"] {
+            assert!(
+                FINDING_SEARCH_WHERE.contains(&format!("'%' || {bind} || '%'")),
+                "{bind} must be concatenated as a bound value: {FINDING_SEARCH_WHERE}"
+            );
+        }
     }
 
     #[test]

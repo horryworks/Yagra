@@ -24,7 +24,12 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { sortRows, type SortState } from '../lib/tableSort';
 import { SealedSecret, CopyableId } from '../components/ui/tableCells';
 import { HashIcon, ShieldIcon, KeyIcon, EditIcon, TrashIcon } from '../components/ui/icons';
 import type { ComponentType } from 'react';
@@ -46,10 +51,9 @@ import {
   type HttpAuthState,
 } from './httpAuthCredential';
 import {
-  nextCredentialSort,
-  visibleCredentials,
-  type CredentialSort,
-  type CredentialSortKey,
+  credentialFilters,
+  credentialSortValues,
+  DEFAULT_CREDENTIAL_SORT,
 } from './credentialList';
 import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
 import './CredentialsPage.css';
@@ -71,7 +75,6 @@ const KIND_META: Record<string, { labelKey: string; Icon: ComponentType }> = {
   meraki_api: { labelKey: 'cred.kind.meraki_api', Icon: KeyIcon },
 };
 
-const COLS = '1.7fr 150px 130px 110px 1fr 92px';
 
 const kindLabel = (kind: string, t: TFunction) => {
   const meta = KIND_META[kind];
@@ -486,9 +489,8 @@ export function CredentialsPage() {
   const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<CredentialSummary[]>([]);
-  const [query, setQuery] = useState('');
-  const [kindFilter, setKindFilter] = useState('all');
-  const [sort, setSort] = useState<CredentialSort>({ key: 'name', dir: 1 });
+  const [sheet, setSheet] = useState(false);
+  const [sort, setSort] = useState<SortState>(DEFAULT_CREDENTIAL_SORT);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -512,14 +514,98 @@ export function CredentialsPage() {
     load();
   }, [load]);
 
-  const list = useMemo(
-    () => visibleCredentials(rows, query, kindFilter, sort),
-    [rows, query, kindFilter, sort],
-  );
+  const columns = useMemo<Column<CredentialSummary>[]>(() => {
+    // Every kind present in the table, so a `meraki_api` or `http_auth` row — neither of which the
+    // old three-option dropdown could select — is filterable.
+    const kinds = [...new Set(rows.map((c) => c.kind))].sort();
+    const specs = credentialFilters(t, kinds, (k) => kindLabel(k, t));
+    const cols: Column<CredentialSummary>[] = [
+      {
+        key: 'name',
+        header: t('cred.cols.name'),
+        width: '1.7fr',
+        sortable: true,
+        render: (c) => {
+          const Icon = KIND_META[c.kind]?.Icon ?? KeyIcon;
+          return (
+            <span className="yt-name">
+              <span className="yt-typeicon" title={kindLabel(c.kind, t)}>
+                <Icon />
+              </span>
+              <span className="yt-name-txt">{c.name}</span>
+            </span>
+          );
+        },
+      },
+      {
+        key: 'type',
+        header: t('cred.cols.type'),
+        width: '150px',
+        render: (c) => {
+          const Icon = KIND_META[c.kind]?.Icon ?? KeyIcon;
+          return (
+            <span className="yt-chip">
+              <Icon />
+              {kindLabel(c.kind, t)}
+            </span>
+          );
+        },
+      },
+      {
+        key: 'secret',
+        header: t('cred.cols.secret'),
+        width: '130px',
+        render: () => <SealedSecret />,
+      },
+      {
+        key: 'used_by',
+        header: t('cred.cols.usedBy'),
+        width: '110px',
+        sortable: true,
+        render: (c) => (
+          <span className={c.used_by === 0 ? 'yt-usage zero' : 'yt-usage'}>
+            {usageLabel(c.used_by, t)}
+          </span>
+        ),
+      },
+      { key: 'id', header: t('cred.cols.credentialId'), width: '1fr', render: (c) => <CopyableId id={c.id} /> },
+      {
+        key: 'actions',
+        header: t('cred.cols.actions'),
+        width: '92px',
+        align: 'right',
+        render: (c) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  {
+                    label: t('common:actions.edit'),
+                    icon: <EditIcon />,
+                    onClick: () => setEditing(c),
+                  },
+                  {
+                    label: t('common:actions.delete'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(c),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [t, authed, rows]);
 
-  const toggleSort = (key: CredentialSortKey) => setSort((s) => nextCredentialSort(s, key));
-  const arrow = (key: CredentialSortKey) =>
-    sort.key === key ? <span className="ytable-arrow">{sort.dir === 1 ? '▲' : '▼'}</span> : null;
+  // URL-backed: one table on this route.
+  const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
+    useClientFilters(columns, rows, { url: true });
+  // Sorting stays with the caller — `DataTable` draws the arrow and reports the click but never
+  // reorders `rows`, so a keyset-paged screen cannot accidentally sort a prefix (`lib/tableSort.ts`).
+  const shown = useMemo(() => sortRows(matched, sort, credentialSortValues()), [matched, sort]);
 
   return (
     <div>
@@ -536,26 +622,16 @@ export function CredentialsPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('cred.searchPlaceholder')}
-              ariaLabel={t('cred.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <Select
-              value={kindFilter}
-              onChange={(e) => setKindFilter(e.target.value)}
-              aria-label={t('cred.filterAria')}
-            >
-              <option value="all">{t('cred.filter.allTypes')}</option>
-              <option value="snmp_v2c">{t('cred.filter.snmp_v2c')}</option>
-              <option value="snmp_v3">{t('cred.filter.snmp_v3')}</option>
-              <option value="api_token">{t('cred.filter.api_token')}</option>
-            </Select>
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
-              shown={list.length}
-              total={rows.length}
+              shown={shown.length}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.credential', { count: rows.length })}
             />
             {authed && (
@@ -565,93 +641,28 @@ export function CredentialsPage() {
             )}
           </TableToolbar>
 
-          <div className="ytable cred-table">
-            <div className="ytable-scroll">
-              <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h sortable" onClick={() => toggleSort('name')}>
-                  {t('cred.cols.name')} {arrow('name')}
-                </div>
-                <div className="ytable-h">{t('cred.cols.type')}</div>
-                <div className="ytable-h">{t('cred.cols.secret')}</div>
-                <div className="ytable-h sortable" onClick={() => toggleSort('used_by')}>
-                  {t('cred.cols.usedBy')} {arrow('used_by')}
-                </div>
-                <div className="ytable-h">{t('cred.cols.credentialId')}</div>
-                <div className="ytable-h right">{t('cred.cols.actions')}</div>
-              </div>
-
-              {list.length === 0 ? (
-                <div className="yt-empty">
-                  <p className="yt-empty-title">
-                    {loading
-                      ? t('common:loading')
-                      : rows.length === 0
-                        ? t('cred.empty.none')
-                        : t('cred.empty.filtered')}
-                  </p>
-                  {!loading && (
-                    <p className="yt-empty-sub">
-                      {rows.length === 0 ? t('cred.empty.noneSub') : t('cred.empty.filteredSub')}
-                    </p>
-                  )}
-                </div>
-              ) : (
-                list.map((c) => {
-                  const Icon = KIND_META[c.kind]?.Icon ?? KeyIcon;
-                  return (
-                    <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={c.id}>
-                      <div className="ytable-cell">
-                        <span className="yt-name">
-                          <span className="yt-typeicon" title={kindLabel(c.kind, t)}>
-                            <Icon />
-                          </span>
-                          <span className="yt-name-txt">{c.name}</span>
-                        </span>
-                      </div>
-                      <div className="ytable-cell">
-                        <span className="yt-chip">
-                          <Icon />
-                          {kindLabel(c.kind, t)}
-                        </span>
-                      </div>
-                      <div className="ytable-cell">
-                        <SealedSecret />
-                      </div>
-                      <div className="ytable-cell">
-                        <span className={c.used_by === 0 ? 'yt-usage zero' : 'yt-usage'}>
-                          {usageLabel(c.used_by, t)}
-                        </span>
-                      </div>
-                      <div className="ytable-cell">
-                        <CopyableId id={c.id} />
-                      </div>
-                      <div className="ytable-cell right">
-                        {authed && (
-                          <span className="ytable-actions">
-                            <OverflowMenu
-                              actions={[
-                                {
-                                  label: t('common:actions.edit'),
-                                  icon: <EditIcon />,
-                                  onClick: () => setEditing(c),
-                                },
-                                {
-                                  label: t('common:actions.delete'),
-                                  icon: <TrashIcon />,
-                                  danger: true,
-                                  onClick: () => setDeleting(c),
-                                },
-                              ]}
-                            />
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(c) => c.id}
+            sort={sort}
+            onSortChange={setSort}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('cred.empty.filtered') : t('cred.empty.none')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

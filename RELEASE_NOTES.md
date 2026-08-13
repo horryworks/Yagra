@@ -31,11 +31,42 @@
 - **The single search box on API tokens is gone**, replaced by separate Name and Owner filters —
   "owned by alice" no longer also matches a token *called* alice. The Neighbors tab's one box became
   three, one per end of the link.
-- On Alert history, Audit, Alert rules and Saved findings the column filters are **single-choice**:
-  those endpoints take one severity, state or action, and offering a multi-select there would have
-  sent one of the ticked values without saying so. Multi-value on those four is still to come.
+- **The column filters on Alert history, Audit, Alert rules and Saved findings now take several
+  values**, replacing the single-choice controls those screens shipped with. `GET /alerts/history`
+  (`severity`, `state`), `GET /audit` (`action`, `status`), `GET /thresholds` (`scope_level`,
+  `direction`) and `GET /analysis/findings` (`tool`, `severity`) each accept a comma-separated set,
+  as `GET /events` already did. A single value is unchanged, so an existing link or client keeps
+  working; an unknown token is a 400 rather than a silently widened result, and a set accepts at
+  most 32 values. The same parameters are on the MCP `get_alert_history`, `get_audit` and
+  `search_analysis_findings` tools.
+- **`action` and `status` on `GET /api/v1/audit`, and `scope_level`/`direction` on
+  `GET /api/v1/thresholds`, are now strings rather than typed enums in the OpenAPI document** —
+  that is what carrying several values requires. The accepted vocabulary has not changed and an
+  unknown value is still refused; what changed is that the refusal now comes back as the standard
+  error body instead of a plain-text parameter rejection.
+- **The search box on Maintenance windows, Mutes, Classification rules, Pollers and Credentials has
+  been replaced by per-column filters, and this is not a like-for-like swap.** Each of those boxes
+  searched several fields at once and could not say which was meant — on Pollers, `0.2` matched a
+  poller running v0.2.4 *and* a poller in a pool named `site-0.2`. Ask about the column you mean
+  instead. The Credentials search covered the name and the credential id together; those are two
+  columns now.
 
 ### New Features
+- **Alert history can be filtered by node name, by metric and by whether the incident was
+  acknowledged.** `GET /api/v1/alerts/history` and the MCP `get_alert_history` tool take `node_q`
+  (substring of the node's current name — distinct from `node_id`, which names exactly one),
+  `metric` (substring of the metric name) and `acked` (`true`/`false`). "What fired this week that
+  nobody has looked at" is now one filter rather than a read-through.
+  ⚠️ On a large history table a **more selective** `metric` term is the slower one: the index still
+  serves the ordering and the page size, so the query walks it until the page is full — a metric
+  matching one row in a million walks the whole index, while a common one stops almost immediately.
+- **Saved findings can be filtered by node name and by finding text.**
+  `GET /api/v1/analysis/findings` and the MCP `search_analysis_findings` tool take `node_q` and `q`,
+  where `q` matches the metric **or** the finding kind — the two halves the What column shows. A
+  fleet-wide finding has no node, so it never matches `node_q`.
+- Every list that had a hand-written table now scrolls virtualized and carries the filter row:
+  Maintenance windows, Mutes, MIB repository, Classification rules, Event sources, Event rules,
+  Notification routing (both tables), Credentials and Pollers.
 - `GET /api/v1/events` and `GET /api/v1/events/stats` take five new optional filters, and the MCP
   `search_events` tool takes the same five: `action` and `severity` (comma-separated sets, like
   `kind` now is), `msg` + `msg_regex` + `msg_not` for a message-only condition, and `src` +
@@ -50,6 +81,10 @@
   filters".
 
 ### Improvements
+- **The Credentials type filter now offers every kind that is in the table.** It listed three, so
+  an `http_auth` credential — or a Meraki API key, which the integration creates rather than an
+  operator — could sit in the list and not be filterable at all.
+- Disabled notification channels and routing rules are still dimmed after the table rewrite.
 - Negation is offered for both plain terms and regular expressions. It was measured on 6.7M real
   events before it shipped: excluding costs what including costs, on both stores and in both modes.
 - **A plain search term now matches from the start of a word on a log-store deployment**, so

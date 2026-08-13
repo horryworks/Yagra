@@ -11,10 +11,15 @@
 // In a `.ts` because Vitest never executes a `.tsx` (testing.md).
 
 import type { TFunction } from 'i18next';
-import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
+import {
+  decodeSet,
+  encodeSet,
+  type ColumnFilterSpec,
+  type FilterState,
+} from '../lib/columnFilter';
 import { decodeCondition } from '../lib/filterCondition';
 import { isFiltered as isFilteredAgainst, unset } from '../lib/filterQuery';
-import { readEnumParam, readIdParam, writeEnumParam, writeIdParam } from '../lib/filterParams';
+import { readIdParam, readSetParam, writeIdParam, writeSetParam } from '../lib/filterParams';
 import {
   DIRECTIONS,
   SCOPE_LEVELS,
@@ -27,8 +32,10 @@ import {
 export interface ThresholdFilters {
   /** Free text over the metric name — matched as a substring, server-side. */
   q: string;
-  scopeLevel: ScopeLevel | '';
-  direction: Direction | '';
+  /** Comma-joined `ScopeLevel` tokens; `''` is every level. Same spelling as the API takes. */
+  scopeLevel: string;
+  /** Comma-joined `Direction` tokens; `''` is both. */
+  direction: string;
 }
 
 export const DEFAULT_THRESHOLD_FILTERS: ThresholdFilters = {
@@ -68,8 +75,10 @@ export function readFilters(
 ): ThresholdFilters {
   return {
     q: readIdParam(params, 'q') ?? '',
-    scopeLevel: readEnumParam(params, 'scope_level', ['', ...levels], ''),
-    direction: readEnumParam(params, 'direction', ['', ...directions], ''),
+    // ⚠️ `readSetParam`, not `readEnumParam`: these carry several tokens since Inc.4b. A bookmark
+    // holding one (`?scope_level=node`) still reads correctly — one token is a one-element set.
+    scopeLevel: readSetParam(params, 'scope_level', levels),
+    direction: readSetParam(params, 'direction', directions),
   };
 }
 
@@ -77,8 +86,8 @@ export function readFilters(
  *  has no query string at all. */
 export function writeFilters(params: URLSearchParams, f: ThresholdFilters): void {
   writeIdParam(params, 'q', f.q.trim() || null);
-  writeEnumParam(params, 'scope_level', f.scopeLevel, '');
-  writeEnumParam(params, 'direction', f.direction, '');
+  writeSetParam(params, 'scope_level', f.scopeLevel);
+  writeSetParam(params, 'direction', f.direction);
 }
 
 /**
@@ -89,9 +98,10 @@ export function writeFilters(params: URLSearchParams, f: ThresholdFilters): void
  * `scope`, `metric` and `direction`, and two were renamed. A column key is internal; a saved URL
  * is not.
  *
- * The enums are `single` because `GET /api/v1/thresholds` takes one `scope_level` and one
- * `direction`. A multi-select over them would send one of the ticked values and quietly drop the
- * rest of the operator's question.
+ * Both enums are multi-select: since ADR-053 Inc.4b `GET /api/v1/thresholds` takes `scope_level`
+ * and `direction` as comma-separated sets. The URL therefore carries a *joined* value where it used
+ * to carry one token — `scope_level=group,node` — which older bookmarks (`scope_level=node`) still
+ * read correctly, since one token is a one-element set.
  */
 export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<StoredThreshold>> {
   return {
@@ -106,15 +116,13 @@ export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<
     },
     scope_level: {
       kind: 'enum',
-      single: true,
-      options: SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
+      options:SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
       readValue: (r) => r.scope_level,
       allLabel: t('thresholds.filter.allScopes'),
     },
     direction: {
       kind: 'enum',
-      single: true,
-      options: DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) })),
+      options:DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) })),
       readValue: (r) => r.direction,
       allLabel: t('thresholds.filter.allDirections'),
     },
@@ -128,10 +136,11 @@ export function stateFromFilters(f: ThresholdFilters): FilterState {
 }
 
 export function filtersFromState(s: FilterState): ThresholdFilters {
-  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
+  // A set column stores its tokens joined and the API takes the same spelling, so both are
+  // pass-throughs — re-encoded only to pin the order, which keeps the URL comparable.
   return {
     q: decodeCondition(s.q ?? '').term,
-    scopeLevel: one(s.scope_level) as ThresholdFilters['scopeLevel'],
-    direction: one(s.direction) as ThresholdFilters['direction'],
+    scopeLevel: encodeSet(decodeSet(s.scope_level ?? ''), SCOPE_LEVELS),
+    direction: encodeSet(decodeSet(s.direction ?? ''), DIRECTIONS),
   };
 }

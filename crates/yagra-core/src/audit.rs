@@ -59,11 +59,23 @@ pub enum AuditAction {
     Mcp,
 }
 
-// Note there is no `from_token`/`as_str` pair here, unlike most enums in this workspace. Parsing at
-// the edge is **serde's**: the query field is typed, so an unknown token is rejected during
-// extraction and the accepted values reach clients through the generated OpenAPI union rather than
-// through a hand-written message. The iteration helpers the tests need live in `mod tests`, where
-// nothing production reads them.
+// This enum **used** to have no `from_token`/`as_str` pair: the query field was typed, so serde
+// rejected an unknown token during extraction and the accepted values reached clients as a closed
+// union in the generated OpenAPI document. ADR-053 Inc.4b traded that away, deliberately, and the
+// trade is worth stating because the old shape was the better one in every respect but the one that
+// mattered.
+//
+// A filter row offers checkboxes. One `action` per request means the operator ticks three and the
+// server answers about one — the failure `EnumFilterSpec.single` existed to keep visible, and the
+// worst kind, since the short list reads exactly like the answer. Carrying several values needs a
+// comma-separated string, and a string cannot be a typed serde field. So the parse moved from serde
+// to `api::util::parse_set`, which is where events already do it.
+//
+// What was actually lost: `?action=nonsense` is now refused by the ADR-019 error envelope rather
+// than by axum's `Query` rejection, and `schema.d.ts` types the parameter as `string`. What was
+// kept: an unknown token is still **refused**, never dropped — that is the property, not the
+// mechanism. `AUDIT_ACTIONS` in `web/src/types/api.ts` remains the WebUI's option list either way
+// (it must exist at runtime — extensibility.md §4), so the UI lost nothing.
 //
 // ⚠️ Nothing above `mod tests` may spell the test-gate attribute, in code **or in a comment**.
 // `production_source()` slices this file at the first occurrence of that literal, and it does so
@@ -101,6 +113,39 @@ impl AuditAction {
             Self::Mcp => "mcp.",
         }
     }
+
+    /// Every action, in the order the WebUI lists them.
+    pub const ALL: [AuditAction; 6] = [
+        Self::Post,
+        Self::Put,
+        Self::Patch,
+        Self::Delete,
+        Self::Login,
+        Self::Mcp,
+    ];
+
+    /// The wire token — the same spelling `#[serde(rename_all = "lowercase")]` produces, which is
+    /// what makes this parse and a serde parse accept the same vocabulary.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Post => "post",
+            Self::Put => "put",
+            Self::Patch => "patch",
+            Self::Delete => "delete",
+            Self::Login => "login",
+            Self::Mcp => "mcp",
+        }
+    }
+
+    /// Parse one token from a comma-separated set parameter — an **exact** lowercase token, or
+    /// `None`. Not case-insensitive: every `from_token` in this workspace is exact (`Severity`,
+    /// `NodeState`, `Direction`), and one that quietly accepted `POST` would make the vocabulary
+    /// a slightly different set on this endpoint than on every other one.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.as_str() == s)
+    }
 }
 
 /// How an audit entry's HTTP status turned out.
@@ -133,6 +178,25 @@ impl AuditStatusClass {
             Self::Server => (Some(500), None),
         }
     }
+
+    /// Every class, in the order the WebUI lists them.
+    pub const ALL: [AuditStatusClass; 3] = [Self::Ok, Self::Client, Self::Server];
+
+    /// The wire token — the same spelling `#[serde(rename_all = "lowercase")]` produces.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Client => "client",
+            Self::Server => "server",
+        }
+    }
+
+    /// See [`AuditAction::from_token`].
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.as_str() == s)
+    }
 }
 
 /// A validated audit-log query. Built at the API edge by `api::audit::audit_page`.
@@ -145,8 +209,10 @@ pub struct AuditFilter {
     pub until: Option<DateTime<Utc>>,
     /// Free text over the username and the action, already trimmed and length-capped at the edge.
     pub q: Option<String>,
-    pub action: Option<AuditAction>,
-    pub status: Option<AuditStatusClass>,
+    /// Any of these action kinds. Empty means unfiltered.
+    pub action: Vec<AuditAction>,
+    /// Any of these status classes. Empty means unfiltered.
+    pub status: Vec<AuditStatusClass>,
     /// Rows per page; clamped to `1..=MAX_LIMIT` by [`AuditRepo::list`].
     pub limit: i64,
 }
@@ -182,14 +248,21 @@ impl AuditFilter {
 /// ⚠️ `username` and `action` are **attacker-influenceable** — a failed sign-in records the submitted
 /// username verbatim (`api/session.rs`) — so nothing in this string is ever formatted from request
 /// input. The only interpolation any caller does is of this constant itself.
+/// ⚠️ `$6` and `$7` are **parallel arrays**, one status class per position: `$6[i]` is that class's
+/// lower bound and `$7[i]` its upper, either of which may be NULL for "unbounded on that side"
+/// ([`AuditStatusClass::bounds`]). A set of classes is a set of *ranges*, so it cannot be an
+/// `= ANY(…)` the way `action` can. `unnest` walks the pairs and the row matches if it falls inside
+/// any of them. The two arrays must therefore always be bound with the same length — `zip` on one
+/// iterator is what guarantees that, rather than two independent `map`s.
 const AUDIT_FILTER_WHERE: &str = "($1::timestamptz IS NULL OR at < $1) \
      AND ($2::timestamptz IS NULL OR at >= $2) \
      AND ($3::timestamptz IS NULL OR at <= $3) \
      AND ($4::text IS NULL \
           OR (username ILIKE '%' || $4 || '%' OR action ILIKE '%' || $4 || '%')) \
-     AND ($5::text IS NULL OR action LIKE $5 || '%') \
-     AND ($6::int IS NULL OR status >= $6) \
-     AND ($7::int IS NULL OR status <= $7)";
+     AND ($5::text[] IS NULL OR action LIKE ANY($5)) \
+     AND ($6::int[] IS NULL OR EXISTS ( \
+          SELECT 1 FROM unnest($6::int[], $7::int[]) AS b(lo, hi) \
+          WHERE (b.lo IS NULL OR status >= b.lo) AND (b.hi IS NULL OR status <= b.hi)))";
 
 /// The one statement that reads the log. `at DESC` matches the `$1` cursor column for column;
 /// `audit_log_at_idx` (migration 0012) serves both.
@@ -208,14 +281,30 @@ fn bind_audit_filter<'q>(
     q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
     f: &'q AuditFilter,
 ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
-    let (min, max) = f.status.map_or((None, None), AuditStatusClass::bounds);
+    // `LIKE ANY(array)` compares against whole patterns, so the trailing `%` that used to be
+    // concatenated in SQL moves into each element here. It is still not interpolated request text:
+    // `sql_prefix` returns one of six literals.
+    let actions: Option<Vec<String>> = (!f.action.is_empty()).then(|| {
+        f.action
+            .iter()
+            .map(|a| format!("{}%", a.sql_prefix()))
+            .collect()
+    });
+    // One iterator, unzipped — so the two arrays cannot come out different lengths, which is the
+    // only way `unnest($6, $7)` can silently pair a bound with the wrong class.
+    let (los, his): (Vec<Option<i32>>, Vec<Option<i32>>) = f
+        .status
+        .iter()
+        .map(|c| AuditStatusClass::bounds(*c))
+        .unzip();
+    let bounded = !f.status.is_empty();
     q.bind(f.before)
         .bind(f.since)
         .bind(f.until)
         .bind(f.q.as_deref())
-        .bind(f.action.map(AuditAction::sql_prefix))
-        .bind(min)
-        .bind(max)
+        .bind(actions)
+        .bind(bounded.then_some(los))
+        .bind(bounded.then_some(his))
 }
 
 /// PostgreSQL-backed append-only audit log.
@@ -274,52 +363,11 @@ impl AuditRepo {
 mod tests {
     use super::*;
 
-    // Iteration + token helpers, here rather than beside the enums because nothing production reads
-    // them: serde owns the parsing at the edge. Keeping them in this module also keeps this the
-    // file's first test gate, which is the split point `production_source()` slices on — see the
-    // warning above the `AuditAction` impl.
-    impl AuditAction {
-        const ALL: [Self; 6] = [
-            Self::Post,
-            Self::Put,
-            Self::Patch,
-            Self::Delete,
-            Self::Login,
-            Self::Mcp,
-        ];
-
-        /// The token a client sends, matching the `#[serde(rename_all)]` on the enum.
-        fn as_str(self) -> &'static str {
-            match self {
-                Self::Post => "post",
-                Self::Put => "put",
-                Self::Patch => "patch",
-                Self::Delete => "delete",
-                Self::Login => "login",
-                Self::Mcp => "mcp",
-            }
-        }
-
-        fn from_token(s: &str) -> Option<Self> {
-            Self::ALL.into_iter().find(|a| a.as_str() == s)
-        }
-    }
-
-    impl AuditStatusClass {
-        const ALL: [Self; 3] = [Self::Ok, Self::Client, Self::Server];
-
-        fn as_str(self) -> &'static str {
-            match self {
-                Self::Ok => "ok",
-                Self::Client => "client",
-                Self::Server => "server",
-            }
-        }
-
-        fn from_token(s: &str) -> Option<Self> {
-            Self::ALL.into_iter().find(|c| c.as_str() == s)
-        }
-    }
+    // The `ALL` / `as_str` / `from_token` helpers used to be declared here, because nothing
+    // production read them — serde owned the parsing at the edge. ADR-053 Inc.4b moved them up
+    // beside the enums, where production now parses comma-separated sets through them. The tests
+    // below are unchanged and still assert the same properties; they now assert them about the
+    // shipping code rather than about a test-local copy of it, which is strictly better.
 
     const SRC: &str = include_str!("audit.rs");
 
@@ -382,10 +430,20 @@ mod tests {
                 "the predicate looks conditionally built ({builder})"
             );
         }
+        // Eight arms for seven binds. `$7` (the upper status bounds) is the deliberate exception:
+        // it has no arm of its own because it is meaningless without `$6` — the two are parallel
+        // arrays walked together by `unnest`, and `$6`'s arm covers both. The extra two arms are
+        // *inside* that `unnest`, where a class unbounded on one side (`ok` has no floor, `server`
+        // no ceiling) carries a NULL element rather than a sentinel number.
         assert_eq!(
             AUDIT_FILTER_WHERE.matches(" IS NULL").count(),
-            7,
-            "every one of the seven binds must carry its own 'no filter' arm"
+            8,
+            "every bind but the paired status upper bound must carry its own 'no filter' arm"
+        );
+        assert!(
+            !AUDIT_FILTER_WHERE.contains("$7::int[] IS NULL"),
+            "the status upper bounds gained their own arm — then a class list without one \
+             would match nothing"
         );
         assert!(src.contains("const AUDIT_FILTER_WHERE"));
         // The slice must reach the *end* of the production half, not just its start. Without this,
@@ -465,12 +523,16 @@ mod tests {
             !AUDIT_FILTER_WHERE.contains('{'),
             "the predicate must contain no format placeholder — it is not a template"
         );
-        assert_eq!(
-            src.matches("format!(").count(),
-            1,
-            "exactly one format!, and it interpolates the constant predicate"
-        );
+        // Two `format!`s, and neither one builds SQL from request text. The first assembles the
+        // statement out of the constant predicate; the second turns `sql_prefix()` — one of six
+        // literals — into a `LIKE` pattern, which is a *bound value*, not part of the statement.
+        // The count is asserted rather than left open so a third one has to justify itself here.
+        assert_eq!(src.matches("format!(").count(), 2);
         assert!(src.contains("WHERE {AUDIT_FILTER_WHERE} ORDER BY"));
+        assert!(
+            src.contains("format!(\"{}%\", a.sql_prefix())"),
+            "the LIKE pattern must be built from the literal prefix, never from request text"
+        );
         for builder in ["push_str(", "QueryBuilder"] {
             assert!(
                 !src.contains(builder),

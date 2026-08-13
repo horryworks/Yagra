@@ -46,10 +46,11 @@ fn parse_direction(s: &str) -> Direction {
 pub struct ThresholdFilter<'a> {
     /// Case-insensitive substring of the metric name.
     pub metric: Option<&'a str>,
-    /// Only rules defined at this scope level.
-    pub level: Option<ScopeLevel>,
-    /// Only rules breaching in this direction.
-    pub direction: Option<Direction>,
+    /// Any of these scope levels. Empty means unfiltered — never an empty array in SQL, which
+    /// `= ANY(…)` would match nothing against.
+    pub level: &'a [ScopeLevel],
+    /// Any of these directions. Empty means unfiltered.
+    pub direction: &'a [Direction],
 }
 
 /// PostgreSQL-backed threshold store.
@@ -88,8 +89,8 @@ impl ThresholdStore {
     /// what pages the fleet. One const also keeps the count query and the page query asking the
     /// same question, so "500 of 3,200" cannot count a different set from the one it is showing.
     const FILTER_WHERE: &'static str = "($1::text IS NULL OR metric ILIKE '%' || $1 || '%') \
-         AND ($2::text IS NULL OR scope_level = $2) \
-         AND ($3::text IS NULL OR direction = $3)";
+         AND ($2::text[] IS NULL OR scope_level = ANY($2)) \
+         AND ($3::text[] IS NULL OR direction = ANY($3))";
 
     /// One page of threshold rules for the API, plus how many matched, so the caller can tell the
     /// operator how many were withheld rather than silently showing a prefix.
@@ -148,9 +149,13 @@ impl ThresholdStore {
         q: sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments>,
         f: &ThresholdFilter<'_>,
     ) -> sqlx::query::Query<'q, sqlx::Postgres, sqlx::postgres::PgArguments> {
+        fn set(tokens: impl Iterator<Item = &'static str>) -> Option<Vec<String>> {
+            let v: Vec<String> = tokens.map(str::to_owned).collect();
+            (!v.is_empty()).then_some(v)
+        }
         q.bind(f.metric.map(str::to_owned))
-            .bind(f.level.map(|l| l.as_str().to_owned()))
-            .bind(f.direction.map(|d| d.as_str().to_owned()))
+            .bind(set(f.level.iter().map(|l| l.as_str())))
+            .bind(set(f.direction.iter().map(|d| d.as_str())))
     }
 
     fn row_to_threshold(row: sqlx::postgres::PgRow) -> anyhow::Result<StoredThreshold> {

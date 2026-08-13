@@ -5,7 +5,8 @@
 // — a 50k-node deployment still has a handful (ui-conventions, "scale-aware lists"). In a `.ts` so
 // a test can reach it (testing.md).
 
-import { isFiltered as isFilteredAgainst, textMatch } from '../lib/filterQuery';
+import type { TFunction } from 'i18next';
+import type { ColumnFilterSpec } from '../lib/columnFilter';
 import type { PollerInfo } from '../types/api';
 
 /** The two states a poller reports. A UI-owned union: the backend serializes `status` as a bare
@@ -15,26 +16,53 @@ import type { PollerInfo } from '../types/api';
 export const POLLER_STATUSES = ['online', 'offline'] as const;
 export type PollerStatusFilter = (typeof POLLER_STATUSES)[number];
 
-export interface PollerFilters {
-  status: PollerStatusFilter | '';
-  /** A pool name, or `''` for every pool. */
-  pool: string;
-  /** Free text over the poller's id, its pool and its version. */
-  q: string;
-}
-
-export const DEFAULT_POLLER_FILTERS: PollerFilters = { status: '', pool: '', q: '' };
-
-/** Whether one poller survives the filter.
+/**
+ * The Settings ▸ Pollers filter row, keyed by `Column.key` (ADR-053 Inc.5).
  *
- *  The version is searched because "which boxes are still on the old build" is a question asked
- *  during every rollout, and the column is otherwise only readable by eye. */
-export function matchesPoller(p: PollerInfo, f: PollerFilters): boolean {
-  if (f.status && p.status !== f.status) return false;
-  if (f.pool && p.pool !== f.pool) return false;
-  return textMatch(f.q, p.id, p.pool, p.version);
-}
-
-export function isPollerFiltered(f: PollerFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_POLLER_FILTERS);
+ * The toolbar's single search box read the id, the pool **and** the version at once, so "0.2" found
+ * a poller running v0.2.4 and a poller in a pool called `site-0.2` and could not tell them apart.
+ * Each is now its own column — and the version one is the reason this screen wanted a filter row at
+ * all: "which boxes are still on the old build" is asked during every rollout (ADR-051) and was
+ * previously answerable only by reading the column.
+ *
+ * `pools` comes from the pool summaries the page already loaded rather than from the rows, because
+ * a pool with no live poller still exists and an operator filtering for it should get the honest
+ * empty answer rather than an option that is missing.
+ */
+export function pollerFilters(
+  t: TFunction,
+  pools: readonly string[],
+): Record<string, ColumnFilterSpec<PollerInfo>> {
+  return {
+    poller: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      readText: (p) => [p.id],
+      containsSemantics: 'substring',
+      placeholder: t('pollers.cols.poller'),
+    },
+    pool: {
+      kind: 'enum',
+      options: pools.map((p) => ({ value: p, label: p })),
+      readValue: (p) => p.pool,
+      allLabel: t('pollers.filter.allPools'),
+      counts: 'client',
+    },
+    status: {
+      kind: 'enum',
+      options: POLLER_STATUSES.map((s) => ({ value: s, label: t(`pollers.status.${s}`) })),
+      readValue: (p) => p.status,
+      allLabel: t('pollers.filter.allStatuses'),
+      counts: 'client',
+    },
+    version: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      // `null` while a poller has never reported — an empty string rather than the em dash the
+      // cell renders, so a term never matches on punctuation the operator did not type.
+      readText: (p) => [p.version ?? ''],
+      containsSemantics: 'substring',
+      placeholder: t('pollers.cols.version'),
+    },
+  };
 }

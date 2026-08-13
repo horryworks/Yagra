@@ -24,18 +24,21 @@ import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Fie
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EntityName } from '../components/ui/EntityName';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { classificationRuleFilters } from './classificationFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
-
-const COLS = '90px 1.7fr 1.2fr 110px 110px';
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ClassificationRule[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [query, setQuery] = useState('');
+  const [sheet, setSheet] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -64,25 +67,6 @@ export function ClassificationRulesPage() {
 
   const profileName = (id: string) => profiles.find((p) => p.id === id)?.name ?? id;
 
-  // Filter over the rule's signature (OID prefix / sysDescr regex), maker/model, and the
-  // resolved profile name — so an operator can find a rule by what it matches or where it points.
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === '') return rows;
-    return rows.filter((r) =>
-      [
-        r.sysobjectid_prefix ?? '',
-        r.sysdescr_regex ?? '',
-        r.vendor ?? '',
-        r.model ?? '',
-        profiles.find((p) => p.id === r.profile_id)?.name ?? r.profile_id,
-      ]
-        .join(' ')
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [rows, profiles, query]);
-
   // Quick enable/disable toggle: re-submit the rule with `enabled` flipped (the update API
   // takes the full body).
   const toggleEnabled = (r: ClassificationRule) => {
@@ -92,6 +76,98 @@ export function ClassificationRulesPage() {
       .then(load)
       .catch((e: unknown) => setError(errMsg(e, t('rules.err.update'))));
   };
+
+  const columns = useMemo<Column<ClassificationRule>[]>(() => {
+    const specs = classificationRuleFilters(t, profileName);
+    const cols: Column<ClassificationRule>[] = [
+      {
+        key: 'priority',
+        header: t('rules.cols.priority'),
+        width: '90px',
+        render: (r) => <span className="mono">{r.priority}</span>,
+      },
+      {
+        key: 'match',
+        header: t('rules.cols.match'),
+        width: '1.7fr',
+        render: (r) => (
+          <span className="classrules-match">
+            {r.sysobjectid_prefix && (
+              <span className="classrules-sig">
+                <span className="classrules-sig-kind">OID</span>
+                <span className="classrules-sig-val mono">{r.sysobjectid_prefix}</span>
+              </span>
+            )}
+            {r.sysdescr_regex && (
+              <span className="classrules-sig">
+                <span className="classrules-sig-kind">descr</span>
+                <span className="classrules-sig-val mono">{r.sysdescr_regex}</span>
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: 'profile',
+        header: t('rules.cols.profile'),
+        width: '1.2fr',
+        render: (r) => <EntityName name={profileName(r.profile_id)} id={r.profile_id} />,
+      },
+      {
+        key: 'status',
+        header: t('rules.cols.status'),
+        width: '110px',
+        render: (r) => (
+          <Badge tone={r.enabled ? 'up' : 'neutral'}>
+            {r.enabled ? t('rules.enabled') : t('rules.disabled')}
+          </Badge>
+        ),
+      },
+      {
+        key: 'actions',
+        header: t('shared.colActions'),
+        width: '110px',
+        align: 'right',
+        render: (r) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  {
+                    label: r.enabled ? t('rules.disable') : t('rules.enable'),
+                    icon: <PowerIcon />,
+                    onClick: () => toggleEnabled(r),
+                  },
+                  {
+                    label: t('rules.editRule'),
+                    icon: <EditIcon />,
+                    onClick: () => setEditing(r),
+                  },
+                  {
+                    label: t('rules.deleteRule'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(r),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `profileName` and `toggleEnabled` are rebuilt every render; what they read is listed instead,
+    // so a keystroke in a filter cell does not rebuild the columns and re-run the predicate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, authed, profiles]);
+
+  // URL-backed: one table on this route, so a narrowed view is linkable.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
+  );
 
   return (
     <div>
@@ -108,16 +184,16 @@ export function ClassificationRulesPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('rules.searchPlaceholder')}
-              ariaLabel={t('rules.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
-              shown={filtered.length}
-              total={rows.length}
+              shown={shown.length}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.rule', { count: rows.length })}
             />
             {authed && (
@@ -129,86 +205,26 @@ export function ClassificationRulesPage() {
 
           {error && <p className="form-error">{error}</p>}
 
-          <div className="ytable classrules-table">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('rules.cols.priority')}</div>
-              <div className="ytable-h">{t('rules.cols.match')}</div>
-              <div className="ytable-h">{t('rules.cols.profile')}</div>
-              <div className="ytable-h">{t('rules.cols.status')}</div>
-              <div className="ytable-h right">{t('shared.colActions')}</div>
-            </div>
-
-            {filtered.length === 0 ? (
-              <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading
-                    ? t('common:loading')
-                    : rows.length === 0
-                      ? t('rules.empty.none')
-                      : t('rules.empty.noMatch')}
-                </p>
-                {!loading && (
-                  <p className="yt-empty-sub">
-                    {rows.length === 0 ? t('rules.empty.noneSub') : t('shared.trySearch')}
-                  </p>
-                )}
-              </div>
-            ) : (
-              filtered.map((r) => (
-                <div className="ytable-row" key={r.id} style={{ gridTemplateColumns: COLS }}>
-                  <div className="ytable-cell mono">{r.priority}</div>
-                  <div className="ytable-cell classrules-match">
-                    {r.sysobjectid_prefix && (
-                      <span className="classrules-sig">
-                        <span className="classrules-sig-kind">OID</span>
-                        <span className="classrules-sig-val mono">{r.sysobjectid_prefix}</span>
-                      </span>
-                    )}
-                    {r.sysdescr_regex && (
-                      <span className="classrules-sig">
-                        <span className="classrules-sig-kind">descr</span>
-                        <span className="classrules-sig-val mono">{r.sysdescr_regex}</span>
-                      </span>
-                    )}
-                  </div>
-                  <div className="ytable-cell">
-                    <EntityName name={profileName(r.profile_id)} id={r.profile_id} />
-                  </div>
-                  <div className="ytable-cell">
-                    <Badge tone={r.enabled ? 'up' : 'neutral'}>
-                      {r.enabled ? t('rules.enabled') : t('rules.disabled')}
-                    </Badge>
-                  </div>
-                  <div className="ytable-cell right">
-                    {authed && (
-                      <span className="ytable-actions">
-                        <OverflowMenu
-                          actions={[
-                            {
-                              label: r.enabled ? t('rules.disable') : t('rules.enable'),
-                              icon: <PowerIcon />,
-                              onClick: () => toggleEnabled(r),
-                            },
-                            {
-                              label: t('rules.editRule'),
-                              icon: <EditIcon />,
-                              onClick: () => setEditing(r),
-                            },
-                            {
-                              label: t('rules.deleteRule'),
-                              icon: <TrashIcon />,
-                              danger: true,
-                              onClick: () => setDeleting(r),
-                            },
-                          ]}
-                        />
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(r) => r.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('rules.empty.noMatch') : t('rules.empty.none')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

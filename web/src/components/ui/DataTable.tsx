@@ -46,6 +46,13 @@ interface Props<T> {
   onReachEnd?: () => void;
   /** Row click (drill-down). */
   onRowClick?: (row: T) => void;
+  /** Extra class(es) for one row — for a *state* the row is in, never for layout.
+   *
+   *  Added by ADR-053 Inc.5 so the Routing tables could keep their `is-muted` row while moving off
+   *  hand-rolled `ytable` markup: a disabled channel or rule is dimmed, which is information, and a
+   *  migration that silently dropped it would make every rule look live. Deliberately not a style
+   *  hook — a class that changed a row's height would break the virtualizer's size estimate. */
+  rowClass?: (row: T) => string | undefined;
   empty?: ReactNode;
   /** While the first page is in flight, show a loading placeholder instead of `empty` so an
    *  unloaded table never reads as "no rows". */
@@ -93,6 +100,7 @@ export function DataTable<T>({
   rowKey,
   onReachEnd,
   onRowClick,
+  rowClass,
   empty,
   loading,
   renderCard,
@@ -236,7 +244,13 @@ export function DataTable<T>({
               return (
                 <div
                   key={rowKey(row)}
-                  className={onRowClick ? 'dt-row clickable' : 'dt-row'}
+                  className={[
+                    'dt-row',
+                    onRowClick ? 'clickable' : '',
+                    rowClass?.(row) ?? '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   style={{
                     gridTemplateColumns: template,
                     transform: `translateY(${vi.start}px)`,

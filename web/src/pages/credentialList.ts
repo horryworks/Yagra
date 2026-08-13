@@ -8,52 +8,82 @@
  *  invisible until someone is hunting for one credential among fifty.
  *
  *  Lives in a `.ts` for the usual reason — Vitest here runs `environment: 'node'` with
- *  `include: ['src/ **\/*.test.ts']`, so inside `CredentialsPage.tsx` this was untestable. */
+ *  `include: ['src/ **\/*.test.ts']`, so inside `CredentialsPage.tsx` this was untestable.
+ *
+ *  **ADR-053 Inc.5** moved the toolbar's search box and type dropdown into the filter row, and the
+ *  row predicate with them (`lib/filterPredicate.ts`). Two things went with `visibleCredentials`:
+ *
+ *  - The **`'all'` sentinel**. The old type filter used the literal string `'all'` for "no filter",
+ *    which meant `kindFilter === 'all'` was a magic value every caller had to know and one wrong
+ *    comparison away from filtering for a credential of kind "all". A filter cell's unset value is
+ *    `''`, and `buildPredicate` skips an empty column entirely, so there is nothing to compare.
+ *  - The **name-or-id search**. It matched both fields in one box, and the filter row cannot say
+ *    that honestly — each column filters itself. That is the better control (an operator can now
+ *    ask about the id without also matching a *name* containing those characters), and it is why
+ *    the Credential ID column gained a filter it never had.
+ *
+ *  The sort stayed, because the sort was never the problem: `sortRows` from `lib/tableSort.ts` now
+ *  applies it, and this module supplies the per-column accessors. */
 
+import type { TFunction } from 'i18next';
+import type { ColumnFilterSpec } from '../lib/columnFilter';
+import type { SortState, SortValues } from '../lib/tableSort';
 import type { CredentialSummary } from '../types/api';
-
-/** The two sortable columns. */
-export type CredentialSortKey = 'name' | 'used_by';
-
-/** A column plus a direction (`1` ascending, `-1` descending). */
-export interface CredentialSort {
-  key: CredentialSortKey;
-  dir: 1 | -1;
-}
 
 /** The fields this module reads. Generic over the row so the page passes real `CredentialSummary`
  *  values and gets them back unchanged, rather than a re-declared copy of the API shape. */
 type CredentialRow = Pick<CredentialSummary, 'id' | 'name' | 'kind' | 'used_by'>;
 
-/** What clicking a column header does: re-clicking the active column flips its direction, while
- *  moving to another column starts ascending — never inheriting the previous column's direction,
- *  which would silently sort the new column backwards. */
-export function nextCredentialSort(
-  current: CredentialSort,
-  key: CredentialSortKey,
-): CredentialSort {
-  return current.key === key ? { key, dir: (current.dir * -1) as 1 | -1 } : { key, dir: 1 };
+/** The name column sorts ascending by default — the order an operator scanning a list expects. */
+export const DEFAULT_CREDENTIAL_SORT: SortState = { by: 'name', dir: 'asc' };
+
+/** Per-column sort accessors. `used_by` is a number, so it sorts numerically rather than as text —
+ *  a string sort would put 10 before 9. */
+export function credentialSortValues<T extends CredentialRow>(): SortValues<T> {
+  return {
+    name: (c) => c.name,
+    used_by: (c) => c.used_by,
+  };
 }
 
-/** Apply the search box, the type filter and the sort, in that order.
+/**
+ * The Settings ▸ Credentials filter row, keyed by `Column.key`.
  *
- *  The search matches the name **or** the credential id, case-insensitively: the id is the handle
- *  that appears in a node's config and in an error message, so pasting one has to find its row. */
-export function visibleCredentials<T extends CredentialRow>(
-  rows: readonly T[],
-  query: string,
-  kindFilter: string,
-  sort: CredentialSort,
-): T[] {
-  const q = query.trim().toLowerCase();
-  const filtered = rows.filter(
-    (c) =>
-      (q === '' || c.name.toLowerCase().includes(q) || c.id.toLowerCase().includes(q)) &&
-      (kindFilter === 'all' || c.kind === kindFilter),
-  );
-  return filtered.sort((a, b) => {
-    const av = sort.key === 'name' ? a.name : a.used_by;
-    const bv = sort.key === 'name' ? b.name : b.used_by;
-    return (av < bv ? -1 : av > bv ? 1 : 0) * sort.dir;
-  });
+ * `kinds` comes from the **rows**, not from `lib/credentialKinds.ts::CREDENTIAL_KINDS`, and the
+ * difference is not cosmetic: that constant is the list an operator may *create*, and it
+ * deliberately excludes `meraki_api` (created by the integration, shown read-only). The old
+ * dropdown hardcoded three of the five, so `http_auth` and `meraki_api` credentials existed in the
+ * table and could not be filtered for at all. Reading the kinds off the rows means every kind that
+ * is on screen is selectable, which is the property that actually matters here.
+ */
+export function credentialFilters(
+  t: TFunction,
+  kinds: readonly string[],
+  kindLabel: (kind: string) => string,
+): Record<string, ColumnFilterSpec<CredentialSummary>> {
+  return {
+    name: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      readText: (c) => [c.name],
+      containsSemantics: 'substring',
+      placeholder: t('cred.cols.name'),
+    },
+    type: {
+      kind: 'enum',
+      options: kinds.map((k) => ({ value: k, label: kindLabel(k) })),
+      readValue: (c) => c.kind,
+      allLabel: t('cred.filter.allTypes'),
+      counts: 'client',
+    },
+    // The id is the handle that appears in a node's config and in an error message, so pasting one
+    // has to find its row. Under its own column now rather than folded into the name search.
+    id: {
+      kind: 'text',
+      modes: ['contains'],
+      readText: (c) => [c.id],
+      containsSemantics: 'substring',
+      placeholder: t('cred.cols.credentialId'),
+    },
+  };
 }

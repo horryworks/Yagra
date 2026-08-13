@@ -59,3 +59,36 @@ export function writeEnumParam<T extends string>(
   if (value === fallback) params.delete(key);
   else params.set(key, value);
 }
+
+/**
+ * Read a filter that names **several** values of a closed set, as one comma-joined string.
+ *
+ * Returns the tokens re-joined in `allowed`'s order so the same selection always produces the same
+ * string — the property `encodeSet` exists for, and it matters here twice: the value is a `useEffect`
+ * dependency key, and a shared link must compare equal to the same view reached by clicking.
+ *
+ * Unknown tokens are dropped rather than rejected, which is [`readEnumParam`]'s rule and for the
+ * same reason: a stale bookmark from a release with one more severity should show the rest of the
+ * filter, not a blank screen. ⚠️ The **API edge does the opposite** and 400s an unknown token — a
+ * dropped token there would widen the answer while the operator reads it as the narrower one.
+ * These two rules disagree on purpose; do not "make them consistent".
+ */
+export function readSetParam<T extends string>(
+  params: URLSearchParams,
+  key: string,
+  allowed: readonly T[],
+): string {
+  const want = new Set(
+    (params.get(key) ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+  );
+  return allowed.filter((v) => want.has(v)).join(',');
+}
+
+/** Write (or clear) a multi-valued closed-set filter. An empty selection **deletes the key**. */
+export function writeSetParam(params: URLSearchParams, key: string, value: string): void {
+  if (value) params.set(key, value);
+  else params.delete(key);
+}

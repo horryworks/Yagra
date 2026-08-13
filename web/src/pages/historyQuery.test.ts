@@ -2,7 +2,7 @@
 // Unit tests for the alert-history filter state (no DOM — Vitest node env).
 
 import { describe, expect, it } from 'vitest';
-import { SEVERITIES, type NodeState, type Severity } from '../types/api';
+import { SEVERITIES, type NodeState } from '../types/api';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { reservedKeyCollisions } from '../lib/columnFilter';
 import {
@@ -40,7 +40,10 @@ describe('queryFor', () => {
       severity: undefined,
       state: undefined,
       resolved: undefined,
+      acked: undefined,
+      metric: undefined,
       node_id: undefined,
+      node_q: undefined,
       group_id: undefined,
       since: undefined,
       before: undefined,
@@ -50,18 +53,29 @@ describe('queryFor', () => {
 
   it('maps each control to its own parameter', () => {
     const f: HistoryFilters = {
-      severity: 'critical' as Severity,
-      state: 'unreachable' as NodeState,
+      ...DEFAULT_FILTERS,
+      // Several severities in one request — the point of Inc.4b. The joined spelling is what the
+      // API takes, so nothing re-encodes it on the way out.
+      severity: 'warning,critical',
+      state: 'unreachable',
       phase: 'fired',
+      nodeQ: 'core-sw',
+      metric: 'cpu',
+      acked: 'false',
       range: '7d',
       nodeId: 'n1',
-      groupId: '',
     };
     expect(queryFor(f, null, NOW)).toMatchObject({
-      severity: 'critical',
+      severity: 'warning,critical',
       state: 'unreachable',
       resolved: false,
+      // `''` means "either"; only a chosen value becomes a boolean, and `false` must survive the
+      // conversion — a falsy-check here would drop "unacknowledged only", which is the filter an
+      // operator actually reaches for.
+      acked: false,
+      metric: 'cpu',
       node_id: 'n1',
+      node_q: 'core-sw',
       group_id: undefined,
       since: '2026-08-05T00:00:00.000Z',
     });
@@ -88,9 +102,12 @@ describe('isFiltered', () => {
     // without its clause cannot leave the empty state claiming the log is empty while a filter is
     // hiding rows. Nothing here needs updating to keep that true.
     const changed: Record<keyof HistoryFilters, HistoryFilters> = {
-      severity: { ...DEFAULT_FILTERS, severity: 'info' as Severity },
-      state: { ...DEFAULT_FILTERS, state: 'ok' as NodeState },
+      severity: { ...DEFAULT_FILTERS, severity: 'info' },
+      state: { ...DEFAULT_FILTERS, state: 'ok' },
       phase: { ...DEFAULT_FILTERS, phase: 'fired' },
+      nodeQ: { ...DEFAULT_FILTERS, nodeQ: 'core' },
+      metric: { ...DEFAULT_FILTERS, metric: 'cpu' },
+      acked: { ...DEFAULT_FILTERS, acked: 'false' },
       range: { ...DEFAULT_FILTERS, range: '24h' },
       nodeId: { ...DEFAULT_FILTERS, nodeId: 'n1' },
       groupId: { ...DEFAULT_FILTERS, groupId: 'g1' },
@@ -104,9 +121,12 @@ describe('isFiltered', () => {
 describe('URL round trip', () => {
   it('restores every filter from the query string', () => {
     const f: HistoryFilters = {
-      severity: 'warning' as Severity,
-      state: 'critical' as NodeState,
+      severity: 'warning,critical',
+      state: 'critical',
       phase: 'cleared',
+      nodeQ: 'core-sw',
+      metric: 'cpu_util',
+      acked: 'true',
       range: '30d',
       nodeId: 'n1',
       groupId: 'g1',
@@ -148,19 +168,32 @@ describe('the filter row (ADR-053 Inc.4)', () => {
   it('keys its columns by the query parameters this screen already used', () => {
     // ⚠️ The column key IS the URL key (ADR-053 decision 12). The columns were `sev` and `at`; they
     // were renamed to `severity` and `range` so that every bookmark taken before the filter row
-    // shipped still resolves. A column key is internal — a URL someone saved is not.
-    expect(COLUMNS.map((c) => c.key).sort()).toEqual(['phase', 'range', 'severity', 'state']);
+    // shipped still resolves. A column key is internal — a URL someone saved is not. The Inc.4b
+    // columns follow the same rule: `node_q` and `metric` are the API's names, not `node`/`what`.
     expect(reservedKeyCollisions(COLUMNS)).toEqual([]);
   });
 
-  it('offers one value per enum, because the endpoint takes one', () => {
-    // 🚨 A multi-select here would let an operator tick three severities and send one — rows missing
-    // from a filtered list with nothing on screen saying so. `GET /alerts/history` takes a single
-    // `severity`/`state`/`resolved`; widening it is a backend increment with its own MCP parity.
-    for (const key of ['severity', 'state', 'phase']) {
-      const s = specs[key];
-      expect(s.kind === 'enum' && s.single).toBe(true);
+  it('offers a multi-select on every enum, because the endpoint takes a set', () => {
+    // This asserted the opposite before Inc.4b, when the endpoint took one value each and a
+    // multi-select would have let an operator tick three and send one. The endpoint now takes
+    // comma-joined sets, so the control that would have lied then is the honest one now.
+    //
+    // 🚨 What must stay true is the *pairing*, not the direction: a multi-select over a parameter
+    // that accepts one value drops rows with nothing on screen saying so.
+    for (const key of ['severity', 'state', 'phase', 'acked']) {
+      expect(specs[key].kind, key).toBe('enum');
+      expect('single' in specs[key], `${key} still carries the removed single flag`).toBe(false);
     }
+  });
+
+  it('mounts a filter on every column, so none reads as forgotten', () => {
+    // The user-visible half of Inc.4b. Node / What / Acked each had a *reason* to be unfilterable —
+    // no API parameter existed — and from the screen that is indistinguishable from an oversight,
+    // which is why it was reported twice. If a column here loses its filter again, that is a
+    // decision someone has to make deliberately.
+    expect(COLUMNS.map((c) => c.key).sort()).toEqual(
+      ['acked', 'metric', 'node_q', 'phase', 'range', 'severity', 'state'].sort(),
+    );
   });
 
   it('carries no client-side range accessor, so the window is applied once', () => {
@@ -173,9 +206,12 @@ describe('the filter row (ADR-053 Inc.4)', () => {
 
   it('round-trips every filter through the flat row state', () => {
     const f: HistoryFilters = {
-      severity: 'critical' as Severity,
-      state: 'unreachable' as NodeState,
+      severity: 'warning,critical',
+      state: 'unreachable',
       phase: 'cleared',
+      nodeQ: 'core-sw',
+      metric: 'cpu_util',
+      acked: 'false',
       range: '7d',
       nodeId: 'n1',
       groupId: 'g1',

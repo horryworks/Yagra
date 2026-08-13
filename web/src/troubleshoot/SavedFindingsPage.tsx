@@ -83,7 +83,10 @@ function findingColumns(t: TFunction, nodeName: (id: string) => string): Column<
       render: (f) => <span className="mono">{Math.round(f.score)}</span>,
     },
     {
-      key: 'node',
+      // ⚠️ Keyed `node_q`, not `node`: the column key **is** the filter's URL key (ADR-053
+      // decision 12) and this one carries a node-*name* substring, not the id `node_id` means.
+      // Nothing type-checks the `specs[c.key]` lookup below.
+      key: 'node_q',
       header: t('findings.cols.node'),
       width: '1.2fr',
       // Resolved through `useEntityNames`, not from the row's own `node_name`: that name was
@@ -97,7 +100,9 @@ function findingColumns(t: TFunction, nodeName: (id: string) => string): Column<
         ),
     },
     {
-      key: 'what',
+      // `q` rather than `what`: the API parameter matches the metric **and** the kind, which is
+      // exactly the pair this column renders.
+      key: 'q',
       header: t('findings.cols.what'),
       width: '1.6fr',
       render: (f) => (

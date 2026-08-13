@@ -123,6 +123,9 @@
       "update": "failed to update rule",
       "save": "failed to save rule",
       "delete": "failed to delete rule"
+    },
+    "filter": {
+      "allStatuses": "Enabled and disabled"
     }
   },
   "sets": {

@@ -9,9 +9,22 @@
 // because a cursor that skips rows is a bug whether or not anything is filtering.
 
 import type { TFunction } from 'i18next';
-import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
+import {
+  decodeSet,
+  encodeSet,
+  type ColumnFilterSpec,
+  type FilterState,
+} from '../lib/columnFilter';
+import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
-import { readEnumParam, readIdParam, writeEnumParam, writeIdParam } from '../lib/filterParams';
+import {
+  readEnumParam,
+  readIdParam,
+  readSetParam,
+  writeEnumParam,
+  writeIdParam,
+  writeSetParam,
+} from '../lib/filterParams';
 import { severityLabel, stateLabel } from '../lib/format';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { PAGE_SIZE } from './historyCursor';
@@ -33,27 +46,27 @@ const RANGE_SECS: Record<HistoryRange, number | null> = {
 };
 
 /**
- * The Alerts ▸ History filter row, keyed by `Column.key` (ADR-053 Inc.4).
+ * The Alerts ▸ History filter row, keyed by `Column.key` (ADR-053 Inc.4 / Inc.4b).
  *
- * ⚠️ **Every enum here is `single`, and that is the API's shape, not a UI preference.**
- * `GET /api/v1/alerts/history` takes one `severity`, one `state` and one `resolved`; a multi-select
- * over those would let an operator tick three boxes, send one, and see a list missing rows with
- * nothing on screen saying why. Widening the endpoint to comma-joined lists (as Events took in
- * Inc.2) is a backend increment with its own MCP-parity obligation — see the ADR.
+ * The enums are multi-select: since Inc.4b `GET /api/v1/alerts/history` takes `severity` and
+ * `state` as comma-separated sets. `phase` stays effectively single-valued because it maps onto a
+ * *boolean* (`resolved`) — ticking both fired and cleared is the unfiltered view, and
+ * [`resolvedFor`] returns `undefined` for it, which is exactly right rather than a special case.
  *
- * Columns deliberately left unfilterable: **node** (the ScopePicker in the action row answers it,
- * and it resolves names against the inventory — a different question from "does this cell contain
- * these characters"), **what** (the only free-text column is `metric`, unindexed on a table that
- * reaches millions of rows, so an ILIKE there turns the keyset seek into a seq scan) and **acked**.
+ * ⚠️ **The node / what / acked columns had no filter until Inc.4b, and the reason mattered: none
+ * of the three could be asked of the API.** A user reported all three as missing twice, which is
+ * the real lesson — *from the screen there is no difference between "deliberately absent" and
+ * "forgotten"*, so a column with no filter looks like a bug whatever the reason. Each got a
+ * parameter rather than a browser-side predicate, because filtering a keyset-paged list in the
+ * browser hides older matches while looking like it worked.
  */
 export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<AlertHistoryRow>> {
   return {
-    // ⚠️ The keys are `severity` / `state` / `phase` / `range`, matching the query parameters this
-    // screen has always used — the column keys were `sev` and `at`, and were renamed to these. That
-    // is the cheap direction: a column key is internal, whereas the URL is a bookmark someone holds.
+    // ⚠️ The keys are the query parameters this screen has always used — the column keys were `sev`
+    // and `at`, and were renamed to these. That is the cheap direction: a column key is internal,
+    // whereas the URL is a bookmark someone holds.
     severity: {
       kind: 'enum',
-      single: true,
       options: SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) })),
       // Server-side: the predicate is in SQL and these accessors are never called. They are here
       // because the spec type asks for them, and returning the real field keeps them honest if the
@@ -63,20 +76,58 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
     },
     state: {
       kind: 'enum',
-      single: true,
       options: SEVERITY_ORDER.map((s) => ({ value: s, label: stateLabel(s) })),
       readValue: (r) => r.state,
       allLabel: t('history.filter.allStates'),
     },
     phase: {
       kind: 'enum',
-      single: true,
       options: [
         { value: 'fired', label: t('history.phase.fired') },
         { value: 'cleared', label: t('history.phase.cleared') },
       ],
       readValue: (r) => (r.resolved ? 'cleared' : 'fired'),
       allLabel: t('history.filter.allPhases'),
+    },
+    // The node's **current** name, matched as a substring by the server (`node_q`). Deliberately
+    // not the same question as the action row's ScopePicker, which selects exactly one node — "every
+    // node called core-sw…" could not be asked at all before this.
+    node_q: {
+      kind: 'text',
+      // Contains only: `node_q` is a substring parameter with no regex and no negated form. Offering
+      // either toggle would promise something there is nothing to send.
+      modes: ['contains'],
+      // ⚠️ Nothing honest to read: the row carries the subject's **id**, and the name it displays is
+      // resolved separately through `useEntityNames`. So this returns nothing rather than the UUID,
+      // which would make a browser-side pass match on characters the operator never sees. The
+      // predicate is the server's, against `nodes.name`.
+      readText: () => [],
+      containsSemantics: 'substring',
+      placeholder: t('history.cols.node'),
+    },
+    // The metric name, matched as a substring by the server (`metric`).
+    //
+    // ⚠️ **A more selective term is the slower one here**, which is the opposite of the intuition:
+    // the index still serves the ordering and the page size, so the planner walks it until the page
+    // is full — a metric matching one row in a million walks the whole index. Liveness transitions
+    // store no metric and never match.
+    metric: {
+      kind: 'text',
+      modes: ['contains'],
+      readText: (r) => [r.metric ?? ''],
+      containsSemantics: 'substring',
+      placeholder: t('history.cols.what'),
+    },
+    // Whether the incident was acknowledged. The question this answers — "what fired this week that
+    // nobody has looked at" — had to be done by eye before.
+    acked: {
+      kind: 'enum',
+      options: [
+        { value: 'true', label: t('history.filter.acked') },
+        { value: 'false', label: t('history.filter.unacked') },
+      ],
+      readValue: (r) => (r.acked ? 'true' : 'false'),
+      allLabel: t('history.filter.allAcked'),
     },
     range: {
       kind: 'range',
@@ -101,20 +152,35 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
 // nothing on the Events page (`useFilterParams.setFilters`): one handler, one write.
 
 export function stateFromFilters(f: HistoryFilters): FilterState {
-  return { severity: f.severity, state: f.state, phase: f.phase, range: f.range };
+  return {
+    severity: f.severity,
+    state: f.state,
+    phase: f.phase,
+    node_q: f.nodeQ ? encodeCondition({ term: f.nodeQ, mode: 'contains', not: false }) : '',
+    metric: f.metric ? encodeCondition({ term: f.metric, mode: 'contains', not: false }) : '',
+    acked: f.acked,
+    range: f.range,
+  };
 }
 
 export function filtersFromState(
   s: FilterState,
   scope: { nodeId: string; groupId: string },
 ): HistoryFilters {
-  // `single` columns still store a set, so a value arrives as a one-element token list.
-  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
   const range = s.range ?? '';
   return {
-    severity: one(s.severity) as HistoryFilters['severity'],
-    state: one(s.state) as HistoryFilters['state'],
-    phase: one(s.phase) as HistoryPhase,
+    // A set column stores its tokens joined; the API takes the same spelling, so this is a
+    // pass-through rather than a decode-and-rejoin.
+    severity: joined(s.severity, SEVERITIES),
+    state: joined(s.state, SEVERITY_ORDER),
+    // `phase` maps onto a boolean, so "both ticked" is the same request as "neither" — see
+    // `resolvedFor`. Normalising it here keeps `isFiltered` from calling the unfiltered view filtered.
+    phase: phaseOf(s.phase),
+    // A text column stores an encoded condition; only its term reaches this API (there is no regex
+    // and no negated form on either parameter).
+    nodeQ: decodeCondition(s.node_q ?? '').term,
+    metric: decodeCondition(s.metric ?? '').term,
+    acked: ackedOf(s.acked),
     range: (HISTORY_RANGES as readonly string[]).includes(range)
       ? (range as HistoryRange)
       : DEFAULT_FILTERS.range,
@@ -123,11 +189,42 @@ export function filtersFromState(
   };
 }
 
-/** The screen's filter state. `''` means "no filter" for each optional field. */
+/** A token set, re-joined in `order` so the same selection is always the same string. */
+function joined(value: string | undefined, order: readonly string[]): string {
+  return encodeSet(decodeSet(value ?? ''), order);
+}
+
+/** Both phases ticked (or neither) is the unfiltered view; one is a filter. */
+function phaseOf(value: string | undefined): HistoryPhase {
+  const picked = decodeSet(value ?? '');
+  return picked.length === 1 ? (picked[0] as HistoryPhase) : '';
+}
+
+/** Same rule for ack: both is the unfiltered view. `''` is "either". */
+function ackedOf(value: string | undefined): AckedFilter {
+  const picked = decodeSet(value ?? '');
+  return picked.length === 1 && (picked[0] === 'true' || picked[0] === 'false')
+    ? (picked[0] as AckedFilter)
+    : '';
+}
+
+/** `''` = either, otherwise the acknowledged state to keep. */
+export type AckedFilter = '' | 'true' | 'false';
+
+/** The screen's filter state. `''` means "no filter" for each optional field.
+ *
+ *  `severity` and `state` are comma-joined token **sets** rather than single values — the API takes
+ *  them that way since ADR-053 Inc.4b, and keeping the same spelling here means `queryFor` passes
+ *  them through untouched instead of re-encoding a list at the last moment. */
 export interface HistoryFilters {
-  severity: Severity | '';
-  state: NodeState | '';
+  severity: string;
+  state: string;
   phase: HistoryPhase;
+  /** Substring of the node's current name (`node_q`). */
+  nodeQ: string;
+  /** Substring of the metric name (`metric`). */
+  metric: string;
+  acked: AckedFilter;
   range: HistoryRange;
   nodeId: string;
   groupId: string;
@@ -146,6 +243,9 @@ export const DEFAULT_FILTERS: HistoryFilters = {
   severity: '',
   state: '',
   phase: '',
+  nodeQ: '',
+  metric: '',
+  acked: '',
   range: 'all',
   nodeId: '',
   groupId: '',
@@ -177,7 +277,12 @@ export function queryFor(
     severity: unset(f.severity),
     state: unset(f.state),
     resolved: resolvedFor(f.phase),
+    // `''` means "either", and the two real values are strings in the filter state because that is
+    // what a filter cell stores. Only here do they become the boolean the API takes.
+    acked: f.acked === '' ? undefined : f.acked === 'true',
+    metric: unset(f.metric),
     node_id: unset(f.nodeId),
+    node_q: unset(f.nodeQ),
     group_id: unset(f.groupId),
     since: sinceIso(RANGE_SECS[f.range], nowMs),
     before: cursor?.before,
@@ -200,11 +305,20 @@ export function isFiltered(f: HistoryFilters): boolean {
  * linking to "this node's alert history" needs somewhere to say which node, and nothing else holds
  * that. The rest ride along so a filtered view can be shared and survives a reload.
  */
-export function readFilters(params: URLSearchParams, severities: readonly Severity[], states: readonly NodeState[]): HistoryFilters {
+export function readFilters(
+  params: URLSearchParams,
+  severities: readonly Severity[],
+  states: readonly NodeState[],
+): HistoryFilters {
   return {
-    severity: readEnumParam(params, 'severity', ['', ...severities], ''),
-    state: readEnumParam(params, 'state', ['', ...states], ''),
+    // ⚠️ `readSetParam`, not `readEnumParam`: these carry several tokens now. An older bookmark
+    // holding one (`?severity=critical`) still reads correctly — one token is a one-element set.
+    severity: readSetParam(params, 'severity', severities),
+    state: readSetParam(params, 'state', states),
     phase: readEnumParam(params, 'phase', HISTORY_PHASES, ''),
+    nodeQ: readIdParam(params, 'node_q') ?? '',
+    metric: readIdParam(params, 'metric') ?? '',
+    acked: readEnumParam<AckedFilter>(params, 'acked', ['', 'true', 'false'], ''),
     range: readEnumParam(params, 'range', HISTORY_RANGES, DEFAULT_FILTERS.range),
     nodeId: readIdParam(params, 'node_id') ?? '',
     groupId: readIdParam(params, 'group_id') ?? '',
@@ -214,9 +328,12 @@ export function readFilters(params: URLSearchParams, severities: readonly Severi
 /** Write the filters back, deleting every key whose value is the default so the unfiltered view
  *  has no query string at all. */
 export function writeFilters(params: URLSearchParams, f: HistoryFilters): void {
-  writeEnumParam(params, 'severity', f.severity, '');
-  writeEnumParam(params, 'state', f.state, '');
+  writeSetParam(params, 'severity', f.severity);
+  writeSetParam(params, 'state', f.state);
   writeEnumParam(params, 'phase', f.phase, '');
+  writeIdParam(params, 'node_q', f.nodeQ.trim() || null);
+  writeIdParam(params, 'metric', f.metric.trim() || null);
+  writeEnumParam(params, 'acked', f.acked, '');
   writeEnumParam(params, 'range', f.range, DEFAULT_FILTERS.range);
   writeIdParam(params, 'node_id', f.nodeId || null);
   writeIdParam(params, 'group_id', f.groupId || null);

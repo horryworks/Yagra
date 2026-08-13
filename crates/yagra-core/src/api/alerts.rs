@@ -259,15 +259,27 @@ pub(crate) struct HistoryQuery {
     /// Only transitions recorded at or before this RFC 3339 timestamp. Bounds `recorded_at`; see
     /// `since`.
     pub until: Option<String>,
-    /// Only transitions at this severity.
-    pub severity: Option<Severity>,
-    /// Only transitions into this state.
-    pub state: Option<NodeState>,
+    /// Comma-separated severities (`info`, `warning`, `critical`); empty or absent means every
+    /// severity. An unknown token is rejected rather than ignored — a dropped token would silently
+    /// widen the answer to everything.
+    pub severity: Option<String>,
+    /// Comma-separated node states; empty or absent means every state.
+    pub state: Option<String>,
     /// `false` for fires only, `true` for clears only. Omit for both.
     pub resolved: Option<bool>,
+    /// `true` for transitions whose incident has been acknowledged, `false` for those that have
+    /// not. Omit for both. Acknowledgement is per incident (node + check + severity), so every
+    /// transition of one incident answers the same way.
+    pub acked: Option<bool>,
+    /// Only transitions whose metric name contains this text (case-insensitive). Liveness rows
+    /// store no metric and therefore never match.
+    pub metric: Option<String>,
     /// Only transitions about this node. Rows about something other than a node (a poller pool)
     /// are excluded by construction.
     pub node_id: Option<Uuid>,
+    /// Only transitions about nodes whose **current name** contains this text (case-insensitive).
+    /// Distinct from `node_id`, which names exactly one node.
+    pub node_q: Option<String>,
     /// Only transitions about nodes in this folder group **or any group beneath it**.
     pub group_id: Option<Uuid>,
 }
@@ -298,10 +310,13 @@ async fn list_alert_history(
             before_id: q.before_id,
             since: q.since.as_deref(),
             until: q.until.as_deref(),
-            severity: q.severity,
-            state: q.state,
+            severity: q.severity.as_deref(),
+            state: q.state.as_deref(),
             resolved: q.resolved,
+            acked: q.acked,
+            metric: q.metric.as_deref(),
             node_id: q.node_id,
+            node_q: q.node_q.as_deref(),
             group_id: q.group_id,
         },
     )
@@ -311,41 +326,32 @@ async fn list_alert_history(
 }
 
 /// The raw filter fields, as either surface receives them.
+///
+/// ⚠️ **This struct is the REST/MCP parity seam for history**, the same role
+/// `eventlog::EventFilterInput` plays for events: a dimension added here is a compile error in
+/// `mcp/tools.rs` until the tool takes it too. What the compiler still cannot see is whether the
+/// tool *offers* the dimension as a parameter or hard-codes it to `None` — that half is covered by
+/// `mcp/tools.rs::every_shared_filter_seam_is_passed_through_whole`, which reads this struct's own
+/// field list rather than a copy of it.
+///
+/// `severity` and `state` are comma-separated text on both surfaces rather than enums. REST could
+/// have kept `Option<Severity>` and let serde parse it, but then the two surfaces would accept
+/// different vocabularies for the same field, and the multi-value spelling would live in two
+/// places. Both go through [`super::util::parse_set`], which is also what events use.
 pub(crate) struct HistoryFilterInput<'a> {
     pub limit: Option<i64>,
     pub before: Option<&'a str>,
     pub before_id: Option<Uuid>,
     pub since: Option<&'a str>,
     pub until: Option<&'a str>,
-    pub severity: Option<Severity>,
-    pub state: Option<NodeState>,
+    pub severity: Option<&'a str>,
+    pub state: Option<&'a str>,
     pub resolved: Option<bool>,
+    pub acked: Option<bool>,
+    pub metric: Option<&'a str>,
     pub node_id: Option<Uuid>,
+    pub node_q: Option<&'a str>,
     pub group_id: Option<Uuid>,
-}
-
-/// Parse a severity or state token from a surface that receives it as text (MCP).
-///
-/// Here rather than in `mcp/tools.rs` so both surfaces accept exactly the same vocabulary. REST
-/// takes the enum directly — serde does this parse — and this is the one extra step MCP needs
-/// because its parameter schemas are `schemars`, which `yagra-common` deliberately does not derive.
-pub(crate) fn parse_severity(s: Option<&str>) -> Result<Option<Severity>, ApiError> {
-    s.map(|v| {
-        Severity::from_token(v).ok_or_else(|| {
-            ApiError::bad_request("invalid_severity", "severity must be info|warning|critical")
-        })
-    })
-    .transpose()
-}
-
-/// See [`parse_severity`].
-pub(crate) fn parse_state(s: Option<&str>) -> Result<Option<NodeState>, ApiError> {
-    s.map(|v| {
-        NodeState::from_token(v).ok_or_else(|| {
-            ApiError::bad_request("invalid_state", "state is not a known node state")
-        })
-    })
-    .transpose()
 }
 
 /// A page of alert history, newest first — shared by `GET /api/v1/alerts/history` and the MCP
@@ -381,6 +387,29 @@ pub(crate) async fn history_page(
     let since = ts(input.since, "since", "invalid_filter")?;
     let until = ts(input.until, "until", "invalid_filter")?;
 
+    // Same set spelling as events (ADR-053): comma-separated, order-preserving, empty means
+    // unfiltered, and an unknown token is a 400. The last is the load-bearing half — dropping a
+    // token widens the answer, and a widened list reads exactly like the answer to the narrower
+    // question that was asked.
+    let severity = super::util::parse_set(
+        "severity",
+        input.severity,
+        "info, warning or critical",
+        Severity::from_token,
+    )?;
+    let state = super::util::parse_set(
+        "state",
+        input.state,
+        &NodeState::ALL
+            .iter()
+            .map(NodeState::as_str)
+            .collect::<Vec<_>>()
+            .join(", "),
+        NodeState::from_token,
+    )?;
+    let metric = super::util::normalize_search(input.metric);
+    let node_q = super::util::normalize_search(input.node_q);
+
     // Filtering *by* a node or a group is still naming one, so both go through the same visibility
     // check the rest of the surface uses — the shape `search_saved_findings` established. Answering
     // `200 []` instead would be a slower way of saying the same thing for a group that exists, and a
@@ -406,11 +435,14 @@ pub(crate) async fn history_page(
         before_id: input.before_id,
         since,
         until,
-        severity: input.severity,
-        state: input.state,
+        severity,
+        state,
         resolved: input.resolved,
         node_id: input.node_id,
         in_group: in_group.as_deref(),
+        acked: input.acked,
+        metric: metric.as_deref(),
+        node_q: node_q.as_deref(),
         limit: input.limit.unwrap_or(100),
     };
     let rows = history.search(&filter).await.map_err(|e| {

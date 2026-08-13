@@ -105,6 +105,13 @@ impl ScopeLevel {
             ScopeLevel::Node => "node",
         }
     }
+
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`. Mirrors
+    /// [`Direction::from_token`] — the API edge decides what a miss means (a 400), never this.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
 }
 
 /// A threshold rule for a single metric.

@@ -117,8 +117,10 @@ pub struct HistoryFilter<'a> {
     pub before_id: Option<Uuid>,
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
-    pub severity: Option<Severity>,
-    pub state: Option<NodeState>,
+    /// Any of these severities. Empty means unfiltered — the same as omitting the parameter.
+    pub severity: Vec<Severity>,
+    /// Any of these states. Empty means unfiltered.
+    pub state: Vec<NodeState>,
     /// `Some(false)` = fires only, `Some(true)` = clears only.
     pub resolved: Option<bool>,
     /// Restrict to one node subject.
@@ -126,22 +128,50 @@ pub struct HistoryFilter<'a> {
     /// Restrict to node subjects currently in these folder groups — the **caller's requested**
     /// group, already expanded to its subtree. Not the caller's RBAC scope; see the const below.
     pub in_group: Option<&'a [Uuid]>,
+    /// `Some(true)` = only transitions whose incident is acknowledged, `Some(false)` = only
+    /// unacknowledged ones. See [`HISTORY_FILTER_WHERE`] for why this is the one filter whose
+    /// answer is computed twice.
+    pub acked: Option<bool>,
+    /// Case-insensitive substring of the metric name.
+    ///
+    /// ⚠️ **A more selective term is the slower one.** `alert_history_cursor_idx` still serves the
+    /// ordering and the `LIMIT`, so this does not change the access method — but the planner walks
+    /// that index until it has filled the page, so a metric matching one row in a million walks the
+    /// whole index while a metric matching a third of them stops almost immediately. The same
+    /// inversion ADR-024 measured on VictoriaLogs. No index is added for it: at the scale where it
+    /// would matter the right index is not obvious, and the wrong one is permanent.
+    pub metric: Option<&'a str>,
+    /// Case-insensitive substring of the **node's current name**.
+    ///
+    /// Deliberately distinct from [`Self::node_id`]: that names one node, this asks a question
+    /// about a set ("everything called `core-sw…`") that no other parameter can express. Resolved
+    /// as a subquery against `nodes` rather than by the caller, because the caller would otherwise
+    /// have to page the whole inventory to build the id list.
+    pub node_q: Option<&'a str>,
     /// Rows per page; clamped to `1..=1000` by [`AlertHistoryStore::search`].
     pub limit: i64,
 }
 
-/// The `WHERE` of a page of alert history. Binds `$1..=$9` in the order [`bind_history_filter`]
-/// writes them; `$10` is the page size.
+/// The `WHERE` of a page of alert history. Binds `$1..=$12` in the order [`bind_history_filter`]
+/// writes them; `$13` is the page size.
 ///
 /// Every clause is **always present** with a `NULL` bind meaning "no filter", rather than being
 /// appended when set — the same rule [`AlertHistoryStore::SCOPE_PREDICATE`] is written to, and for
 /// the reason stated there: a conditionally-built predicate has a branch that can be forgotten, and
 /// forgetting one fails **open**.
 ///
-/// ⚠️ **`node` is a subject identity, not a node reference** (migration 0075). `$8` and `$9` are
-/// therefore each paired with `subject_kind = 'node'`. A bare `node = $8` would also match the
+/// ⚠️ **`node` is a subject identity, not a node reference** (migration 0075). `$8`, `$9` and `$12`
+/// are therefore each paired with `subject_kind = 'node'`. A bare `node = $8` would also match the
 /// derived UUID of a pool subject, and a group filter that admitted pool rows would put Yagra's own
 /// coverage alerts into an answer about one site's devices.
+///
+/// ⚠️ **`$10` (ack) is the one filter whose answer this query computes and then throws away.** The
+/// ack *shown* on a row is joined in Rust by `api::alerts::decorate_history`, out of a map keyed by
+/// the subject — not here — because a subject's storage identity is resolved in `poolres.rs` and
+/// not in SQL. So "is it acked" is answered twice, by two mechanisms, and they agree only because
+/// the `EXISTS` names `alert_acks`' primary key `(node, check_id, severity)`, which is exactly what
+/// `api::alerts::ack_key` builds. `the_ack_filter_reads_the_same_key_the_rust_join_reads` pins that;
+/// without it, a row could be filtered *in* as acked and then rendered without its ack pill.
 ///
 /// ⚠️ **The caller's RBAC scope is deliberately NOT here, and must not be added.**
 /// [`AlertHistoryStore::SCOPE_PREDICATE`] fails *closed* for a non-node subject — pool→group
@@ -156,12 +186,18 @@ const HISTORY_FILTER_WHERE: &str = "\
         ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
      AND ($3::timestamptz IS NULL OR recorded_at >= $3) \
      AND ($4::timestamptz IS NULL OR recorded_at <= $4) \
-     AND ($5::text IS NULL OR severity = $5) \
-     AND ($6::text IS NULL OR state = $6) \
+     AND ($5::text[] IS NULL OR severity = ANY($5)) \
+     AND ($6::text[] IS NULL OR state = ANY($6)) \
      AND ($7::boolean IS NULL OR resolved = $7) \
      AND ($8::uuid IS NULL OR (subject_kind = 'node' AND node = $8)) \
      AND ($9::uuid[] IS NULL OR (subject_kind = 'node' \
-          AND node IN (SELECT id FROM nodes WHERE group_id = ANY($9))))";
+          AND node IN (SELECT id FROM nodes WHERE group_id = ANY($9)))) \
+     AND ($10::boolean IS NULL OR EXISTS (SELECT 1 FROM alert_acks a \
+          WHERE a.node = alert_history.node AND a.check_id = alert_history.check_id \
+            AND a.severity = alert_history.severity) = $10) \
+     AND ($11::text IS NULL OR metric ILIKE '%' || $11 || '%') \
+     AND ($12::text IS NULL OR (subject_kind = 'node' \
+          AND node IN (SELECT id FROM nodes WHERE name ILIKE '%' || $12 || '%')))";
 
 /// The one statement that reads a page of history. `ORDER BY` names the cursor's columns in the
 /// cursor's direction — a keyset cursor is only valid for the ordering it was built for, and
@@ -172,11 +208,18 @@ fn history_page_sql() -> String {
                 resolved, metric, observed_value, threshold_value, direction, recorded_at \
          FROM alert_history \
          WHERE {HISTORY_FILTER_WHERE} \
-         ORDER BY recorded_at DESC, id DESC LIMIT $10"
+         ORDER BY recorded_at DESC, id DESC LIMIT $13"
     )
 }
 
-/// Bind `$1..=$9` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
+/// An empty set means *unfiltered*, which in this predicate is a `NULL` bind — never an empty
+/// array, which `= ANY(…)` would match nothing at all against.
+fn set_or_null(tokens: impl IntoIterator<Item = &'static str>) -> Option<Vec<String>> {
+    let v: Vec<String> = tokens.into_iter().map(str::to_owned).collect();
+    (!v.is_empty()).then_some(v)
+}
+
+/// Bind `$1..=$12` of [`HISTORY_FILTER_WHERE`], in the one order that matches it.
 ///
 /// One helper because the sequence is positional and silent when wrong: swapping `$3` and `$4`
 /// still compiles, still runs, and just answers a different question.
@@ -188,11 +231,14 @@ fn bind_history_filter<'q>(
         .bind(f.before_id)
         .bind(f.since)
         .bind(f.until)
-        .bind(f.severity.map(|s| s.as_str()))
-        .bind(f.state.map(|s| s.as_str()))
+        .bind(set_or_null(f.severity.iter().map(|s| s.as_str())))
+        .bind(set_or_null(f.state.iter().map(|s| s.as_str())))
         .bind(f.resolved)
         .bind(f.node_id)
         .bind(f.in_group)
+        .bind(f.acked)
+        .bind(f.metric)
+        .bind(f.node_q)
 }
 
 /// PostgreSQL-backed alert history.
@@ -700,7 +746,11 @@ mod tests {
         // reference. A bare `node = $8` would also match the derived UUID of a pool subject, and a
         // group filter admitting pool rows would put Yagra's own coverage alerts into an answer
         // about one site's devices. Nothing but a source check can catch this without a database.
-        for bind in ["$8", "$9"] {
+        //
+        // `$12` (the node-name substring) is here for the same reason and is the newer trap: it
+        // reads like a filter on a *name*, so the subject-kind pairing looks redundant until you
+        // notice a pool subject's derived UUID can collide with a real node's id.
+        for bind in ["$8", "$9", "$12"] {
             let clause = HISTORY_FILTER_WHERE
                 .split(&format!("({bind}::"))
                 .nth(1)
@@ -717,10 +767,10 @@ mod tests {
     fn the_history_filter_binds_every_placeholder_it_names() {
         // Positional and silent when wrong: swapping two binds still compiles, still runs, and just
         // answers a different question.
-        let named = (1..=9)
+        let named = (1..=12)
             .filter(|n| HISTORY_FILTER_WHERE.contains(&format!("${n}")))
             .count();
-        assert_eq!(named, 9, "the predicate should name exactly $1..=$9");
+        assert_eq!(named, 12, "the predicate should name exactly $1..=$12");
         let binds = production_source()
             .split("fn bind_history_filter")
             .nth(1)
@@ -731,7 +781,38 @@ mod tests {
             .matches(".bind(")
             .count();
         assert_eq!(binds, named, "one bind per placeholder");
-        assert!(history_page_sql().contains("LIMIT $10"));
+        assert!(history_page_sql().contains("LIMIT $13"));
+    }
+
+    #[test]
+    fn the_ack_filter_reads_the_same_key_the_rust_join_reads() {
+        // "Is this acked" is answered twice — by `$10`'s EXISTS when *filtering*, and by
+        // `api::alerts::decorate_history`'s map when *rendering* — because a subject's storage
+        // identity resolves in `poolres.rs` rather than in SQL. Two mechanisms, one question, and
+        // the failure is invisible: a row filtered in as acked would render with no ack pill, or a
+        // row the operator asked to hide would come back. They agree only while both name
+        // `alert_acks`' primary key, so pin the three columns.
+        let exists = HISTORY_FILTER_WHERE
+            .split("EXISTS (SELECT 1 FROM alert_acks a")
+            .nth(1)
+            .expect("the ack EXISTS");
+        let exists = exists.split(") = $10").next().unwrap_or(exists);
+        for col in ["a.node = alert_history.node", "a.check_id", "a.severity"] {
+            assert!(
+                exists.contains(col),
+                "the ack EXISTS dropped {col}: {exists}"
+            );
+        }
+        // The Rust side of the same key. `ack_key` builds `(storage_id, check, severity)`, and
+        // `alert_history.node` *is* the storage id (migration 0075) — so a change to either half
+        // that does not change the other lands here.
+        let rust =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/api/alerts.rs"))
+                .expect("read api/alerts.rs");
+        assert!(
+            rust.contains("(subject.storage_id(), check, severity.as_str().to_owned())"),
+            "ack_key changed shape; the SQL EXISTS above must change with it"
+        );
     }
 
     #[test]
@@ -741,10 +822,13 @@ mod tests {
         // here would therefore hide pool-coverage alerts from exactly the scoped operator whose site
         // had gone dark. The handler post-filters instead, through `allows_subject`, which resolves
         // pools properly. Exactly one `nodes` subquery — the *requested* group — belongs here.
+        // Counting `nodes` subqueries stopped working when `$12` added a second one that asks a
+        // different question (a name substring). What must stay unique is the *group* shape —
+        // that is the one the caller's scope would take.
         assert_eq!(
-            HISTORY_FILTER_WHERE.matches("SELECT id FROM nodes").count(),
+            HISTORY_FILTER_WHERE.matches("group_id = ANY(").count(),
             1,
-            "a second nodes subquery means the caller's scope was pushed into this predicate"
+            "a second group subquery means the caller's scope was pushed into this predicate"
         );
         assert!(
             !HISTORY_FILTER_WHERE.contains("subject_kind <> 'node'"),
@@ -757,13 +841,13 @@ mod tests {
         // The fail-open shape: a conditionally-built WHERE has a branch someone can forget, and the
         // branch that gets forgotten returns *more* rows, not fewer.
         //
-        // Eight arms for nine binds, and `$2` is the deliberate exception: `before_id` has no
+        // Eleven arms for twelve binds, and `$2` is the deliberate exception: `before_id` has no
         // meaning without `before`, so instead of its own "no filter" arm it is absorbed by the
         // `coalesce` inside `$1`'s. That is what makes a cursor of `before` alone degrade to
         // "strictly before this instant" rather than matching nothing.
         assert_eq!(
             HISTORY_FILTER_WHERE.matches(" IS NULL").count(),
-            8,
+            11,
             "every bind but the cursor's second half must carry its own 'no filter' arm"
         );
         assert!(

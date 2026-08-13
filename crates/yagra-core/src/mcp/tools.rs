@@ -376,12 +376,15 @@ impl YagraMcp {
 
     #[tool(
         description = "Recent alert history (fires and clears), newest first. `limit` is 1–1000 \
-                       (default 100). Narrow with `severity`, `state`, `resolved` (false=fires, \
-                       true=clears), `node_id`, `group_id` (that folder and everything beneath it) \
-                       and `since`/`until` — the window to search, which is separate from the \
-                       cursor. To page, pass the oldest returned row's `cursor_at` as `before` and \
-                       its `cursor_id` as `before_id` — both, and not its `at`, which is when the \
-                       alert fired rather than when the row was written. Requires live mode."
+                       (default 100). Narrow with `severity` and `state` (each comma-separated for \
+                       several values), `resolved` (false=fires, true=clears), `acked` (false = \
+                       nobody has acknowledged it yet), `metric` (substring of the metric name), \
+                       `node_id`, `node_q` (substring of the node's name), `group_id` (that folder \
+                       and everything beneath it) and `since`/`until` — the window to search, which \
+                       is separate from the cursor. To page, pass the oldest returned row's \
+                       `cursor_at` as `before` and its `cursor_id` as `before_id` — both, and not \
+                       its `at`, which is when the alert fired rather than when the row was \
+                       written. Requires live mode."
     )]
     async fn get_alert_history(
         &self,
@@ -405,24 +408,21 @@ impl YagraMcp {
         // The whole page function is the shared seam — parsing, the scope checks on `node_id` /
         // `group_id`, the store call and the post-filter — so this surface cannot validate more
         // loosely than REST does. That is the drift `parse_event_filter` already paid for, on the
-        // surface with no human in the loop.
-        let (severity, state) = match (
-            crate::api::alerts::parse_severity(p.severity.as_deref()),
-            crate::api::alerts::parse_state(p.state.as_deref()),
-        ) {
-            (Ok(sev), Ok(st)) => (sev, st),
-            (Err(e), _) | (_, Err(e)) => return tool_api_error("get_alert_history", &e),
-        };
+        // surface with no human in the loop. Since ADR-053 Inc.4b the set parsing is inside it too,
+        // which is why there is no longer a token-parsing step here to get wrong.
         let input = crate::api::alerts::HistoryFilterInput {
             limit: p.limit,
             before: p.before.as_deref(),
             before_id: p.before_id,
             since: p.since.as_deref(),
             until: p.until.as_deref(),
-            severity,
-            state,
+            severity: p.severity.as_deref(),
+            state: p.state.as_deref(),
             resolved: p.resolved,
+            acked: p.acked,
+            metric: p.metric.as_deref(),
             node_id: p.node_id,
+            node_q: p.node_q.as_deref(),
             group_id: p.group_id,
         };
         let rows = match crate::api::alerts::history_page(&self.state, scope, input).await {
@@ -1046,11 +1046,13 @@ impl YagraMcp {
         description = "Search Troubleshoot findings across every run — \"has anything been found \
                        about this node / this site / this week\". Distinct from \
                        get_analysis_findings, which reports one run you already know about. \
-                       Filters: `node_id`, `group_id` (a folder and everything beneath it), \
-                       `tool` (anomaly | correlation | capacity | flap), `severity` (crit | warn | \
-                       info), and `since` (RFC 3339). Page with `before` + `before_id` from the \
-                       last row; `limit` is 1–200 (default 100). Returns [] on a deployment with \
-                       no analysis runner."
+                       Filters: `node_id`, `node_q` (substring of the node's name), `group_id` (a \
+                       folder and everything beneath it), `tool` (anomaly | correlation | capacity \
+                       | flap), `severity` (crit | warn | info), `q` (substring of the metric name \
+                       or the finding kind), and `since` (RFC 3339). `tool` and `severity` each \
+                       take several values comma-separated. Page with `before` + `before_id` from \
+                       the last row; `limit` is 1–200 (default 100). Returns [] on a deployment \
+                       with no analysis runner."
     )]
     async fn search_analysis_findings(
         &self,
@@ -1077,7 +1079,9 @@ impl YagraMcp {
             since: p.since,
             tool: p.tool,
             severity: p.severity,
+            q: p.q,
             node_id: p.node_id,
+            node_q: p.node_q,
             group_id: p.group_id,
             limit: p.limit,
         };
@@ -2194,8 +2198,9 @@ impl YagraMcp {
                        the `before` cursor), `q` (free text over the username and the action), \
                        `action` (post|put|patch|delete|login|mcp — `login` covers local, LDAP and \
                        OIDC sign-ins; `mcp` covers actions taken through this tool surface) and \
-                       `status` (ok|client|server). Requires the view-audit permission, which is \
-                       separate from view."
+                       `status` (ok|client|server). `action` and `status` each take several values \
+                       comma-separated. Requires the view-audit permission, which is separate from \
+                       view."
     )]
     async fn get_audit(
         &self,
@@ -2209,9 +2214,15 @@ impl YagraMcp {
     }
 
     async fn audit_in(&self, p: AuditParams) -> Result<CallToolResult, McpError> {
-        let Some(admin) = self.state.admin.as_ref() else {
+        // Availability is checked **here** rather than left to `audit_page`, and the two surfaces
+        // therefore order the two failures differently: REST answers 400 for a malformed filter on
+        // a deployment with no log, this answers "unavailable" first. That is deliberate and
+        // pre-dates Inc.4b — an assistant that gets a typed "this deployment keeps no audit log"
+        // stops asking, whereas a 400 about a cursor invites it to retry with a different cursor
+        // forever. `the_audit_tool_reports_a_missing_write_side_rather_than_an_empty_log` pins it.
+        if self.state.admin.is_none() {
             return tool_unavailable("get_audit", "the audit log requires live mode");
-        };
+        }
         // An unparseable cursor is a 400 here as it is over REST, never a silent jump back to the
         // newest page — a client walking the log would otherwise loop forever on page one. The
         // whole page function is the shared seam, so the filter cannot be validated more loosely
@@ -2222,10 +2233,10 @@ impl YagraMcp {
             since: p.since.as_deref(),
             until: p.until.as_deref(),
             q: p.q.as_deref(),
-            action: p.action,
-            status: p.status,
+            action: p.action.as_deref(),
+            status: p.status.as_deref(),
         };
-        match crate::api::audit::audit_page(admin, input).await {
+        match crate::api::audit::audit_page(&self.state, input).await {
             Ok(rows) => ok_json("get_audit", &rows),
             Err(e) => tool_api_error("get_audit", &e),
         }
@@ -3271,10 +3282,11 @@ struct AuditParams {
     until: Option<String>,
     /// Free text matched against the username and the action (case-insensitive substring).
     q: Option<String>,
-    /// Only entries of this kind: `post` | `put` | `patch` | `delete` | `login` | `mcp`.
-    action: Option<crate::audit::AuditAction>,
-    /// Only entries whose response fell in this class: `ok` | `client` | `server`.
-    status: Option<crate::audit::AuditStatusClass>,
+    /// Action kinds to include, comma-separated: `post` | `put` | `patch` | `delete` | `login` |
+    /// `mcp`. Omit for all. An unknown token is an error rather than being ignored.
+    action: Option<String>,
+    /// Status classes to include, comma-separated: `ok` | `client` | `server`. Omit for all.
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -3351,14 +3363,24 @@ pub(crate) struct AlertHistoryParams {
     since: Option<String>,
     /// Only transitions recorded at or before this RFC 3339 timestamp.
     until: Option<String>,
-    /// Only transitions at this severity: `info` | `warning` | `critical`.
+    /// Severities to include, comma-separated: `info` | `warning` | `critical`. Omit for all. An
+    /// unknown token is an error rather than being ignored.
     severity: Option<String>,
-    /// Only transitions into this node state, e.g. `ok` | `warning` | `critical` | `unreachable`.
+    /// Node states to include, comma-separated, e.g. `critical,unreachable`. Omit for all.
     state: Option<String>,
     /// `false` for fires only, `true` for clears only. Omit for both.
     resolved: Option<bool>,
+    /// `true` for transitions whose incident has been acknowledged, `false` for those that have
+    /// not. Omit for both. Ask `false` for "what fired and nobody has looked at".
+    acked: Option<bool>,
+    /// Only transitions whose metric name contains this text (case-insensitive), e.g. `cpu`.
+    /// Liveness transitions store no metric and never match.
+    metric: Option<String>,
     /// Only transitions about this node.
     node_id: Option<Uuid>,
+    /// Only transitions about nodes whose name contains this text (case-insensitive). Use this
+    /// rather than `node_id` when the question is about a set of nodes, e.g. every `core-sw…`.
+    node_q: Option<String>,
     /// Only transitions about nodes in this folder group or any group beneath it.
     group_id: Option<Uuid>,
 }
@@ -3558,12 +3580,18 @@ struct SearchFindingsParams {
     before_id: Option<Uuid>,
     /// Inclusive lower bound on finding time (RFC 3339) — the range filter, not the cursor.
     since: Option<String>,
-    /// Restrict to one diagnostic: anomaly | correlation | capacity | flap.
+    /// Diagnostics to include, comma-separated: anomaly | correlation | capacity | flap. Omit for
+    /// all. An unknown token is an error rather than being ignored.
     tool: Option<String>,
-    /// Restrict to crit | warn | info.
+    /// Severities to include, comma-separated: crit | warn | info. Omit for all.
     severity: Option<String>,
+    /// Case-insensitive substring of the metric name or the finding kind, e.g. `cpu`.
+    q: Option<String>,
     /// Restrict to findings about one node.
     node_id: Option<Uuid>,
+    /// Only findings about nodes whose name contains this text (case-insensitive). Use this rather
+    /// than `node_id` when the question is about a set of nodes. Fleet-wide findings never match.
+    node_q: Option<String>,
     /// Restrict to findings about nodes in one folder group and everything beneath it.
     group_id: Option<Uuid>,
     /// Page size, 1–200 (default 100).
@@ -3865,6 +3893,144 @@ mod tests {
     use crate::sink::InMemorySink;
     use crate::store::MetricStore;
     use std::sync::Arc;
+
+    /// Every filter dimension a shared REST/MCP seam declares is actually passed by the tool.
+    ///
+    /// **This is the half the compiler cannot see.** A seam struct like
+    /// `api::alerts::HistoryFilterInput` makes a *new* field a compile error here — the initializer
+    /// below will not build without it — but the compiler is satisfied by `acked: None`. A
+    /// dimension that is declared and then hardcoded away is the same silent failure as one that
+    /// was never declared, and it is the failure ADR-042 read parity exists to prevent: the WebUI
+    /// can ask the question and `/mcp` quietly cannot.
+    ///
+    /// One table rather than one test per seam. There were four seams by ADR-053 Inc.4b and the
+    /// per-seam version had already been written twice; a fifth would have been written a third
+    /// time, or not at all.
+    ///
+    /// The two escape hatches each need a stated reason, so an exception is a decision rather than
+    /// the path of least resistance:
+    /// - `hardcoded` — the tool deliberately does not offer the dimension.
+    /// - `renamed` — the tool's parameter has a different name from the seam's field.
+    #[test]
+    fn every_shared_filter_seam_is_passed_through_whole() {
+        const TOOLS: &str = include_str!("tools.rs");
+        const ALERTS: &str = include_str!("../api/alerts.rs");
+        const AUDIT: &str = include_str!("../api/audit.rs");
+        const ANALYSIS: &str = include_str!("../api/analysis.rs");
+        const EVENTLOG: &str = include_str!("../api/eventlog.rs");
+
+        struct Seam {
+            src: &'static str,
+            decl: &'static str,
+            init: &'static str,
+            /// `(field, why the tool does not take it)`
+            hardcoded: &'static [(&'static str, &'static str)],
+            /// `(seam field, the tool's parameter name)`
+            renamed: &'static [(&'static str, &'static str)],
+        }
+        let seams = [
+            Seam {
+                src: ALERTS,
+                decl: "pub(crate) struct HistoryFilterInput<'a> {",
+                init: "crate::api::alerts::HistoryFilterInput {",
+                hardcoded: &[],
+                renamed: &[],
+            },
+            Seam {
+                src: AUDIT,
+                decl: "pub(crate) struct AuditFilterInput<'a> {",
+                init: "crate::api::audit::AuditFilterInput {",
+                hardcoded: &[],
+                renamed: &[],
+            },
+            Seam {
+                src: ANALYSIS,
+                decl: "pub(crate) struct SavedFindingsQuery {",
+                init: "crate::api::analysis::SavedFindingsQuery {",
+                hardcoded: &[],
+                renamed: &[],
+            },
+            Seam {
+                src: EVENTLOG,
+                decl: "pub(crate) struct EventFilterInput<'a> {",
+                init: "crate::api::eventlog::EventFilterInput {",
+                // `search_events` pages by `before_ts`/`before_id` through its own cursor rather
+                // than the log list's single `before`, so there is no parameter to pass here.
+                hardcoded: &[("before", "the tool carries its own two-part cursor")],
+                // The tool names the whole-row term `search` (it is not a column), and bounds the
+                // window with `since`/`until` like every other tool rather than `start`/`end`.
+                renamed: &[("start", "since"), ("end", "until"), ("q", "search")],
+            },
+        ];
+
+        let mut checked = 0;
+        for seam in seams {
+            let body = seam
+                .src
+                .split(seam.decl)
+                .nth(1)
+                .unwrap_or_else(|| panic!("seam struct not found: {}", seam.decl));
+            let fields: Vec<&str> = body
+                .lines()
+                .take_while(|l| !l.starts_with('}'))
+                .map(str::trim)
+                .filter(|l| !l.starts_with("///") && !l.starts_with("//") && !l.starts_with('#'))
+                .filter_map(|l| {
+                    l.strip_prefix("pub(crate) ")
+                        .or_else(|| l.strip_prefix("pub "))
+                })
+                .filter_map(|l| l.split(':').next())
+                .filter(|f| !f.is_empty())
+                .collect();
+            assert!(
+                fields.len() >= 5,
+                "field extraction produced {} fields for {} — the struct shape changed and this \
+                 test is now checking almost nothing",
+                fields.len(),
+                seam.decl
+            );
+
+            let call = TOOLS
+                .split(seam.init)
+                .nth(1)
+                .unwrap_or_else(|| panic!("no tool builds {}", seam.init));
+            let call: Vec<&str> = call
+                .lines()
+                .map(str::trim)
+                .take_while(|l| !l.starts_with('}'))
+                .collect();
+
+            for field in fields {
+                let line = call
+                    .iter()
+                    .find(|l| l.starts_with(&format!("{field}:")))
+                    .unwrap_or_else(|| panic!("{} does not pass {field}", seam.init));
+                if let Some((_, why)) = seam.hardcoded.iter().find(|(f, _)| *f == field) {
+                    assert!(
+                        !line.contains("p."),
+                        "{field} is listed as hardcoded ({why}) but now reads a parameter — \
+                         remove the exception: {line}"
+                    );
+                    continue;
+                }
+                let param = seam
+                    .renamed
+                    .iter()
+                    .find(|(f, _)| *f == field)
+                    .map_or(field, |(_, p)| *p);
+                assert!(
+                    line.contains(&format!("p.{param}")),
+                    "{} passes {field} from something other than `p.{param}`: {line}",
+                    seam.init
+                );
+                checked += 1;
+            }
+        }
+        // The assertion that stops "the parser stopped matching" from masquerading as "everything
+        // is fine" — the same load-bearing shape `every_documented_body_is_the_type_its_handler_returns`
+        // uses.
+        assert!(checked >= 40, "only {checked} dimensions were compared");
+    }
 
     /// The fold's dispatch, tested without a `RequestContext`. Two properties matter: the default
     /// is the graph that existed before the fold (so an existing client's call is unchanged), and a

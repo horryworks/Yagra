@@ -4,10 +4,11 @@
 // `maintenance` — no alerts fire and existing ones resolve — until the window ends.
 // The engine refreshes its snapshot every ~30s, so boundaries take effect within that.
 //
-// Data-table standard v2: a toolbar (count + "+ Add window") over the shared `.ytable`.
+// Data-table standard v2: an action row (count + "+ Add window") over the shared `DataTable`, with
+// the narrowing controls in the filter row under the header (ADR-053 Inc.5).
 // Add and delete both go through modals; enable/disable is an immediate row action.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg, ApiError } from '../services/api';
@@ -19,28 +20,18 @@ import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
 import { PowerIcon, TrashIcon } from '../components/ui/icons';
 import { AddMaintenanceWindowModal } from '../components/suppression/AddMaintenanceWindowModal';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { formatScheduleTime } from '../lib/format';
 import { isEnded, windowStatus } from './maintenanceStatus';
-import {
-  DEFAULT_MAINTENANCE_FILTERS,
-  isMaintenanceFiltered,
-  MAINTENANCE_STATUS_FILTERS,
-  matchesWindow,
-  type MaintenanceFilters,
-} from './suppressionFilters';
+import { windowFilters } from './suppressionFilters';
 import './MaintenancePage.css';
-
-const COLS = '120px 1.4fr 1fr 230px 120px';
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
 function DeleteWindowModal({
@@ -118,6 +109,7 @@ export function MaintenancePage() {
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MaintenanceWindow | null>(null);
   const [clearing, setClearing] = useState(false);
+  const [sheet, setSheet] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -176,10 +168,88 @@ export function MaintenancePage() {
 
   // Client-side because the list is bounded by what an operator typed in, not by fleet size
   // (ui-conventions). The judgement is in `suppressionFilters.ts`; this is only the wiring.
-  const [filters, setFilters] = useState<MaintenanceFilters>(DEFAULT_MAINTENANCE_FILTERS);
-  const set = <K extends keyof MaintenanceFilters>(key: K, value: MaintenanceFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = rows.filter((w) => matchesWindow(w, filters, scopeLabel, now));
+  const columns = useMemo<Column<MaintenanceWindow>[]>(() => {
+    const specs = windowFilters(t, scopeLabel, now);
+    const cols: Column<MaintenanceWindow>[] = [
+      {
+        key: 'status',
+        header: t('maintenance.cols.status'),
+        width: '120px',
+        render: (w) => {
+          const status = windowStatus(w, now);
+          return <Badge tone={status.tone}>{t(`maintenance.status.${status.labelKey}`)}</Badge>;
+        },
+      },
+      {
+        key: 'name',
+        header: t('maintenance.cols.name'),
+        width: '1.4fr',
+        render: (w) => <span className="yt-name-txt">{w.name}</span>,
+      },
+      {
+        key: 'scope',
+        header: t('maintenance.cols.scope'),
+        width: '1fr',
+        render: (w) => (
+          <span className="maint-scope">
+            <Badge>{scopeBadge(w)}</Badge>
+            <EntityName name={scopeLabel(w)} id={w.scope_id} />
+          </span>
+        ),
+      },
+      {
+        key: 'range',
+        header: t('maintenance.cols.range'),
+        width: '230px',
+        render: (w) => (
+          <span className="mono">
+            {formatScheduleTime(w.starts_at)} → {formatScheduleTime(w.ends_at)}
+          </span>
+        ),
+      },
+      {
+        key: 'actions',
+        header: t('maintenance.cols.actions'),
+        width: '120px',
+        align: 'right',
+        render: (w) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  {
+                    label: w.enabled
+                      ? t('maintenance.actions.disable')
+                      : t('maintenance.actions.enable'),
+                    icon: <PowerIcon />,
+                    onClick: () => setEnabled(w.id, !w.enabled),
+                  },
+                  {
+                    label: t('common:actions.delete'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(w),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `scopeLabel`/`scopeBadge`/`setEnabled` close over state and are rebuilt every render; the
+    // values they actually read are listed instead, so the columns (and therefore the predicate)
+    // are not rebuilt on every keystroke elsewhere on the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, now, authed, groups, profiles, nodeName]);
+
+  // URL-backed: one table on this route, so a narrowed view is linkable.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
+  );
 
   return (
     <div>
@@ -202,26 +272,16 @@ export function MaintenancePage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => set('q', v)}
-              placeholder={t('maintenance.filter.searchPlaceholder')}
-              ariaLabel={t('maintenance.filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.status}
-              onChange={(v) => set('status', v)}
-              options={MAINTENANCE_STATUS_FILTERS.map((s) => ({
-                value: s,
-                label: t(`maintenance.status.${s}`),
-              }))}
-              allLabel={t('maintenance.filter.allStatuses')}
-              ariaLabel={t('maintenance.filter.statusAria')}
-            />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
               shown={shown.length}
-              total={isMaintenanceFiltered(filters) ? rows.length : undefined}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.window', { count: shown.length })}
             />
             {authed && (
@@ -244,76 +304,26 @@ export function MaintenancePage() {
 
           {error && <p className="form-error">{error}</p>}
 
-          <div className="ytable">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('maintenance.cols.status')}</div>
-              <div className="ytable-h">{t('maintenance.cols.name')}</div>
-              <div className="ytable-h">{t('maintenance.cols.scope')}</div>
-              <div className="ytable-h">{t('maintenance.cols.range')}</div>
-              <div className="ytable-h right">{t('maintenance.cols.actions')}</div>
-            </div>
-
-            {shown.length === 0 ? (
-              <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading
-                    ? t('common:loading')
-                    : isMaintenanceFiltered(filters)
-                      ? t('maintenance.empty.filtered')
-                      : t('maintenance.empty.title')}
-                </p>
-                {!loading && !isMaintenanceFiltered(filters) && (
-                  <p className="yt-empty-sub">{t('maintenance.empty.sub')}</p>
-                )}
-              </div>
-            ) : (
-              shown.map((w) => {
-                const status = windowStatus(w, now);
-                return (
-                  <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={w.id}>
-                    <div className="ytable-cell">
-                      <Badge tone={status.tone}>{t(`maintenance.status.${status.labelKey}`)}</Badge>
-                    </div>
-                    <div className="ytable-cell">
-                      <span className="yt-name-txt">{w.name}</span>
-                    </div>
-                    <div className="ytable-cell">
-                      <span className="maint-scope">
-                        <Badge>{scopeBadge(w)}</Badge>
-                        <EntityName name={scopeLabel(w)} id={w.scope_id} />
-                      </span>
-                    </div>
-                    <div className="ytable-cell mono">
-                      {formatScheduleTime(w.starts_at)} → {formatScheduleTime(w.ends_at)}
-                    </div>
-                    <div className="ytable-cell right">
-                      {authed && (
-                        <span className="ytable-actions">
-                          <OverflowMenu
-                            actions={[
-                              {
-                                label: w.enabled
-                                  ? t('maintenance.actions.disable')
-                                  : t('maintenance.actions.enable'),
-                                icon: <PowerIcon />,
-                                onClick: () => setEnabled(w.id, !w.enabled),
-                              },
-                              {
-                                label: t('common:actions.delete'),
-                                icon: <TrashIcon />,
-                                danger: true,
-                                onClick: () => setDeleting(w),
-                              },
-                            ]}
-                          />
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(w) => w.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('maintenance.empty.filtered') : t('maintenance.empty.title')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, t(`maintenance.cols.${c.key}`)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

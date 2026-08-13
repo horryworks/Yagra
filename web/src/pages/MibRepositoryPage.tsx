@@ -4,10 +4,23 @@
 // their own. The collection editor picks from this so operators choose metrics by name instead
 // of typing raw OIDs.
 //
-// Data-table standard v2: a toolbar (debounced server search + count + "+ Add entry") over the
-// shared `.ytable`. Add and delete go through modals (focused-editing / destructive-consent).
+// Data-table standard v2: an action row (count + "+ Add entry") over the shared `DataTable`, with
+// the search in the filter row under the Metric column (ADR-053 Inc.5). Add and delete go through
+// modals (focused-editing / destructive-consent).
+//
+// ⚠️ **Only the Metric column carries a filter, and the other three deliberately do not.** The
+// catalog is read with a server-side `LIMIT` (`mib.rs::MibRepo::list`), so the browser holds a
+// *prefix* of the matching entries. A client-side predicate over that prefix would narrow what
+// happened to arrive and present it as the answer — the failure `ui-conventions.md` calls out for
+// scale-aware lists, and the one Settings ▸ Audit shipped with before its filters moved into SQL.
+// Type and Vendor become filterable when the endpoint takes them, not before.
+//
+// The Metric cell's condition is the same server search the toolbar used to hold — it matches the
+// metric name, the OID **and** the vendor (`mib-catalog?q=`), so a term typed under "Metric" can
+// match on the other two. That imprecision is stated rather than hidden, the same call
+// `auditQuery.ts` makes about its own two-column `q`.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { api, errMsg, ApiError } from '../services/api';
@@ -21,12 +34,15 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { filterableColumns, type FilterState } from '../lib/columnFilter';
+import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { TrashIcon } from '../components/ui/icons';
 import { mibEntryReady } from './mibEntryForm';
 import './MibRepositoryPage.css';
-
-const COLS = '1.4fr 2fr 1fr 1fr 92px';
 
 /** Create a catalog entry (focused-editing modal). Same fields + OID gate as the old inline row. */
 function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -165,6 +181,7 @@ export function MibRepositoryPage() {
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MibCatalogEntry | null>(null);
+  const [sheet, setSheet] = useState(false);
 
   const load = useCallback((q: string) => {
     api
@@ -186,6 +203,82 @@ export function MibRepositoryPage() {
     load(settledQuery);
   }, [load, settledQuery]);
 
+  const columns = useMemo<Column<MibCatalogEntry>[]>(
+    () => [
+      {
+        key: 'metric',
+        header: t('mib.cols.metric'),
+        width: '1.4fr',
+        render: (e) => <span className="mib-metric">{e.metric_name}</span>,
+        filter: {
+          kind: 'text',
+          // Contains only: `?q=` is a substring match with no regex parameter and no negated form.
+          modes: ['contains'],
+          // Server-side — `load()` re-fetches on the settled term, so this is never consulted.
+          readText: () => [],
+          containsSemantics: 'substring',
+          placeholder: t('mib.cols.metric'),
+        },
+      },
+      {
+        key: 'oid',
+        header: t('mib.cols.oid'),
+        width: '2fr',
+        render: (e) => <span className="mono ellipsis">{e.oid}</span>,
+      },
+      {
+        key: 'type',
+        header: t('mib.cols.type'),
+        width: '1fr',
+        render: (e) => (
+          <>
+            {e.collection} · {e.metric_kind}
+          </>
+        ),
+      },
+      {
+        key: 'vendor',
+        header: t('mib.cols.vendor'),
+        width: '1fr',
+        render: (e) =>
+          e.vendor ? (
+            <Badge tone="neutral">{e.vendor}</Badge>
+          ) : (
+            <span className="muted">{t('mib.standard')}</span>
+          ),
+      },
+      {
+        key: 'actions',
+        header: t('shared.colActions'),
+        width: '92px',
+        align: 'right',
+        render: (e) =>
+          authed ? (
+            <span className="ytable-actions">
+              <IconButton
+                title={t('common:actions.delete')}
+                danger
+                onClick={() => setDeleting(e)}
+              >
+                <TrashIcon />
+              </IconButton>
+            </span>
+          ) : null,
+      },
+    ],
+    [t, authed],
+  );
+
+  // The filter row is a *view* of `query`, not a second copy of it. One state, one writer — the
+  // shape `one-handler-one-url-write` argues for, and the reason there is no `useClientFilters`
+  // here: the predicate is the server's.
+  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
+  const filters: FilterState = useMemo(
+    () => ({ metric: query ? encodeCondition({ term: query, mode: 'contains', not: false }) : '' }),
+    [query],
+  );
+  const onFiltersChange = (next: FilterState) => setQuery(decodeCondition(next.metric ?? '').term);
+
   return (
     <div>
       <PageHeader
@@ -201,12 +294,12 @@ export function MibRepositoryPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('mib.searchPlaceholder')}
-              ariaLabel={t('mib.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
+            <ClearFilters columns={filterCols} filters={filters} onClear={() => setQuery('')} />
             <TableSpacer />
             <ResultCount shown={rows.length} noun={t('mib.noun', { count: rows.length })} />
             {authed && (
@@ -216,52 +309,25 @@ export function MibRepositoryPage() {
             )}
           </TableToolbar>
 
-          <div className="ytable">
-            <div className="ytable-scroll">
-              <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-                <div className="ytable-h">{t('mib.cols.metric')}</div>
-                <div className="ytable-h">{t('mib.cols.oid')}</div>
-                <div className="ytable-h">{t('mib.cols.type')}</div>
-                <div className="ytable-h">{t('mib.cols.vendor')}</div>
-                <div className="ytable-h right">{t('shared.colActions')}</div>
-              </div>
-
-              {rows.length === 0 ? (
-                <div className="yt-empty">
-                  <p className="yt-empty-title">
-                    {loading ? t('common:loading') : t('mib.empty.noMatch')}
-                  </p>
-                  {!loading && <p className="yt-empty-sub">{t('shared.trySearch')}</p>}
-                </div>
-              ) : (
-                rows.map((e) => (
-                  <div className="ytable-row" style={{ gridTemplateColumns: COLS }} key={e.id}>
-                    <div className="ytable-cell mib-metric">{e.metric_name}</div>
-                    <div className="ytable-cell mono ellipsis">{e.oid}</div>
-                    <div className="ytable-cell">
-                      {e.collection} · {e.metric_kind}
-                    </div>
-                    <div className="ytable-cell">
-                      {e.vendor ? (
-                        <Badge tone="neutral">{e.vendor}</Badge>
-                      ) : (
-                        <span className="muted">{t('mib.standard')}</span>
-                      )}
-                    </div>
-                    <div className="ytable-cell right">
-                      {authed && (
-                        <span className="ytable-actions">
-                          <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(e)}>
-                            <TrashIcon />
-                          </IconButton>
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
+          <DataTable
+            rows={rows}
+            columns={columns}
+            rowKey={(e) => e.id}
+            filters={filters}
+            onFiltersChange={onFiltersChange}
+            loading={loading}
+            empty={t('mib.empty.noMatch')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={onFiltersChange}
+              counts={{}}
+              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

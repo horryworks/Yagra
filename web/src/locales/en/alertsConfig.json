@@ -251,6 +251,10 @@
       "update": "failed to update rule",
       "save": "failed to save rule",
       "delete": "failed to delete rule"
+    },
+    "filter": {
+      "allSeverities": "All severities",
+      "allStatuses": "Enabled and disabled"
     }
   },
   "eventSources": {
@@ -302,6 +306,10 @@
       "add": "failed to add source",
       "save": "failed to save source",
       "delete": "failed to delete source"
+    },
+    "filter": {
+      "allKinds": "All kinds",
+      "allStatuses": "Enabled and disabled"
     }
   }
 }

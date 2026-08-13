@@ -50,7 +50,10 @@
       "allPhases": "発生と解消",
       "phaseAria": "発生・解消で絞り込む",
       "allStates": "すべての状態",
-      "stateAria": "状態で絞り込む"
+      "stateAria": "状態で絞り込む",
+      "allAcked": "確認の有無を問わない",
+      "acked": "確認済み",
+      "unacked": "未確認"
     },
     "range": {
       "all": "全期間",

@@ -57,20 +57,21 @@ export interface EnumFilterSpec<T> {
    *  `'server'` asks an endpoint when the popover opens. Absent = no counts at all, which is the
    *  honest answer for a keyset-paged list with no aggregate endpoint. */
   counts?: 'client' | 'server';
-  /**
-   * Only one value may be selected at a time.
-   *
-   * ⚠️ **This exists to keep a control from promising something the backend cannot do.** A
-   * server-side list can only offer multi-select where its endpoint accepts a list, and four of them
-   * (alert history, audit, thresholds, saved findings) still take exactly one `severity` / `state` /
-   * `action`. A multi-select over those would let an operator tick three boxes and send one — rows
-   * missing from a filtered list with nothing on screen saying so, which is the worst shape a filter
-   * bug takes. Picking a second value here **replaces** the first, exactly as the range kind does.
-   *
-   * Client-side lists never need this: the predicate runs in the browser and a set is free.
-   */
-  single?: boolean;
 }
+
+// There used to be a `single?: boolean` here, and it is worth saying why it is gone rather than
+// leaving the next person to wonder whether multi-select is safe on a server-side list.
+//
+// It existed because four endpoints — alert history, audit, thresholds, saved findings — took
+// exactly one `severity` / `state` / `action`, so a multi-select over them would have let an
+// operator tick three boxes and send one: rows missing from a filtered list with nothing on screen
+// saying so, the worst shape a filter bug takes. `single` made the control tell the truth about the
+// API instead of hiding it.
+//
+// ADR-053 Inc.4b widened all four endpoints to comma-joined sets, which is the *right* fix — the
+// control was never the problem. The flag is deleted rather than kept "in case": an unused option
+// on a shared type is an invitation to reach for it instead of widening the next endpoint, which is
+// exactly the trade this increment decided against.
 
 /** A column matched by free text. */
 export interface TextFilterSpec<T> {
@@ -130,6 +131,20 @@ export function filterableColumns<T>(
 }
 
 /** The value a column has when nothing is set. */
+/**
+ * Turn a screen's `Record<columnKey, spec>` into filterable columns.
+ *
+ * A page never needs this — it attaches each spec to the real column it belongs under, which is
+ * what keeps the filter cell aligned with its header. This exists so a **test** can run a screen's
+ * specs through `filterPredicate.ts` without inventing a fake column list, which four spec tests
+ * had each started doing with a different cast (ADR-053 Inc.5).
+ */
+export function specColumns<T>(
+  specs: Record<string, ColumnFilterSpec<T>>,
+): FilterableColumn<T>[] {
+  return Object.entries(specs).map(([key, filter]) => ({ key, filter }));
+}
+
 export function defaultValue<T>(spec: ColumnFilterSpec<T>): string {
   return spec.kind === 'range' ? spec.defaultPreset : '';
 }

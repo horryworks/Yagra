@@ -4,6 +4,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import {
+  SEVERITIES,
   type EventRule,
   type EventRuleInput,
   type EventSource,
@@ -17,12 +18,16 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { eventRuleFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
 import './EventRulesPage.css';
 
-const COLS = '1.4fr 130px 1fr 120px 110px 110px';
 const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'info'> = {
   critical: 'critical',
   warning: 'warning',
@@ -55,7 +60,7 @@ export function EventRulesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<EventRule[]>([]);
   const [sources, setSources] = useState<EventSource[]>([]);
-  const [query, setQuery] = useState('');
+  const [sheet, setSheet] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -83,16 +88,6 @@ export function EventRulesPage() {
     load();
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [r.name, r.pattern, r.clear_pattern ?? '', r.severity, r.source_kind ?? ''].some((f) =>
-        f.toLowerCase().includes(q),
-      ),
-    );
-  }, [rows, query]);
-
   const toggleEnabled = (r: EventRule) => {
     setError(null);
     api
@@ -100,6 +95,99 @@ export function EventRulesPage() {
       .then(load)
       .catch((e: unknown) => setError(errMsg(e, t('eventRules.err.update'))));
   };
+
+  const columns = useMemo<Column<EventRule>[]>(() => {
+    const scopeLabel = (r: EventRule) => r.source_kind ?? t('eventRules.any');
+    const specs = eventRuleFilters(t, SEVERITIES, scopeLabel);
+    const cols: Column<EventRule>[] = [
+      { key: 'name', header: t('eventRules.cols.name'), width: '1.4fr', render: (r) => r.name },
+      {
+        key: 'severity',
+        header: t('eventRules.cols.severity'),
+        width: '130px',
+        render: (r) => <SeverityBadge value={r.severity} />,
+      },
+      {
+        key: 'pattern',
+        header: t('eventRules.cols.pattern'),
+        width: '1fr',
+        render: (r) => (
+          <span className="eventrules-match">
+            <span className="eventrules-sig">
+              <span className="eventrules-sig-kind">
+                {t(`eventRules.matchKind.${r.match_kind}`)}
+              </span>
+              <span className="eventrules-sig-val mono" title={r.pattern}>
+                {r.pattern}
+              </span>
+            </span>
+            {r.clear_pattern && (
+              <span className="eventrules-sig">
+                <span className="eventrules-sig-kind">{t('eventRules.clear')}</span>
+                <span className="eventrules-sig-val mono" title={r.clear_pattern}>
+                  {r.clear_pattern}
+                </span>
+              </span>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: 'scope',
+        header: t('eventRules.cols.scope'),
+        width: '120px',
+        render: (r) => <span className="mono">{scopeLabel(r)}</span>,
+      },
+      {
+        key: 'status',
+        header: t('eventRules.cols.status'),
+        width: '110px',
+        render: (r) => (
+          <Badge tone={r.enabled ? 'up' : 'neutral'}>
+            {r.enabled ? t('status.enabled') : t('status.disabled')}
+          </Badge>
+        ),
+      },
+      {
+        key: 'actions',
+        header: t('eventRules.cols.actions'),
+        width: '110px',
+        align: 'right',
+        render: (r) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  {
+                    label: r.enabled ? t('eventRules.disable') : t('eventRules.enable'),
+                    icon: <PowerIcon />,
+                    onClick: () => toggleEnabled(r),
+                  },
+                  { label: t('eventRules.edit'), icon: <EditIcon />, onClick: () => setEditing(r) },
+                  {
+                    label: t('eventRules.delete'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(r),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `toggleEnabled` is rebuilt every render; listing it would rebuild the columns on every
+    // keystroke elsewhere and re-run the predicate for nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, authed]);
+
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
+  );
 
   return (
     <div>
@@ -109,16 +197,16 @@ export function EventRulesPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('eventRules.searchPlaceholder')}
-              ariaLabel={t('eventRules.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
-              shown={filtered.length}
-              total={rows.length}
+              shown={shown.length}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.rule', { count: rows.length })}
             />
             {authed && (
@@ -128,93 +216,26 @@ export function EventRulesPage() {
             )}
           </TableToolbar>
           {error && <p className="form-error">{error}</p>}
-          <div className="ytable eventrules-table">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('eventRules.cols.name')}</div>
-              <div className="ytable-h">{t('eventRules.cols.severity')}</div>
-              <div className="ytable-h">{t('eventRules.cols.pattern')}</div>
-              <div className="ytable-h">{t('eventRules.cols.scope')}</div>
-              <div className="ytable-h">{t('eventRules.cols.status')}</div>
-              <div className="ytable-h right">{t('eventRules.cols.actions')}</div>
-            </div>
-            {filtered.length === 0 ? (
-              <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading
-                    ? t('common:loading')
-                    : rows.length === 0
-                      ? t('eventRules.empty')
-                      : t('eventRules.emptyMatch')}
-                </p>
-                {!loading && (
-                  <p className="yt-empty-sub">
-                    {rows.length === 0
-                      ? t('eventRules.emptySub')
-                      : t('eventRules.emptyMatchSub')}
-                  </p>
-                )}
-              </div>
-            ) : (
-              filtered.map((r) => (
-                <div className="ytable-row" key={r.id} style={{ gridTemplateColumns: COLS }}>
-                  <div className="ytable-cell">{r.name}</div>
-                  <div className="ytable-cell">
-                    <SeverityBadge value={r.severity} />
-                  </div>
-                  <div className="ytable-cell eventrules-match">
-                    <div className="eventrules-sig">
-                      <span className="eventrules-sig-kind">
-                        {t(`eventRules.matchKind.${r.match_kind}`)}
-                      </span>
-                      <span className="eventrules-sig-val mono" title={r.pattern}>
-                        {r.pattern}
-                      </span>
-                    </div>
-                    {r.clear_pattern && (
-                      <div className="eventrules-sig">
-                        <span className="eventrules-sig-kind">{t('eventRules.clear')}</span>
-                        <span className="eventrules-sig-val mono" title={r.clear_pattern}>
-                          {r.clear_pattern}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <div className="ytable-cell mono">{r.source_kind ?? t('eventRules.any')}</div>
-                  <div className="ytable-cell">
-                    <Badge tone={r.enabled ? 'up' : 'neutral'}>
-                      {r.enabled ? t('status.enabled') : t('status.disabled')}
-                    </Badge>
-                  </div>
-                  <div className="ytable-cell right">
-                    {authed && (
-                      <span className="ytable-actions">
-                        <OverflowMenu
-                          actions={[
-                            {
-                              label: r.enabled ? t('eventRules.disable') : t('eventRules.enable'),
-                              icon: <PowerIcon />,
-                              onClick: () => toggleEnabled(r),
-                            },
-                            {
-                              label: t('eventRules.edit'),
-                              icon: <EditIcon />,
-                              onClick: () => setEditing(r),
-                            },
-                            {
-                              label: t('eventRules.delete'),
-                              icon: <TrashIcon />,
-                              danger: true,
-                              onClick: () => setDeleting(r),
-                            },
-                          ]}
-                        />
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(r) => r.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('eventRules.emptyMatch') : t('eventRules.empty')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
       {adding && (

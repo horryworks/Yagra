@@ -248,19 +248,19 @@
           {
             "name": "severity",
             "in": "query",
-            "description": "Only transitions at this severity.",
+            "description": "Comma-separated severities (`info`, `warning`, `critical`); empty or absent means every\nseverity. An unknown token is rejected rather than ignored — a dropped token would silently\nwiden the answer to everything.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/Severity"
+              "type": "string"
             }
           },
           {
             "name": "state",
             "in": "query",
-            "description": "Only transitions into this state.",
+            "description": "Comma-separated node states; empty or absent means every state.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/NodeState"
+              "type": "string"
             }
           },
           {
@@ -273,6 +273,24 @@
             }
           },
           {
+            "name": "acked",
+            "in": "query",
+            "description": "`true` for transitions whose incident has been acknowledged, `false` for those that have\nnot. Omit for both. Acknowledgement is per incident (node + check + severity), so every\ntransition of one incident answers the same way.",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "description": "Only transitions whose metric name contains this text (case-insensitive). Liveness rows\nstore no metric and therefore never match.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "node_id",
             "in": "query",
             "description": "Only transitions about this node. Rows about something other than a node (a poller pool)\nare excluded by construction.",
@@ -280,6 +298,15 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "node_q",
+            "in": "query",
+            "description": "Only transitions about nodes whose **current name** contains this text (case-insensitive).\nDistinct from `node_id`, which names exactly one node.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -508,7 +535,7 @@
           {
             "name": "tool",
             "in": "query",
-            "description": "Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`).",
+            "description": "Comma-separated diagnostics (`AnalysisTool` tokens, e.g. `anomaly,capacity`); empty or\nabsent means every tool. An unknown token is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -517,7 +544,16 @@
           {
             "name": "severity",
             "in": "query",
-            "description": "Restrict to `crit`, `warn` or `info`.",
+            "description": "Comma-separated severities (`crit`, `warn`, `info`); empty or absent means every severity.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Case-insensitive substring of the metric name **or** the finding kind — the two halves the\n*What* column shows.",
             "required": false,
             "schema": {
               "type": "string"
@@ -531,6 +567,15 @@
             "schema": {
               "type": "string",
               "format": "uuid"
+            }
+          },
+          {
+            "name": "node_q",
+            "in": "query",
+            "description": "Case-insensitive substring of the node's current name. Distinct from `node_id`, which names\nexactly one node; fleet-wide findings never match this.",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -1496,19 +1541,19 @@
           {
             "name": "action",
             "in": "query",
-            "description": "Only entries of this kind.",
+            "description": "Comma-separated action kinds (`post`, `put`, `patch`, `delete`, `login`, `mcp`); empty or\nabsent means every kind. An unknown token is rejected rather than ignored.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/AuditAction"
+              "type": "string"
             }
           },
           {
             "name": "status",
             "in": "query",
-            "description": "Only entries whose response fell in this class.",
+            "description": "Comma-separated status classes (`ok`, `client`, `server`); empty or absent means every\nclass.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/AuditStatusClass"
+              "type": "string"
             }
           }
         ],
@@ -1608,19 +1653,19 @@
           {
             "name": "action",
             "in": "query",
-            "description": "Only entries of this kind.",
+            "description": "Comma-separated action kinds (`post`, `put`, `patch`, `delete`, `login`, `mcp`); empty or\nabsent means every kind. An unknown token is rejected rather than ignored.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/AuditAction"
+              "type": "string"
             }
           },
           {
             "name": "status",
             "in": "query",
-            "description": "Only entries whose response fell in this class.",
+            "description": "Comma-separated status classes (`ok`, `client`, `server`); empty or absent means every\nclass.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/AuditStatusClass"
+              "type": "string"
             }
           }
         ],
@@ -17293,19 +17338,19 @@
           {
             "name": "scope_level",
             "in": "query",
-            "description": "Only rules defined at this scope level (`profile` | `group` | `node`).",
+            "description": "Comma-separated scope levels (`profile` | `group` | `node`); empty or absent means every\nlevel.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/ScopeLevel"
+              "type": "string"
             }
           },
           {
             "name": "direction",
             "in": "query",
-            "description": "Only rules breaching in this direction (`above` | `below`).",
+            "description": "Comma-separated directions (`above` | `below`); empty or absent means both.",
             "required": false,
             "schema": {
-              "$ref": "#/components/schemas/Direction"
+              "type": "string"
             }
           }
         ],
@@ -17316,6 +17361,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ThresholdPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "`scope_level` or `direction` names a value outside its vocabulary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }

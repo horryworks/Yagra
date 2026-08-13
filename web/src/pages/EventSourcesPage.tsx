@@ -12,16 +12,20 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { eventSourceFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons';
 import './EventSourcesPage.css';
 
-const COLS = '1.6fr 120px 110px 130px';
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<EventSource[]>([]);
-  const [query, setQuery] = useState('');
+  const [sheet, setSheet] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -47,11 +51,6 @@ export function EventSourcesPage() {
     load();
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) => r.name.toLowerCase().includes(q));
-  }, [rows, query]);
 
   const toggleEnabled = (r: EventSource) => {
     setError(null);
@@ -69,6 +68,75 @@ export function EventSourcesPage() {
       .catch((e: unknown) => setError(errMsg(e, t('eventSources.err.rotate'))));
   };
 
+  const columns = useMemo<Column<EventSource>[]>(() => {
+    // The kind list comes from the rows, so a source kind a newer core introduced is selectable
+    // rather than silently missing from the filter.
+    const kinds = [...new Set(rows.map((r) => r.kind))].sort();
+    const specs = eventSourceFilters(t, kinds);
+    const cols: Column<EventSource>[] = [
+      { key: 'name', header: t('eventSources.cols.name'), width: '1.6fr', render: (r) => r.name },
+      {
+        key: 'kind',
+        header: t('eventSources.cols.kind'),
+        width: '120px',
+        render: (r) => <Badge tone="neutral">{r.kind}</Badge>,
+      },
+      {
+        key: 'status',
+        header: t('eventSources.cols.status'),
+        width: '110px',
+        render: (r) => (
+          <Badge tone={r.enabled ? 'up' : 'neutral'}>
+            {r.enabled ? t('status.enabled') : t('status.disabled')}
+          </Badge>
+        ),
+      },
+      {
+        key: 'actions',
+        header: t('eventSources.cols.actions'),
+        width: '130px',
+        align: 'right',
+        render: (r) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  { label: t('eventSources.rotate'), icon: <KeyIcon />, onClick: () => rotate(r) },
+                  {
+                    label: r.enabled ? t('eventSources.disable') : t('eventSources.enable'),
+                    icon: <PowerIcon />,
+                    onClick: () => toggleEnabled(r),
+                  },
+                  {
+                    label: t('eventSources.edit'),
+                    icon: <EditIcon />,
+                    onClick: () => setEditing(r),
+                  },
+                  {
+                    label: t('eventSources.delete'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(r),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `rotate` and `toggleEnabled` are rebuilt every render; listing them would rebuild the
+    // columns on every keystroke elsewhere and re-run the predicate for nothing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, authed, rows]);
+
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
+  );
+
   return (
     <div>
       <PageHeader title={t('nav:alerts.eventSources')} note={t('eventSources.note')} />
@@ -77,16 +145,16 @@ export function EventSourcesPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('eventSources.searchPlaceholder')}
-              ariaLabel={t('eventSources.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
-              shown={filtered.length}
-              total={rows.length}
+              shown={shown.length}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('noun.source', { count: rows.length })}
             />
             {authed && (
@@ -96,75 +164,26 @@ export function EventSourcesPage() {
             )}
           </TableToolbar>
           {error && <p className="form-error">{error}</p>}
-          <div className="ytable eventsources-table">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('eventSources.cols.name')}</div>
-              <div className="ytable-h">{t('eventSources.cols.kind')}</div>
-              <div className="ytable-h">{t('eventSources.cols.status')}</div>
-              <div className="ytable-h right">{t('eventSources.cols.actions')}</div>
-            </div>
-            {filtered.length === 0 ? (
-              <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading
-                    ? t('common:loading')
-                    : rows.length === 0
-                      ? t('eventSources.empty')
-                      : t('eventSources.emptyMatch')}
-                </p>
-                {!loading && rows.length === 0 && (
-                  <p className="yt-empty-sub">{t('eventSources.emptySub')}</p>
-                )}
-              </div>
-            ) : (
-              filtered.map((r) => (
-                <div className="ytable-row" key={r.id} style={{ gridTemplateColumns: COLS }}>
-                  <div className="ytable-cell">{r.name}</div>
-                  <div className="ytable-cell">
-                    <Badge tone="neutral">{r.kind}</Badge>
-                  </div>
-                  <div className="ytable-cell">
-                    <Badge tone={r.enabled ? 'up' : 'neutral'}>
-                      {r.enabled ? t('status.enabled') : t('status.disabled')}
-                    </Badge>
-                  </div>
-                  <div className="ytable-cell right">
-                    {authed && (
-                      <span className="ytable-actions">
-                        <OverflowMenu
-                          actions={[
-                            {
-                              label: t('eventSources.rotate'),
-                              icon: <KeyIcon />,
-                              onClick: () => rotate(r),
-                            },
-                            {
-                              label: r.enabled
-                                ? t('eventSources.disable')
-                                : t('eventSources.enable'),
-                              icon: <PowerIcon />,
-                              onClick: () => toggleEnabled(r),
-                            },
-                            {
-                              label: t('eventSources.edit'),
-                              icon: <EditIcon />,
-                              onClick: () => setEditing(r),
-                            },
-                            {
-                              label: t('eventSources.delete'),
-                              icon: <TrashIcon />,
-                              danger: true,
-                              onClick: () => setDeleting(r),
-                            },
-                          ]}
-                        />
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+          <DataTable
+            rows={shown}
+            columns={columns}
+            rowKey={(r) => r.id}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
+            loading={loading}
+            empty={anyFiltered ? t('eventSources.emptyMatch') : t('eventSources.empty')}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
       {adding && (

@@ -7,19 +7,30 @@
 //! names actions taken across domains the caller may not otherwise be allowed to see.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireViewAudit};
+use super::extract::RequireViewAudit;
 use super::util::{normalize_search, parse_rfc3339};
 use super::ApiState;
 use crate::audit::{AuditAction, AuditFilter, AuditStatusClass};
 use axum::response::IntoResponse;
-use axum::{extract::Query, routing::get, Json, Router};
+use axum::{
+    extract::{Query, State},
+    routing::get,
+    Json, Router,
+};
 use serde::Deserialize;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 ///
-/// The two filter enums are registered as components because `AuditQuery` references them: without
-/// this the generated document would carry a `$ref` to a schema that is not there, and the WebUI's
-/// generated types would lose the closed union that makes the vocabulary un-mirrorable.
+/// The two filter enums are registered as components, and since ADR-053 Inc.4b **nothing in this
+/// document references them** — the query parameters are comma-separated strings now, so the
+/// `$ref`s that used to require this registration are gone.
+///
+/// They stay registered on purpose. `web/src/types/api.ts` asserts its `AUDIT_ACTIONS` /
+/// `AUDIT_STATUS_CLASSES` runtime arrays equal `components['schemas']['AuditAction']` /
+/// `['AuditStatusClass']`, which is what stops the WebUI's option list from drifting from the
+/// vocabulary the backend accepts. Dropping these two lines because "nothing points at them" would
+/// delete that check silently — the arrays would still compile, and a seventh action would appear
+/// in Rust and never in the filter row.
 #[derive(utoipa::OpenApi)]
 #[openapi(
     paths(list_audit, export_audit),
@@ -59,10 +70,12 @@ pub(super) struct AuditQuery {
     until: Option<String>,
     /// Free text matched against the username and the action (case-insensitive substring).
     q: Option<String>,
-    /// Only entries of this kind.
-    action: Option<AuditAction>,
-    /// Only entries whose response fell in this class.
-    status: Option<AuditStatusClass>,
+    /// Comma-separated action kinds (`post`, `put`, `patch`, `delete`, `login`, `mcp`); empty or
+    /// absent means every kind. An unknown token is rejected rather than ignored.
+    action: Option<String>,
+    /// Comma-separated status classes (`ok`, `client`, `server`); empty or absent means every
+    /// class.
+    status: Option<String>,
 }
 
 #[utoipa::path(
@@ -76,36 +89,42 @@ pub(super) struct AuditQuery {
         (status = 503, description = "Skeleton mode keeps no audit log", body = super::error::ErrorBody),
     ),
 )]
-// Extractor order is `RequireViewAudit` → `Query` → `Admin`, and the middle one is deliberate.
-// The house rule is `Require*` before `Admin` — authenticate first, so an anonymous caller learns
-// only that it is anonymous and never which subsystems this deployment has. `Query` sits between
-// them for the reason `list_alert_history` states about its cursor: a malformed filter is the
-// client's bug whether or not this deployment keeps a log, and answering 503 to it would tell a
-// client walking the log "there is nothing here" when the truth is "your request was wrong".
-// It leaks nothing: whether the parse fails depends only on the request.
+// Extractor order is `RequireViewAudit` → `Query`, and there is deliberately **no `Admin`**.
+// The house rule is `Require*` first — authenticate before anything else, so an anonymous caller
+// learns only that it is anonymous and never which subsystems this deployment has. What follows is
+// the reason `list_alert_history` states about its cursor: a malformed filter is the client's bug
+// whether or not this deployment keeps a log, and answering 503 to it would tell a client walking
+// the log "there is nothing here" when the truth is "your request was wrong". It leaks nothing —
+// whether the parse fails depends only on the request.
 //
-// ⚠️ This buys that behaviour for `action` and `status` only. They are typed, so serde rejects them
-// during extraction; the RFC 3339 bounds are `Option<String>` here and are validated inside
-// `audit_page`, which necessarily runs after `Admin`. So a bad timestamp on a *skeleton* deployment
-// is still a 503. Making it uniform would mean either a newtype with a hand-written `Deserialize`
-// or checking availability inside the handler body — and the latter is exactly what the `Admin`
-// extractor exists to stop being forgettable.
+// **`Admin` was dropped from the signature and the availability check moved into [`audit_page`],
+// after the parse.** Until ADR-053 Inc.4b that ordering held for `action`/`status` only, because
+// they were typed and serde rejected them during extraction, while the RFC 3339 bounds were parsed
+// in the handler and therefore lost to `Admin`'s 503 on a skeleton deployment — a wart this comment
+// used to describe as accepted. Making the two enums comma-separated moved their parse into the
+// handler too, which would have made the wart the *rule*. So the wart was fixed instead: every
+// filter is now validated before availability is consulted, on both this endpoint and the export.
+//
+// ⚠️ The thing `Admin` existed to stop being forgettable is still owed — [`audit_page`] must
+// resolve `st.admin` itself and return `ApiError::admin_unavailable()`, and
+// `a_well_formed_filter_still_reports_the_missing_write_side` is what fails if it stops doing so.
+// Do not "tidy" that check away, and do not re-add the extractor: with both, the 503 wins again.
 async fn list_audit(
     _guard: RequireViewAudit,
     Query(q): Query<AuditQuery>,
-    admin: Admin,
+    State(st): State<ApiState>,
 ) -> ApiResult<Json<Vec<crate::audit::AuditRow>>> {
     Ok(Json(
         audit_page(
-            &admin,
+            &st,
             AuditFilterInput {
                 limit: q.limit,
                 before: q.before.as_deref(),
                 since: q.since.as_deref(),
                 until: q.until.as_deref(),
                 q: q.q.as_deref(),
-                action: q.action,
-                status: q.status,
+                action: q.action.as_deref(),
+                status: q.status.as_deref(),
             },
         )
         .await?,
@@ -138,18 +157,18 @@ async fn list_audit(
 async fn export_audit(
     _guard: RequireViewAudit,
     Query(q): Query<AuditExportQuery>,
-    admin: Admin,
+    State(st): State<ApiState>,
 ) -> Result<axum::response::Response, ApiError> {
     let rows = audit_page(
-        &admin,
+        &st,
         AuditFilterInput {
             limit: Some(EXPORT_MAX),
             before: None,
             since: q.since.as_deref(),
             until: q.until.as_deref(),
             q: q.q.as_deref(),
-            action: q.action,
-            status: q.status,
+            action: q.action.as_deref(),
+            status: q.status.as_deref(),
         },
     )
     .await?;
@@ -205,10 +224,12 @@ pub(super) struct AuditExportQuery {
     until: Option<String>,
     /// Free text matched against the username and the action (case-insensitive substring).
     q: Option<String>,
-    /// Only entries of this kind.
-    action: Option<AuditAction>,
-    /// Only entries whose response fell in this class.
-    status: Option<AuditStatusClass>,
+    /// Comma-separated action kinds (`post`, `put`, `patch`, `delete`, `login`, `mcp`); empty or
+    /// absent means every kind. An unknown token is rejected rather than ignored.
+    action: Option<String>,
+    /// Comma-separated status classes (`ok`, `client`, `server`); empty or absent means every
+    /// class.
+    status: Option<String>,
 }
 
 /// The raw, unvalidated filter fields, as either surface receives them.
@@ -219,8 +240,11 @@ pub(crate) struct AuditFilterInput<'a> {
     pub since: Option<&'a str>,
     pub until: Option<&'a str>,
     pub q: Option<&'a str>,
-    pub action: Option<AuditAction>,
-    pub status: Option<AuditStatusClass>,
+    /// Comma-separated action kinds; parsed by [`audit_page`], not by serde. See the long note in
+    /// `crate::audit` for why the typed field was given up.
+    pub action: Option<&'a str>,
+    /// Comma-separated status classes.
+    pub status: Option<&'a str>,
 }
 
 /// A page of the audit log, newest first — shared by `GET /api/v1/audit` and the MCP `get_audit`
@@ -234,8 +258,13 @@ pub(crate) struct AuditFilterInput<'a> {
 ///
 /// **`ViewAudit`, not `View`.** Also note this goes through `AuditRepo::list`, which is where the
 /// `1..=MAX_LIMIT` clamp lives — a caller that rebuilt the query itself would inherit no bound.
+///
+/// ⚠️ **Takes `ApiState`, not `AdminState`, and resolves the write side itself — deliberately.**
+/// The whole filter is validated first, so a malformed request answers `400` on a deployment that
+/// keeps no log rather than the `503` an `Admin` extractor would have returned before the body ran.
+/// See the long comment above `list_audit`.
 pub(crate) async fn audit_page(
-    admin: &super::AdminState,
+    st: &ApiState,
     input: AuditFilterInput<'_>,
 ) -> Result<Vec<crate::audit::AuditRow>, ApiError> {
     // The cursor and the range bounds get different codes: a bad cursor is a client paging bug, a
@@ -259,9 +288,37 @@ pub(crate) async fn audit_page(
         since: ts(input.since, "since", "invalid_filter")?,
         until: ts(input.until, "until", "invalid_filter")?,
         q: normalize_search(input.q),
-        action: input.action,
-        status: input.status,
+        // Same set spelling as events and alert history (ADR-053): comma-separated, empty means
+        // unfiltered, unknown token is a 400. The allowed-values message is read off the enum so a
+        // seventh action cannot be accepted here but missing from the error text.
+        action: super::util::parse_set(
+            "action",
+            input.action,
+            &AuditAction::ALL
+                .iter()
+                .map(|a| a.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            AuditAction::from_token,
+        )?,
+        status: super::util::parse_set(
+            "status",
+            input.status,
+            &AuditStatusClass::ALL
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            AuditStatusClass::from_token,
+        )?,
         limit: input.limit.unwrap_or(crate::audit::DEFAULT_LIMIT),
+    };
+    // Availability **after** the parse — this is what the `Admin` extractor used to do before the
+    // body ran, and moving it here is the whole point (see `list_audit`). Still a 503 rather than
+    // an empty page: "nobody has done anything" and "this deployment keeps no audit log" must not
+    // read alike.
+    let Some(admin) = st.admin.as_ref() else {
+        return Err(ApiError::admin_unavailable());
     };
     admin.audit.list(&filter).await.map_err(|e| {
         ApiError::from_internal(e.as_ref(), "list audit log", "failed to list the audit log")

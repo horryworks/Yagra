@@ -9,13 +9,11 @@
 // shared `.ytable`. Add via modal; enable/disable is an inline icon toggle; delete confirms in a
 // modal. Channel kind and rule severity are neutral/status chips (categorical vs status).
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import {
-  CHANNEL_KINDS,
-  SEVERITIES,
   type ChannelConfigInput,
   type ChannelKind,
   type NotificationChannel,
@@ -30,23 +28,12 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import {
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import { ENABLED_STATES } from '../lib/filterQuery';
-import {
-  DEFAULT_CHANNEL_FILTERS,
-  DEFAULT_ROUTING_FILTERS,
-  isChannelFiltered,
-  isRoutingFiltered,
-  matchesChannel,
-  matchesRoutingRule,
-  type ChannelFilters,
-  type RoutingFilters,
-} from './routingFilters';
+import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { channelFilters, routingRuleFilters } from './routingFilters';
 import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
@@ -58,9 +45,6 @@ const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'neutral'> = {
   warning: 'warning',
   info: 'neutral',
 };
-
-const CHANNEL_COLS = '1.6fr 140px 130px 96px';
-const RULE_COLS = '1.4fr 130px 1fr 130px 96px';
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {
@@ -168,39 +152,96 @@ function ChannelsSection({
 
   // Client-side: the channel list is bounded by what an operator configured, not by fleet size
   // (ui-conventions). The judgement lives in `routingFilters.ts`.
-  const [filters, setFilters] = useState<ChannelFilters>(DEFAULT_CHANNEL_FILTERS);
-  const set = <K extends keyof ChannelFilters>(key: K, value: ChannelFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = channels.filter((c) => matchesChannel(c, filters));
+  const [sheet, setSheet] = useState(false);
+  const columns = useMemo<Column<NotificationChannel>[]>(() => {
+    const kinds = [...new Set(channels.map((c) => c.kind))].sort();
+    const specs = channelFilters(t, kinds);
+    const cols: Column<NotificationChannel>[] = [
+      {
+        key: 'name',
+        header: t('routing.channels.cols.name'),
+        width: '1.6fr',
+        render: (c) => <span className="yt-name-txt">{c.name}</span>,
+      },
+      {
+        key: 'kind',
+        header: t('routing.channels.cols.kind'),
+        width: '140px',
+        render: (c) => (
+          <>
+            <Badge tone="neutral">{c.kind}</Badge>
+            {hasTemplate(c) && (
+              <Badge tone="neutral" title={t('routing.channels.templatedHint')}>
+                {t('routing.channels.templated')}
+              </Badge>
+            )}
+          </>
+        ),
+      },
+      {
+        key: 'status',
+        header: t('routing.channels.cols.status'),
+        width: '130px',
+        render: (c) => <EnabledStatus enabled={c.enabled} />,
+      },
+      {
+        key: 'actions',
+        header: t('routing.channels.cols.actions'),
+        width: '96px',
+        align: 'right',
+        render: (c) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  {
+                    label: t('routing.channels.template'),
+                    icon: <EditIcon />,
+                    onClick: () => setTemplating(c),
+                  },
+                  {
+                    label: c.enabled
+                      ? t('routing.channels.disable')
+                      : t('routing.channels.enable'),
+                    icon: <PowerIcon />,
+                    onClick: () => toggle(c),
+                  },
+                  {
+                    label: t('routing.channels.delete'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(c),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `toggle` is rebuilt every render; listing it would rebuild the columns on every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, authed, channels]);
+
+  // ⚠️ **Component state, not the URL.** The column key IS the URL key (ADR-053 decision 12), and
+  // this route has two tables — both with a `name` and a `status` column. URL-backing either one
+  // would make the two filter each other.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    channels,
+  );
 
   return (
     <section>
       <div className="table-toolbar">
         <h2 className="table-section-title">{t('routing.channels.title')}</h2>
-        <SearchInput
-          value={filters.q}
-          onChange={(v) => set('q', v)}
-          placeholder={t('routing.channels.searchPlaceholder')}
-          ariaLabel={t('routing.channels.searchAria')}
-        />
-        <FilterSelect
-          value={filters.kind}
-          onChange={(v) => set('kind', v)}
-          options={CHANNEL_KINDS.map((k) => ({ value: k, label: k }))}
-          allLabel={t('routing.channels.allKinds')}
-          ariaLabel={t('routing.channels.kindAria')}
-        />
-        <FilterSelect
-          value={filters.enabled}
-          onChange={(v) => set('enabled', v)}
-          options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
-          allLabel={t('common:filter.allEnabled')}
-          ariaLabel={t('common:filter.enabledAria')}
-        />
+        <MobileFilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
+        <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
         <TableSpacer />
         <ResultCount
           shown={shown.length}
-          total={isChannelFiltered(filters) ? channels.length : undefined}
+          total={anyFiltered ? channels.length : undefined}
           noun={t('noun.channel', { count: shown.length })}
         />
         {authed && (
@@ -210,79 +251,27 @@ function ChannelsSection({
         )}
       </div>
 
-      <div className="ytable channels-table">
-        <div className="ytable-head" style={{ gridTemplateColumns: CHANNEL_COLS }}>
-          <div className="ytable-h">{t('routing.channels.cols.name')}</div>
-          <div className="ytable-h">{t('routing.channels.cols.kind')}</div>
-          <div className="ytable-h">{t('routing.channels.cols.status')}</div>
-          <div className="ytable-h right">{t('routing.channels.cols.actions')}</div>
-        </div>
-        {shown.length === 0 ? (
-          <div className="yt-empty">
-            <p className="yt-empty-title">
-              {loading
-                ? t('common:loading')
-                : isChannelFiltered(filters)
-                  ? t('common:filter.noMatch')
-                  : t('routing.channels.empty')}
-            </p>
-            {!loading && !isChannelFiltered(filters) && (
-              <p className="yt-empty-sub">{t('routing.channels.emptySub')}</p>
-            )}
-          </div>
-        ) : (
-          shown.map((c) => (
-            <div
-              className={c.enabled ? 'ytable-row' : 'ytable-row is-muted'}
-              style={{ gridTemplateColumns: CHANNEL_COLS }}
-              key={c.id}
-            >
-              <div className="ytable-cell">
-                <span className="yt-name-txt">{c.name}</span>
-              </div>
-              <div className="ytable-cell">
-                <Badge tone="neutral">{c.kind}</Badge>
-                {hasTemplate(c) && (
-                  <Badge tone="neutral" title={t('routing.channels.templatedHint')}>
-                    {t('routing.channels.templated')}
-                  </Badge>
-                )}
-              </div>
-              <div className="ytable-cell">
-                <EnabledStatus enabled={c.enabled} />
-              </div>
-              <div className="ytable-cell right">
-                {authed && (
-                  <span className="ytable-actions">
-                    <OverflowMenu
-                      actions={[
-                        {
-                          label: t('routing.channels.template'),
-                          icon: <EditIcon />,
-                          onClick: () => setTemplating(c),
-                        },
-                        {
-                          label: c.enabled
-                            ? t('routing.channels.disable')
-                            : t('routing.channels.enable'),
-                          icon: <PowerIcon />,
-                          onClick: () => toggle(c),
-                        },
-                        {
-                          label: t('routing.channels.delete'),
-                          icon: <TrashIcon />,
-                          danger: true,
-                          onClick: () => setDeleting(c),
-                        },
-                      ]}
-                    />
-                  </span>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+      <DataTable
+        rows={shown}
+        columns={columns}
+        rowKey={(c) => c.id}
+        rowClass={(c) => (c.enabled ? undefined : 'is-muted')}
+        filters={filters}
+        onFiltersChange={setFilters}
+        filterCounts={counts}
+        loading={loading}
+        empty={anyFiltered ? t('common:filter.noMatch') : t('routing.channels.empty')}
+      />
+      {sheet && (
+        <MobileFilterSheet
+          columns={filterCols}
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+          onClose={() => setSheet(false)}
+        />
+      )}
 
       {adding && (
         <AddChannelModal
@@ -525,39 +514,91 @@ function RulesSection({
       .catch((e: unknown) => onError(errMsg(e, t('routing.err.update'))));
 
   // Client-side, same reason as the channels table above.
-  const [filters, setFilters] = useState<RoutingFilters>(DEFAULT_ROUTING_FILTERS);
-  const set = <K extends keyof RoutingFilters>(key: K, value: RoutingFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = rules.filter((r) => matchesRoutingRule(r, filters));
+  const [sheet, setSheet] = useState(false);
+  const columns = useMemo<Column<RoutingRule>[]>(() => {
+    const specs = routingRuleFilters(t, severityLabel);
+    const cols: Column<RoutingRule>[] = [
+      {
+        key: 'name',
+        header: t('routing.rules.cols.name'),
+        width: '1.4fr',
+        render: (r) => <span className="yt-name-txt">{r.name}</span>,
+      },
+      {
+        key: 'severity',
+        header: t('routing.rules.cols.severity'),
+        width: '130px',
+        render: (r) => (
+          <Badge tone={r.severity ? SEVERITY_TONE[r.severity] : 'neutral'}>
+            {r.severity ? severityLabel(r.severity) : t('routing.rules.any')}
+          </Badge>
+        ),
+      },
+      {
+        key: 'channels',
+        header: t('routing.rules.cols.channels'),
+        width: '1fr',
+        render: (r) => (
+          <span className="muted ellipsis">
+            {r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels')}
+          </span>
+        ),
+      },
+      {
+        key: 'status',
+        header: t('routing.rules.cols.status'),
+        width: '130px',
+        render: (r) => <EnabledStatus enabled={r.enabled} />,
+      },
+      {
+        key: 'actions',
+        header: t('routing.rules.cols.actions'),
+        width: '96px',
+        align: 'right',
+        render: (r) =>
+          authed ? (
+            <span className="ytable-actions">
+              <OverflowMenu
+                actions={[
+                  {
+                    label: r.enabled ? t('routing.rules.disable') : t('routing.rules.enable'),
+                    icon: <PowerIcon />,
+                    onClick: () => toggle(r),
+                  },
+                  {
+                    label: t('routing.rules.delete'),
+                    icon: <TrashIcon />,
+                    danger: true,
+                    onClick: () => setDeleting(r),
+                  },
+                ]}
+              />
+            </span>
+          ) : null,
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+    // `channelName` and `toggle` are rebuilt every render; what they read is listed instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, authed, channels]);
+
+  // Component state, not the URL — see the channels table above for why this route cannot use it.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rules,
+  );
 
   return (
     <section className="routing-rules-section">
       <div className="table-toolbar">
         <h2 className="table-section-title">{t('routing.rules.title')}</h2>
-        <SearchInput
-          value={filters.q}
-          onChange={(v) => set('q', v)}
-          placeholder={t('routing.rules.searchPlaceholder')}
-          ariaLabel={t('routing.rules.searchAria')}
-        />
-        <FilterSelect
-          value={filters.severity}
-          onChange={(v) => set('severity', v)}
-          options={SEVERITIES.map((sv) => ({ value: sv, label: severityLabel(sv) }))}
-          allLabel={t('routing.rules.allSeverities')}
-          ariaLabel={t('routing.rules.severityAria')}
-        />
-        <FilterSelect
-          value={filters.enabled}
-          onChange={(v) => set('enabled', v)}
-          options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
-          allLabel={t('common:filter.allEnabled')}
-          ariaLabel={t('common:filter.enabledAria')}
-        />
+        <MobileFilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
+        <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
         <TableSpacer />
         <ResultCount
           shown={shown.length}
-          total={isRoutingFiltered(filters) ? rules.length : undefined}
+          total={anyFiltered ? rules.length : undefined}
           noun={t('common:noun.rule', { count: shown.length })}
         />
         {authed && (
@@ -567,77 +608,27 @@ function RulesSection({
         )}
       </div>
 
-      <div className="ytable rules-table">
-        <div className="ytable-head" style={{ gridTemplateColumns: RULE_COLS }}>
-          <div className="ytable-h">{t('routing.rules.cols.name')}</div>
-          <div className="ytable-h">{t('routing.rules.cols.severity')}</div>
-          <div className="ytable-h">{t('routing.rules.cols.channels')}</div>
-          <div className="ytable-h">{t('routing.rules.cols.status')}</div>
-          <div className="ytable-h right">{t('routing.rules.cols.actions')}</div>
-        </div>
-        {shown.length === 0 ? (
-          <div className="yt-empty">
-            <p className="yt-empty-title">
-              {loading
-                ? t('common:loading')
-                : isRoutingFiltered(filters)
-                  ? t('common:filter.noMatch')
-                  : t('routing.rules.empty')}
-            </p>
-            {!loading && !isRoutingFiltered(filters) && (
-              <p className="yt-empty-sub">{t('routing.rules.emptySub')}</p>
-            )}
-          </div>
-        ) : (
-          shown.map((r) => (
-            <div
-              className={r.enabled ? 'ytable-row' : 'ytable-row is-muted'}
-              style={{ gridTemplateColumns: RULE_COLS }}
-              key={r.id}
-            >
-              <div className="ytable-cell">
-                <span className="yt-name-txt">{r.name}</span>
-              </div>
-              <div className="ytable-cell">
-                <Badge tone={r.severity ? SEVERITY_TONE[r.severity] : 'neutral'}>
-                  {r.severity ? severityLabel(r.severity) : t('routing.rules.any')}
-                </Badge>
-              </div>
-              <div className="ytable-cell ellipsis">
-                <span className="muted">
-                  {r.channel_ids.map(channelName).join(', ') || t('routing.rules.noChannels')}
-                </span>
-              </div>
-              <div className="ytable-cell">
-                <EnabledStatus enabled={r.enabled} />
-              </div>
-              <div className="ytable-cell right">
-                {authed && (
-                  <span className="ytable-actions">
-                    <OverflowMenu
-                      actions={[
-                        {
-                          label: r.enabled
-                            ? t('routing.rules.disable')
-                            : t('routing.rules.enable'),
-                          icon: <PowerIcon />,
-                          onClick: () => toggle(r),
-                        },
-                        {
-                          label: t('routing.rules.delete'),
-                          icon: <TrashIcon />,
-                          danger: true,
-                          onClick: () => setDeleting(r),
-                        },
-                      ]}
-                    />
-                  </span>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+      <DataTable
+        rows={shown}
+        columns={columns}
+        rowKey={(r) => r.id}
+        rowClass={(r) => (r.enabled ? undefined : 'is-muted')}
+        filters={filters}
+        onFiltersChange={setFilters}
+        filterCounts={counts}
+        loading={loading}
+        empty={anyFiltered ? t('common:filter.noMatch') : t('routing.rules.empty')}
+      />
+      {sheet && (
+        <MobileFilterSheet
+          columns={filterCols}
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
+          onClose={() => setSheet(false)}
+        />
+      )}
 
       {adding && (
         <AddRuleModal

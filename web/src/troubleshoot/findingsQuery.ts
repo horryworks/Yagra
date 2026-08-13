@@ -5,15 +5,16 @@
 // `include: ['src/**/*.test.ts']`, so a test written beside a `.tsx` is a file nothing runs
 // (testing.md). Everything that decides *what is asked for* lives here; the page is layout.
 
-import type {
-  AnalysisToolKey,
-  FindingSeverity,
-  SavedFinding,
-  SavedFindingsQuery,
-} from '../types/api';
+import type { SavedFinding, SavedFindingsQuery } from '../types/api';
 import type { ScopeValue } from '../components/ScopePicker/scope';
 import type { TFunction } from 'i18next';
-import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
+import {
+  decodeSet,
+  encodeSet,
+  type ColumnFilterSpec,
+  type FilterState,
+} from '../lib/columnFilter';
+import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { FINDING_SEVERITIES } from '../types/api';
 import { TOOLS } from './data';
 
@@ -36,8 +37,14 @@ const RANGE_SECS: Record<FindingRange, number | null> = {
 
 /** The screen's filter state. `''` means "no filter" for each optional field. */
 export interface FindingFilters {
-  tool: AnalysisToolKey | '';
-  severity: FindingSeverity | '';
+  /** Comma-joined `AnalysisToolKey` tokens; `''` is every tool. Same spelling as the API takes. */
+  tool: string;
+  /** Comma-joined `FindingSeverity` tokens; `''` is every severity. */
+  severity: string;
+  /** Substring of the metric name or the finding kind (`q`). */
+  q: string;
+  /** Substring of the node's current name (`node_q`). */
+  nodeQ: string;
   range: FindingRange;
   nodeId: string;
   groupId: string;
@@ -53,6 +60,8 @@ export interface FindingFilters {
 export const DEFAULT_FILTERS: FindingFilters = {
   tool: '',
   severity: '',
+  q: '',
+  nodeQ: '',
   range: '7d',
   nodeId: '',
   groupId: '',
@@ -85,7 +94,9 @@ export function queryFor(
   return {
     tool: f.tool || undefined,
     severity: f.severity || undefined,
+    q: f.q || undefined,
     node_id: f.nodeId || undefined,
+    node_q: f.nodeQ || undefined,
     group_id: f.groupId || undefined,
     since: sinceIso(f.range, nowMs),
     before: cursor?.before,
@@ -139,6 +150,8 @@ export function isFiltered(f: FindingFilters): boolean {
   return (
     f.tool !== '' ||
     f.severity !== '' ||
+    f.q !== '' ||
+    f.nodeQ !== '' ||
     f.nodeId !== '' ||
     f.groupId !== '' ||
     f.range !== DEFAULT_FILTERS.range
@@ -148,13 +161,18 @@ export function isFiltered(f: FindingFilters): boolean {
 /**
  * The Troubleshoot ▸ Saved findings filter row, keyed by `Column.key` (ADR-053 Inc.4).
  *
- * The keys are the API's parameter names (`tool` / `severity` / `range`); the columns were `tool`,
- * `severity` and `at`, so only the time column was renamed.
+ * The keys are the API's parameter names (`tool` / `severity` / `q` / `node_q` / `range`); the
+ * columns were `tool`, `severity`, `node`, `what` and `at`, so three were renamed.
  *
- * Both enums are `single` because `GET /api/v1/analysis/findings` takes one of each. The Node and
- * What columns carry no filter: the scope is answered by the ScopePicker in the action row (it
- * resolves names against the inventory, which is a different question from "does this cell contain
- * these characters"), and the finding text has no server-side search parameter to send it to.
+ * Both enums are multi-select: since ADR-053 Inc.4b `GET /api/v1/analysis/findings` takes `tool`
+ * and `severity` as comma-separated sets.
+ *
+ * ⚠️ **Node and What had no filter until Inc.4b because the API had no parameter for either.**
+ * That distinction is invisible from the screen — a user reported both as missing — so the fix was
+ * to add the parameters rather than to explain the absence. The Node filter is *not* a duplicate of
+ * the action row's ScopePicker: that selects exactly one node, and "every node called core-sw…" was
+ * unsayable. **Score is still unfiltered**, and that one is a genuine gap: a numeric range is a
+ * filter *kind* this row does not have yet (ADR-053 Inc.6).
  *
  * ⚠️ The range default is `7d`, not `all`, and that is a performance contract rather than a
  * preference — see `DEFAULT_FILTERS` above. `clientRangePresets` is deliberately not reused: these
@@ -164,7 +182,6 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
   return {
     severity: {
       kind: 'enum',
-      single: true,
       options: FINDING_SEVERITIES.map((s) => ({
         value: s,
         label: t(`findings.severity.${s}`),
@@ -174,12 +191,35 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
     },
     tool: {
       kind: 'enum',
-      single: true,
       // From the same catalog the launcher offers, so a new analysis appears here with no second
       // list to remember.
       options: TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) })),
       readValue: (f) => f.tool,
       allLabel: t('findings.filter.allTools'),
+    },
+    // The node's **current** name, matched as a substring server-side (`node_q`). A fleet-wide
+    // finding has no node and therefore never matches — which is right, it is not about one.
+    node_q: {
+      kind: 'text',
+      // Contains only: `node_q` is a substring parameter with neither a regex nor a negated form.
+      modes: ['contains'],
+      // The row's `node_name` is the name **as of the run**, while the column renders the current
+      // one and the server matches the current one. Reading the stale copy here would make a
+      // browser-side pass disagree with both, so there is deliberately nothing to read.
+      readText: () => [],
+      containsSemantics: 'substring',
+      placeholder: t('findings.cols.node'),
+    },
+    // The What column shows the metric **and** the kind, so `q` matches both — the same shape as
+    // the audit log's `q` over username and action, and the same imprecision: a term can match on
+    // the half the operator was not thinking of. Better than matching only the half that fits in
+    // one parameter and silently dropping rows that match the other.
+    q: {
+      kind: 'text',
+      modes: ['contains'],
+      readText: (f) => [f.metric, f.kind],
+      containsSemantics: 'substring',
+      placeholder: t('findings.cols.what'),
     },
     range: {
       kind: 'range',
@@ -195,18 +235,32 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
 
 /** The flat row state ⟷ the filter shape. The scope is not a column, so it is carried through. */
 export function stateFromFilters(f: FindingFilters): FilterState {
-  return { severity: f.severity, tool: f.tool, range: f.range };
+  return {
+    severity: f.severity,
+    tool: f.tool,
+    node_q: f.nodeQ ? encodeCondition({ term: f.nodeQ, mode: 'contains', not: false }) : '',
+    q: f.q ? encodeCondition({ term: f.q, mode: 'contains', not: false }) : '',
+    range: f.range,
+  };
 }
 
 export function filtersFromState(
   s: FilterState,
   scope: { nodeId: string; groupId: string },
 ): FindingFilters {
-  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
   const range = s.range ?? '';
   return {
-    tool: one(s.tool) as FindingFilters['tool'],
-    severity: one(s.severity) as FindingFilters['severity'],
+    // Set columns store their tokens joined and the API takes the same spelling; re-encoding pins
+    // the order so the value is stable as an effect dependency.
+    tool: encodeSet(
+      decodeSet(s.tool ?? ''),
+      TOOLS.map((t) => t.id),
+    ),
+    severity: encodeSet(decodeSet(s.severity ?? ''), FINDING_SEVERITIES),
+    // Text columns store an encoded condition; only the term reaches this API (neither parameter
+    // has a regex or a negated form).
+    q: decodeCondition(s.q ?? '').term,
+    nodeQ: decodeCondition(s.node_q ?? '').term,
     range: (FINDING_RANGES as readonly string[]).includes(range)
       ? (range as FindingRange)
       : DEFAULT_FILTERS.range,

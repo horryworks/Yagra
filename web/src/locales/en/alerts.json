@@ -50,7 +50,10 @@
       "allPhases": "Fires and clears",
       "phaseAria": "Filter by fire or clear",
       "allStates": "All states",
-      "stateAria": "Filter by state"
+      "stateAria": "Filter by state",
+      "allAcked": "Acknowledged or not",
+      "acked": "Acknowledged",
+      "unacked": "Not acknowledged"
     },
     "range": {
       "all": "All time",

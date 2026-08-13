@@ -9181,17 +9181,37 @@ export interface operations {
                  *     `since`.
                  */
                 until?: string;
-                /** @description Only transitions at this severity. */
-                severity?: components["schemas"]["Severity"];
-                /** @description Only transitions into this state. */
-                state?: components["schemas"]["NodeState"];
+                /**
+                 * @description Comma-separated severities (`info`, `warning`, `critical`); empty or absent means every
+                 *     severity. An unknown token is rejected rather than ignored — a dropped token would silently
+                 *     widen the answer to everything.
+                 */
+                severity?: string;
+                /** @description Comma-separated node states; empty or absent means every state. */
+                state?: string;
                 /** @description `false` for fires only, `true` for clears only. Omit for both. */
                 resolved?: boolean;
+                /**
+                 * @description `true` for transitions whose incident has been acknowledged, `false` for those that have
+                 *     not. Omit for both. Acknowledgement is per incident (node + check + severity), so every
+                 *     transition of one incident answers the same way.
+                 */
+                acked?: boolean;
+                /**
+                 * @description Only transitions whose metric name contains this text (case-insensitive). Liveness rows
+                 *     store no metric and therefore never match.
+                 */
+                metric?: string;
                 /**
                  * @description Only transitions about this node. Rows about something other than a node (a poller pool)
                  *     are excluded by construction.
                  */
                 node_id?: string;
+                /**
+                 * @description Only transitions about nodes whose **current name** contains this text (case-insensitive).
+                 *     Distinct from `node_id`, which names exactly one node.
+                 */
+                node_q?: string;
                 /** @description Only transitions about nodes in this folder group **or any group beneath it**. */
                 group_id?: string;
             };
@@ -9343,12 +9363,25 @@ export interface operations {
                 before_id?: string;
                 /** @description Inclusive lower bound on finding time, RFC 3339 — the range filter, not the cursor. */
                 since?: string;
-                /** @description Restrict to one diagnostic (an `AnalysisTool` token, e.g. `anomaly`). */
+                /**
+                 * @description Comma-separated diagnostics (`AnalysisTool` tokens, e.g. `anomaly,capacity`); empty or
+                 *     absent means every tool. An unknown token is rejected rather than ignored.
+                 */
                 tool?: string;
-                /** @description Restrict to `crit`, `warn` or `info`. */
+                /** @description Comma-separated severities (`crit`, `warn`, `info`); empty or absent means every severity. */
                 severity?: string;
+                /**
+                 * @description Case-insensitive substring of the metric name **or** the finding kind — the two halves the
+                 *     *What* column shows.
+                 */
+                q?: string;
                 /** @description Restrict to findings about one node. */
                 node_id?: string;
+                /**
+                 * @description Case-insensitive substring of the node's current name. Distinct from `node_id`, which names
+                 *     exactly one node; fleet-wide findings never match this.
+                 */
+                node_q?: string;
                 /** @description Restrict to findings about nodes in one folder group **and everything beneath it**. */
                 group_id?: string;
                 /** @description Page size, clamped to 200 (default 100). */
@@ -10095,10 +10128,16 @@ export interface operations {
                 until?: string;
                 /** @description Free text matched against the username and the action (case-insensitive substring). */
                 q?: string;
-                /** @description Only entries of this kind. */
-                action?: components["schemas"]["AuditAction"];
-                /** @description Only entries whose response fell in this class. */
-                status?: components["schemas"]["AuditStatusClass"];
+                /**
+                 * @description Comma-separated action kinds (`post`, `put`, `patch`, `delete`, `login`, `mcp`); empty or
+                 *     absent means every kind. An unknown token is rejected rather than ignored.
+                 */
+                action?: string;
+                /**
+                 * @description Comma-separated status classes (`ok`, `client`, `server`); empty or absent means every
+                 *     class.
+                 */
+                status?: string;
             };
             header?: never;
             path?: never;
@@ -10162,10 +10201,16 @@ export interface operations {
                 until?: string;
                 /** @description Free text matched against the username and the action (case-insensitive substring). */
                 q?: string;
-                /** @description Only entries of this kind. */
-                action?: components["schemas"]["AuditAction"];
-                /** @description Only entries whose response fell in this class. */
-                status?: components["schemas"]["AuditStatusClass"];
+                /**
+                 * @description Comma-separated action kinds (`post`, `put`, `patch`, `delete`, `login`, `mcp`); empty or
+                 *     absent means every kind. An unknown token is rejected rather than ignored.
+                 */
+                action?: string;
+                /**
+                 * @description Comma-separated status classes (`ok`, `client`, `server`); empty or absent means every
+                 *     class.
+                 */
+                status?: string;
             };
             header?: never;
             path?: never;
@@ -22387,10 +22432,13 @@ export interface operations {
                 limit?: number;
                 /** @description Case-insensitive substring of the metric name. */
                 q?: string;
-                /** @description Only rules defined at this scope level (`profile` | `group` | `node`). */
-                scope_level?: components["schemas"]["ScopeLevel"];
-                /** @description Only rules breaching in this direction (`above` | `below`). */
-                direction?: components["schemas"]["Direction"];
+                /**
+                 * @description Comma-separated scope levels (`profile` | `group` | `node`); empty or absent means every
+                 *     level.
+                 */
+                scope_level?: string;
+                /** @description Comma-separated directions (`above` | `below`); empty or absent means both. */
+                direction?: string;
             };
             header?: never;
             path?: never;
@@ -22405,6 +22453,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ThresholdPage"];
+                };
+            };
+            /** @description `scope_level` or `direction` names a value outside its vocabulary */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */

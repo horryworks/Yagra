@@ -11,16 +11,19 @@
 // is a correctness bug, not a missing feature. The controls are unchanged; only where they apply is.
 
 import type { TFunction } from 'i18next';
-import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
+import {
+  decodeSet,
+  encodeSet,
+  type ColumnFilterSpec,
+  type FilterState,
+} from '../lib/columnFilter';
 import { decodeCondition } from '../lib/filterCondition';
 import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
 import {
   AUDIT_ACTIONS,
   AUDIT_STATUS_CLASSES,
-  type AuditAction,
   type AuditQuery,
   type AuditRow,
-  type AuditStatusClass,
 } from '../types/api';
 
 /**
@@ -43,8 +46,10 @@ const RANGE_SECS: Record<AuditRange, number | null> = {
 /** The screen's filter state. `''` means "no filter" for each optional field. */
 export interface AuditFilters {
   q: string;
-  action: AuditAction | '';
-  status: AuditStatusClass | '';
+  /** Comma-joined `AuditAction` tokens; `''` is every kind. Same spelling as the API takes. */
+  action: string;
+  /** Comma-joined `AuditStatusClass` tokens; `''` is every class. */
+  status: string;
   range: AuditRange;
 }
 
@@ -154,8 +159,10 @@ export function isFiltered(f: AuditFilters): boolean {
  * match. Narrowing the API to a `username` parameter (and giving the action column its own text
  * condition) is a backend increment; until then this is the imprecision, stated rather than hidden.
  *
- * The enums are `single` for the same reason History's are: `GET /api/v1/audit` takes one `action`
- * and one `status`, and a multi-select over them would send one of the ticked values.
+ * Both enums are multi-select: since ADR-053 Inc.4b `GET /api/v1/audit` takes `action` and `status`
+ * as comma-separated sets. `status` is worth a note — a class is a *range* of HTTP statuses, so a
+ * set of classes is a set of ranges, and the backend walks them with `unnest` rather than an `IN`.
+ * Nothing about that is visible here, which is the point.
  */
 export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<AuditRow>> {
   return {
@@ -170,15 +177,13 @@ export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<Audi
     },
     action: {
       kind: 'enum',
-      single: true,
-      options: AUDIT_ACTIONS.map((a) => ({ value: a, label: t(`audit.action.${a}`) })),
+      options:AUDIT_ACTIONS.map((a) => ({ value: a, label: t(`audit.action.${a}`) })),
       readValue: (r) => r.action,
       allLabel: t('audit.filter.allActions'),
     },
     status: {
       kind: 'enum',
-      single: true,
-      options: AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
+      options:AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
       // Server-side: the class is derived in SQL from the numeric status, never read here.
       readValue: (r) => String(r.status),
       allLabel: t('audit.filter.allStatuses'),
@@ -202,13 +207,14 @@ export function stateFromFilters(f: AuditFilters): FilterState {
 }
 
 export function filtersFromState(s: FilterState): AuditFilters {
-  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
   const range = s.range ?? '';
   return {
     // The text column stores an encoded condition; only its term reaches this API.
     q: decodeCondition(s.q ?? '').term,
-    action: one(s.action) as AuditFilters['action'],
-    status: one(s.status) as AuditFilters['status'],
+    // Set columns store their tokens joined and the API takes the same spelling; re-encoding only
+    // pins the order, which is what keeps the value comparable as an effect dependency.
+    action: encodeSet(decodeSet(s.action ?? ''), AUDIT_ACTIONS),
+    status: encodeSet(decodeSet(s.status ?? ''), AUDIT_STATUS_CLASSES),
     range: (AUDIT_RANGES as readonly string[]).includes(range)
       ? (range as AuditRange)
       : DEFAULT_FILTERS.range,

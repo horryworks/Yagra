@@ -112,6 +112,13 @@
   cursor: pointer;
 }
 
+/* Disabled / inactive row (`rowClass`). Same value as `.ytable-row.is-muted`, and deliberately
+   opacity-only: anything that changed the row's box would desynchronise the virtualizer's fixed
+   size estimate from the rendered height. */
+.dt-row.is-muted {
+  opacity: 0.6;
+}
+
 .dt-row:hover {
   background: var(--bg-tertiary);
 }

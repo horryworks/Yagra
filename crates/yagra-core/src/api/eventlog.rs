@@ -26,7 +26,7 @@
 //! the boundary.
 
 use super::extract::{Admin, RequireView, Scoped};
-use super::util::normalize_search;
+use super::util::{normalize_search, parse_set};
 use super::{ApiError, ApiResult, ApiState};
 use crate::events::{EventFilter, EventRow, EventStatBucket, EventStatGroup, EventTimeBucket};
 use crate::logstore::NameIds;
@@ -70,60 +70,6 @@ fn action_list() -> String {
         .join(", ")
 }
 
-/// How many tokens one comma-separated set parameter may name.
-///
-/// Not a query-cost guard — that was measured and there isn't one: on 6.7M events an `in(…)` list
-/// covering every stored value cost what a single value cost. It is a **request-size** guard, the
-/// same reason a term is capped in chars, and it is deliberately far above the largest closed set
-/// this API has (`syslog_severity`, 8 values). Do not read it as a sibling of
-/// [`NAME_SEARCH_NODE_LIMIT`] or `STATS_SCOPE_NODE_LIMIT`: those two bound how much *work* a query
-/// does, and their values were chosen from that.
-const FILTER_SET_MAX_TOKENS: usize = 32;
-
-/// Split a comma-separated set parameter into trimmed, de-duplicated tokens, preserving order.
-///
-/// `Some("")` yields an empty set, which means *unfiltered* — the same as omitting the parameter.
-/// That is deliberate: the WebUI clears a filter by writing an empty value before it removes the
-/// key, and a client that sends `kind=` should get the unfiltered list rather than a 400 or,
-/// worse, a set containing one empty string that matches nothing.
-fn split_set(raw: Option<&str>) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for tok in raw.unwrap_or_default().split(',') {
-        let tok = tok.trim();
-        if !tok.is_empty() && !out.iter().any(|v| v == tok) {
-            out.push(tok.to_owned());
-        }
-    }
-    out
-}
-
-/// Validate one set parameter: cap its size, then map each token through `parse`, rejecting the
-/// first one that is not a member. Rejecting rather than dropping is the whole point — a dropped
-/// token silently widens the result to everything, and the operator reads the widened list as the
-/// answer to the question they asked.
-fn parse_set<T>(
-    field: &str,
-    raw: Option<&str>,
-    allowed: &str,
-    parse: impl Fn(&str) -> Option<T>,
-) -> Result<Vec<T>, ApiError> {
-    let tokens = split_set(raw);
-    if tokens.len() > FILTER_SET_MAX_TOKENS {
-        return Err(ApiError::bad_request(
-            "invalid_filter",
-            format!("{field} may name at most {FILTER_SET_MAX_TOKENS} values"),
-        ));
-    }
-    tokens
-        .iter()
-        .map(|t| {
-            parse(t).ok_or_else(|| {
-                ApiError::bad_request("invalid_filter", format!("{field} must be {allowed}"))
-            })
-        })
-        .collect()
-}
-
 /// Build one column's text condition, or `None` when the term is blank.
 ///
 /// `regex` is compiled here for the same reason the whole-row term's is — the edge is where a
@@ -158,7 +104,7 @@ fn text_cond(
 /// ⚠️ **This struct is the REST/MCP parity seam.** `search_events_in` fills it field by field, so a
 /// dimension added here is a compile error there until the MCP tool takes it too — which is what
 /// makes ADR-042's read-parity mechanical for events rather than a thing to remember.
-/// `the_mcp_event_search_takes_every_dimension_the_rest_edge_takes` covers the half the compiler
+/// `mcp/tools.rs::every_shared_filter_seam_is_passed_through_whole` covers the half the compiler
 /// cannot see: that the MCP tool's *parameters* offer the dimension at all, rather than hard-coding
 /// it to `None`.
 #[derive(Default)]
@@ -620,8 +566,12 @@ async fn events_stats(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only the tests read the cap directly. It moved to `api::util` with `parse_set` when four more
+    // endpoints needed the same spelling (ADR-053 Inc.4b); this import is what keeps the cap test
+    // pinned to the real constant rather than to a copy of the number.
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};
+    use crate::api::util::FILTER_SET_MAX_TOKENS;
     // Only the tests assert the cap's value; the production path reaches it through
     // `normalize_search`, which is where the policy lives now (`api/util.rs`).
     use crate::api::util::SEARCH_TERM_MAX_CHARS;
@@ -988,37 +938,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_mcp_event_search_takes_every_dimension_the_rest_edge_takes() {
-        // The other half of the parity claim: the tool must actually *pass* what it takes. A
-        // parameter that is declared and then never read is the same silent failure as one that was
-        // never declared, and it type-checks.
-        let mcp = include_str!("../mcp/tools.rs");
-        let call = mcp
-            .split("crate::api::eventlog::EventFilterInput {")
-            .nth(1)
-            .expect("search_events_in builds the shared input");
-        let call = &call[..call.find("})").expect("the initializer ends")];
-        for (field, from) in [
-            ("kind", "p.kind"),
-            ("action", "p.action"),
-            ("severity", "p.severity"),
-            ("msg", "p.msg"),
-            ("msg_regex", "p.msg_regex"),
-            ("msg_not", "p.msg_not"),
-            ("src", "p.src"),
-            ("src_not", "p.src_not"),
-        ] {
-            let line = call
-                .lines()
-                .find(|l| l.trim_start().starts_with(&format!("{field}:")))
-                .unwrap_or_else(|| panic!("search_events_in does not pass {field}"));
-            assert!(
-                line.contains(from),
-                "search_events_in passes {field} from something other than its own parameter: {line}"
-            );
-        }
-    }
+    // `the_mcp_event_search_takes_every_dimension_the_rest_edge_takes` used to live here. It was
+    // the second hand-written copy of "the tool passes every field the seam declares", and ADR-053
+    // Inc.4b would have made it the fifth. It is now one table-driven test over all four seams —
+    // `mcp/tools.rs::every_shared_filter_seam_is_passed_through_whole` — which also derives the
+    // field list from each struct instead of restating it, so a new dimension is covered without
+    // anyone remembering to add it.
 
     #[tokio::test]
     async fn reading_the_log_is_gated_before_the_store_is_consulted() {

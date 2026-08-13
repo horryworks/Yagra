@@ -50,12 +50,9 @@ export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus 
         options={spec.options}
         selected={decodeSet(value)}
         counts={counts}
-        // A `single` column replaces rather than adds, and re-picking the current value clears it —
-        // the same behaviour the range kind has always had, for the same reason: the thing behind
-        // the control accepts one value. See `EnumFilterSpec.single`.
-        onToggle={(v) =>
-          onChange(spec.single ? (v === value ? '' : v) : toggleSetValue(value, v, order))
-        }
+        // Always a set. The `spec.single` branch that used to sit here (pick replaces rather than
+        // adds) is gone with the flag — every endpoint behind an enum column now accepts a list.
+        onToggle={(v) => onChange(toggleSetValue(value, v, order))}
         onClear={() => onChange('')}
         label={label}
       />
