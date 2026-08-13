@@ -627,19 +627,6 @@
       }
     }
   },
-  "scope": {
-    "all": "全ノード",
-    "modeAria": "範囲の種類",
-    "groupsAria": "グループ",
-    "noGroups": "ノードグループはまだありません。",
-    "modes": {
-      "all": "全て",
-      "group": "グループ",
-      "node": "ノード"
-    },
-    "groupLabel": "グループ: {{name}}（サブグループを含む）",
-    "nodeLabel": "ノード: {{name}}"
-  },
   "methods": {
     "stat": "統計",
     "ml": "ML",

@@ -2,7 +2,7 @@
 // @vitest-environment jsdom
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { NodeGroup } from '../types/api';
+import type { NodeGroup } from '../../types/api';
 
 // Scope-picker data. The load-bearing property is what this hook does NOT do: it loads groups
 // (cheap, bounded) and deliberately never full-loads the node inventory — Node mode goes through
@@ -13,7 +13,7 @@ const listNodeGroups = vi.fn();
 const listNodes = vi.fn();
 const searchNodes = vi.fn();
 
-vi.mock('../services/api', () => ({
+vi.mock('../../services/api', () => ({
   api: {
     listNodeGroups: () => listNodeGroups(),
     listNodes: () => listNodes(),

@@ -438,16 +438,12 @@ export function isSelfOrDescendant(
   return true;
 }
 
-/** Whether a filter-mode result set hit the server's cap, so matches are missing from the list.
- *
- *  Filter mode asks the server for one page of matches. A fleet with more matches than the cap
- *  gets a silently short list: the group-truncation notice does not cover this path, because that
- *  one reports per-group member caps while filtering bypasses groups entirely. Without this the
- *  operator reads "these are the switches" when it is "these are the first N switches". */
-export function filterResultsTruncated(
-  filtering: boolean,
-  resultCount: number,
-  cap: number,
-): boolean {
-  return filtering && resultCount >= cap;
-}
+// `filterResultsTruncated(filtering, count, cap)` lived here and is gone. It inferred "matches are
+// missing" from a full page, which held while the only filter was a text search the SQL served
+// whole. It stopped holding when the tree gained state / kind / pool: the server rejects those
+// candidates *after* the query, so a short page and a complete answer are no longer the same
+// thing — a scan of 5,000 rows that keeps 3 returns three rows and is still incomplete, and the
+// inference would have called that complete precisely when it was least so.
+//
+// `NodePage.truncated` is the server's own answer now. Deleted rather than left for the text-only
+// case: a helper that is right for one caller and quietly wrong for the next is worse than none.

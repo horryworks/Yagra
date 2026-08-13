@@ -252,7 +252,7 @@
     "entry_one": "entry",
     "entry_other": "entries",
     "export": "Export",
-    "exportHint": "Exports the rows loaded so far — scroll to load more before exporting.",
+    "exportHint": "Exports every entry matching the current filter, newest first (up to 50,000).",
     "empty": {
       "none": "No audit entries yet",
       "filtered": "No matching entries — adjust the filters or time range."

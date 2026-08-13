@@ -4,7 +4,6 @@ import {
   asGroupType,
   buildNodeTree,
   descendantNodes,
-  filterResultsTruncated,
   filterTerm,
   flattenTree,
   flatRowKey,
@@ -500,19 +499,3 @@ describe('subtreeGroupIds', () => {
   });
 });
 
-describe('filterResultsTruncated', () => {
-  it('is false while browsing, whatever the count', () => {
-    // Browsing pages through groups; the cap belongs to filter mode only.
-    expect(filterResultsTruncated(false, 500, 500)).toBe(false);
-  });
-
-  it('is true only when a filter came back with a full page', () => {
-    expect(filterResultsTruncated(true, 499, 500)).toBe(false);
-    expect(filterResultsTruncated(true, 500, 500)).toBe(true);
-  });
-
-  it('reports truncation when the server returns more than the cap', () => {
-    // Defensive: the client cap and the server cap are two numbers and could drift.
-    expect(filterResultsTruncated(true, 501, 500)).toBe(true);
-  });
-});

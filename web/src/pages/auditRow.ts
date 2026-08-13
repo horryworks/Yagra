@@ -34,10 +34,11 @@ export function parseAction(action: string): ParsedAction {
   return { method: action.slice(0, sp), path: action.slice(sp + 1), login: false };
 }
 
-/** Re-exported so `AuditPage` keeps one import for its row helpers.
- *
- *  The implementation moved to `lib/csv` once the Troubleshoot export turned out to hold a
- *  byte-identical copy — and neither copy neutralized a leading `=`, so a username submitted to a
- *  failed login could be planted as `=HYPERLINK(…)` and evaluated when an admin opened the export.
- *  Do not re-inline it here: that is the shape the bug had. */
-export { csvField } from '../lib/csv';
+// `csvField` was re-exported here for `AuditPage`, and is not any more: the audit export moved to
+// the server (`GET /api/v1/audit/export.csv`), so this page encodes no CSV at all. The encoder
+// still lives in `lib/csv` for the Troubleshoot report export, and the history behind it is worth
+// keeping: there were once two byte-identical copies and neither neutralized a leading `=`, so a
+// username submitted to a *failed* login could be planted as `=HYPERLINK(…)` and evaluated when an
+// admin opened the export. The Rust side had a third copy with the same hole
+// (`crates/yagra-core/src/csv.rs` is now the one, mirrored against `lib/csv.ts` by a test).
+// Do not re-inline an encoder here — that is the shape the bug had, three times.

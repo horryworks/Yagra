@@ -36,6 +36,45 @@
   justify-content: flex-end;
 }
 
+/* A sortable header is a real <button>, so it needs the chrome stripped back to the header's own
+   look — otherwise it inherits the platform button and the row stops reading as a header row. */
+.dt-h-sort {
+  gap: 5px;
+  background: none;
+  border: none;
+  height: 100%;
+  font-family: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.dt-h-sort:hover {
+  color: var(--text-secondary);
+}
+
+.dt-h-sort:focus-visible {
+  /* Focus is a border-color change everywhere else (ui-conventions), but this control has no
+     border to change; an inset ring keeps it visible without shifting the 38px header height. */
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+.dt-h-sort.active {
+  color: var(--accent-color);
+}
+
+/* The inactive arrow stays in the layout rather than appearing on hover: a header that grows a
+   glyph when the pointer touches it shifts its own label, and the affordance is then invisible to
+   anyone driving the table from the keyboard. */
+.dt-h-arrow {
+  font-size: 0.85em;
+  opacity: 0.45;
+}
+
+.dt-h-sort.active .dt-h-arrow {
+  opacity: 1;
+}
+
 .dt-scroll {
   position: relative;
 }

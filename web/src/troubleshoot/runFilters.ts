@@ -12,11 +12,17 @@
 // In a `.ts` because Vitest never executes a `.tsx` (testing.md).
 
 import { isFiltered as isFilteredAgainst, textMatch } from '../lib/filterQuery';
-import type { AnalysisJob, AnalysisToolKey } from '../types/api';
+import { ANALYSIS_JOB_STATES, type AnalysisJob, type AnalysisJobState, type AnalysisToolKey } from '../types/api';
 
-/** Every state a run can be in, as the API validates them. Matches `JOB_STATES` in
- *  `api/analysis.rs`; the column is a bare string on both sides, so this list is the vocabulary. */
-export const RUN_STATES = ['queued', 'running', 'done', 'failed', 'cancelled'] as const;
+/** The states an operator may pick — every one the writers produce, i.e. everything but `unknown`.
+ *
+ *  A deliberate **subset** of `ANALYSIS_JOB_STATES`, derived from it rather than written out, so a
+ *  new state cannot ship missing from the dropdown (the `monitorKinds.ts` pattern). `unknown` is
+ *  excluded because nothing writes it — it is what a token this build cannot read degrades to, and
+ *  the API refuses it as a filter for the same reason. */
+export const RUN_STATES = ANALYSIS_JOB_STATES.filter(
+  (s): s is Exclude<AnalysisJobState, 'unknown'> => s !== 'unknown',
+);
 export type RunState = (typeof RUN_STATES)[number];
 
 export interface RunFilters {

@@ -82,7 +82,7 @@ export function isNeighborFiltered(f: NeighborFilters): boolean {
 // ────────────────────────────────────────────────────────────────── collection
 
 export interface MetricFilters {
-  /** Hide the metrics that are configured but not arriving. */
+  /** Hide the metrics that are not arriving. */
   flowingOnly: boolean;
   /** Free text over the metric name. */
   q: string;
@@ -90,13 +90,27 @@ export interface MetricFilters {
 
 export const DEFAULT_METRIC_FILTERS: MetricFilters = { flowingOnly: false, q: '' };
 
+/** Whether a metric has samples in the inventory window.
+ *
+ *  ⚠️ **`ok` alone is the wrong answer, and it is the obvious one.** `MetricStatus` crosses two
+ *  facts, not one: `ok` = configured **and** arriving, `no_data` = configured and **not** arriving,
+ *  `unconfigured` = **not** configured and arriving. So the metrics that come from no collection
+ *  set at all — ICMP reachability, `http_up`, `dns_up`, the neighbour count, values extracted from
+ *  a monitored JSON response — are `unconfigured` while flowing perfectly.
+ *
+ *  Reading "flowing" as `status === 'ok'` therefore hides exactly the live metrics on the kinds of
+ *  node that have nothing else: a URL or DNS monitor has no collection set, so the toggle would
+ *  empty the tab it is meant to narrow. */
+export function metricIsFlowing(m: NodeMetricEntry): boolean {
+  return m.status === 'ok' || m.status === 'unconfigured';
+}
+
 /** Whether one collected metric survives the filter.
  *
- *  "Flowing" is `status === 'ok'` — the store's own answer, which is what the status column shows,
- *  rather than a second opinion derived from whether a last value happens to be present. A metric
- *  that stopped arriving an hour ago still has one. */
+ *  The judgement is the store's own status, rather than a second opinion derived from whether a
+ *  last value happens to be present: a metric that stopped arriving an hour ago still has one. */
 export function matchesMetric(m: NodeMetricEntry, f: MetricFilters): boolean {
-  if (f.flowingOnly && m.status !== 'ok') return false;
+  if (f.flowingOnly && !metricIsFlowing(m)) return false;
   return textMatch(f.q, m.metric);
 }
 

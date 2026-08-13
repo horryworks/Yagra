@@ -641,7 +641,7 @@
           {
             "name": "state",
             "in": "query",
-            "description": "Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`.",
+            "description": "Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`.\nNote `done`, not `succeeded` — that is the report-run vocabulary, not this one.",
             "required": false,
             "schema": {
               "type": "string"
@@ -1528,6 +1528,111 @@
           },
           "400": {
             "description": "A cursor or range bound is not RFC 3339, or `action`/`status` is not one of the listed values",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the view-audit permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode keeps no audit log",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/audit/export.csv": {
+      "get": {
+        "tags": [
+          "audit"
+        ],
+        "summary": "The audit log as CSV, narrowed by the same filters as the list.",
+        "description": "**This is the endpoint that makes Export mean what it says.** The button used to write out the\nrows the browser had scrolled to, which is a different set from \"everything matching\" — in a log\nwhose purpose is completeness, that is a correctness problem rather than a missing feature. The\nlist endpoint's filters moved into SQL first; this closes the other half.\n\n`before` is deliberately **not** accepted: a cursor is where a page starts, and an export is not\npaged. Accepting it would let a caller export \"the second page\" and believe it was the answer.\n\nThe response is a download rather than JSON, so a failure has nowhere useful to render — which\nis why the filter is validated the same way the list validates it, before anything is fetched.",
+        "operationId": "export_audit",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only entries at or after this RFC 3339 timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "until",
+            "in": "query",
+            "description": "Only entries at or before this RFC 3339 timestamp.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "description": "Free text matched against the username and the action (case-insensitive substring).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "in": "query",
+            "description": "Only entries of this kind.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditAction"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Only entries whose response fell in this class.",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/AuditStatusClass"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every matching entry as CSV, newest first, capped",
+            "content": {
+              "text/csv": {}
+            }
+          },
+          "400": {
+            "description": "A range bound is not RFC 3339, or `action`/`status` is not one of the listed values",
             "content": {
               "application/json": {
                 "schema": {
@@ -9058,6 +9163,34 @@
           {
             "name": "search",
             "in": "query",
+            "description": "Case-insensitive substring of the node's name or address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only nodes whose live display state is this one (`ok` | `warning` | `critical` |\n`unknown` | `unreachable` | `maintenance`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeState"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeKind"
+            }
+          },
+          {
+            "name": "pool",
+            "in": "query",
+            "description": "Only nodes whose **effective** poll pool is this one — the node's own pool when it sets\none, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering\non the stored column alone would miss every node that inherits, which is most of them.",
             "required": false,
             "schema": {
               "type": "string"
@@ -14162,7 +14295,8 @@
         "tags": [
           "reports"
         ],
-        "summary": "Saved runs, newest first. Empty in skeleton mode.",
+        "summary": "Saved runs, newest first, optionally narrowed. Empty in skeleton mode.",
+        "description": "Skeleton mode has no report store, so this answers an empty list rather than a 503 — the runs\nlist is one tab of a page that otherwise works. **The filter is validated before that early\nreturn**, so a malformed one is a 400 on every deployment rather than an empty `200` on some.",
         "operationId": "list_report_runs",
         "parameters": [
           {
@@ -14173,11 +14307,39 @@
               "type": "integer",
               "format": "int64"
             }
+          },
+          {
+            "name": "definition_id",
+            "in": "query",
+            "description": "Only runs generated from this report definition.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only runs in this state: `queued` | `running` | `succeeded` | `failed`.\nNote `succeeded`, not `done` — an *analysis* run uses the other word.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "description": "Only runs created at or after this instant (RFC 3339).",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Saved runs, newest first; empty in skeleton mode",
+            "description": "Matching runs, newest first; empty in skeleton mode",
             "content": {
               "application/json": {
                 "schema": {
@@ -14185,6 +14347,16 @@
                   "items": {
                     "$ref": "#/components/schemas/ReportRun"
                   }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The state is outside its vocabulary, or `since` is not RFC 3339",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -17215,6 +17387,34 @@
           {
             "name": "search",
             "in": "query",
+            "description": "Case-insensitive substring of the node's name or address.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "Only nodes whose live display state is this one (`ok` | `warning` | `critical` |\n`unknown` | `unreachable` | `maintenance`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeState"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "description": "Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`).",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/NodeKind"
+            }
+          },
+          {
+            "name": "pool",
+            "in": "query",
+            "description": "Only nodes whose **effective** poll pool is this one — the node's own pool when it sets\none, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering\non the stored column alone would miss every node that inherits, which is most of them.",
             "required": false,
             "schema": {
               "type": "string"
@@ -18875,7 +19075,7 @@
             "format": "int64"
           },
           "state": {
-            "type": "string"
+            "$ref": "#/components/schemas/AnalysisJobState"
           },
           "summary": {
             "type": [
@@ -18887,6 +19087,18 @@
             "type": "string"
           }
         }
+      },
+      "AnalysisJobState": {
+        "type": "string",
+        "description": "Where an analysis run is in its lifecycle.\n\nA bare `String` until v0.2.6, and the cost of that was paid twice. The vocabulary had to be\nwritten out by hand at the API edge to validate the runs filter, and again in the WebUI to fill\nits dropdown — two lists nothing compared. Worse, `state: string` compares equal to *any*\nstring: the in-app \"your analysis finished\" notice tested `state === 'succeeded'`, which is the\n**report-run** vocabulary, so every successful analysis announced itself as a failure. Typing it\nmakes that comparison a compile error on both sides.",
+        "enum": [
+          "queued",
+          "running",
+          "done",
+          "failed",
+          "cancelled",
+          "unknown"
+        ]
       },
       "AnalysisSchedule": {
         "type": "object",
@@ -25999,7 +26211,8 @@
         "type": "object",
         "description": "One keyset page of the inventory.",
         "required": [
-          "nodes"
+          "nodes",
+          "truncated"
         ],
         "properties": {
           "next_cursor": {
@@ -26007,13 +26220,17 @@
               "string",
               "null"
             ],
-            "description": "Pass back as `cursor` for the next page; `null` ⇒ this was the last one. Always `null` in\nsearch mode, which returns a single capped page by design."
+            "description": "Pass back as `cursor` for the next page; `null` ⇒ this was the last one. Always `null` in\nfilter mode, which returns a single capped page by design."
           },
           "nodes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/NodeSummary"
             }
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "Filter mode only: matches exist that this answer does not contain, because the page hit its\ncap or the candidate scan hit its ceiling. Always `false` while paging.\n\nA separate field rather than something the client infers from `nodes.len()`, because once\nthe server rejects candidates after the query those two stop meaning the same thing: a\nfilter that scans 5,000 rows and keeps 3 returns three rows and is still incomplete."
           }
         }
       },

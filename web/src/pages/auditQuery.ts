@@ -70,6 +70,31 @@ export function queryFor(f: AuditFilters, before: string | null, nowMs: number):
 }
 
 /**
+ * The download URL for the CSV of everything matching `f`.
+ *
+ * Deliberately **not** `queryFor` with a bigger limit: the export endpoint takes no cursor and no
+ * limit, because "the second page of an export" is not a thing an operator can act on. What it
+ * shares with the list is the *filter*, so the two answer questions about the same set — the point
+ * of the whole change, since the button used to write out whatever had been scrolled to.
+ *
+ * A URL rather than a fetch: the browser's own download handles the file, so a large export never
+ * passes through JavaScript memory. The session cookie rides along; a token-authenticated client
+ * calls the endpoint itself.
+ */
+export function exportUrl(f: AuditFilters, nowMs: number): string {
+  const params = new URLSearchParams();
+  const add = (k: string, v: string | undefined) => {
+    if (v) params.set(k, v);
+  };
+  add('q', unset(f.q));
+  add('action', unset(f.action));
+  add('status', unset(f.status));
+  add('since', sinceIso(RANGE_SECS[f.range], nowMs));
+  const qs = params.toString();
+  return qs ? `/api/v1/audit/export.csv?${qs}` : '/api/v1/audit/export.csv';
+}
+
+/**
  * The cursor for the page after `rows`, or `null` when there is no next page.
  *
  * A short page means the filtered query ran out of matches, not that the log did — which is exactly

@@ -26,7 +26,9 @@
 use super::extract::{Admin, RequireAckAlerts, RequireView, Scoped};
 use super::scope::ScopeTarget;
 use super::{ApiError, ApiResult, ApiState};
-use crate::analysis::{AnalysisJob, AnalysisTool, CreateError, JobParams, ScopeKind};
+use crate::analysis::{
+    AnalysisJob, AnalysisJobState, AnalysisTool, CreateError, JobParams, ScopeKind,
+};
 use axum::{
     extract::{Path, Query, State},
     // Imported rather than written out at each use: the guard that compares a documented
@@ -232,7 +234,7 @@ pub(crate) async fn report(
             )
         })?
         .ok_or_else(|| ApiError::not_found("job_not_found", format!("no analysis job {job_id}")))?;
-    let findings = if job.state == "done" {
+    let findings = if job.state == AnalysisJobState::Done {
         admin.analysis.findings(job_id).await.map_err(|e| {
             ApiError::from_internal(
                 e.as_ref(),
@@ -323,12 +325,6 @@ pub(crate) fn visible_findings(
 
 /// Every state an analysis run can be in, as the column stores them.
 ///
-/// Written out here rather than derived because the state is a bare `String` on `AnalysisJob` —
-/// the writers set it with `UPDATE … SET state = 'done'` and nothing types it. Validating the
-/// filter against this list is what keeps a typo from being dropped and silently widening the
-/// answer to every run.
-const JOB_STATES: [&str; 5] = ["queued", "running", "done", "failed", "cancelled"];
-
 /// `?limit=` plus the filters, all optional.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
@@ -337,6 +333,7 @@ pub(super) struct JobsQuery {
     /// Only runs of this analysis (e.g. `anomaly`).
     tool: Option<String>,
     /// Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`.
+    /// Note `done`, not `succeeded` — that is the report-run vocabulary, not this one.
     state: Option<String>,
     /// Only runs started at or after this instant (RFC 3339).
     since: Option<String>,
@@ -383,20 +380,15 @@ async fn list_analysis_jobs(
         None => None,
     };
     let state = match q.state.as_deref() {
-        Some(s) => Some(
-            *JOB_STATES
-                .iter()
-                .find(|known| **known == s)
-                .ok_or_else(|| {
-                    ApiError::bad_request(
-                        "invalid_state",
-                        format!(
-                            "unknown run state; must be one of: {}",
-                            JOB_STATES.join(", ")
-                        ),
-                    )
-                })?,
-        ),
+        Some(s) => Some(AnalysisJobState::from_filter_token(s).ok_or_else(|| {
+            ApiError::bad_request(
+                "invalid_state",
+                format!(
+                    "unknown run state; must be one of: {}",
+                    AnalysisJobState::filter_token_list()
+                ),
+            )
+        })?),
         None => None,
     };
     let since = match q.since.as_deref() {

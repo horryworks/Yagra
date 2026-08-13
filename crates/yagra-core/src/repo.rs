@@ -161,6 +161,26 @@ const DEMO_NODE_ID: Uuid = Uuid::nil();
 /// fact in two places drifts, and the copy that is wrong is the one nobody reads).
 pub const NODE_SEARCH_MAX: i64 = 500;
 
+/// Ceiling on one *candidate scan* — the rows filter mode examines before answering.
+///
+/// Larger than [`NODE_SEARCH_MAX`] and not a contradiction of it: that one is how many rows a
+/// single **answer** may contain, this one is how many the server may **look at** to build it.
+/// They were one number while looking at a row and returning it were the same act; the Nodes
+/// tree's state / kind / pool filters separated the two, because none of the three can be a `WHERE`
+/// clause (see `api::nodes`) and each therefore rejects candidates after the query.
+///
+/// The invariant that matters is the direction: the scan ceiling must be **at or above** the page
+/// ceiling. The bug this file's other constant was written for was the inverse — the edge promised
+/// 500 while the SQL quietly cut to 100 — so a repo that returns *fewer* rows than its caller
+/// documented is the failure, and a repo that returns more is simply clamped again upstream.
+pub const NODE_SCAN_MAX: i64 = 5_000;
+
+/// The direction is the whole point, and it is checked at **compile** time rather than in a test —
+/// the values are constants, so a runtime assertion could only ever be a slower way of finding out.
+/// A repo ceiling *below* what a caller documented is the original bug; above it is harmless,
+/// because every caller clamps again to its own page.
+const _: () = assert!(NODE_SEARCH_MAX <= NODE_SCAN_MAX);
+
 /// The folder groups a query is restricted to, or `None` for no restriction at all (ADR-014).
 ///
 /// This is deliberately a **group** filter and not a node-id list: expanding a scope to node ids
@@ -256,7 +276,7 @@ impl NodeListing for NodeRepo {
         term: &str,
         limit: i64,
     ) -> anyhow::Result<Vec<Node>> {
-        let limit = limit.clamp(1, NODE_SEARCH_MAX);
+        let limit = limit.clamp(1, NODE_SCAN_MAX);
         // Parameterized ILIKE (security.md — never string-format user input into SQL); the `%`
         // wildcards are concatenated in SQL so the term itself is a bound value. `host(address)`
         // strips the netmask so an IP-substring search matches the displayed address.
@@ -378,7 +398,7 @@ impl NodeListing for StaticNodeList {
                 .cmp(&b.name)
                 .then(a.id.as_uuid().cmp(&b.id.as_uuid()))
         });
-        nodes.truncate(limit.clamp(1, NODE_SEARCH_MAX) as usize);
+        nodes.truncate(limit.clamp(1, NODE_SCAN_MAX) as usize);
         Ok(nodes)
     }
 }
@@ -2022,7 +2042,7 @@ mod tests {
             !src.contains(&stale),
             "a search path re-clamps to its own literal instead of the shared constant"
         );
-        let shared = format!("clamp(1, {})", "NODE_SEARCH_MAX");
+        let shared = format!("clamp(1, {})", "NODE_SCAN_MAX");
         // Both implementations clamp, and both clamp against the constant.
         assert_eq!(src.matches(&shared).count(), 2);
     }
@@ -2188,8 +2208,13 @@ mod tests {
             .map(|i| node(u128::from(i) + 1, &format!("sw-{i:04}"), "10.0.0.1", None))
             .collect();
         let list = StaticNodeList(nodes);
-        // Asking for more than the cap yields exactly the cap, not some smaller inner limit.
-        let hits = list.search(None, "sw-", NODE_SEARCH_MAX * 2).await.unwrap();
-        assert_eq!(hits.len() as i64, NODE_SEARCH_MAX);
+        // A caller asking for one page gets one page — the repo does not quietly cut it shorter,
+        // which was the original defect.
+        let page = list.search(None, "sw-", NODE_SEARCH_MAX).await.unwrap();
+        assert_eq!(page.len() as i64, NODE_SEARCH_MAX);
+        // Asking for more than the scan ceiling yields exactly the ceiling, not some smaller
+        // inner limit.
+        let hits = list.search(None, "sw-", NODE_SCAN_MAX * 2).await.unwrap();
+        assert_eq!(hits.len(), 600, "fewer nodes exist than the ceiling allows");
     }
 }

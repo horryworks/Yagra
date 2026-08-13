@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
+import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
@@ -178,10 +179,12 @@ export function MibRepositoryPage() {
       .finally(() => setLoading(false));
   }, []);
 
+  // The term settles, then one load runs for it. (No stale-response guard here, deliberately: the
+  // catalog is a single admin-scoped list and the last write wins either way.)
+  const settledQuery = useDebouncedValue(query);
   useEffect(() => {
-    const timer = setTimeout(() => load(query), 200);
-    return () => clearTimeout(timer);
-  }, [load, query]);
+    load(settledQuery);
+  }, [load, settledQuery]);
 
   return (
     <div>

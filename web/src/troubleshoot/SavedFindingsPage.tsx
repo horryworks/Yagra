@@ -28,8 +28,8 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
-import { ScopePicker } from './ScopePicker';
-import { allScope, type ScopeValue } from './scope';
+import { ScopePicker } from '../components/ScopePicker/ScopePicker';
+import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
 import { TOOLS, reportPathFor, toolById } from './data';
 import { sevOf } from './report/format';
 import {

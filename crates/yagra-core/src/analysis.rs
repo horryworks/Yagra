@@ -296,6 +296,68 @@ impl JobParams {
 
 // ── Persisted shapes ────────────────────────────────────────────────────────────────
 
+/// Where an analysis run is in its lifecycle.
+///
+/// A bare `String` until v0.2.6, and the cost of that was paid twice. The vocabulary had to be
+/// written out by hand at the API edge to validate the runs filter, and again in the WebUI to fill
+/// its dropdown — two lists nothing compared. Worse, `state: string` compares equal to *any*
+/// string: the in-app "your analysis finished" notice tested `state === 'succeeded'`, which is the
+/// **report-run** vocabulary, so every successful analysis announced itself as a failure. Typing it
+/// makes that comparison a compile error on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AnalysisJobState {
+    /// Accepted and waiting on admission control. Not written by any statement today — a run is
+    /// inserted `running` — but it is a state the column may hold and an operator may filter for.
+    Queued,
+    /// In flight. The only state `set_progress` / `mark_cancelled` will act on.
+    Running,
+    /// Finished and produced its findings. Note the token: **`done`**, not `succeeded`.
+    Done,
+    /// Finished with a reason it could not.
+    Failed,
+    /// Stopped by an operator, or by a core restart tripping its cancel flag.
+    Cancelled,
+    /// A state this build does not know — a newer core wrote it.
+    Unknown,
+}
+
+crate::stored_enum::token_enum!(AnalysisJobState, Unknown, "analysis_jobs.state", [
+    Queued => "queued",
+    Running => "running",
+    Done => "done",
+    Failed => "failed",
+    Cancelled => "cancelled",
+    Unknown => "unknown",
+]);
+
+impl AnalysisJobState {
+    /// Whether the run has stopped moving — nothing will change this row again.
+    ///
+    /// [`Self::Unknown`] counts as terminal on purpose. Anything waiting on a run polls until this
+    /// says yes, and a state this build cannot read is one it will never learn to read, so calling
+    /// it "still running" is an infinite wait.
+    #[must_use]
+    pub const fn is_terminal(self) -> bool {
+        match self {
+            Self::Queued | Self::Running => false,
+            Self::Done | Self::Failed | Self::Cancelled | Self::Unknown => true,
+        }
+    }
+
+    /// Parse a filter token, refusing anything outside the writable vocabulary.
+    #[must_use]
+    pub fn from_filter_token(s: &str) -> Option<Self> {
+        crate::stored_enum::parse_filter_token(Self::ALL, Self::Unknown, Self::as_str, s)
+    }
+
+    /// The filterable tokens, for the 400 that names them. Mirrors `AnalysisTool::token_list`.
+    #[must_use]
+    pub fn filter_token_list() -> String {
+        crate::stored_enum::filter_token_list(Self::ALL, Self::Unknown, Self::as_str)
+    }
+}
+
 /// A job row, as served to the API / SSE. Timestamps are epoch-millis so the WebUI formats
 /// relative times without a date dependency.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -306,7 +368,7 @@ pub struct AnalysisJob {
     pub scope_id: Option<Uuid>,
     pub scope_label: String,
     pub params: serde_json::Value,
-    pub state: String,
+    pub state: AnalysisJobState,
     pub pct: i32,
     pub phase: Option<String>,
     pub finding_count: i32,
@@ -528,8 +590,9 @@ fn now_s() -> i64 {
 pub struct JobFilter<'a> {
     /// Only runs of this tool. Validated against [`AnalysisTool`] at the API edge.
     pub tool: Option<&'a str>,
-    /// Only runs in this state (`queued` | `running` | `done` | `failed` | `cancelled`).
-    pub state: Option<&'a str>,
+    /// Only runs in this state. Typed, so the vocabulary the filter accepts is the vocabulary the
+    /// writers produce — there is no second list to keep in step.
+    pub state: Option<AnalysisJobState>,
     /// Only runs started at or after this instant.
     pub since: Option<DateTime<Utc>>,
 }
@@ -623,7 +686,7 @@ fn job_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<AnalysisJob> {
         scope_id: row.try_get("scope_id")?,
         scope_label: row.try_get("scope_label")?,
         params: row.try_get("params")?,
-        state: row.try_get("state")?,
+        state: AnalysisJobState::from_stored(row.try_get::<String, _>("state")?.as_str()),
         pct: row.try_get("pct")?,
         phase: row.try_get("phase")?,
         finding_count: row.try_get("finding_count")?,
@@ -657,8 +720,9 @@ impl AnalysisRepo {
             "INSERT INTO analysis_jobs \
              (id, tool, scope_kind, scope_id, scope_label, params, state, pct, phase, \
               finding_count, created_by, started_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, 'running', 0, $7, 0, $8, now()) \
-             RETURNING {JOB_COLS}"
+             VALUES ($1, $2, $3, $4, $5, $6, '{}', 0, $7, 0, $8, now()) \
+             RETURNING {JOB_COLS}",
+            AnalysisJobState::Running.as_str()
         ))
         .bind(id)
         .bind(params.tool.as_str())
@@ -675,9 +739,10 @@ impl AnalysisRepo {
 
     /// Update progress (percent + phase caption) of a running job.
     pub async fn set_progress(&self, id: Uuid, pct: i32, phase: &str) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE analysis_jobs SET pct = $2, phase = $3 WHERE id = $1 AND state = 'running'",
-        )
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET pct = $2, phase = $3 WHERE id = $1 AND state = '{}'",
+            AnalysisJobState::Running.as_str()
+        ))
         .bind(id)
         .bind(pct.clamp(0, 100))
         .bind(phase)
@@ -688,10 +753,11 @@ impl AnalysisRepo {
 
     /// Mark a job done with its result summary (findings inserted separately).
     pub async fn finish(&self, id: Uuid, finding_count: i32, summary: &str) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE analysis_jobs SET state = 'done', pct = 100, phase = NULL, \
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', pct = 100, phase = NULL, \
              finding_count = $2, summary = $3, finished_at = now() WHERE id = $1",
-        )
+            AnalysisJobState::Done.as_str()
+        ))
         .bind(id)
         .bind(finding_count)
         .bind(summary)
@@ -702,10 +768,11 @@ impl AnalysisRepo {
 
     /// Mark a job failed with a reason.
     pub async fn fail(&self, id: Uuid, error: &str) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE analysis_jobs SET state = 'failed', phase = NULL, error = $2, \
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', phase = NULL, error = $2, \
              finished_at = now() WHERE id = $1",
-        )
+            AnalysisJobState::Failed.as_str()
+        ))
         .bind(id)
         .bind(error)
         .execute(&self.pool)
@@ -715,10 +782,12 @@ impl AnalysisRepo {
 
     /// Mark a job cancelled (set by the runner when its cancel flag was tripped).
     pub async fn mark_cancelled(&self, id: Uuid) -> anyhow::Result<()> {
-        sqlx::query(
-            "UPDATE analysis_jobs SET state = 'cancelled', phase = NULL, finished_at = now() \
-             WHERE id = $1 AND state = 'running'",
-        )
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', phase = NULL, finished_at = now() \
+             WHERE id = $1 AND state = '{}'",
+            AnalysisJobState::Cancelled.as_str(),
+            AnalysisJobState::Running.as_str()
+        ))
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -777,7 +846,7 @@ impl AnalysisRepo {
              ORDER BY created_at DESC LIMIT $4"
         ))
         .bind(filter.tool.map(str::to_owned))
-        .bind(filter.state.map(str::to_owned))
+        .bind(filter.state.map(|s| s.as_str().to_owned()))
         .bind(filter.since)
         .bind(limit)
         .fetch_all(&self.pool)
@@ -1006,10 +1075,12 @@ impl AnalysisRepo {
 
     /// On startup, fail any job left `running` by a previous core process (it can't resume).
     pub async fn fail_orphans(&self) -> anyhow::Result<u64> {
-        let res = sqlx::query(
-            "UPDATE analysis_jobs SET state = 'failed', phase = NULL, \
-             error = 'core restarted while running', finished_at = now() WHERE state = 'running'",
-        )
+        let res = sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', phase = NULL, \
+             error = 'core restarted while running', finished_at = now() WHERE state = '{}'",
+            AnalysisJobState::Failed.as_str(),
+            AnalysisJobState::Running.as_str()
+        ))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected())
@@ -3944,6 +4015,75 @@ mod tests {
             AnalysisScheduleStatus::from_stored("throttled"),
             AnalysisScheduleStatus::Unknown
         );
+    }
+
+    #[test]
+    fn token_and_serde_agree_for_every_job_state() {
+        for s in AnalysisJobState::ALL.iter().copied() {
+            let json = serde_json::to_string(&s).expect("state serializes");
+            assert_eq!(json, format!("\"{}\"", s.as_str()));
+            assert_eq!(AnalysisJobState::from_stored(s.as_str()), s);
+            // Deserialize too: unlike the schedule status, this one is read back off the wire —
+            // the MCP DTO carries it and the filter parses it.
+            let back: AnalysisJobState = serde_json::from_str(&json).expect("state parses");
+            assert_eq!(back, s);
+        }
+        // The vocabulary a *report* run uses. Feeding it here has to fail, because the two lists
+        // looking interchangeable is what put `succeeded` in the analysis path in the first place.
+        assert_eq!(
+            AnalysisJobState::from_stored("succeeded"),
+            AnalysisJobState::Unknown
+        );
+        assert_eq!(AnalysisJobState::from_filter_token("succeeded"), None);
+    }
+
+    #[test]
+    fn the_filter_vocabulary_is_everything_the_writers_can_produce_and_nothing_else() {
+        // `Unknown` is the one variant nothing writes, so offering it as a filter would hand the
+        // operator a confident empty answer.
+        assert_eq!(AnalysisJobState::from_filter_token("unknown"), None);
+        let listed = AnalysisJobState::filter_token_list();
+        for s in AnalysisJobState::ALL.iter().copied() {
+            let filterable = s != AnalysisJobState::Unknown;
+            assert_eq!(
+                AnalysisJobState::from_filter_token(s.as_str()).is_some(),
+                filterable
+            );
+            assert_eq!(
+                listed.split(", ").any(|t| t == s.as_str()),
+                filterable,
+                "{s:?} is listed in the 400 iff it is filterable"
+            );
+        }
+    }
+
+    #[test]
+    fn the_job_state_sql_is_built_from_the_enum() {
+        // `analysis_jobs.state` is written by statement literals, not by a bind, so without this
+        // the enum would be the source only for the *reader* and a writer could drift away from it
+        // silently. Needles are built at runtime: this test reads its own file, so a literal one
+        // would match itself and pass forever.
+        let src = include_str!("analysis.rs");
+        // Executable code above the tests, comments stripped — the doc comment on
+        // `is_filterable` names `state = 'unknown'` as the thing it refuses, and prose about a
+        // literal must not read as the literal.
+        let production = src
+            .split_once("#[cfg(test)]")
+            .map_or(src, |(before, _)| before)
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        for state in AnalysisJobState::ALL.iter().copied() {
+            let bad = format!("'{}'", state.as_str());
+            assert!(
+                !production.contains(&bad),
+                "{bad} is hardcoded in SQL again; interpolate AnalysisJobState::…as_str() instead"
+            );
+        }
+        assert!(production.contains("AnalysisJobState::Running.as_str()"));
+        assert!(production.contains("AnalysisJobState::Done.as_str()"));
+        assert!(production.contains("AnalysisJobState::Cancelled.as_str()"));
     }
 
     #[test]

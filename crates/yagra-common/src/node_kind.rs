@@ -49,6 +49,38 @@ pub struct NodeRows {
 }
 
 impl NodeKind {
+    /// Every kind, in precedence order — the same order [`Self::resolve`] applies.
+    ///
+    /// For anything that must present all of them: a filter's vocabulary, a per-kind tally. A kind
+    /// missing here drops out of those silently, so the test below pins it against the tokens.
+    pub const ALL: [NodeKind; 4] = [
+        NodeKind::Meraki,
+        NodeKind::Url,
+        NodeKind::Dns,
+        NodeKind::Device,
+    ];
+
+    /// The serialized token — the same string `#[serde(rename_all = "snake_case")]` produces.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Meraki => "meraki",
+            Self::Url => "url",
+            Self::Dns => "dns",
+            Self::Device => "device",
+        }
+    }
+
+    /// The inverse of [`Self::as_str`]: an exact token, or `None`.
+    ///
+    /// Deliberately not lenient. Unlike a *stored* token, this parses what a caller **asked for**,
+    /// and quietly widening an unrecognised filter to "every kind" would answer a different
+    /// question than the one asked.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.as_str() == s)
+    }
+
     /// **The** precedence: decide a node's kind from the rows it carries.
     ///
     /// This is the only place the order lives. Every surface that answers "what is this node"
@@ -134,6 +166,36 @@ mod tests {
         assert!(!NodeKind::Meraki.is_polled_per_node());
         for kind in [NodeKind::Url, NodeKind::Dns, NodeKind::Device] {
             assert!(kind.is_polled_per_node(), "{kind:?} should produce jobs");
+        }
+    }
+
+    #[test]
+    fn all_lists_every_kind_once_and_agrees_with_the_tokens() {
+        // `as_str` is exhaustive, so a new variant is forced to get a token — but nothing forces
+        // it into `ALL`, and a kind missing from `ALL` silently drops out of the inventory filter's
+        // vocabulary. Pinning the two together fails either way round.
+        let expected = ["meraki", "url", "dns", "device"];
+        assert_eq!(NodeKind::ALL.len(), expected.len());
+        let tokens: Vec<&str> = NodeKind::ALL.iter().map(|k| k.as_str()).collect();
+        assert_eq!(tokens, expected, "ALL is precedence order");
+        for k in NodeKind::ALL {
+            assert_eq!(NodeKind::from_token(k.as_str()), Some(k));
+        }
+        // Not lenient: a filter naming something else is refused, never widened.
+        assert_eq!(NodeKind::from_token("switch"), None);
+        assert_eq!(NodeKind::from_token("URL"), None);
+    }
+
+    #[test]
+    fn the_token_and_the_serde_tag_are_the_same_string() {
+        // Two mechanisms produce this one value — `as_str` and `#[serde(rename_all)]` — and
+        // nothing else makes them agree. The REST query parses with serde and the MCP tool parses
+        // with `from_token`, so a disagreement is one surface accepting what the other refuses.
+        for k in NodeKind::ALL {
+            assert_eq!(
+                serde_json::to_string(&k).unwrap(),
+                format!("\"{}\"", k.as_str())
+            );
         }
     }
 

@@ -13,7 +13,7 @@ import type {
 } from '../types/api';
 import { TOOLS } from './data';
 import { sigmaFor } from './report/format';
-import type { ScopeValue } from './scope';
+import type { ScopeValue } from '../components/ScopePicker/scope';
 
 /** Baseline lookback, matching the launch drawer's fixed value. */
 export const BASELINE_SECS = 14 * 86_400;

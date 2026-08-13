@@ -11,7 +11,7 @@ import type {
   SavedFinding,
   SavedFindingsQuery,
 } from '../types/api';
-import type { ScopeValue } from './scope';
+import type { ScopeValue } from '../components/ScopePicker/scope';
 
 /**
  * Rows per request. Matches the backend's default and stays under its 200 ceiling, so a page is

@@ -314,6 +314,17 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ),
         Tool("get_audit"),
     ),
+    (
+        "GET",
+        "/api/v1/audit/export.csv",
+        Global(
+            "admin-only, and audit rows carry no node attribution to filter on (ADR-014 non-goal)",
+        ),
+        // The same rows `get_audit` already answers, in a file format. An MCP client asking for
+        // CSV would be asking this surface to render a spreadsheet for it, which is what the tool
+        // result already is in a form a model can actually read.
+        Exempt("the CSV rendering of get_audit's answer; the data is reachable via that tool"),
+    ),
     ("POST", "/api/v1/auth/login", ACCOUNT, NO_MCP_WRITE),
     ("POST", "/api/v1/auth/logout", ACCOUNT, NO_MCP_WRITE),
     (

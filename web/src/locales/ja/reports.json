@@ -33,7 +33,21 @@
       "generated": "生成日時"
     },
     "view": "表示",
-    "empty": "生成されたレポートはまだありません。テンプレートを実行して作成してください。"
+    "empty": "生成されたレポートはまだありません。テンプレートを実行して作成してください。",
+    "state": {
+      "queued": "待機中",
+      "running": "実行中",
+      "succeeded": "成功",
+      "failed": "失敗"
+    },
+    "filter": {
+      "searchPlaceholder": "レポートを検索…",
+      "searchAria": "保存済みレポートを検索",
+      "allReports": "すべてのレポート",
+      "reportAria": "レポートで絞り込み",
+      "allStates": "すべての状態",
+      "stateAria": "状態で絞り込み"
+    }
   },
   "defs": {
     "cols": {

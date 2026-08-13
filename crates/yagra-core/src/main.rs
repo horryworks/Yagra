@@ -35,6 +35,7 @@ mod collection;
 mod config;
 mod config_bundle;
 mod config_gen;
+mod csv;
 mod dashboard;
 mod discovery;
 mod dns_check;

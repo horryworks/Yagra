@@ -65,6 +65,26 @@
   padding: 0 9px;
 }
 
+/* The state / kind / pool selects, on their own row under the pane head. Wrapping rather than
+   sharing the head's row: the pane is narrow by design (and narrower still on mobile), and three
+   selects beside the search box would squeeze it to nothing. */
+.nodes-pane-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 var(--space-3) var(--space-2);
+}
+
+.nodes-pane-filters .table-filter {
+  height: 26px;
+  font-size: var(--font-xs);
+  /* Each select takes an equal share of the row and may shrink; a long pool name must not push
+     the others off. `min-width: 0` because a flex item's default `min-width: auto` refuses to
+     shrink below its content. */
+  flex: 1 1 0;
+  min-width: 0;
+}
+
 /* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). */
 .nodes-split.inv-collapsed {
   grid-template-columns: 40px 1fr;

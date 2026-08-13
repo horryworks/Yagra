@@ -5,8 +5,8 @@
 // the dedicated /nodes/search endpoint now exists and NodePicker already uses it).
 
 import { useEffect, useState } from 'react';
-import { api } from '../services/api';
-import type { NodeGroup } from '../types/api';
+import { api } from '../../services/api';
+import type { NodeGroup } from '../../types/api';
 
 export interface ScopeData {
   groups: NodeGroup[];

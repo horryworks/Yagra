@@ -14,8 +14,9 @@ import type { NodeSearchResult } from '../../types/api';
  *  drop-down under the top bar, not a dedicated picker, and a long list here covers the page. */
 export const MAX_RESULTS = 20;
 
-/** Debounce so a fast typist fires one request rather than one per keystroke. Matches NodePicker. */
-export const SEARCH_DEBOUNCE_MS = 200;
+// The debounce constant lived here too and is gone: it is one number for every search box in the
+// product, and it now has one home (`lib/useDebouncedValue.ts`). `useNodeSearch` applies it, so no
+// picker names the delay at all any more.
 
 /** What a key press should do to the popover. Returning an action rather than mutating keeps the
  *  key handling describable in a test; the component maps each action onto its state. */

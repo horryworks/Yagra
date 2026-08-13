@@ -34,11 +34,12 @@ import {
 } from '../components/ui/TableToolbar';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
-import { csvField, parseAction } from './auditRow';
+import { parseAction } from './auditRow';
 import {
   appendPage,
   AUDIT_RANGES,
   DEFAULT_FILTERS,
+  exportUrl,
   isFiltered,
   nextCursor,
   queryFor,
@@ -146,22 +147,20 @@ export function AuditPage() {
       });
   }, [active, cursor, t]);
 
-  // The export is the loaded rows, and the button says so. Every one of them matches the filter
-  // now, which is a real improvement — but it is still "what has been scrolled through", not
-  // "everything matching". A server-side export would need a second CSV encoder in Rust, and a
-  // duplicated encoder is a duplicated security boundary: this log stores the username submitted to
-  // a *failed* sign-in, so the formula neutralization in `lib/csv` is load-bearing and must stay in
-  // one place. Backlogged rather than half-solved.
+  // The export is now everything matching the filter, not the rows that happen to be loaded — the
+  // server renders it (`GET /api/v1/audit/export.csv`) with the same filter this page is showing.
+  //
+  // The objection that kept it client-side was that a Rust CSV encoder would be a *second* one, and
+  // a duplicated encoder is a duplicated security boundary: this log stores the username submitted
+  // to a **failed** sign-in, so formula neutralization is load-bearing. That was the right concern
+  // and the wrong conclusion — the backend already had a CSV encoder (report exports) and it did
+  // **not** neutralize. There were two all along, and one was broken. `crates/yagra-core/src/csv.rs`
+  // is now the single one, mirrored against `lib/csv.ts` by a test.
+  //
+  // Navigating rather than fetching: the browser's own download handles the file, so a 50k-row
+  // export never passes through JS memory, and the filename comes from Content-Disposition.
   const exportCsv = () => {
-    const header = ['time', 'user', 'action', 'status'];
-    const lines = rows.map((r) => [r.at, r.username, r.action, r.status].map(csvField).join(','));
-    const csv = [header.join(','), ...lines].join('\r\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'audit-log.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    window.location.assign(exportUrl(active, Date.now()));
   };
 
   return (

@@ -73,16 +73,13 @@ impl<T> Ranked<T> {
     }
 }
 
-/// `?limit=` on its own — the query shape for endpoints that cap a list but do not page it.
-///
-/// Several of these used to borrow the alert-history query struct, which also carries a `before`
-/// cursor they never read. Sharing a shape you only half-use makes it look, at the call site, like
-/// the endpoint supports paging when it does not.
-#[derive(Deserialize, utoipa::IntoParams)]
-#[into_params(parameter_in = Query)]
-pub(crate) struct ListQuery {
-    pub limit: Option<i64>,
-}
+// `ListQuery` — `?limit=` on its own — lived here and is gone. It had three users (thresholds,
+// analysis runs, report runs) and all three grew filters, so each now declares its own query
+// struct. The lesson it was written to record still holds and is why nothing should re-create it:
+// several of these once borrowed the alert-history query struct, which also carries a `before`
+// cursor they never read, and sharing a shape you only half-use makes it look at the call site
+// like the endpoint supports paging when it does not. A one-field query is cheap to declare where
+// it is used; a shared one becomes a place every domain has to widen together.
 
 /// The cadence fields of any create/update body that schedules something.
 ///

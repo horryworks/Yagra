@@ -60,7 +60,16 @@
     "selectPrompt": "Select a node or group to see its detail.",
     "backToList": "Inventory",
     "hideTree": "Collapse inventory",
-    "showTree": "Show inventory"
+    "showTree": "Show inventory",
+    "filterScanTruncated": "Some matches are not shown: the filter examined as many nodes as it is allowed to. Add a search term to narrow it.",
+    "filter": {
+      "allStates": "All states",
+      "stateAria": "Filter by state",
+      "allKinds": "All kinds",
+      "kindAria": "Filter by kind",
+      "allPools": "All pools",
+      "poolAria": "Filter by poll pool"
+    }
   },
   "add": {
     "node": "Add node",

@@ -16,6 +16,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import type { EventKind } from '../../types/api';
 import { Select } from '../ui/Field';
 import { SearchInput } from '../ui/TableToolbar';
@@ -75,13 +76,13 @@ export function EventFilterBar({
   // hidden and `.event-filters` is `display: contents`, so the controls stay inline in the toolbar.
   const [open, setOpen] = useState(false);
 
-  // Debounce the text box so we don't refetch on every keystroke (matches the MIB search).
+  // The box settles before it is reported upward, so a burst of keystrokes is one refetch.
+  const settledSearch = useDebouncedValue(searchDraft.trim());
   useEffect(() => {
-    const id = setTimeout(() => onSearchChange(searchDraft.trim()), 200);
-    return () => clearTimeout(id);
-    // onSearchChange is a stable setter from the parent; depend only on the draft.
+    onSearchChange(settledSearch);
+    // onSearchChange is a stable setter from the parent; depend only on the settled value.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchDraft]);
+  }, [settledSearch]);
 
   // The default range has to reach the parent, not just sit in this state — otherwise the first
   // fetch is unbounded and only the second one is narrowed. Resolved once here rather than per

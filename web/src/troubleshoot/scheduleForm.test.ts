@@ -14,7 +14,7 @@ import {
 import { sigmaFor } from './report/format';
 import { TOOLS } from './data';
 import type { AnalysisSchedule } from '../types/api';
-import type { ScopeValue } from './scope';
+import type { ScopeValue } from '../components/ScopePicker/scope';
 
 const ALL: ScopeValue = { kind: 'all', id: null, label: 'All nodes' };
 

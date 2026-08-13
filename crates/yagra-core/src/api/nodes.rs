@@ -233,8 +233,15 @@ pub(crate) struct NodeSummary {
 pub(crate) struct NodePage {
     nodes: Vec<NodeSummary>,
     /// Pass back as `cursor` for the next page; `null` ⇒ this was the last one. Always `null` in
-    /// search mode, which returns a single capped page by design.
+    /// filter mode, which returns a single capped page by design.
     next_cursor: Option<String>,
+    /// Filter mode only: matches exist that this answer does not contain, because the page hit its
+    /// cap or the candidate scan hit its ceiling. Always `false` while paging.
+    ///
+    /// A separate field rather than something the client infers from `nodes.len()`, because once
+    /// the server rejects candidates after the query those two stop meaning the same thing: a
+    /// filter that scans 5,000 rows and keeps 3 returns three rows and is still incomplete.
+    truncated: bool,
 }
 
 /// One group's direct members. Not keyset-paged — a folder is loaded whole when it is expanded —
@@ -245,16 +252,94 @@ pub(crate) struct GroupNodes {
     truncated: bool,
 }
 
-/// Keyset pagination query for the node list. An optional `search` substring switches the endpoint
-/// into server-side name/address search mode (capped, single page, no cursor) — so the Nodes tree's
-/// filter never full-loads the fleet into the browser (ui-conventions: search is server-side at
-/// scale). Both modes return full [`NodeSummary`] rows so the tree can nest and colour them.
+/// Keyset pagination query for the node list. Any of `search` / `state` / `kind` / `pool`
+/// switches the endpoint into **filter mode** — capped, single page, no cursor — so the Nodes
+/// tree's filter never full-loads the fleet into the browser (ui-conventions: search is
+/// server-side at scale). Both modes return full [`NodeSummary`] rows so the tree can nest and
+/// colour them.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct NodePageQuery {
     pub cursor: Option<Uuid>,
     pub limit: Option<i64>,
+    /// Case-insensitive substring of the node's name or address.
     pub search: Option<String>,
+    /// Only nodes whose live display state is this one (`ok` | `warning` | `critical` |
+    /// `unknown` | `unreachable` | `maintenance`).
+    pub state: Option<NodeState>,
+    /// Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`).
+    pub kind: Option<NodeKind>,
+    /// Only nodes whose **effective** poll pool is this one — the node's own pool when it sets
+    /// one, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering
+    /// on the stored column alone would miss every node that inherits, which is most of them.
+    pub pool: Option<String>,
+}
+
+/// Why three of the four filters are applied in-process rather than as a `WHERE` clause — and it
+/// is not for want of trying:
+///
+/// - **state** is not in PostgreSQL at all. It lives in the alert engine's in-memory map, with a
+///   TSDB freshness probe as the fallback for nodes the engine has never observed.
+/// - **kind** is not a stored column either — it is derived from which single-purpose side table
+///   carries a row, and the precedence lives in exactly one place ([`NodeKind::resolve`]). A `CASE`
+///   in SQL would be a second answer to "what is this node", which is the thing that type exists to
+///   prevent.
+/// - **pool** is inherited from the folder tree and deliberately not materialized (ADR-013), so the
+///   answer is [`crate::poolres::PoolResolver`]'s, not a column's.
+///
+/// So they run over a bounded candidate scan ([`crate::repo::NODE_SCAN_MAX`]), through the same
+/// resolvers every other surface asks. What that buys is that a row can never disagree with the
+/// filter that selected it. What it costs is the bound: past it the answer is a subset, and
+/// `NodePage::truncated` says so rather than letting "no matches" mean "none among the first N".
+#[derive(Debug, Default, Clone)]
+pub(crate) struct NodeFilter {
+    pub state: Option<NodeState>,
+    pub kind: Option<NodeKind>,
+    pub pool: Option<String>,
+}
+
+impl NodeFilter {
+    /// Whether anything at all is set. `search` is handled separately — it is the one filter SQL
+    /// can serve, so it narrows the scan rather than the survivors.
+    pub(crate) fn is_set(&self) -> bool {
+        self.state.is_some() || self.kind.is_some() || self.pool.is_some()
+    }
+}
+
+/// Filter mode's page: the candidate scan, the in-process filters, and whether matches were left
+/// out. Returns `(rows, truncated)`.
+///
+/// Shared by `GET /api/v1/nodes` and the MCP `list_nodes` tool (ADR-042 read parity), because the
+/// two answering differently about *which nodes match* is exactly the drift the parity rule
+/// exists to stop — and it would be invisible, since each answer looks internally consistent.
+pub(crate) async fn filtered_node_page(
+    st: &ApiState,
+    scope: &super::scope::NodeScope,
+    term: &str,
+    filter: &NodeFilter,
+    limit: i64,
+) -> Result<(Vec<Node>, bool), ApiError> {
+    // The scan is only widened past one page when something has to reject candidates after the
+    // query. A plain text search rejects nothing, so it stays exactly as cheap as it was.
+    let scan = if filter.is_set() {
+        crate::repo::NODE_SCAN_MAX
+    } else {
+        limit
+    };
+    let candidates = st
+        .nodes
+        .search(scope.group_filter(), term, scan)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
+        })?;
+    let scan_hit_ceiling = i64::try_from(candidates.len()).unwrap_or(i64::MAX) >= scan;
+    let mut nodes = apply_node_filter(st, candidates, filter).await;
+    let over_page = i64::try_from(nodes.len()).unwrap_or(i64::MAX) > limit;
+    if over_page {
+        nodes.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    }
+    Ok((nodes, scan_hit_ceiling || over_page))
 }
 
 /// Which single-purpose rows each of the given nodes carries, resolved into a [`NodeKind`].
@@ -369,19 +454,24 @@ async fn list_nodes(
         .limit
         .unwrap_or(100)
         .clamp(1, crate::repo::NODE_SEARCH_MAX);
-    // Search mode: a non-empty `search` filters by name/address server-side and returns a single
-    // capped page (no keyset cursor) — the tree's filter searches the fleet without loading it.
-    if let Some(term) = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let nodes = st
-            .nodes
-            .search(scope.group_filter(), term, limit)
-            .await
-            .map_err(|e| {
-                ApiError::from_internal(e.as_ref(), "search nodes for list", "failed to list nodes")
-            })?;
+    let term = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let filter = NodeFilter {
+        state: q.state,
+        kind: q.kind,
+        pool: q
+            .pool
+            .map(|p| p.trim().to_owned())
+            .filter(|p| !p.is_empty()),
+    };
+    // Filter mode: any of search / state / kind / pool returns a single capped page (no keyset
+    // cursor) — the tree narrows the fleet without loading it.
+    if term.is_some() || filter.is_set() {
+        let (nodes, truncated) =
+            filtered_node_page(&st, &scope, term.unwrap_or(""), &filter, limit).await?;
         return Ok(Json(NodePage {
             nodes: build_node_summaries(&st, nodes).await,
             next_cursor: None,
+            truncated,
         }));
     }
     // Fetch one extra row to tell "exactly a full page" from "a full page with more after it",
@@ -405,7 +495,76 @@ async fn list_nodes(
     Ok(Json(NodePage {
         nodes: build_node_summaries(&st, nodes).await,
         next_cursor,
+        // Paging is not truncation: `next_cursor` already says there is more, and a client that
+        // read both would show a "results were cut" notice on every page but the last.
+        truncated: false,
     }))
+}
+
+/// Keep the candidates that match `filter`, asking the one resolver that owns each question.
+///
+/// Each resolver is consulted only when its filter is set — a state filter must not pay for the
+/// folder tree, and a pool filter must not pay for a TSDB freshness probe. `search` already
+/// applied the caller's scope, so nothing here can widen it.
+async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter) -> Vec<Node> {
+    if !filter.is_set() {
+        return nodes;
+    }
+    let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
+    let node_ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
+    let states = async {
+        match filter.state {
+            Some(_) => display_states(st, &node_ids).await,
+            None => HashMap::new(),
+        }
+    };
+    let kinds = async {
+        match (filter.kind, st.admin.as_ref()) {
+            (Some(_), Some(admin)) => node_kinds(admin, &ids).await,
+            // Skeleton mode has no side tables, so every node is a plain device — which is what
+            // `build_node_summaries` reports for the same rows, so the two still agree.
+            _ => HashMap::new(),
+        }
+    };
+    let pools = async {
+        match (filter.pool.as_deref(), st.admin.as_ref()) {
+            (Some(_), Some(admin)) => Some(super::util::pool_resolver(admin).await),
+            _ => None,
+        }
+    };
+    let (states, kinds, pools) = tokio::join!(states, kinds, pools);
+    nodes
+        .into_iter()
+        .filter(|n| {
+            if let Some(want) = filter.state {
+                let have = states
+                    .get(&n.id)
+                    .copied()
+                    .unwrap_or(yagra_common::NodeState::Unknown);
+                if have != want {
+                    return false;
+                }
+            }
+            if let Some(want) = filter.kind {
+                let have = kinds
+                    .get(&n.id.as_uuid())
+                    .copied()
+                    .unwrap_or(NodeKind::Device);
+                if have != want {
+                    return false;
+                }
+            }
+            if let Some(want) = filter.pool.as_deref() {
+                let have = pools
+                    .as_ref()
+                    .map_or(yagra_bus::DEFAULT_POOL, |r| r.resolve_pool(n));
+                if have != want {
+                    return false;
+                }
+            }
+            true
+        })
+        .collect()
 }
 
 /// Query for the node-picker typeahead: `?q=<substr>&limit=<n>`. Empty/absent `q` returns the
@@ -1773,5 +1932,146 @@ mod tests {
         // An id nobody asked about is not invented, and an empty page is an empty map.
         assert_eq!(got.len(), 1);
         assert!(resolve_kinds(&[], &empty, &empty, &empty).is_empty());
+    }
+
+    // ── Filter mode ─────────────────────────────────────────────────────────────────────────────
+
+    fn n(id: u128, name: &str, pool: Option<&str>) -> Node {
+        let mut node = Node::new(
+            NodeId::from(Uuid::from_u128(id)),
+            name,
+            std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+        );
+        node.pool = pool.map(str::to_owned);
+        node
+    }
+
+    #[tokio::test]
+    async fn a_filter_that_is_set_widens_the_scan_and_one_that_is_not_does_not() {
+        // The cost of filter mode is paid only by the filters that reject rows *after* the query.
+        // A plain text search rejects nothing, so widening the scan for it would make every
+        // keystroke in the tree read 5,000 rows to show 100.
+        let st = public_state();
+        let scope = super::super::scope::NodeScope::All;
+        let (rows, truncated) =
+            filtered_node_page(&st, &scope, "demo", &NodeFilter::default(), 100)
+                .await
+                .expect("search succeeds");
+        assert_eq!(rows.len(), 1, "the skeleton inventory holds one node");
+        assert!(!truncated);
+    }
+
+    #[tokio::test]
+    async fn a_state_filter_selects_on_the_state_the_row_would_display() {
+        // The whole reason these run in-process: the filter and the rendered row must come from
+        // one resolver, so a row can never disagree with the filter that selected it. In skeleton
+        // mode the alert engine has observed nothing and there is no TSDB fallback, so every node
+        // displays `unknown` — and therefore matches `unknown` and nothing else.
+        let st = public_state();
+        let scope = super::super::scope::NodeScope::All;
+        let want_unknown = NodeFilter {
+            state: Some(NodeState::Unknown),
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, "", &want_unknown, 100)
+            .await
+            .expect("filter succeeds");
+        assert_eq!(rows.len(), 1);
+        let want_ok = NodeFilter {
+            state: Some(NodeState::Ok),
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, "", &want_ok, 100)
+            .await
+            .expect("filter succeeds");
+        assert!(rows.is_empty(), "no node displays ok, so none may match ok");
+    }
+
+    #[tokio::test]
+    async fn a_kind_filter_agrees_with_what_the_row_is_badged() {
+        // Skeleton mode has no side tables, so every node resolves to `Device` — the same answer
+        // `build_node_summaries` puts on the row. Asking for anything else must return nothing
+        // rather than everything.
+        let st = public_state();
+        let scope = super::super::scope::NodeScope::All;
+        for (kind, expect) in [
+            (NodeKind::Device, 1),
+            (NodeKind::Url, 0),
+            (NodeKind::Dns, 0),
+        ] {
+            let f = NodeFilter {
+                kind: Some(kind),
+                ..Default::default()
+            };
+            let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+                .await
+                .expect("filter succeeds");
+            assert_eq!(rows.len(), expect, "{kind:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pool_filter_reads_the_effective_pool_not_the_stored_column() {
+        // A node that sets no pool of its own is not "pool-less" — it inherits, and with no folder
+        // saying otherwise it lands on the default. Filtering the column would find nothing for
+        // `default`, which is the pool most of the fleet is actually in.
+        let st = public_state();
+        let scope = super::super::scope::NodeScope::All;
+        let f = NodeFilter {
+            pool: Some(yagra_bus::DEFAULT_POOL.to_owned()),
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+            .await
+            .expect("filter succeeds");
+        assert_eq!(rows.len(), 1, "the demo node inherits the default pool");
+        let f = NodeFilter {
+            pool: Some("tokyo".to_owned()),
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+            .await
+            .expect("filter succeeds");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn a_pool_filter_matches_a_nodes_own_pool_over_any_inheritance() {
+        // `resolve_pool`'s precedence, pinned where the filter reads it: a node naming its own pool
+        // is in that pool whatever its folder says. Pure, so it does not need a state.
+        let resolver = crate::poolres::PoolResolver::empty();
+        assert_eq!(resolver.resolve_pool(&n(1, "a", Some("osaka"))), "osaka");
+        assert_eq!(
+            resolver.resolve_pool(&n(2, "b", None)),
+            yagra_bus::DEFAULT_POOL
+        );
+        // A blank string is "unset", not a pool literally named "" — otherwise a cleared field in
+        // the UI would put a node into a pool no poller ever registers for.
+        assert_eq!(
+            resolver.resolve_pool(&n(3, "c", Some(""))),
+            yagra_bus::DEFAULT_POOL
+        );
+    }
+
+    #[tokio::test]
+    async fn paging_never_reports_truncation() {
+        // `next_cursor` already says there is more. A client reading both would show a "results
+        // were cut" notice on every page but the last.
+        let st = public_state();
+        let resp = router(st)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/nodes?limit=1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let page: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(page["truncated"], false);
     }
 }

@@ -21,7 +21,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Actor, Admin, RequireManageConfig, RequireView, Scoped};
 use super::scope::NodeScope;
-use super::util::{CreatedId, ListQuery, MAX_JSON_DOC_BYTES};
+use super::util::{CreatedId, MAX_JSON_DOC_BYTES};
 use super::ApiState;
 use crate::reports::{self, ScheduleInput};
 use axum::{
@@ -402,12 +402,31 @@ fn reports_are_fleet_wide(scope: &NodeScope) -> Result<(), ApiError> {
     )
 }
 
-/// Saved runs, newest first. Empty in skeleton mode.
+/// `?limit=` plus the saved-runs filters, all optional.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct RunsQuery {
+    limit: Option<i64>,
+    /// Only runs generated from this report definition.
+    definition_id: Option<Uuid>,
+    /// Only runs in this state: `queued` | `running` | `succeeded` | `failed`.
+    /// Note `succeeded`, not `done` — an *analysis* run uses the other word.
+    state: Option<String>,
+    /// Only runs created at or after this instant (RFC 3339).
+    since: Option<String>,
+}
+
+/// Saved runs, newest first, optionally narrowed. Empty in skeleton mode.
+///
+/// Skeleton mode has no report store, so this answers an empty list rather than a 503 — the runs
+/// list is one tab of a page that otherwise works. **The filter is validated before that early
+/// return**, so a malformed one is a 400 on every deployment rather than an empty `200` on some.
 #[utoipa::path(
     get, path = "/api/v1/reports/runs", tag = "reports",
-    params(ListQuery),
+    params(RunsQuery),
     responses(
-        (status = 200, description = "Saved runs, newest first; empty in skeleton mode", body = Vec<reports::ReportRun>),
+        (status = 200, description = "Matching runs, newest first; empty in skeleton mode", body = Vec<reports::ReportRun>),
+        (status = 400, description = "The state is outside its vocabulary, or `since` is not RFC 3339", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks View", body = super::error::ErrorBody),
     ),
@@ -416,9 +435,59 @@ async fn list_report_runs(
     _guard: RequireView,
     Scoped(scope): Scoped,
     State(st): State<ApiState>,
-    Query(q): Query<ListQuery>,
+    Query(q): Query<RunsQuery>,
 ) -> ApiResult<Json<Vec<reports::ReportRun>>> {
-    Ok(Json(report_runs(&st, &scope, q.limit).await?))
+    let filter = parse_run_filter(q.definition_id, q.state.as_deref(), q.since.as_deref())?;
+    Ok(Json(report_runs(&st, &scope, q.limit, &filter).await?))
+}
+
+/// Turn the query's strings into a [`reports::RunFilter`], rejecting anything outside its
+/// vocabulary — shared by REST and the MCP `get_report_runs` tool, so the two cannot drift on what
+/// they accept. (The events filter was validated in two places once, and the copy without the cap
+/// was the MCP one.)
+///
+/// Rejected, never ignored: an unknown token dropped here widens the answer, and the operator who
+/// asked for failed runs would be shown every run believing the narrower thing.
+pub(crate) fn parse_run_filter(
+    definition_id: Option<Uuid>,
+    state: Option<&str>,
+    since: Option<&str>,
+) -> Result<reports::RunFilter, ApiError> {
+    let state = match state {
+        Some(s) => Some(
+            crate::stored_enum::parse_filter_token(
+                reports::ReportRunState::ALL,
+                reports::ReportRunState::Unknown,
+                reports::ReportRunState::as_str,
+                s,
+            )
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "invalid_state",
+                    format!(
+                        "unknown run state; must be one of: {}",
+                        crate::stored_enum::filter_token_list(
+                            reports::ReportRunState::ALL,
+                            reports::ReportRunState::Unknown,
+                            reports::ReportRunState::as_str,
+                        )
+                    ),
+                )
+            })?,
+        ),
+        None => None,
+    };
+    let since = match since {
+        Some(s) => Some(super::util::parse_rfc3339(s).ok_or_else(|| {
+            ApiError::bad_request("invalid_since", "since must be an RFC 3339 timestamp")
+        })?),
+        None => None,
+    };
+    Ok(reports::RunFilter {
+        definition_id,
+        state,
+        since,
+    })
 }
 
 /// Saved report runs, newest first — shared by `GET /api/v1/reports/runs` and the MCP
@@ -431,15 +500,21 @@ pub(crate) async fn report_runs(
     st: &ApiState,
     scope: &super::scope::NodeScope,
     limit: Option<i64>,
+    filter: &reports::RunFilter,
 ) -> Result<Vec<reports::ReportRun>, ApiError> {
     reports_are_fleet_wide(scope)?;
     let Some(admin) = st.admin.as_ref() else {
         return Ok(Vec::new());
     };
     let limit = limit.unwrap_or(50).clamp(1, 500);
-    admin.reports.repo().list_runs(limit).await.map_err(|e| {
-        ApiError::from_internal(e.as_ref(), "list report runs", "failed to list report runs")
-    })
+    admin
+        .reports
+        .repo()
+        .list_runs(limit, filter)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "list report runs", "failed to list report runs")
+        })
 }
 
 /// One run with its rendered result (the viewer).

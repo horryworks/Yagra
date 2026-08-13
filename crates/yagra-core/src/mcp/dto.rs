@@ -389,8 +389,9 @@ pub struct AnalysisJobDto {
     pub scope_id: Option<Uuid>,
     /// Human label for the scope (e.g. a group or node name).
     pub scope_label: String,
-    /// Lifecycle state: `running` / `done` / `failed` / `cancelled`.
-    pub state: String,
+    /// Lifecycle state: `queued` / `running` / `done` / `failed` / `cancelled`. Typed rather than
+    /// copied as text, so this tool's vocabulary is the one the writers produce.
+    pub state: crate::analysis::AnalysisJobState,
     /// Progress percent (0–100).
     pub pct: i32,
     /// Current progress caption while running (`None` once terminal).
@@ -416,7 +417,7 @@ impl AnalysisJobDto {
             scope_kind: job.scope_kind.clone(),
             scope_id: job.scope_id,
             scope_label: job.scope_label.clone(),
-            state: job.state.clone(),
+            state: job.state,
             pct: job.pct,
             phase: job.phase.clone(),
             finding_count: job.finding_count,
@@ -928,7 +929,7 @@ mod tests {
             scope_id: None,
             scope_label: "All nodes".to_owned(),
             params: serde_json::json!({ "sensitivity": 3.0 }),
-            state: "done".to_owned(),
+            state: crate::analysis::AnalysisJobState::Done,
             pct: 100,
             phase: None,
             finding_count: 1,

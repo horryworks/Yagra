@@ -9,9 +9,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
-import { Segmented } from './Segmented';
-import { ScopePicker } from './ScopePicker';
-import { allScope, type ScopeValue } from './scope';
+import { Segmented } from '../components/ui/Segmented';
+import { ScopePicker } from '../components/ScopePicker/ScopePicker';
+import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
 import { METHODS, toolById, type Tool, reportPathFor } from './data';
 // The slider→σ mapping lives (tested) in report/format.ts — the reports read the same scale back.
 import { sigmaFor } from './report/format';

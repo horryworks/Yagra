@@ -316,6 +316,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audit/export.csv": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The audit log as CSV, narrowed by the same filters as the list.
+         * @description **This is the endpoint that makes Export mean what it says.** The button used to write out the
+         *     rows the browser had scrolled to, which is a different set from "everything matching" — in a log
+         *     whose purpose is completeness, that is a correctness problem rather than a missing feature. The
+         *     list endpoint's filters moved into SQL first; this closes the other half.
+         *
+         *     `before` is deliberately **not** accepted: a cursor is where a page starts, and an export is not
+         *     paged. Accepting it would let a caller export "the second page" and believe it was the answer.
+         *
+         *     The response is a download rather than JSON, so a failure has nowhere useful to render — which
+         *     is why the filter is validated the same way the list validates it, before anything is fetched.
+         */
+        get: operations["export_audit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/login": {
         parameters: {
             query?: never;
@@ -2717,7 +2746,12 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Saved runs, newest first. Empty in skeleton mode. */
+        /**
+         * Saved runs, newest first, optionally narrowed. Empty in skeleton mode.
+         * @description Skeleton mode has no report store, so this answers an empty list rather than a 503 — the runs
+         *     list is one tab of a page that otherwise works. **The filter is validated before that early
+         *     return**, so a malformed one is a 400 on every deployment rather than an empty `200` on some.
+         */
         get: operations["list_report_runs"];
         put?: never;
         post?: never;
@@ -3941,10 +3975,22 @@ export interface components {
             scope_label: string;
             /** Format: int64 */
             started_ms?: number | null;
-            state: string;
+            state: components["schemas"]["AnalysisJobState"];
             summary?: string | null;
             tool: string;
         };
+        /**
+         * @description Where an analysis run is in its lifecycle.
+         *
+         *     A bare `String` until v0.2.6, and the cost of that was paid twice. The vocabulary had to be
+         *     written out by hand at the API edge to validate the runs filter, and again in the WebUI to fill
+         *     its dropdown — two lists nothing compared. Worse, `state: string` compares equal to *any*
+         *     string: the in-app "your analysis finished" notice tested `state === 'succeeded'`, which is the
+         *     **report-run** vocabulary, so every successful analysis announced itself as a failure. Typing it
+         *     makes that comparison a compile error on both sides.
+         * @enum {string}
+         */
+        AnalysisJobState: "queued" | "running" | "done" | "failed" | "cancelled" | "unknown";
         /** @description A schedule row, as served to the API. */
         AnalysisSchedule: {
             /** Format: int32 */
@@ -6888,10 +6934,19 @@ export interface components {
         NodePage: {
             /**
              * @description Pass back as `cursor` for the next page; `null` ⇒ this was the last one. Always `null` in
-             *     search mode, which returns a single capped page by design.
+             *     filter mode, which returns a single capped page by design.
              */
             next_cursor?: string | null;
             nodes: components["schemas"]["NodeSummary"][];
+            /**
+             * @description Filter mode only: matches exist that this answer does not contain, because the page hit its
+             *     cap or the candidate scan hit its ceiling. Always `false` while paging.
+             *
+             *     A separate field rather than something the client infers from `nodes.len()`, because once
+             *     the server rejects candidates after the query those two stop meaning the same thing: a
+             *     filter that scans 5,000 rows and keeps 3 returns three rows and is still incomplete.
+             */
+            truncated: boolean;
         };
         /**
          * @description Set (or clear) a node's **dependency parent** (upstream). `parent_id: null` removes the
@@ -9345,7 +9400,10 @@ export interface operations {
                 limit?: number;
                 /** @description Only runs of this analysis (e.g. `anomaly`). */
                 tool?: string;
-                /** @description Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`. */
+                /**
+                 * @description Only runs in this state: `queued` | `running` | `done` | `failed` | `cancelled`.
+                 *     Note `done`, not `succeeded` — that is the report-run vocabulary, not this one.
+                 */
                 state?: string;
                 /** @description Only runs started at or after this instant (RFC 3339). */
                 since?: string;
@@ -10045,6 +10103,73 @@ export interface operations {
                 };
             };
             /** @description A cursor or range bound is not RFC 3339, or `action`/`status` is not one of the listed values */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the view-audit permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode keeps no audit log */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    export_audit: {
+        parameters: {
+            query?: {
+                /** @description Only entries at or after this RFC 3339 timestamp. */
+                since?: string;
+                /** @description Only entries at or before this RFC 3339 timestamp. */
+                until?: string;
+                /** @description Free text matched against the username and the action (case-insensitive substring). */
+                q?: string;
+                /** @description Only entries of this kind. */
+                action?: components["schemas"]["AuditAction"];
+                /** @description Only entries whose response fell in this class. */
+                status?: components["schemas"]["AuditStatusClass"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every matching entry as CSV, newest first, capped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/csv": unknown;
+                };
+            };
+            /** @description A range bound is not RFC 3339, or `action`/`status` is not one of the listed values */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -15924,7 +16049,21 @@ export interface operations {
             query?: {
                 cursor?: string;
                 limit?: number;
+                /** @description Case-insensitive substring of the node's name or address. */
                 search?: string;
+                /**
+                 * @description Only nodes whose live display state is this one (`ok` | `warning` | `critical` |
+                 *     `unknown` | `unreachable` | `maintenance`).
+                 */
+                state?: components["schemas"]["NodeState"];
+                /** @description Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`). */
+                kind?: components["schemas"]["NodeKind"];
+                /**
+                 * @description Only nodes whose **effective** poll pool is this one — the node's own pool when it sets
+                 *     one, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering
+                 *     on the stored column alone would miss every node that inherits, which is most of them.
+                 */
+                pool?: string;
             };
             header?: never;
             path?: never;
@@ -19734,6 +19873,15 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description Only runs generated from this report definition. */
+                definition_id?: string;
+                /**
+                 * @description Only runs in this state: `queued` | `running` | `succeeded` | `failed`.
+                 *     Note `succeeded`, not `done` — an *analysis* run uses the other word.
+                 */
+                state?: string;
+                /** @description Only runs created at or after this instant (RFC 3339). */
+                since?: string;
             };
             header?: never;
             path?: never;
@@ -19741,13 +19889,22 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Saved runs, newest first; empty in skeleton mode */
+            /** @description Matching runs, newest first; empty in skeleton mode */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["ReportRun"][];
+                };
+            };
+            /** @description The state is outside its vocabulary, or `since` is not RFC 3339 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
             /** @description No valid bearer token */
@@ -22344,7 +22501,21 @@ export interface operations {
             query?: {
                 cursor?: string;
                 limit?: number;
+                /** @description Case-insensitive substring of the node's name or address. */
                 search?: string;
+                /**
+                 * @description Only nodes whose live display state is this one (`ok` | `warning` | `critical` |
+                 *     `unknown` | `unreachable` | `maintenance`).
+                 */
+                state?: components["schemas"]["NodeState"];
+                /** @description Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`). */
+                kind?: components["schemas"]["NodeKind"];
+                /**
+                 * @description Only nodes whose **effective** poll pool is this one — the node's own pool when it sets
+                 *     one, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering
+                 *     on the stored column alone would miss every node that inherits, which is most of them.
+                 */
+                pool?: string;
             };
             header?: never;
             path?: never;

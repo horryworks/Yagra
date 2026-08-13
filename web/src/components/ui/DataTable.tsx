@@ -10,6 +10,7 @@ import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useViewportMode } from '../../lib/viewport';
+import { nextSort, type SortState } from '../../lib/tableSort';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -21,6 +22,12 @@ export interface Column<T> {
   width?: string;
   /** End-align the header + cells (counts, actions). */
   align?: 'right';
+  /** Make the header a sort control (design-system §4.1).
+   *
+   *  Opt-in per column, not per table, because on a keyset-paged list most columns cannot be
+   *  sorted honestly — see `lib/tableSort.ts`. A column is sortable when the caller can put the
+   *  whole list in order, not when the header would look nice with an arrow. */
+  sortable?: boolean;
 }
 
 interface Props<T> {
@@ -42,6 +49,15 @@ interface Props<T> {
   renderCard?: (row: T) => ReactNode;
   /** Estimated card height (mobile card mode) before measurement; keeps the initial scrollbar sane. */
   cardEstimatePx?: number;
+  /** The active sort, for the header affordance. Present only when some column is `sortable`.
+   *
+   *  ⚠️ **This component does not sort `rows`.** It draws the arrow and reports the click; the
+   *  caller applies the order. That is deliberate: a keyset-paged table holds the pages that have
+   *  been scrolled to, so sorting them here would reorder a prefix and present it as the order.
+   *  `lib/tableSort.ts` has the two right answers and which list gets which. */
+  sort?: SortState;
+  /** Called with the next sort state when a sortable header is clicked. */
+  onSortChange?: (next: SortState) => void;
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -57,6 +73,8 @@ export function DataTable<T>({
   loading,
   renderCard,
   cardEstimatePx = CARD_PX,
+  sort,
+  onSortChange,
 }: Props<T>) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -84,11 +102,34 @@ export function DataTable<T>({
     <div className="dt">
       {!cardMode && (
         <div className="dt-head" style={{ gridTemplateColumns: template }}>
-          {columns.map((c) => (
-            <div key={c.key} className={c.align === 'right' ? 'dt-h right' : 'dt-h'}>
-              {c.header}
-            </div>
-          ))}
+          {columns.map((c) => {
+            const cls = c.align === 'right' ? 'dt-h right' : 'dt-h';
+            if (!c.sortable || !sort || !onSortChange) {
+              return (
+                <div key={c.key} className={cls}>
+                  {c.header}
+                </div>
+              );
+            }
+            const active = sort.by === c.key;
+            return (
+              <button
+                key={c.key}
+                type="button"
+                className={active ? `${cls} dt-h-sort active` : `${cls} dt-h-sort`}
+                // The header is a real button, so the sort is keyboard-operable — an operator
+                // driving the table from the keyboard is a stated requirement, and a click handler
+                // on a `div` is not reachable that way.
+                onClick={() => onSortChange(nextSort(sort, c.key))}
+                aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+              >
+                {c.header}
+                <span className="dt-h-arrow" aria-hidden="true">
+                  {active ? (sort.dir === 'asc' ? '▲' : '▼') : '↕'}
+                </span>
+              </button>
+            );
+          })}
         </div>
       )}
       <div className="dt-scroll scroll-y" ref={scrollRef}>

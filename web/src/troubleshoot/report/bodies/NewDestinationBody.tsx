@@ -17,7 +17,7 @@ import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { formatAsn, formatBytes } from '../../../lib/format';
 import { portLabel } from '../../../lib/flowLabels';
-import { Segmented } from '../../Segmented';
+import { Segmented } from '../../../components/ui/Segmented';
 import { EmptyList, FindingRow, MonoLine, NodeRef, RightRail } from '../kit';
 import { splitDestinations } from '../newDestination';
 import type { ReportBodyProps } from '../types';

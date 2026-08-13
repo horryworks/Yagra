@@ -21,12 +21,17 @@ import {
 import { ENABLED_STATES } from '../lib/filterQuery';
 import {
   DEFAULT_DEFINITION_FILTERS,
+  DEFAULT_SAVED_RUN_FILTERS,
   DEFAULT_SCHEDULE_LIST_FILTERS,
   isDefinitionFiltered,
+  isSavedRunFiltered,
   isScheduleListFiltered,
   matchesDefinition,
   matchesReportSchedule,
+  matchesSavedRun,
+  RUN_STATE_FILTERS,
   type DefinitionFilters,
+  type SavedRunFilters,
   type ScheduleListFilters,
 } from './reportListFilters';
 import { usePolled } from '../dashboard/usePolled';
@@ -109,19 +114,22 @@ export function ReportsPage() {
   // Destructive-action consent via the shared ConfirmDeleteModal — a failed delete keeps the
   // dialog open and shows the message rather than closing silently.
   const [confirm, setConfirm] = useState<{ text: string; run: () => Promise<void> } | null>(null);
-  // Client-side: templates and schedules are bounded by what an admin authored, not by fleet
-  // size (ui-conventions). The Saved-reports tab is the one that grows with the fleet and
-  // belongs in the query instead — that is increment 6, not this.
+  // All three tabs filter in the browser. Templates and schedules because they are bounded by what
+  // an admin authored rather than by fleet size (ui-conventions); saved runs because the store
+  // behind it is SSE-fed and would undo a filtered fetch on the next progress frame — the reason is
+  // written out in `reportListFilters.ts`, beside the predicate it explains.
   const [defFilters, setDefFilters] = useState<DefinitionFilters>(DEFAULT_DEFINITION_FILTERS);
   const [schedFilters, setSchedFilters] = useState<ScheduleListFilters>(
     DEFAULT_SCHEDULE_LIST_FILTERS,
   );
+  const [runFilters, setRunFilters] = useState<SavedRunFilters>(DEFAULT_SAVED_RUN_FILTERS);
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
   const schedules: ReportSchedule[] = scheds.data ?? [];
   const shownDefinitions = definitions.filter((d) => matchesDefinition(d, defFilters));
   const shownSchedules = schedules.filter((x) => matchesReportSchedule(x, schedFilters));
+  const shownRuns = runs.filter((r) => matchesSavedRun(r, runFilters));
 
   async function runNow(def: ReportDefinition) {
     setBusy(def.id);
@@ -325,15 +333,42 @@ export function ReportsPage() {
       {tab === 'saved' && (
         <>
           <TableToolbar>
+            <SearchInput
+              value={runFilters.q}
+              onChange={(v) => setRunFilters((f) => ({ ...f, q: v }))}
+              placeholder={t('runs.filter.searchPlaceholder')}
+              ariaLabel={t('runs.filter.searchAria')}
+            />
+            <FilterSelect
+              value={runFilters.definitionId}
+              onChange={(v) => setRunFilters((f) => ({ ...f, definitionId: v }))}
+              options={definitions.map((d) => ({ value: d.id, label: d.name }))}
+              allLabel={t('runs.filter.allReports')}
+              ariaLabel={t('runs.filter.reportAria')}
+            />
+            <FilterSelect
+              value={runFilters.state}
+              onChange={(v) => setRunFilters((f) => ({ ...f, state: v }))}
+              options={RUN_STATE_FILTERS.map((s) => ({
+                value: s,
+                label: t(`runs.state.${s}`),
+              }))}
+              allLabel={t('runs.filter.allStates')}
+              ariaLabel={t('runs.filter.stateAria')}
+            />
             <TableSpacer />
-            <ResultCount shown={runs.length} noun={t('noun.savedReport', { count: runs.length })} />
+            <ResultCount
+              shown={shownRuns.length}
+              total={isSavedRunFiltered(runFilters) ? runs.length : undefined}
+              noun={t('noun.savedReport', { count: shownRuns.length })}
+            />
           </TableToolbar>
           <DataTable
-            rows={runs}
+            rows={shownRuns}
             columns={runColumns}
             rowKey={(r) => r.id}
             onRowClick={(r) => setViewerRunId(r.id)}
-            empty={t('runs.empty')}
+            empty={isSavedRunFiltered(runFilters) ? t('common:filter.noMatch') : t('runs.empty')}
             loading={!runsLoaded}
           />
         </>

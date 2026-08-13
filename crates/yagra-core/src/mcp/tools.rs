@@ -42,7 +42,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use yagra_common::{NodeId, NodeKind, Permission, SeriesKey, Severity};
+use yagra_common::{NodeId, NodeKind, NodeState, Permission, SeriesKey, Severity};
 
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
@@ -155,10 +155,13 @@ impl YagraMcp {
 
     #[tool(
         description = "List monitored nodes with their rolled-up state. Optional case-insensitive \
-                       `search` matches name or address; `limit` is 1–100 (default 50). Returns \
-                       node id, name, address, state, kind, parent, group, vendor, model, and tags. \
-                       `kind` says what a node is — `device`, `url`, `dns` or `meraki` — and \
-                       therefore which metrics it can have."
+                       `search` matches name or address; narrow further with `state` \
+                       (ok|warning|critical|unreachable|unknown|maintenance), `kind` \
+                       (meraki|url|dns|device) and `pool` (the effective poll pool, inherited from \
+                       the folder tree when the node sets none); `limit` is 1–100 (default 50). \
+                       Returns node id, name, address, state, kind, parent, group, vendor, model, \
+                       and tags. `kind` says what a node is — `device`, `url`, `dns` or `meraki` \
+                       — and therefore which metrics it can have."
     )]
     async fn list_nodes(
         &self,
@@ -177,13 +180,54 @@ impl YagraMcp {
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(50).clamp(1, 100);
+        // Rejected, never ignored: an unrecognised token dropped here would widen the answer, and
+        // a model that asked for the URL monitors would reason over every node believing it had
+        // the narrower set.
+        let kind = match p.kind.as_deref().map(NodeKind::from_token) {
+            Some(None) => {
+                return tool_bad_params(
+                    "list_nodes",
+                    "unknown kind; must be one of: meraki, url, dns, device",
+                );
+            }
+            other => other.flatten(),
+        };
+        let state = match p.state.as_deref().map(NodeState::from_token) {
+            Some(None) => {
+                return tool_bad_params(
+                    "list_nodes",
+                    "unknown state; must be one of: ok, warning, critical, unreachable, unknown, \
+                     maintenance",
+                );
+            }
+            other => other.flatten(),
+        };
+        let filter = crate::api::nodes::NodeFilter {
+            state,
+            kind,
+            pool: p.pool.clone(),
+        };
         // The scope goes into the query as the same indexed `group_id = ANY(…)` predicate the REST
         // list uses — `NodeListing` takes a `GroupFilter` on every method precisely so no call site
         // can default to the whole fleet without saying so.
         let groups = scope.group_filter();
-        let nodes = match &p.search {
-            Some(term) => self.state.nodes.search(groups, term, limit).await,
-            None => self.state.nodes.list_page(groups, None, limit).await,
+        let nodes = if p.search.is_some() || filter.is_set() {
+            // The shared seam, so a model and the WebUI cannot be told different things about
+            // which nodes match — the filters run in-process here too, over the same bounded scan.
+            match crate::api::nodes::filtered_node_page(
+                &self.state,
+                scope,
+                p.search.as_deref().unwrap_or(""),
+                &filter,
+                limit,
+            )
+            .await
+            {
+                Ok((nodes, _truncated)) => Ok(nodes),
+                Err(e) => return tool_api_error("list_nodes", &e),
+            }
+        } else {
+            self.state.nodes.list_page(groups, None, limit).await
         };
         let nodes = match nodes {
             Ok(n) => n,
@@ -1348,7 +1392,7 @@ impl YagraMcp {
         let deadline = Instant::now() + ANALYSIS_MAX_WAIT;
         let final_job = loop {
             match admin.analysis.get(job.id).await {
-                Ok(Some(j)) if is_terminal(&j.state) => break j,
+                Ok(Some(j)) if j.state.is_terminal() => break j,
                 Ok(Some(j)) => {
                     if Instant::now() >= deadline {
                         let body = serde_json::json!({
@@ -2082,9 +2126,12 @@ impl YagraMcp {
 
     #[tool(
         description = "Saved report runs. Without `run_id`, the most recent runs (newest first, \
-                       `limit` 1–500, default 50); with `run_id`, that run plus its rendered \
-                       result. Fleet-wide only: a rendered report keeps no per-node attribution, \
-                       so a group-scoped token is refused rather than shown the whole fleet."
+                       `limit` 1–500, default 50), optionally narrowed by `definition_id`, \
+                       `state` (queued|running|succeeded|failed — note `succeeded`, not the \
+                       `done` an analysis run uses) and `since` (RFC 3339); with `run_id`, that \
+                       run plus its rendered result. Fleet-wide only: a rendered report keeps no \
+                       per-node attribution, so a group-scoped token is refused rather than shown \
+                       the whole fleet."
     )]
     async fn get_report_runs(
         &self,
@@ -2113,10 +2160,20 @@ impl YagraMcp {
                     Err(e) => tool_api_error("get_report_runs", &e),
                 }
             }
-            None => match crate::api::reports::report_runs(&self.state, scope, p.limit).await {
-                Ok(rows) => ok_json("get_report_runs", &rows),
-                Err(e) => tool_api_error("get_report_runs", &e),
-            },
+            None => {
+                let filter = match crate::api::reports::parse_run_filter(
+                    p.definition_id,
+                    p.state.as_deref(),
+                    p.since.as_deref(),
+                ) {
+                    Ok(f) => f,
+                    Err(e) => return tool_api_error("get_report_runs", &e),
+                };
+                match crate::api::reports::report_runs(&self.state, scope, p.limit, &filter).await {
+                    Ok(rows) => ok_json("get_report_runs", &rows),
+                    Err(e) => tool_api_error("get_report_runs", &e),
+                }
+            }
         }
     }
 
@@ -3183,6 +3240,13 @@ struct ReportRunsParams {
     run_id: Option<Uuid>,
     /// Max runs to list (1–500, default 50). Ignored when `run_id` is given.
     limit: Option<i64>,
+    /// Only runs generated from this report definition. Ignored when `run_id` is given.
+    definition_id: Option<Uuid>,
+    /// Only runs in this state: `queued` | `running` | `succeeded` | `failed`. Ignored when
+    /// `run_id` is given.
+    state: Option<String>,
+    /// Only runs created at or after this RFC 3339 timestamp. Ignored when `run_id` is given.
+    since: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -3231,12 +3295,20 @@ struct RunRcaParams {
     force: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct ListNodesParams {
     /// Case-insensitive substring matched against node name or address.
     search: Option<String>,
     /// Max nodes to return (1–100, default 50).
     limit: Option<i64>,
+    /// Only nodes in this rolled-up state: `ok` | `warning` | `critical` | `unreachable` |
+    /// `unknown` | `maintenance`.
+    state: Option<String>,
+    /// Only nodes of this monitoring kind: `meraki` | `url` | `dns` | `device`.
+    kind: Option<String>,
+    /// Only nodes whose effective poll pool is this one (a node's own pool, else the nearest
+    /// folder ancestor that sets one, else `default`).
+    pool: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -3663,11 +3735,6 @@ fn record_tool(tool: &str, outcome: &str) {
         .increment(1);
 }
 
-/// Whether an analysis job has reached a terminal lifecycle state (no further progress).
-fn is_terminal(state: &str) -> bool {
-    matches!(state, "done" | "failed" | "cancelled")
-}
-
 /// Build a [`FlowQuery`] from the shared flow-tool params: typed drill-down filters (an unparseable
 /// `peer` is ignored, never interpolated). Shared by `top_flows` and `flow_fanout`.
 ///
@@ -3883,13 +3950,19 @@ mod tests {
     // ── Pure helpers ────────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn terminal_states_are_exactly_the_finished_ones() {
-        for s in ["done", "failed", "cancelled"] {
-            assert!(is_terminal(s), "{s} is terminal");
+    fn the_wait_loop_stops_on_every_state_that_is_not_still_moving() {
+        use crate::analysis::AnalysisJobState as S;
+        // The loop this drives polls until terminal, so a wrong answer here is either a tool that
+        // returns a half-finished run or one that never returns at all. `Unknown` is terminal
+        // deliberately: a token this build cannot read is one it will never learn to read.
+        for s in [S::Done, S::Failed, S::Cancelled, S::Unknown] {
+            assert!(s.is_terminal(), "{s:?} should stop the wait");
         }
-        for s in ["running", "queued", "", "DONE"] {
-            assert!(!is_terminal(s), "{s} is not terminal");
+        for s in [S::Running, S::Queued] {
+            assert!(!s.is_terminal(), "{s:?} should keep waiting");
         }
+        // Every variant is covered above — a new state must be classified, not defaulted.
+        assert_eq!(S::ALL.len(), 6);
     }
 
     #[test]
@@ -4091,6 +4164,7 @@ mod tests {
                 ListNodesParams {
                     search: None,
                     limit: Some(10_000),
+                    ..Default::default()
                 },
                 &unrestricted(),
             )
@@ -4117,7 +4191,7 @@ mod tests {
             .list_nodes_in(
                 ListNodesParams {
                     search: Some("demo".to_owned()),
-                    limit: None,
+                    ..Default::default()
                 },
                 &unrestricted(),
             )
@@ -4129,7 +4203,7 @@ mod tests {
             .list_nodes_in(
                 ListNodesParams {
                     search: Some("no-such-node".to_owned()),
-                    limit: None,
+                    ..Default::default()
                 },
                 &unrestricted(),
             )
@@ -4150,6 +4224,7 @@ mod tests {
                 ListNodesParams {
                     search: None,
                     limit: None,
+                    ..Default::default()
                 },
                 &scoped,
             )

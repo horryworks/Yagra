@@ -25,6 +25,7 @@ import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
+import { NODE_KINDS } from '../types/api';
 import type {
   FleetGroupSummary,
   FleetSummary,
@@ -38,6 +39,16 @@ import type {
 import { countsTotal, mergeNodesById, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { FILTER_SEARCH_LIMIT, useFilterSearch } from './useFilterSearch';
+import {
+  isInventoryFiltered,
+  NODE_STATE_FILTERS,
+  readInventoryFilters,
+  truncationNotice,
+  writeInventoryFilters,
+  type InventoryFilters,
+} from './inventoryFilters';
+import { FilterSelect } from '../components/ui/TableToolbar';
+import { NODE_KIND_SPEC } from '../lib/nodeKind';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
@@ -100,6 +111,19 @@ export function NodesPage() {
   const tabParam = searchParams.get('tab') ?? '';
   const tab = normalizeNodeDetailTab(tabParam);
   const [filter, setFilter] = useState('');
+  // The three selects live in the URL beside the selection — they are the part someone shares
+  // ("the URL monitors in the tokyo pool"), and a reload that dropped them would silently widen
+  // the list back to the whole fleet. The text box stays local, as it always has: it is a scratch
+  // typing surface, and the pane it filters is already addressable by the selects.
+  const inventoryFilters = readInventoryFilters(searchParams);
+  const setInventoryFilters = useCallback(
+    (next: InventoryFilters) => {
+      const params = new URLSearchParams(searchParams);
+      writeInventoryFilters(params, next);
+      setSearchParams(params, { replace: true });
+    },
+    [searchParams, setSearchParams],
+  );
 
   // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).
   // `replace` keeps rapid clicking out of the browser history.
@@ -164,12 +188,15 @@ export function NodesPage() {
 
   // Members load lazily, per group, only once that group's contents are on screen (A-3). The hook
   // owns that cache; this page only says what is currently worth having loaded.
-  const filtering = filter.trim().length > 0;
-  // Filter mode's server-side search page — the nodes whose own name/address matched. One capped
-  // page, never the fleet; the folders a group-name match reveals arrive separately through the
-  // per-group member cache below. `appliedTerm` is the debounced term the search was issued for, so
-  // the reveal loads in step with the search rather than once per keystroke.
-  const search = useFilterSearch(filter);
+  // Any of the four puts the tree into filter mode. The state / kind / pool ones count even with
+  // an empty box: "show me the URL monitors" is a whole question, and browsing the folder tree
+  // while one is set would show every node and look like the control did nothing.
+  const filtering = filter.trim().length > 0 || isInventoryFiltered(inventoryFilters);
+  // Filter mode's server-side page — the nodes that matched. One capped page, never the fleet; the
+  // folders a group-name match reveals arrive separately through the per-group member cache below.
+  // `appliedTerm` is the debounced term the search was issued for, so the reveal loads in step with
+  // the search rather than once per keystroke.
+  const search = useFilterSearch(filter, inventoryFilters);
   const refetchSearch = search.refetch;
   const members = useLazyGroupMembers({
     groups,
@@ -442,7 +469,11 @@ export function NodesPage() {
   // a fleet with more matches than the cap would otherwise show a silently short list. Counts the
   // SEARCH PAGE, not `treeNodes`: the latter also carries the revealed folders' members, which would
   // trip the cap notice for a term that never came near it.
-  const filterTruncated = search.truncated;
+  const filterTruncated = truncationNotice(
+    search.truncated,
+    search.nodes.length,
+    FILTER_SEARCH_LIMIT,
+  );
   // The selected node's summary, if it's among the loaded members (for the Move action). The detail
   // pane itself renders from the id, so it still works for a selection whose group isn't loaded.
   const selectedNode =
@@ -490,10 +521,13 @@ export function NodesPage() {
       {anyGroupTruncated && (
         <p className="muted nodes-truncated">{t('inventory.groupTruncated')}</p>
       )}
-      {filterTruncated && (
+      {filterTruncated === 'page' && (
         <p className="muted nodes-truncated">
           {t('inventory.filterTruncated', { count: FILTER_SEARCH_LIMIT })}
         </p>
+      )}
+      {filterTruncated === 'scan' && (
+        <p className="muted nodes-truncated">{t('inventory.filterScanTruncated')}</p>
       )}
       {members.revealTruncated && (
         <p className="muted nodes-truncated">{t('inventory.revealTruncated')}</p>
@@ -566,6 +600,35 @@ export function NodesPage() {
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder={t('inventory.searchPlaceholder')}
+              />
+            </div>
+            <div className="nodes-pane-filters">
+              <FilterSelect
+                value={inventoryFilters.state}
+                onChange={(v) => setInventoryFilters({ ...inventoryFilters, state: v })}
+                options={NODE_STATE_FILTERS.map((s) => ({
+                  value: s,
+                  label: t(`format:state.${s}`),
+                }))}
+                allLabel={t('inventory.filter.allStates')}
+                ariaLabel={t('inventory.filter.stateAria')}
+              />
+              <FilterSelect
+                value={inventoryFilters.kind}
+                onChange={(v) => setInventoryFilters({ ...inventoryFilters, kind: v })}
+                options={NODE_KINDS.map((k) => ({
+                  value: k,
+                  label: t(NODE_KIND_SPEC[k].labelKey),
+                }))}
+                allLabel={t('inventory.filter.allKinds')}
+                ariaLabel={t('inventory.filter.kindAria')}
+              />
+              <FilterSelect
+                value={inventoryFilters.pool}
+                onChange={(v) => setInventoryFilters({ ...inventoryFilters, pool: v })}
+                options={pools.map((p) => ({ value: p.name, label: p.name }))}
+                allLabel={t('inventory.filter.allPools')}
+                ariaLabel={t('inventory.filter.poolAria')}
               />
             </div>
           </div>

@@ -15,7 +15,7 @@
 // The honest limitation — it fires only while Yagra is open in this browser — is stated in the
 // drawer hint rather than left for the operator to discover.
 
-import type { AnalysisJob } from '../types/api';
+import type { AnalysisJob, AnalysisJobState } from '../types/api';
 import { reportPathFor, toolById } from './data';
 
 /** Terminal for notification purposes: anything that is not still in flight.
@@ -23,7 +23,7 @@ import { reportPathFor, toolById } from './data';
  *  Broader than `TERMINAL_JOB_STATES` in `data.ts`, which is the subset whose *label* is shown and
  *  therefore needs locale strings. A successful run is terminal too, and is the case an operator
  *  most wants to hear about. */
-export function isFinished(state: string): boolean {
+export function isFinished(state: AnalysisJobState): boolean {
   return state !== 'running' && state !== 'queued';
 }
 
@@ -51,7 +51,11 @@ export function shouldNotify(
   if (isFinished(prev.state)) return null; // already finished; this is a repeat tick
   if (!isFinished(next.state)) return null; // still in flight
   return {
-    msgKey: next.state === 'succeeded' ? 'toast.finished' : 'toast.failed',
+    // `done`, not `succeeded` — the latter is the *report* vocabulary. This read `'succeeded'`
+    // for as long as the notice existed, and because `state` was a bare string nothing objected:
+    // the comparison was simply always false, so every successful analysis said it had failed.
+    // Typing `AnalysisJob.state` is what turned it into a compile error.
+    msgKey: next.state === 'done' ? 'toast.finished' : 'toast.failed',
     linkTo: reportLinkFor(next),
   };
 }

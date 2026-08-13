@@ -8,14 +8,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchInput } from '../ui/TableToolbar';
-import { api } from '../../services/api';
-import type { NodeSearchResult } from '../../types/api';
+import { useNodeSearch } from '../../lib/useNodeSearch';
 import './NodePicker.css';
 
 /** Server search cap: request (and show) at most this many hits — keep typing to narrow. */
 const MAX_RESULTS = 50;
-/** Debounce for the server search so a fast typist fires one request, not one per keystroke. */
-const SEARCH_DEBOUNCE_MS = 200;
 
 interface Props {
   /** Selected node id (the URL/parent is the source of truth), or null for "no filter". */
@@ -44,8 +41,6 @@ export function NodePicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const [results, setResults] = useState<NodeSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
 
@@ -71,35 +66,9 @@ export function NodePicker({
     if (open) boxRef.current?.querySelector('input')?.focus();
   }, [open]);
 
-  // Server-side search: (re)query on open and on each (debounced) keystroke. Empty query returns
-  // the first page by name so the list isn't blank before typing. The cancelled flag drops a stale
-  // response so a slow request can't overwrite the results of a later keystroke.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const term = query.trim();
-    setLoading(true);
-    const h = setTimeout(
-      () => {
-        api
-          .searchNodes(term, MAX_RESULTS)
-          .then((r) => {
-            if (!cancelled) setResults(r);
-          })
-          .catch(() => {
-            if (!cancelled) setResults([]);
-          })
-          .finally(() => {
-            if (!cancelled) setLoading(false);
-          });
-      },
-      term ? SEARCH_DEBOUNCE_MS : 0,
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(h);
-    };
-  }, [open, query]);
+  // The debounce, the empty-term-is-a-real-query rule and the stale-response guard are all in
+  // `useNodeSearch` — this was one of three byte-identical copies of them.
+  const { results, loading } = useNodeSearch(open, query, MAX_RESULTS);
 
   const shown = useMemo(
     () => (exclude && exclude.size ? results.filter((node) => !exclude.has(node.id)) : results),
@@ -107,10 +76,10 @@ export function NodePicker({
   );
 
   const openPopover = () => {
+    // The hook re-queries on open (the empty term is a real query), so there is nothing to clear
+    // here — clearing would blank the list for one frame before the same rows came back.
     setQuery('');
     setActive(0);
-    setResults([]);
-    setLoading(true);
     setOpen(true);
   };
 

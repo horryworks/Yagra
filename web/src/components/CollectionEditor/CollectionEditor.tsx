@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { api, errMsg, type CollectionItemInput } from '../../services/api';
 import type {
   CollectionKind,
@@ -63,17 +64,15 @@ export function CollectionEditor({
     load();
   }, [load]);
 
-  // Debounced catalog search while the picker is open.
+  // Catalog search while the picker is open: the term settles, then one request goes out.
+  const settledPick = useDebouncedValue(pickQuery.trim());
   useEffect(() => {
     if (!picking) return;
-    const timer = setTimeout(() => {
-      api
-        .listMibCatalog(pickQuery.trim() || undefined)
-        .then(setPicks)
-        .catch(() => setPicks([]));
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [picking, pickQuery]);
+    api
+      .listMibCatalog(settledPick || undefined)
+      .then(setPicks)
+      .catch(() => setPicks([]));
+  }, [picking, settledPick]);
 
   // A catalog row types `collection`/`metric_kind` as bare strings on the wire, unlike the stored
   // collection item this form writes, so the picker narrows rather than adopting the row's value.

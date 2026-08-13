@@ -15,6 +15,7 @@ import {
   matchesInterface,
   matchesMetric,
   matchesNeighbor,
+  metricIsFlowing,
   type FilterableInterface,
   type InterfaceFilters,
   type MetricFilters,
@@ -148,10 +149,38 @@ describe('matchesMetric', () => {
     expect(matchesMetric(metric({ status: 'no_data' }), DEFAULT_METRIC_FILTERS)).toBe(true);
   });
 
-  it('hides the ones that are configured but not arriving', () => {
+  it('hides only the ones that are not arriving', () => {
+    // `no_data` is the one state that means "nothing is coming".
     expect(matchesMetric(metric({ status: 'no_data' }), mf({ flowingOnly: true }))).toBe(false);
-    expect(matchesMetric(metric({ status: 'unconfigured' }), mf({ flowingOnly: true }))).toBe(false);
     expect(matchesMetric(metric(), mf({ flowingOnly: true }))).toBe(true);
+  });
+
+  it('keeps an unconfigured metric, because unconfigured means arriving without a collection set', () => {
+    // ⚠️ This asserted the opposite and was wrong. `MetricStatus` crosses two facts: `ok` is
+    // configured AND arriving, `unconfigured` is arriving with NO collection set behind it —
+    // reachability, `http_up`, `dns_up`, the neighbour count, JSON-extracted values.
+    //
+    // The consequence was worst exactly where the tab has least: a URL or DNS monitor has no
+    // collection set at all, so every metric it has is `unconfigured`, and "only the ones that are
+    // flowing" emptied the list it was meant to narrow.
+    expect(matchesMetric(metric({ status: 'unconfigured' }), mf({ flowingOnly: true }))).toBe(true);
+    expect(
+      matchesMetric(metric({ metric: 'http_up', status: 'unconfigured' }), mf({ flowingOnly: true })),
+    ).toBe(true);
+  });
+
+  it('classifies every status the API can return', () => {
+    // Driven off the union so a new status has to be decided rather than falling into "not
+    // flowing" by default — which is the direction that hides rows.
+    const seen = (['ok', 'no_data', 'unconfigured'] as const).map((status) => [
+      status,
+      metricIsFlowing(metric({ status })),
+    ]);
+    expect(seen).toEqual([
+      ['ok', true],
+      ['no_data', false],
+      ['unconfigured', true],
+    ]);
   });
 
   it('searches the metric name', () => {

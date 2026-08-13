@@ -9,6 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { api, ApiError } from '../../services/api';
 import { formatBytes, formatAsn } from '../../lib/format';
 import { PROTO_NAMES, protoName, portLabel } from '../../lib/flowLabels';
@@ -33,6 +34,11 @@ import { buildFlowFilters, toggleFilterValue } from './flowFilters';
 // implementation rather than a second copy that has to be fixed twice.
 import { flowTrendSeries } from '../../dashboard/widgets/util';
 import './FlowTab.css';
+
+/** Settle delay for the port/peer boxes. Longer than the shared search debounce because a commit
+ *  here re-runs the whole flow fan-out (top talkers, conversations, ports, protocols, AS), not one
+ *  list query. */
+const FLOW_FILTER_DEBOUNCE_MS = 350;
 
 const TOP_N = 10;
 
@@ -64,14 +70,15 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const [asAgg, setAsAgg] = useState<FlowAsAgg[]>([]);
   const [xRange, setXRange] = useState<[number, number] | undefined>(undefined);
 
-  // Debounce the free-text filters (port/peer) so a fetch fires ~once the operator stops typing.
+  // The free-text filters (port/peer) settle before they commit, so a fetch fires once the
+  // operator stops typing. 350ms rather than the shared 200: these two drive a multi-query flow
+  // fetch, not a single list.
+  const settledPort = useDebouncedValue(portInput, FLOW_FILTER_DEBOUNCE_MS);
+  const settledPeer = useDebouncedValue(peerInput, FLOW_FILTER_DEBOUNCE_MS);
   useEffect(() => {
-    const id = setTimeout(() => {
-      setPort(portInput);
-      setPeer(peerInput);
-    }, 350);
-    return () => clearTimeout(id);
-  }, [portInput, peerInput]);
+    setPort(settledPort);
+    setPeer(settledPeer);
+  }, [settledPort, settledPeer]);
 
   // Click-to-filter: a Top-N row / conversation cell / Sankey node sets the matching filter (and a
   // second click on the already-active value clears it), writing the same state the typed bar drives

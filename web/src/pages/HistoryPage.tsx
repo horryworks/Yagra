@@ -43,8 +43,8 @@ import {
 // with a server-side node typeahead, which is exactly the node_id + group_id pair this screen
 // filters on. It is mounted on the `troubleshoot` i18n namespace, so moving it to components/ means
 // moving its strings and its consumers too — worth doing, but not inside this change.
-import { ScopePicker } from '../troubleshoot/ScopePicker';
-import { allScope, nodeScopeLabel, type ScopeValue } from '../troubleshoot/scope';
+import { ScopePicker } from '../components/ScopePicker/ScopePicker';
+import { allScope, nodeScopeLabel, type ScopeValue } from '../components/ScopePicker/scope';
 import { scopeFilter } from '../troubleshoot/findingsQuery';
 
 export function HistoryPage() {

@@ -20,6 +20,31 @@
   no range still gets none.
 
 ### New Features
+- **Nodes ▸ All nodes can be narrowed by state, kind and poll pool.** The tree could search names
+  and addresses and nothing else, so "which URL monitors are down" and "what does the tokyo pool
+  actually poll" had no answer on the screen that lists them. The three filters live in the URL, so
+  a narrowed inventory can be shared. `GET /api/v1/nodes` accepts `state`, `kind` and `pool`, and
+  the MCP `list_nodes` tool takes the same three. Two notes on what they mean. `pool` is the
+  **effective** pool — a node's own if it sets one, otherwise the nearest folder that does,
+  otherwise `default` — because filtering the stored column alone would find nothing for `default`,
+  which is the pool most of a fleet is actually in. And none of the three can be a SQL `WHERE`
+  clause: a node's state lives in the alert engine, its kind is derived from which side table
+  carries a row, and its pool is inherited. They are applied by the same resolvers every other
+  screen asks, over a bounded scan of at most 5,000 candidates, and the response carries a new
+  `truncated` flag when that bound was reached — so a short answer says whether it is complete
+  instead of leaving you to assume it.
+- **Reports ▸ Saved reports can be narrowed** by report, run state and free text.
+  `GET /api/v1/reports/runs` accepts `definition_id`, `state` and `since` for API clients, and the
+  MCP `get_report_runs` tool takes the same three; the page filters in the browser, because its
+  rows arrive over SSE and a filtered fetch would be undone by the next progress frame. Filtering by
+  report uses the definition's id rather than its name, so renaming a report does not orphan its own
+  history.
+- **Settings ▸ API tokens sorts by column.** Click a header to sort, click again to reverse. Status
+  sorts by severity rather than alphabetically, so the tokens that do not work group at one end, and
+  a token with no expiry sorts last in both directions rather than filling the top of the screen
+  when the order is reversed. The shared table component gained the affordance; it deliberately does
+  not sort the rows itself, so a screen that pages through a large list cannot accidentally reorder
+  the pages it happens to have loaded and present that as the order.
 - **Alerts ▸ Rules can be narrowed, in the database.** This is the one configuration table that
   grows with the fleet — a node-level override is per node × metric — which is why the list has
   always been capped at 500 with a "showing N of M" note. It had no filter at all, and one added in
@@ -71,6 +96,27 @@
   name, which is unindexed, and searching it would turn every page into a full table scan.
 
 ### Bug Fixes
+- **A report exported as CSV could carry a spreadsheet formula out of the product.** The exporter
+  quoted per RFC 4180 and stopped there, which does not help: a spreadsheet strips the quotes and
+  then evaluates the text underneath. Report tables are built from device-supplied strings — a node
+  name, an interface description, a `sysDescr` — so a device (or anyone who could set a node's name)
+  could plant `=HYPERLINK(…)` and have it run for whoever opened the export. The WebUI had already
+  paid for this exact omission once and neutralizes it; the backend had a second encoder that did
+  not, which is what a duplicated encoder costs. There is one encoder now, and a test holds it
+  against the WebUI's. Exported values are unchanged except that every field is quoted and a
+  formula-triggering one gains a leading apostrophe.
+- **The completion notice for a Troubleshoot analysis announced every success as a failure.** "Notify
+  me" compared the finished run against `succeeded`, which is the word a *report* run uses — an
+  analysis run says `done`. The comparison was simply never true, so every run that finished
+  normally produced "your analysis failed". `AnalysisJob.state` is a closed set on both sides now,
+  which makes that comparison a compile error rather than a silent mismatch; the API additionally
+  rejects a filter naming a state nothing writes instead of answering an empty list.
+- **The node detail's Collection tab hid every live metric on a URL or DNS monitor.** Its "Arriving
+  only" toggle read "arriving" as one status, but the status crosses two facts: one value means
+  *configured and arriving* and another means *arriving with no collection set behind it* — which is
+  what reachability, `http_up`, `dns_up`, the neighbour count and JSON-extracted values all are. A
+  URL or DNS monitor has no collection set at all, so the toggle emptied the list it was meant to
+  narrow.
 - **Node names showed up as raw UUIDs, and whether they did was a coin toss per page load.** Any
   list that references a node — active alerts, alert history, events, saved findings, pollers —
   resolves ids to names in one batched request. The request was sent from an effect on the component

@@ -85,5 +85,18 @@
     "disabled": "無効",
     "searchAria": "この一覧を検索",
     "noMatch": "この絞り込みに一致するものがありません。"
+  },
+  "scope": {
+    "all": "全ノード",
+    "modeAria": "範囲の種類",
+    "groupsAria": "グループ",
+    "noGroups": "ノードグループはまだありません。",
+    "modes": {
+      "all": "全て",
+      "group": "グループ",
+      "node": "ノード"
+    },
+    "groupLabel": "グループ: {{name}}（サブグループを含む）",
+    "nodeLabel": "ノード: {{name}}"
   }
 }

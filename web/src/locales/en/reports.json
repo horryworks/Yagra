@@ -35,7 +35,21 @@
       "generated": "Generated"
     },
     "view": "View",
-    "empty": "No reports generated yet. Run a template to create one."
+    "empty": "No reports generated yet. Run a template to create one.",
+    "state": {
+      "queued": "Queued",
+      "running": "Running",
+      "succeeded": "Succeeded",
+      "failed": "Failed"
+    },
+    "filter": {
+      "searchPlaceholder": "Search reports…",
+      "searchAria": "Search saved reports",
+      "allReports": "All reports",
+      "reportAria": "Filter by report",
+      "allStates": "All states",
+      "stateAria": "Filter by state"
+    }
   },
   "defs": {
     "cols": {

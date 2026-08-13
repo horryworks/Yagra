@@ -49,3 +49,36 @@ macro_rules! token_enum {
 }
 
 pub(crate) use token_enum;
+
+/// Parse an operator-supplied **filter** token against a stored enum's list, refusing the `Unknown`
+/// fallback.
+///
+/// `Unknown` is the one variant nothing ever writes — it is what a token this build cannot read
+/// degrades to on the way *in*. Accepting it on the way out would build `WHERE col = 'unknown'`,
+/// which matches no row, so the operator would get a confident empty answer where they should have
+/// got a 400. Every stored enum that reaches a query parameter has this same rule, which is why it
+/// is here and not copied into each of them.
+pub(crate) fn parse_filter_token<T: Copy + PartialEq>(
+    all: &[T],
+    unknown: T,
+    token: impl Fn(T) -> &'static str,
+    s: &str,
+) -> Option<T> {
+    all.iter()
+        .copied()
+        .find(|v| *v != unknown && token(*v) == s)
+}
+
+/// The tokens [`parse_filter_token`] accepts, for the 400 that names them.
+pub(crate) fn filter_token_list<T: Copy + PartialEq>(
+    all: &[T],
+    unknown: T,
+    token: impl Fn(T) -> &'static str,
+) -> String {
+    all.iter()
+        .copied()
+        .filter(|v| *v != unknown)
+        .map(token)
+        .collect::<Vec<_>>()
+        .join(", ")
+}

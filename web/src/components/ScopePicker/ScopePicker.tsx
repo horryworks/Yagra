@@ -6,11 +6,10 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SearchInput } from '../components/ui/TableToolbar';
-import { api } from '../services/api';
-import { groupOptions } from '../lib/nodeTree';
-import type { NodeSearchResult } from '../types/api';
-import { Segmented } from './Segmented';
+import { SearchInput } from '../ui/TableToolbar';
+import { groupOptions } from '../../lib/nodeTree';
+import { useNodeSearch } from '../../lib/useNodeSearch';
+import { Segmented } from '../../components/ui/Segmented';
 import { useScopeData } from './useScopeData';
 import { allScope, groupScopeLabel, nodeScopeLabel, type ScopeValue } from './scope';
 import './ScopePicker.css';
@@ -18,8 +17,6 @@ import './ScopePicker.css';
 type Mode = 'all' | 'group' | 'node';
 /** Server search cap — request (and show) at most this many hits; keep typing to narrow. */
 const MAX_RESULTS = 50;
-/** Debounce so a fast typist fires one search request, not one per keystroke. */
-const SEARCH_DEBOUNCE_MS = 200;
 
 interface Props {
   value: ScopeValue;
@@ -30,7 +27,7 @@ interface Props {
 }
 
 export function ScopePicker({ value, onChange, id, className, disabled }: Props) {
-  const { t } = useTranslation('troubleshoot');
+  const { t } = useTranslation('common');
   const { groups } = useScopeData();
   const MODES = useMemo(
     () => [
@@ -44,8 +41,6 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
   const [mode, setMode] = useState<Mode>(value.kind);
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
-  const [results, setResults] = useState<NodeSearchResult[]>([]);
-  const [nodesLoading, setNodesLoading] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const nodeBoxRef = useRef<HTMLDivElement>(null);
 
@@ -71,35 +66,10 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
     if (open && mode === 'node') nodeBoxRef.current?.querySelector('input')?.focus();
   }, [open, mode]);
 
-  // Server-side node search: (re)query on entering Node mode and on each (debounced) keystroke —
-  // never a whole-inventory client load. Empty query returns the first page by name so the list
-  // isn't blank before typing. A cancelled flag drops a stale response from an earlier keystroke.
-  useEffect(() => {
-    if (!open || mode !== 'node') return;
-    let cancelled = false;
-    const term = query.trim();
-    setNodesLoading(true);
-    const h = setTimeout(
-      () => {
-        api
-          .searchNodes(term, MAX_RESULTS)
-          .then((r) => {
-            if (!cancelled) setResults(r);
-          })
-          .catch(() => {
-            if (!cancelled) setResults([]);
-          })
-          .finally(() => {
-            if (!cancelled) setNodesLoading(false);
-          });
-      },
-      term ? SEARCH_DEBOUNCE_MS : 0,
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(h);
-    };
-  }, [open, mode, query]);
+  // The debounce, the empty-term-is-a-real-query rule and the stale-response guard live in
+  // useNodeSearch (lib/) — this was one of three byte-identical copies. Node mode is the only
+  // one that searches, so it is the active condition.
+  const { results, loading: nodesLoading } = useNodeSearch(open && mode === 'node', query, MAX_RESULTS);
 
   const groupItems = useMemo(() => groupOptions(groups), [groups]);
   const nameById = useMemo(() => new Map(groups.map((g) => [g.id, g.name])), [groups]);
@@ -109,9 +79,10 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
   const openPopover = () => {
     if (disabled) return;
     setMode(value.kind);
+    // The hook re-queries whenever Node mode is entered (the empty term is a real query), so
+    // there is nothing to clear here.
     setQuery('');
     setActive(0);
-    setResults([]);
     setOpen(true);
   };
 
@@ -122,8 +93,6 @@ export function ScopePicker({ value, onChange, id, className, disabled }: Props)
     if (m === 'all') {
       onChange(allScope(t));
       setOpen(false);
-    } else if (m === 'node') {
-      setResults([]);
     }
   };
 

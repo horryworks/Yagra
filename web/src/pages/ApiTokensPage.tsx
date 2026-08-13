@@ -45,6 +45,7 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
+import { sortRows, type SortState } from '../lib/tableSort';
 import {
   TableToolbar,
   TableSpacer,
@@ -54,16 +55,17 @@ import {
 } from '../components/ui/TableToolbar';
 import {
   DEFAULT_TOKEN_FILTERS,
+  DEFAULT_TOKEN_SORT,
   isTokenFiltered,
   matchesToken,
   TOKEN_STATE_FILTERS,
+  tokenSortValues,
   type TokenFilters,
 } from './apiTokenFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
 import './ApiTokensPage.css';
-
 
 /** Elevated roles read as a warmer tone so a non-viewer token stands out in the list. */
 const roleTone = (role: Role): 'neutral' | 'info' | 'warning' =>
@@ -88,7 +90,13 @@ function tokenColumns(
 ): Column<ApiTokenSummary>[] {
   const now = new Date();
   const cols: Column<ApiTokenSummary>[] = [
-    { key: 'name', header: t('cols.name'), width: '1fr', render: (r) => <span className="tok-name">{r.name}</span> },
+    {
+      key: 'name',
+      header: t('cols.name'),
+      width: '1fr',
+      sortable: true,
+      render: (r) => <span className="tok-name">{r.name}</span>,
+    },
     {
       key: 'surfaces',
       header: t('cols.surfaces'),
@@ -107,12 +115,14 @@ function tokenColumns(
       key: 'role',
       header: t('cols.role'),
       width: '120px',
+      sortable: true,
       render: (r) => <Badge tone={roleTone(r.role)}>{t(`common:role.${r.role}`)}</Badge>,
     },
     {
       key: 'owner',
       header: t('cols.owner'),
       width: '160px',
+      sortable: true,
       render: (r) =>
         r.owner ? (
           // The SSO note only appears for an owner that signs in through an IdP, because that is
@@ -143,6 +153,7 @@ function tokenColumns(
       key: 'status',
       header: t('cols.status'),
       width: '150px',
+      sortable: true,
       render: (r) => {
         const state = tokenState(r, now);
         return (
@@ -159,6 +170,7 @@ function tokenColumns(
       key: 'expires',
       header: t('cols.expires'),
       width: '150px',
+      sortable: true,
       render: (r) => {
         const days = daysUntilExpiry(r.expires_at, now);
         if (!r.expires_at) return <span className="muted">{t('expires.never')}</span>;
@@ -171,11 +183,18 @@ function tokenColumns(
         );
       },
     },
-    { key: 'created', header: t('cols.created'), width: '190px', render: (r) => <TimeCell iso={r.created_at} /> },
+    {
+      key: 'created',
+      header: t('cols.created'),
+      width: '190px',
+      sortable: true,
+      render: (r) => <TimeCell iso={r.created_at} />,
+    },
     {
       key: 'lastUsed',
       header: t('cols.lastUsed'),
       width: '190px',
+      sortable: true,
       render: (r) =>
         r.last_used_at ? <TimeCell iso={r.last_used_at} /> : <span className="muted">{t('lastUsed.never')}</span>,
     },
@@ -470,8 +489,16 @@ export function ApiTokensPage() {
   // (ui-conventions). One clock reading per render so the state filter and the state badge cannot
   // disagree about a token lapsing between two rows.
   const [filters, setFilters] = useState<TokenFilters>(DEFAULT_TOKEN_FILTERS);
+  // The table sorts in the browser, and legitimately: every token is here. `DataTable` renders the
+  // header affordance and reports the click — it never reorders `rows` itself, so a keyset-paged
+  // screen cannot accidentally sort a prefix and present it as the order (`lib/tableSort.ts`).
+  const [sort, setSort] = useState<SortState>(DEFAULT_TOKEN_SORT);
   const now = new Date();
-  const shown = rows.filter((r) => matchesToken(r, filters, now));
+  const shown = sortRows(
+    rows.filter((r) => matchesToken(r, filters, now)),
+    sort,
+    tokenSortValues(now),
+  );
 
   const load = useCallback(() => {
     setError(null);
@@ -553,6 +580,8 @@ export function ApiTokensPage() {
           <DataTable
             rows={shown}
             columns={columns}
+            sort={sort}
+            onSortChange={setSort}
             rowKey={(r) => r.id}
             loading={loading}
             empty={isTokenFiltered(filters) ? t('common:filter.noMatch') : t('empty')}

@@ -14,11 +14,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { api } from '../../services/api';
+import { useNodeSearch } from '../../lib/useNodeSearch';
 import type { NodeSearchResult } from '../../types/api';
 import {
   MAX_RESULTS,
-  SEARCH_DEBOUNCE_MS,
   isCapped,
   keyAction,
   moveActive,
@@ -33,8 +32,6 @@ export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
-  const [results, setResults] = useState<NodeSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -68,34 +65,9 @@ export function GlobalSearch({ mobile = false }: { mobile?: boolean }) {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
-  // Query on each (debounced) keystroke while open. The cancelled flag drops a stale response so a
-  // slow request cannot overwrite the results of a later keystroke.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const term = query.trim();
-    setLoading(true);
-    const h = setTimeout(
-      () => {
-        api
-          .searchNodes(term, MAX_RESULTS)
-          .then((r) => {
-            if (!cancelled) setResults(r);
-          })
-          .catch(() => {
-            if (!cancelled) setResults([]);
-          })
-          .finally(() => {
-            if (!cancelled) setLoading(false);
-          });
-      },
-      term ? SEARCH_DEBOUNCE_MS : 0,
-    );
-    return () => {
-      cancelled = true;
-      clearTimeout(h);
-    };
-  }, [open, query]);
+  // The debounce, the empty-term-is-a-real-query rule and the stale-response guard live in
+  // useNodeSearch (lib/) — this was one of three byte-identical copies.
+  const { results, loading } = useNodeSearch(open, query, MAX_RESULTS);
 
   const go = (r: NodeSearchResult) => {
     navigate(resultRoute(r));

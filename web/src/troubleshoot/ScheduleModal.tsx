@@ -15,8 +15,8 @@ import { Select, FieldHint } from '../components/ui/Field';
 import { api, errMsg } from '../services/api';
 import type { AnalysisSchedule, AnalysisToolKey, Cadence } from '../types/api';
 import { SELECTABLE_CADENCES, WEEKDAY_OPTIONS } from '../lib/cadence';
-import { ScopePicker } from './ScopePicker';
-import { allScope, type ScopeValue } from './scope';
+import { ScopePicker } from '../components/ScopePicker/ScopePicker';
+import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
 import {
   WINDOW_CHOICES,
   blankSchedule,

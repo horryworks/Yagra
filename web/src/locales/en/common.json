@@ -99,5 +99,18 @@
     "disabled": "Disabled",
     "searchAria": "Search this list",
     "noMatch": "Nothing matches these filters."
+  },
+  "scope": {
+    "all": "All nodes",
+    "modeAria": "Scope type",
+    "groupsAria": "Groups",
+    "noGroups": "No node groups yet.",
+    "modes": {
+      "all": "All",
+      "group": "Group",
+      "node": "Node"
+    },
+    "groupLabel": "group: {{name}} (incl. subgroups)",
+    "nodeLabel": "node: {{name}}"
   }
 }

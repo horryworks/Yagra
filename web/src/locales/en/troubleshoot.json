@@ -643,19 +643,6 @@
       }
     }
   },
-  "scope": {
-    "all": "All nodes",
-    "modeAria": "Scope type",
-    "groupsAria": "Groups",
-    "noGroups": "No node groups yet.",
-    "modes": {
-      "all": "All",
-      "group": "Group",
-      "node": "Node"
-    },
-    "groupLabel": "group: {{name}} (incl. subgroups)",
-    "nodeLabel": "node: {{name}}"
-  },
   "methods": {
     "stat": "Statistical",
     "ml": "ML",

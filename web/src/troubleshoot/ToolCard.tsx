@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../components/ui/Button';
 import { METHODS, type Tool, reportPathFor } from './data';
 import { useTroubleshootStore } from './store';
-import { defaultAnalysisInput } from './scope';
+import { defaultAnalysisInput } from './analysisDefaults';
 
 function DepthPips({ depth }: { depth: number }) {
   const { t } = useTranslation('troubleshoot');

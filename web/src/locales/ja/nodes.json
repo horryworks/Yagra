@@ -60,7 +60,16 @@
     "selectPrompt": "詳細を表示するにはノードまたはグループを選択してください。",
     "backToList": "インベントリ",
     "hideTree": "インベントリを折りたたむ",
-    "showTree": "インベントリを表示"
+    "showTree": "インベントリを表示",
+    "filterScanTruncated": "一致するノードの一部は表示されていません（絞り込みが調べられる上限まで調べた結果です）。検索語を足して絞り込んでください。",
+    "filter": {
+      "allStates": "すべての状態",
+      "stateAria": "状態で絞り込み",
+      "allKinds": "すべての種別",
+      "kindAria": "種別で絞り込み",
+      "allPools": "すべてのプール",
+      "poolAria": "ポーリングプールで絞り込み"
+    }
   },
   "add": {
     "node": "ノードを追加",

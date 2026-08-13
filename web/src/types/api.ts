@@ -58,6 +58,7 @@ const schemaEnumPins: {
   ReportTrigger: AssertEqual<ReportTrigger, components['schemas']['ReportRunTrigger']>;
   Cadence: AssertEqual<Cadence, components['schemas']['Cadence']>;
   AnalysisScheduleStatus: AssertEqual<AnalysisScheduleStatus, components['schemas']['AnalysisScheduleStatus']>;
+  AnalysisJobState: AssertEqual<AnalysisJobState, components['schemas']['AnalysisJobState']>;
   EventKind: AssertEqual<EventKind, components['schemas']['EventKind']>;
   EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
   EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
@@ -78,6 +79,7 @@ const schemaEnumPins: {
   ReportTrigger: true,
   Cadence: true,
   AnalysisScheduleStatus: true,
+  AnalysisJobState: true,
   EventKind: true,
   EventAction: true,
   EventMatchKind: true,
@@ -1149,6 +1151,22 @@ export type ReportRunState = (typeof REPORT_RUN_STATES)[number];
 /** What started a run. */
 export const REPORT_TRIGGERS = ['manual', 'scheduled', 'unknown'] as const;
 export type ReportTrigger = (typeof REPORT_TRIGGERS)[number];
+
+/** Lifecycle of a Troubleshoot analysis run.
+ *
+ *  ⚠️ **Not the same vocabulary as a report run**, and the difference has already cost something:
+ *  a finished analysis is `done`, a finished report is `succeeded`. While this was a bare `string`
+ *  the completion toast compared against `'succeeded'`, so every successful analysis announced
+ *  itself as a failure. Both are unions now, and the comparison is a compile error. */
+export const ANALYSIS_JOB_STATES = [
+  'queued',
+  'running',
+  'done',
+  'failed',
+  'cancelled',
+  'unknown',
+] as const;
+export type AnalysisJobState = (typeof ANALYSIS_JOB_STATES)[number];
 
 /** What kind of passive event a source produces. */
 export const EVENT_KINDS = ['syslog', 'trap', 'webhook'] as const;

@@ -6,9 +6,11 @@ import type { ApiTokenSummary } from '../types/api';
 import { TOKEN_STATES } from './tokenForm';
 import {
   DEFAULT_TOKEN_FILTERS,
+  DEFAULT_TOKEN_SORT,
   isTokenFiltered,
   matchesToken,
   TOKEN_STATE_FILTERS,
+  tokenSortValues,
   type TokenFilters,
 } from './apiTokenFilters';
 
@@ -72,5 +74,43 @@ describe('matchesToken', () => {
     expect(isTokenFiltered(DEFAULT_TOKEN_FILTERS)).toBe(false);
     expect(isTokenFiltered(f({ state: 'revoked' }))).toBe(true);
     expect(isTokenFiltered(f({ q: 'x' }))).toBe(true);
+  });
+});
+
+describe('tokenSortValues', () => {
+  const v = tokenSortValues(NOW);
+
+  it('ranks the status column by severity, not alphabetically', () => {
+    // An operator sorting Status wants the tokens that do not work at one end. Alphabetically,
+    // `active` would come before `expired` because `a` precedes `e`.
+    const revoked = Number(v.status(token({ revoked_at: '2026-01-01T00:00:00.000Z' })));
+    const active = Number(v.status(token()));
+    expect(revoked).toBeLessThan(active);
+  });
+
+  it('reports a token with no expiry as missing, so it sorts last either way', () => {
+    // Not "expires at the beginning of time": sorting a never-expiring token as an empty date
+    // would fill the top of the screen with the rows being sorted away from.
+    expect(v.expires(token({ expires_at: null }))).toBeNull();
+    expect(v.expires(token({ expires_at: '2026-09-01T00:00:00.000Z' }))).toBe(
+      '2026-09-01T00:00:00.000Z',
+    );
+  });
+
+  it('reports a never-used token as missing rather than as an empty string', () => {
+    expect(v.lastUsed(token({ last_used_at: null }))).toBeNull();
+    expect(v.owner(token({ owner: null }))).toBeNull();
+  });
+
+  it('has a comparator for every column the page marks sortable', () => {
+    // A column with the affordance and no comparator is a header that does nothing when clicked —
+    // `sortRows` returns the rows untouched, which reads as the table being stuck.
+    expect(Object.keys(v).sort()).toEqual(
+      ['created', 'expires', 'lastUsed', 'name', 'owner', 'role', 'status'].sort(),
+    );
+  });
+
+  it('starts newest-first, matching what the API already returns', () => {
+    expect(DEFAULT_TOKEN_SORT).toEqual({ by: 'created', dir: 'desc' });
   });
 });

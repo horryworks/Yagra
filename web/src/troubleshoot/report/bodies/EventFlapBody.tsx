@@ -16,7 +16,7 @@ import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
-import { Segmented } from '../../Segmented';
+import { Segmented } from '../../../components/ui/Segmented';
 import {
   BalanceBar,
   Chips,

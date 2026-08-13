@@ -78,8 +78,10 @@ import type {
   NodeDetail,
   NodeGroup,
   NodeNameEntry,
+  NodeKind,
   NodePage,
   NodeSearchResult,
+  NodeState,
   NodeStatus,
   MonitoringGap,
   NodeAssignment,
@@ -622,12 +624,24 @@ export const api = {
    *  page's `next_cursor` to fetch the next page; `next_cursor: null` ⇒ last page. A non-empty
    *  `search` switches to server-side name/address search — a single capped page (no cursor) of
    *  full node summaries — so the Nodes tree's filter never full-loads the fleet client-side. */
-  listNodesPage: (opts?: { cursor?: string; limit?: number; search?: string }): Promise<NodePage> =>
+  /** One page of the inventory. Any of `search` / `state` / `kind` / `pool` puts the endpoint into
+   *  filter mode: a single capped page, no cursor, and `truncated` when matches were left out. */
+  listNodesPage: (opts?: {
+    cursor?: string;
+    limit?: number;
+    search?: string;
+    state?: NodeState;
+    kind?: NodeKind;
+    pool?: string;
+  }): Promise<NodePage> =>
     apiGet('/api/v1/nodes', {
       query: {
         cursor: opts?.cursor || undefined,
         limit: opts?.limit,
         search: opts?.search || undefined,
+        state: opts?.state || undefined,
+        kind: opts?.kind || undefined,
+        pool: opts?.pool || undefined,
       },
     }),
 

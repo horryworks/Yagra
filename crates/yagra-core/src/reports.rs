@@ -680,22 +680,13 @@ pub fn result_json_to_csv(result: &serde_json::Value) -> String {
     out
 }
 
-/// Join fields into one CSV record (RFC-4180 quoting).
-fn csv_row(fields: &[&str]) -> String {
-    fields
-        .iter()
-        .map(|f| csv_escape(f))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn csv_escape(s: &str) -> String {
-    if s.contains([',', '"', '\n', '\r']) {
-        format!("\"{}\"", s.replace('"', "\"\""))
-    } else {
-        s.to_owned()
-    }
-}
+// `csv_row` / `csv_escape` lived here and are gone. They quoted per RFC 4180 and stopped there —
+// no spreadsheet-formula neutralization — while a report table's cells are device-supplied
+// (`sysDescr`, `ifAlias`, a node name an operator typed). The WebUI had already paid for that
+// exact omission once; this was the same hole, quieter, on the surface nobody re-read. Both now
+// go through `crate::csv`, which is one encoder and therefore one security boundary
+// (`extensibility.md` §3).
+use crate::csv::row as csv_row;
 
 /// Wrap section HTML fragments in a self-contained, print-friendly HTML document. The CSS is inline
 /// so the same document renders in the WebUI viewer and the PDF renderer (WYSIWYG).
@@ -745,6 +736,30 @@ table.rs-table td{padding:6px 8px;border-bottom:1px solid #eef1f6}\
 const DEF_COLS: &str = "id, name, description, spec, updated_by, \
      (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_ms, \
      (EXTRACT(EPOCH FROM updated_at) * 1000)::bigint AS updated_ms";
+
+/// What narrows the saved-runs list. Every field optional; all of them ANDed.
+///
+/// A struct rather than three `Option` parameters, for the reason [`crate::analysis::JobFilter`]
+/// is one: three optionals in a row is the call-site mistake that compiles, runs, and answers a
+/// different question.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct RunFilter {
+    /// Only runs generated from this report definition. A definition that has since been deleted
+    /// leaves its runs behind with the id still on them, so this can name one that no longer
+    /// exists — which returns those runs rather than an error, and is the useful answer.
+    pub definition_id: Option<Uuid>,
+    /// Only runs in this lifecycle state.
+    pub state: Option<ReportRunState>,
+    /// Only runs created at or after this instant.
+    pub since: Option<DateTime<Utc>>,
+}
+
+/// The saved-runs predicate: one const, every clause always present, every value a nullable bind.
+/// Not assembled conditionally — a `WHERE` built by pushing clauses has a branch per filter that
+/// can be forgotten, and a forgotten one fails open.
+const RUN_FILTER_WHERE: &str = "($1::uuid IS NULL OR definition_id = $1) \
+     AND ($2::text IS NULL OR state = $2) \
+     AND ($3::timestamptz IS NULL OR created_at >= $3)";
 
 const RUN_COLS: &str = "id, definition_id, name, trigger, state, pct, error, \
      (EXTRACT(EPOCH FROM range_from) * 1000)::bigint AS range_from_ms, \
@@ -1014,10 +1029,18 @@ impl ReportsRepo {
 
     // — Runs —
 
-    pub async fn list_runs(&self, limit: i64) -> anyhow::Result<Vec<ReportRun>> {
+    pub async fn list_runs(
+        &self,
+        limit: i64,
+        filter: &RunFilter,
+    ) -> anyhow::Result<Vec<ReportRun>> {
         let rows = sqlx::query(&format!(
-            "SELECT {RUN_COLS} FROM report_runs ORDER BY created_at DESC LIMIT $1"
+            "SELECT {RUN_COLS} FROM report_runs WHERE {RUN_FILTER_WHERE} \
+             ORDER BY created_at DESC LIMIT $4"
         ))
+        .bind(filter.definition_id)
+        .bind(filter.state.map(|s| s.as_str().to_owned()))
+        .bind(filter.since)
         .bind(limit.clamp(1, 500))
         .fetch_all(&self.pool)
         .await?;
@@ -1717,6 +1740,40 @@ mod tests {
     }
 
     #[test]
+    fn the_run_filter_binds_every_placeholder_it_names_and_interpolates_none() {
+        // One const, one nullable bind per clause, in the one order that matches. A positional
+        // bind that drifts from its placeholder is silent: the query still runs and answers a
+        // different question. Needles are built at runtime — a literal one in a test that reads
+        // its own file matches itself and passes forever.
+        let placeholders = (1..=3)
+            .filter(|n| RUN_FILTER_WHERE.contains(&format!("${n}")))
+            .count();
+        assert_eq!(placeholders, 3, "{RUN_FILTER_WHERE}");
+        assert!(
+            !RUN_FILTER_WHERE.contains("{}"),
+            "the predicate must not be a format string"
+        );
+        let src = include_str!("reports.rs");
+        let after = src
+            .split_once("pub async fn list_runs")
+            .expect("list_runs exists")
+            .1;
+        // Stop at the function's own closing brace: statements after it bind too, and counting
+        // those would make this pass for the wrong reason.
+        let body = after.split_once("\n    }").map_or(after, |(b, _)| b);
+        assert_eq!(
+            body.matches(".bind(").count(),
+            placeholders + 1,
+            "one bind per placeholder, plus the limit"
+        );
+        // Every clause is always present. A `WHERE` assembled by pushing clauses has a branch per
+        // filter that can be forgotten, and a forgotten one fails open.
+        for clause in ["definition_id = $1", "state = $2", "created_at >= $3"] {
+            assert!(RUN_FILTER_WHERE.contains(clause), "missing {clause}");
+        }
+    }
+
+    #[test]
     fn escape_html_neutralizes_markup() {
         assert_eq!(esc("<b>&\"'"), "&lt;b&gt;&amp;&quot;&#39;");
         assert_eq!(esc("plain text"), "plain text");
@@ -1779,10 +1836,34 @@ mod tests {
             }]
         });
         let csv = result_json_to_csv(&result);
-        assert!(csv.contains("\"My, Report\"")); // comma forces quoting
-        assert!(csv.contains("Node,CPU"));
-        assert!(csv.contains("\"r\"\"2\",10")); // embedded quote doubled
-        assert!(csv.contains("Peak,88%"));
+        // Every field is quoted, not only the ones containing a comma. Deciding per value is a
+        // rule that can be got wrong once and corrupt every row after it — which is why the shared
+        // encoder does not offer the choice.
+        assert!(csv.contains("\"My, Report\""));
+        assert!(csv.contains("\"Node\",\"CPU\""));
+        assert!(csv.contains("\"r\"\"2\",\"10\"")); // embedded quote doubled
+        assert!(csv.contains("\"Peak\",\"88%\""));
+    }
+
+    #[test]
+    fn a_report_cell_cannot_carry_a_spreadsheet_formula_out_of_the_product() {
+        // Report tables are built from device-supplied strings — a node name, `ifAlias`,
+        // `sysDescr`. This export went out for its whole life with RFC 4180 quoting and nothing
+        // else, which a spreadsheet strips before evaluating the text underneath.
+        let result = serde_json::json!({
+            "title": "T",
+            "sections": [{
+                "title": "S",
+                "table": {
+                    "columns": ["Node"],
+                    "rows": [["=HYPERLINK(\"http://evil\",\"click\")"], ["-0.5"]]
+                }
+            }]
+        });
+        let csv = result_json_to_csv(&result);
+        assert!(csv.contains("\"'=HYPERLINK"), "not neutralized: {csv}");
+        // …and a negative number is still a number, or every numeric column becomes text.
+        assert!(csv.contains("\"-0.5\""), "{csv}");
     }
 
     #[test]
