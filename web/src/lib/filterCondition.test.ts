@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { TEXT_MODES, type TextMode } from './columnFilter';
 import {
   compileCondition,
+  conditionEcho,
   conditionError,
   conditionIsActive,
   decodeCondition,
@@ -152,5 +153,37 @@ describe('conditionError', () => {
     expect(conditionError(c('', 'regex'))).toBeNull();
     expect(conditionError(c('^ok$', 'regex'))).toBeNull();
     expect(conditionError(c('[', 'regex'))).toBeTruthy();
+  });
+});
+
+describe('conditionEcho — what the editor will read back', () => {
+  it('reports the default for an inactive condition, whatever mode it carried', () => {
+    // ⚠️ The fact the editor got wrong. Turning on Regex with an empty box produces a condition
+    // that encodes to '' and therefore comes back as the default — so an editor comparing against
+    // what it *sent* sees a difference, calls it an outside edit, and resets the switch. The
+    // symptom is a switch that cannot be moved until something is typed.
+    for (const mode of TEXT_MODES) {
+      for (const not of [false, true]) {
+        expect(conditionEcho(c('', mode, not))).toEqual(EMPTY_CONDITION);
+      }
+    }
+    // Whitespace is inactive in `contains` and meaningful in `regex` — the echo has to follow
+    // `conditionIsActive`, not `term !== ''`, or the two answers drift.
+    expect(conditionEcho(c('   ', 'contains'))).toEqual(EMPTY_CONDITION);
+    expect(conditionEcho(c('   ', 'regex'))).toEqual(c('   ', 'regex'));
+  });
+
+  it('is the identity on an active condition, including the escaped terms', () => {
+    for (const cond of [
+      c('link down'),
+      c('!link'),
+      c('~link'),
+      c('\\link'),
+      c('^%LINK-3', 'regex'),
+      c('policypermit', 'contains', true),
+      c('^%LINK-3', 'regex', true),
+    ]) {
+      expect(conditionEcho(cond)).toEqual(cond);
+    }
   });
 });

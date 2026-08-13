@@ -21,7 +21,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TextMode } from '../../lib/columnFilter';
-import { conditionError, type TextCondition } from '../../lib/filterCondition';
+import {
+  conditionEcho,
+  conditionError,
+  conditionIsActive,
+  type TextCondition,
+} from '../../lib/filterCondition';
 import './TextConditionEditor.css';
 
 interface Props {
@@ -50,11 +55,17 @@ export function TextConditionEditor({
   autoFocus,
 }: Props) {
   const { t } = useTranslation('common');
-  const [draft, setDraft] = useState(value.term);
-  /** The term this component last committed. Without it, the sync-from-props effect below would
-   *  fight the debounce: the commit re-enters as a new `value.term` and would reset the draft the
-   *  operator has kept typing into. */
-  const committed = useRef(value.term);
+  /** **The whole condition is draft state, not just the term.** Mode and negation are meaningful
+   *  before there is anything to match — an operator turns on Regex and *then* types a pattern —
+   *  but they cannot be stored: an inactive condition encodes to `''` and the key is deleted, so
+   *  the only place they can live until a term exists is here. Keeping only the term here is what
+   *  made the switch appear frozen on an empty box. */
+  const [draft, setDraft] = useState<TextCondition>(value);
+  /** What the parent will report back after our last commit — `conditionEcho`, not what we sent.
+   *  Without it the sync-from-props effect below fights the debounce (the commit re-enters as a new
+   *  `value` and resets the draft the operator is still typing into) and, for an inactive
+   *  condition, undoes the mode they just chose. */
+  const echo = useRef<TextCondition>(conditionEcho(value));
   /** ⚠️ `value` and `onChange` are read through a ref, and the debounce effect depends on `draft`
    *  ALONE. Both props change identity on nearly every parent render — `value` is derived from the
    *  URL, `onChange` is an inline closure — so listing them as dependencies restarts the timer each
@@ -62,47 +73,61 @@ export function TextConditionEditor({
    *  in a live app. */
   const latest = useRef({ value, onChange });
   latest.current = { value, onChange };
+  /** The debounce fires after the render that scheduled it, so it must read the *current* draft
+   *  rather than the one captured when the timer was set. */
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
 
-  // Adopt an externally-changed term (the cell's clear button, a back/forward navigation), but not
-  // the echo of our own commit.
+  // Adopt an externally-changed condition (the cell's clear button, a back/forward navigation), but
+  // not the echo of our own commit.
   useEffect(() => {
-    if (value.term !== committed.current) {
-      committed.current = value.term;
-      setDraft(value.term);
+    // Read through the ref rather than the prop: the three primitives are the real dependencies,
+    // and naming `value` itself would re-run this on every parent render (new object identity).
+    const next = latest.current.value;
+    const e = echo.current;
+    if (next.term !== e.term || next.mode !== e.mode || next.not !== e.not) {
+      echo.current = next;
+      setDraft(next);
     }
-  }, [value.term]);
+  }, [value.term, value.mode, value.not]);
 
-  useEffect(() => {
-    if (draft === committed.current) return;
-    const id = setTimeout(() => {
-      committed.current = draft;
-      latest.current.onChange({ ...latest.current.value, term: draft });
-    }, DEBOUNCE_MS);
-    return () => clearTimeout(id);
-  }, [draft]);
-
-  const commitNow = (next: TextCondition) => {
-    committed.current = next.term;
-    onChange(next);
+  const commit = (next: TextCondition) => {
+    const wasActive = conditionIsActive(echo.current);
+    echo.current = conditionEcho(next);
+    // Flipping a switch on an empty box changes nothing the URL can hold, so do not write one —
+    // that would push a history entry per click for a filter that is not filtering.
+    if (!wasActive && !conditionIsActive(next)) return;
+    latest.current.onChange(next);
   };
 
-  const error = conditionError({ ...value, term: draft });
-  const showHint = containsSemantics === 'token' && value.mode === 'contains';
+  useEffect(() => {
+    if (draft.term === echo.current.term) return;
+    const id = setTimeout(() => commit(draftRef.current), DEBOUNCE_MS);
+    return () => clearTimeout(id);
+  }, [draft.term]);
+
+  const commitNow = (next: TextCondition) => {
+    setDraft(next);
+    commit(next);
+  };
+
+  const error = conditionError(draft);
+  const showHint = containsSemantics === 'token' && draft.mode === 'contains';
 
   return (
     <div className="tcond">
       <input
         type="search"
         className="tcond-input"
-        value={draft}
+        value={draft.term}
         placeholder={placeholder ?? t('filter.termPlaceholder')}
         aria-label={placeholder ?? t('filter.termPlaceholder')}
         autoFocus={autoFocus}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => setDraft({ ...draft, term: e.target.value })}
         onKeyDown={(e) => {
           // Enter commits immediately rather than waiting out the debounce — the operator has said
           // they are done.
-          if (e.key === 'Enter') commitNow({ ...value, term: draft });
+          if (e.key === 'Enter') commitNow(draft);
         }}
       />
       {(modes.length > 1 || allowNot) && (
@@ -110,16 +135,15 @@ export function TextConditionEditor({
           {modes.length > 1 && (
             <label
               className="tcond-sw"
-              title={`${t('filter.modeAria')}: ${t(`filter.mode.${value.mode}`)}`}
+              title={`${t('filter.modeAria')}: ${t(`filter.mode.${draft.mode}`)}`}
             >
               <input
                 type="checkbox"
                 role="switch"
-                checked={value.mode === 'regex'}
+                checked={draft.mode === 'regex'}
                 onChange={(e) =>
                   commitNow({
-                    ...value,
-                    term: draft,
+                    ...draft,
                     mode: (e.target.checked ? 'regex' : 'contains') satisfies TextMode,
                   })
                 }
@@ -131,10 +155,10 @@ export function TextConditionEditor({
           {allowNot && (
             <button
               type="button"
-              className={value.not ? 'tcond-not on' : 'tcond-not'}
-              aria-pressed={value.not}
+              className={draft.not ? 'tcond-not on' : 'tcond-not'}
+              aria-pressed={draft.not}
               title={t('filter.notAria')}
-              onClick={() => commitNow({ ...value, term: draft, not: !value.not })}
+              onClick={() => commitNow({ ...draft, not: !draft.not })}
             >
               {t('filter.not')}
             </button>

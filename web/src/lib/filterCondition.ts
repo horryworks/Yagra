@@ -53,6 +53,19 @@ export function encodeCondition(c: TextCondition): string {
   return (c.not ? '!' : '') + (c.mode === 'regex' ? '~' : '') + body;
 }
 
+/**
+ * What the caller will read back after `c` has been through the URL — `decode(encode(c))`.
+ *
+ * The editor needs this to tell **its own echo** from an external change. An inactive condition
+ * encodes to `''`, so `{term: '', mode: 'regex'}` comes back as the default: an editor that
+ * remembered what it *sent* would see the difference, call it an outside edit, and reset the switch
+ * the operator had just moved. That is the shape the bug took — the mode switch would not move at
+ * all until something was typed in the box.
+ */
+export function conditionEcho(c: TextCondition): TextCondition {
+  return decodeCondition(encodeCondition(c));
+}
+
 /** Decode a URL value. Anything malformed reads as a plain `contains` term rather than throwing —
  *  a hand-edited or stale URL must degrade to a wider view, never to a broken page. */
 export function decodeCondition(value: string): TextCondition {
