@@ -21,7 +21,16 @@ import {
 
 export interface FilterParams {
   filters: FilterState;
-  setFilters: (next: FilterState) => void;
+  /**
+   * Write the filter row's state.
+   *
+   * `also` mutates the *same* `URLSearchParams` before it is committed, and it exists because
+   * anything else is a bug: two `setSearchParams` calls in one handler are both built from this
+   * render's snapshot, React batches them, and **the second silently discards the first**. That is
+   * not theoretical — "clear all filters" on the Events page cleared the columns and then restored
+   * them, because clearing the node picker was a second write. One handler, one write.
+   */
+  setFilters: (next: FilterState, also?: (params: URLSearchParams) => void) => void;
   /** The instant relative ranges resolve against — stable until the range itself changes. */
   nowMs: number;
 }
@@ -32,9 +41,10 @@ export function useFilterParams<T>(columns: readonly FilterableColumn<T>[]): Fil
   const filters = useMemo(() => readFilterParams(columns, searchParams), [columns, searchParams]);
 
   const setFilters = useCallback(
-    (next: FilterState) => {
+    (next: FilterState, also?: (params: URLSearchParams) => void) => {
       const params = new URLSearchParams(searchParams);
       writeFilterParams(columns, params, next);
+      also?.(params);
       // `replace` so a settled keystroke does not push a history entry and make Back mean "the
       // previous character" instead of "the previous screen" (`filterParams.ts`).
       setSearchParams(params, { replace: true });

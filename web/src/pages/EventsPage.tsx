@@ -33,7 +33,7 @@ import {
   useSearchSemantics,
 } from '../components/EventLog/useEventFilters';
 import { useFilterParams } from '../lib/useFilterParams';
-import { isAnyFiltered } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { readIdParam, writeIdParam } from '../lib/filterParams';
 
@@ -112,12 +112,16 @@ export function EventsPage() {
           }}
         />
         {/* The node picker is counted and cleared with the columns: it is not a column filter, but
-            it narrows this list, and "clear all filters" that leaves a node selected is a lie. */}
+            it narrows this list, and "clear all filters" that leaves a node selected is a lie.
+            ⚠️ Both go into ONE `setSearchParams` — see `setFilters`'s `also` parameter for what
+            happened when they were two. */}
         <ClearFilters
           columns={filterCols}
           filters={filters}
-          onChange={setFilters}
-          extra={{ active: nodeId != null, clear: () => setNode(null) }}
+          extraActive={nodeId != null}
+          onClear={() =>
+            setFilters(defaultFilters(filterCols), (p) => writeIdParam(p, 'node_id', null))
+          }
         />
         <TableSpacer />
         <ResultCount

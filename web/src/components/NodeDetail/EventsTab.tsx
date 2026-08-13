@@ -96,7 +96,11 @@ export function EventsTab({ node }: { node: NodeDetail }) {
             setSheet(true);
           }}
         />
-        <ClearFilters columns={filterCols} filters={filters} onChange={apply} />
+        <ClearFilters
+          columns={filterCols}
+          filters={filters}
+          onClear={() => apply(defaultFilters(filterCols))}
+        />
         <TableSpacer />
         <ResultCount
           shown={rows.length}

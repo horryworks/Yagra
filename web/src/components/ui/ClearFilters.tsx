@@ -11,31 +11,33 @@
 // It renders nothing when nothing is narrowing the list, so a screen can place it unconditionally.
 
 import { useTranslation } from 'react-i18next';
-import { activeFilterCount, defaultFilters, type FilterState, type FilterableColumn } from '../../lib/columnFilter';
+import { activeFilterCount, type FilterState, type FilterableColumn } from '../../lib/columnFilter';
 
 interface Props<T> {
   columns: readonly FilterableColumn<T>[];
   filters: FilterState;
-  onChange: (next: FilterState) => void;
-  /** A control outside the filter row that also narrows this list — the Events page's node picker,
-   *  say. Counted in the badge and cleared with the rest, because an operator who presses "clear
-   *  all filters" and is still looking at a filtered list has been told something untrue. */
-  extra?: { active: boolean; clear: () => void };
+  /**
+   * Reset everything, in **one** state write.
+   *
+   * ⚠️ This is a single callback rather than the obvious `onChange(defaultFilters(columns))` plus an
+   * `extra.clear()`, and the reason is a bug that shipped: on a URL-backed screen both of those
+   * build a `URLSearchParams` from the same render's snapshot, React batches the two writes, and the
+   * second one restores what the first cleared. The button did nothing at all. Giving the screen one
+   * callback is what makes "clear the columns *and* the node picker" expressible as one write.
+   */
+  onClear: () => void;
+  /** Whether a control outside the filter row is also narrowing this list — the Events page's node
+   *  picker, say. Counted here, and `onClear` is expected to clear it too: an operator who presses
+   *  "clear all filters" and is still looking at a filtered list has been told something untrue. */
+  extraActive?: boolean;
 }
 
-export function ClearFilters<T>({ columns, filters, onChange, extra }: Props<T>) {
+export function ClearFilters<T>({ columns, filters, onClear, extraActive }: Props<T>) {
   const { t } = useTranslation('common');
-  const count = activeFilterCount(columns, filters) + (extra?.active ? 1 : 0);
+  const count = activeFilterCount(columns, filters) + (extraActive ? 1 : 0);
   if (count === 0) return null;
   return (
-    <button
-      type="button"
-      className="clear-filters"
-      onClick={() => {
-        onChange(defaultFilters(columns));
-        extra?.clear();
-      }}
-    >
+    <button type="button" className="clear-filters" onClick={onClear}>
       {t('filter.clearAllCount', { count })}
     </button>
   );
