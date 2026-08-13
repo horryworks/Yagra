@@ -2430,6 +2430,38 @@ mod tests {
     /// and it is worse here: a short bind list is a runtime error PostgreSQL reports, but a
     /// *reordered* or miscounted one runs fine and answers a different question — a page of events
     /// filtered by something the operator did not ask for, with nothing in the logs.
+    /// The PostgreSQL half of `logstore::a_negated_term_stays_a_phrase_filter_too` — the message
+    /// column must carry *both* spellings, with the flag choosing between them at query time
+    /// (the predicate is a constant, so it cannot be chosen at build time).
+    ///
+    /// ⚠️ Pair it with the edge's `every_regex_parameter_accepts_a_pattern_that_compiles`, and know
+    /// what neither one proves. A clause that reads correctly here still would if the edge refused
+    /// every pattern, which is what it did; and neither test shows the compiled pattern is
+    /// *evaluated* as a pattern rather than as a literal. The check that does is behavioural and
+    /// lives on real data: a term with a metacharacter that matches nothing literally
+    /// (`FIREWALL.TCK` against `FIREWALLATCK`) must still return the row.
+    #[test]
+    fn the_message_condition_offers_both_spellings_and_the_source_condition_only_one() {
+        for needle in [
+            "CASE WHEN $13::boolean THEN e.message ~* $12",
+            "ELSE e.message ILIKE '%' || $12 || '%' END",
+        ] {
+            assert!(
+                EVENT_FILTER_WHERE.contains(needle),
+                "the message condition lost its {needle:?} branch"
+            );
+        }
+        // And the source condition has no regex spelling at all — see `TextCond`: a pattern there
+        // would mean "IP or name" on PostgreSQL and "IP only" on a log store.
+        for absent in ["host(e.source_ip) ~*", "n.name ~*"] {
+            assert!(
+                !EVENT_FILTER_WHERE.contains(absent),
+                "the source condition grew a regex form ({absent}); decide what it means on a log \
+                 store first"
+            );
+        }
+    }
+
     #[test]
     fn the_where_clause_binds_every_parameter_it_names() {
         // Needles built at runtime: a literal `$16` in this file would also match itself in the
