@@ -1,0 +1,16 @@
+/* Shared popover surface: `position: fixed` + measured coordinates, so the popover is not clipped
+   by a scrolling / overflow-hidden ancestor, and not re-anchored by a virtualized row's transform.
+   Chrome matches the popover the rest of the app already uses (`.ovm-menu`, `.ts-run-menu`); those
+   three predate this primitive and are follow-ups, not copies to grow.
+
+   Per-caller padding and widths live on the caller's own class (`.amenu-menu`, `.msel`, `.tcond`) —
+   this rule is only the surface. */
+
+.apop {
+  position: fixed;
+  z-index: 70;
+  background: var(--bg-secondary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius);
+  box-shadow: 0 8px 24px var(--overlay);
+}

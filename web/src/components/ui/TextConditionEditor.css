@@ -1,0 +1,93 @@
+/* Text-condition editor. Sits inside `.apop` or inline in the mobile filter sheet — no surface of
+   its own. */
+
+.tcond {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  min-width: 260px;
+  max-width: 340px;
+}
+
+.tcond-input {
+  padding: 6px 8px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+}
+
+.tcond-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.tcond-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tcond-controls .ts-seg {
+  flex: 1;
+  min-width: 0;
+}
+
+.tcond-not {
+  flex: none;
+  padding: 4px 10px;
+  background: none;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.tcond-not:hover {
+  color: var(--text-primary);
+}
+
+/* Excluding is a destructive-feeling read: the operator is hiding rows. Marking it with the
+   critical hue rather than the accent keeps "this is narrowing differently" visible at a glance,
+   which matters because the closed trigger has only one glyph to say it with. */
+.tcond-not.on {
+  background: var(--status-critical);
+  border-color: var(--status-critical);
+  color: var(--bg-primary);
+}
+
+.tcond-not:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.tcond-error,
+.tcond-hint {
+  margin: 0;
+  font-size: var(--font-xs);
+  line-height: 1.4;
+}
+
+.tcond-error {
+  color: var(--status-critical);
+}
+
+.tcond-hint {
+  color: var(--text-tertiary);
+}
+
+html[data-viewport='mobile'] .tcond {
+  min-width: 0;
+  max-width: none;
+  padding: 0;
+}
+
+html[data-viewport='mobile'] .tcond-input,
+html[data-viewport='mobile'] .tcond-not {
+  min-height: var(--touch-target);
+}

@@ -58,6 +58,7 @@ import {
   NODE_EDIT_SECTIONS,
 } from './components/NodeDetail/nodeEditForm';
 import { CREDENTIAL_KINDS } from './lib/credentialKinds';
+import { TEXT_MODES } from './lib/columnFilter';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
@@ -198,6 +199,13 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // left the screen that *assigns* roles free to render `role.auditor` at a raw key.
     expectKeys('role', { en: enCommon, ja: jaCommon }, 'role.', ROLES);
     expectKeys('role (access)', { en: enAccess, ja: jaAccess }, 'role.', ROLES);
+  });
+
+  it('every text-filter mode has a label (common:filter.mode.*)', () => {
+    // `TextConditionEditor` builds `filter.mode.${m}` from the runtime array, so a third mode added
+    // to `TEXT_MODES` without its strings would render a raw key inside every column filter on
+    // every list — in BOTH locales, which parity passes.
+    expectKeys('text filter mode', { en: enCommon, ja: jaCommon }, 'filter.mode.', TEXT_MODES);
   });
 
   it('every node-group type has a label (nodes:groupType.*)', () => {

@@ -1,6 +1,6 @@
-/* Anchored action menu. Chrome matches the popover the rest of the app already uses (`.ovm-menu`,
-   `.ts-run-menu`); the difference is `position: fixed` + measured coordinates, so the menu is not
-   clipped by a scrolling/overflow-hidden ancestor. */
+/* Anchored action menu. The popover SURFACE — fixed positioning, background, border, shadow — is
+   `.apop` (AnchoredPopover.css); this file styles only what is specific to a menu. Deliberately no
+   property is declared in both, so the two rules cannot fight over source order. */
 
 .amenu {
   position: relative;
@@ -8,17 +8,11 @@
 }
 
 .amenu-menu {
-  position: fixed;
-  z-index: 70;
   min-width: 176px;
   max-width: 280px;
   display: flex;
   flex-direction: column;
-  background: var(--bg-secondary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius);
   padding: 4px;
-  box-shadow: 0 8px 24px var(--overlay);
 }
 
 .amenu-item {

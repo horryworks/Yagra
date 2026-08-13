@@ -1,0 +1,141 @@
+/* Multi-select option list. Sits inside `.apop` (AnchoredPopover) or, on mobile, inline in a
+   `Modal` — so it declares no surface of its own, only layout. */
+
+.msel {
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: 320px;
+  padding: 4px;
+  gap: 4px;
+}
+
+.msel-search {
+  margin: 2px;
+  padding: 5px 8px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+}
+
+.msel-search:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.msel-list {
+  display: flex;
+  flex-direction: column;
+  /* Long option lists (severities, node kinds) scroll rather than growing past the viewport, which
+     the popover's placement would then have to flip away from the trigger. */
+  max-height: 280px;
+}
+
+.msel-opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.msel-opt:hover {
+  background: var(--bg-tertiary);
+}
+
+.msel-opt:focus-visible {
+  background: var(--bg-tertiary);
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}
+
+/* The checkmark is drawn rather than a native checkbox (an interactive input inside role="option"
+   is invalid markup). The box keeps its width whether or not it is ticked, so the labels do not
+   shift as the operator clicks down the list. */
+.msel-box {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--bg-primary);
+}
+
+.msel-opt.on .msel-box {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.msel-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.msel-count {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.msel-none {
+  padding: 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.msel-foot {
+  display: flex;
+  justify-content: flex-end;
+  border-top: var(--border-width) solid var(--border-color);
+  padding-top: 4px;
+}
+
+.msel-clear {
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.msel-clear:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.msel-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+html[data-viewport='mobile'] .msel {
+  max-width: none;
+}
+
+html[data-viewport='mobile'] .msel-opt {
+  min-height: var(--touch-target);
+}

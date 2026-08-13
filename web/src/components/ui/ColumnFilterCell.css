@@ -1,0 +1,101 @@
+/* Column filter row cell. The row itself (`.dt-filters`) is in DataTable.css, because its grid
+   template must be the same `const` the header and the data rows use — see the note there. */
+
+.dt-f {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 0 8px;
+}
+
+.dt-f.right {
+  justify-content: flex-end;
+}
+
+.dt-f-trigger {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 6px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.dt-f-trigger:hover {
+  border-color: var(--text-tertiary);
+}
+
+.dt-f-trigger:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* An active filter is marked on the trigger, not only inside the popover: the whole reason the
+   controls moved under the header was so the row says what is narrowing the table. */
+.dt-f-trigger.on {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.dt-f-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.dt-f-caret {
+  flex: none;
+  opacity: 0.5;
+  font-size: 0.8em;
+}
+
+/* Mode markers: the closed trigger has to carry "this is a regex" and "this is an exclusion", or a
+   negated filter looks exactly like a positive one. */
+.dt-f-mark {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: 0.9em;
+}
+
+.dt-f-mark.not {
+  color: var(--status-critical);
+  font-weight: var(--weight-medium);
+}
+
+.dt-f-clear {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.dt-f-clear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.dt-f-clear:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 var(--border-width) var(--accent-color);
+}

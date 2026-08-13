@@ -84,7 +84,28 @@
     "enabled": "有効",
     "disabled": "無効",
     "searchAria": "この一覧を検索",
-    "noMatch": "この絞り込みに一致するものがありません。"
+    "noMatch": "この絞り込みに一致するものがありません。",
+    "row": "列フィルタ",
+    "open": "{{column}}で絞り込む",
+    "clear": "解除",
+    "clearAria": "{{column}}の絞り込みを解除",
+    "clearAll": "すべての絞り込みを解除",
+    "more": "他{{count}}件",
+    "mode": {
+      "contains": "部分一致",
+      "regex": "正規表現"
+    },
+    "modeAria": "一致の方法",
+    "not": "除外",
+    "notAria": "一致した行を残すのではなく除外する",
+    "termPlaceholder": "入力して絞り込む…",
+    "optionSearch": "選択肢を探す",
+    "noOptions": "一致する選択肢がありません。",
+    "regexInvalid": "正規表現として不正です: {{message}}",
+    "tokenHint": "このデプロイでは語単位で一致します。語の中に当てるには正規表現を使ってください。",
+    "sheet": "フィルタ",
+    "sheetButton": "フィルタ",
+    "sheetButtonCount": "フィルタ ({{count}})"
   },
   "scope": {
     "all": "全ノード",

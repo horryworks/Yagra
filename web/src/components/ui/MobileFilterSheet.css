@@ -1,0 +1,54 @@
+/* Mobile filter sheet: the same bodies the desktop popover shows, stacked in a `Modal` (which is
+   already a bottom sheet under html[data-viewport='mobile']). */
+
+.mfilt {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mfilt-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mfilt-h {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  color: var(--text-tertiary);
+}
+
+/* A dot beside the column name, because on mobile the trigger that would normally carry the
+   "something is set here" border is not on screen — the sheet is the only place it can be said. */
+.mfilt-on {
+  color: var(--accent-color);
+  font-size: 0.7em;
+}
+
+.mfilt-clear,
+.mfilt-btn {
+  padding: 0 12px;
+  min-height: var(--touch-target);
+  background: none;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.mfilt-btn.on {
+  border-color: var(--accent-color);
+  color: var(--text-primary);
+}
+
+.mfilt-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

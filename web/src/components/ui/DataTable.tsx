@@ -11,6 +11,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useViewportMode } from '../../lib/viewport';
 import { nextSort, type SortState } from '../../lib/tableSort';
+import { ColumnFilterCell } from './ColumnFilterCell';
+import type { ColumnFilterSpec, FilterState } from '../../lib/columnFilter';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -28,6 +30,12 @@ export interface Column<T> {
    *  sorted honestly — see `lib/tableSort.ts`. A column is sortable when the caller can put the
    *  whole list in order, not when the header would look nice with an arrow. */
   sortable?: boolean;
+  /** Put a filter control directly under this column's header (ADR-053, design-system §4.1).
+   *
+   *  Opt-in per column for the same reason `sortable` is, plus one of its own: a column with an
+   *  unbounded value space must not offer a value list at all. `source_ip` is the named example —
+   *  ADR-024 calls it out — and a facet query over it would enumerate the internet. */
+  filter?: ColumnFilterSpec<T>;
 }
 
 interface Props<T> {
@@ -58,6 +66,22 @@ interface Props<T> {
   sort?: SortState;
   /** Called with the next sort state when a sortable header is clicked. */
   onSortChange?: (next: SortState) => void;
+  /** Current filter values, keyed by column key (ADR-053). Supplying this **and**
+   *  `onFiltersChange` **and** at least one column with a `filter` spec is what draws the filter
+   *  row — so every existing caller renders byte-for-byte what it did before.
+   *
+   *  ⚠️ Like `sort`, this component does not filter `rows`. It draws the controls and reports the
+   *  change; the caller decides whether that means a client-side predicate
+   *  (`lib/filterPredicate.ts`) or a query parameter. On a keyset-paged list only the caller knows
+   *  which pages it holds, so filtering here would narrow a prefix and present it as the answer. */
+  filters?: FilterState;
+  onFiltersChange?: (next: FilterState) => void;
+  /** Facet counts per column key, when the caller has them. See `lib/filterCounts.ts` for the
+   *  counting rule — counts must exclude the column's own filter. */
+  filterCounts?: Record<string, Record<string, number>>;
+  /** Told which column's popover just opened, so a server-side caller can fetch that column's
+   *  counts on demand instead of on every page load (ADR-023). */
+  onFilterOpen?: (columnKey: string) => void;
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -75,9 +99,18 @@ export function DataTable<T>({
   cardEstimatePx = CARD_PX,
   sort,
   onSortChange,
+  filters,
+  onFiltersChange,
+  filterCounts,
+  onFilterOpen,
 }: Props<T>) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
+  // ⚠️ ONE const, used by THREE grids: `.dt-head`, `.dt-filters` and every `.dt-row`. If they ever
+  // disagree the filter controls sit under the wrong columns, and nothing catches it — `.tsx` tests
+  // never run (see .claude/rules/testing.md), so this shared binding IS the guard. Do not compute a
+  // fourth grid template anywhere else, and do not let a track become `auto`: an `auto` track sizes
+  // to its own content, so the three grids would resolve to different widths from the same string.
   const template = columns.map((c) => c.width ?? '1fr').join(' ');
   // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
   // grid can't fit ~390px. A custom `renderCard` wins; otherwise a generic labeled card is built
@@ -90,6 +123,10 @@ export function DataTable<T>({
     estimateSize: () => (cardMode ? cardEstimatePx : ROW_PX),
     overscan: 12,
   });
+
+  // The filter row draws only when the caller asked for it AND some column opted in — so the ~17
+  // existing call sites are unchanged down to the DOM.
+  const showFilters = !cardMode && !!filters && !!onFiltersChange && columns.some((c) => c.filter);
 
   const items = virtualizer.getVirtualItems();
   // Fire the page-load callback once the last virtual row is within view of the end.
@@ -130,6 +167,36 @@ export function DataTable<T>({
               </button>
             );
           })}
+        </div>
+      )}
+      {showFilters && (
+        <div
+          className="dt-filters"
+          style={{ gridTemplateColumns: template }}
+          role="group"
+          aria-label={t('filter.row')}
+        >
+          {columns.map((c) =>
+            c.filter ? (
+              <ColumnFilterCell
+                key={c.key}
+                spec={c.filter}
+                value={filters[c.key] ?? ''}
+                onChange={(next) => onFiltersChange({ ...filters, [c.key]: next })}
+                counts={filterCounts?.[c.key]}
+                // The accessible name has to be a string, and `header` is a ReactNode. Every
+                // filterable column's header is a `t()` string today; the key is a readable last
+                // resort rather than an empty label.
+                label={typeof c.header === 'string' ? c.header : c.key}
+                onOpen={onFilterOpen ? () => onFilterOpen(c.key) : undefined}
+                align={c.align}
+              />
+            ) : (
+              // An empty cell rather than no cell: the grid is positional, so a skipped column
+              // would shift every later filter under the wrong header.
+              <div key={c.key} className="dt-f empty" />
+            ),
+          )}
         </div>
       )}
       <div className="dt-scroll scroll-y" ref={scrollRef}>

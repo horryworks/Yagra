@@ -75,6 +75,18 @@
   opacity: 1;
 }
 
+/* Column filter row (ADR-053): directly under the header, on the secondary surface so it reads as
+   part of the table's chrome rather than as a first data row. Its grid template comes from the same
+   `const` the header and the rows use — see the note in DataTable.tsx. The cells themselves are
+   `.dt-f*` in ColumnFilterCell.css. */
+.dt-filters {
+  display: grid;
+  align-items: center;
+  height: 36px;
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
 .dt-scroll {
   position: relative;
 }

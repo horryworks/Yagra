@@ -98,7 +98,28 @@
     "enabled": "Enabled",
     "disabled": "Disabled",
     "searchAria": "Search this list",
-    "noMatch": "Nothing matches these filters."
+    "noMatch": "Nothing matches these filters.",
+    "row": "Column filters",
+    "open": "Filter by {{column}}",
+    "clear": "Clear",
+    "clearAria": "Clear the {{column}} filter",
+    "clearAll": "Clear all filters",
+    "more": "+{{count}}",
+    "mode": {
+      "contains": "Contains",
+      "regex": "Regex"
+    },
+    "modeAria": "Match mode",
+    "not": "Exclude",
+    "notAria": "Exclude the rows that match, instead of keeping them",
+    "termPlaceholder": "Type to filter…",
+    "optionSearch": "Find an option",
+    "noOptions": "No option matches.",
+    "regexInvalid": "Not a valid regular expression: {{message}}",
+    "tokenHint": "This deployment matches whole words. Use Regex to match inside a word.",
+    "sheet": "Filters",
+    "sheetButton": "Filter",
+    "sheetButtonCount": "Filter ({{count}})"
   },
   "scope": {
     "all": "All nodes",
