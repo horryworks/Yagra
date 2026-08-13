@@ -10,8 +10,18 @@
 // and Export handed the operator that same partial set. In a log whose purpose is completeness that
 // is a correctness bug, not a missing feature. The controls are unchanged; only where they apply is.
 
+import type { TFunction } from 'i18next';
+import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
+import { decodeCondition } from '../lib/filterCondition';
 import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
-import type { AuditAction, AuditQuery, AuditStatusClass } from '../types/api';
+import {
+  AUDIT_ACTIONS,
+  AUDIT_STATUS_CLASSES,
+  type AuditAction,
+  type AuditQuery,
+  type AuditRow,
+  type AuditStatusClass,
+} from '../types/api';
 
 /**
  * Rows per request. Matches the backend's default and stays under its 500 ceiling, so a page is one
@@ -128,4 +138,79 @@ export function appendPage<T extends { id: string }>(have: readonly T[], page: r
  *  is hiding them. */
 export function isFiltered(f: AuditFilters): boolean {
   return isFilteredAgainst(f, DEFAULT_FILTERS);
+}
+
+/**
+ * The Access ▸ Audit filter row, keyed by `Column.key` (ADR-053 Inc.4).
+ *
+ * The keys are the API's own parameter names (`q` / `action` / `status` / `range`) rather than the
+ * old column names (`user`, `action`, `status`, `time`), so `filtersFromState` is a rename-free
+ * mapping. This screen keeps its filters in component state, not the URL, so no bookmark depends on
+ * them — unlike History, where the same choice was forced by saved links.
+ *
+ * ⚠️ **`q` is a two-column search the filter row cannot express honestly.** The endpoint matches it
+ * against the username **and** the action, so it is mounted on the User column, which is the more
+ * useful half and the one an operator reaches for — but typing a path fragment there will also
+ * match. Narrowing the API to a `username` parameter (and giving the action column its own text
+ * condition) is a backend increment; until then this is the imprecision, stated rather than hidden.
+ *
+ * The enums are `single` for the same reason History's are: `GET /api/v1/audit` takes one `action`
+ * and one `status`, and a multi-select over them would send one of the ticked values.
+ */
+export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<AuditRow>> {
+  return {
+    q: {
+      kind: 'text',
+      // Contains only: the endpoint does a case-insensitive substring, and there is no regex
+      // parameter to carry a pattern to it. Offering the toggle would promise what cannot be sent.
+      modes: ['contains'],
+      readText: (r) => [r.username, r.action],
+      containsSemantics: 'substring',
+      placeholder: t('audit.cols.user'),
+    },
+    action: {
+      kind: 'enum',
+      single: true,
+      options: AUDIT_ACTIONS.map((a) => ({ value: a, label: t(`audit.action.${a}`) })),
+      readValue: (r) => r.action,
+      allLabel: t('audit.filter.allActions'),
+    },
+    status: {
+      kind: 'enum',
+      single: true,
+      options: AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
+      // Server-side: the class is derived in SQL from the numeric status, never read here.
+      readValue: (r) => String(r.status),
+      allLabel: t('audit.filter.allStatuses'),
+    },
+    range: {
+      kind: 'range',
+      presets: AUDIT_RANGES.map((r) => ({
+        value: r,
+        label: t(`audit.range.${r}`),
+        seconds: null,
+      })),
+      defaultPreset: DEFAULT_FILTERS.range,
+    },
+  };
+}
+
+/** The flat row state ⟷ the request shape. The URL codec stays this module's existing one; the
+ *  filter row does not get a second one writing the same params (one handler, one write). */
+export function stateFromFilters(f: AuditFilters): FilterState {
+  return { q: f.q, action: f.action, status: f.status, range: f.range };
+}
+
+export function filtersFromState(s: FilterState): AuditFilters {
+  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
+  const range = s.range ?? '';
+  return {
+    // The text column stores an encoded condition; only its term reaches this API.
+    q: decodeCondition(s.q ?? '').term,
+    action: one(s.action) as AuditFilters['action'],
+    status: one(s.status) as AuditFilters['status'],
+    range: (AUDIT_RANGES as readonly string[]).includes(range)
+      ? (range as AuditRange)
+      : DEFAULT_FILTERS.range,
+  };
 }

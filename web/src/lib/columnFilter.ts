@@ -57,6 +57,19 @@ export interface EnumFilterSpec<T> {
    *  `'server'` asks an endpoint when the popover opens. Absent = no counts at all, which is the
    *  honest answer for a keyset-paged list with no aggregate endpoint. */
   counts?: 'client' | 'server';
+  /**
+   * Only one value may be selected at a time.
+   *
+   * ⚠️ **This exists to keep a control from promising something the backend cannot do.** A
+   * server-side list can only offer multi-select where its endpoint accepts a list, and four of them
+   * (alert history, audit, thresholds, saved findings) still take exactly one `severity` / `state` /
+   * `action`. A multi-select over those would let an operator tick three boxes and send one — rows
+   * missing from a filtered list with nothing on screen saying so, which is the worst shape a filter
+   * bug takes. Picking a second value here **replaces** the first, exactly as the range kind does.
+   *
+   * Client-side lists never need this: the predicate runs in the browser and a set is free.
+   */
+  single?: boolean;
 }
 
 /** A column matched by free text. */
@@ -105,9 +118,13 @@ export interface FilterableColumn<T> {
   filter: ColumnFilterSpec<T>;
 }
 
-/** Pull the filterable columns out of a `Column<T>[]`-shaped list, narrowing `filter` to non-null. */
-export function filterableColumns<T, C extends { key: string; filter?: ColumnFilterSpec<T> }>(
-  columns: readonly C[],
+/** Pull the filterable columns out of a `Column<T>[]`-shaped list, narrowing `filter` to non-null.
+ *
+ *  ⚠️ `T` is inferred from the `filter` property, not from a second type parameter. It was written
+ *  the other way first (`<T, C extends {…}>`) and every call site had to name both or neither, so
+ *  TypeScript picked `unknown` for `T` and rejected the columns it was handed. */
+export function filterableColumns<T>(
+  columns: readonly { key: string; filter?: ColumnFilterSpec<T> }[],
 ): FilterableColumn<T>[] {
   return columns.flatMap((c) => (c.filter ? [{ key: c.key, filter: c.filter }] : []));
 }

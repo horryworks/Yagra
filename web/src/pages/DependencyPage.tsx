@@ -23,9 +23,12 @@ import type { NodeState, TopologyMode, TopologyNode } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { dependencyFilters } from './dependencyFilters';
 import { EntityName } from '../components/ui/EntityName';
 import { SetParentModal } from '../components/SetParentModal/SetParentModal';
 import { classifyNodes, canEnableDerived, type DiffRow, type DiffVerdict } from './topologyDiff';
@@ -55,8 +58,7 @@ export function DependencyPage() {
   const { t } = useTranslation('topology');
   const authed = useAuthStore((s) => s.authed);
   const navigate = useNavigate();
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'upstream' | 'suppressed'>('all');
+  const [sheet, setSheet] = useState(false);
   const [editing, setEditing] = useState<TopologyNode | null>(null);
   const [modeBusy, setModeBusy] = useState(false);
   const [modeError, setModeError] = useState<string | null>(null);
@@ -101,17 +103,6 @@ export function DependencyPage() {
     return new Map(rows.map((r) => [r.nodeId, r]));
   }, [shadow, nodes]);
 
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return nodes.filter((n) => {
-      const matchesQuery = q === '' || n.name.toLowerCase().includes(q);
-      const matchesFilter =
-        filter === 'all' ||
-        (filter === 'upstream' ? n.parent_id != null : n.root_cause != null);
-      return matchesQuery && matchesFilter;
-    });
-  }, [nodes, query, filter]);
-
   const optedOut = useMemo(() => new Set(shadow?.opted_out ?? []), [shadow]);
 
   // Memoized so the columns `useMemo` below can depend on it honestly. Behaviour is unchanged
@@ -143,8 +134,9 @@ export function DependencyPage() {
     }
   };
 
-  const columns: Column<TopologyNode>[] = useMemo(
-    () => [
+  const columns: Column<TopologyNode>[] = useMemo(() => {
+    const specs = dependencyFilters(t, diffs, comparing);
+    const cols: Column<TopologyNode>[] = [
       {
         key: 'node',
         header: t('dependency.cols.node'),
@@ -247,9 +239,17 @@ export function DependencyPage() {
             </Button>
           ) : null,
       },
-    ],
-    [authed, comparing, diffs, mode, nameOf, optedOut, t, toggleOptOut],
-  );
+    ];
+    // Attached by key, so a column with no spec has no control and a spec with no column shows up
+    // here rather than as a filter that can be set from a URL and never seen.
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [authed, comparing, diffs, mode, nameOf, optedOut, t, toggleOptOut]);
+  // Client-side, and URL-backed: one table on this route. ⚠️ The row list is fleet-scaled, which
+  // `ui-conventions.md` says needs a server-side path — that predates this change and is unchanged
+  // by it; the filter row narrows the same array the page already held.
+  const { filterCols, filters, setFilters, clear, shown: rows, counts, anyFiltered } =
+    useClientFilters(columns, nodes, { url: true });
 
   return (
     <div className="page-fill">
@@ -352,28 +352,26 @@ export function DependencyPage() {
         <>
           {mode === 'derived' && <p className="muted">{t('dependency.editHiddenInDerived')}</p>}
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('dependency.searchPlaceholder')}
-              ariaLabel={t('dependency.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <Select
-              value={filter}
-              onChange={(e) => setFilter(e.target.value as typeof filter)}
-              aria-label={t('dependency.filterAria')}
-            >
-              <option value="all">{t('dependency.filter.all')}</option>
-              <option value="upstream">{t('dependency.filter.upstream')}</option>
-              <option value="suppressed">{t('dependency.filter.suppressed')}</option>
-            </Select>
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
-            <ResultCount shown={rows.length} noun={t('common:noun.node', { count: rows.length })} />
+            <ResultCount
+              shown={rows.length}
+              total={anyFiltered ? nodes.length : undefined}
+              noun={t('common:noun.node', { count: rows.length })}
+            />
           </TableToolbar>
 
           <DataTable
             rows={rows}
             columns={columns}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
             rowKey={(r) => r.id}
             onRowClick={(r) => navigate(`/nodes/${r.id}`)}
             loading={loading}
@@ -383,6 +381,22 @@ export function DependencyPage() {
                 : t('dependency.emptyFiltered')
             }
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={{
+                node: t('dependency.cols.node'),
+                upstream: t('dependency.cols.upstream'),
+                status: t('dependency.cols.status'),
+                root: t('dependency.cols.root'),
+                verdict: t('dependency.cols2.verdict'),
+              }}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

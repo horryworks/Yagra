@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EVENT_FILTER_KEYS,
   eventEmptyKind,
+  shouldWiden,
   widenEventQuery,
   eventFilterColumns,
   eventFilterKey,
@@ -272,5 +273,37 @@ describe('widenEventQuery', () => {
       msg: 'x',
       msg_regex: true,
     });
+  });
+});
+
+describe('shouldWiden', () => {
+  const ready = { widened: false, canWiden: true, settled: true, rowCount: 0 };
+
+  it('widens once a fetch for this query has come back empty', () => {
+    expect(shouldWiden(ready)).toBe(true);
+  });
+
+  it('does not widen before the current query has been answered', () => {
+    // 🚨 The defect this function exists for (reported on the test server, 2026-08-13).
+    // `settled: false` with `rowCount: 0` is the state during a filter change: the rows on screen
+    // still belong to the *previous* question. Reading that as "this term found nothing" widened
+    // searches for terms that match perfectly well — `POLICY` was reported as widened, and the
+    // marks then highlighted it mid-word, because the previous search had happened to be empty.
+    expect(shouldWiden({ ...ready, settled: false })).toBe(false);
+  });
+
+  it('does not widen a query that found something', () => {
+    expect(shouldWiden({ ...ready, rowCount: 1 })).toBe(false);
+  });
+
+  it('does not widen twice — the retry is at most one', () => {
+    // Without this the widened query, finding nothing either, would re-trigger forever.
+    expect(shouldWiden({ ...ready, widened: true })).toBe(false);
+  });
+
+  it('does not widen when there is no wider form of the query', () => {
+    // The five `widenEventQuery` refusals arrive here as `canWiden: false`, so the two functions
+    // cannot disagree about whether widening is possible.
+    expect(shouldWiden({ ...ready, canWiden: false })).toBe(false);
   });
 });

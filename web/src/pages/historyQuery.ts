@@ -8,10 +8,14 @@
 // Paging itself lives in `historyCursor.ts` — it is correct on its own and was shipped on its own,
 // because a cursor that skips rows is a bug whether or not anything is filtering.
 
+import type { TFunction } from 'i18next';
+import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
 import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
 import { readEnumParam, readIdParam, writeEnumParam, writeIdParam } from '../lib/filterParams';
+import { severityLabel, stateLabel } from '../lib/format';
+import { SEVERITY_ORDER } from '../lib/nodeState';
 import { PAGE_SIZE } from './historyCursor';
-import type { NodeState, Severity } from '../types/api';
+import { SEVERITIES, type AlertHistoryRow, type NodeState, type Severity } from '../types/api';
 
 /** The lifecycle phases the screen offers, mapped to the API's `resolved` boolean. */
 export const HISTORY_PHASES = ['', 'fired', 'cleared'] as const;
@@ -27,6 +31,97 @@ const RANGE_SECS: Record<HistoryRange, number | null> = {
   '30d': 30 * 86_400,
   all: null,
 };
+
+/**
+ * The Alerts ▸ History filter row, keyed by `Column.key` (ADR-053 Inc.4).
+ *
+ * ⚠️ **Every enum here is `single`, and that is the API's shape, not a UI preference.**
+ * `GET /api/v1/alerts/history` takes one `severity`, one `state` and one `resolved`; a multi-select
+ * over those would let an operator tick three boxes, send one, and see a list missing rows with
+ * nothing on screen saying why. Widening the endpoint to comma-joined lists (as Events took in
+ * Inc.2) is a backend increment with its own MCP-parity obligation — see the ADR.
+ *
+ * Columns deliberately left unfilterable: **node** (the ScopePicker in the action row answers it,
+ * and it resolves names against the inventory — a different question from "does this cell contain
+ * these characters"), **what** (the only free-text column is `metric`, unindexed on a table that
+ * reaches millions of rows, so an ILIKE there turns the keyset seek into a seq scan) and **acked**.
+ */
+export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<AlertHistoryRow>> {
+  return {
+    // ⚠️ The keys are `severity` / `state` / `phase` / `range`, matching the query parameters this
+    // screen has always used — the column keys were `sev` and `at`, and were renamed to these. That
+    // is the cheap direction: a column key is internal, whereas the URL is a bookmark someone holds.
+    severity: {
+      kind: 'enum',
+      single: true,
+      options: SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) })),
+      // Server-side: the predicate is in SQL and these accessors are never called. They are here
+      // because the spec type asks for them, and returning the real field keeps them honest if the
+      // screen ever gains a client-side pass.
+      readValue: (r) => r.severity,
+      allLabel: t('history.filter.allSeverities'),
+    },
+    state: {
+      kind: 'enum',
+      single: true,
+      options: SEVERITY_ORDER.map((s) => ({ value: s, label: stateLabel(s) })),
+      readValue: (r) => r.state,
+      allLabel: t('history.filter.allStates'),
+    },
+    phase: {
+      kind: 'enum',
+      single: true,
+      options: [
+        { value: 'fired', label: t('history.phase.fired') },
+        { value: 'cleared', label: t('history.phase.cleared') },
+      ],
+      readValue: (r) => (r.resolved ? 'cleared' : 'fired'),
+      allLabel: t('history.filter.allPhases'),
+    },
+    range: {
+      kind: 'range',
+      presets: HISTORY_RANGES.map((r) => ({
+        value: r,
+        label: t(`history.range.${r}`),
+        // Server-side: the window becomes `since`, and a client predicate must not re-apply it
+        // against a clock the server already used (`RangeFilterSpec.readTime`).
+        seconds: null,
+      })),
+      defaultPreset: DEFAULT_FILTERS.range,
+    },
+  };
+}
+
+// The filter row's state is flat primitives keyed by column (`columnFilter.ts` explains why this is
+// forced rather than chosen); `HistoryFilters` is named by what the API calls things and also
+// carries the scope, which is not a column. These two functions are the only mapping between them.
+//
+// ⚠️ The **URL codec stays `readFilters`/`writeFilters`** below — the filter row does not get its
+// own. Two codecs writing the same `URLSearchParams` is the shape that made "clear all filters" do
+// nothing on the Events page (`useFilterParams.setFilters`): one handler, one write.
+
+export function stateFromFilters(f: HistoryFilters): FilterState {
+  return { severity: f.severity, state: f.state, phase: f.phase, range: f.range };
+}
+
+export function filtersFromState(
+  s: FilterState,
+  scope: { nodeId: string; groupId: string },
+): HistoryFilters {
+  // `single` columns still store a set, so a value arrives as a one-element token list.
+  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
+  const range = s.range ?? '';
+  return {
+    severity: one(s.severity) as HistoryFilters['severity'],
+    state: one(s.state) as HistoryFilters['state'],
+    phase: one(s.phase) as HistoryPhase,
+    range: (HISTORY_RANGES as readonly string[]).includes(range)
+      ? (range as HistoryRange)
+      : DEFAULT_FILTERS.range,
+    nodeId: scope.nodeId,
+    groupId: scope.groupId,
+  };
+}
 
 /** The screen's filter state. `''` means "no filter" for each optional field. */
 export interface HistoryFilters {

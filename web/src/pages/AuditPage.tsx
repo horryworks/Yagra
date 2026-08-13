@@ -18,31 +18,28 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
-import { AUDIT_ACTIONS, AUDIT_STATUS_CLASSES, type AuditRow } from '../types/api';
-import { useDebouncedValue } from '../lib/useDebouncedValue';
+import type { AuditRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
-import { Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import {
-  TableToolbar,
-  SearchInput,
-  TableSpacer,
-  ResultCount,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
 import { parseAction } from './auditRow';
 import {
   appendPage,
-  AUDIT_RANGES,
+  auditFilters,
   DEFAULT_FILTERS,
   exportUrl,
+  filtersFromState,
   isFiltered,
   nextCursor,
   queryFor,
+  stateFromFilters,
   type AuditFilters,
 } from './auditQuery';
 
@@ -50,10 +47,11 @@ import {
  *  label are localized, so build them from the calling component's `t` (rebuild on language
  *  change). HTTP method names (POST/PUT/…) and paths are technical and rendered verbatim. */
 function auditColumns(t: TFunction): Column<AuditRow>[] {
-  return [
-    { key: 'time', header: t('audit.cols.time'), width: '190px', render: (r) => <TimeCell iso={r.at} /> },
+  const specs = auditFilters(t);
+  const cols: Column<AuditRow>[] = [
+    { key: 'range', header: t('audit.cols.time'), width: '190px', render: (r) => <TimeCell iso={r.at} /> },
     {
-      key: 'user',
+      key: 'q',
       header: t('audit.cols.user'),
       width: '168px',
       render: (r) => (
@@ -81,6 +79,8 @@ function auditColumns(t: TFunction): Column<AuditRow>[] {
     },
     { key: 'status', header: t('audit.cols.status'), width: '150px', render: (r) => <HttpStatus status={r.status} /> },
   ];
+  for (const c of cols) c.filter = specs[c.key];
+  return cols;
 }
 
 export function AuditPage() {
@@ -97,15 +97,17 @@ export function AuditPage() {
 
   // The search box settles before it is sent; the selects commit immediately (picking an option is
   // already a deliberate act, and waiting on it would feel broken).
-  const [draftQ, setDraftQ] = useState(DEFAULT_FILTERS.q);
-  const [filters, setFilters] = useState<AuditFilters>(DEFAULT_FILTERS);
-  const settledQ = useDebouncedValue(draftQ);
-  const active = useMemo<AuditFilters>(() => ({ ...filters, q: settledQ }), [filters, settledQ]);
-  const set = <K extends keyof AuditFilters>(key: K, value: AuditFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
+  const [sheet, setSheet] = useState(false);
+  // The filter row's flat state. The debounce that used to live here is inside
+  // `TextConditionEditor` now — one implementation instead of one per screen.
+  const [rowFilters, setRowFilters] = useState<FilterState>(() =>
+    stateFromFilters(DEFAULT_FILTERS),
+  );
+  const active = useMemo<AuditFilters>(() => filtersFromState(rowFilters), [rowFilters]);
 
   // Columns close over the translator, so rebuild them on a language switch.
   const columns = useMemo(() => auditColumns(t), [t]);
+  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
 
   // Refetch from the top whenever the filter changes — the cursor is only meaningful within one
   // filter, so carrying it across a change would page into the previous query's results.
@@ -178,50 +180,16 @@ export function AuditPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={draftQ}
-              onChange={setDraftQ}
-              placeholder={t('audit.searchPlaceholder')}
-              ariaLabel={t('audit.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={rowFilters}
+              onOpen={() => setSheet(true)}
             />
-            {/* Options come from the `as const` arrays that are pinned to the backend enums, so a
-                variant added in Rust is a compile error here rather than a filter nobody can pick.
-                The method labels stay verbatim — POST/PUT/… are technical, not prose. */}
-            <FilterSelect
-              value={filters.action}
-              onChange={(v) => set('action', v)}
-              options={AUDIT_ACTIONS.map((a) => ({
-                value: a,
-                label: t(`audit.action.${a}`),
-              }))}
-              allLabel={t('audit.filter.allActions')}
-              ariaLabel={t('audit.filterActionAria')}
+            <ClearFilters
+              columns={filterCols}
+              filters={rowFilters}
+              onClear={() => setRowFilters(stateFromFilters(DEFAULT_FILTERS))}
             />
-            <FilterSelect
-              value={filters.status}
-              onChange={(v) => set('status', v)}
-              options={AUDIT_STATUS_CLASSES.map((s) => ({
-                value: s,
-                label: t(`audit.statusClass.${s}`),
-              }))}
-              allLabel={t('audit.filter.allStatus')}
-              ariaLabel={t('audit.filterStatusAria')}
-            />
-            {/* Not a FilterSelect: the range has no "no filter" member — `all` *is* one of its
-                options and its default, so the '' sentinel would be a second way to say the same
-                thing. */}
-            <Select
-              value={filters.range}
-              onChange={(e) => set('range', e.target.value as AuditFilters['range'])}
-              className="table-filter"
-              aria-label={t('common:range.timeRange')}
-            >
-              {AUDIT_RANGES.map((r) => (
-                <option key={r} value={r}>
-                  {t(`audit.range.${r}`)}
-                </option>
-              ))}
-            </Select>
             <TableSpacer />
             <ResultCount shown={rows.length} noun={t('audit.entry', { count: rows.length })} />
             <Button
@@ -242,11 +210,27 @@ export function AuditPage() {
           <DataTable
             rows={rows}
             columns={columns}
+            filters={rowFilters}
+            onFiltersChange={setRowFilters}
             rowKey={(r) => r.id}
             onReachEnd={cursor === null ? undefined : loadMore}
             loading={loading}
             empty={isFiltered(active) ? t('audit.empty.filtered') : t('audit.empty.none')}
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={rowFilters}
+              onChange={setRowFilters}
+              labels={{
+                q: t('audit.cols.user'),
+                action: t('audit.cols.action'),
+                status: t('audit.cols.status'),
+                range: t('audit.cols.time'),
+              }}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
     </div>

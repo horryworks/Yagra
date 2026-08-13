@@ -41,7 +41,15 @@
     "filter": {
       "all": "All nodes",
       "upstream": "With upstream",
-      "suppressed": "Currently suppressed"
+      "suppressed": "Currently suppressed",
+      "upstreamRef": {
+        "set": "Has an upstream",
+        "none": "No upstream"
+      },
+      "rootRef": {
+        "set": "Being suppressed",
+        "none": "Not suppressed"
+      }
     },
     "cols": {
       "node": "Node",

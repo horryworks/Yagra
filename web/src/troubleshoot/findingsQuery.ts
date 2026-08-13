@@ -12,6 +12,10 @@ import type {
   SavedFindingsQuery,
 } from '../types/api';
 import type { ScopeValue } from '../components/ScopePicker/scope';
+import type { TFunction } from 'i18next';
+import { decodeSet, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
+import { FINDING_SEVERITIES } from '../types/api';
+import { TOOLS } from './data';
 
 /**
  * Rows per request. Matches the backend's default and stays under its 200 ceiling, so a page is
@@ -139,4 +143,74 @@ export function isFiltered(f: FindingFilters): boolean {
     f.groupId !== '' ||
     f.range !== DEFAULT_FILTERS.range
   );
+}
+
+/**
+ * The Troubleshoot ▸ Saved findings filter row, keyed by `Column.key` (ADR-053 Inc.4).
+ *
+ * The keys are the API's parameter names (`tool` / `severity` / `range`); the columns were `tool`,
+ * `severity` and `at`, so only the time column was renamed.
+ *
+ * Both enums are `single` because `GET /api/v1/analysis/findings` takes one of each. The Node and
+ * What columns carry no filter: the scope is answered by the ScopePicker in the action row (it
+ * resolves names against the inventory, which is a different question from "does this cell contain
+ * these characters"), and the finding text has no server-side search parameter to send it to.
+ *
+ * ⚠️ The range default is `7d`, not `all`, and that is a performance contract rather than a
+ * preference — see `DEFAULT_FILTERS` above. `clientRangePresets` is deliberately not reused: these
+ * presets carry `seconds: null` because the window is applied by the server.
+ */
+export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<SavedFinding>> {
+  return {
+    severity: {
+      kind: 'enum',
+      single: true,
+      options: FINDING_SEVERITIES.map((s) => ({
+        value: s,
+        label: t(`findings.severity.${s}`),
+      })),
+      readValue: (f) => f.severity,
+      allLabel: t('findings.filter.allSeverities'),
+    },
+    tool: {
+      kind: 'enum',
+      single: true,
+      // From the same catalog the launcher offers, so a new analysis appears here with no second
+      // list to remember.
+      options: TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) })),
+      readValue: (f) => f.tool,
+      allLabel: t('findings.filter.allTools'),
+    },
+    range: {
+      kind: 'range',
+      presets: FINDING_RANGES.map((r) => ({
+        value: r,
+        label: t(`findings.range.${r}`),
+        seconds: null,
+      })),
+      defaultPreset: DEFAULT_FILTERS.range,
+    },
+  };
+}
+
+/** The flat row state ⟷ the filter shape. The scope is not a column, so it is carried through. */
+export function stateFromFilters(f: FindingFilters): FilterState {
+  return { severity: f.severity, tool: f.tool, range: f.range };
+}
+
+export function filtersFromState(
+  s: FilterState,
+  scope: { nodeId: string; groupId: string },
+): FindingFilters {
+  const one = (v: string | undefined) => decodeSet(v ?? '')[0] ?? '';
+  const range = s.range ?? '';
+  return {
+    tool: one(s.tool) as FindingFilters['tool'],
+    severity: one(s.severity) as FindingFilters['severity'],
+    range: (FINDING_RANGES as readonly string[]).includes(range)
+      ? (range as FindingRange)
+      : DEFAULT_FILTERS.range,
+    nodeId: scope.nodeId,
+    groupId: scope.groupId,
+  };
 }

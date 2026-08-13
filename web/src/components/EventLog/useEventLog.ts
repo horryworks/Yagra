@@ -59,6 +59,21 @@ export interface EventLog {
   rows: EventRow[];
   loading: boolean;
   exhausted: boolean;
+  /**
+   * Whether `rows` is the answer to the filter **currently** passed in.
+   *
+   * ⚠️ This is not `!loading`, and the difference shipped as a bug. `loading` is turned on inside
+   * the reload effect, i.e. one commit *after* the filter changed, so between the render that
+   * changed the filter and the effect that acts on it there is a window where `loading` is still
+   * `false` and `rows` still belongs to the previous question. Anything that reads "no rows and not
+   * loading" as "this search found nothing" fires in that window — which is exactly what made a
+   * term that matches perfectly well report itself as having been widened (ADR-053 Inc.2d).
+   *
+   * So it is stated rather than inferred: the fetch stamps the identity of the filter it answered,
+   * and this compares that stamp to the current one. A response that arrives out of order stamps a
+   * filter that is no longer current, so it reads `false` — conservative in the right direction.
+   */
+  settled: boolean;
   loadMore: () => void;
   /** Force a reload from the top (keeps the current filter). */
   reload: () => void;
@@ -84,6 +99,15 @@ export function useEventLog({
   const [exhausted, setExhausted] = useState(false);
   const [nonce, setNonce] = useState(0);
   const loadingMore = useRef(false);
+  // Which filter the rows above are the answer to. `filterOpts`'s identity changes exactly when one
+  // of its primitives does, so it is the token — no stringify, and no second list of dependencies
+  // to keep in step with the first.
+  //
+  // ⚠️ Held **inside an object**, and that is not styling. `setState` treats a function argument as
+  // an updater and calls it, so `setAnswered(filterOpts)` stores `filterOpts()` — the options
+  // object — and the identity comparison below is then false forever. It fails silently: the
+  // widening simply never happens, which on screen is indistinguishable from a term that matched.
+  const [answered, setAnswered] = useState<{ filter: unknown } | null>(null);
 
   const filterOpts = useCallback(
     (before?: string) => ({
@@ -116,6 +140,9 @@ export function useEventLog({
       .then((page) => {
         setRows(page);
         setExhausted(page.length < EVENT_PAGE_SIZE);
+        // Only on success. A failed fetch leaves the previous rows on screen, and calling those
+        // the answer to a question they were not asked is the whole defect this guards.
+        setAnswered({ filter: filterOpts });
       })
       .catch(() => undefined)
       .finally(() => setLoading(false));
@@ -139,5 +166,5 @@ export function useEventLog({
   }, [rows, exhausted, filterOpts]);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  return { rows, loading, exhausted, loadMore, reload };
+  return { rows, loading, exhausted, settled: answered?.filter === filterOpts, loadMore, reload };
 }

@@ -20,21 +20,11 @@ import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Badge, type Tone } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import { ENABLED_STATES } from '../lib/filterQuery';
-import { TOOLS } from './data';
-import {
-  DEFAULT_SCHEDULE_FILTERS,
-  isScheduleFiltered,
-  matchesSchedule,
-  type ScheduleFilters,
-} from './scheduleFilters';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { scheduleFilters } from './scheduleFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -58,7 +48,8 @@ function scheduleColumns(
   onEdit: (s: AnalysisSchedule) => void,
   onDelete: (s: AnalysisSchedule) => void,
 ): Column<AnalysisSchedule>[] {
-  return [
+  const specs = scheduleFilters(t);
+  const cols: Column<AnalysisSchedule>[] = [
     {
       key: 'tool',
       header: t('schedule.cols.analysis'),
@@ -129,6 +120,8 @@ function scheduleColumns(
       ),
     },
   ];
+  for (const c of cols) c.filter = specs[c.key];
+  return cols;
 }
 
 export function ScheduledPage() {
@@ -142,12 +135,7 @@ export function ScheduledPage() {
   const [editing, setEditing] = useState<AnalysisSchedule | null>(null);
   const [creating, setCreating] = useState(false);
   const [deleting, setDeleting] = useState<AnalysisSchedule | null>(null);
-  // Client-side: the list is bounded by what an operator set up, not by fleet size
-  // (ui-conventions). The judgement is in `scheduleFilters.ts`.
-  const [filters, setFilters] = useState<ScheduleFilters>(DEFAULT_SCHEDULE_FILTERS);
-  const set = <K extends keyof ScheduleFilters>(key: K, value: ScheduleFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = rows.filter((r) => matchesSchedule(r, filters));
+  const [sheet, setSheet] = useState(false);
 
   // Creating or editing a schedule is `AckAlerts` at the edge, like launching a run — so the
   // action is offered only to a role that holds it, rather than failing on save.
@@ -173,9 +161,13 @@ export function ScheduledPage() {
       .catch(() => undefined);
   }, [authed, load]);
 
-  const columns = useMemo(
-    () => scheduleColumns(t, setEditing, setDeleting),
-    [t],
+  const columns = useMemo(() => scheduleColumns(t, setEditing, setDeleting), [t]);
+  // Client-side: the list is bounded by what an operator set up, not by fleet size
+  // (ui-conventions). URL-backed — one table on this route.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
   );
 
   const saved = () => {
@@ -202,32 +194,16 @@ export function ScheduledPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => set('q', v)}
-              placeholder={t('schedule.filter.searchPlaceholder')}
-              ariaLabel={t('schedule.filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            {/* The tool options come from the catalog the schedule form already offers, so a
-                new analysis appears here without a second list to remember. */}
-            <FilterSelect
-              value={filters.tool}
-              onChange={(v) => set('tool', v)}
-              options={TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) }))}
-              allLabel={t('schedule.filter.allTools')}
-              ariaLabel={t('schedule.filter.toolAria')}
-            />
-            <FilterSelect
-              value={filters.enabled}
-              onChange={(v) => set('enabled', v)}
-              options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
-              allLabel={t('common:filter.allEnabled')}
-              ariaLabel={t('common:filter.enabledAria')}
-            />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
               shown={shown.length}
-              total={isScheduleFiltered(filters) ? rows.length : undefined}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('schedule.schedule', { count: shown.length })}
             />
             {canWrite && (
@@ -242,10 +218,28 @@ export function ScheduledPage() {
           <DataTable
             rows={shown}
             columns={columns}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
             rowKey={(s) => s.id}
             loading={loading}
-            empty={isScheduleFiltered(filters) ? t('common:filter.noMatch') : t('schedule.empty')}
+            empty={anyFiltered ? t('common:filter.noMatch') : t('schedule.empty')}
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={{
+                tool: t('schedule.cols.analysis'),
+                scope: t('schedule.cols.scope'),
+                next: t('schedule.cols.next'),
+                last: t('schedule.cols.last'),
+              }}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

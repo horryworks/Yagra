@@ -25,7 +25,9 @@
     "fidelity": "忠実度",
     "filter": "フィルタ",
     "health": "状態",
-    "actions": "操作"
+    "actions": "操作",
+    "dest": "宛先種別",
+    "status": "状態"
   },
   "actions": {
     "edit": "編集",

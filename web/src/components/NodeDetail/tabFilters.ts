@@ -10,8 +10,10 @@
 // near-identical `.toLowerCase().includes()` blocks. The Interfaces tab already had one, hand-rolled
 // and searching two fields where the row shows five.
 
+import type { TFunction } from 'i18next';
+import type { ColumnFilterSpec } from '../../lib/columnFilter';
 import { isFiltered as isFilteredAgainst, textMatch } from '../../lib/filterQuery';
-import type { Neighbor, NeighborProto, NodeMetricEntry } from '../../types/api';
+import { NEIGHBOR_PROTOS, type Neighbor, type NodeMetricEntry } from '../../types/api';
 
 // ───────────────────────────────────────────────────────────────── interfaces
 
@@ -61,22 +63,48 @@ export function isInterfaceFiltered(f: InterfaceFilters): boolean {
 
 // ────────────────────────────────────────────────────────────────── neighbours
 
-export interface NeighborFilters {
-  /** Which protocol reported the adjacency. */
-  proto: NeighborProto | '';
-  /** Free text over the peer's name, the local port and the peer's port. */
-  q: string;
-}
-
-export const DEFAULT_NEIGHBOR_FILTERS: NeighborFilters = { proto: '', q: '' };
-
-export function matchesNeighbor(n: Neighbor, f: NeighborFilters): boolean {
-  if (f.proto && n.proto !== f.proto) return false;
-  return textMatch(f.q, n.remote_sys_name, n.local_port, n.remote_port, n.remote_port_desc);
-}
-
-export function isNeighborFiltered(f: NeighborFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_NEIGHBOR_FILTERS);
+/**
+ * The Neighbors tab's filter row, keyed by `Column.key` (ADR-053 Inc.3).
+ *
+ * The search box this replaces read four fields at once — peer name, local port, remote port and
+ * remote port description. Split per column that is three controls, and the one that changes
+ * meaning is the peer: its cell renders the system name *or* the chassis id, so the column filter
+ * reads both. Typing what is on screen has to find the row, whichever of the two is showing.
+ */
+export function neighborFilters(t: TFunction): Record<string, ColumnFilterSpec<Neighbor>> {
+  return {
+    local: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (n) => [n.local_port],
+      containsSemantics: 'substring',
+      placeholder: t('neighbors.colLocalPort'),
+    },
+    peer: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (n) => [n.remote_sys_name, n.remote_chassis],
+      containsSemantics: 'substring',
+      placeholder: t('neighbors.colPeer'),
+    },
+    remote_port: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (n) => [n.remote_port, n.remote_port_desc],
+      containsSemantics: 'substring',
+      placeholder: t('neighbors.colRemotePort'),
+    },
+    proto: {
+      kind: 'enum',
+      options: NEIGHBOR_PROTOS.map((p) => ({ value: p, label: t(`neighbors.proto.${p}`) })),
+      readValue: (n) => n.proto,
+      allLabel: t('neighbors.colProto'),
+      counts: 'client',
+    },
+  };
 }
 
 // ────────────────────────────────────────────────────────────────── collection

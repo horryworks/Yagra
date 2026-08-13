@@ -25,7 +25,9 @@
     "fidelity": "Fidelity",
     "filter": "Filter",
     "health": "Health",
-    "actions": "Actions"
+    "actions": "Actions",
+    "dest": "Destination",
+    "status": "Status"
   },
   "actions": {
     "edit": "Edit",

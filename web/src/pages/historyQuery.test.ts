@@ -4,9 +4,13 @@
 import { describe, expect, it } from 'vitest';
 import { SEVERITIES, type NodeState, type Severity } from '../types/api';
 import { SEVERITY_ORDER } from '../lib/nodeState';
+import { reservedKeyCollisions } from '../lib/columnFilter';
 import {
   DEFAULT_FILTERS,
+  filtersFromState,
+  historyFilters,
   isFiltered,
+  stateFromFilters,
   queryFor,
   readFilters,
   resolvedFor,
@@ -133,5 +137,58 @@ describe('URL round trip', () => {
   it('accepts a node deep-link on its own', () => {
     // The reason these filters are in the URL at all: a node page links to its own alert history.
     expect(read('node_id=abc')).toEqual({ ...DEFAULT_FILTERS, nodeId: 'abc' });
+  });
+});
+
+describe('the filter row (ADR-053 Inc.4)', () => {
+  const t = ((k: string) => k) as unknown as Parameters<typeof historyFilters>[0];
+  const specs = historyFilters(t);
+  const COLUMNS = Object.entries(specs).map(([key, filter]) => ({ key, filter }));
+
+  it('keys its columns by the query parameters this screen already used', () => {
+    // ⚠️ The column key IS the URL key (ADR-053 decision 12). The columns were `sev` and `at`; they
+    // were renamed to `severity` and `range` so that every bookmark taken before the filter row
+    // shipped still resolves. A column key is internal — a URL someone saved is not.
+    expect(COLUMNS.map((c) => c.key).sort()).toEqual(['phase', 'range', 'severity', 'state']);
+    expect(reservedKeyCollisions(COLUMNS)).toEqual([]);
+  });
+
+  it('offers one value per enum, because the endpoint takes one', () => {
+    // 🚨 A multi-select here would let an operator tick three severities and send one — rows missing
+    // from a filtered list with nothing on screen saying so. `GET /alerts/history` takes a single
+    // `severity`/`state`/`resolved`; widening it is a backend increment with its own MCP parity.
+    for (const key of ['severity', 'state', 'phase']) {
+      const s = specs[key];
+      expect(s.kind === 'enum' && s.single).toBe(true);
+    }
+  });
+
+  it('carries no client-side range accessor, so the window is applied once', () => {
+    // The window becomes `since` in the request. A `readTime` here would re-apply it in the browser
+    // against a different clock reading than the server used, dropping rows at the boundary.
+    const range = specs.range;
+    expect(range.kind === 'range' && range.readTime).toBeUndefined();
+    expect(range.kind === 'range' && range.defaultPreset).toBe(DEFAULT_FILTERS.range);
+  });
+
+  it('round-trips every filter through the flat row state', () => {
+    const f: HistoryFilters = {
+      severity: 'critical' as Severity,
+      state: 'unreachable' as NodeState,
+      phase: 'cleared',
+      range: '7d',
+      nodeId: 'n1',
+      groupId: 'g1',
+    };
+    // The scope is not a column, so it is supplied on the way back rather than read off the row.
+    expect(filtersFromState(stateFromFilters(f), { nodeId: 'n1', groupId: 'g1' })).toEqual(f);
+  });
+
+  it('falls back to the default window for a preset a stale URL names', () => {
+    const back = filtersFromState({ ...stateFromFilters(DEFAULT_FILTERS), range: 'last-fortnight' }, {
+      nodeId: '',
+      groupId: '',
+    });
+    expect(back.range).toBe(DEFAULT_FILTERS.range);
   });
 });

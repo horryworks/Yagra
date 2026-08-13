@@ -23,23 +23,27 @@ import { useAuthStore } from '../store';
 import { FINDING_SEVERITIES, type SavedFinding } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
-import { Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
 import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
-import { TOOLS, reportPathFor, toolById } from './data';
+import { reportPathFor, toolById } from './data';
 import { sevOf } from './report/format';
 import {
   DEFAULT_FILTERS,
-  FINDING_RANGES,
   appendPage,
+  findingFilters,
+  filtersFromState,
   isFiltered,
   nextCursor,
   queryFor,
   scopeFilter,
+  stateFromFilters,
   type FindingCursor,
   type FindingFilters,
 } from './findingsQuery';
@@ -55,7 +59,8 @@ const SEV_COLOR: Record<(typeof FINDING_SEVERITIES)[number], string> = {
 /** Columns for the virtualized table. Built from the caller's `t` so a language switch rebuilds
  *  the headers and the tool names. */
 function findingColumns(t: TFunction, nodeName: (id: string) => string): Column<SavedFinding>[] {
-  return [
+  const specs = findingFilters(t);
+  const cols: Column<SavedFinding>[] = [
     {
       key: 'severity',
       header: t('findings.cols.severity'),
@@ -114,12 +119,14 @@ function findingColumns(t: TFunction, nodeName: (id: string) => string): Column<
       },
     },
     {
-      key: 'at',
+      key: 'range',
       header: t('findings.cols.at'),
       width: '190px',
       render: (f) => <TimeCell iso={f.at} />,
     },
   ];
+  for (const c of cols) c.filter = specs[c.key];
+  return cols;
 }
 
 export function SavedFindingsPage() {
@@ -130,6 +137,7 @@ export function SavedFindingsPage() {
 
   const [filters, setFilters] = useState<FindingFilters>(DEFAULT_FILTERS);
   const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
+  const [sheet, setSheet] = useState(false);
   const [rows, setRows] = useState<SavedFinding[]>([]);
   const [cursor, setCursor] = useState<FindingCursor | null>(null);
   const [exhausted, setExhausted] = useState(false);
@@ -140,6 +148,10 @@ export function SavedFindingsPage() {
   const loadingMore = useRef(false);
 
   const columns = useMemo(() => findingColumns(t, nodeName), [t, nodeName]);
+  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
+  const rowFilters = useMemo(() => stateFromFilters(filters), [filters]);
+  const onRowFilters = (next: FilterState) =>
+    setFilters(filtersFromState(next, { nodeId: filters.nodeId, groupId: filters.groupId }));
 
   // First page — refetched whenever a filter changes, because filtering happens server-side (the
   // table is keyset-paged, so a client-side filter would only ever narrow the pages already
@@ -217,50 +229,22 @@ export function SavedFindingsPage() {
         <>
           <TableToolbar>
             <ScopePicker value={scope} onChange={pickScope} className="ts-sf-scope" />
-            <Select
-              value={filters.tool}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, tool: e.target.value as FindingFilters['tool'] }))
-              }
-              aria-label={t('findings.filterToolAria')}
-            >
-              <option value="">{t('findings.filter.allTools')}</option>
-              {TOOLS.map((tool) => (
-                <option key={tool.id} value={tool.id}>
-                  {t(tool.name)}
-                </option>
-              ))}
-            </Select>
-            <Select
-              value={filters.severity}
-              onChange={(e) =>
-                setFilters((f) => ({
-                  ...f,
-                  severity: e.target.value as FindingFilters['severity'],
-                }))
-              }
-              aria-label={t('findings.filterSeverityAria')}
-            >
-              <option value="">{t('findings.filter.allSeverities')}</option>
-              {FINDING_SEVERITIES.map((sev) => (
-                <option key={sev} value={sev}>
-                  {t(`findings.severity.${sev}`)}
-                </option>
-              ))}
-            </Select>
-            <Select
-              value={filters.range}
-              onChange={(e) =>
-                setFilters((f) => ({ ...f, range: e.target.value as FindingFilters['range'] }))
-              }
-              aria-label={t('common:range.timeRange')}
-            >
-              {FINDING_RANGES.map((r) => (
-                <option key={r} value={r}>
-                  {t(`findings.range.${r}`)}
-                </option>
-              ))}
-            </Select>
+            <MobileFilterButton
+              columns={filterCols}
+              filters={rowFilters}
+              onOpen={() => setSheet(true)}
+            />
+            {/* The scope narrows this list too, so it is counted and cleared with the columns —
+                a "clear all" that leaves a node selected is a lie. Both go into one write. */}
+            <ClearFilters
+              columns={filterCols}
+              filters={rowFilters}
+              extraActive={filters.nodeId !== '' || filters.groupId !== ''}
+              onClear={() => {
+                setScope(allScope(t));
+                setFilters(DEFAULT_FILTERS);
+              }}
+            />
             <TableSpacer />
             <ResultCount
               shown={rows.length}
@@ -273,12 +257,27 @@ export function SavedFindingsPage() {
           <DataTable
             rows={rows}
             columns={columns}
+            filters={rowFilters}
+            onFiltersChange={onRowFilters}
             rowKey={(f) => f.id}
             onRowClick={open}
             onReachEnd={exhausted ? undefined : loadMore}
             loading={loading}
             empty={isFiltered(filters) ? t('findings.empty.filtered') : t('findings.empty.none')}
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={rowFilters}
+              onChange={onRowFilters}
+              labels={{
+                severity: t('findings.cols.severity'),
+                tool: t('findings.cols.tool'),
+                range: t('findings.cols.at'),
+              }}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
     </div>

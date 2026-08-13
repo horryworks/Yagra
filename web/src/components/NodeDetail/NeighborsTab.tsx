@@ -23,14 +23,11 @@ import type {
   NodeDetail as NodeDetailData,
 } from '../../types/api';
 import { DataTable, type Column } from '../ui/DataTable';
-import { FilterSelect, SearchInput, TableToolbar, TableSpacer } from '../ui/TableToolbar';
-import { NEIGHBOR_PROTOS } from '../../types/api';
-import {
-  DEFAULT_NEIGHBOR_FILTERS,
-  isNeighborFiltered,
-  matchesNeighbor,
-  type NeighborFilters,
-} from './tabFilters';
+import { TableToolbar, TableSpacer } from '../ui/TableToolbar';
+import { ClearFilters } from '../ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { useClientFilters } from '../../lib/useClientFilters';
+import { neighborFilters } from './tabFilters';
 import {
   diffNeighbors,
   emptyReason,
@@ -59,7 +56,7 @@ export function NeighborsTab({ node }: Props) {
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Client-side: one device has neighbours in the dozens, and the tab already has them all.
-  const [filters, setFilters] = useState<NeighborFilters>(DEFAULT_NEIGHBOR_FILTERS);
+  const [sheet, setSheet] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,6 +99,7 @@ export function NeighborsTab({ node }: Props) {
   const neighbors = current?.neighbors.neighbors ?? [];
   const reason = loaded ? emptyReason(collectionEnabled, current) : null;
 
+  const specs = neighborFilters(t);
   const columns: Column<Neighbor>[] = [
     {
       key: 'local',
@@ -143,8 +141,12 @@ export function NeighborsTab({ node }: Props) {
       ),
     },
   ];
+  for (const c of columns) c.filter = specs[c.key];
 
-  const shownNeighbors = neighbors.filter((n) => matchesNeighbor(n, filters));
+  // Not URL-backed: this is one tab of a node's detail view, and the page already owns `tab`/`sub`
+  // in the query string. A filter here is a glance, not a view someone sends.
+  const { filterCols, filters, setFilters, clear, shown: shownNeighbors, counts, anyFiltered } =
+    useClientFilters(columns, neighbors);
 
   return (
     <div className="nd-nb">
@@ -166,37 +168,41 @@ export function NeighborsTab({ node }: Props) {
             )}
           </div>
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('neighbors.filter.searchPlaceholder')}
-              ariaLabel={t('neighbors.filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.proto}
-              onChange={(v) => setFilters((f) => ({ ...f, proto: v }))}
-              options={NEIGHBOR_PROTOS.map((pr) => ({
-                value: pr,
-                label: t(`neighbors.proto.${pr}`),
-              }))}
-              allLabel={t('neighbors.filter.allProtos')}
-              ariaLabel={t('neighbors.filter.protoAria')}
-            />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
           </TableToolbar>
           <div className="nd-nb-table">
             <DataTable
               rows={shownNeighbors}
               columns={columns}
+              filters={filters}
+              onFiltersChange={setFilters}
+              filterCounts={counts}
               rowKey={neighborKey}
               loading={!loaded}
-              empty={
-                isNeighborFiltered(filters)
-                  ? t('common:filter.noMatch')
-                  : t('neighbors.empty.none')
-              }
+              empty={anyFiltered ? t('common:filter.noMatch') : t('neighbors.empty.none')}
             />
           </div>
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={{
+                local: t('neighbors.colLocalPort'),
+                peer: t('neighbors.colPeer'),
+                remote_port: t('neighbors.colRemotePort'),
+                proto: t('neighbors.colProto'),
+              }}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

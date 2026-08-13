@@ -38,7 +38,15 @@
     "filter": {
       "all": "すべてのノード",
       "upstream": "上流あり",
-      "suppressed": "現在抑制中"
+      "suppressed": "現在抑制中",
+      "upstreamRef": {
+        "set": "上流あり",
+        "none": "上流なし"
+      },
+      "rootRef": {
+        "set": "抑制されている",
+        "none": "抑制されていない"
+      }
     },
     "cols": {
       "node": "ノード",

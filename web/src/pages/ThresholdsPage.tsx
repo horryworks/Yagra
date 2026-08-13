@@ -36,19 +36,19 @@ import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { filterableColumns, type FilterState } from '../lib/columnFilter';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import {
+  DEFAULT_THRESHOLD_FILTERS,
+  filtersFromState,
   isFiltered,
   queryFor,
   readFilters,
+  stateFromFilters,
+  thresholdFilters,
   writeFilters,
-  type ThresholdFilters,
 } from './thresholdQuery';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
@@ -242,16 +242,12 @@ export function ThresholdsPage() {
   // reload and can be shared. `replace: true` because a settled filter is not a place you
   // navigated to: pushing one per keystroke would make Back walk through every intermediate
   // state instead of leaving the screen.
+  const [sheet, setSheet] = useState(false);
   const [params, setParams] = useSearchParams();
   const filters = useMemo(
     () => readFilters(params, SCOPE_LEVELS, DIRECTIONS),
     [params],
   );
-  const set = <K extends keyof ThresholdFilters>(key: K, value: ThresholdFilters[K]) => {
-    const next = new URLSearchParams(params);
-    writeFilters(next, { ...filters, [key]: value });
-    setParams(next, { replace: true });
-  };
 
   // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
   // narrowing would only ever examine the 500 rules already on screen — which is the whole
@@ -274,9 +270,10 @@ export function ThresholdsPage() {
     load();
   }, [load]);
 
+  const specs = thresholdFilters(t);
   const columns: Column<StoredThreshold>[] = [
     {
-      key: 'scope',
+      key: 'scope_level',
       header: t('thresholds.cols.scope'),
       width: '1.6fr',
       render: (row) => (
@@ -287,7 +284,7 @@ export function ThresholdsPage() {
       ),
     },
     {
-      key: 'metric',
+      key: 'q',
       header: t('thresholds.cols.metric'),
       width: '1.4fr',
       render: (row) => <span className="mono">{row.metric}</span>,
@@ -340,6 +337,14 @@ export function ThresholdsPage() {
         ),
     },
   ];
+  for (const c of columns) c.filter = specs[c.key];
+  const filterCols = filterableColumns(columns);
+  const rowFilters = stateFromFilters(filters);
+  const onRowFilters = (next: FilterState) => {
+    const p = new URLSearchParams(params);
+    writeFilters(p, filtersFromState(next));
+    setParams(p, { replace: true });
+  };
 
   return (
     <div>
@@ -360,25 +365,15 @@ export function ThresholdsPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => set('q', v)}
-              placeholder={t('thresholds.filter.searchPlaceholder')}
-              ariaLabel={t('thresholds.filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={rowFilters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.scopeLevel}
-              onChange={(v) => set('scopeLevel', v)}
-              options={SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) }))}
-              allLabel={t('thresholds.filter.allScopes')}
-              ariaLabel={t('thresholds.filter.scopeAria')}
-            />
-            <FilterSelect
-              value={filters.direction}
-              onChange={(v) => set('direction', v)}
-              options={DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) }))}
-              allLabel={t('thresholds.filter.allDirections')}
-              ariaLabel={t('thresholds.filter.directionAria')}
+            <ClearFilters
+              columns={filterCols}
+              filters={rowFilters}
+              onClear={() => onRowFilters(stateFromFilters(DEFAULT_THRESHOLD_FILTERS))}
             />
             <TableSpacer />
             {/* Says how many of how many when the server capped the response — never a bare count
@@ -405,6 +400,8 @@ export function ThresholdsPage() {
           <DataTable
             rows={rows}
             columns={columns}
+            filters={rowFilters}
+            onFiltersChange={onRowFilters}
             rowKey={(r) => r.id}
             loading={loading}
             // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a
@@ -423,6 +420,19 @@ export function ThresholdsPage() {
               )
             }
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={rowFilters}
+              onChange={onRowFilters}
+              labels={{
+                q: t('thresholds.cols.metric'),
+                scope_level: t('thresholds.cols.scope'),
+                direction: t('thresholds.cols.direction'),
+              }}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

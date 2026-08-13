@@ -230,7 +230,7 @@ describe('filterableColumns', () => {
       { key: 'b' },
       { key: 'c', filter: COLUMNS[1].filter },
     ];
-    expect(filterableColumns<Row, (typeof cols)[number]>(cols).map((c) => c.key)).toEqual([
+    expect(filterableColumns<Row>(cols).map((c) => c.key)).toEqual([
       'a',
       'c',
     ]);

@@ -262,6 +262,33 @@ export function widenEventQuery(q: EventQuery, semantics: SearchSemantics): Even
 }
 
 /**
+ * Whether to re-ask the current query in its widened form, right now.
+ *
+ * Pure, and separated from the hook that calls it, because the bug it exists to prevent is not
+ * visible on screen: a search that was widened when it did not need to be still shows rows, still
+ * highlights them consistently, and still says so in the banner — it is simply answering a broader
+ * question than the operator asked, and nothing about the result looks wrong. It shipped that way
+ * (ADR-053 Inc.2d, reported 2026-08-13: `POLICY` matches by prefix, and was widened anyway).
+ *
+ * The load-bearing input is `settled`, and the rule is one line: **an empty list is only evidence
+ * of a miss once a fetch for *this* query has come back.** The version that reads `!loading &&
+ * rows.length === 0` looks equivalent and is not — see `useEventLog`'s `settled` for the window
+ * where those two disagree. Given a previous query that also found nothing, that window is entered
+ * on every filter change, so the widening fired for terms that had never been asked about.
+ */
+export function shouldWiden(s: {
+  /** Already widened for this query. The retry is at most one. */
+  widened: boolean;
+  /** Whether a widened form of this query exists at all (`widenEventQuery` returned non-null). */
+  canWiden: boolean;
+  /** Whether `rowCount` describes the query currently being asked. */
+  settled: boolean;
+  rowCount: number;
+}): boolean {
+  return !s.widened && s.canWiden && s.settled && s.rowCount === 0;
+}
+
+/**
  * What the Message column was matched on, for the highlighter — built once per query, never per row.
  *
  * `widened` matters here for the same reason it matters to the query: after the automatic retry the

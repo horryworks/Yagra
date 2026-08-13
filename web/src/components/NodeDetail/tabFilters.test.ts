@@ -6,21 +6,25 @@ import type { Neighbor, NodeMetricEntry } from '../../types/api';
 import {
   DEFAULT_INTERFACE_FILTERS,
   DEFAULT_METRIC_FILTERS,
-  DEFAULT_NEIGHBOR_FILTERS,
   IF_STATES,
   ifState,
   isInterfaceFiltered,
   isMetricFiltered,
-  isNeighborFiltered,
   matchesInterface,
   matchesMetric,
-  matchesNeighbor,
   metricIsFlowing,
+  neighborFilters,
   type FilterableInterface,
   type InterfaceFilters,
   type MetricFilters,
-  type NeighborFilters,
 } from './tabFilters';
+import {
+  defaultFilters,
+  isAnyFiltered,
+  type FilterState,
+  type FilterableColumn,
+} from '../../lib/columnFilter';
+import { matchesFilters } from '../../lib/filterPredicate';
 
 const iface = (over: Partial<FilterableInterface> = {}): FilterableInterface => ({
   ifindex: 3,
@@ -56,10 +60,6 @@ const metric = (over: Partial<NodeMetricEntry> = {}): NodeMetricEntry => ({
 
 const iff = (over: Partial<InterfaceFilters>): InterfaceFilters => ({
   ...DEFAULT_INTERFACE_FILTERS,
-  ...over,
-});
-const nf = (over: Partial<NeighborFilters>): NeighborFilters => ({
-  ...DEFAULT_NEIGHBOR_FILTERS,
   ...over,
 });
 const mf = (over: Partial<MetricFilters>): MetricFilters => ({ ...DEFAULT_METRIC_FILTERS, ...over });
@@ -111,35 +111,52 @@ describe('matchesInterface', () => {
   });
 });
 
-describe('matchesNeighbor', () => {
+describe('the neighbours filter row', () => {
+  const nt = ((k: string) => k) as unknown as Parameters<typeof neighborFilters>[0];
+  const NB_COLS: FilterableColumn<Neighbor>[] = Object.entries(neighborFilters(nt)).map(
+    ([key, filter]) => ({ key, filter }),
+  );
+  const NB_DEFAULTS = defaultFilters(NB_COLS);
+  const nbf = (over: Record<string, string>): FilterState => ({ ...NB_DEFAULTS, ...over });
+  const NOW = Date.parse('2026-08-13T12:00:00Z');
+  const has = (row: Neighbor, state: FilterState) => matchesFilters(row, NB_COLS, state, NOW);
+
   it('shows everything when nothing is set', () => {
-    expect(matchesNeighbor(nb(), DEFAULT_NEIGHBOR_FILTERS)).toBe(true);
+    expect(has(nb(), NB_DEFAULTS)).toBe(true);
+    expect(isAnyFiltered(NB_COLS, NB_DEFAULTS)).toBe(false);
   });
 
   it('filters by the protocol that reported the adjacency', () => {
     // A switch running both reports the same physical link twice with different identities, so
     // being able to look at one protocol's view alone is the point.
-    expect(matchesNeighbor(nb(), nf({ proto: 'lldp' }))).toBe(true);
-    expect(matchesNeighbor(nb(), nf({ proto: 'cdp' }))).toBe(false);
+    expect(has(nb(), nbf({ proto: 'lldp' }))).toBe(true);
+    expect(has(nb(), nbf({ proto: 'cdp' }))).toBe(false);
+    // …and both together, which the single-choice dropdown could not express.
+    expect(has(nb(), nbf({ proto: 'cdp,lldp' }))).toBe(true);
   });
 
-  it('searches the peer and both ends of the link', () => {
-    expect(matchesNeighbor(nb(), nf({ q: 'SW-CORE' }))).toBe(true);
-    expect(matchesNeighbor(nb(), nf({ q: 'gi0/1' }))).toBe(true);
-    expect(matchesNeighbor(nb(), nf({ q: 'te1/1/1' }))).toBe(true);
-    expect(matchesNeighbor(nb(), nf({ q: 'sw-edge' }))).toBe(false);
+  it('asks each end of the link separately, where the search box asked all four at once', () => {
+    expect(has(nb(), nbf({ peer: 'SW-CORE' }))).toBe(true);
+    expect(has(nb(), nbf({ local: 'gi0/1' }))).toBe(true);
+    expect(has(nb(), nbf({ remote_port: 'te1/1/1' }))).toBe(true);
+    // The distinction the one box could not draw: this port number is the *local* one.
+    expect(has(nb(), nbf({ remote_port: 'gi0/1' }))).toBe(false);
+    expect(has(nb(), nbf({ peer: 'sw-edge' }))).toBe(false);
   });
 
-  it('survives a neighbour that reported almost nothing', () => {
+  it('matches the peer column on whichever identity the cell is showing', () => {
+    // ⚠️ The cell renders the system name, or the chassis id when there is no name. Reading only
+    // `remote_sys_name` would mean typing what is on screen finds nothing for a bare neighbour.
     const bare = nb({ remote_sys_name: null, remote_port: '', remote_port_desc: null });
-    expect(matchesNeighbor(bare, nf({ q: 'gi0/1' }))).toBe(true);
-    expect(matchesNeighbor(bare, nf({ q: 'sw-core' }))).toBe(false);
+    expect(has(bare, nbf({ peer: bare.remote_chassis }))).toBe(true);
+    expect(has(bare, nbf({ peer: 'sw-core' }))).toBe(false);
+    expect(has(bare, nbf({ local: 'gi0/1' }))).toBe(true);
   });
 
-  it('flips isFiltered for every field', () => {
-    expect(isNeighborFiltered(DEFAULT_NEIGHBOR_FILTERS)).toBe(false);
-    expect(isNeighborFiltered(nf({ proto: 'cdp' }))).toBe(true);
-    expect(isNeighborFiltered(nf({ q: 'x' }))).toBe(true);
+  it('flips isAnyFiltered for every column', () => {
+    for (const key of Object.keys(NB_DEFAULTS)) {
+      expect(isAnyFiltered(NB_COLS, nbf({ [key]: 'x' }))).toBe(true);
+    }
   });
 });
 

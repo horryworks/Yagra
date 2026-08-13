@@ -24,6 +24,16 @@
   equivalent selection is `action=fired,refreshed,cleared,suppressed`.
 - **Every Events filter is now in the URL**, so a filtered view can be linked. A filter at its
   default has no key at all, which means a bare `/alerts/events` is always the default view.
+- **Saved reports is filtered by the report's name rather than picked from a list of reports.** A run
+  keeps the name its report had when it ran, and that is what the column shows, so a list of report
+  *ids* labelled with today's names would have silently dropped the older runs of a renamed report.
+  Finding a renamed report's history now means searching for either name.
+- **The single search box on API tokens is gone**, replaced by separate Name and Owner filters —
+  "owned by alice" no longer also matches a token *called* alice. The Neighbors tab's one box became
+  three, one per end of the link.
+- On Alert history, Audit, Alert rules and Saved findings the column filters are **single-choice**:
+  those endpoints take one severity, state or action, and offering a multi-select there would have
+  sent one of the ticked values without saying so. Multi-value on those four is still to come.
 
 ### New Features
 - `GET /api/v1/events` and `GET /api/v1/events/stats` take five new optional filters, and the MCP
@@ -62,6 +72,18 @@
 - The Events empty state distinguishes three cases — nothing in the window, nothing matching the
   filters, and nothing whose word *starts* with the term — because the default range narrows, so "no
   events" was never the right sentence.
+- **Twelve more screens moved their filters into the column filter row**: API tokens, Forwarding,
+  Dependencies, a node's Neighbors tab, Troubleshoot ▸ Scheduled, all three Reports tables, Alert
+  history, Audit, Alert rules and Saved findings. Each also gained "Clear all filters" and the
+  mobile filter sheet, and most gained filters they never had — a time window on when a token was
+  last used, the state of a node on the Dependencies list, the trigger of a saved report.
+- **Two tables that were showing two facts in one column now show them in two.** Forwarding's Target
+  held the address *and* the protocol, so the destination-kind filter had nowhere to live; it now has
+  its own column, as does the enabled/disabled state that used to be a badge beside the name.
+- **Dependencies' "All nodes / With upstream / Currently suppressed" selector became two filters**,
+  on the two columns it was really asking about, so both can now be applied at once.
+- On screens whose list is fully in the browser, an option's count says how many rows you would get
+  by switching to it — it excludes that column's own filter, the way a spreadsheet's autofilter does.
 
 ## v0.2.6 — every check on a device runs again, and twenty-two lists can be narrowed
 

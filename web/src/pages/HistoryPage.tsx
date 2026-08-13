@@ -21,21 +21,21 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
 import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import { Select } from '../components/ui/Field';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { AlertSubjectName } from '../widgets/AlertSubjectName';
 import { AlertWhatText } from '../widgets/AlertWhatText';
 import { appendPage, nextCursor } from './historyCursor';
 import {
-  HISTORY_RANGES,
+  DEFAULT_FILTERS,
+  filtersFromState,
+  historyFilters,
   isFiltered,
   queryFor,
   readFilters,
+  stateFromFilters,
   writeFilters,
   type HistoryFilters,
 } from './historyQuery';
@@ -50,6 +50,7 @@ import { scopeFilter } from '../troubleshoot/findingsQuery';
 export function HistoryPage() {
   const { t } = useTranslation('alerts');
   const [rows, setRows] = useState<AlertHistoryRow[]>([]);
+  const [sheet, setSheet] = useState(false);
   const [loading, setLoading] = useState(true);
   /** Keyset cursor for the next (older) page; `null` once the log is exhausted. */
   const [cursor, setCursor] = useState<{ before: string; before_id: string } | null>(null);
@@ -72,8 +73,11 @@ export function HistoryPage() {
     writeFilters(p, next);
     setParams(p, { replace: true });
   };
-  const set = <K extends keyof HistoryFilters>(key: K, value: HistoryFilters[K]) =>
-    setFilters({ ...filters, [key]: value });
+  // The filter row's flat state, and the one place it maps back onto the request shape. The URL
+  // codec stays `writeFilters` — the row does not get a second one writing the same params.
+  const rowFilters = useMemo(() => stateFromFilters(filters), [filters]);
+  const onRowFilters = (next: FilterState) =>
+    setFilters(filtersFromState(next, { nodeId: filters.nodeId, groupId: filters.groupId }));
 
   const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
   const onScope = (v: ScopeValue) => {
@@ -137,10 +141,11 @@ export function HistoryPage() {
   }, [cursor, filters]);
 
   // Columns close over `nodeName`, so rebuild them when the inventory resolves.
-  const columns = useMemo<Column<AlertHistoryRow>[]>(
-    () => [
+  const columns = useMemo<Column<AlertHistoryRow>[]>(() => {
+    const specs = historyFilters(t);
+    const cols: Column<AlertHistoryRow>[] = [
       {
-        key: 'sev',
+        key: 'severity',
         header: t('history.cols.severity'),
         width: '110px',
         render: (r) => (
@@ -203,14 +208,16 @@ export function HistoryPage() {
           ),
       },
       {
-        key: 'at',
+        key: 'range',
         header: t('history.cols.when'),
         width: '1fr',
         render: (r) => <span className="muted">{formatTimestamp(r.at_unix_ms)}</span>,
       },
-    ],
-    [nodeName, t],
-  );
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [nodeName, t]);
+  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
 
   return (
     <div className="page-fill">
@@ -225,44 +232,23 @@ export function HistoryPage() {
           "Which node" is what ScopePicker answers instead. */}
       <TableToolbar>
         <ScopePicker value={scope} onChange={onScope} className="table-filter" />
-        <FilterSelect
-          value={filters.severity}
-          onChange={(v) => set('severity', v)}
-          options={SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) }))}
-          allLabel={t('history.filter.allSeverities')}
-          ariaLabel={t('history.filter.severityAria')}
+        <MobileFilterButton
+          columns={filterCols}
+          filters={rowFilters}
+          onOpen={() => setSheet(true)}
         />
-        <FilterSelect
-          value={filters.phase}
-          onChange={(v) => set('phase', v)}
-          options={[
-            { value: 'fired' as const, label: t('history.phase.fired') },
-            { value: 'cleared' as const, label: t('history.phase.cleared') },
-          ]}
-          allLabel={t('history.filter.allPhases')}
-          ariaLabel={t('history.filter.phaseAria')}
+        {/* The scope is counted and cleared with the columns: it is not a column filter, but it
+            narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
+            ONE write — `setFilters` takes the whole `HistoryFilters`, scope included. */}
+        <ClearFilters
+          columns={filterCols}
+          filters={rowFilters}
+          extraActive={filters.nodeId !== '' || filters.groupId !== ''}
+          onClear={() => {
+            setScope(allScope(t));
+            setFilters(DEFAULT_FILTERS);
+          }}
         />
-        <FilterSelect
-          value={filters.state}
-          onChange={(v) => set('state', v)}
-          options={SEVERITY_ORDER.map((s) => ({ value: s, label: stateLabel(s) }))}
-          allLabel={t('history.filter.allStates')}
-          ariaLabel={t('history.filter.stateAria')}
-        />
-        {/* Not a FilterSelect: `all` is one of the range's own options and its default, so the ''
-            sentinel would be a second way to say the same thing. */}
-        <Select
-          value={filters.range}
-          onChange={(e) => set('range', e.target.value as HistoryFilters['range'])}
-          className="table-filter"
-          aria-label={t('common:range.timeRange')}
-        >
-          {HISTORY_RANGES.map((r) => (
-            <option key={r} value={r}>
-              {t(`history.range.${r}`)}
-            </option>
-          ))}
-        </Select>
         <TableSpacer />
         <ResultCount
           shown={rows.length}
@@ -272,6 +258,8 @@ export function HistoryPage() {
       <DataTable
         rows={rows}
         columns={columns}
+        filters={rowFilters}
+        onFiltersChange={onRowFilters}
         // The row's own id. The composite key this replaces was not unique — two transitions of the
         // same subject and check, in the same millisecond, collided — and a duplicate React key is
         // a silent misrender rather than an error.
@@ -281,7 +269,23 @@ export function HistoryPage() {
         // that legitimately returns zero is indistinguishable from an empty log.
         empty={isFiltered(filters) ? t('history.emptyFiltered') : t('history.empty')}
         loading={loading}
+        // No facet counts: every count here would be a second aggregate query over a table that
+        // reaches millions of rows, per popover open. ADR-023 puts UI load third.
       />
+      {sheet && (
+        <MobileFilterSheet
+          columns={filterCols}
+          filters={rowFilters}
+          onChange={onRowFilters}
+          labels={{
+            severity: t('history.cols.severity'),
+            state: t('history.cols.state'),
+            phase: t('history.cols.event'),
+            range: t('history.cols.when'),
+          }}
+          onClose={() => setSheet(false)}
+        />
+      )}
     </div>
   );
 }

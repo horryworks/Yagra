@@ -22,7 +22,7 @@ import type {
   ForwardSourceKind,
   ForwardStatus,
 } from '../types/api';
-import { FORWARD_DEST_KINDS, FORWARD_SOURCE_KINDS } from '../types/api';
+import { FORWARD_SOURCE_KINDS } from '../types/api';
 import {
   destKindsForSource,
   fieldsForSource,
@@ -44,20 +44,11 @@ import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, TextArea, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import { ENABLED_STATES } from '../lib/filterQuery';
-import {
-  DEFAULT_FORWARDING_FILTERS,
-  isForwardingFiltered,
-  matchesForwardDestination,
-  type ForwardingFilters,
-} from './forwardingListFilters';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import {
@@ -75,21 +66,18 @@ const STATUS_POLL_MS = 10_000;
 function destinationColumns(
   t: TFunction,
   status: Map<string, ForwardDestStatus>,
+  rows: readonly ForwardDestination[],
   onEdit: (row: ForwardDestination) => void,
   onTest: (row: ForwardDestination) => void,
   onDelete: (row: ForwardDestination) => void,
 ): Column<ForwardDestination>[] {
-  return [
+  const specs = forwardingFilters(t, rows);
+  const cols: Column<ForwardDestination>[] = [
     {
       key: 'name',
       header: t('cols.name'),
       width: '1fr',
-      render: (r) => (
-        <span className="fwd-name">
-          {r.name}
-          {!r.enabled && <Badge tone="neutral">{t('status.disabled')}</Badge>}
-        </span>
-      ),
+      render: (r) => <span className="fwd-name">{r.name}</span>,
     },
     {
       key: 'source',
@@ -101,12 +89,28 @@ function destinationColumns(
       key: 'target',
       header: t('cols.target'),
       width: '1fr',
-      render: (r) => (
-        <span className="fwd-target">
-          <span className="mono">{r.target}</span>
-          <span className="fwd-sub">{t(`dest.${r.dest_kind}`)}</span>
-        </span>
-      ),
+      render: (r) => <span className="mono">{r.target}</span>,
+    },
+    {
+      // Split out of Target by ADR-053 Inc.3: the cell rendered the address *and* the protocol, and
+      // the destination-kind dropdown the toolbar used to carry had nowhere to land while the two
+      // shared a column. One column, one filter.
+      key: 'dest',
+      header: t('cols.dest'),
+      width: '120px',
+      render: (r) => <span className="fwd-sub">{t(`dest.${r.dest_kind}`)}</span>,
+    },
+    {
+      // Likewise the enabled state, which was a badge tucked beside the name.
+      key: 'status',
+      header: t('cols.status'),
+      width: '110px',
+      render: (r) =>
+        r.enabled ? (
+          <Badge tone="up">{t('common:filter.enabled')}</Badge>
+        ) : (
+          <Badge tone="neutral">{t('status.disabled')}</Badge>
+        ),
     },
     {
       key: 'scope',
@@ -180,6 +184,10 @@ function destinationColumns(
       ),
     },
   ];
+  // Attached by key, so a column with no spec has no control and a spec with no column is visible
+  // here rather than a silent no-op.
+  for (const c of cols) c.filter = specs[c.key];
+  return cols;
 }
 
 /** One `field op value` row of the filter builder. */
@@ -555,10 +563,7 @@ export function ForwardingPage() {
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<ForwardDestination | null>(null);
   const [testResult, setTestResult] = useState<{ name: string; text: string } | null>(null);
-  // Client-side: the destination list is bounded by what an operator configured, not by fleet size
-  // (ui-conventions). The judgement is in `forwardingListFilters.ts`.
-  const [filters, setFilters] = useState<ForwardingFilters>(DEFAULT_FORWARDING_FILTERS);
-  const shown = rows.filter((d) => matchesForwardDestination(d, filters));
+  const [sheet, setSheet] = useState(false);
 
   const load = useCallback(() => {
     setError(null);
@@ -627,8 +632,15 @@ export function ForwardingPage() {
   );
 
   const columns = useMemo(
-    () => destinationColumns(t, statusById, setEditing, runTest, setDeleting),
-    [t, statusById, runTest],
+    () => destinationColumns(t, statusById, rows, setEditing, runTest, setDeleting),
+    [t, statusById, rows, runTest],
+  );
+  // Client-side: the destination list is bounded by what an operator configured, not by fleet size
+  // (ui-conventions). URL-backed — one table on this route, so a filtered view is linkable.
+  const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
+    columns,
+    rows,
+    { url: true },
   );
 
   // A byte-exact destination cannot be honoured for traffic from a poller that predates raw
@@ -678,30 +690,16 @@ export function ForwardingPage() {
           )}
 
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('filter.searchPlaceholder')}
-              ariaLabel={t('filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.dest_kind}
-              onChange={(v) => setFilters((f) => ({ ...f, dest_kind: v }))}
-              options={FORWARD_DEST_KINDS.map((k) => ({ value: k, label: t(`dest.${k}`) }))}
-              allLabel={t('filter.allDestKinds')}
-              ariaLabel={t('filter.destKindAria')}
-            />
-            <FilterSelect
-              value={filters.enabled}
-              onChange={(v) => setFilters((f) => ({ ...f, enabled: v }))}
-              options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
-              allLabel={t('common:filter.allEnabled')}
-              ariaLabel={t('common:filter.enabledAria')}
-            />
+            <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
             <TableSpacer />
             <ResultCount
               shown={shown.length}
-              total={isForwardingFiltered(filters) ? rows.length : undefined}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('count', { count: shown.length })}
             />
             <Button variant="primary" onClick={() => setAdding(true)}>
@@ -714,10 +712,23 @@ export function ForwardingPage() {
           <DataTable
             rows={shown}
             columns={columns}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
             rowKey={(r) => r.id}
             loading={loading}
-            empty={isForwardingFiltered(filters) ? t('common:filter.noMatch') : t('empty')}
+            empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, t(`cols.${c.key}`)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 

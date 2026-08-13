@@ -11,6 +11,7 @@ import { api } from '../../services/api';
 import { clearFilter, type FilterState, type FilterableColumn } from '../../lib/columnFilter';
 import {
   eventFilterQuery,
+  shouldWiden,
   widenEventQuery,
   EVENT_FILTER_KEYS,
   type EventQuery,
@@ -122,8 +123,14 @@ export function useEventFacets(
  * that answers narrowly, and a bare JSON array has nowhere to carry the admission.
  *
  * Both Events screens call this rather than `useEventLog`, so the policy exists once. The retry is
- * at most one per query: `tried` is keyed by the query itself, so a widened search that also finds
- * nothing settles instead of oscillating.
+ * at most one per query: the widened flag is reset by the query key, so a widened search that also
+ * finds nothing settles instead of oscillating.
+ *
+ * ⚠️ **The trigger reads `log.settled`, never `!log.loading`.** Those look interchangeable and are
+ * not; `shouldWiden` carries the reasoning, and `useEventLog`'s `settled` carries the window where
+ * they disagree. This shipped wrong once, and the reason it survived review and a screen test is
+ * that a wrongly-widened search looks entirely correct — rows appear, the marks agree with them,
+ * and the banner explains itself.
  */
 export function useWidenedEventLog(
   query: EventQuery,
@@ -144,10 +151,11 @@ export function useWidenedEventLog(
   }
 
   useEffect(() => {
-    if (!widened && wide && !log.loading && log.rows.length === 0) setWidened(true);
+    if (shouldWiden({ widened, canWiden: wide != null, settled: log.settled, rowCount: log.rows.length }))
+      setWidened(true);
     // `wide` is rebuilt every render, so it is compared through the key rather than by identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [widened, key, log.loading, log.rows.length]);
+  }, [widened, key, log.settled, log.rows.length]);
 
   return { ...log, widened: widened && wide != null && log.rows.length > 0 };
 }

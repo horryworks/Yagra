@@ -122,7 +122,14 @@
     "from": "From",
     "to": "To",
     "prefixHint": "This deployment matches from the start of a word. Use Regex to match further inside one.",
-    "clearAllCount": "Clear all filters ({{count}})"
+    "clearAllCount": "Clear all filters ({{count}})",
+    "range": {
+      "24h": "Last 24 hours",
+      "7d": "Last 7 days",
+      "30d": "Last 30 days",
+      "90d": "Last 90 days",
+      "all": "All time"
+    }
   },
   "scope": {
     "all": "All nodes",

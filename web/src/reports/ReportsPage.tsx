@@ -11,28 +11,14 @@ import { Button } from '../components/ui/Button';
 import { Badge } from '../components/ui/Badge';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { DataTable, type Column } from '../components/ui/DataTable';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
 import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import { ENABLED_STATES } from '../lib/filterQuery';
-import {
-  DEFAULT_DEFINITION_FILTERS,
-  DEFAULT_SAVED_RUN_FILTERS,
-  DEFAULT_SCHEDULE_LIST_FILTERS,
-  isDefinitionFiltered,
-  isSavedRunFiltered,
-  isScheduleListFiltered,
-  matchesDefinition,
-  matchesReportSchedule,
-  matchesSavedRun,
-  RUN_STATE_FILTERS,
-  type DefinitionFilters,
-  type SavedRunFilters,
-  type ScheduleListFilters,
+  definitionFilters,
+  reportScheduleFilters,
+  savedRunFilters,
 } from './reportListFilters';
 import { usePolled } from '../dashboard/usePolled';
 import { api } from '../services/api';
@@ -118,18 +104,13 @@ export function ReportsPage() {
   // an admin authored rather than by fleet size (ui-conventions); saved runs because the store
   // behind it is SSE-fed and would undo a filtered fetch on the next progress frame — the reason is
   // written out in `reportListFilters.ts`, beside the predicate it explains.
-  const [defFilters, setDefFilters] = useState<DefinitionFilters>(DEFAULT_DEFINITION_FILTERS);
-  const [schedFilters, setSchedFilters] = useState<ScheduleListFilters>(
-    DEFAULT_SCHEDULE_LIST_FILTERS,
-  );
-  const [runFilters, setRunFilters] = useState<SavedRunFilters>(DEFAULT_SAVED_RUN_FILTERS);
+  // ⚠️ And **not** URL-backed, unlike every other Inc.3 screen: three tables share this route and
+  // the column key is the URL key, so `name` would be written by two of them at once.
+  const [sheet, setSheet] = useState<'saved' | 'templates' | 'schedules' | null>(null);
 
   const catalog: ReportSectionDef[] = sections.data ?? [];
   const definitions: ReportDefinition[] = defs.data ?? [];
   const schedules: ReportSchedule[] = scheds.data ?? [];
-  const shownDefinitions = definitions.filter((d) => matchesDefinition(d, defFilters));
-  const shownSchedules = schedules.filter((x) => matchesReportSchedule(x, schedFilters));
-  const shownRuns = runs.filter((r) => matchesSavedRun(r, runFilters));
 
   async function runNow(def: ReportDefinition) {
     setBusy(def.id);
@@ -175,6 +156,7 @@ export function ReportsPage() {
   }
 
   // ── Column sets ──
+  const runSpecs = savedRunFilters(t);
   const runColumns: Column<ReportRun>[] = [
     { key: 'name', header: t('runs.cols.report'), width: '1.6fr', render: (r) => r.name },
     { key: 'status', header: t('runs.cols.status'), width: '160px', render: (r) => <RunStatus run={r} /> },
@@ -209,7 +191,9 @@ export function ReportsPage() {
       ),
     },
   ];
+  for (const c of runColumns) c.filter = runSpecs[c.key];
 
+  const defSpecs = definitionFilters(t);
   const defColumns: Column<ReportDefinition>[] = [
     { key: 'name', header: t('defs.cols.template'), width: '1.6fr', render: (d) => d.name },
     {
@@ -254,7 +238,9 @@ export function ReportsPage() {
       ),
     },
   ];
+  for (const c of defColumns) c.filter = defSpecs[c.key];
 
+  const schedSpecs = reportScheduleFilters(t);
   const schedColumns: Column<ReportSchedule>[] = [
     { key: 'name', header: t('scheds.cols.report'), width: '1.4fr', render: (s) => s.definition_name },
     {
@@ -300,6 +286,11 @@ export function ReportsPage() {
         ),
     },
   ];
+  for (const c of schedColumns) c.filter = schedSpecs[c.key];
+
+  const runF = useClientFilters(runColumns, runs);
+  const defF = useClientFilters(defColumns, definitions);
+  const schedF = useClientFilters(schedColumns, schedules);
 
   const tabs: { key: Tab; label: string; count: number }[] = [
     { key: 'saved', label: t('tabs.saved'), count: runs.length },
@@ -333,61 +324,70 @@ export function ReportsPage() {
       {tab === 'saved' && (
         <>
           <TableToolbar>
-            <SearchInput
-              value={runFilters.q}
-              onChange={(v) => setRunFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('runs.filter.searchPlaceholder')}
-              ariaLabel={t('runs.filter.searchAria')}
+            <MobileFilterButton
+              columns={runF.filterCols}
+              filters={runF.filters}
+              onOpen={() => setSheet('saved')}
             />
-            <FilterSelect
-              value={runFilters.definitionId}
-              onChange={(v) => setRunFilters((f) => ({ ...f, definitionId: v }))}
-              options={definitions.map((d) => ({ value: d.id, label: d.name }))}
-              allLabel={t('runs.filter.allReports')}
-              ariaLabel={t('runs.filter.reportAria')}
-            />
-            <FilterSelect
-              value={runFilters.state}
-              onChange={(v) => setRunFilters((f) => ({ ...f, state: v }))}
-              options={RUN_STATE_FILTERS.map((s) => ({
-                value: s,
-                label: t(`runs.state.${s}`),
-              }))}
-              allLabel={t('runs.filter.allStates')}
-              ariaLabel={t('runs.filter.stateAria')}
+            <ClearFilters
+              columns={runF.filterCols}
+              filters={runF.filters}
+              onClear={runF.clear}
             />
             <TableSpacer />
             <ResultCount
-              shown={shownRuns.length}
-              total={isSavedRunFiltered(runFilters) ? runs.length : undefined}
-              noun={t('noun.savedReport', { count: shownRuns.length })}
+              shown={runF.shown.length}
+              total={runF.anyFiltered ? runs.length : undefined}
+              noun={t('noun.savedReport', { count: runF.shown.length })}
             />
           </TableToolbar>
           <DataTable
-            rows={shownRuns}
+            rows={runF.shown}
             columns={runColumns}
+            filters={runF.filters}
+            onFiltersChange={runF.setFilters}
+            filterCounts={runF.counts}
             rowKey={(r) => r.id}
             onRowClick={(r) => setViewerRunId(r.id)}
-            empty={isSavedRunFiltered(runFilters) ? t('common:filter.noMatch') : t('runs.empty')}
+            empty={runF.anyFiltered ? t('common:filter.noMatch') : t('runs.empty')}
             loading={!runsLoaded}
           />
+          {sheet === 'saved' && (
+            <MobileFilterSheet
+              columns={runF.filterCols}
+              filters={runF.filters}
+              onChange={runF.setFilters}
+              counts={runF.counts}
+              labels={{
+                name: t('runs.cols.report'),
+                status: t('runs.cols.status'),
+                trigger: t('runs.cols.trigger'),
+                when: t('runs.cols.generated'),
+              }}
+              onClose={() => setSheet(null)}
+            />
+          )}
         </>
       )}
 
       {tab === 'templates' && (
         <>
           <TableToolbar>
-            <SearchInput
-              value={defFilters.q}
-              onChange={(v) => setDefFilters({ q: v })}
-              placeholder={t('defs.filter.searchPlaceholder')}
-              ariaLabel={t('defs.filter.searchAria')}
+            <MobileFilterButton
+              columns={defF.filterCols}
+              filters={defF.filters}
+              onOpen={() => setSheet('templates')}
+            />
+            <ClearFilters
+              columns={defF.filterCols}
+              filters={defF.filters}
+              onClear={defF.clear}
             />
             <TableSpacer />
             <ResultCount
-              shown={shownDefinitions.length}
-              total={isDefinitionFiltered(defFilters) ? definitions.length : undefined}
-              noun={t('common:noun.template', { count: shownDefinitions.length })}
+              shown={defF.shown.length}
+              total={defF.anyFiltered ? definitions.length : undefined}
+              noun={t('common:noun.template', { count: defF.shown.length })}
             />
             {isAdmin && (
               <Button variant="primary" onClick={() => setBuilderFor('new')}>
@@ -396,11 +396,14 @@ export function ReportsPage() {
             )}
           </TableToolbar>
           <DataTable
-            rows={shownDefinitions}
+            rows={defF.shown}
             columns={defColumns}
+            filters={defF.filters}
+            onFiltersChange={defF.setFilters}
+            filterCounts={defF.counts}
             rowKey={(d) => d.id}
             empty={
-              isDefinitionFiltered(defFilters)
+              defF.anyFiltered
                 ? t('common:filter.noMatch')
                 : isAdmin
                   ? t('defs.emptyAdmin')
@@ -408,30 +411,40 @@ export function ReportsPage() {
             }
             loading={defs.loading && definitions.length === 0}
           />
+          {sheet === 'templates' && (
+            <MobileFilterSheet
+              columns={defF.filterCols}
+              filters={defF.filters}
+              onChange={defF.setFilters}
+              counts={defF.counts}
+              labels={{
+                name: t('defs.cols.template'),
+                updated: t('defs.cols.updated'),
+              }}
+              onClose={() => setSheet(null)}
+            />
+          )}
         </>
       )}
 
       {tab === 'schedules' && (
         <>
           <TableToolbar>
-            <SearchInput
-              value={schedFilters.q}
-              onChange={(v) => setSchedFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('scheds.filter.searchPlaceholder')}
-              ariaLabel={t('scheds.filter.searchAria')}
+            <MobileFilterButton
+              columns={schedF.filterCols}
+              filters={schedF.filters}
+              onOpen={() => setSheet('schedules')}
             />
-            <FilterSelect
-              value={schedFilters.enabled}
-              onChange={(v) => setSchedFilters((f) => ({ ...f, enabled: v }))}
-              options={ENABLED_STATES.map((e) => ({ value: e, label: t(`common:filter.${e}`) }))}
-              allLabel={t('common:filter.allEnabled')}
-              ariaLabel={t('common:filter.enabledAria')}
+            <ClearFilters
+              columns={schedF.filterCols}
+              filters={schedF.filters}
+              onClear={schedF.clear}
             />
             <TableSpacer />
             <ResultCount
-              shown={shownSchedules.length}
-              total={isScheduleListFiltered(schedFilters) ? schedules.length : undefined}
-              noun={t('noun.schedule', { count: shownSchedules.length })}
+              shown={schedF.shown.length}
+              total={schedF.anyFiltered ? schedules.length : undefined}
+              noun={t('noun.schedule', { count: schedF.shown.length })}
             />
             {isAdmin && (
               <Button
@@ -444,11 +457,14 @@ export function ReportsPage() {
             )}
           </TableToolbar>
           <DataTable
-            rows={shownSchedules}
+            rows={schedF.shown}
             columns={schedColumns}
+            filters={schedF.filters}
+            onFiltersChange={schedF.setFilters}
+            filterCounts={schedF.counts}
             rowKey={(s) => s.id}
             empty={
-              isScheduleListFiltered(schedFilters)
+              schedF.anyFiltered
                 ? t('common:filter.noMatch')
                 : definitions.length === 0
                   ? t('scheds.emptyNoDefs')
@@ -456,6 +472,20 @@ export function ReportsPage() {
             }
             loading={scheds.loading && schedules.length === 0}
           />
+          {sheet === 'schedules' && (
+            <MobileFilterSheet
+              columns={schedF.filterCols}
+              filters={schedF.filters}
+              onChange={schedF.setFilters}
+              counts={schedF.counts}
+              labels={{
+                name: t('scheds.cols.report'),
+                next: t('scheds.cols.nextRun'),
+                enabled: t('scheds.cols.state'),
+              }}
+              onClose={() => setSheet(null)}
+            />
+          )}
         </>
       )}
 

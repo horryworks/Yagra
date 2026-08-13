@@ -7,7 +7,7 @@
 // Data-table standard v2: a toolbar (New + count) over the shared `DataTable`; revoke is a per-row
 // OverflowMenu action with a confirm modal. Modeled on AuditPage (table) + AuthSettingsPage (modals).
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg, ApiError } from '../services/api';
@@ -46,22 +46,11 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { sortRows, type SortState } from '../lib/tableSort';
-import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-  FilterSelect,
-} from '../components/ui/TableToolbar';
-import {
-  DEFAULT_TOKEN_FILTERS,
-  DEFAULT_TOKEN_SORT,
-  isTokenFiltered,
-  matchesToken,
-  TOKEN_STATE_FILTERS,
-  tokenSortValues,
-  type TokenFilters,
-} from './apiTokenFilters';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { useClientFilters } from '../lib/useClientFilters';
+import { DEFAULT_TOKEN_SORT, tokenFilters, tokenSortValues } from './apiTokenFilters';
 import { TimeCell } from '../components/ui/tableCells';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TrashIcon } from '../components/ui/icons';
@@ -83,12 +72,17 @@ const STATE_TONE: Record<TokenState, 'up' | 'neutral' | 'warning'> = {
 };
 
 /** Table columns. Renderers close over `t`, so the caller rebuilds them on a language switch.
- *  `onRevoke` is `null` when the viewer isn't an admin (no row actions rendered then). */
+ *  `onRevoke` is `null` when the viewer isn't an admin (no row actions rendered then).
+ *
+ *  `now` is the caller's, not this function's: the filter specs and the status badge both derive a
+ *  token's state from it, and two readings would let a row be filtered as `active` and rendered as
+ *  `expired` in the same paint. */
 function tokenColumns(
   t: TFunction,
+  now: Date,
   onRevoke: ((row: ApiTokenSummary) => void) | null,
 ): Column<ApiTokenSummary>[] {
-  const now = new Date();
+  const filters = tokenFilters(t, now);
   const cols: Column<ApiTokenSummary>[] = [
     {
       key: 'name',
@@ -199,6 +193,9 @@ function tokenColumns(
         r.last_used_at ? <TimeCell iso={r.last_used_at} /> : <span className="muted">{t('lastUsed.never')}</span>,
     },
   ];
+  // Attached by key rather than written into each literal, so a column with no spec simply has no
+  // filter control and a spec with no column is a visible mismatch here rather than a silent no-op.
+  for (const c of cols) c.filter = filters[c.key];
   if (onRevoke) {
     cols.push({
       key: 'actions',
@@ -485,20 +482,19 @@ export function ApiTokensPage() {
   const [created, setCreated] = useState<CreatedApiToken | null>(null);
   const [revoking, setRevoking] = useState<ApiTokenSummary | null>(null);
   const [users, setUsers] = useState<UserSummary[]>([]);
-  // Client-side: the token list is bounded by what an admin issued, not by fleet size
-  // (ui-conventions). One clock reading per render so the state filter and the state badge cannot
-  // disagree about a token lapsing between two rows.
-  const [filters, setFilters] = useState<TokenFilters>(DEFAULT_TOKEN_FILTERS);
+  const [sheet, setSheet] = useState(false);
   // The table sorts in the browser, and legitimately: every token is here. `DataTable` renders the
   // header affordance and reports the click — it never reorders `rows` itself, so a keyset-paged
   // screen cannot accidentally sort a prefix and present it as the order (`lib/tableSort.ts`).
   const [sort, setSort] = useState<SortState>(DEFAULT_TOKEN_SORT);
-  const now = new Date();
-  const shown = sortRows(
-    rows.filter((r) => matchesToken(r, filters, now)),
-    sort,
-    tokenSortValues(now),
-  );
+  // One clock reading, shared by the filter specs, the sort and the status badge — see
+  // `tokenColumns`. Re-read only when the rows are replaced, so a relative window ("used in the
+  // last 24 hours") does not creep forward while the operator reads the screen. Same shape as
+  // `useFilterParams`'s pinned `nowMs`, and a ref rather than `useMemo` because a memo keyed on
+  // `rows` is a cache the runtime may drop, not a guarantee.
+  const clock = useRef<{ rows: unknown; at: Date } | null>(null);
+  if (!clock.current || clock.current.rows !== rows) clock.current = { rows, at: new Date() };
+  const now = clock.current.at;
 
   const load = useCallback(() => {
     setError(null);
@@ -528,8 +524,16 @@ export function ApiTokensPage() {
   }, [authed, load]);
 
   const columns = useMemo(
-    () => tokenColumns(t, authed ? (r) => setRevoking(r) : null),
-    [t, authed],
+    () => tokenColumns(t, now, authed ? (r) => setRevoking(r) : null),
+    [t, now, authed],
+  );
+  // URL-backed: one table on this route, so the column keys are free and a filtered view can be
+  // sent to someone. Counts are exact and free here — every token is already in the browser.
+  const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
+    useClientFilters(columns, rows, { url: true });
+  const shown = useMemo(
+    () => sortRows(matched, sort, tokenSortValues(now)),
+    [matched, sort, now],
   );
 
   return (
@@ -551,23 +555,20 @@ export function ApiTokensPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('filter.searchPlaceholder')}
-              ariaLabel={t('filter.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <FilterSelect
-              value={filters.state}
-              onChange={(v) => setFilters((f) => ({ ...f, state: v }))}
-              options={TOKEN_STATE_FILTERS.map((s) => ({ value: s, label: t(`state.${s}`) }))}
-              allLabel={t('filter.allStates')}
-              ariaLabel={t('filter.stateAria')}
+            <ClearFilters
+              columns={filterCols}
+              filters={filters}
+              onClear={clear}
             />
             <TableSpacer />
             <ResultCount
               shown={shown.length}
-              total={isTokenFiltered(filters) ? rows.length : undefined}
+              total={anyFiltered ? rows.length : undefined}
               noun={t('count', { count: shown.length })}
             />
             <Button variant="primary" onClick={() => setAdding(true)}>
@@ -582,10 +583,23 @@ export function ApiTokensPage() {
             columns={columns}
             sort={sort}
             onSortChange={setSort}
+            filters={filters}
+            onFiltersChange={setFilters}
+            filterCounts={counts}
             rowKey={(r) => r.id}
             loading={loading}
-            empty={isTokenFiltered(filters) ? t('common:filter.noMatch') : t('empty')}
+            empty={anyFiltered ? t('common:filter.noMatch') : t('empty')}
           />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              labels={Object.fromEntries(columns.map((c) => [c.key, t(`cols.${c.key}`)]))}
+              onClose={() => setSheet(false)}
+            />
+          )}
         </>
       )}
 
