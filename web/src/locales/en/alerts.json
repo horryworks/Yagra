@@ -76,7 +76,8 @@
       "custom": "Custom…"
     },
     "emptyWindow": "No events in the last 24 hours. The window is what keeps searching fast — widen it under When.",
-    "emptyTokenMiss": "Nothing matches a whole word here. This deployment matches whole words, so a term inside a longer word finds nothing — switch the message filter to Regex."
+    "emptyPrefixMiss": "No word starts with that here. This deployment matches from the start of a word, so a term that sits inside a longer one finds nothing — switch the message filter to Regex.",
+    "widened": "No word starts with that term, so these are the events with it anywhere inside a word."
   },
   "eventLog": {
     "openInEvents": "Open in Events",

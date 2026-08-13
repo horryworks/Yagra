@@ -48,6 +48,39 @@ fn logsql_quote(v: &str) -> String {
     format!("\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
+/// A plain search term against the message: **case-insensitive, matching from the start of a word**
+/// — `POLICY` finds `POLICYPERMIT`, `PERMIT` does not.
+///
+/// This is the one spelling of "what a plain term means" on this backend; the SQL path's is
+/// `ILIKE '%term%'`. The two still differ, and the axis is now sub-*word* rather than sub-token.
+///
+/// **Why a prefix and not a substring, when a substring is what an operator expects.** The index is
+/// a dictionary: words in sorted order, each pointing at the blocks holding it. A prefix is a
+/// contiguous run of that dictionary, so it is answered from the index; a match inside a word is
+/// not in the dictionary at all and can only be found by reading every block in the window.
+/// Measured 2026-08-13 on 6,695,066 events, shipping shape (`sort` + `limit 100`), 24h window:
+///
+///   `i("policypermit")`     exact word          85,462 hits   0.06s
+///   `i("policy"*)`          word prefix        116,010 hits   0.12s   ← this
+///   `i("firewall"*)`        word prefix            569 hits   0.15s
+///   `~"(?i)ewallatck"`      inside a word          566 hits   2.17s   (15× the prefix)
+///   `~"(?i)zzzznomatch"`    inside a word            0 hits   1.79s
+///
+/// Note the inversion in the last two rows: **the more selective the term, the slower the scan**,
+/// because `limit` cannot cut it short. Zero hits is the worst case — the whole window must be read
+/// before "nothing" can be said. That is why the substring form is not the default and is not made
+/// one by widening the range: over 30 days it reaches VictoriaLogs' 30s query ceiling, and the scan
+/// grows with the fleet's event volume while the prefix does not.
+///
+/// The escape hatch for "inside a word" is the regex mode, opted into per query — and, on the
+/// Events page only, an automatic second query when this one returns nothing (ADR-053 Inc.2d). That
+/// retry deliberately lives in the WebUI rather than here: `GET /events` returns a bare array with
+/// nowhere to say "I widened your search", and answering a different question than the one asked
+/// without being able to say so is worse than answering narrowly.
+fn msg_prefix(term: &str) -> String {
+    format!("_msg:i({}*)", logsql_quote(term))
+}
+
 /// Node ids the API resolved from the filter's free-text terms, so a term can still find events by
 /// **node name** without the name ever entering the log store (ADR-011 keeps names out of the TSDB
 /// and log tiers).
@@ -397,20 +430,8 @@ fn build_filter_part(filter: &EventFilter, names: NameIds<'_>) -> String {
             // case-sensitive here and case-insensitive there.
             clauses.push(format!("_msg:~{}", logsql_quote(&ci_regex(term))));
         } else {
-            // A case-INSENSITIVE phrase filter: still whole-token, so one axis of difference from
-            // the SQL path's `ILIKE '%term%'` remains (sub-token granularity) and one is now gone.
-            //
-            // Case was bought deliberately, and what made it affordable was bounding the Events
-            // page's default range, not a change in the measurement: `i("…")` is ~1.1× a plain
-            // phrase over 24h and ~10× unbounded (re-measured 2026-08-13 on 6.7M events). A search
-            // that no one can spell correctly is not a search — `SSH` not matching `ssh` was the
-            // single most common complaint about this box — so the bounded window is what the
-            // feature is worth paying for. Sub-token matching is *not*: it is ~300× and reached
-            // VictoriaLogs' 30s ceiling on real syslog, which is why
-            // `a_plain_term_stays_a_phrase_filter_not_a_regex_scan` still forbids the regex form
-            // here. That remains the search box's explicit **regex** toggle, opted into per query.
             let mut ors = vec![
-                format!("_msg:i({})", logsql_quote(term)),
+                msg_prefix(term),
                 // Case matters here too, and only here: an IPv6 literal is hex, and the poller may
                 // record `FE80::1` where PostgreSQL's `host(inet)` renders `fe80::1`.
                 format!("source_ip:i({})", logsql_quote(term)),
@@ -428,7 +449,7 @@ fn build_filter_part(filter: &EventFilter, names: NameIds<'_>) -> String {
         let inner = if c.regex {
             format!("_msg:~{}", logsql_quote(&ci_regex(&c.term)))
         } else {
-            format!("_msg:i({})", logsql_quote(&c.term))
+            msg_prefix(&c.term)
         };
         clauses.push(negate(inner, c.not));
     }
@@ -966,15 +987,40 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
     }
 }
 
-/// Whether a stored record satisfies the filter, modelling the **PostgreSQL** contract:
-/// case-insensitive substring for a plain term, case-insensitive regex for a pattern.
+/// The fake's model of [`msg_prefix`]: does any **word** in `haystack` start with `needle`?
 ///
-/// It cannot model both backends, because for a *plain term* they legitimately differ on one axis:
-/// VictoriaLogs matches by whole token rather than by substring (see [`build_filter_part`] for the
-/// ~300× measurement behind accepting that). Case used to be a second axis and no longer is —
-/// both are case-insensitive in both modes. Everything else — the time base, which fields a term
-/// searches — is shared, and `both_backends_filter_on_event_time_with_the_same_case_rules` is what
-/// keeps it that way.
+/// `needle` must already be lower-cased. VictoriaLogs splits on non-alphanumerics, so a word starts
+/// at index 0 or after a non-alphanumeric character — which is why `i("ermit"*)` finds nothing in
+/// `POLICYPERMIT` (verified against the real store, 2026-08-13) while `i("policy"*)` finds it.
+/// A needle containing separators works the same way: only its first character has to land on a
+/// word start, and the rest matches literally, which is the phrase-prefix behaviour VictoriaLogs
+/// gives (`i("cid=0x814f"*)` matched, `i("policy/6"*)` did not — the word there is `01POLICY`).
+///
+/// ⚠️ This mirrors an *engine*, so it can only ever be approximate. What it must not be is **more
+/// permissive** than the engine: a fake that still answered `contains` would let every test pass
+/// while the deployment returned fewer rows.
+#[cfg(test)]
+fn word_prefix_match(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    let hay = haystack.to_lowercase();
+    let bytes = hay.as_bytes();
+    hay.match_indices(needle)
+        .any(|(i, _)| i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+}
+
+/// Whether a stored record satisfies the filter. It models **PostgreSQL** on every axis but one,
+/// and the exception is the plain term: there the two backends legitimately differ, so this follows
+/// the *log store* — a word-prefix match ([`word_prefix_match`], mirroring [`msg_prefix`]) rather
+/// than PostgreSQL's substring.
+///
+/// That choice is deliberate and is the safe direction. A fake can only be wrong in two ways, and
+/// only one of them is discoverable: if it is **narrower** than a real backend, a test that expects
+/// a row fails and someone looks. If it is **wider**, every test passes while a deployment returns
+/// fewer rows than the suite believed. Case is no longer an axis at all — both backends fold it in
+/// both modes. Everything else is shared, and
+/// `both_backends_filter_on_event_time_with_the_same_case_rules` is what keeps it that way.
 #[cfg(test)]
 fn record_matches(r: &PersistRecord, f: &EventFilter, names: NameIds<'_>) -> bool {
     let m = &r.msg;
@@ -1030,7 +1076,7 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, names: NameIds<'_>) -> boo
             }
         } else {
             let t = term.to_lowercase();
-            let hit_msg = m.message.to_lowercase().contains(&t);
+            let hit_msg = word_prefix_match(&m.message, &t);
             let hit_ip = m
                 .source_ip
                 .map(|ip| ip.to_string().to_lowercase().contains(&t))
@@ -1048,7 +1094,7 @@ fn record_matches(r: &PersistRecord, f: &EventFilter, names: NameIds<'_>) -> boo
         let hit = if c.regex {
             regex::Regex::new(&ci_regex(&c.term)).is_ok_and(|re| re.is_match(&m.message))
         } else {
-            m.message.to_lowercase().contains(&c.term.to_lowercase())
+            word_prefix_match(&m.message, &c.term.to_lowercase())
         };
         if hit == c.not {
             return false;
@@ -1413,7 +1459,7 @@ mod tests {
         assert!(q.contains("kind:=\"syslog\""));
         assert!(q.contains(&format!("node_id:=\"{node}\"")));
         assert!(q.contains("matched:=\"true\""));
-        assert!(q.contains("_msg:i(\"link down\")"));
+        assert!(q.contains("_msg:i(\"link down\"*)"));
         assert!(q.contains("source_ip:i(\"link down\")"));
         assert!(q.contains(&format!("node_id:in(\"{}\")", Uuid::from_u128(9))));
         assert!(q.ends_with("| sort by (_time) desc | limit 100"));
@@ -1421,29 +1467,25 @@ mod tests {
 
     #[test]
     fn a_plain_term_stays_a_phrase_filter_not_a_regex_scan() {
-        // Guards a fix that was tried and reverted. Making a plain term match the SQL path's
-        // `ILIKE '%term%'` exactly needs two things, and only one of them is affordable. Measured
-        // on the live test server against real syslog (2026-07-28, and re-measured 2026-08-13 on
-        // 6.7M events — the shape held, the absolute numbers moved with the data volume):
+        // Guards a fix that was tried and reverted: a plain term must never become `_msg:~`.
         //
-        //   `_msg:"term"`        phrase, case-sensitive, token-exact     0.9s/24h, 0.9s unbounded
-        //   `_msg:i("term")`     case-INsensitive, still token-exact     1.0s/24h, 9.4s unbounded
-        //   `_msg:~"(?i)term"`   case-insensitive substring              5.6s/24h, 30.1s unbounded
-        //                                                               (= VL's query ceiling)
+        // ⚠️ The *permitted* spelling widened on 2026-08-13 and this assertion moved with it —
+        // `i("term")` → `i("term"*)`, a word **prefix**, so `POLICY` finds `POLICYPERMIT`. What is
+        // forbidden is unchanged and is the whole point of the test: the regex form scans every
+        // block in the window because a match inside a word is not in the dictionary. The prefix is
+        // in the dictionary, so it costs what an exact word costs (0.12s vs 0.06s over 24h on 6.7M
+        // events; the regex form is 2.17s for a *more* selective term, and 1.79s to return nothing
+        // at all). Full table in `msg_prefix`.
         //
-        // An inverted word index cannot serve a leading substring, and case folding defeats the
-        // token index too. The middle row shipped once the Events page stopped defaulting to an
-        // unbounded range (`web/src/components/EventLog/eventRange.ts`, default 24h): over a
-        // bounded window it is ~1.1×, and a search that only matches the casing the device happened
-        // to send is not a search. The bottom row is still ~300× and still refused — regex mode
-        // remains the escape hatch, sub-token on both backends and opted into per query.
+        // Read the earlier revert with that in mind: it failed because it reached for the regex
+        // form, not because operators were wrong to expect `POLICY` to find `POLICYPERMIT`.
         let filter = EventFilter {
             search: Some("link".into()),
             regex: false,
             ..EventFilter::default()
         };
         let q = build_search_logsql(&filter, NameIds::default(), 100);
-        assert!(q.contains("_msg:i(\"link\")"), "{q}");
+        assert!(q.contains("_msg:i(\"link\"*)"), "{q}");
         assert!(
             !q.contains("_msg:~"),
             "plain term must not become a regex scan: {q}"
@@ -1497,7 +1539,7 @@ mod tests {
             },
             NameIds::default(),
         );
-        assert!(plain.contains("_msg:i(\"Term\")"), "{plain}");
+        assert!(plain.contains("_msg:i(\"Term\"*)"), "{plain}");
         assert!(plain.contains("source_ip:i(\"Term\")"), "{plain}");
 
         // 3. Every filter dimension reaches both sides. A field added to one builder only is the
@@ -1537,7 +1579,7 @@ mod tests {
             "node_id:=",
             "matched:=",
             "_msg:",
-            "NOT _msg:i(\"boom\")",
+            "NOT _msg:i(\"boom\"*)",
             "source_ip:i(\"10.0.0.1\")",
         ] {
             assert!(logsql.contains(clause), "LogsQL missing {clause}: {logsql}");
@@ -1553,6 +1595,61 @@ mod tests {
         for col in ["e.action", "e.syslog_severity", "e.message", "n.name"] {
             assert!(EVENT_FILTER_WHERE.contains(col), "SQL missing {col}");
         }
+    }
+
+    #[test]
+    fn the_fake_matches_from_a_word_start_like_the_real_index_does() {
+        // The fake is the third implementation of "what a plain term means", and the only one no
+        // deployment ever runs — so it is the one that can drift without anybody noticing. These
+        // cases are transcribed from queries actually issued against the test server's store on
+        // 2026-08-13, not from what the syntax looks like it should do.
+        let msg = "Aug 13 2026 12:19:33 jpmyj01fw01 %%01POLICY/6/POLICYPERMIT(l):CID=0x814f041e";
+        for (needle, want, why) in [
+            (
+                "policy",
+                true,
+                "a word starts with it — the case this change is for",
+            ),
+            ("policypermit", true, "an exact word is a prefix of itself"),
+            (
+                "ermit",
+                false,
+                "inside a word: `i(\"ermit\"*)` returned 0 on the real store",
+            ),
+            (
+                "permit",
+                false,
+                "the operator's complaint — only the widening query finds this",
+            ),
+            (
+                "cid=0x814f",
+                true,
+                "separators are literal; only the start must land on a word",
+            ),
+            (
+                "policy/6",
+                false,
+                "the word is `01POLICY`, so the phrase never starts",
+            ),
+            (
+                "POLICY",
+                true,
+                "case-insensitive, which is what `i(…)` buys",
+            ),
+            ("", true, "an empty term is no condition at all"),
+        ] {
+            assert_eq!(
+                word_prefix_match(msg, &needle.to_lowercase()),
+                want,
+                "{needle:?}: {why}"
+            );
+        }
+        // ⚠️ The direction that matters: the fake must never be *more* permissive than the engine,
+        // or every test passes while the deployment returns fewer rows than the test believed.
+        assert!(
+            !word_prefix_match("POLICYPERMIT", "ermit"),
+            "the fake fell back to substring matching"
+        );
     }
 
     #[test]
@@ -1573,7 +1670,7 @@ mod tests {
             },
             NameIds::default(),
         );
-        assert!(plain.contains("NOT _msg:i(\"policypermit\")"), "{plain}");
+        assert!(plain.contains("NOT _msg:i(\"policypermit\"*)"), "{plain}");
         assert!(!plain.contains("_msg:~"), "{plain}");
 
         // The regex mode still negates the regex, and still case-folds it.
@@ -1673,7 +1770,7 @@ mod tests {
         );
         assert!(
             split.contains(&format!(
-                "(_msg:i(\"down\") OR source_ip:i(\"down\") OR node_id:in(\"{}\"))",
+                "(_msg:i(\"down\"*) OR source_ip:i(\"down\") OR node_id:in(\"{}\"))",
                 Uuid::from_u128(22)
             )),
             "{split}"

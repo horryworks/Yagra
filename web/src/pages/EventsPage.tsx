@@ -19,7 +19,6 @@ import { DataTable } from '../components/ui/DataTable';
 import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { NodePicker } from '../components/NodePicker/NodePicker';
-import { useEventLog } from '../components/EventLog/useEventLog';
 import { eventColumns, eventCard } from '../components/EventLog/eventColumns';
 import {
   eventEmptyKind,
@@ -29,6 +28,7 @@ import {
 import {
   eventColumnLabels,
   useEventFacets,
+  useWidenedEventLog,
   useSearchSemantics,
 } from '../components/EventLog/useEventFilters';
 import { useFilterParams } from '../lib/useFilterParams';
@@ -56,8 +56,7 @@ export function EventsPage() {
     node_id: nodeId ?? undefined,
   });
 
-  const { rows, loading, exhausted, loadMore } = useEventLog({
-    ...query,
+  const { rows, loading, exhausted, loadMore, widened } = useWidenedEventLog(query, semantics, {
     node_id: nodeId ?? undefined,
   });
 
@@ -65,7 +64,7 @@ export function EventsPage() {
   const empty = {
     unfiltered: t('events.emptyWindow'),
     filtered: t('events.empty'),
-    tokenMiss: t('events.emptyTokenMiss'),
+    prefixMiss: t('events.emptyPrefixMiss'),
   }[eventEmptyKind(filters, semantics, anyFiltered)];
 
   const setNode = (node: { id: string; name: string } | null) => {
@@ -108,6 +107,9 @@ export function EventsPage() {
           noun={exhausted ? t('events.events') : t('events.eventsLoaded')}
         />
       </TableToolbar>
+      {/* Said out loud, because the rows below are the answer to a slightly broader question than
+          the one the operator typed. Silently widening would be the worse half of this trade. */}
+      {widened && <p className="ev-widened">{t('events.widened')}</p>}
       <DataTable
         rows={rows}
         columns={columns}

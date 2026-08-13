@@ -116,12 +116,12 @@
     "optionSearch": "Find an option",
     "noOptions": "No option matches.",
     "regexInvalid": "Not a valid regular expression: {{message}}",
-    "tokenHint": "This deployment matches whole words. Use Regex to match inside a word.",
     "sheet": "Filters",
     "sheetButton": "Filter",
     "sheetButtonCount": "Filter ({{count}})",
     "from": "From",
-    "to": "To"
+    "to": "To",
+    "prefixHint": "This deployment matches from the start of a word. Use Regex to match further inside one."
   },
   "scope": {
     "all": "All nodes",

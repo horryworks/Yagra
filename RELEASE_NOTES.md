@@ -33,16 +33,25 @@
   unknown token in any set is a 400 rather than a silently widened search, and each set accepts at
   most 32 values.
 - `kind` now accepts several values (`kind=syslog,trap`). A single value is unchanged.
-- `GET /api/v1/system-health` gained **`search_semantics`** (`token` | `substring`): how a plain
-  search term matches on this deployment. On a VictoriaLogs deployment a term matches whole words,
-  so `POLICY` does not find `POLICYPERMIT` — the Events page now says so beside the filter, and its
-  empty state names that specific case instead of "nothing matches these filters".
+- `GET /api/v1/system-health` gained **`search_semantics`** (`prefix` | `substring`): how a plain
+  search term matches on this deployment. On a VictoriaLogs deployment a term matches from the start
+  of a word, so `POLICY` finds `POLICYPERMIT` but `PERMIT` does not — the Events page says so beside
+  the filter, and its empty state names that specific case instead of "nothing matches these
+  filters".
 
 ### Improvements
 - Negation is offered for both plain terms and regular expressions. It was measured on 6.7M real
   events before it shipped: excluding costs what including costs, on both stores and in both modes.
+- **A plain search term now matches from the start of a word on a log-store deployment**, so
+  `POLICY` finds `POLICYPERMIT`. It previously had to be the whole word. Measured on 6,695,066 real
+  events before shipping: a word prefix is answered from the store's index and costs about what an
+  exact word costs (0.12s against 0.06s over 24 hours), while a match *inside* a word is a full scan
+  of the window and is ~15× slower — which is why that stays behind the Regex switch.
+- **When a plain term finds nothing, the Events screens ask once more, looking inside words too, and
+  say that they did.** The expensive query is paid only where the cheap one had already reached a
+  dead end.
 - The Events empty state distinguishes three cases — nothing in the window, nothing matching the
-  filters, and nothing matching *as a whole word* — because the default range narrows, so "no
+  filters, and nothing whose word *starts* with the term — because the default range narrows, so "no
   events" was never the right sentence.
 
 ## v0.2.6 — every check on a device runs again, and twenty-two lists can be narrowed

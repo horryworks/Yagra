@@ -38,7 +38,7 @@ export const EVENT_FILTER_KEYS = ['kind', 'source', 'message', 'action', 'at'] a
  *  `undefined` is a real state, not a placeholder: an N-1 core does not report it, and axum drops
  *  query parameters it does not know **silently**, so on that core every filter below would appear
  *  to do nothing. The screens read this to decide whether to say "whole words" or to say nothing. */
-export type SearchSemantics = 'token' | 'substring' | undefined;
+export type SearchSemantics = 'prefix' | 'substring' | undefined;
 
 /**
  * The Events column filters.
@@ -54,7 +54,7 @@ export function eventFilters(
   const semantics = opts?.semantics;
   // Only a log-store deployment needs the warning; on PostgreSQL a term is a substring and there is
   // nothing to explain. `undefined` says nothing rather than guessing — see `SearchSemantics`.
-  const containsSemantics = semantics === 'token' ? ('token' as const) : undefined;
+  const containsSemantics = semantics === 'prefix' ? ('prefix' as const) : undefined;
   const specs: Record<string, ColumnFilterSpec<EventRow>> = {
     kind: {
       kind: 'enum',
@@ -202,11 +202,12 @@ export function eventFilterKey(q: EventQuery): string {
  * Which empty state the screen should show.
  *
  * Three, not two, and the third is the whole reason `search_semantics` is reported. On a log-store
- * deployment `%%01POLICY/6/POLICYPERMIT` tokenizes to `01policy` and `policypermit`, so a plain
- * search for `POLICY` returns nothing while the operator is looking at the word on screen.
- * "Nothing matches these filters" is true and explains none of that.
+ * deployment a plain term is matched from the start of a word, so `%%01POLICY/6/POLICYPERMIT` is
+ * found by `POLICY` but not by `PERMIT` — and the operator is looking at those letters on screen
+ * while the screen says nothing matched. "Nothing matches these filters" is true and explains none
+ * of that.
  */
-export type EventEmptyKind = 'unfiltered' | 'filtered' | 'tokenMiss';
+export type EventEmptyKind = 'unfiltered' | 'filtered' | 'prefixMiss';
 
 export function eventEmptyKind(
   state: FilterState,
@@ -214,13 +215,48 @@ export function eventEmptyKind(
   anyFiltered: boolean,
 ): EventEmptyKind {
   if (!anyFiltered) return 'unfiltered';
-  if (semantics === 'token') {
+  if (semantics === 'prefix') {
     // Only a *plain, non-negated* term can miss this way. A regex reaches inside tokens on either
     // store, and a negated term returning nothing means everything matched — a different story.
     const plain = [state.message ?? '', state.source ?? '']
       .map(decodeCondition)
       .some((c) => c.term !== '' && c.mode === 'contains' && !c.not);
-    if (plain) return 'tokenMiss';
+    if (plain) return 'prefixMiss';
   }
   return 'filtered';
+}
+
+/** Escape a plain term so it matches itself as a regular expression.
+ *
+ * ⚠️ The character class has to include the backslash itself. A term of `C:\Users` re-asked as
+ * `C:\Users` is not the same search — it is a pattern with an undefined escape in it, which the
+ * backend refuses at the edge, so the widening would turn "no results" into an error. */
+export function escapeRegex(term: string): string {
+  return term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * The same query with its plain message term re-asked as a regex, or `null` when that would answer
+ * the same question (ADR-053 Inc.2d).
+ *
+ * The Events page runs this **only after the plain query returned nothing**, and it is the reason a
+ * plain term can stay a word-prefix filter: a prefix is answered from the store's dictionary, a
+ * match inside a word costs a full scan of the window, and this pays that cost exactly once, in the
+ * case where the operator had otherwise reached a dead end.
+ *
+ * Why it lives in the WebUI and not in the store: `GET /events` returns a bare array, with nowhere
+ * to say "I widened your search". Answering a different question than the one asked, silently, is
+ * worse than answering narrowly — so the retry belongs where the result can be labelled.
+ *
+ * `null` for the four cases where widening is not a widening:
+ *   - the deployment already matches any substring (PostgreSQL);
+ *   - there is no plain term to widen;
+ *   - the term is **negated** — an empty result there means *everything* matched, and widening the
+ *     thing being excluded would return fewer rows, not more;
+ *   - the term is already a regex, which reaches inside words on either store.
+ */
+export function widenEventQuery(q: EventQuery, semantics: SearchSemantics): EventQuery | null {
+  if (semantics !== 'prefix') return null;
+  if (!q.msg || q.msg_regex || q.msg_not) return null;
+  return { ...q, msg: escapeRegex(q.msg), msg_regex: true };
 }

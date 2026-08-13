@@ -5,11 +5,18 @@
 // Both are deliberately *lazy*. ADR-023 puts UI load third, behind polling and alert evaluation,
 // and neither of these is on the path to seeing the log.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
 import { clearFilter, type FilterState, type FilterableColumn } from '../../lib/columnFilter';
-import { eventFilterQuery, EVENT_FILTER_KEYS, type SearchSemantics } from './eventFilterSpec';
+import {
+  eventFilterQuery,
+  widenEventQuery,
+  EVENT_FILTER_KEYS,
+  type EventQuery,
+  type SearchSemantics,
+} from './eventFilterSpec';
+import { useEventLog } from './useEventLog';
 import type { EventRow } from '../../types/api';
 
 /** Column names for the mobile sheet, which has room for them where a 90px grid track does not.
@@ -103,4 +110,44 @@ export function useEventFacets(
   }, []);
 
   return { counts, load };
+}
+
+/**
+ * `useEventLog`, plus the one automatic retry ADR-053 Inc.2d asks for: if a plain term found
+ * nothing on a deployment that matches from the start of a word, ask again for the same term
+ * anywhere inside one.
+ *
+ * `widened` is returned so the screen can *say so*. That is the whole reason this is not in the
+ * store — a search that silently answers a broader question than the one asked is worse than one
+ * that answers narrowly, and a bare JSON array has nowhere to carry the admission.
+ *
+ * Both Events screens call this rather than `useEventLog`, so the policy exists once. The retry is
+ * at most one per query: `tried` is keyed by the query itself, so a widened search that also finds
+ * nothing settles instead of oscillating.
+ */
+export function useWidenedEventLog(
+  query: EventQuery,
+  semantics: SearchSemantics,
+  extra?: { node_id?: string },
+) {
+  const [widened, setWidened] = useState(false);
+  const wide = widenEventQuery(query, semantics);
+  const key = JSON.stringify([query, extra ?? null]);
+  const applied = widened && wide ? wide : query;
+  const log = useEventLog({ ...applied, ...extra });
+
+  // A new question deserves the cheap query again, even if the last one had to be widened.
+  const lastKey = useRef(key);
+  if (lastKey.current !== key) {
+    lastKey.current = key;
+    if (widened) setWidened(false);
+  }
+
+  useEffect(() => {
+    if (!widened && wide && !log.loading && log.rows.length === 0) setWidened(true);
+    // `wide` is rebuilt every render, so it is compared through the key rather than by identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [widened, key, log.loading, log.rows.length]);
+
+  return { ...log, widened: widened && wide != null && log.rows.length > 0 };
 }

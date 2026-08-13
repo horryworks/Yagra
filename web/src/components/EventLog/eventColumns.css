@@ -107,3 +107,11 @@
   overflow-wrap: anywhere;
   color: var(--text-primary);
 }
+
+/* The admission that the search was broadened. Sits between the action row and the table, in the
+   secondary tone: it explains the rows below rather than warning about them. */
+.ev-widened {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}

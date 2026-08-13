@@ -37,9 +37,10 @@ interface Props {
   /** Whether excluding is meaningful for this column. */
   allowNot?: boolean;
   placeholder?: string;
-  /** What a plain term means on this list. `'token'` earns a hint: on a VictoriaLogs deployment
-   *  `POLICY` does not find `POLICYPERMIT`, and nothing else on screen would explain that. */
-  containsSemantics?: 'substring' | 'token';
+  /** What a plain term means on this list. `'prefix'` earns a hint: on a VictoriaLogs deployment a
+   *  term matches from the start of a word, so `PERMIT` does not find `POLICYPERMIT` (`POLICY`
+   *  does), and nothing else on screen would explain that. */
+  containsSemantics?: 'substring' | 'prefix';
   autoFocus?: boolean;
 }
 
@@ -112,7 +113,7 @@ export function TextConditionEditor({
   };
 
   const error = conditionError(draft);
-  const showHint = containsSemantics === 'token' && draft.mode === 'contains';
+  const showHint = containsSemantics === 'prefix' && draft.mode === 'contains';
 
   return (
     <div className="tcond">
@@ -166,7 +167,7 @@ export function TextConditionEditor({
         </div>
       )}
       {error && <p className="tcond-error">{t('filter.regexInvalid', { message: error })}</p>}
-      {!error && showHint && <p className="tcond-hint">{t('filter.tokenHint')}</p>}
+      {!error && showHint && <p className="tcond-hint">{t('filter.prefixHint')}</p>}
     </div>
   );
 }

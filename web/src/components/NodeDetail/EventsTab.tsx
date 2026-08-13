@@ -17,14 +17,18 @@ import { DataTable } from '../ui/DataTable';
 import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { TableToolbar, TableSpacer, ResultCount } from '../ui/TableToolbar';
 import { useEntityNames } from '../ui/EntityName';
-import { useEventLog } from '../EventLog/useEventLog';
 import { eventColumns, eventCard } from '../EventLog/eventColumns';
 import {
   eventEmptyKind,
   eventFilterColumns,
   eventFilterQuery,
 } from '../EventLog/eventFilterSpec';
-import { eventColumnLabels, useEventFacets, useSearchSemantics } from '../EventLog/useEventFilters';
+import {
+  eventColumnLabels,
+  useEventFacets,
+  useSearchSemantics,
+  useWidenedEventLog,
+} from '../EventLog/useEventFilters';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
 
 export function EventsTab({ node }: { node: NodeDetail }) {
@@ -46,7 +50,9 @@ export function EventsTab({ node }: { node: NodeDetail }) {
   const query = useMemo(() => eventFilterQuery(filters, nowMs), [filters, nowMs]);
   const facets = useEventFacets(filterCols, filters, nowMs, { node_id: node.id });
 
-  const { rows, loading, exhausted, loadMore } = useEventLog({ ...query, node_id: node.id });
+  const { rows, loading, exhausted, loadMore, widened } = useWidenedEventLog(query, semantics, {
+    node_id: node.id,
+  });
 
   const columns = useMemo(
     () => eventColumns(nodeName, t, { showSource: false, semantics }),
@@ -57,7 +63,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
   const empty = {
     unfiltered: t('eventLog.emptyNodeWindow'),
     filtered: t('eventLog.emptyNode'),
-    tokenMiss: t('events.emptyTokenMiss'),
+    prefixMiss: t('events.emptyPrefixMiss'),
   }[eventEmptyKind(filters, semantics, isAnyFiltered(filterCols, filters))];
 
   const apply = (next: FilterState) => {
@@ -87,6 +93,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
           noun={exhausted ? t('events.events') : t('events.eventsLoaded')}
         />
       </TableToolbar>
+      {widened && <p className="ev-widened">{t('events.widened')}</p>}
       <DataTable
         rows={rows}
         columns={columns}

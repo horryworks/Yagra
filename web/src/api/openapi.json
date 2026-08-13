@@ -22632,7 +22632,7 @@
         "type": "string",
         "description": "How a plain (non-regex) search term matches on this deployment. Which one applies depends on\nthe store that answers event searches, so a client that wants a term to behave the same\neverywhere should use a regular expression instead.",
         "enum": [
-          "token",
+          "prefix",
           "substring"
         ]
       },

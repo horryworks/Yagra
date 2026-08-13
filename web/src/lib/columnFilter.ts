@@ -75,7 +75,7 @@ export interface TextFilterSpec<T> {
    *  list must say which the deployment does — PostgreSQL substrings, VictoriaLogs matches whole
    *  tokens, and the divergence is deliberate and measured (ADR-024). `undefined` = unknown, which
    *  is what an N-1 core produces and which the empty state has to word differently. */
-  containsSemantics?: 'substring' | 'token';
+  containsSemantics?: 'substring' | 'prefix';
   placeholder?: string;
 }
 

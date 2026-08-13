@@ -102,12 +102,12 @@
     "optionSearch": "選択肢を探す",
     "noOptions": "一致する選択肢がありません。",
     "regexInvalid": "正規表現として不正です: {{message}}",
-    "tokenHint": "このデプロイでは語単位で一致します。語の中に当てるには正規表現を使ってください。",
     "sheet": "フィルタ",
     "sheetButton": "フィルタ",
     "sheetButtonCount": "フィルタ ({{count}})",
     "from": "開始",
-    "to": "終了"
+    "to": "終了",
+    "prefixHint": "このデプロイでは語の先頭から一致します。語の途中や末尾に当てるには正規表現を使ってください。"
   },
   "scope": {
     "all": "全ノード",

@@ -691,9 +691,11 @@ fn auth_signal_predicate() -> String {
 //  removed:
 //
 //  1. The empty result is otherwise unexplainable. `%%01POLICY/6/POLICYPERMIT` tokenizes to
-//     `01policy` and `policypermit`, so searching `POLICY` returns nothing on a log-store deployment
-//     while the operator is looking at the word on screen. "Nothing matches these filters" is a true
-//     sentence that explains none of that.
+//     `01policy` and `policypermit`, so searching `PERMIT` returns nothing on a log-store deployment
+//     while the operator is looking at the letters on screen. "Nothing matches these filters" is a
+//     true sentence that explains none of that. (`POLICY` *does* find it — the term is matched from
+//     the start of a word since ADR-053 Inc.2d, which is why this value is `prefix` and not `token`.
+//     The remaining gap is the middle and the end of a word.)
 //  2. It is how a new WebUI detects an old core. axum's `Query<T>` drops unknown parameters
 //     silently, so a WebUI carrying the ADR-053 filters, pointed at a core that predates them, would
 //     have every new filter quietly do nothing. The presence of this field is the signal that the
@@ -701,9 +703,9 @@ fn auth_signal_predicate() -> String {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EventSearchSemantics {
-    /// A term matches whole words (a log store's inverted index). `POLICY` will not find
-    /// `POLICYPERMIT`; the regex mode will.
-    Token,
+    /// A term matches from the start of a word (a log store's inverted index). `POLICY` finds
+    /// `POLICYPERMIT`, but `PERMIT` does not; the regex mode does.
+    Prefix,
     /// A term matches any substring (PostgreSQL `ILIKE '%term%'`).
     Substring,
 }
@@ -2516,7 +2518,7 @@ mod tests {
 
     /// The WebUI branches on these two strings, and it hardcodes them.
     ///
-    /// `web/src/components/EventLog/eventFilterSpec.ts` declares `'token' | 'substring'` — the one
+    /// `web/src/components/EventLog/eventFilterSpec.ts` declares `'prefix' | 'substring'` — the one
     /// shape ADR-035's generation does not reach, because a client that *narrows* a generated union
     /// still has to spell the members. Renaming a variant here would leave that comparison silently
     /// false, so the mode label and the empty state would both fall back to their unknown-core
@@ -2524,8 +2526,8 @@ mod tests {
     #[test]
     fn the_search_semantics_spelling_is_what_the_webui_expects() {
         assert_eq!(
-            serde_json::to_string(&EventSearchSemantics::Token).expect("serializes"),
-            "\"token\""
+            serde_json::to_string(&EventSearchSemantics::Prefix).expect("serializes"),
+            "\"prefix\""
         );
         assert_eq!(
             serde_json::to_string(&EventSearchSemantics::Substring).expect("serializes"),

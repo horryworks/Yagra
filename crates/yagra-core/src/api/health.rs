@@ -374,7 +374,7 @@ pub(crate) async fn system_health_snapshot(st: &ApiState) -> SystemHealth {
         // store the query does not use. Note this is not the `logs` field above: that one says
         // *reachable*, and an unreachable log store is still the store being searched.
         search_semantics: match st.logs.as_ref() {
-            Some(_) => crate::events::EventSearchSemantics::Token,
+            Some(_) => crate::events::EventSearchSemantics::Prefix,
             None => crate::events::EventSearchSemantics::Substring,
         },
     }

@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EVENT_FILTER_KEYS,
   eventEmptyKind,
+  widenEventQuery,
   eventFilterColumns,
   eventFilterKey,
   eventFilterQuery,
@@ -81,10 +82,10 @@ describe('the spec', () => {
   });
 
   it('only warns about whole-word matching on a deployment that does it', () => {
-    const token = eventFilters(t, { semantics: 'token' });
+    const token = eventFilters(t, { semantics: 'prefix' });
     const substring = eventFilters(t, { semantics: 'substring' });
     const unknown = eventFilters(t, {});
-    expect(token.message.kind === 'text' && token.message.containsSemantics).toBe('token');
+    expect(token.message.kind === 'text' && token.message.containsSemantics).toBe('prefix');
     // Substring needs no warning; an N-1 core that reports nothing must not have one invented for
     // it, because the guess would be wrong exactly half the time.
     expect(substring.message.kind === 'text' && substring.message.containsSemantics).toBeUndefined();
@@ -193,28 +194,28 @@ describe('eventEmptyKind', () => {
   it('names the window when nothing is filtered', () => {
     // The default *narrows*, so "there are no events" would be a lie — there are none in the last
     // 24 hours, which is a different sentence and a different next action.
-    expect(eventEmptyKind(DEFAULTS, 'token', false)).toBe('unfiltered');
+    expect(eventEmptyKind(DEFAULTS, 'prefix', false)).toBe('unfiltered');
   });
 
   it('names the whole-word rule when a plain term found nothing on a log store', () => {
     // `%%01POLICY/6/POLICYPERMIT` tokenizes to `01policy` and `policypermit`, so `POLICY` matches
     // nothing while the operator is looking at the word. This is the case the generic message
     // cannot explain, and the reason the deployment reports its search semantics at all.
-    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, 'token', true)).toBe('tokenMiss');
-    expect(eventEmptyKind({ ...DEFAULTS, source: 'rtr' }, 'token', true)).toBe('tokenMiss');
+    expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, 'prefix', true)).toBe('prefixMiss');
+    expect(eventEmptyKind({ ...DEFAULTS, source: 'rtr' }, 'prefix', true)).toBe('prefixMiss');
   });
 
   it('does not blame tokenization for a case it cannot explain', () => {
     // A regex reaches inside words on either store; a negated term returning nothing means
     // *everything* matched. Neither is a tokenization miss, and saying so would send the operator
     // to the wrong fix.
-    expect(eventEmptyKind({ ...DEFAULTS, message: '~POLICY' }, 'token', true)).toBe('filtered');
-    expect(eventEmptyKind({ ...DEFAULTS, message: '!POLICY' }, 'token', true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, message: '~POLICY' }, 'prefix', true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, message: '!POLICY' }, 'prefix', true)).toBe('filtered');
     // And on a substring deployment there is nothing to explain in the first place.
     expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, 'substring', true)).toBe('filtered');
     expect(eventEmptyKind({ ...DEFAULTS, message: 'POLICY' }, undefined, true)).toBe('filtered');
     // A non-text filter finding nothing is just an empty result.
-    expect(eventEmptyKind({ ...DEFAULTS, kind: 'trap' }, 'token', true)).toBe('filtered');
+    expect(eventEmptyKind({ ...DEFAULTS, kind: 'trap' }, 'prefix', true)).toBe('filtered');
   });
 });
 
@@ -222,5 +223,54 @@ describe('the range presets', () => {
   it('offers every preset the range module defines', () => {
     const at = eventFilters(t).at;
     expect(at.kind === 'range' && at.presets.map((p) => p.value)).toEqual([...EVENT_RANGES]);
+  });
+});
+
+describe('widenEventQuery', () => {
+  const plain = { msg: 'PERMIT', start: 'S' };
+
+  it('re-asks a plain term as a regex on a prefix-matching deployment', () => {
+    expect(widenEventQuery(plain, 'prefix')).toEqual({
+      msg: 'PERMIT',
+      msg_regex: true,
+      start: 'S',
+    });
+  });
+
+  it('escapes the term, so widening cannot change what was searched for', () => {
+    // Without this a term containing a metacharacter would come back as a *pattern*: `1.2.3.4`
+    // would match `1x2y3z4`, and a trailing backslash would be refused by the edge outright — the
+    // widening would turn "no results" into an error.
+    for (const [term, want] of [
+      ['1.2.3.4', '1\\.2\\.3\\.4'],
+      ['a+b', 'a\\+b'],
+      ['C:\\Users', 'C:\\\\Users'],
+      ['(x)', '\\(x\\)'],
+    ]) {
+      expect(widenEventQuery({ msg: term }, 'prefix')?.msg).toBe(want);
+    }
+  });
+
+  it('declines the four cases where widening would not be a widening', () => {
+    // Substring already: nothing to widen to.
+    expect(widenEventQuery(plain, 'substring')).toBeNull();
+    // An old core that does not report its semantics — guessing is what this field exists to avoid.
+    expect(widenEventQuery(plain, undefined)).toBeNull();
+    // No term.
+    expect(widenEventQuery({ start: 'S' }, 'prefix')).toBeNull();
+    // Already a pattern, which reaches inside words on either store.
+    expect(widenEventQuery({ msg: 'x', msg_regex: true }, 'prefix')).toBeNull();
+    // ⚠️ Negated. An empty result there means *everything* matched, and broadening the excluded set
+    // returns fewer rows, not more — the opposite of what the retry is for.
+    expect(widenEventQuery({ msg: 'x', msg_not: true }, 'prefix')).toBeNull();
+  });
+
+  it('leaves every other dimension of the query alone', () => {
+    const q = { kind: 'syslog,trap', action: 'fired', src: 'rtr1', src_not: true, end: 'E' };
+    expect(widenEventQuery({ ...q, msg: 'x' }, 'prefix')).toEqual({
+      ...q,
+      msg: 'x',
+      msg_regex: true,
+    });
   });
 });

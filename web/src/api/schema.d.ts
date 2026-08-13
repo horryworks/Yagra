@@ -5330,7 +5330,7 @@ export interface components {
          *     everywhere should use a regular expression instead.
          * @enum {string}
          */
-        EventSearchSemantics: "token" | "substring";
+        EventSearchSemantics: "prefix" | "substring";
         /** @description A passive-event ingest source. */
         EventSourceRow: {
             enabled: boolean;
