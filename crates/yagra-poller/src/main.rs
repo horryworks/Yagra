@@ -570,11 +570,15 @@ async fn run_sync_loop<B, S>(
     tracing::warn!("working-set sync stream ended");
 }
 
-/// Tick every 500ms, popping the due specs from the working set and forwarding each as a job to the
-/// worker loop over a bounded channel (backpressure: a full channel awaits, it never drops). Stops
-/// when the channel closes (worker gone).
+/// Tick every [`working_set::SCHEDULER_TICK`], popping the due specs from the working set and
+/// forwarding each as a job to the worker loop over a bounded channel (backpressure: a full channel
+/// awaits, it never drops). Stops when the channel closes (worker gone).
+///
+/// The period is the working set's constant, not a literal here: it spaces a node's specs by whole
+/// ticks so they cannot collide in the worker's per-device single-flight guard, which only holds
+/// while this timer runs at that period.
 async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc::Sender<PollJob>) {
-    let mut tick = tokio::time::interval(Duration::from_millis(500));
+    let mut tick = tokio::time::interval(working_set::SCHEDULER_TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;

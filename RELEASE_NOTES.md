@@ -96,6 +96,27 @@
   name, which is unindexed, and searching it would turn every page into a full table scan.
 
 ### Bug Fixes
+- **A device with more than one check was polled for only one of them — silently, and without
+  alerting. Affects v0.2.3, v0.2.4 and v0.2.5; upgrade.** On a typical SNMP node that meant the
+  system scalars kept arriving while the interface walk, the vendor health tables, the topology
+  walks and even ICMP were discarded on every cycle. Nothing looked wrong from the outside: the
+  surviving scalar check *is* the liveness check, so the node stayed `ok`, no gap was recorded, and
+  the only visible symptom was graphs that stopped filling in. URL, DNS and ICMP-only monitors carry
+  a single check each and were never affected. Three things had to line up. The poller's local
+  scheduler hands the worker everything due in one 500 ms tick as a single burst; the worker's
+  per-device guard — which exists so a slow device cannot pile polls up — lets one probe per target
+  address run and **drops** the rest rather than deferring them; and a dropped check's timer still
+  advances a whole interval, so once two checks of one node landed in the same tick they stayed
+  there for good. v0.2.3 made that alignment the default by narrowing the window a newly adopted
+  check is scheduled in from its poll interval to `checks ÷ 200 per second` — about 70 ms on a small
+  deployment, far inside one tick. Note the direction: **the smaller the deployment, the narrower
+  the window, so first installations were hit hardest and a large fleet not at all.** A node's checks
+  are now placed one second apart by position instead of each drawing its own offset, which is both
+  what anti-stampede actually calls for — spreading is between nodes — and a separation that
+  arithmetic guarantees rather than luck, including across the harmonically related 60 s / 300 s /
+  3600 s tiers where a collision would otherwise have repeated forever. The v0.2.3 handover
+  improvement is unchanged. `YAGRA_ADOPT_RATE_PER_SEC=0` remains the escape hatch to the pre-v0.2.3
+  scheduling, and is no longer needed to avoid this.
 - **A report exported as CSV could carry a spreadsheet formula out of the product.** The exporter
   quoted per RFC 4180 and stopped there, which does not help: a spreadsheet strips the quotes and
   then evaluates the text underneath. Report tables are built from device-supplied strings — a node

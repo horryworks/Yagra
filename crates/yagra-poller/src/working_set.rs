@@ -37,6 +37,28 @@
 //! fraction of a second; a 25,000-spec cold start still clamps to the interval and behaves exactly
 //! as before. The window is a floor no schedule can beat, so this is not a trade against the
 //! stampede rule — it is the same rule expressed in the units that actually bound it (ADR-051).
+//!
+//! **⚠️ That window is also why a node's specs must be placed, not drawn — the interaction cost two
+//! days of interface data on the test server (2026-08-11 → 08-13) and shipped in v0.2.3–v0.2.5.**
+//! Three mechanisms meet here. [`Self::due`] hands the scheduler everything that fired in one
+//! [`SCHEDULER_TICK`] as a single burst; the worker's per-device single-flight guard
+//! (`limiter::PollLimiter`) lets exactly **one** probe per target IP run and **drops** the rest
+//! rather than deferring them; and [`Self::due`] advances a dropped spec's timer anyway, so the
+//! phase relationship between a node's specs never changes once set. Draw those phases from a 70 ms
+//! window — which is what `14 specs / 200 per second` yields on a small deployment — and every spec
+//! of a node lands in the same tick, so the one that sorts first wins **forever** and the rest are
+//! discarded on every cycle. On the test server that left a Huawei firewall reporting only
+//! `snmp_sys_uptime_ticks`: the ifTable walk, the vendor tables and even ICMP were dropped every
+//! minute, the node stayed `ok` because the surviving scalar *is* the liveness check, and nothing
+//! alerted. Note the direction — the *smaller* the deployment the narrower the window, so this hurt
+//! first deployments worst and a 25,000-spec fleet not at all.
+//!
+//! So [`settle`] no longer draws an offset per spec. It draws **one** offset per node — which is
+//! what anti-stampede actually asks for, since spreading is between *nodes* — and then steps its
+//! specs [`SPEC_STAGGER_MS`] apart by position. The window keeps its ADR-051 meaning untouched; only
+//! the placement inside it changed. Separation becomes arithmetic rather than luck: consecutive
+//! specs differ by a fixed amount, and because [`WorkingSet::due`] re-arms each by a whole interval,
+//! that difference is preserved for the life of the spec.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -44,6 +66,33 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 use yagra_bus::{JobSpec, NodeJobs, PollJob, SyncMsg, WorkingSetDelta, WorkingSetSnapshot};
 use yagra_common::NodeId;
+
+/// How often the poller's local scheduler asks [`WorkingSet::due`] what has fired (`main.rs`'s
+/// `run_local_scheduler` owns the timer and reads this constant rather than repeating the literal).
+///
+/// It is **the** quantum of this module: two specs due within one tick of each other are due *at the
+/// same time* as far as anything downstream can tell, which is why [`settle`] spaces a node's specs
+/// by whole ticks. The two must stay one fact — a scheduler ticking slower than the spacing would
+/// silently restore the collision the spacing exists to prevent.
+pub const SCHEDULER_TICK: Duration = Duration::from_millis(TICK_MS as u64);
+
+/// [`SCHEDULER_TICK`] in milliseconds. Declared first so the two cannot disagree.
+const TICK_MS: u32 = 500;
+
+/// How far apart [`settle`] places consecutive specs of the **same node**.
+///
+/// One tick is the minimum that separates them, because [`WorkingSet::due`] resolves at tick
+/// granularity. The second tick is margin: the scheduler's timer uses
+/// `MissedTickBehavior::Delay`, so a tick that arrives late (the worker channel was full, the
+/// process was descheduled) can sweep up two specs that are exactly one tick apart. Two ticks
+/// survives a late tick and still costs a node's last spec well under a second of adoption delay.
+const SPEC_STAGGER_MS: u32 = 2 * TICK_MS;
+
+// The stagger is measured in ticks, and the compiler is the right place to say so: a stagger below
+// one tick would separate the offsets while leaving both jobs in the same `due` burst — separation
+// nothing downstream could observe, which is the failure this constant exists to prevent.
+const _: () = assert!(SPEC_STAGGER_MS >= TICK_MS);
+const _: () = assert!(SPEC_STAGGER_MS.is_multiple_of(TICK_MS));
 
 /// Specs per second a poller is willing to take on when it adopts work from another poller. Sizes
 /// the adoption window (see the module docs); it is a spreading rate, not a throttle — nothing
@@ -343,21 +392,50 @@ fn reschedule(old: Option<&Vec<ScheduledSpec>>, new_specs: Vec<JobSpec>) -> Vec<
     out
 }
 
-/// Give every spec that did not keep a phase its `next_due`, spread uniformly over the adoption
-/// window — clamped per spec to its own interval, since spreading a 10s poll over 25s would move the
-/// gap rather than close it.
+/// Give every spec of **one node** that did not keep a phase its `next_due`: one random base offset
+/// for the node, spread uniformly over the adoption window and clamped per spec to its own interval
+/// (spreading a 10s poll over 25s would move the gap rather than close it), plus a fixed
+/// [`SPEC_STAGGER`] per position so the node's own specs cannot land on the same scheduler tick.
+///
+/// **The draw is per node, not per spec, and that is the correction.** Anti-stampede is about
+/// spreading *nodes*; drawing each spec of one node independently is what let all of them share a
+/// tick, and a shared tick is permanent — see the module docs. Staggering by position instead makes
+/// the separation a property of the arithmetic: consecutive specs are exactly [`SPEC_STAGGER`]
+/// apart, and since [`WorkingSet::due`] re-arms each by a whole interval, that gap never closes.
+///
+/// The separation holds for every realistic schedule, including the harmonically related tiers
+/// (60s / 300s / 3600s) where a collision would otherwise repeat forever: two offsets differing by
+/// `k × SPEC_STAGGER` coincide only if that difference is a multiple of the intervals' gcd, and the
+/// staggers in play (1–20s for a node with up to 20 specs) sit strictly between zero and the
+/// shortest interval the API accepts. It degrades gracefully rather than wrapping: `% interval_ms`
+/// keeps every offset inside its own interval, so a node with more specs than its interval has room
+/// for loses the guarantee for the ones that wrap — it does not schedule them in the past.
 fn settle(
     pending: Vec<PendingSpec>,
     now: Instant,
     window_ms: u32,
     rng: &mut impl FnMut(u32) -> u32,
 ) -> Vec<ScheduledSpec> {
+    // Drawn on first use so a settle that donates every phase asks the rng for nothing (a resync
+    // must not consume entropy, and a test can assert exactly that).
+    let mut base_ms: Option<u32> = None;
     pending
         .into_iter()
-        .map(|p| {
+        .enumerate()
+        .map(|(k, p)| {
             let next_due = p.next_due.unwrap_or_else(|| {
-                let bound = p.spec.interval_secs.saturating_mul(1000).min(window_ms);
-                jitter(now, bound, rng)
+                let interval_ms = p.spec.interval_secs.saturating_mul(1000);
+                let bound = interval_ms.min(window_ms);
+                let base = *base_ms.get_or_insert_with(|| if bound == 0 { 0 } else { rng(bound) });
+                let stagger = u32::try_from(k)
+                    .unwrap_or(u32::MAX)
+                    .saturating_mul(SPEC_STAGGER_MS);
+                let offset_ms = if interval_ms == 0 {
+                    0
+                } else {
+                    base.saturating_add(stagger) % interval_ms
+                };
+                now + Duration::from_millis(u64::from(offset_ms))
             });
             ScheduledSpec {
                 spec: p.spec,
@@ -365,13 +443,6 @@ fn settle(
             }
         })
         .collect()
-}
-
-/// `now + uniform([0, bound_ms))`. A zero bound yields `now` — poll it on the next scheduler tick —
-/// and `rng` is never called with a zero bound.
-fn jitter(now: Instant, bound_ms: u32, rng: &mut impl FnMut(u32) -> u32) -> Instant {
-    let offset_ms = if bound_ms == 0 { 0 } else { rng(bound_ms) };
-    now + Duration::from_millis(u64::from(offset_ms))
 }
 
 #[cfg(test)]
@@ -431,6 +502,49 @@ mod tests {
             upserts,
             removes,
         })
+    }
+
+    /// Run `ticks` scheduler ticks from `now` at [`SCHEDULER_TICK`] and return, for each tick, how
+    /// many jobs it produced **per node** — the shape the worker actually sees, since one `due` call
+    /// becomes one back-to-back burst into a limiter that single-flights per target.
+    ///
+    /// `late_every` injects a tick that arrives one period late (the scheduler's
+    /// `MissedTickBehavior::Delay`), because that is the case a one-tick separation would not
+    /// survive. `0` means never.
+    fn tick_bursts(
+        ws: &mut WorkingSet,
+        now: Instant,
+        ticks: u32,
+        late_every: u32,
+    ) -> Vec<HashMap<NodeId, usize>> {
+        let mut out = Vec::new();
+        let mut elapsed = Duration::ZERO;
+        for i in 0..ticks {
+            elapsed += SCHEDULER_TICK;
+            if late_every != 0 && i % late_every == late_every - 1 {
+                elapsed += SCHEDULER_TICK; // this tick was missed; the next sweeps up both
+                continue;
+            }
+            let mut per_node: HashMap<NodeId, usize> = HashMap::new();
+            for job in ws.due(now + elapsed) {
+                *per_node.entry(job.node_id).or_default() += 1;
+            }
+            out.push(per_node);
+        }
+        out
+    }
+
+    /// The firewall that found this bug: an SNMP scalar check, an SNMP table walk and ICMP, all on
+    /// one node, all on the same interval — the shape no test in this module had.
+    fn one_node_three_specs(n: NodeId, interval: u32) -> NodeJobs {
+        NodeJobs {
+            node_id: n,
+            specs: vec![
+                snmp_spec(n, "public", interval),
+                snmp_spec(n, "public2", interval),
+                icmp_spec(n, interval),
+            ],
+        }
     }
 
     /// A jitter source that ignores the bound and returns a fixed offset (deterministic tests).
@@ -911,6 +1025,136 @@ mod tests {
             due < now + Duration::from_secs(30),
             "jitter must be within [0, interval)"
         );
+    }
+
+    // ── One node's specs must never share a scheduler tick (the v0.2.3–v0.2.5 regression) ────────
+    //
+    // These are the tests this module did not have: every case above builds nodes with exactly one
+    // spec, so nothing here could see a node's specs collide with each other. They assert the
+    // property the worker actually depends on — a `due` burst never carries two jobs for one target
+    // — rather than the offsets that produce it, because the offsets are an implementation detail
+    // and the burst is what the per-device single-flight guard drops from.
+
+    #[test]
+    fn a_nodes_specs_never_share_one_due_burst() {
+        // Reproduces the shipped failure: a small deployment, so the adoption window is a few
+        // milliseconds wide, and a node carrying three same-interval specs. Before the stagger all
+        // three drew from that window, landed in one tick, and the limiter kept the first and
+        // dropped the other two — on every cycle, forever.
+        let mut ws = WorkingSet::new();
+        let now = Instant::now();
+        let mut rng = fixed(7); // a 14-spec adoption gives a 70ms window; any draw sits inside one tick
+        ws.apply(
+            snapshot(
+                Uuid::from_u128(1),
+                1,
+                0,
+                1,
+                vec![one_node_three_specs(node(1), 60)],
+            ),
+            now,
+            &mut rng,
+        );
+        // Four full intervals, so a collision that only repeats every cycle still shows up.
+        let bursts = tick_bursts(&mut ws, now, 60 * 4 * 2, 0);
+        let worst = bursts.iter().filter_map(|b| b.get(&node(1))).max();
+        assert_eq!(
+            worst,
+            Some(&1),
+            "a node's specs must reach the worker one tick apart, never together"
+        );
+        // …and all three must actually be polled: separation is worthless if it costs a poll.
+        let polled: usize = bursts.iter().filter_map(|b| b.get(&node(1))).sum();
+        assert_eq!(polled, 12, "3 specs × 4 intervals");
+    }
+
+    #[test]
+    fn the_separation_survives_a_late_tick() {
+        // `MissedTickBehavior::Delay` means a blocked scheduler resumes late and sweeps up
+        // everything now due. One tick of separation would merge under that; SPEC_STAGGER_MS is two
+        // for exactly this reason, so pin the reason.
+        let mut ws = WorkingSet::new();
+        let now = Instant::now();
+        let mut rng = fixed(0);
+        ws.apply(
+            snapshot(
+                Uuid::from_u128(1),
+                1,
+                0,
+                1,
+                vec![one_node_three_specs(node(1), 60)],
+            ),
+            now,
+            &mut rng,
+        );
+        let bursts = tick_bursts(&mut ws, now, 60 * 4 * 2, 3);
+        let worst = bursts.iter().filter_map(|b| b.get(&node(1))).max();
+        assert_eq!(
+            worst,
+            Some(&1),
+            "every third tick arrives late and must still not merge two of a node's specs"
+        );
+    }
+
+    #[test]
+    fn the_separation_holds_across_harmonic_interval_tiers() {
+        // 60 / 300 / 3600 all divide each other, so two specs that once shared a tick would share it
+        // forever — `due` re-arms by a whole interval, so their relative phase never drifts apart.
+        // This is the case that makes "unlikely" indistinguishable from "broken" in production.
+        let n = node(1);
+        let mut ws = WorkingSet::new();
+        let now = Instant::now();
+        let mut rng = fixed(0);
+        ws.apply(
+            snapshot(
+                Uuid::from_u128(1),
+                1,
+                0,
+                1,
+                vec![NodeJobs {
+                    node_id: n,
+                    specs: vec![
+                        snmp_spec(n, "public", 60),
+                        snmp_spec(n, "public2", 300),
+                        icmp_spec(n, 3600),
+                    ],
+                }],
+            ),
+            now,
+            &mut rng,
+        );
+        // Two full hours: the 3600s spec coincides with a 60s tick 120 times in that span.
+        let bursts = tick_bursts(&mut ws, now, 3600 * 2 * 2, 0);
+        let worst = bursts.iter().filter_map(|b| b.get(&n)).max();
+        assert_eq!(worst, Some(&1), "harmonic tiers must not lock together");
+    }
+
+    #[test]
+    fn a_node_draws_one_offset_however_many_specs_it_adopts() {
+        // The per-node draw *is* the fix: a per-spec draw is what put them in one tick. Pin the
+        // count, because restoring the old behaviour would be a one-line change that breaks nothing
+        // else in this file.
+        let mut draws = 0usize;
+        let mut rng = |bound: u32| {
+            draws += 1;
+            bound / 2
+        };
+        let mut ws = WorkingSet::new();
+        ws.apply(
+            snapshot(
+                Uuid::from_u128(1),
+                1,
+                0,
+                1,
+                vec![
+                    one_node_three_specs(node(1), 60),
+                    one_node_three_specs(node(2), 60),
+                ],
+            ),
+            Instant::now(),
+            &mut rng,
+        );
+        assert_eq!(draws, 2, "one draw per node, not one per spec");
     }
 
     #[test]
