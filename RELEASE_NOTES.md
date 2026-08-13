@@ -10,6 +10,21 @@
 
 ## Unreleased
 
+## v0.2.6 — every check on a device runs again, and twenty-two lists can be narrowed
+
+**⚠️ If you are running v0.2.3, v0.2.4 or v0.2.5, upgrade as soon as you can.** Those three
+releases poll a device for only **one** of its checks. On an SNMP node the system scalars keep
+arriving while the interface walk, the vendor health tables, the topology walks and even ICMP are
+discarded on every cycle — SNMP collection quietly stops filling in, and nothing says so, because
+the check that survives *is* the liveness check. The first entry under Bug Fixes explains why it
+is invisible and why a **smaller** deployment is hit harder than a large one. There is no
+configuration to change: the fix is in the poller, and upgrading is the whole remedy.
+
+The rest of the release is about narrowing lists. Twenty-two screens had no filter of any kind,
+including the two opened first during an incident — Alerts ▸ Active and Alerts ▸ History — and the
+one where a missing match is a correctness problem rather than an inconvenience: Settings ▸ Audit
+filtered only the rows it had already fetched, and hid older matching entries without saying so.
+
 ### Breaking changes
 - **The event log's time range now defaults to the last 24 hours instead of all time**, and the
   From/To instants have moved under a "Custom…" choice in the new range dropdown. This is what pays
@@ -18,6 +33,16 @@
   hours it is about 1.1×. "All time" is still one click away, and the API is unchanged: `start` and
   `end` on `GET /api/v1/events` remain optional and unbounded by default, so an API client that sent
   no range still gets none.
+- `GET /api/v1/system/upgrade` (and `get_system_health(section="upgrade")`) gained
+  **`updater.installed`**: whether this deployment has an upgrade mechanism at all. Read it before
+  `updater.present`, which now means only "the updater has reported" and is meaningful only where
+  `installed` is true.
+- A request to upgrade a deployment that has no mechanism now answers **`upgrade_unsupported`**
+  (503) instead of `upgrade_unavailable`. The three 503 codes on this surface are now distinct:
+  `upgrade_unsupported` (no mechanism here), `upgrade_disabled` (there is one and it is switched
+  off) and `upgrade_unavailable` (there is one and its updater is not answering). Uploading an
+  image archive to a deployment with no mechanism answered `upgrade_unavailable` before and answers
+  `upgrade_unsupported` now.
 
 ### New Features
 - **Nodes ▸ All nodes can be narrowed by state, kind and poll pool.** The tree could search names
@@ -94,6 +119,69 @@
   `group_id`, `since` and `until`; the MCP `get_alert_history` tool takes the same set through the
   same code path. There is deliberately no free-text search: the only free-text column is the metric
   name, which is unindexed, and searching it would turn every page into a full table scan.
+
+### Improvements
+- **Settings ▸ System health compares hosts instead of showing one at a time.** Host resources was a
+  dropdown of core and every poller, so asking whether a poller was busy — against core, or against
+  its pool-mates — meant switching between them and remembering. It is now one section for core and
+  one per poller pool, with every host in a section drawn on the same CPU, load, memory and disk
+  charts. A section holding one host keeps the 1m/5m/15m load detail; two or more collapse to the
+  1-minute average so the colour can mean the host, and each card's headline names the host reading
+  highest rather than a number that describes none of them. Disk cards are the union of the mounts
+  the section reports, so core's `metrics` and `database` volumes no longer vanish when a poller is
+  selected. Sections fold away, and a folded one still shows each host's current CPU, memory and
+  disk — without fetching any history, which is what bounds the cost on a fleet with many pollers.
+- **A URL or DNS monitor's own settings are now in Edit node.** Changing a monitored URL, its
+  expected status, a DNS record type or a resolver previously meant finding a ⋮ menu on the health
+  card in the Overview tab, which only appeared while that card was rendered. Those fields are now
+  part of Edit node in the header, alongside the profile and pool. The ⋮ menu keeps "Remove
+  monitoring". If the monitor settings save and the node settings do not, the dialog stays open and
+  says which half landed — saving again is safe, both writes are replacements.
+- **Edit node is on the inventory tree's right-click menu.** Editing a node meant selecting its row
+  first and then finding the button in the detail pane's header. Nodes ▸ All nodes now offers
+  "Edit node…" directly under "Open" in any node row's context menu — the same dialog, without
+  moving the selection, so the pane keeps showing whatever was already open.
+- **Paired fields in a dialog stack on a phone.** Side-by-side pairs inside modals (a DNS
+  resolver + port, a URL monitor's status bounds, a credential's kind + name) kept two columns at
+  ~390px and squeezed each to half a screen. They now stack, as the non-modal forms already did.
+- **Troubleshoot ▸ Tools no longer repeats the analysis-run list.** The panel it showed was a
+  verbatim duplicate of Troubleshoot ▸ Analysis runs — the same component over the same job list,
+  unfiltered and untruncated — so it only pushed the tool grid down the page. The tool grid now
+  follows the stat strip directly; the *running now* counter at the top of the page still shows
+  in-flight jobs, and the full list stays one click away under Analysis runs.
+- **Settings ▸ Upgrade no longer offers to upgrade a deployment that cannot be upgraded from
+  there.** Upgrading from the WebUI needs a container deployment that runs the `yagra-updater`
+  sidecar alongside core — the composition in `docker-compose.deploy.yml`. Every other way of
+  installing Yagra (natively, or from a composition without that sidecar) has no such mechanism,
+  and the page did not say so: it showed the release list, the apply button and the on/off switch,
+  and pressing any of them returned a 503. It now says the deployment cannot be upgraded from
+  there, points at the command line, and shows none of those controls. What is running, the applied
+  schema and the downgrade window are unchanged and still shown on every deployment.
+  - Distinct from a deployment that *has* the mechanism whose updater is missing or has stopped —
+    that is a fault, and it is still reported as one, as loudly as before.
+- **The documented way to install Yagra is now the published images, and it no longer asks you to
+  clone anything.** Every install path in the README, the deployment guide and the website led with
+  `docker compose up --build` — a from-source build of `docker-compose.yml`, which is precisely the
+  composition that has no updater sidecar and no persistent KEK. So the documented first step landed
+  new users on a deployment that cannot upgrade itself and loses stored device credentials on
+  restart, and, since the change above, says so on the Upgrade page with nothing nearby to explain
+  why. The recommended path is now `docker-compose.deploy.yml` — fetched with `curl`, started with
+  `docker compose up -d`. It needs no checkout and no build: every variable it interpolates has a
+  default, and it bind-mounts nothing outside the Docker socket. `POSTGRES_PASSWORD` is the one
+  setting worth choosing before the first start, because Postgres bakes it into the data volume
+  then.
+  - Building from source is unchanged and still fully documented — it is now addressed to people
+    developing on Yagra, auditing it, or making a custom build, with its two limits stated where
+    the instructions are rather than a section away.
+  - The two Docker compositions swapped letters in `DEPLOYMENT.md`: **A** is now the pre-built
+    images and **B** the source build. In-page anchors moved with them; `C`/`D`/`E` did not change.
+- **Searching the inventory tree for a group name now shows that group's contents.** On Nodes ▸ All
+  nodes, a search term matching a folder returned the folder row and nothing under it: the search
+  runs on the server against node names and addresses, so a matched folder's members were never in
+  the answer and the row rendered empty next to a health bar saying it had members. A group matched
+  by name now loads its whole subtree — sub-folders and every member node, whether or not the node
+  itself matches — while a term matching only node names behaves exactly as before. A term matching
+  more folders than can be opened at once says so rather than showing some of them empty.
 
 ### Bug Fixes
 - **A device with more than one check was polled for only one of them — silently, and without
@@ -212,81 +300,6 @@
   retyped, leaving a pane that read as "nothing matches this search" rather than as a failed
   refresh. The search is now re-issued with the rest of the inventory, and the previous matches stay
   on screen until the fresh ones land, so the tree no longer blinks empty.
-
-### Improvements
-- **Settings ▸ System health compares hosts instead of showing one at a time.** Host resources was a
-  dropdown of core and every poller, so asking whether a poller was busy — against core, or against
-  its pool-mates — meant switching between them and remembering. It is now one section for core and
-  one per poller pool, with every host in a section drawn on the same CPU, load, memory and disk
-  charts. A section holding one host keeps the 1m/5m/15m load detail; two or more collapse to the
-  1-minute average so the colour can mean the host, and each card's headline names the host reading
-  highest rather than a number that describes none of them. Disk cards are the union of the mounts
-  the section reports, so core's `metrics` and `database` volumes no longer vanish when a poller is
-  selected. Sections fold away, and a folded one still shows each host's current CPU, memory and
-  disk — without fetching any history, which is what bounds the cost on a fleet with many pollers.
-- **A URL or DNS monitor's own settings are now in Edit node.** Changing a monitored URL, its
-  expected status, a DNS record type or a resolver previously meant finding a ⋮ menu on the health
-  card in the Overview tab, which only appeared while that card was rendered. Those fields are now
-  part of Edit node in the header, alongside the profile and pool. The ⋮ menu keeps "Remove
-  monitoring". If the monitor settings save and the node settings do not, the dialog stays open and
-  says which half landed — saving again is safe, both writes are replacements.
-- **Edit node is on the inventory tree's right-click menu.** Editing a node meant selecting its row
-  first and then finding the button in the detail pane's header. Nodes ▸ All nodes now offers
-  "Edit node…" directly under "Open" in any node row's context menu — the same dialog, without
-  moving the selection, so the pane keeps showing whatever was already open.
-- **Paired fields in a dialog stack on a phone.** Side-by-side pairs inside modals (a DNS
-  resolver + port, a URL monitor's status bounds, a credential's kind + name) kept two columns at
-  ~390px and squeezed each to half a screen. They now stack, as the non-modal forms already did.
-- **Troubleshoot ▸ Tools no longer repeats the analysis-run list.** The panel it showed was a
-  verbatim duplicate of Troubleshoot ▸ Analysis runs — the same component over the same job list,
-  unfiltered and untruncated — so it only pushed the tool grid down the page. The tool grid now
-  follows the stat strip directly; the *running now* counter at the top of the page still shows
-  in-flight jobs, and the full list stays one click away under Analysis runs.
-- **Settings ▸ Upgrade no longer offers to upgrade a deployment that cannot be upgraded from
-  there.** Upgrading from the WebUI needs a container deployment that runs the `yagra-updater`
-  sidecar alongside core — the composition in `docker-compose.deploy.yml`. Every other way of
-  installing Yagra (natively, or from a composition without that sidecar) has no such mechanism,
-  and the page did not say so: it showed the release list, the apply button and the on/off switch,
-  and pressing any of them returned a 503. It now says the deployment cannot be upgraded from
-  there, points at the command line, and shows none of those controls. What is running, the applied
-  schema and the downgrade window are unchanged and still shown on every deployment.
-  - Distinct from a deployment that *has* the mechanism whose updater is missing or has stopped —
-    that is a fault, and it is still reported as one, as loudly as before.
-- **The documented way to install Yagra is now the published images, and it no longer asks you to
-  clone anything.** Every install path in the README, the deployment guide and the website led with
-  `docker compose up --build` — a from-source build of `docker-compose.yml`, which is precisely the
-  composition that has no updater sidecar and no persistent KEK. So the documented first step landed
-  new users on a deployment that cannot upgrade itself and loses stored device credentials on
-  restart, and, since the change above, says so on the Upgrade page with nothing nearby to explain
-  why. The recommended path is now `docker-compose.deploy.yml` — fetched with `curl`, started with
-  `docker compose up -d`. It needs no checkout and no build: every variable it interpolates has a
-  default, and it bind-mounts nothing outside the Docker socket. `POSTGRES_PASSWORD` is the one
-  setting worth choosing before the first start, because Postgres bakes it into the data volume
-  then.
-  - Building from source is unchanged and still fully documented — it is now addressed to people
-    developing on Yagra, auditing it, or making a custom build, with its two limits stated where
-    the instructions are rather than a section away.
-  - The two Docker compositions swapped letters in `DEPLOYMENT.md`: **A** is now the pre-built
-    images and **B** the source build. In-page anchors moved with them; `C`/`D`/`E` did not change.
-- **Searching the inventory tree for a group name now shows that group's contents.** On Nodes ▸ All
-  nodes, a search term matching a folder returned the folder row and nothing under it: the search
-  runs on the server against node names and addresses, so a matched folder's members were never in
-  the answer and the row rendered empty next to a health bar saying it had members. A group matched
-  by name now loads its whole subtree — sub-folders and every member node, whether or not the node
-  itself matches — while a term matching only node names behaves exactly as before. A term matching
-  more folders than can be opened at once says so rather than showing some of them empty.
-
-### API
-- `GET /api/v1/system/upgrade` (and `get_system_health(section="upgrade")`) gained
-  **`updater.installed`**: whether this deployment has an upgrade mechanism at all. Read it before
-  `updater.present`, which now means only "the updater has reported" and is meaningful only where
-  `installed` is true.
-- A request to upgrade a deployment that has no mechanism now answers **`upgrade_unsupported`**
-  (503) instead of `upgrade_unavailable`. The three 503 codes on this surface are now distinct:
-  `upgrade_unsupported` (no mechanism here), `upgrade_disabled` (there is one and it is switched
-  off) and `upgrade_unavailable` (there is one and its updater is not answering). Uploading an
-  image archive to a deployment with no mechanism answered `upgrade_unavailable` before and answers
-  `upgrade_unsupported` now.
 
 ## v0.2.5 — the tree answers why a row is silent, and lets one node out of a group's window
 
