@@ -1517,6 +1517,19 @@ pub fn compile_matcher(match_kind: &str, pattern: &str) -> Result<Matcher, Strin
     }
 }
 
+/// Compile a pattern that is a regex **by construction** — the caller holds a boolean, not a stored
+/// match-kind string.
+///
+/// Separate from [`compile_matcher`] because that function's first parameter is the matcher *kind*,
+/// and passing anything else is not a compile error: it is an `unknown match kind` at runtime, on
+/// the branch a rejection test cannot distinguish from a correct rejection. That is exactly what
+/// happened — the event filter's per-column condition passed the *column name* there, so
+/// `msg_regex=true` rejected every pattern it was ever given while the test asserting that a broken
+/// pattern is refused went on passing. A caller with a boolean should never have to name a kind.
+pub fn compile_regex(pattern: &str) -> Result<Matcher, String> {
+    compile_matcher("regex", pattern)
+}
+
 /// The stored `severity` of a rule. The column has a CHECK, so an unrecognised value means the row
 /// was written by a newer build; the rule still compiles, at the least alarming level.
 fn parse_severity(s: &str) -> Severity {

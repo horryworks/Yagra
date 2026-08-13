@@ -128,6 +128,10 @@ fn parse_set<T>(
 ///
 /// `regex` is compiled here for the same reason the whole-row term's is — the edge is where a
 /// pathological pattern has to stop, not the store.
+///
+/// `field` names the column for the error message and nothing else. It reached `compile_matcher`'s
+/// *match-kind* parameter once, which refused every pattern with `unknown match kind "msg"`; see
+/// [`crate::events::compile_regex`], which is why a boolean caller no longer names a kind at all.
 fn text_cond(
     field: &str,
     term: Option<&str>,
@@ -139,8 +143,11 @@ fn text_cond(
         return Ok(None);
     };
     if regex {
-        crate::events::compile_matcher(field, &term).map_err(|e| {
-            ApiError::bad_request("invalid_filter", format!("invalid regular expression: {e}"))
+        crate::events::compile_regex(&term).map_err(|e| {
+            ApiError::bad_request(
+                "invalid_filter",
+                format!("invalid regular expression for {field}: {e}"),
+            )
         })?;
     }
     Ok(Some(crate::events::TextCond { term, regex, not }))
@@ -215,7 +222,7 @@ pub(crate) fn parse_event_filter(input: EventFilterInput<'_>) -> Result<EventFil
     // uses — so a pathological pattern never reaches either store.
     if input.regex {
         if let Some(term) = search.as_deref() {
-            crate::events::compile_matcher("regex", term).map_err(|e| {
+            crate::events::compile_regex(term).map_err(|e| {
                 ApiError::bad_request("invalid_filter", format!("invalid regular expression: {e}"))
             })?;
         }
@@ -854,6 +861,43 @@ mod tests {
         })
         .expect_err("an uncompilable pattern must reject");
         assert_eq!(bad.code(), "invalid_filter");
+    }
+
+    #[test]
+    fn every_regex_parameter_accepts_a_pattern_that_compiles() {
+        // ⚠️ The reason this test exists, and the reason it is separate from the rejection above:
+        // the rejection passed for a whole release while `msg_regex=true` refused *every* pattern.
+        // The edge passed the column name where `compile_matcher` wants the matcher kind, so the
+        // error was `unknown match kind "msg"` — an error, which is what the test demanded. A guard
+        // that only ever asks for a refusal cannot tell "refused this pattern" from "refuses all
+        // input", so each regex-capable parameter has to be shown accepting one too.
+        for (what, input) in [
+            (
+                "the whole-row term",
+                EventFilterInput {
+                    q: Some("%LINEPROTO-\\d-UPDOWN"),
+                    regex: true,
+                    ..Default::default()
+                },
+            ),
+            (
+                "the message column",
+                EventFilterInput {
+                    msg: Some("%LINEPROTO-\\d-UPDOWN"),
+                    msg_regex: true,
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let f = parse_event_filter(input)
+                .unwrap_or_else(|e| panic!("{what} rejected a valid pattern: {}", e.code()));
+            // …and the flag survives, or the store would run it as a plain term and quietly answer
+            // a different question.
+            assert!(
+                f.regex || f.message.is_some_and(|c| c.regex),
+                "{what} dropped the regex flag"
+            );
+        }
     }
 
     #[test]
