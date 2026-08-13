@@ -31,9 +31,79 @@
   gap: 6px;
 }
 
-.tcond-controls .ts-seg {
+/* The mode switch. A real checkbox carries the semantics (`role="switch"` + keyboard + focus);
+   the track and knob are drawn from it, so there is no state kept anywhere but the input.
+   `appearance: none` on the input itself would leave the knob's position depending on text
+   direction, hence the explicit sibling span. */
+.tcond-sw {
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+  user-select: none;
+}
+
+.tcond-sw input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.tcond-sw-track {
+  flex: none;
+  position: relative;
+  width: 30px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.tcond-sw-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.tcond-sw input:checked + .tcond-sw-track {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+}
+
+.tcond-sw input:checked + .tcond-sw-track::after {
+  background: var(--bg-primary);
+  transform: translateX(14px);
+}
+
+/* The label's own text is a bare text node, so it cannot be selected as a sibling — the colour
+   change has to be applied to the label itself. */
+.tcond-sw:has(input:checked) {
+  color: var(--text-primary);
+}
+
+/* Keyboard focus has to be visible on the track, since the input it belongs to is invisible. */
+.tcond-sw input:focus-visible + .tcond-sw-track {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tcond-sw-track,
+  .tcond-sw-track::after {
+    transition: none;
+  }
 }
 
 .tcond-not {

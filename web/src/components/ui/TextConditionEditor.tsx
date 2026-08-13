@@ -12,10 +12,14 @@
 //   - **An invalid regex is shown, not thrown.** `[` is a state every regex passes through while it
 //     is being typed; `compileCondition` stays total and matches nothing, and the message goes here
 //     beside the box.
+//   - **The mode is a switch, not a two-option segmented control.** `TEXT_MODES` has exactly two
+//     members and always will — "contains" is the absence of "regex", not a peer choice — and a
+//     segmented control spells a boolean as if it were a set, which is why the shipped version left
+//     an operator unable to tell which half was active (the selected fill is one step of background
+//     tone apart). A switch states the *default* too: regex is off unless you turn it on.
 
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Segmented } from './Segmented';
 import type { TextMode } from '../../lib/columnFilter';
 import { conditionError, type TextCondition } from '../../lib/filterCondition';
 import './TextConditionEditor.css';
@@ -104,12 +108,25 @@ export function TextConditionEditor({
       {(modes.length > 1 || allowNot) && (
         <div className="tcond-controls">
           {modes.length > 1 && (
-            <Segmented
-              options={modes.map((m) => ({ value: m, label: t(`filter.mode.${m}`) }))}
-              value={value.mode}
-              onChange={(m) => commitNow({ ...value, term: draft, mode: m as TextMode })}
-              ariaLabel={t('filter.modeAria')}
-            />
+            <label
+              className="tcond-sw"
+              title={`${t('filter.modeAria')}: ${t(`filter.mode.${value.mode}`)}`}
+            >
+              <input
+                type="checkbox"
+                role="switch"
+                checked={value.mode === 'regex'}
+                onChange={(e) =>
+                  commitNow({
+                    ...value,
+                    term: draft,
+                    mode: (e.target.checked ? 'regex' : 'contains') satisfies TextMode,
+                  })
+                }
+              />
+              <span className="tcond-sw-track" aria-hidden="true" />
+              {t('filter.mode.regex')}
+            </label>
           )}
           {allowNot && (
             <button
