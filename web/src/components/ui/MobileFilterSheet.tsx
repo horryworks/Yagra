@@ -21,6 +21,7 @@ import {
   type FilterableColumn,
 } from '../../lib/columnFilter';
 import { summaryIsActive } from '../../lib/filterSummary';
+import { useViewportMode } from '../../lib/viewport';
 import './MobileFilterSheet.css';
 
 interface Props<T> {
@@ -90,7 +91,16 @@ export function MobileFilterSheet<T>({
 }
 
 /** The action-row button that opens the sheet. Separate so a screen can place it in its own toolbar
- *  without pulling the sheet's state up before it is needed. */
+ *  without pulling the sheet's state up before it is needed.
+ *
+ * **It renders nothing on desktop, and that gate lives here rather than at the call site.**
+ * `DataTable` shows the filter row exactly when it is *not* in card mode, off this same
+ * `useViewportMode()`; the button is the other half of that either/or, so the two must not be
+ * decided in two places. Shipped without this, every desktop screen showed `Filter (N)` in the
+ * action row *and* the filter row underneath — two controls editing one state, which is the
+ * coexistence this ADR set out to remove. A CSS `display:none` would have fixed the symptom while
+ * leaving the decision in a second language, and 29 more screens are still to adopt this pattern.
+ */
 export function MobileFilterButton<T>({
   columns,
   filters,
@@ -101,7 +111,9 @@ export function MobileFilterButton<T>({
   onOpen: () => void;
 }) {
   const { t } = useTranslation('common');
+  const mode = useViewportMode();
   const n = activeFilterCount(columns, filters);
+  if (mode !== 'mobile') return null;
   return (
     <button type="button" className={n > 0 ? 'mfilt-btn on' : 'mfilt-btn'} onClick={onOpen}>
       {n > 0 ? t('filter.sheetButtonCount', { count: n }) : t('filter.sheetButton')}
