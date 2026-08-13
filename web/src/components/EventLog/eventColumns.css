@@ -10,12 +10,45 @@
   min-width: 0;
 }
 
+/* The message is a button so it is reachable by keyboard and by touch — the popover it opens is the
+   only way to read a long line, and a hover-only affordance is barred by ui-conventions. It is
+   styled back down to plain text: nothing about this cell should look like an action. */
 .events-msg {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.events-msg:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+/* The full message. `pre-wrap` keeps the device's own spacing, `anywhere` breaks the long unbroken
+   runs syslog is made of (`CID=0x814f041e;vsys=public,…`) instead of forcing a sideways scroll. The
+   same pair the mobile card's disclosure uses. */
+.events-msg-pop {
+  max-width: min(720px, calc(100vw - 32px));
+}
+
+.events-msg-full {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--font-sm);
+  line-height: 1.5;
+  color: var(--text-primary);
+  user-select: text;
 }
 
 .events-msg-cell .events-msg {

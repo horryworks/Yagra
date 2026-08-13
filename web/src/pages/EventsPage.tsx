@@ -24,6 +24,7 @@ import {
   eventEmptyKind,
   eventFilterColumns,
   eventFilterQuery,
+  eventHighlight,
 } from '../components/EventLog/eventFilterSpec';
 import {
   eventColumnLabels,
@@ -33,6 +34,7 @@ import {
 } from '../components/EventLog/useEventFilters';
 import { useFilterParams } from '../lib/useFilterParams';
 import { isAnyFiltered } from '../lib/columnFilter';
+import { ClearFilters } from '../components/ui/ClearFilters';
 import { readIdParam, writeIdParam } from '../lib/filterParams';
 
 export function EventsPage() {
@@ -43,11 +45,6 @@ export function EventsPage() {
   const semantics = useSearchSemantics();
   const [sheet, setSheet] = useState(false);
 
-  const columns = useMemo(
-    () => eventColumns(nodeName, t, { semantics }),
-    [nodeName, t, semantics],
-  );
-  const renderCard = useMemo(() => eventCard(nodeName, t), [nodeName, t]);
   const filterCols = useMemo(() => eventFilterColumns(t, { semantics }), [t, semantics]);
   const { filters, setFilters, nowMs } = useFilterParams(filterCols);
 
@@ -59,6 +56,19 @@ export function EventsPage() {
   const { rows, loading, exhausted, loadMore, widened } = useWidenedEventLog(query, semantics, {
     node_id: nodeId ?? undefined,
   });
+
+  // Built once per query, not per row: `matchRanges` compiles a pattern, and there are 100 rows on
+  // screen. `widened` belongs in here because after the automatic retry the term really was matched
+  // inside words, and the marks have to say the same thing the query asked.
+  const highlight = useMemo(
+    () => eventHighlight(filters, semantics, widened),
+    [filters, semantics, widened],
+  );
+  const columns = useMemo(
+    () => eventColumns(nodeName, t, { semantics, highlight }),
+    [nodeName, t, semantics, highlight],
+  );
+  const renderCard = useMemo(() => eventCard(nodeName, t, { highlight }), [nodeName, t, highlight]);
 
   const anyFiltered = isAnyFiltered(filterCols, filters) || nodeId != null;
   const empty = {
@@ -100,6 +110,14 @@ export function EventsPage() {
             for (const c of filterCols) facets.load(c.key);
             setSheet(true);
           }}
+        />
+        {/* The node picker is counted and cleared with the columns: it is not a column filter, but
+            it narrows this list, and "clear all filters" that leaves a node selected is a lie. */}
+        <ClearFilters
+          columns={filterCols}
+          filters={filters}
+          onChange={setFilters}
+          extra={{ active: nodeId != null, clear: () => setNode(null) }}
         />
         <TableSpacer />
         <ResultCount

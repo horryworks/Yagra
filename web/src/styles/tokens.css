@@ -55,6 +55,15 @@
   --supp-maintenance: #2c94c8; /* 空色 — 水色と青の中間 */
   --supp-mute: #b59a2b; /* 芥子 — 黄 */
 
+  /* ---- search-match highlight (ADR-053 Inc.2e) ----
+     Deliberately NOT the accent and NOT a status colour: an accent-coloured run of text inside a
+     log line reads as "this row is selected", and a status colour reads as "this row is warning".
+     What it has to say is only "these are the characters you searched for", so it is a wash behind
+     the text with the text colour left alone — the same reason a highlighter pen does not change
+     the ink. Both themes keep the body text at full contrast on top of it. */
+  --match-bg: #ffe08a;
+  --match-fg: var(--text-primary);
+
   /* ---- status (§1.3) — network-state semantics; never reused for decoration ---- */
   --status-up: #2e7d32;
   --status-warning: #c77a0b;
@@ -148,6 +157,10 @@
   /* Brand nudged brighter for dark readability (§1.5). Seal/login stay --brand-fixed. */
   --brand: #f26a12;
   --accent-hover: #ff7c2e;
+
+  /* A saturated yellow on a dark ground blinds; this is the same hue at a fraction of the light,
+     which keeps the marked text readable rather than making it the brightest thing on screen. */
+  --match-bg: #6a5316;
 
   --status-up: #4caf50;
   --status-warning: #e2a526;

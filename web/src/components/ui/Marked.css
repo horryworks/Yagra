@@ -1,0 +1,15 @@
+/* A marked search match (ADR-053 Inc.2e).
+
+   Scoped to a class rather than styling the bare `mark` element: this is a shared primitive, and a
+   global element rule would silently repaint any `<mark>` a future component renders for an
+   unrelated reason. Only the ground changes — the text keeps its own colour, so a marked run stays
+   as readable as the rest of the line (see `--match-bg` in tokens.css for why it is neither the
+   accent nor a status colour). */
+.mk {
+  background: var(--match-bg);
+  color: var(--match-fg);
+  border-radius: 2px;
+  /* Marks land inside a `mono` cell whose text may be ellipsis-truncated; padding would shift the
+     glyphs and change where the truncation falls. */
+  padding: 0;
+}

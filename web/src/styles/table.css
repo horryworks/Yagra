@@ -928,3 +928,23 @@ html[data-viewport='mobile'] .il-right .role-select {
 html[data-viewport='mobile'] .il-right .muted {
   flex: 1;
 }
+
+/* "Clear all filters" (ADR-053 Inc.2e). A ghost button in the action row, mounted only while
+   something is narrowing the list — so it reads as a way out of a state, not as a permanent
+   control. Matches `.mfilt-btn`, its counterpart in the mobile sheet's footer. */
+.clear-filters {
+  padding: 0 12px;
+  min-height: var(--touch-target);
+  background: none;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.clear-filters:hover {
+  color: var(--text-primary);
+  border-color: var(--accent-color);
+}

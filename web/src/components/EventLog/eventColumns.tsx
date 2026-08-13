@@ -12,6 +12,8 @@ import { Badge } from '../ui/Badge';
 import { EntityName } from '../ui/EntityName';
 import { formatTimestamp } from '../../lib/format';
 import { eventFilters, type SearchSemantics } from './eventFilterSpec';
+import { MessageCell, type MessageHighlight } from './MessageCell';
+import { Marked } from '../ui/Marked';
 import './eventColumns.css';
 
 const ACTION_TONE: Record<EventRow['action'], 'critical' | 'warning' | 'up' | 'neutral' | 'info'> = {
@@ -29,7 +31,7 @@ const ACTION_TONE: Record<EventRow['action'], 'critical' | 'warning' | 'up' | 'n
 export function eventColumns(
   nodeName: (id: string) => string,
   t: TFunction,
-  opts?: { showSource?: boolean; semantics?: SearchSemantics },
+  opts?: { showSource?: boolean; semantics?: SearchSemantics; highlight?: MessageHighlight },
 ): Column<EventRow>[] {
   const showSource = opts?.showSource ?? true;
   // The filter descriptors live in a `.ts` next door because they carry judgement (which modes a
@@ -64,16 +66,9 @@ export function eventColumns(
       header: t('alerts:eventLog.cols.message'),
       width: '2fr',
       filter: filters.message,
-      render: (r) => (
-        <span className="events-msg-cell" title={r.message}>
-          {r.trap_name && (
-            <Badge tone="info" title={r.trap_oid ?? undefined}>
-              {r.trap_name}
-            </Badge>
-          )}
-          <span className="mono events-msg">{r.message}</span>
-        </span>
-      ),
+      // No `title` here any more: the cell opens a real popover, and the OS tooltip would fade in
+      // on top of it. See `MessageCell` for what the native one could not do.
+      render: (r) => <MessageCell row={r} highlight={opts?.highlight} />,
     },
     {
       key: 'action',
@@ -107,7 +102,7 @@ export function eventColumns(
 export function eventCard(
   nodeName: (id: string) => string,
   t: TFunction,
-  opts?: { showSource?: boolean },
+  opts?: { showSource?: boolean; highlight?: MessageHighlight },
 ): (r: EventRow) => ReactNode {
   const showSource = opts?.showSource ?? true;
   return (r) => (
@@ -134,7 +129,9 @@ export function eventCard(
         <summary>
           <span className="ev-card-msg-preview mono">{r.message || '—'}</span>
         </summary>
-        <div className="ev-card-msg-full mono">{r.message}</div>
+        <div className="ev-card-msg-full mono">
+          <Marked text={r.message} highlight={opts?.highlight} />
+        </div>
       </details>
     </div>
   );

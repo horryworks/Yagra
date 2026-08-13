@@ -50,6 +50,15 @@
 - **When a plain term finds nothing, the Events screens ask once more, looking inside words too, and
   say that they did.** The expensive query is paid only where the cheap one had already reached a
   dead end.
+- **The parts of a message that matched the filter are highlighted**, in the table, in the full-text
+  popover and on the mobile card. A negated condition highlights nothing — the rows on screen are
+  the ones that did *not* match.
+- **The full message opens in a panel**: hover it, or click to pin it open and select the text.
+  It replaces the browser tooltip, which appeared slowly, could not be copied, and was cut short by
+  the platform on the long lines this is most needed for.
+- **"Clear all filters" is back on desktop**, in the action row, with a count of what it will clear.
+  It appears only while something is narrowing the list, and on the Events page it clears the node
+  selection too.
 - The Events empty state distinguishes three cases — nothing in the window, nothing matching the
   filters, and nothing whose word *starts* with the term — because the default range narrows, so "no
   events" was never the right sentence.

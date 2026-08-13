@@ -989,16 +989,22 @@ fn record_to_event_row(r: &PersistRecord) -> EventRow {
 
 /// The fake's model of [`msg_prefix`]: does any **word** in `haystack` start with `needle`?
 ///
-/// `needle` must already be lower-cased. VictoriaLogs splits on non-alphanumerics, so a word starts
-/// at index 0 or after a non-alphanumeric character — which is why `i("ermit"*)` finds nothing in
-/// `POLICYPERMIT` (verified against the real store, 2026-08-13) while `i("policy"*)` finds it.
-/// A needle containing separators works the same way: only its first character has to land on a
-/// word start, and the rest matches literally, which is the phrase-prefix behaviour VictoriaLogs
-/// gives (`i("cid=0x814f"*)` matched, `i("policy/6"*)` did not — the word there is `01POLICY`).
+/// `needle` must already be lower-cased. A word starts at index 0 or after a separator, so
+/// `i("policy"*)` finds `POLICYPERMIT` while `i("ermit"*)` finds nothing in it. A needle containing
+/// separators works the same way: only its first character has to land on a word start and the rest
+/// matches literally, which is the phrase-prefix behaviour VictoriaLogs gives (`i("cid=0x814f"*)`
+/// matched; `i("policy/6"*)` did not, the word there being `01POLICY`).
+///
+/// ⚠️ **A word is `[a-z0-9_]` — the underscore is *not* a separator.** Measured against the live
+/// store on 2026-08-13 after the first version of this function guessed otherwise: `i("to"*)`
+/// returns 836 rows while `Trust_to_Untrust` appears in 111,021 of them, so the underscore is
+/// inside the word. `-` `.` `=` `/` `%` all do separate (`i("zone"*)` finds `source-zone=trust`,
+/// `i("168"*)` finds `192.168.1.119`).
 ///
 /// ⚠️ This mirrors an *engine*, so it can only ever be approximate. What it must not be is **more
-/// permissive** than the engine: a fake that still answered `contains` would let every test pass
-/// while the deployment returned fewer rows.
+/// permissive** than the engine — and the underscore bug was exactly that, in exactly the direction
+/// this note already warned about: every test passed while the deployment returned fewer rows. A
+/// fake can be wrong in two ways and only the narrow one is discoverable.
 #[cfg(test)]
 fn word_prefix_match(haystack: &str, needle: &str) -> bool {
     if needle.is_empty() {
@@ -1006,8 +1012,9 @@ fn word_prefix_match(haystack: &str, needle: &str) -> bool {
     }
     let hay = haystack.to_lowercase();
     let bytes = hay.as_bytes();
+    let word_byte = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
     hay.match_indices(needle)
-        .any(|(i, _)| i == 0 || !bytes[i - 1].is_ascii_alphanumeric())
+        .any(|(i, _)| i == 0 || !word_byte(bytes[i - 1]))
 }
 
 /// Whether a stored record satisfies the filter. It models **PostgreSQL** on every axis but one,
@@ -1650,6 +1657,22 @@ mod tests {
             !word_prefix_match("POLICYPERMIT", "ermit"),
             "the fake fell back to substring matching"
         );
+        // 🚨 The underscore, which the first version of this function got wrong in exactly that
+        // direction. It is a *word character*, so `Trust_to_Untrust` contains no word `to` —
+        // measured, because the guess ("splits on non-alphanumerics") was wrong: `i("to"*)` returns
+        // 836 rows on the live store while `Trust_to_Untrust` occurs in 111,021 of them. Everything
+        // else in this line does separate.
+        assert!(!word_prefix_match("Trust_to_Untrust", "to"));
+        assert!(word_prefix_match("Trust_to_Untrust", "trust"));
+        for sep in ['-', '.', '=', '/', ' ', ':'] {
+            assert!(
+                word_prefix_match(&format!("x{sep}policy"), "policy"),
+                "{sep:?} should separate words"
+            );
+        }
+        // The same rule the WebUI's highlighter has to reach — `web/src/lib/matchRanges.ts` is the
+        // fourth implementation of this, and its test carries these same cases.
+        assert!(!word_prefix_match("x_policy", "policy"));
     }
 
     #[test]

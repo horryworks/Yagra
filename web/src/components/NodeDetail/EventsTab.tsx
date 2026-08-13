@@ -22,6 +22,7 @@ import {
   eventEmptyKind,
   eventFilterColumns,
   eventFilterQuery,
+  eventHighlight,
 } from '../EventLog/eventFilterSpec';
 import {
   eventColumnLabels,
@@ -30,6 +31,7 @@ import {
   useWidenedEventLog,
 } from '../EventLog/useEventFilters';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
+import { ClearFilters } from '../ui/ClearFilters';
 
 export function EventsTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('alerts');
@@ -54,11 +56,18 @@ export function EventsTab({ node }: { node: NodeDetail }) {
     node_id: node.id,
   });
 
-  const columns = useMemo(
-    () => eventColumns(nodeName, t, { showSource: false, semantics }),
-    [nodeName, t, semantics],
+  const highlight = useMemo(
+    () => eventHighlight(filters, semantics, widened),
+    [filters, semantics, widened],
   );
-  const renderCard = useMemo(() => eventCard(nodeName, t, { showSource: false }), [nodeName, t]);
+  const columns = useMemo(
+    () => eventColumns(nodeName, t, { showSource: false, semantics, highlight }),
+    [nodeName, t, semantics, highlight],
+  );
+  const renderCard = useMemo(
+    () => eventCard(nodeName, t, { showSource: false, highlight }),
+    [nodeName, t, highlight],
+  );
 
   const empty = {
     unfiltered: t('eventLog.emptyNodeWindow'),
@@ -87,6 +96,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
             setSheet(true);
           }}
         />
+        <ClearFilters columns={filterCols} filters={filters} onChange={apply} />
         <TableSpacer />
         <ResultCount
           shown={rows.length}

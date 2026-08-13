@@ -25,7 +25,7 @@ import {
   type FilterState,
   type FilterableColumn,
 } from '../../lib/columnFilter';
-import { decodeCondition } from '../../lib/filterCondition';
+import { decodeCondition, type TextCondition } from '../../lib/filterCondition';
 import { localInputToIso } from '../NodeDetail/RangeControl';
 import { boundsFor, DEFAULT_EVENT_RANGE, EVENT_RANGES, type EventRange } from './eventRange';
 
@@ -259,4 +259,19 @@ export function widenEventQuery(q: EventQuery, semantics: SearchSemantics): Even
   if (semantics !== 'prefix') return null;
   if (!q.msg || q.msg_regex || q.msg_not) return null;
   return { ...q, msg: escapeRegex(q.msg), msg_regex: true };
+}
+
+/**
+ * What the Message column was matched on, for the highlighter — built once per query, never per row.
+ *
+ * `widened` matters here for the same reason it matters to the query: after the automatic retry the
+ * term really was matched inside words, so the marks have to say so (ADR-053 Inc.2d/2e).
+ */
+export function eventHighlight(
+  state: FilterState,
+  semantics: SearchSemantics,
+  widened: boolean,
+): { cond: TextCondition | null; semantics: SearchSemantics; widened: boolean } {
+  const cond = decodeCondition(state.message ?? '');
+  return { cond: cond.term ? cond : null, semantics, widened };
 }
