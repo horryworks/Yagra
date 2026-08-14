@@ -176,9 +176,14 @@ export function FilterButton<T>({
  * `Interfaces` stuck its row halfway down the scroller, at the height of a header mobile hides, and
  * the interface rows scrolled through the gap above it.
  *
+ * ⚠️ **Since Inc.10 the two surfaces that lay cells out call it for you** — `FilterBar`, and
+ * `ColumnFilterRow`, which every grid row now goes through. A screen calls this directly only if it
+ * renders `ColumnFilterCell`s in some third arrangement, and there is none today.
+ *
  * A hook rather than a wrapper component on purpose: these rows *are* CSS grids that share a
  * `gridTemplateColumns` with their header, so an element wrapped around one breaks the alignment
- * the row exists to keep.
+ * the row exists to keep. That is why `ColumnFilterRow` **is** the grid element rather than
+ * something around it, and why the template stays with the caller that also owns the header.
  *
  * ⚠️ **It takes the columns and the current values** (Inc.9) so it can answer "is anything
  * narrowing this list", which forces the row open. Passing a count in from each caller would put

@@ -11,8 +11,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
 import { useViewportMode } from '../../lib/viewport';
 import { nextSort, type SortState } from '../../lib/tableSort';
-import { ColumnFilterCell } from './ColumnFilterCell';
-import { useFilterRowVisible } from './MobileFilterSheet';
+import { ColumnFilterRow } from './ColumnFilterRow';
 import { filterableColumns, type ColumnFilterSpec, type FilterState } from '../../lib/columnFilter';
 import { minTableWidth } from '../../lib/tableWidth';
 import './DataTable.css';
@@ -108,10 +107,6 @@ interface Props<T> {
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
 const CARD_PX = 110; // default estimate for a mobile card before it is measured
-/** Stands in for `filters` on a table that has none. A module constant rather than an inline `{}`
- *  so the identity is stable — `useFilterRowVisible` only reads it, but an inline object here would
- *  be a new value every render for anything that later memoizes on it. */
-const EMPTY_FILTERS: FilterState = {};
 
 export function DataTable<T>({
   rows,
@@ -179,14 +174,24 @@ export function DataTable<T>({
   }, [expandedKey]);
 
   // The filter row draws only when the caller asked for it AND some column opted in AND the shared
-  // decision says the row is showing. That last half is `useFilterRowVisible()` rather than a local
-  // `!cardMode`, so this table and the five hand-rolled filter rows elsewhere read the *same*
-  // decision instead of six look-alikes (four of which had no decision at all — see
-  // `MobileFilterSheet.tsx`). Since Inc.9 it also carries the desktop open/closed state, so a
-  // second answer here would leave the row drawn on a screen whose toggle says it is closed.
+  // decision says the row is showing. That last half lives inside `ColumnFilterRow` (Inc.10) rather
+  // than here, so this table and the five hand-rolled rows elsewhere read the *same* decision
+  // instead of six look-alikes (four of which had no decision at all — see `MobileFilterSheet.tsx`).
+  // It carries the desktop open/closed state too, so a second answer here would leave the row drawn
+  // on a screen whose toggle says it is closed.
   const filterCols = useMemo(() => filterableColumns(columns), [columns]);
-  const rowVisible = useFilterRowVisible(filterCols, filters ?? EMPTY_FILTERS);
-  const showFilters = rowVisible && !!filters && !!onFiltersChange && filterCols.length > 0;
+  // ⚠️ One slot per column, in the header's order — including the columns with no filter, which
+  // become empty tracks. Skipping them would slide every later control out from under its header.
+  const filterSlots = useMemo(
+    () => columns.map((c) => (c.filter ? { key: c.key, align: c.align } : null)),
+    [columns],
+  );
+  // The accessible name has to be a string, and `header` is a ReactNode. Every filterable column's
+  // header is a `t()` string today; the key is a readable last resort rather than an empty label.
+  const filterLabels = useMemo(
+    () => Object.fromEntries(columns.map((c) => [c.key, typeof c.header === 'string' ? c.header : c.key])),
+    [columns],
+  );
 
   const items = virtualizer.getVirtualItems();
   // Fire the page-load callback once the last virtual row is within view of the end.
@@ -229,35 +234,18 @@ export function DataTable<T>({
           })}
         </div>
       )}
-      {showFilters && (
-        <div
+      {!!filters && !!onFiltersChange && (
+        <ColumnFilterRow
+          columns={filterCols}
+          slots={filterSlots}
+          filters={filters}
+          onChange={onFiltersChange}
+          counts={filterCounts}
+          onFilterOpen={onFilterOpen}
+          labels={filterLabels}
           className="dt-filters"
           style={{ gridTemplateColumns: template, ...widthStyle }}
-          role="group"
-          aria-label={t('filter.row')}
-        >
-          {columns.map((c) =>
-            c.filter ? (
-              <ColumnFilterCell
-                key={c.key}
-                spec={c.filter}
-                value={filters[c.key] ?? ''}
-                onChange={(next) => onFiltersChange({ ...filters, [c.key]: next })}
-                counts={filterCounts?.[c.key]}
-                // The accessible name has to be a string, and `header` is a ReactNode. Every
-                // filterable column's header is a `t()` string today; the key is a readable last
-                // resort rather than an empty label.
-                label={typeof c.header === 'string' ? c.header : c.key}
-                onOpen={onFilterOpen ? () => onFilterOpen(c.key) : undefined}
-                align={c.align}
-              />
-            ) : (
-              // An empty cell rather than no cell: the grid is positional, so a skipped column
-              // would shift every later filter under the wrong header.
-              <div key={c.key} className="dt-f empty" />
-            ),
-          )}
-        </div>
+        />
       )}
       {/* The scroller carries the same floor as the two grids above it, or the rows would stop
           short of the header the moment the table is scrolled sideways. Not in card mode: cards

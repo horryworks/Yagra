@@ -23,14 +23,10 @@ import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
+import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
-import {
-  FilterButton,
-  MobileFilterSheet,
-  useFilterRowVisible,
-} from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -92,36 +88,29 @@ export function ProfilesPage() {
   const allFilterCols = useMemo(() => [...colFilters, ...catCols], [colFilters, catCols]);
   const [filters, setFilters] = useState<FilterState>({});
   const [sheet, setSheet] = useState(false);
-  // ⚠️ `colFilters`, not `allFilterCols`: each surface answers for the columns it draws. A category
-  // filter is narrowing the list through the `FilterBar` below, which shows itself for exactly that
-  // reason — forcing *this* row open too would reveal a control that is not the one responsible.
-  const filterRowVisible = useFilterRowVisible(colFilters, filters);
 
   const filtered = useMemo(
     () => rows.filter(buildPredicate(allFilterCols, filters, Date.now())),
     [rows, allFilterCols, filters],
   );
-  const catCounts = useMemo(
-    () => ({ category: facetCounts(rows, allFilterCols, filters, 'category', Date.now()) }),
+  // Every enum column's facet counts, computed once per (rows, filters) change.
+  // ⚠️ This used to be `category` here and a bare `facetCounts(...)` **inside the cell renderer** —
+  // so the row's counts were recomputed for every cell on every render, each pass walking all rows,
+  // and the two surfaces disagreed: the desktop row showed counts under Poll interval and the
+  // mobile sheet, given only `category`, showed none. One memo, one answer, both surfaces.
+  const filterCounts = useMemo(
+    () =>
+      Object.fromEntries(
+        allFilterCols
+          .filter((c) => c.filter.kind === 'enum')
+          .map((c) => [c.key, facetCounts(rows, allFilterCols, filters, c.key, Date.now())]),
+      ),
     [rows, allFilterCols, filters],
   );
   const filterLabels: Record<string, string> = useMemo(
     () => ({ ...profileFilterLabels(t), category: t('profiles.cols.category') }),
     [t],
   );
-  const filterCell = (key: string) => {
-    const col = colFilters.find((c) => c.key === key);
-    if (!col) return <div className="dt-f empty" />;
-    return (
-      <ColumnFilterCell
-        spec={col.filter}
-        value={filters[key] ?? ''}
-        onChange={(next) => setFilters({ ...filters, [key]: next })}
-        counts={facetCounts(rows, allFilterCols, filters, key, Date.now())}
-        label={filterLabels[key] ?? key}
-      />
-    );
-  };
 
   // Group the filtered rows by category, in the canonical display order; trailing "Other"
   // bucket catches any unknown token so nothing is silently hidden.
@@ -186,7 +175,7 @@ export function ProfilesPage() {
               labels={filterLabels}
               filters={filters}
               onChange={setFilters}
-              counts={catCounts}
+              counts={filterCounts}
               onClose={() => setSheet(false)}
             />
           )}
@@ -196,7 +185,7 @@ export function ProfilesPage() {
             labels={filterLabels}
             filters={filters}
             onChange={setFilters}
-            counts={catCounts}
+            counts={filterCounts}
           />
 
           <div className="ytable profiles-table">
@@ -215,21 +204,21 @@ export function ProfilesPage() {
                 `styles/table.css`. It moved here so that all seven filter surfaces read the one
                 decision in `MobileFilterSheet.tsx` — the CSS copy was correct and still cost
                 nothing to keep, but it meant "is the row visible" had two answers in two
-                languages, and the four rows that had *neither* were invisible against that. */}
-            {filterRowVisible && (
-              <div
-                className="ytable-filters"
-                style={{ gridTemplateColumns: COLS }}
-                role="group"
-                aria-label={t('common:filter.row')}
-              >
-                {filterCell('name')}
-                {filterCell('vendor')}
-                {filterCell('interval')}
-                <div className="dt-f empty" />
-                <div className="dt-f empty" />
-              </div>
-            )}
+                languages, and the four rows that had *neither* were invisible against that.
+                ⚠️ `colFilters`, not `allFilterCols`: each surface answers for the columns it draws.
+                A category filter is narrowing the list through the `FilterBar` above, which shows
+                itself for exactly that reason — forcing *this* row open too would reveal a control
+                that is not the one responsible. */}
+            <ColumnFilterRow
+              columns={colFilters}
+              slots={['name', 'vendor', 'interval', null, null]}
+              filters={filters}
+              onChange={setFilters}
+              counts={filterCounts}
+              labels={filterLabels}
+              className="ytable-filters"
+              style={{ gridTemplateColumns: COLS }}
+            />
 
             {filtered.length === 0 ? (
               <div className="yt-empty">

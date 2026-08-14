@@ -314,7 +314,9 @@ export const RESERVED_URL_KEYS = [
 ] as const;
 
 /** Column keys that would fight the page's own query params, plus any duplicated key. Empty is the
- *  only acceptable answer; a test on each screen's spec asserts that. */
+ *  only acceptable answer, and `filterSpecRegistry.test.ts` asserts it for **every** spec builder in
+ *  the app — it was eight screens out of twenty-five until ADR-053 Inc.10, which is to say the check
+ *  did not cover the screen most likely to be written next. */
 export function reservedKeyCollisions<T>(columns: readonly FilterableColumn<T>[]): string[] {
   const bad = new Set<string>();
   const seen = new Set<string>();

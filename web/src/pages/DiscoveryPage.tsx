@@ -34,51 +34,14 @@ import {
   ENDPOINT_DEFAULT_MONITORED,
 } from './discoveryFilters';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
+import { ColumnFilterRow } from '../components/ui/ColumnFilterRow';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import {
-  FilterButton,
-  MobileFilterSheet,
-  useFilterRowVisible,
-} from '../components/ui/MobileFilterSheet';
-import {
-  defaultFilters,
-  isAnyFiltered,
-  type FilterState,
-  type FilterableColumn,
-} from '../lib/columnFilter';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
 import './DiscoveryPage.css';
-
-/**
- * One cell of a hand-rolled filter row.
- *
- * Shared by the two tables on this page rather than written twice. ⚠️ The key→spec lookup is an
- * untyped index, exactly as `DataTable`'s is: rename a key in `discoveryFilters.ts` and the cell
- * quietly becomes an empty one, with nothing to notice it (`.tsx` tests never run).
- */
-function filterCell<T>(
-  columns: readonly FilterableColumn<T>[],
-  filters: FilterState,
-  onChange: (next: FilterState) => void,
-  counts: Record<string, Record<string, number>>,
-  labels: Record<string, string>,
-  key: string,
-) {
-  const col = columns.find((c) => c.key === key);
-  if (!col) return <div className="dt-f empty" />;
-  return (
-    <ColumnFilterCell
-      spec={col.filter}
-      value={filters[key] ?? ''}
-      onChange={(next) => onChange({ ...filters, [key]: next })}
-      counts={counts[key]}
-      label={labels[key] ?? key}
-    />
-  );
-}
 
 interface RowState {
   selected: boolean;
@@ -107,9 +70,9 @@ export function DiscoveryPage() {
   const [note, setNote] = useState<string | null>(null);
   // Client-side: a sweep's result set is bounded by the range an operator typed in (ui-conventions).
   const candCols = useMemo(() => candidateColumns(t), [t]);
+  const candLabels = useMemo(() => candidateLabels(t), [t]);
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(candCols));
   const [candSheet, setCandSheet] = useState(false);
-  const filterRowVisible = useFilterRowVisible(candCols, filters);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -324,7 +287,7 @@ export function DiscoveryPage() {
           {candSheet && (
             <MobileFilterSheet
               columns={candCols}
-              labels={candidateLabels(t)}
+              labels={candLabels}
               filters={filters}
               onChange={setFilters}
               counts={candCounts}
@@ -352,30 +315,15 @@ export function DiscoveryPage() {
                 `.disco-head` and `.disco-row` to fixed px + `width: max-content` and scrolls them
                 sideways, and it named two of the three grids — so this row stayed at container
                 width and every control sat somewhere other than under its column. */}
-            {filterRowVisible && (
-              <div className="disco-filters" role="group" aria-label={t('common:filter.row')}>
-                <div className="dt-f empty" />
-                {filterCell(
-                  candCols,
-                  filters,
-                  setFilters,
-                  candCounts,
-                  candidateLabels(t),
-                  'address',
-                )}
-                {filterCell(
-                  candCols,
-                  filters,
-                  setFilters,
-                  candCounts,
-                  candidateLabels(t),
-                  'identity',
-                )}
-                <div className="dt-f empty" />
-                <div className="dt-f empty" />
-                <div className="dt-f empty" />
-              </div>
-            )}
+            <ColumnFilterRow
+              columns={candCols}
+              slots={[null, 'address', 'identity', null, null, null]}
+              filters={filters}
+              onChange={setFilters}
+              counts={candCounts}
+              labels={candLabels}
+              className="disco-filters"
+            />
             {shownCandidates.map((c) => {
               const r = rowState[c.address];
               if (!r) return null;
@@ -509,10 +457,6 @@ function SeenOnNetworkCard({
   );
   const [epFilters, setEpFilters] = useState<FilterState>(epDefaults);
   const [epSheet, setEpSheet] = useState(false);
-  // ⚠️ `epDefaults` as the baseline, on all three controls. Without it `activeFilterCount` reports 1
-  // before the operator has touched anything — the narrowing default counts as a filter — which
-  // since Inc.9 would force this row open forever and lock the toggle meant to close it.
-  const filterRowVisible = useFilterRowVisible(epCols, epFilters, epDefaults);
 
   const load = useCallback(() => {
     api
@@ -622,17 +566,21 @@ function SeenOnNetworkCard({
           {/* Same CSS grid rule as the header and every row, and the same mobile story as the
               candidates table above — this one is hidden on a phone for the same reason. The
               profile and credential columns are the import form's own inputs, and the last is the
-              button. */}
-          {filterRowVisible && (
-            <div className="disco-seen-filters" role="group" aria-label={t('common:filter.row')}>
-              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'ip')}
-              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'mac')}
-              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'via')}
-              <div className="dt-f empty" />
-              <div className="dt-f empty" />
-              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'monitored')}
-            </div>
-          )}
+              button.
+              ⚠️ `epDefaults` as the `baseline`, here and on `FilterButton` and `ClearFilters` —
+              all three, the same object. Without it `activeFilterCount` reports 1 before the
+              operator has touched anything (the narrowing default counts as a filter), which since
+              Inc.9 forces this row open forever and locks the toggle meant to close it. */}
+          <ColumnFilterRow
+            columns={epCols}
+            slots={['ip', 'mac', 'via', null, null, 'monitored']}
+            filters={epFilters}
+            onChange={setEpFilters}
+            counts={epCounts}
+            labels={epLabels}
+            className="disco-seen-filters"
+            baseline={epDefaults}
+          />
           {endpoints.map((e) => {
             const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
             return (

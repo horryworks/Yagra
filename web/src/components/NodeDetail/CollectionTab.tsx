@@ -25,13 +25,9 @@ import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../type
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
-import { ColumnFilterCell } from '../ui/ColumnFilterCell';
+import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
-import {
-  FilterButton,
-  MobileFilterSheet,
-  useFilterRowVisible,
-} from '../ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { defaultFilters, type FilterState } from '../../lib/columnFilter';
 import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
@@ -185,7 +181,6 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const columns = useMemo(() => metricColumns(t), [t]);
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
   const [sheet, setSheet] = useState(false);
-  const filterRowVisible = useFilterRowVisible(columns, filters);
   // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
   // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).
   const range = useRangeStore((s) => s.range);
@@ -237,20 +232,6 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const metricLabels: Record<string, string> = {
     metric: t('collection.colMetric'),
     status: t('collection.colStatus'),
-  };
-  const metricCell = (key: string) => {
-    const col = columns.find((c) => c.key === key);
-    if (!col) return <div className="dt-f empty" />;
-    return (
-      <ColumnFilterCell
-        spec={col.filter}
-        value={filters[key] ?? ''}
-        onChange={(next) => setFilters({ ...filters, [key]: next })}
-        counts={metricCounts[key]}
-        label={metricLabels[key] ?? key}
-        align={key === 'status' ? 'right' : undefined}
-      />
-    );
   };
 
   return (
@@ -349,15 +330,17 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
                 cells: one is derived from the metric name and the other is a live number, and
                 neither is a question this list can answer. Not drawn on a phone, where four grid
                 tracks in ~366px leave each trigger too narrow to read its own summary —
-                `FilterButton` above is the other half. */}
-            {filterRowVisible && (
-              <div className="nd-coll-mfilters" role="group" aria-label={t('common:filter.row')}>
-                {metricCell('metric')}
-                <div className="dt-f empty" />
-                <div className="dt-f empty" />
-                {metricCell('status')}
-              </div>
-            )}
+                `FilterButton` above is the other half, and the gate itself is inside
+                `ColumnFilterRow`. */}
+            <ColumnFilterRow
+              columns={columns}
+              slots={['metric', null, null, { key: 'status', align: 'right' }]}
+              filters={filters}
+              onChange={setFilters}
+              counts={metricCounts}
+              labels={metricLabels}
+              className="nd-coll-mfilters"
+            />
             {shownMetrics.map((m) => (
               <MetricRow key={m.metric} nodeId={node.id} entry={m} range={range} />
             ))}

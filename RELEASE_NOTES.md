@@ -23,6 +23,10 @@
   view.** That table deliberately starts narrowed to unmonitored endpoints, and the button was
   counting that default as a filter the operator had set — so pressing it changed nothing. It now
   appears only once you actually change something.
+- **Nodes ▸ Device profiles: the `Filter` sheet on a phone now shows the same option counts the
+  desktop filter row does.** "Poll interval" listed *Inherited* and *Overridden* with no numbers
+  beside them there, while the row on a desktop had them — the two surfaces were being handed
+  different sets of counts. Both now read one source.
 
 ### Bug Fixes
 - **Five screens drew a desktop column-filter row on a phone, on top of the `Filter` button that is

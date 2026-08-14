@@ -23,13 +23,9 @@ import { useIsMobileViewport } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
 import { interfaceColumns } from './tabFilters';
-import { ColumnFilterCell } from '../ui/ColumnFilterCell';
+import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
-import {
-  FilterButton,
-  MobileFilterSheet,
-  useFilterRowVisible,
-} from '../ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
 import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
@@ -75,7 +71,6 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const filterRowVisible = useFilterRowVisible(columns, filters);
 
   const shown = useMemo(
     () => rows.filter(buildPredicate(columns, filters, Date.now())),
@@ -96,19 +91,6 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     if_name: t('interfaces.colInterface'),
     if_alias: t('interfaces.colDescription'),
     oper: t('interfaces.colOper'),
-  };
-  const cell = (key: string) => {
-    const col = columns.find((c) => c.key === key);
-    if (!col) return <div className="dt-f empty" />;
-    return (
-      <ColumnFilterCell
-        spec={col.filter}
-        value={filters[key] ?? ''}
-        onChange={(next) => setFilters({ ...filters, [key]: next })}
-        counts={counts[key]}
-        label={labels[key] ?? key}
-      />
-    );
   };
   const up = rows.filter((r) => r.oper_status === 1).length;
   const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
@@ -202,19 +184,20 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             const enforces in TS). The two throughput columns are pictures, not values, so they
             carry an empty cell rather than a control that could not mean anything.
 
-            Not drawn on a phone — `FilterButton` above is its other half. It shipped without
-            that gate and was the worst-looking of the four: the row is `position: sticky` at
+            Not drawn on a phone — `FilterButton` above is its other half, and since Inc.10 that
+            gate is `ColumnFilterRow`'s own rather than a flag read here. It shipped without any
+            gate and was the worst-looking of the four: the row is `position: sticky` at
             `top: 32px`, the height of the header, and mobile hides the header — so it pinned itself
             halfway down the scroller and the interface rows ran through the gap above it. */}
-        {filterRowVisible && (
-          <div className="nd-if-filters" role="group" aria-label={t('common:filter.row')}>
-            {cell('if_name')}
-            {cell('if_alias')}
-            {cell('oper')}
-            <div className="dt-f empty" />
-            <div className="dt-f empty" />
-          </div>
-        )}
+        <ColumnFilterRow
+          columns={columns}
+          slots={['if_name', 'if_alias', 'oper', null, null]}
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          labels={labels}
+          className="nd-if-filters"
+        />
         {shown.map((r) => {
           const down = r.oper_status != null && r.oper_status !== 1;
           return (

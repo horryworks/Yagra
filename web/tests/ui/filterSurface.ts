@@ -205,6 +205,7 @@ export const MUST_FILTER: Record<string, string> = {
   '/nodes': 'the tree bar (Inc.6 decision E — a list with no header row)',
   '/nodes/discovery': 'the two discovery tables (Inc.6, and where the 28px defect landed)',
   '/nodes/mib': 'a server-side filter row: typing has to reach the request',
+  '/nodes/profiles': 'the last hand-rolled row (a grouped `.ytable`, not a `.dt`) — Inc.10',
   '/alerts': 'FilterBar over an SSE-fed list (Inc.6)',
   '/alerts/events': 'the URL-backed filter row (Inc.2)',
   '/alerts/history': 'server-side, and the one that shipped never reaching the request',
