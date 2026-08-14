@@ -122,6 +122,14 @@
   an `http_auth` credential — or a Meraki API key, which the integration creates rather than an
   operator — could sit in the list and not be filterable at all.
 - Disabled notification channels and routing rules are still dimmed after the table rewrite.
+- **Filtering the node tree by state, kind or pool now narrows the folders too, and expands them.**
+  Those three run server-side, so the tree could not see them: picking *Critical* left every folder
+  on screen — including the ones with no critical node under them — and a collapsed folder stayed
+  collapsed over its own match. Only the search box had ever told the tree it was filtering.
+- **A folder's bar and count describe the rows on screen while a filter is on**, rather than the
+  whole folder. "DNS 3" beside a single row asked the operator to work out which number was the
+  answer. Browsing is unchanged: there the count is the server's rollup, which is what makes a
+  folder nobody has opened report its real size.
 - **The metric editor's add form has moved below the metric list**, under a "New metric" heading.
   Above the list it was a line of inputs sitting directly on top of a table — which is now what a
   filter row looks like everywhere else — so it read as one, and typing a metric name into it did

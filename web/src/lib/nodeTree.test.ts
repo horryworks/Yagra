@@ -188,6 +188,46 @@ describe('flattenTree — narrowed by a filter the tree cannot see (ADR-053 Inc.
     expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:a']);
   });
 
+  it('counts the rows on screen, not the fleet', () => {
+    // Decided 2026-08-14: while narrowing the bar describes what is shown. "DNS 3" beside a single
+    // row makes the operator work out which number is the answer. The server rollup is still the
+    // right answer while browsing, where the row stands in for a folder nobody has opened.
+    const counts = { g1: { ok: 9, warning: 0, critical: 0, unknown: 0, unreachable: 0, maintenance: 0 },
+                     g1a: { ok: 9, warning: 0, critical: 0, unknown: 0, unreachable: 0, maintenance: 0 },
+                     g2: { ok: 0, warning: 0, critical: 0, unknown: 0, unreachable: 0, maintenance: 0 },
+                     g2a: { ok: 2, warning: 0, critical: 1, unknown: 0, unreachable: 0, maintenance: 0 } };
+    const rows = flattenTree(narrowedTree(), {
+      collapsed: {},
+      filter: '',
+      narrowed: true,
+      groupCounts: counts,
+    });
+    const dns = rows.find((r) => flatRowKey(r) === 'g:g2a');
+    expect(dns?.kind === 'group' && dns.tally.total).toBe(1);
+    // …and browsing still reads the rollup, so an unopened folder is not reported as empty.
+    const browsing = flattenTree(narrowedTree(), {
+      collapsed: {},
+      filter: '',
+      groupCounts: counts,
+    });
+    const dnsBrowsing = browsing.find((r) => flatRowKey(r) === 'g:g2a');
+    expect(dnsBrowsing?.kind === 'group' && dnsBrowsing.tally.total).toBe(3);
+  });
+
+  it('counts a folder matched by NAME as all of its members', () => {
+    // ⚠️ The count has to mirror the row rules, inherited match included: a folder the term matched
+    // shows every member, so a count derived from "names that match" would sit beside more rows
+    // than it claims.
+    const t = buildNodeTree(
+      [group('g2', 'Sites'), group('g2a', 'DNS', 'g2')],
+      [node('a', 'alpha', 'g2a'), node('b', 'beta', 'g2a', 1)],
+    );
+    const rows = flattenTree(t, { collapsed: {}, filter: 'dns' });
+    const dns = rows.find((r) => flatRowKey(r) === 'g:g2a');
+    expect(dns?.kind === 'group' && dns.tally.total).toBe(2);
+    expect(rows.map(flatRowKey)).toEqual(['g:g2', 'g:g2a', 'n:a', 'n:b']);
+  });
+
   it('leaves browsing untouched', () => {
     // No flag, no term: the whole tree, collapse state honoured — byte-for-byte what it was.
     // Sibling groups sort by name at equal `sort_order`, so "Internet Sites" precedes "Japan".

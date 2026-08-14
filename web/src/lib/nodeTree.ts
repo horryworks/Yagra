@@ -220,7 +220,6 @@ export function flattenTree(
   // force-expansion, hiding an empty folder and the ungrouped header turn on.
   const byTerm = q.length > 0;
   const narrowing = byTerm || opts.narrowed === true;
-  const filtering = narrowing;
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
   // Per-group subtree tally from the server direct counts (bottom-up over the built, acyclic tree).
@@ -230,9 +229,23 @@ export function flattenTree(
   // being fetched separately, because the term matched the folder rather than its contents) can be
   // waiting on anything.
   const isLoaded = (id: string) =>
-    filtering
+    narrowing
       ? !opts.revealedGroups?.has(id) || (opts.loadedGroups?.has(id) ?? true)
       : !opts.loadedGroups || opts.loadedGroups.has(id);
+
+  /**
+   * The nodes under `group` that this pass will actually render — the group row's tally while
+   * narrowing.
+   *
+   * ⚠️ **It has to mirror `walkGroup`'s own rules, including the inherited match.** A folder whose
+   * *name* matches the term shows all of its members, so its count must too; deriving the number
+   * from anything simpler would put a figure beside the bar that the rows below contradict.
+   */
+  const visibleNodes = (group: TreeGroup, ancestorMatch: boolean): NodeSummary[] => {
+    const eff = ancestorMatch || (byTerm && group.name.toLowerCase().includes(q));
+    const own = group.nodes.filter((n) => !byTerm || eff || n.name.toLowerCase().includes(q));
+    return [...own, ...group.children.flatMap((c) => visibleNodes(c, eff))];
+  };
 
   const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
     // A folder's own name can only be matched by a term. A state filter says nothing about it.
@@ -244,9 +257,19 @@ export function flattenTree(
     const keep = byTerm ? subtreeMatches(group, q) : subtreeHasNodes(group);
     if (narrowing && !effMatch && !keep) return;
 
-    const isOpen = filtering ? true : !opts.collapsed[group.id];
-    const tally = subtree ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
-                          : tallyStates(descendantNodes(group));
+    const isOpen = narrowing ? true : !opts.collapsed[group.id];
+    // 🚨 **While narrowing, the bar describes the rows on screen — not the fleet.** The server
+    // rollup (`groupCounts`) is the group's whole membership and is the right answer when browsing,
+    // where the row stands in for a folder nobody has opened. Under a filter it is a different
+    // statement from the one the operator is reading: "DNS 3" beside a single row asks them to
+    // work out which number is the answer. Chosen deliberately (2026-08-14) over keeping the
+    // health rollup; the cost is that "how big is this folder really" is not visible while a
+    // filter is on.
+    const tally = narrowing
+      ? tallyStates(visibleNodes(group, ancestorMatch))
+      : subtree
+        ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
+        : tallyStates(descendantNodes(group));
     const directTotal = counts ? countsTotal(counts[group.id] ?? emptyStateCounts()) : group.nodes.length;
     // A twisty is offered when the group has sub-groups or any (counted or loaded) member below it.
     const hasChildren = group.children.length > 0 || tally.total > 0;
