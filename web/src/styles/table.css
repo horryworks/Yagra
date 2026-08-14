@@ -643,7 +643,7 @@ html[data-viewport='mobile'] .ytable {
 }
 
 .table-search input {
-  height: 30px;
+  height: var(--control-h);
   width: 240px;
   max-width: 100%;
   padding: 0 10px 0 28px;
@@ -950,7 +950,7 @@ html[data-viewport='mobile'] .il-right .muted {
    control. Matches `.mfilt-btn`, its counterpart in the mobile sheet's footer. */
 .clear-filters {
   padding: 0 12px;
-  min-height: var(--touch-target);
+  min-height: var(--control-h);
   background: none;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -963,4 +963,9 @@ html[data-viewport='mobile'] .il-right .muted {
 .clear-filters:hover {
   color: var(--text-primary);
   border-color: var(--accent-color);
+}
+
+/* Tap target on a phone, where it sits beside `.mfilt-btn` and both are pressed with a thumb. */
+html[data-viewport='mobile'] .clear-filters {
+  min-height: var(--touch-target);
 }

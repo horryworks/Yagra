@@ -1,5 +1,5 @@
 .field {
-  height: 30px;
+  height: var(--control-h);
   padding: 0 10px;
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);

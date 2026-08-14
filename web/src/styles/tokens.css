@@ -125,6 +125,14 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --touch-target: 44px; /* min tap target on mobile; 40px floor for secondary in-row controls */
+  /* The height every control in a toolbar or a form row shares on a DESKTOP: `.field` (inputs,
+     selects, the node/scope pickers), the toolbar's search box, and the ghost buttons beside them.
+     It was written out as a bare `30px` in each of those, and the filter buttons instead carried
+     `--touch-target` — correct on a phone, half again too tall next to a picker on a desktop, which
+     is what it looked like once they started rendering there (ADR-053 Inc.9).
+     ⚠️ Not a replacement for `--touch-target`: mobile still overrides the buttons back up to 44px,
+     because a control that is the *only* way to filter on a phone has to be pressable. */
+  --control-h: 30px;
   --font-touch-input: 16px; /* iOS Safari auto-zooms inputs < 16px on focus — pin mobile inputs here */
 
   /* ---- Light theme (default; §1.5) ---- */

@@ -58,6 +58,35 @@ for (const width of WIDTHS) {
   });
 }
 
+test.describe('the toolbar the filter button sits in', () => {
+  // Events is the pair from the report: a node picker (`.field`, the shared control height) with
+  // `Filter` and `Clear all filters` beside it. The buttons carried `--touch-target` (44px), which
+  // is right on a phone and half again too tall next to a 30px picker — and that only became
+  // visible when Inc.9 started rendering them on a desktop. Nothing else can see this: the two
+  // heights come from different files and both are individually valid.
+  test('the filter buttons are the same height as the controls beside them', async ({ page }) => {
+    // `message` is the Message column's key, and the column key *is* the URL key (ADR-053 decision
+    // 12 refuses a prefix). `msg` is the API's parameter name and does not appear in a URL.
+    await page.goto('/alerts/events?message=router');
+    const picker = page.locator('.nodepick-control.field');
+    const button = page.locator('.mfilt-btn').first();
+    const clear = page.getByRole('button', { name: /Clear all filters/ });
+    await expect(picker).toBeVisible();
+    await expect(button).toBeVisible();
+    // A filter is in the URL, so the clear button is mounted and the row is forced open.
+    await expect(clear).toBeVisible();
+
+    const boxes = await Promise.all([picker, button, clear].map((l) => l.boundingBox()));
+    const [p, b, c] = boxes.map((box) => box?.height ?? 0);
+    expect(p, 'the picker did not lay out').toBeGreaterThan(0);
+    // 1px of slop for border rounding; a mismatched token is 14px, never one.
+    expect(Math.abs(b - p), `Filter is ${b}px beside a ${p}px picker`).toBeLessThanOrEqual(1);
+    expect(Math.abs(c - p), `Clear all filters is ${c}px beside a ${p}px picker`).toBeLessThanOrEqual(
+      1,
+    );
+  });
+});
+
 test.describe('the filter popover', () => {
   // Audit is a server-side filter row on a wide table, so its last column is at the right edge —
   // the side a panel escapes from. The first column exercises the left edge in the same run.

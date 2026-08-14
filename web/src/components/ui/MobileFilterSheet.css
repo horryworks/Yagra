@@ -33,7 +33,9 @@
 .mfilt-clear,
 .mfilt-btn {
   padding: 0 12px;
-  min-height: var(--touch-target);
+  /* Toolbar height, so it lines up with the pickers and the search box it sits beside. The mobile
+     override below puts the tap target back — see the token's own note. */
+  min-height: var(--control-h);
   background: none;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -46,6 +48,25 @@
 .mfilt-btn.on {
   border-color: var(--accent-color);
   color: var(--text-primary);
+}
+
+/* On a phone this button is the ONLY way to filter the list, so it keeps the full tap target.
+   `.clear-filters` carries the same override in styles/table.css — the two are counterparts and
+   are always rendered side by side.
+   ⚠️ `.mfilt-clear` is in here too, and it is not merely along for the ride: it is the sheet's own
+   footer button, so it exists *only* in mobile layout and would otherwise have silently lost its
+   tap target to a change made for a desktop toolbar it never appears in. */
+html[data-viewport='mobile'] .mfilt-btn,
+html[data-viewport='mobile'] .mfilt-clear {
+  min-height: var(--touch-target);
+}
+
+/* Locked open because a filter is narrowing the list (ADR-053 Inc.9). Dimmed rather than removed:
+   the count it carries is still the answer to "how much is hidden", and `ClearFilters` beside it is
+   the way out. `aria-disabled`, not `disabled`, so the title stays reachable from the keyboard. */
+.mfilt-btn[aria-disabled='true'] {
+  opacity: 0.65;
+  cursor: default;
 }
 
 .mfilt-clear:disabled {
