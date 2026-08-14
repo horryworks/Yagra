@@ -14,7 +14,8 @@
     "i18n:check": "node scripts/i18n-parity.mjs",
     "generate:api": "openapi-typescript src/api/openapi.json -o src/api/schema.d.ts",
     "test:ui": "playwright test --project=ui",
-    "test:e2e": "playwright test --project=e2e"
+    "test:e2e": "playwright test --project=e2e",
+    "test:e2e:upgrade": "node tests/e2e/waitForVersion.mjs && playwright test --project=e2e"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

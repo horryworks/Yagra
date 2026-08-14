@@ -19,6 +19,16 @@ build. Both callers (`/verify` Step 18, `/flashdeploy`) build immediately before
 `npm run test:e2e` builds nothing and serves nothing — it drives whatever the deployment is running.
 It needs no `dist/` at all, which is why the stale-bundle guard steps aside for it.
 
+`npm run test:e2e:upgrade` is the same suite behind a wait. It polls `GET /api/v1/version`
+(unauthenticated, so the wait itself needs no credentials) until the deployment reports the version
+in `package.json`, then runs. It exists because a release publishes images and **nothing is running
+them** — since ADR-050 a deployment upgrades itself, when a person decides to. So the decision stays
+with the person and only the waiting is automated: `/release` arms this in the background, and the
+suite runs itself the moment the version flips. Override the target with `E2E_TARGET_VERSION`
+(**not** an argument — `npm run … -- x` would append it to `playwright`, not to the waiter), the
+cadence with `E2E_UPGRADE_POLL_MS`, and the 20-minute deadline with `E2E_UPGRADE_DEADLINE_MS`.
+Exit 2 means nobody upgraded in time; that is "not verified", not "the release is broken".
+
 ## Layout
 
 ```
