@@ -47,15 +47,17 @@
 
 /* Filter row under the header (ADR-053 Inc.6), for the screens that keep hand-rolled markup for a
    reason `DataTable` cannot serve — grouped rows, a matrix layout. It shares its caller's `COLS`
-   const with the header and every row: THREE grids, ONE binding. */
+   const with the header and every row: THREE grids, ONE binding.
+
+   ⚠️ There is deliberately no `html[data-viewport='mobile'] { display: none }` here any more. Every
+   filter row and bar is now gated by `useFilterRowVisible()` in `MobileFilterSheet.tsx`, beside the
+   `Filter (N)` button that is its other half — one decision, one language. A rule here would be a
+   second answer that happens to agree, and it would cover only the callers that use this class,
+   which is exactly how four hand-rolled rows kept drawing on a phone. */
 .ytable-filters {
   min-height: 36px;
   background: var(--bg-secondary);
   border-bottom: var(--border-width) solid var(--border-color);
-}
-
-html[data-viewport='mobile'] .ytable-filters {
-  display: none;
 }
 
 /* Sentence-case header (NO all-caps), medium weight, sticky for virtual scroll / server paging. */

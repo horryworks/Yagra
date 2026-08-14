@@ -14,7 +14,36 @@
 // comes from; a check with an invented threshold would be re-tuned the first time it inconvenienced
 // someone, and then it would guard nothing.
 
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { Page } from '@playwright/test';
+
+/** Every filter surface in the app, selected by the accessible name its own component gives it
+ *  rather than by a list of class names.
+ *
+ *  ⚠️ **A class list was the bug.** Beside `DataTable`'s `.dt-filters` and `FilterBar`'s `.fbar`
+ *  there are five hand-rolled filter rows (`grep -rn "filter.row'" src`), each with its own class
+ *  because each shares a `gridTemplateColumns` with a header this component knows nothing about.
+ *  Naming two of the seven is what let four of them keep drawing on a phone for three increments.
+ *  `role="group"` + the label is the one thing all seven already have in common — a new one gets
+ *  covered by existing, and by the same markup that makes it reachable by a screen reader. */
+const FILTER_LABELS = (() => {
+  const common = JSON.parse(
+    readFileSync(join(process.cwd(), 'src/locales/en/common.json'), 'utf8'),
+  ) as { filter?: Record<string, unknown> };
+  // Read, then checked: a renamed key would otherwise build `[aria-label="undefined"]`, which
+  // selects nothing and turns every assertion below into a vacuous pass.
+  const labels = [common.filter?.row, common.filter?.bar];
+  if (!labels.every((l) => typeof l === 'string' && l.length > 0)) {
+    throw new Error('common.json no longer has filter.row / filter.bar — this selector is stale');
+  }
+  return labels as string[];
+})();
+
+/** CSS selector matching any filter row or bar, wherever it lives. */
+export const FILTER_SURFACE = FILTER_LABELS.map(
+  (label) => `[role="group"][aria-label="${label}"]`,
+).join(', ');
 
 /** One thing wrong with one control. `where` locates it for a human; `why` is the invariant. */
 export interface FilterFinding {

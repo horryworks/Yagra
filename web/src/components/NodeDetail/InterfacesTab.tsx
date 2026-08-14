@@ -25,7 +25,11 @@ import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './in
 import { interfaceColumns } from './tabFilters';
 import { ColumnFilterCell } from '../ui/ColumnFilterCell';
 import { ClearFilters } from '../ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import {
+  MobileFilterButton,
+  MobileFilterSheet,
+  useFilterRowVisible,
+} from '../ui/MobileFilterSheet';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
 import { facetCounts } from '../../lib/filterCounts';
 import { buildPredicate } from '../../lib/filterPredicate';
@@ -35,8 +39,18 @@ const SPARK_WINDOW_SECS = 3600;
 const SPARK_STEP_SECS = 120;
 const SPARK_W = 120;
 const SPARK_H = 26;
-// Sticky list-header height, mirrored in CSS — used to keep the selected row clear of it.
-const LIST_HEAD_H = 32;
+/** The list's sticky chrome — the header and, on a desktop, the filter row under it — measured
+ *  rather than mirrored from CSS. It was a `LIST_HEAD_H = 32` constant, and both of the things a
+ *  mirror does went wrong: ADR-053 added a 34px sticky filter row below the header and nobody
+ *  updated the number, so a selected row near the top was scrolled *under* the filter row; and
+ *  mobile hides both, so the number reserved 32px of nothing. A `display: none` element measures 0,
+ *  which is exactly the answer wanted in that case. */
+function stickyChromeHeight(list: HTMLElement): number {
+  return Array.from(list.querySelectorAll('.nd-if-head, .nd-if-filters')).reduce(
+    (h, el) => h + el.getBoundingClientRect().height,
+    0,
+  );
+}
 
 /** Human oper label from ifOperStatus (1 = up). */
 function operLabel(oper: number | null, t: TFunction): string {
@@ -61,6 +75,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const filterRowVisible = useFilterRowVisible();
 
   const shown = useMemo(
     () => rows.filter(buildPredicate(columns, filters, Date.now())),
@@ -102,7 +117,8 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   // then re-clicking it to close becomes impossible. Keep the selected row scrolled flush into the
   // visible list area (just above the dock) so toggle-to-close is always one click. Computed via
   // getBoundingClientRect + scrollTop (never scrollIntoView, which can disrupt the app); the scale
-  // factor keeps it correct under any ancestor transform, and LIST_HEAD_H clears the sticky header.
+  // factor keeps it correct under any ancestor transform, and the measured sticky chrome clears
+  // whatever is pinned at the top of the list here.
   const keepSelectedInView = useCallback(() => {
     const list = listRef.current;
     if (!list) return;
@@ -111,7 +127,8 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     const lr = list.getBoundingClientRect();
     const rr = row.getBoundingClientRect();
     const scale = (list.offsetHeight ? lr.height / list.offsetHeight : 1) || 1;
-    const headH = LIST_HEAD_H * scale;
+    // Already in the same coordinate space as `lr`/`rr`, so it is NOT scaled again.
+    const headH = stickyChromeHeight(list);
     if (rr.bottom > lr.bottom) list.scrollTop += (rr.bottom - lr.bottom) / scale;
     else if (rr.top < lr.top + headH) list.scrollTop -= (lr.top + headH - rr.top) / scale;
   }, []);
@@ -183,14 +200,21 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         {/* A real filter row: same grid rule as `.nd-if-head` and `.nd-if-row` (one CSS
             declaration, three selectors — the same discipline `DataTable`'s shared template
             const enforces in TS). The two throughput columns are pictures, not values, so they
-            carry an empty cell rather than a control that could not mean anything. */}
-        <div className="nd-if-filters" role="group" aria-label={t('common:filter.row')}>
-          {cell('if_name')}
-          {cell('if_alias')}
-          {cell('oper')}
-          <div className="dt-f empty" />
-          <div className="dt-f empty" />
-        </div>
+            carry an empty cell rather than a control that could not mean anything.
+
+            Not drawn on a phone — `MobileFilterButton` above is its other half. It shipped without
+            that gate and was the worst-looking of the four: the row is `position: sticky` at
+            `top: 32px`, the height of the header, and mobile hides the header — so it pinned itself
+            halfway down the scroller and the interface rows ran through the gap above it. */}
+        {filterRowVisible && (
+          <div className="nd-if-filters" role="group" aria-label={t('common:filter.row')}>
+            {cell('if_name')}
+            {cell('if_alias')}
+            {cell('oper')}
+            <div className="dt-f empty" />
+            <div className="dt-f empty" />
+          </div>
+        )}
         {shown.map((r) => {
           const down = r.oper_status != null && r.oper_status !== 1;
           return (

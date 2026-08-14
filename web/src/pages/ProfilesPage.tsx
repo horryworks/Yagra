@@ -26,7 +26,11 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import {
+  MobileFilterButton,
+  MobileFilterSheet,
+  useFilterRowVisible,
+} from '../components/ui/MobileFilterSheet';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
@@ -43,6 +47,7 @@ const COLS = '1.8fr 1fr 120px 130px 96px';
 export function ProfilesPage() {
   const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
+  const filterRowVisible = useFilterRowVisible();
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
   const [unavailable, setUnavailable] = useState(false);
@@ -202,19 +207,26 @@ export function ProfilesPage() {
             {/* ⚠️ The SAME `COLS` const as the header and every row — three grids, one binding, the
                 discipline `DataTable` enforces for its own. This screen keeps its hand-rolled table
                 because the rows are grouped by category and `DataTable` has no group heading; the
-                trade is stated in `monitoringConfigFilters.ts`. */}
-            <div
-              className="ytable-filters"
-              style={{ gridTemplateColumns: COLS }}
-              role="group"
-              aria-label={t('common:filter.row')}
-            >
-              {filterCell('name')}
-              {filterCell('vendor')}
-              {filterCell('interval')}
-              <div className="dt-f empty" />
-              <div className="dt-f empty" />
-            </div>
+                trade is stated in `monitoringConfigFilters.ts`.
+                The mobile gate used to be a `display: none` on `.ytable-filters` in
+                `styles/table.css`. It moved here so that all seven filter surfaces read the one
+                decision in `MobileFilterSheet.tsx` — the CSS copy was correct and still cost
+                nothing to keep, but it meant "is the row visible" had two answers in two
+                languages, and the four rows that had *neither* were invisible against that. */}
+            {filterRowVisible && (
+              <div
+                className="ytable-filters"
+                style={{ gridTemplateColumns: COLS }}
+                role="group"
+                aria-label={t('common:filter.row')}
+              >
+                {filterCell('name')}
+                {filterCell('vendor')}
+                {filterCell('interval')}
+                <div className="dt-f empty" />
+                <div className="dt-f empty" />
+              </div>
+            )}
 
             {filtered.length === 0 ? (
               <div className="yt-empty">

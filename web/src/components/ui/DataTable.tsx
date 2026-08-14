@@ -12,6 +12,7 @@ import { useTranslation } from 'react-i18next';
 import { useViewportMode } from '../../lib/viewport';
 import { nextSort, type SortState } from '../../lib/tableSort';
 import { ColumnFilterCell } from './ColumnFilterCell';
+import { useFilterRowVisible } from './MobileFilterSheet';
 import type { ColumnFilterSpec, FilterState } from '../../lib/columnFilter';
 import { minTableWidth } from '../../lib/tableWidth';
 import './DataTable.css';
@@ -174,8 +175,13 @@ export function DataTable<T>({
   }, [expandedKey]);
 
   // The filter row draws only when the caller asked for it AND some column opted in — so the ~17
-  // existing call sites are unchanged down to the DOM.
-  const showFilters = !cardMode && !!filters && !!onFiltersChange && columns.some((c) => c.filter);
+  // existing call sites are unchanged down to the DOM. The mobile half of the condition is
+  // `useFilterRowVisible()` rather than `!cardMode`, so that this table and the five hand-rolled
+  // filter rows elsewhere read the *same* decision instead of five look-alikes (four of which had
+  // no decision at all — see `MobileFilterSheet.tsx`). Identical value, one source.
+  const filterRowVisible = useFilterRowVisible();
+  const showFilters =
+    filterRowVisible && !!filters && !!onFiltersChange && columns.some((c) => c.filter);
 
   const items = virtualizer.getVirtualItems();
   // Fire the page-load callback once the last virtual row is within view of the end.

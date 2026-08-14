@@ -120,3 +120,23 @@ export function MobileFilterButton<T>({
     </button>
   );
 }
+
+/**
+ * The other half of that either/or: **a filter row or bar draws exactly when the button does not.**
+ * Every surface that renders `ColumnFilterCell`s in a row asks this before rendering them.
+ *
+ * It lives here, twenty lines from the button, because the two are one decision — the same reason
+ * the button's own gate is not at its call sites. It was written out separately five times instead:
+ * `DataTable` and `FilterBar` each had their own `useViewportMode()` call (correct, and no longer
+ * duplicated), a `display: none` in `styles/table.css` covered one hand-rolled row, and the other
+ * four hand-rolled rows had nothing at all. Those four kept drawing a desktop grid on a phone —
+ * `Interfaces` stuck its row halfway down the scroller, at the height of a header mobile hides, and
+ * the interface rows scrolled through the gap above it.
+ *
+ * A hook rather than a wrapper component on purpose: these rows *are* CSS grids that share a
+ * `gridTemplateColumns` with their header, so an element wrapped around one breaks the alignment
+ * the row exists to keep.
+ */
+export function useFilterRowVisible(): boolean {
+  return useViewportMode() !== 'mobile';
+}

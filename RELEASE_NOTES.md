@@ -10,6 +10,19 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **Five screens drew a desktop column-filter row on a phone, on top of the `Filter` button that is
+  supposed to replace it.** On the node detail **Interfaces** tab the row also pinned itself
+  partway down the list — it sticks to the bottom of the column header, and the header is hidden in
+  mobile layout — so interface rows scrolled through the gap above it. The **Collection** tab,
+  both tables on **Nodes ▸ Discovery** and **Monitoring ▸ Profiles** showed the same row, with its
+  controls too narrow to read or sitting away from the columns they filter. All five now offer the
+  `Filter` sheet alone, as every other screen already did; nothing is filterable on a desktop and
+  not on a phone.
+- **Selecting an interface could scroll it under the filter row.** The Interfaces tab kept the
+  selected row clear of its own sticky header by a fixed 32px, which stopped being the full height
+  when the filter row was added below the header in v0.2.6.
+
 ## v0.2.7 — every screen filters by its own columns, and the Events search shows what it matched
 
 ### Breaking changes

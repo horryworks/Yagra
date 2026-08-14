@@ -19,9 +19,22 @@
 //      being filterable on a phone, silently.
 
 import { expect, test } from '../support/app';
-import { inspectFilterSurface, MUST_FILTER } from './filterSurface';
+import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
+import { defaultBodyFor, type Json } from '../support/openapi';
+import { FILTER_SURFACE, inspectFilterSurface, MUST_FILTER } from './filterSurface';
 
 const SCREENS = Object.keys(MUST_FILTER);
+
+/** The two node-detail tabs that hand-roll a filter row of their own. They are not routes, so the
+ *  walk's screen list cannot reach them — and both were drawing their row on a phone. */
+const NODE_ID = '00000000-0000-4000-8000-0000000000aa';
+const TABS_WITH_A_FILTER_ROW = ['interfaces', 'collection'];
+
+function deviceNode(): Json {
+  const body = defaultBodyFor(`/api/v1/nodes/${NODE_ID}`) as { kind: string };
+  body.kind = 'device';
+  return body as unknown as Json;
+}
 
 /** Widths an operator actually has. 1280 is Playwright's Desktop Chrome and the walk's default, so
  *  it is deliberately not repeated here; these are the two that bracket it.
@@ -111,6 +124,27 @@ test.describe('on a phone', () => {
     });
   });
 
+  /** The either/or, asserted in both directions. `where` names the screen for the failure text. */
+  async function expectTheSheetInsteadOfTheRow(
+    page: import('@playwright/test').Page,
+    where: string,
+  ) {
+    // Half one: the desktop surfaces are gone. Each refuses in its own component, off the same
+    // `useViewportMode()`, and the bug this catches shipped twice — first as the row and a
+    // `Filter (N)` button on a desktop, then as both of them on a phone.
+    expect(
+      await page.locator(FILTER_SURFACE).count(),
+      `${where}: a desktop filter row/bar on a phone`,
+    ).toBe(0);
+
+    // Half two: something replaced them. A screen that is filterable on a desktop and not on a
+    // phone is not a layout choice, it is a lost feature — and it looks completely normal.
+    expect(
+      await page.locator('.mfilt-btn').count(),
+      `${where}: filterable on a desktop, not filterable here`,
+    ).toBeGreaterThan(0);
+  }
+
   for (const path of SCREENS) {
     test(`${path} offers the sheet instead of the row`, async ({ page }) => {
       await page.goto(path);
@@ -120,19 +154,27 @@ test.describe('on a phone', () => {
       await expect(page.locator('.dt-row, .fbar, .mfilt-btn, .ntree-row').first()).toBeVisible({
         timeout: 15_000,
       });
-
-      // Half one: the desktop surfaces are gone. Both refuse in their own component, off the same
-      // `useViewportMode()`, and the bug this catches shipped once — the row and a `Filter (N)`
-      // button on screen together, two controls editing one state.
-      expect(await page.locator('.dt-filters').count(), `${path}: a filter row on a phone`).toBe(0);
-      expect(await page.locator('.fbar').count(), `${path}: a filter bar on a phone`).toBe(0);
-
-      // Half two: something replaced them. A screen that is filterable on a desktop and not on a
-      // phone is not a layout choice, it is a lost feature — and it looks completely normal.
-      expect(
-        await page.locator('.mfilt-btn').count(),
-        `${path}: filterable on a desktop, not filterable here`,
-      ).toBeGreaterThan(0);
+      await expectTheSheetInsteadOfTheRow(page, path);
     });
   }
+
+  // A node-detail tab is a screen with a filter row that no route names, so nothing above visits
+  // it. `Interfaces` is where the defect was reported from: its row is `position: sticky` at the
+  // height of a header that mobile hides, so the rows scrolled through the gap above it.
+  test.describe('a node detail tab', () => {
+    test.use({
+      mockConfig: {
+        overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/nodes/{node_id}': () => deviceNode() },
+      },
+    });
+
+    for (const tab of TABS_WITH_A_FILTER_ROW) {
+      test(`${tab} offers the sheet instead of the row`, async ({ page }) => {
+        await page.goto(`/nodes/${NODE_ID}?tab=${tab}`);
+        await expect(page.getByRole('tab').first()).toBeVisible({ timeout: 15_000 });
+        await expect(page.locator('.mfilt-btn').first()).toBeVisible({ timeout: 15_000 });
+        await expectTheSheetInsteadOfTheRow(page, `?tab=${tab}`);
+      });
+    }
+  });
 });

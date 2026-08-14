@@ -36,7 +36,11 @@ import {
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import {
+  MobileFilterButton,
+  MobileFilterSheet,
+  useFilterRowVisible,
+} from '../components/ui/MobileFilterSheet';
 import {
   defaultFilters,
   isAnyFiltered,
@@ -88,6 +92,7 @@ interface RowState {
 export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
+  const filterRowVisible = useFilterRowVisible();
   const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
   const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -342,15 +347,35 @@ export function DiscoveryPage() {
                 into would take the row out from under the cursor.
                 ⚠️ A reachability control was put in that 28px track and shipped unusable, which is
                 what a filter row costs when nothing renders it in a test. It is gone rather than
-                relocated; `discoveryFilters.ts` says why. */}
-            <div className="disco-filters" role="group" aria-label={t('common:filter.row')}>
-              <div className="dt-f empty" />
-              {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'address')}
-              {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'identity')}
-              <div className="dt-f empty" />
-              <div className="dt-f empty" />
-              <div className="dt-f empty" />
-            </div>
+                relocated; `discoveryFilters.ts` says why.
+                Not drawn on a phone (`MobileFilterButton` is the other half): mobile re-templates
+                `.disco-head` and `.disco-row` to fixed px + `width: max-content` and scrolls them
+                sideways, and it named two of the three grids — so this row stayed at container
+                width and every control sat somewhere other than under its column. */}
+            {filterRowVisible && (
+              <div className="disco-filters" role="group" aria-label={t('common:filter.row')}>
+                <div className="dt-f empty" />
+                {filterCell(
+                  candCols,
+                  filters,
+                  setFilters,
+                  candCounts,
+                  candidateLabels(t),
+                  'address',
+                )}
+                {filterCell(
+                  candCols,
+                  filters,
+                  setFilters,
+                  candCounts,
+                  candidateLabels(t),
+                  'identity',
+                )}
+                <div className="dt-f empty" />
+                <div className="dt-f empty" />
+                <div className="dt-f empty" />
+              </div>
+            )}
             {shownCandidates.map((c) => {
               const r = rowState[c.address];
               if (!r) return null;
@@ -466,6 +491,7 @@ function SeenOnNetworkCard({
   creds: CredentialSummary[];
 }) {
   const { t } = useTranslation('monitoring');
+  const filterRowVisible = useFilterRowVisible();
   const [page, setPage] = useState<DiscoveredEndpointPage | null>(null);
   const [rows, setRows] = useState<Record<string, { profile_id: string; credential_id: string }>>(
     {},
@@ -584,16 +610,20 @@ function SeenOnNetworkCard({
             <div className="disco-h">{t('discovery.cols.credential')}</div>
             <div className="disco-h" />
           </div>
-          {/* Same CSS grid rule as the header and every row. The profile and credential columns
-              are the import form's own inputs, and the last is the button. */}
-          <div className="disco-seen-filters" role="group" aria-label={t('common:filter.row')}>
-            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'ip')}
-            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'mac')}
-            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'via')}
-            <div className="dt-f empty" />
-            <div className="dt-f empty" />
-            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'monitored')}
-          </div>
+          {/* Same CSS grid rule as the header and every row, and the same mobile story as the
+              candidates table above — this one is hidden on a phone for the same reason. The
+              profile and credential columns are the import form's own inputs, and the last is the
+              button. */}
+          {filterRowVisible && (
+            <div className="disco-seen-filters" role="group" aria-label={t('common:filter.row')}>
+              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'ip')}
+              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'mac')}
+              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'via')}
+              <div className="dt-f empty" />
+              <div className="dt-f empty" />
+              {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'monitored')}
+            </div>
+          )}
           {endpoints.map((e) => {
             const r = rows[e.id] ?? { profile_id: '', credential_id: '' };
             return (

@@ -20,7 +20,7 @@
 import { useTranslation } from 'react-i18next';
 import { ColumnFilterCell } from './ColumnFilterCell';
 import type { FilterState, FilterableColumn } from '../../lib/columnFilter';
-import { useViewportMode } from '../../lib/viewport';
+import { useFilterRowVisible } from './MobileFilterSheet';
 import './FilterBar.css';
 
 interface Props<T> {
@@ -39,8 +39,8 @@ interface Props<T> {
 /**
  * The bar. **Renders nothing on mobile**, and that gate lives here rather than at each call site.
  *
- * `MobileFilterButton` is the other half of the same either/or and decides it off the same
- * `useViewportMode()`. Leaving the choice to the caller is exactly how the filter row first shipped
+ * `useFilterRowVisible` is the other half of `MobileFilterButton`'s either/or, and the two are
+ * declared in the same file. Leaving the choice to the caller is exactly how the filter row shipped
  * showing `Filter (N)` *and* the row underneath — two controls editing one state — so the rule is
  * that the two halves of one decision stay in one language.
  */
@@ -53,8 +53,8 @@ export function FilterBar<T>({
   onFilterOpen,
 }: Props<T>) {
   const { t } = useTranslation('common');
-  const mode = useViewportMode();
-  if (mode === 'mobile' || columns.length === 0) return null;
+  const visible = useFilterRowVisible();
+  if (!visible || columns.length === 0) return null;
   return (
     <div className="fbar" role="group" aria-label={t('filter.bar')}>
       {columns.map((c) => {
