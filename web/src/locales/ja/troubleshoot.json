@@ -88,7 +88,7 @@
   },
   "findings": {
     "pageNote": "これまでの全実行で見つかった検出結果（新しい順）",
-    "signInPrompt": "保存された検出結果を検索するにはサインインしてください。",
+    "signInPrompt": "検出結果を検索するにはサインインしてください。",
     "fleetWide": "フリート全体",
     "finding_other": "検出結果",
     "cols": {

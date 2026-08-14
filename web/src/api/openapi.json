@@ -500,7 +500,7 @@
         "tags": [
           "analysis"
         ],
-        "summary": "Findings across every run — the Saved-findings screen.",
+        "summary": "Findings across every run — the WebUI's All-findings screen.",
         "description": "Complements `GET /analysis/jobs/{id}/findings`, which answers \"what did this run find\". This one\nanswers the question an operator actually starts from — \"has anything been found about this node\n/ this site / this week\" — which no single run can answer because the runs are what get\nenumerated otherwise.\n\nSkeleton mode has no job store, so it answers an empty list rather than a 503: the screen is a\nsearch, and an error where \"nothing yet\" is the truthful answer reads as a broken page.",
         "operationId": "saved_findings",
         "parameters": [

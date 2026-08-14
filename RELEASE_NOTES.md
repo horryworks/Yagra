@@ -126,6 +126,11 @@
   filters".
 
 ### Improvements
+- **Troubleshoot ▸ "Saved findings" is now "All findings".** The old name promised a step that does
+  not exist: findings are written the instant a run completes, there is nothing to save and no
+  button to look for. The screen shows every finding from every run until that run is pruned
+  (Settings ▸ Retention, "Diagnostic", default 90 days). Only the label changed — the URL,
+  `GET /api/v1/analysis/findings` and the `SavedFinding` schema name are untouched.
 - **The Credentials type filter now offers every kind that is in the table.** It listed three, so
   an `http_auth` credential — or a Meraki API key, which the integration creates rather than an
   operator — could sit in the list and not be filterable at all.

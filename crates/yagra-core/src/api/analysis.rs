@@ -559,7 +559,7 @@ pub(crate) struct SavedFindingsQuery {
     pub(crate) limit: Option<i64>,
 }
 
-/// Findings across every run — the Saved-findings screen.
+/// Findings across every run — the WebUI's All-findings screen.
 ///
 /// Complements `GET /analysis/jobs/{id}/findings`, which answers "what did this run find". This one
 /// answers the question an operator actually starts from — "has anything been found about this node

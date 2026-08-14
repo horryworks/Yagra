@@ -90,7 +90,7 @@
   },
   "findings": {
     "pageNote": "Everything the analyses have found, newest first — across every run",
-    "signInPrompt": "Sign in to search saved findings.",
+    "signInPrompt": "Sign in to search findings.",
     "fleetWide": "Fleet-wide",
     "finding_one": "finding",
     "finding_other": "findings",

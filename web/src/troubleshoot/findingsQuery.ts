@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Saved findings — the query logic behind `/troubleshoot/findings`, as pure functions.
+// All findings — the query logic behind `/troubleshoot/findings`, as pure functions.
+// (The screen was "Saved findings" until 2026-08-14; `SavedFindingsPage.tsx` records why the code
+// name kept the old word and the label did not.)
 //
 // Here rather than in the page because Vitest runs `environment: 'node'` with
 // `include: ['src/**/*.test.ts']`, so a test written beside a `.tsx` is a file nothing runs
@@ -62,9 +64,13 @@ export interface FindingFilters {
 /**
  * The default view: a week, unfiltered.
  *
- * Not `all`. The findings table only grows — nothing prunes `analysis_findings` today — so an
- * unbounded default would get slower for the life of the deployment, and the first screen an
+ * Not `all`. An unbounded default would get slower as the table fills, and the first screen an
  * operator opens is the wrong place to discover that.
+ *
+ * ⚠️ This used to say "nothing prunes `analysis_findings`", and that is no longer true — findings
+ * cascade from `analysis_jobs`, which `retention::Subject::AnalysisRuns` trims at `diagnostic_days`
+ * (default 90). The *ceiling* is therefore bounded; the default stays 7d anyway because scheduled
+ * analyses fill 90 days steadily and the operator's question is almost always "this week".
  */
 export const DEFAULT_FILTERS: FindingFilters = {
   tool: '',
@@ -175,7 +181,7 @@ export function isFiltered(f: FindingFilters): boolean {
 }
 
 /**
- * The Troubleshoot ▸ Saved findings filter row, keyed by `Column.key` (ADR-053 Inc.4).
+ * The Troubleshoot ▸ All findings filter row, keyed by `Column.key` (ADR-053 Inc.4).
  *
  * The keys are the API's parameter names (`tool` / `severity` / `q` / `node_q` / `range`); the
  * columns were `tool`, `severity`, `node`, `what` and `at`, so three were renamed.

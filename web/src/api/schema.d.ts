@@ -115,7 +115,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Findings across every run — the Saved-findings screen.
+         * Findings across every run — the WebUI's All-findings screen.
          * @description Complements `GET /analysis/jobs/{id}/findings`, which answers "what did this run find". This one
          *     answers the question an operator actually starts from — "has anything been found about this node
          *     / this site / this week" — which no single run can answer because the runs are what get

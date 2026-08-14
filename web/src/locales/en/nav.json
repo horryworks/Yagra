@@ -40,7 +40,7 @@
     "all": "Tools",
     "runs": "Analysis runs",
     "scheduled": "Scheduled",
-    "findings": "Saved findings"
+    "findings": "All findings"
   },
   "settings": {
     "systemHealth": "System health",

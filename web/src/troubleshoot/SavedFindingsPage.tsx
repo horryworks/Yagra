@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Saved findings (`/troubleshoot/findings`) — everything the analyses have found, across runs.
+// All findings (`/troubleshoot/findings`) — everything the analyses have found, across runs.
 //
 // The runs list next door answers "what did I run"; this answers the question an operator actually
 // starts from — "has anything been found about this node / this site / this week" — which no single
 // run can answer, because otherwise finding out means opening runs one at a time.
+//
+// ⚠️ **The screen was called "Saved findings" until 2026-08-14, and the file, the type and the URL
+// still carry that word.** The label was wrong: it named an action that does not exist. Findings are
+// written by `AnalysisRepo::insert_findings` the instant a run completes — there is no save step,
+// nothing to opt into, and a user reading "Saved" reasonably went looking for the button. What is
+// actually here is every finding from every run, until the run is pruned (`diagnostic_days`,
+// default 90). The code name stays `SavedFinding` because it is a **published OpenAPI schema name**
+// (ADR-035): renaming it would break every generated client to fix a label. The divergence is
+// deliberate, and this comment is the thing that keeps it from reading as drift.
 //
 // Data-table standard v2: a toolbar (scope + tool + severity + range + count) over the shared
 // virtualized `DataTable`, keyset-paged (ADR-019) — the findings table only grows. Every decision

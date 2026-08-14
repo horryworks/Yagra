@@ -40,7 +40,7 @@
     "all": "診断ツール",
     "runs": "分析ジョブ",
     "scheduled": "定期実行",
-    "findings": "保存済み分析結果"
+    "findings": "すべての検出結果"
   },
   "settings": {
     "systemHealth": "システムヘルス",

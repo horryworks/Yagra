@@ -1338,7 +1338,12 @@ impl AnalysisRunner {
         self.repo.findings(id).await
     }
 
-    /// Findings across every run (the Saved-findings search).
+    /// Findings across every run (the All-findings search).
+    ///
+    /// ⚠️ The row type is still `SavedFinding` and stays that way: it is a published OpenAPI schema
+    /// name, so renaming it would break every generated client to fix a label. The **screen** was
+    /// renamed because "Saved" promised an action that does not exist — findings are written by
+    /// `insert_findings` the moment a run completes, and there is nothing to save.
     pub async fn search_findings(
         &self,
         q: &FindingSearch<'_>,
