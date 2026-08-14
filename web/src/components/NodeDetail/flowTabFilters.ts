@@ -21,7 +21,7 @@ import {
   type ColumnFilterSpec,
   type FilterableColumn,
 } from '../../lib/columnFilter';
-import { PROTO_NAMES, portLabel, protoName } from '../../lib/flowLabels';
+import { PROTO_NAMES, portLabel } from '../../lib/flowLabels';
 import type { TFunction } from 'i18next';
 
 /**
@@ -168,9 +168,4 @@ export function toggleFlowValue(
  *  5-minute rollup carries only `proto`. The tab says so rather than letting the chart look wrong. */
 export function chartIgnoresFilters(state: Record<string, string>): boolean {
   return Boolean(state.port?.trim() || state.peer?.trim() || state.asn?.trim());
-}
-
-/** The protocol label for a stored token, for the places that render a chip outside the cell. */
-export function protoTokenLabel(token: string): string {
-  return protoName(Number(token));
 }

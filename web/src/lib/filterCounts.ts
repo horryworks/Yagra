@@ -15,7 +15,7 @@
 // polling and alert evaluation; firing five aggregate queries per page load to decorate checkboxes
 // nobody clicked is the shape that starves the poller.
 
-import { decodeSet, type FilterState, type FilterableColumn } from './columnFilter';
+import { type FilterState, type FilterableColumn } from './columnFilter';
 import { buildPredicate } from './filterPredicate';
 
 /** The rows a column's facet counts are computed over: everything passing the *other* filters. */
@@ -64,10 +64,4 @@ export function facetCounts<T>(
     }
   }
   return counts;
-}
-
-/** How many rows a given option would leave, were it the only thing selected in its column. Used by
- *  the popover to grey an option that cannot narrow anything further. */
-export function optionIsSelected(value: string, token: string): boolean {
-  return decodeSet(value).includes(token);
 }

@@ -3,11 +3,16 @@
 // (the column filter row, MibRepositoryPage, NodesPage, NodePicker, GlobalSearch, ScopePicker, FlowTab,
 // CollectionEditor) — and the filter work was about to add twenty more.
 //
-// Deliberately holds no judgement, because nothing can test it: Vitest runs `environment: 'node'`
-// (testing.md), so `renderHook` is unavailable and a `.tsx` test is a file nothing runs. Everything
-// that decides *what is asked for* belongs in a plain `.ts` beside the screen — see
-// `lib/filterQuery.ts` and `troubleshoot/findingsQuery.ts`. Keep this file boring enough that its
-// untestability costs nothing.
+// Deliberately holds no judgement — everything that decides *what is asked for* belongs in a plain
+// `.ts` beside the screen (see `lib/filterQuery.ts` and `troubleshoot/findingsQuery.ts`), so all
+// this file owes is the timer.
+//
+// ⚠️ It used to say here that nothing could test it, because Vitest runs `environment: 'node'`. That
+// was wrong, and the correction is worth keeping: the ban in `testing.md` is on `.tsx` test files —
+// Vitest's `include` is `src/**/*.test.ts`, so a `.tsx` test is never executed — **not** on hooks. A
+// `.ts` test opting in with `// @vitest-environment jsdom` gets `renderHook`, which is how a dozen
+// hooks here are tested and how `useDebouncedValue.test.ts` covers the two properties that are
+// invisible from a screen: which dependency re-arms the timer, and that `ms = 0` is still a tick.
 
 import { useEffect, useState } from 'react';
 
