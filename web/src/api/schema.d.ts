@@ -13060,13 +13060,33 @@ export interface operations {
     get_flow_conversations: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -13116,13 +13136,33 @@ export interface operations {
     get_flow_protocols: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -13172,13 +13212,33 @@ export interface operations {
     get_flow_series: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -13228,13 +13288,33 @@ export interface operations {
     get_flow_top_as: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -13284,13 +13364,33 @@ export interface operations {
     get_flow_top_ports: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -13340,13 +13440,33 @@ export interface operations {
     get_flow_top_talkers: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -17033,13 +17153,33 @@ export interface operations {
     get_node_flow_conversations: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -17092,13 +17232,33 @@ export interface operations {
     get_node_flow_protocols: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -17151,13 +17311,33 @@ export interface operations {
     get_node_flow_series: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -17210,13 +17390,33 @@ export interface operations {
     get_node_flow_top_as: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -17269,13 +17469,33 @@ export interface operations {
     get_node_flow_top_ports: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;
@@ -17328,13 +17548,33 @@ export interface operations {
     get_node_flow_top_talkers: {
         parameters: {
             query?: {
+                /** @description Window start, Unix seconds. Defaults to one hour before `to`. */
                 from?: number;
+                /** @description Window end, Unix seconds. Defaults to now. */
                 to?: number;
+                /** @description Maximum rows for a top-N aggregation. Clamped to 1..=1000. */
                 limit?: number;
+                /**
+                 * @description IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+                 *     not a protocol number is rejected rather than ignored.
+                 */
                 proto?: string;
+                /**
+                 * @description Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+                 *     not a port is rejected rather than ignored.
+                 */
                 port?: string;
+                /**
+                 * @description Peer addresses to include, comma-separated. A row matches when one of these is its source
+                 *     **or** its destination. At most 8; a value that is not an IP address is rejected.
+                 */
                 peer?: string;
+                /**
+                 * @description AS numbers to include, comma-separated. A row matches when one of these is its source or
+                 *     destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
+                 */
                 asn?: string;
+                /** @description Which AS side `top-as` aggregates on: `src`, or `dst` (the default). */
                 dir?: string;
             };
             header?: never;

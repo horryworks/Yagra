@@ -70,7 +70,11 @@ pub struct FlowRow {
 /// A top-N flow query: an optional node scope, a time window, a result cap, and optional drill-down
 /// filters. Filters are strongly typed (never raw strings) so nothing device-supplied is
 /// interpolated.
-#[derive(Debug, Clone, Copy)]
+///
+/// ⚠️ No longer `Copy` — the filters became `Vec`s in ADR-053 Inc.8. Callers that used to rely on an
+/// implicit copy now `clone()`, which is what a fan-out of six queries over one filter set wants
+/// anyway.
+#[derive(Debug, Clone)]
 pub struct FlowQuery {
     /// Node whose flows to query; `None` aggregates across every exporter (fleet-wide).
     pub node_id: Option<Uuid>,
@@ -80,14 +84,22 @@ pub struct FlowQuery {
     pub to_unix_ms: i64,
     /// Max rows to return (clamped).
     pub limit: u32,
-    /// Optional IP-protocol filter.
-    pub proto: Option<u8>,
-    /// Optional destination-port filter.
-    pub dst_port: Option<u16>,
-    /// Optional peer filter — rows where this address is the source or the destination.
-    pub peer: Option<IpAddr>,
-    /// Optional AS filter — rows where this ASN is the source or the destination AS (0 = unknown).
-    pub asn: Option<u32>,
+    // The four drill-down filters. Empty = no filter; several values in one = a disjunction
+    // (`IN (…)`); values across two = a conjunction. ADR-053 Inc.8 widened these from `Option<T>`,
+    // because a multi-select control over a single-valued query is the failure `EnumFilterSpec.single`
+    // used to guard: three boxes ticked, one value sent, rows missing with nothing saying so.
+    //
+    // ⚠️ They are typed integers and `IpAddr`, not strings, and [`flow_filters_sql`] interpolates
+    // them directly. That is what keeps the interpolation safe — see its doc comment before changing
+    // any of these to `String`.
+    /// IP protocols to include (empty = every protocol).
+    pub proto: Vec<u8>,
+    /// Destination ports to include (empty = every port).
+    pub dst_port: Vec<u16>,
+    /// Peers to include — rows where one of these is the source **or** the destination.
+    pub peer: Vec<IpAddr>,
+    /// ASNs to include — rows where one of these is the source or destination AS (0 = unknown).
+    pub asn: Vec<u32>,
 }
 
 /// Which AS side a top-AS query aggregates on. A typed enum (never interpolated raw) so only a
@@ -112,7 +124,7 @@ impl AsDir {
 
 /// A flow trend query: one node and a time window (5-minute rollup granularity). The rollup carries
 /// only `proto`, so of the fact-table filters only a protocol filter can apply to the trend.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FlowSeriesQuery {
     /// Node whose trend to query; `None` aggregates across every exporter (fleet-wide).
     pub node_id: Option<Uuid>,
@@ -120,8 +132,10 @@ pub struct FlowSeriesQuery {
     pub from_unix_ms: i64,
     /// Window end (Unix ms, inclusive).
     pub to_unix_ms: i64,
-    /// Optional IP-protocol filter (the only fact-table filter the rollup supports).
-    pub proto: Option<u8>,
+    /// IP protocols to include (empty = every protocol) — the only fact-table filter the rollup can
+    /// answer, which is why the Flow tab tells the operator that a port/peer/AS drill-down does not
+    /// narrow the chart.
+    pub proto: Vec<u8>,
 }
 
 /// A top-talker: one host address with summed traffic.
@@ -337,25 +351,49 @@ fn node_scope_sql(node_id: Option<Uuid>) -> String {
     }
 }
 
-/// Build the optional fact-table filter fragment (`AND …`) for a [`FlowQuery`]. Only typed values
-/// are interpolated: `proto`/`dst_port` are integers and `peer` is a validated [`IpAddr`] rendered
-/// via [`ip_to_ch`] — no device-supplied string ever reaches SQL.
+/// Build the optional fact-table filter fragment (`AND …`) for a [`FlowQuery`].
+///
+/// **This is string interpolation, not a bind, and that is safe for exactly one reason: every value
+/// here has already been parsed into a type that cannot carry SQL** — `proto`/`dst_port`/`asn` are
+/// integers and `peer` is a validated [`IpAddr`] rendered via [`ip_to_ch`]. ADR-053 Inc.8 widened
+/// these to sets, and the property survives *because the set is a `Vec<u16>`, never a `Vec<String>`*.
+/// The API edge (`api/flow.rs::flow_query_params`) is where a token becomes a number or a 400.
+/// **If you ever make one of these a `String`, this function stops being safe.**
+///
+/// Each set is `IN (…)` — a disjunction within a column, ANDed across columns, which is what the
+/// four drill-downs mean together ("TCP or UDP, on port 443, with this peer").
 fn flow_filters_sql(q: &FlowQuery) -> String {
     let mut s = String::new();
-    if let Some(p) = q.proto {
-        s.push_str(&format!(" AND proto = {p}"));
+    if !q.proto.is_empty() {
+        s.push_str(&format!(" AND proto IN ({})", join_nums(&q.proto)));
     }
-    if let Some(port) = q.dst_port {
-        s.push_str(&format!(" AND dst_port = {port}"));
+    if !q.dst_port.is_empty() {
+        s.push_str(&format!(" AND dst_port IN ({})", join_nums(&q.dst_port)));
     }
-    if let Some(peer) = q.peer {
-        let ip = ip_to_ch(peer);
-        s.push_str(&format!(" AND (src_ip = '{ip}' OR dst_ip = '{ip}')"));
+    if !q.peer.is_empty() {
+        let ips = q
+            .peer
+            .iter()
+            .map(|p| format!("'{}'", ip_to_ch(*p)))
+            .collect::<Vec<_>>()
+            .join(",");
+        s.push_str(&format!(" AND (src_ip IN ({ips}) OR dst_ip IN ({ips}))"));
     }
-    if let Some(asn) = q.asn {
-        s.push_str(&format!(" AND (src_as = {asn} OR dst_as = {asn})"));
+    if !q.asn.is_empty() {
+        let asns = join_nums(&q.asn);
+        s.push_str(&format!(" AND (src_as IN ({asns}) OR dst_as IN ({asns}))"));
     }
     s
+}
+
+/// Render a set of integers as a SQL list. Generic over the integer type so the three numeric sets
+/// share one implementation rather than three `map(|x| x.to_string())` chains that could each grow a
+/// different quoting mistake.
+fn join_nums<T: std::fmt::Display>(vals: &[T]) -> String {
+    vals.iter()
+        .map(std::string::ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Build the top-conversations SQL. The AS aggregates are aliased to `src_asn`/`dst_asn` — **never**
@@ -761,10 +799,11 @@ impl FlowStore for ChStore {
     async fn series(&self, q: &FlowSeriesQuery) -> anyhow::Result<Vec<FlowPoint>> {
         let (from, to) = window_secs(q.from_unix_ms, q.to_unix_ms);
         // The rollup carries only proto, so only a protocol filter can apply to the trend.
-        let proto_filter = q
-            .proto
-            .map(|p| format!(" AND proto = {p}"))
-            .unwrap_or_default();
+        let proto_filter = if q.proto.is_empty() {
+            String::new()
+        } else {
+            format!(" AND proto IN ({})", join_nums(&q.proto))
+        };
         let scope = node_scope_sql(q.node_id);
         let sql = format!(
             "SELECT toUnixTimestamp(ts) AS t, proto, sum(bytes) AS bytes, sum(packets) AS packets
@@ -837,7 +876,17 @@ impl InMemoryFlowStore {
         self.len() == 0
     }
 
+    /// The fake's mirror of [`flow_filters_sql`]. **An empty set means "no filter" and a non-empty
+    /// one means membership — the same rule the SQL's `IN (…)` follows.** Getting the empty case
+    /// backwards here would make the fake *narrower* than the engine and every test would still
+    /// pass; getting the non-empty case wrong would make it wider, which is the direction that ships
+    /// a bug (a fake that matched more than the real store is exactly how the event-search predicate
+    /// went wrong once).
     fn in_window(&self, q: &FlowQuery) -> Vec<FlowRow> {
+        /// `true` when the set does not narrow, or when the row's value is in it.
+        fn allows<T: PartialEq>(set: &[T], value: &T) -> bool {
+            set.is_empty() || set.contains(value)
+        }
         self.rows
             .lock()
             .expect("flow fake mutex poisoned")
@@ -846,11 +895,13 @@ impl InMemoryFlowStore {
                 q.node_id.is_none_or(|n| r.node_id == n)
                     && r.ts_unix_ms >= q.from_unix_ms
                     && r.ts_unix_ms <= q.to_unix_ms
-                    && q.proto.is_none_or(|p| r.proto == p)
-                    && q.dst_port.is_none_or(|port| r.dst_port == port)
-                    && q.peer
-                        .is_none_or(|peer| r.src_ip == peer || r.dst_ip == peer)
-                    && q.asn.is_none_or(|a| r.src_as == a || r.dst_as == a)
+                    && allows(&q.proto, &r.proto)
+                    && allows(&q.dst_port, &r.dst_port)
+                    // Peer and AS match on **either** end, so they cannot go through `allows`.
+                    && (q.peer.is_empty()
+                        || q.peer.contains(&r.src_ip)
+                        || q.peer.contains(&r.dst_ip))
+                    && (q.asn.is_empty() || q.asn.contains(&r.src_as) || q.asn.contains(&r.dst_as))
             })
             .cloned()
             .collect()
@@ -1010,10 +1061,10 @@ impl FlowStore for InMemoryFlowStore {
             from_unix_ms: q.from_unix_ms,
             to_unix_ms: q.to_unix_ms,
             limit: u32::MAX,
-            proto: q.proto,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: q.proto.clone(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         use std::collections::BTreeMap;
         let mut agg: BTreeMap<(i64, u8), (u64, u64)> = BTreeMap::new();
@@ -1156,10 +1207,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 100_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: Some(15169),
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: vec![15169],
         };
         let sql = conversations_sql(&q);
         // No aggregate is aliased *exactly* to a filtered column (the collision is `AS src_as,` /
@@ -1174,11 +1225,57 @@ mod tests {
         );
         assert!(sql.contains("any(src_as) AS src_asn"), "{sql}");
         assert!(sql.contains("any(dst_as) AS dst_asn"), "{sql}");
-        // The asn filter still references the real columns (so it actually narrows).
+        // The asn filter still references the real columns (so it actually narrows). Spelled
+        // `IN (…)` since ADR-053 Inc.8 widened the drill-downs to sets — a one-value set is still a
+        // set, which is what keeps this one SQL shape rather than two.
         assert!(
-            sql.contains("AND (src_as = 15169 OR dst_as = 15169)"),
+            sql.contains("AND (src_as IN (15169) OR dst_as IN (15169))"),
             "{sql}"
         );
+    }
+
+    #[test]
+    fn a_drill_down_set_is_a_disjunction_within_a_column_and_a_conjunction_across_them() {
+        // What the four filters mean together: "TCP or UDP, on 80 or 443". Written against the SQL
+        // because the ClickHouse path has no test double — the in-memory fake mirrors this, and
+        // `in_window` carries the note about which direction a mismatch breaks in.
+        let q = FlowQuery {
+            node_id: None,
+            from_unix_ms: 0,
+            to_unix_ms: 100_000,
+            limit: 10,
+            proto: vec![6, 17],
+            dst_port: vec![80, 443],
+            peer: vec!["10.0.0.1".parse().unwrap()],
+            asn: Vec::new(),
+        };
+        let sql = flow_filters_sql(&q);
+        assert!(sql.contains(" AND proto IN (6,17)"), "{sql}");
+        assert!(sql.contains(" AND dst_port IN (80,443)"), "{sql}");
+        // A peer matches at either end, so its set appears twice — once per side. ⚠️ The rendering
+        // is `ip_to_ch`'s, not `Display`'s: the column is IPv6 and a v4 address arrives as its
+        // v4-mapped form (`::ffff:10.0.0.1`). Asserting the plain form here failed, which is the
+        // test doing its job — a hand-written IPv4 literal would not have matched a single row.
+        let mapped = ip_to_ch("10.0.0.1".parse().unwrap());
+        assert!(
+            sql.contains(&format!(
+                "AND (src_ip IN ('{mapped}') OR dst_ip IN ('{mapped}'))"
+            )),
+            "{sql}"
+        );
+        // An empty set contributes nothing at all — not `IN ()`, which ClickHouse would reject.
+        assert!(
+            !sql.contains("src_as"),
+            "an unset filter must emit no clause: {sql}"
+        );
+
+        let none = flow_filters_sql(&FlowQuery {
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            ..q
+        });
+        assert_eq!(none, "", "no filters means no fragment");
     }
 
     #[test]
@@ -1196,10 +1293,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 100_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         let sql = conversations_sql(&q);
         assert!(
@@ -1242,10 +1339,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         // Fleet-wide aggregates across both exporters' nodes.
         assert_eq!(store.top_talkers(&q).await.unwrap().len(), 2);
@@ -1294,10 +1391,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         let talkers = store.top_talkers(&q).await.unwrap();
         assert_eq!(talkers[0].addr, "10.0.0.2");
@@ -1332,10 +1429,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         let convos = store.top_conversations(&q).await.unwrap();
         assert_eq!(convos[0].src_asn, 0);
@@ -1362,7 +1459,7 @@ mod tests {
             node_id: Some(node),
             from_unix_ms: 0,
             to_unix_ms: 1_000_000,
-            proto: None,
+            proto: Vec::new(),
         };
         let pts = store.series(&q).await.unwrap();
         assert_eq!(pts.len(), 2);
@@ -1407,10 +1504,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         let top = store.top_as(&q, AsDir::Dst).await.unwrap();
         assert_eq!(top.len(), 2);
@@ -1420,8 +1517,8 @@ mod tests {
 
         // Protocol filter (UDP) narrows to just the Cloudflare AS.
         let q_udp = FlowQuery {
-            proto: Some(17),
-            ..q
+            proto: vec![17],
+            ..q.clone()
         };
         let udp = store.top_as(&q_udp, AsDir::Dst).await.unwrap();
         assert_eq!(udp.len(), 1);
@@ -1429,8 +1526,8 @@ mod tests {
 
         // Peer filter (a specific destination host) narrows the port view.
         let q_peer = FlowQuery {
-            peer: Some("1.1.1.1".parse().unwrap()),
-            ..q
+            peer: vec!["1.1.1.1".parse().unwrap()],
+            ..q.clone()
         };
         let ports = store.top_ports(&q_peer).await.unwrap();
         assert_eq!(ports.len(), 1);
@@ -1438,8 +1535,8 @@ mod tests {
 
         // AS filter narrows every view to flows touching that ASN (as src or dst).
         let q_asn = FlowQuery {
-            asn: Some(13335),
-            ..q
+            asn: vec![13335],
+            ..q.clone()
         };
         let as_only = store.top_as(&q_asn, AsDir::Dst).await.unwrap();
         assert_eq!(as_only.len(), 1);
@@ -1468,10 +1565,10 @@ mod tests {
             from_unix_ms: 0,
             to_unix_ms: 10_000,
             limit: 10,
-            proto: None,
-            dst_port: None,
-            peer: None,
-            asn: None,
+            proto: Vec::new(),
+            dst_port: Vec::new(),
+            peer: Vec::new(),
+            asn: Vec::new(),
         };
         let fan = store.fanout_by_src(&q).await.unwrap();
         // Highest fan-out first: the scanner leads with 3 distinct destinations / 3 ports.

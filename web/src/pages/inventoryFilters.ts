@@ -51,8 +51,11 @@ export const NODE_STATE_FILTERS: readonly NodeState[] = DISPLAY_ORDER;
  * browser holds no copy of the fleet to re-check them against. `buildPredicate` is never called on
  * this screen, so the accessor would be dead weight that the next reader would take as an
  * invitation to filter locally — which would silently answer "of the folders you have opened".
- * (An `enum` spec requires `readValue`, so each supplies one that reports nothing rather than
- * guessing; see the note on each.)
+ *
+ * ⚠️ They each carried `readValue: () => null` until ADR-053 Inc.8, because the type demanded one.
+ * That placeholder was not neutral: `null` means "this row has no value", so a predicate built over
+ * it would have **rejected every row** rather than skipping the column. The accessor is optional now
+ * and omitting it is what says "server-side" — the same spelling `readTime` and `readNumber` use.
  *
  * `pool` is the odd one: the option list is the deployment's live pools, passed in, because pools
  * are named by the operator and there is no enum to enumerate.
@@ -61,24 +64,20 @@ export function inventoryFilterSpecs(
   t: TFunction,
   pools: readonly { name: string }[],
 ): Record<string, ColumnFilterSpec<never>> {
-  const serverSide = () => null;
   return {
     state: {
       kind: 'enum',
       options: NODE_STATE_FILTERS.map((s) => ({ value: s, label: t(`format:state.${s}`) })),
-      readValue: serverSide,
       allLabel: t('inventory.filter.allStates'),
     },
     kind: {
       kind: 'enum',
       options: NODE_KINDS.map((k) => ({ value: k, label: t(NODE_KIND_SPEC[k].labelKey) })),
-      readValue: serverSide,
       allLabel: t('inventory.filter.allKinds'),
     },
     pool: {
       kind: 'enum',
       options: pools.map((p) => ({ value: p.name, label: p.name })),
-      readValue: serverSide,
       allLabel: t('inventory.filter.allPools'),
     },
   };

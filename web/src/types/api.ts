@@ -1064,12 +1064,18 @@ export type InterfaceTopMetric = 'throughput' | 'in_bps' | 'out_bps' | 'errors' 
 
 /** Optional drill-down filters shared by the flow endpoints (protocol / destination port / peer /
  *  AS). A bag the client spreads into a query string — the endpoints take these as individual
- *  query parameters, so there is no request body schema for it. */
+ *  query parameters, so there is no request body schema for it.
+ *
+ *  **Comma-separated sets since ADR-053 Inc.8**, and therefore `string` rather than `number`: one
+ *  value is still one value (`proto=6`), several are `proto=6,17`, and the endpoint 400s on a token
+ *  it cannot parse rather than silently returning the unfiltered top-N. Building the string is
+ *  `components/NodeDetail/flowTabFilters.ts`'s job, which is also where each column's parser
+ *  lives — a raw string assembled anywhere else would bypass the validation. */
 export interface FlowFilters {
-  proto?: number;
-  port?: number;
+  proto?: string;
+  port?: string;
   peer?: string;
-  asn?: number;
+  asn?: string;
 }
 
 /** One placed section instance in a report definition's spec. Part of `ReportSpec` — see below. */

@@ -47,9 +47,14 @@ export function facetCounts<T>(
   const col = columns.find((c) => c.key === key);
   if (!col || col.filter.kind !== 'enum') return {};
   const spec = col.filter;
+  // No accessor means the column is answered by the server, so there are no rows here to count and
+  // no honest number to return. `{}` is what the cell already renders as "no counts offered" —
+  // better than zeros, which would read as "nothing matches any of these".
+  const read = spec.readValue;
+  if (!read) return {};
   const counts: Record<string, number> = Object.fromEntries(spec.options.map((o) => [o.value, 0]));
   for (const row of rowsExcluding(rows, columns, state, key, nowMs)) {
-    const v = spec.readValue(row);
+    const v = read(row);
     if (v == null) continue;
     for (const one of typeof v === 'string' ? [v] : v) {
       // A value the spec does not list is a row the operator cannot select for. Counting it into a

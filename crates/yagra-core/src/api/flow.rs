@@ -85,19 +85,36 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Time-window + limit query for the flow endpoints. `from`/`to` are Unix seconds (defaulting to
-/// the trailing hour); `limit` caps top-N rows. `proto`/`port`/`peer` are optional drill-down
-/// filters and `dir` selects the AS side for the top-AS endpoint — all parsed into strong types
-/// (unparseable values are ignored), so no untrusted string reaches the store query.
+/// the trailing hour); `limit` caps top-N rows. `proto`/`port`/`peer`/`asn` are drill-down filters,
+/// each a comma-separated set, and `dir` selects the AS side for the top-AS endpoint. Every value is
+/// parsed into a strong type here, so no untrusted string reaches the store query.
 #[derive(Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
+// ⚠️ The `///` comments below are published **verbatim** in the OpenAPI document and reach every
+// generated client and the public API reference, so they describe the contract and nothing else.
+// Design rationale stays in `//` comments (`openapi-publishes-internal-docs`). They are also the
+// only place a client learns that these four take a *set* — a struct-level doc comment is not
+// published by `IntoParams`, which is why widening them without these would have been invisible.
 pub(super) struct FlowRangeQuery {
+    /// Window start, Unix seconds. Defaults to one hour before `to`.
     from: Option<i64>,
+    /// Window end, Unix seconds. Defaults to now.
     to: Option<i64>,
+    /// Maximum rows for a top-N aggregation. Clamped to 1..=1000.
     limit: Option<u32>,
+    /// IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is
+    /// not a protocol number is rejected rather than ignored.
     proto: Option<String>,
+    /// Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is
+    /// not a port is rejected rather than ignored.
     port: Option<String>,
+    /// Peer addresses to include, comma-separated. A row matches when one of these is its source
+    /// **or** its destination. At most 8; a value that is not an IP address is rejected.
     peer: Option<String>,
+    /// AS numbers to include, comma-separated. A row matches when one of these is its source or
+    /// destination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.
     asn: Option<String>,
+    /// Which AS side `top-as` aggregates on: `src`, or `dst` (the default).
     dir: Option<String>,
 }
 
@@ -165,25 +182,67 @@ pub(crate) fn flow_window(
     )
 }
 
+/// How many values one drill-down set may carry.
+///
+/// ⚠️ **Not the same bound, or the same reason, as the 32-token cap on the event filters.** There the
+/// limit defends request size; here each extra value widens an `IN (…)` that ClickHouse evaluates
+/// over the fact table, so the cost is the *query*. Eight is what the UI can show and well past what
+/// a drill-down means — a filter naming a hundred ports is not a drill-down.
+const FLOW_FILTER_MAX: usize = 8;
+
+/// Parse one comma-separated drill-down set into strong values.
+///
+/// **Every token must parse, or the request is a 400** (ADR-053 Inc.8, 決定 Q). This used to drop
+/// what it could not read, which meant `port=abc` returned the *unfiltered* top-N — an answer to a
+/// question nobody asked, presented as the answer. Silently widening a filter is the failure this
+/// ADR exists to remove, so the flow endpoints now follow the same rule the event and alert filters
+/// do. An absent parameter is still "no filter"; an empty one (`port=`) is too.
+fn flow_filter_set<T: std::str::FromStr>(
+    raw: Option<&str>,
+    what: &str,
+) -> Result<Vec<T>, ApiError> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for tok in raw.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+        let v = tok.parse::<T>().map_err(|_| {
+            ApiError::bad_request(
+                "invalid_filter",
+                format!("`{what}` does not accept the value `{tok}`"),
+            )
+        })?;
+        out.push(v);
+    }
+    if out.len() > FLOW_FILTER_MAX {
+        return Err(ApiError::bad_request(
+            "invalid_filter",
+            format!("`{what}` accepts at most {FLOW_FILTER_MAX} values"),
+        ));
+    }
+    Ok(out)
+}
+
 /// Build a validated [`crate::flowstore::FlowQuery`] from a request. `node_id` is `Some` (from the
 /// path) for a per-node query or `None` for the fleet-wide (all-exporters) endpoints; the window is
 /// converted to ms and the limit clamped — no untrusted string ever reaches the store query.
-fn flow_query_params(node_id: Option<Uuid>, q: &FlowRangeQuery) -> crate::flowstore::FlowQuery {
+fn flow_query_params(
+    node_id: Option<Uuid>,
+    q: &FlowRangeQuery,
+) -> Result<crate::flowstore::FlowQuery, ApiError> {
     let (from_unix_ms, to_unix_ms, limit) = flow_window(q.from, q.to, q.limit, 20);
-    crate::flowstore::FlowQuery {
+    Ok(crate::flowstore::FlowQuery {
         node_id,
         from_unix_ms,
         to_unix_ms,
         limit,
-        // Parse into strong types; anything unparseable is simply ignored (no raw string in SQL).
-        proto: q.proto.as_deref().and_then(|s| s.trim().parse::<u8>().ok()),
-        dst_port: q.port.as_deref().and_then(|s| s.trim().parse::<u16>().ok()),
-        peer: q
-            .peer
-            .as_deref()
-            .and_then(|s| s.trim().parse::<std::net::IpAddr>().ok()),
-        asn: q.asn.as_deref().and_then(|s| s.trim().parse::<u32>().ok()),
-    }
+        // Parsed into strong types here and nowhere else — `flowstore::flow_filters_sql`
+        // interpolates these directly and is safe only because they are numbers and `IpAddr`.
+        proto: flow_filter_set(q.proto.as_deref(), "proto")?,
+        dst_port: flow_filter_set(q.port.as_deref(), "port")?,
+        peer: flow_filter_set(q.peer.as_deref(), "peer")?,
+        asn: flow_filter_set(q.asn.as_deref(), "asn")?,
+    })
 }
 
 /// Which AS side the top-AS endpoint aggregates on (`dir=src`; default destination).
@@ -323,7 +382,7 @@ async fn run_flow_agg(
     q: &FlowRangeQuery,
     agg: FlowAgg,
 ) -> ApiResult<Response> {
-    let fq = flow_query_params(node_id, q);
+    let fq = flow_query_params(node_id, q)?;
     Ok(flow_agg_rows(st, &fq, flow_as_dir(q), agg)
         .await?
         .into_response())
@@ -351,7 +410,7 @@ pub(crate) async fn flow_agg_rows(
                 node_id: fq.node_id,
                 from_unix_ms: fq.from_unix_ms,
                 to_unix_ms: fq.to_unix_ms,
-                proto: fq.proto,
+                proto: fq.proto.clone(),
             };
             FlowRows::Series(
                 store
@@ -570,31 +629,94 @@ mod tests {
             asn: None,
             dir: None,
         };
-        let fq = flow_query_params(None, &q);
+        let fq = flow_query_params(None, &q).expect("no filters to reject");
         assert_eq!(fq.to_unix_ms, 1_000_000_000);
         assert_eq!(fq.from_unix_ms, (1_000_000 - DEFAULT_RANGE_SECS) * 1000);
         assert_eq!(fq.limit, 1000, "an unbounded top-N would be a DoS vector");
         assert_eq!(fq.node_id, None);
     }
 
-    #[test]
-    fn unparseable_filters_are_dropped_rather_than_reaching_the_store() {
-        // security.md: strong types at the edge. A junk value must not become a SQL predicate.
-        let q = FlowRangeQuery {
+    /// A `FlowRangeQuery` with only the drill-down fields set — the rest defaulted.
+    fn filters(
+        proto: Option<&str>,
+        port: Option<&str>,
+        peer: Option<&str>,
+        asn: Option<&str>,
+    ) -> FlowRangeQuery {
+        FlowRangeQuery {
             from: None,
             to: None,
             limit: None,
-            proto: Some("'; DROP TABLE flows--".to_owned()),
-            port: Some("not-a-port".to_owned()),
-            peer: Some("not-an-ip".to_owned()),
-            asn: Some("AS15169".to_owned()),
+            proto: proto.map(str::to_owned),
+            port: port.map(str::to_owned),
+            peer: peer.map(str::to_owned),
+            asn: asn.map(str::to_owned),
             dir: None,
-        };
-        let fq = flow_query_params(None, &q);
-        assert_eq!(fq.proto, None);
-        assert_eq!(fq.dst_port, None);
-        assert_eq!(fq.peer, None);
-        assert_eq!(fq.asn, None);
+        }
+    }
+
+    #[test]
+    fn unparseable_filters_are_refused_rather_than_reaching_the_store() {
+        // security.md: strong types at the edge — a junk value must not become a SQL predicate.
+        //
+        // ⚠️ This test used to assert the junk was **dropped**, and that was the bug: dropping it
+        // returned the *unfiltered* top-N, so `port=not-a-port` answered a question nobody asked and
+        // presented it as the answer. ADR-053 Inc.8 makes it a 400, which is the rule every other
+        // filtered endpoint already follows.
+        for (label, q) in [
+            (
+                "proto",
+                filters(Some("'; DROP TABLE flows--"), None, None, None),
+            ),
+            ("port", filters(None, Some("not-a-port"), None, None)),
+            ("peer", filters(None, None, Some("not-an-ip"), None)),
+            ("asn", filters(None, None, None, Some("AS15169"))),
+        ] {
+            let err = flow_query_params(None, &q)
+                .expect_err(&format!("`{label}` must refuse a value it cannot parse"));
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST, "{label}");
+        }
+    }
+
+    #[test]
+    fn a_drill_down_takes_a_set_and_an_absent_one_narrows_nothing() {
+        let fq = flow_query_params(None, &filters(Some("6,17"), Some("80, 443"), None, None))
+            .expect("a well-formed set");
+        assert_eq!(fq.proto, vec![6, 17]);
+        assert_eq!(
+            fq.dst_port,
+            vec![80, 443],
+            "surrounding space is not a value"
+        );
+        assert!(fq.peer.is_empty(), "an absent filter is the empty set");
+        assert!(fq.asn.is_empty());
+
+        // `port=` is "no filter", not "the empty-string port".
+        let blank = flow_query_params(None, &filters(None, Some(""), None, None)).expect("blank");
+        assert!(blank.dst_port.is_empty());
+    }
+
+    #[test]
+    fn a_set_is_capped_because_each_value_widens_a_clickhouse_scan() {
+        let too_many = (1..=FLOW_FILTER_MAX + 1)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let err = flow_query_params(None, &filters(None, Some(&too_many), None, None))
+            .expect_err("past the cap");
+        assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        // Exactly at the cap is fine — an off-by-one here silently costs the operator a value.
+        let at_cap = (1..=FLOW_FILTER_MAX)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            flow_query_params(None, &filters(None, Some(&at_cap), None, None))
+                .expect("at the cap")
+                .dst_port
+                .len(),
+            FLOW_FILTER_MAX
+        );
     }
 
     #[test]

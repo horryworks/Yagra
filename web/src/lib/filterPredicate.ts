@@ -27,10 +27,12 @@ function compileColumn<T>(
   nowMs: number,
 ): ((row: T) => boolean) | null {
   if (spec.kind === 'enum') {
+    if (!spec.readValue) return null; // server-side: the set is already in the query
+    const read = spec.readValue;
     const want = new Set(decodeSet(raw));
     if (want.size === 0) return null;
     return (row) => {
-      const v = spec.readValue(row);
+      const v = read(row);
       if (v == null) return false;
       return typeof v === 'string' ? want.has(v) : v.some((x) => want.has(x));
     };
@@ -38,6 +40,17 @@ function compileColumn<T>(
   if (spec.kind === 'text') {
     const test = compileCondition(decodeCondition(raw));
     return test === null ? null : (row) => test(spec.readText(row));
+  }
+  if (spec.kind === 'values') {
+    if (!spec.readValues) return null; // server-side: the set is already in the query
+    const read = spec.readValues;
+    const want = new Set(decodeSet(raw));
+    if (want.size === 0) return null;
+    return (row) => {
+      const v = read(row);
+      if (v == null) return false;
+      return typeof v === 'string' ? want.has(v) : v.some((x) => want.has(x));
+    };
   }
   if (spec.kind === 'number') {
     if (!spec.readNumber) return null; // server-side: the bounds are already in the query

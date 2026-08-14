@@ -11,11 +11,12 @@
 // no header row to hang a filter row on). Two implementations would drift, and mobile is where
 // nobody would notice for a release or two.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnchoredPopover, focusPopoverTrigger } from './AnchoredPopover';
 import { MultiSelectList } from './MultiSelectList';
 import { TextConditionEditor } from './TextConditionEditor';
+import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import {
   CUSTOM_RANGE,
   decodeNumberRange,
@@ -24,10 +25,12 @@ import {
   defaultValue,
   encodeNumberRange,
   encodeRange,
+  normalizeValues,
   toggleSetValue,
   type ColumnFilterSpec,
   type NumberFilterSpec,
   type RangeFilterSpec,
+  type ValuesFilterSpec,
 } from '../../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../../lib/filterCondition';
 import { summarize, summaryIsActive } from '../../lib/filterSummary';
@@ -74,10 +77,57 @@ export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus 
       />
     );
   }
+  if (spec.kind === 'values') {
+    return <ValuesBody spec={spec} value={value} onChange={onChange} autoFocus={autoFocus} />;
+  }
   if (spec.kind === 'number') {
     return <NumberBody spec={spec} value={value} onChange={onChange} autoFocus={autoFocus} />;
   }
   return <RangeBody spec={spec} value={value} onChange={onChange} label={label} />;
+}
+
+/** The `values` kind's body: one box, comma-separated, normalized on settle.
+ *
+ *  **Debounced, unlike `NumberBody`** — and for the reason that comment gives for *not* debouncing
+ *  there. A partial value here is a *different, valid, more expensive* query: typing `10.0.0.1`
+ *  passes through `10`, `10.0`, `10.0.0` — each a well-formed set that would re-run six ClickHouse
+ *  aggregations. 350ms is what the tab's hand-rolled inputs already used for exactly this.
+ *
+ *  ⚠️ The effect depends on `draft` **only**. `value` comes from state that this component's own
+ *  commit changes, and `onChange` is an inline closure with a new identity every render; either in
+ *  the dependency list makes the input never settle (`TextConditionEditor` carries the same note,
+ *  and the bug it describes shipped once). */
+function ValuesBody<T>({
+  spec,
+  value,
+  onChange,
+  autoFocus,
+}: {
+  spec: ValuesFilterSpec<T>;
+  value: string;
+  onChange: (next: string) => void;
+  autoFocus?: boolean;
+}) {
+  const { t } = useTranslation('common');
+  const [draft, setDraft] = useState(value);
+  const settled = useDebouncedValue(draft, 350);
+  const commit = useRef(onChange);
+  commit.current = onChange;
+  useEffect(() => {
+    commit.current(normalizeValues(settled, spec.parse, spec.max));
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see the note above: only `draft`.
+  }, [settled]);
+  return (
+    <input
+      className="field dt-f-values"
+      type="text"
+      value={draft}
+      placeholder={spec.placeholder ?? t('filter.valuesPlaceholder')}
+      aria-label={spec.placeholder ?? t('filter.valuesPlaceholder')}
+      autoFocus={autoFocus}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  );
 }
 
 /** The number kind's body: two bounds, either of which may be left blank.
@@ -233,6 +283,7 @@ export function ColumnFilterCell<T>({
     if (spec.kind === 'enum') return spec.allLabel;
     if (spec.kind === 'text') return spec.placeholder ?? t('filter.termPlaceholder');
     if (spec.kind === 'number') return t('filter.anyValue');
+    if (spec.kind === 'values') return spec.placeholder ?? t('filter.valuesPlaceholder');
     return t('filter.termPlaceholder');
   };
 

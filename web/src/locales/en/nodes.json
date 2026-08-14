@@ -197,10 +197,12 @@
       "allProtos": "All protocols",
       "port": "Dst port",
       "peer": "Peer IP",
-      "chartHint": "Port / peer filters narrow the tables and diagram; the trend shows all traffic.",
-      "active": "Active filters",
-      "clear": "Clear filters",
-      "remove": "Remove filter"
+      "chartHint": "Port, peer and AS filters narrow the tables and diagram; the trend shows all traffic for the selected protocols.",
+      "asn": "AS number",
+      "protoLabel": "Protocol",
+      "portLabel": "Dst port",
+      "peerLabel": "Peer",
+      "asnLabel": "AS"
     },
     "none": "No flow data in this window.",
     "noTrend": "No traffic trend in this window.",

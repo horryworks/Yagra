@@ -8,6 +8,11 @@
   padding: 16px;
 }
 
+/* The action row: filter-sheet button + clear-all on the left, the range control on the right.
+   ⚠️ `space-between` needs exactly TWO children to keep the range control on the right. Both
+   left-hand controls render `null` most of the time (the sheet button on desktop, clear-all when
+   nothing is set), so they live inside a wrapper — otherwise the range control would slide to the
+   left the moment nothing was filtered, which is a layout that changes as you use the page. */
 .nd-flow-toolbar {
   display: flex;
   justify-content: space-between;
@@ -15,69 +20,16 @@
   flex-wrap: wrap;
   gap: 10px;
 }
-
-/* Drill-down filters (protocol / destination port / peer). */
-.nd-flow-filters {
+.nd-flow-toolbar-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
 }
-.nd-flow-filters .field {
-  max-width: 150px;
-}
-.nd-flow-filters .nd-flow-port {
-  max-width: 110px;
-}
 
-/* Active-filter chips (click-to-filter drill-down): a removable chip per set filter + clear-all. */
-.nd-flow-chips {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.nd-flow-chips-label {
-  font-size: var(--font-sm);
-  color: var(--text-tertiary);
-}
-.nd-flow-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 4px 3px 8px;
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
-  background: var(--bg-tertiary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-}
-.nd-flow-chip-x {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 2px;
-  border: none;
-  background: none;
-  color: var(--text-tertiary);
-  font-size: var(--font-md);
-  line-height: 1;
-  cursor: pointer;
-}
-.nd-flow-chip-x:hover {
-  color: var(--text-primary);
-}
-.nd-flow-chips-clear {
-  padding: 2px 4px;
-  border: none;
-  background: none;
-  color: var(--accent-color);
-  font-size: var(--font-sm);
-  cursor: pointer;
-}
-.nd-flow-chips-clear:hover {
-  color: var(--accent-hover);
-}
+/* The drill-down bar itself is the shared `.fbar` (ADR-053 Inc.8) and needs no rules here. The
+   hand-rolled selects and chip row it replaced are gone: what each filter holds is now the cell's
+   own trigger summary, and removing one value is the ✕ inside it. */
 
 /* Clickable IP in the conversations table — reset the button chrome, keep the mono cell look.
    Stacks the IP over its AS sub-line (mirrors the Sankey label). */

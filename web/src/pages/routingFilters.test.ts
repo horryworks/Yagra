@@ -80,7 +80,7 @@ describe('the routing-rules filter row', () => {
     // …and the array it returns is the whole vocabulary, so a fourth severity is covered without
     // this test or that spec being touched.
     const sev = specs.severity;
-    expect(sev.kind === 'enum' && sev.readValue(any)).toEqual(SEVERITIES);
+    expect(sev.kind === 'enum' && sev.readValue?.(any)).toEqual(SEVERITIES);
   });
 
   it('still excludes a rule bound to a different severity', () => {

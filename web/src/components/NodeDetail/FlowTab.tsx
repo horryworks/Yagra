@@ -9,11 +9,22 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useDebouncedValue } from '../../lib/useDebouncedValue';
 import { api, ApiError } from '../../services/api';
 import { formatBytes, formatAsn } from '../../lib/format';
-import { PROTO_NAMES, protoName, portLabel } from '../../lib/flowLabels';
+import { protoName, portLabel } from '../../lib/flowLabels';
 import { useRefreshTick } from '../../lib/refreshTick';
+import { ClearFilters } from '../ui/ClearFilters';
+import { FilterBar } from '../ui/FilterBar';
+import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { defaultFilters, type FilterState } from '../../lib/columnFilter';
+import {
+  chartIgnoresFilters,
+  flowFilterColumns,
+  flowFilterLabels,
+  flowFilters,
+  flowQueryFilters,
+  toggleFlowValue,
+} from './flowTabFilters';
 import type {
   FlowAsAgg,
   FlowConversation,
@@ -26,20 +37,19 @@ import type {
 import { MetricChart, PALETTE } from '../MetricChart/MetricChart';
 import { RankedBars, type RankedRow } from '../../dashboard/primitives/RankedBars';
 import { DataTable, type Column } from '../ui/DataTable';
-import { Select, TextInput } from '../ui/Field';
 import { RangeControl, DEFAULT_RANGE, resolveRange, type Range } from './RangeControl';
 import { FlowSankey } from './FlowSankey';
-import { buildFlowFilters, toggleFilterValue } from './flowFilters';
 // The protocol-series grouping is shared with the fleet-wide throughput widget — one tested
 // implementation rather than a second copy that has to be fixed twice.
 import { flowTrendSeries } from '../../dashboard/widgets/util';
 import './FlowTab.css';
 
-/** Settle delay for the port/peer boxes. Longer than the shared search debounce because a commit
- *  here re-runs the whole flow fan-out (top talkers, conversations, ports, protocols, AS), not one
- *  list query. */
-const FLOW_FILTER_DEBOUNCE_MS = 350;
-
+/** How many rows each Top-N and the conversations table hold.
+ *
+ *  🚨 **This is why the conversations table has no filter row of its own** (ADR-053 決定 M). Those
+ *  ten rows are the ten ClickHouse already ranked by bytes; a browser-side predicate over them would
+ *  narrow ten out of thousands and then report "no conversations match". Narrowing conversations
+ *  means asking the server for a different top-N — which is what the drill-down bar does. */
 const TOP_N = 10;
 
 const toRows = <T,>(items: T[], label: (x: T) => string, value: (x: T) => number): RankedRow[] =>
@@ -49,16 +59,15 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const { t } = useTranslation('nodes');
   const tick = useRefreshTick();
   const [range, setRange] = useState<Range>(DEFAULT_RANGE);
-  // Filter inputs. `proto`/`asDir` commit immediately (selects); `port`/`peer` are debounced from
-  // their raw inputs so typing doesn't refetch on every keystroke.
-  const [proto, setProto] = useState('');
+  // The four drill-downs, in the shared filter state (ADR-053 Inc.8). Every one of them is a
+  // question for the server, so this state's only job is to become query parameters. The debounce
+  // that used to live here is inside the `values` cell now, where the other kinds' already were.
+  const filterCols = useMemo(() => flowFilterColumns(t), [t]);
+  const specs = useMemo(() => flowFilters(t), [t]);
+  const labels = useMemo(() => flowFilterLabels(t), [t]);
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  const [sheet, setSheet] = useState(false);
   const [asDir, setAsDir] = useState<'src' | 'dst'>('dst');
-  const [portInput, setPortInput] = useState('');
-  const [peerInput, setPeerInput] = useState('');
-  const [port, setPort] = useState('');
-  const [peer, setPeer] = useState('');
-  // AS filter (set only by clicking a Top-AS row; no typed input, so a single committed value).
-  const [asn, setAsn] = useState('');
   const [loading, setLoading] = useState(true);
   const [disabled, setDisabled] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,62 +79,46 @@ export function FlowTab({ node }: { node: NodeDetail }) {
   const [asAgg, setAsAgg] = useState<FlowAsAgg[]>([]);
   const [xRange, setXRange] = useState<[number, number] | undefined>(undefined);
 
-  // The free-text filters (port/peer) settle before they commit, so a fetch fires once the
-  // operator stops typing. 350ms rather than the shared 200: these two drive a multi-query flow
-  // fetch, not a single list.
-  const settledPort = useDebouncedValue(portInput, FLOW_FILTER_DEBOUNCE_MS);
-  const settledPeer = useDebouncedValue(peerInput, FLOW_FILTER_DEBOUNCE_MS);
-  useEffect(() => {
-    setPort(settledPort);
-    setPeer(settledPeer);
-  }, [settledPort, settledPeer]);
+  // Click-to-filter: a Top-N row / conversation cell / Sankey node **adds** its value to the
+  // matching drill-down, and a second click on an already-active value removes it.
+  //
+  // ⚠️ It used to *replace*, because the filter held one value — so clicking a second talker
+  // silently dropped the first, and there was no way to ask "these two hosts". Adding is what the
+  // ✕ on each trigger already implied. `toggleFlowValue` normalizes through the column's own parser
+  // so a clicked value and a typed one cannot end up as two entries for the same port.
+  const toggle = useCallback(
+    (key: 'proto' | 'port' | 'peer' | 'asn', clicked: string) =>
+      setFilters((cur) => ({
+        ...cur,
+        [key]: toggleFlowValue(cur[key] ?? '', clicked, specs[key]),
+      })),
+    [specs],
+  );
+  const applyPeer = useCallback((addr: string) => toggle('peer', addr), [toggle]);
+  const applyPort = useCallback((p: string) => toggle('port', p), [toggle]);
+  const applyProto = useCallback((p: string) => toggle('proto', p), [toggle]);
+  const applyAsn = useCallback((a: string) => toggle('asn', a), [toggle]);
 
-  // Click-to-filter: a Top-N row / conversation cell / Sankey node sets the matching filter (and a
-  // second click on the already-active value clears it), writing the same state the typed bar drives
-  // — including the input mirror, so the bar and the chips stay in sync. Clicks are discrete, so
-  // they commit immediately (no debounce).
-  const applyPeer = useCallback(
-    (addr: string) => {
-      const next = toggleFilterValue(peer, addr);
-      setPeerInput(next);
-      setPeer(next);
-    },
-    [peer],
-  );
-  const applyPort = useCallback(
-    (p: string) => {
-      const next = toggleFilterValue(port, p);
-      setPortInput(next);
-      setPort(next);
-    },
-    [port],
-  );
-  const applyProto = useCallback((p: string) => setProto((cur) => toggleFilterValue(cur, p)), []);
-  const applyAsn = useCallback((a: string) => setAsn((cur) => toggleFilterValue(cur, a)), []);
-  const clearFilters = useCallback(() => {
-    setProto('');
-    setPortInput('');
-    setPort('');
-    setPeerInput('');
-    setPeer('');
-    setAsn('');
-  }, []);
+  // The six queries depend on the joined strings, not on the state object: an object literal has a
+  // new identity every render and would refetch the whole fan-out continuously.
+  const { proto: qProto, port: qPort, peer: qPeer, asn: qAsn } = flowQueryFilters(filters);
 
   useEffect(() => {
     let cancelled = false;
     const { from, to } = resolveRange(range);
-    // Build the typed filter set; blank / invalid values are omitted (two or more ⇒ ANDed).
-    const filters = buildFlowFilters({ proto, port, peer, asn });
+    // Comma-joined sets; an absent one is omitted, and the endpoint 400s on a value it cannot parse
+    // rather than silently returning the unfiltered top-N (ADR-053 決定 Q).
+    const f = { proto: qProto, port: qPort, peer: qPeer, asn: qAsn };
 
     setLoading(true);
     setError(null);
     void Promise.allSettled([
-      api.getNodeFlowSeries(node.id, { from, to, ...filters }),
-      api.getNodeFlowTopTalkers(node.id, { from, to, limit: TOP_N, ...filters }),
-      api.getNodeFlowConversations(node.id, { from, to, limit: TOP_N, ...filters }),
-      api.getNodeFlowTopPorts(node.id, { from, to, limit: TOP_N, ...filters }),
-      api.getNodeFlowProtocols(node.id, { from, to, ...filters }),
-      api.getNodeFlowTopAs(node.id, { from, to, limit: TOP_N, dir: asDir, ...filters }),
+      api.getNodeFlowSeries(node.id, { from, to, ...f }),
+      api.getNodeFlowTopTalkers(node.id, { from, to, limit: TOP_N, ...f }),
+      api.getNodeFlowConversations(node.id, { from, to, limit: TOP_N, ...f }),
+      api.getNodeFlowTopPorts(node.id, { from, to, limit: TOP_N, ...f }),
+      api.getNodeFlowProtocols(node.id, { from, to, ...f }),
+      api.getNodeFlowTopAs(node.id, { from, to, limit: TOP_N, dir: asDir, ...f }),
     ]).then(([sRes, tRes, cRes, pRes, prRes, aRes]) => {
       if (cancelled) return;
       // Flow disabled ⇒ every call 503s with `flow_unavailable`: show the "not configured" state.
@@ -158,7 +151,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     return () => {
       cancelled = true;
     };
-  }, [node.id, range, tick, t, proto, port, peer, asn, asDir]);
+  }, [node.id, range, tick, t, qProto, qPort, qPeer, qAsn, asDir]);
 
   const trend = useMemo(() => flowTrendSeries(series, protoName, PALETTE), [series]);
   const talkerRows = useMemo(() => toRows(talkers, (x) => x.addr, (x) => x.bytes), [talkers]);
@@ -220,39 +213,6 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     [t, applyPeer],
   );
 
-  const filterBar = (
-    <div className="nd-flow-filters">
-      <Select
-        value={proto}
-        onChange={(e) => setProto(e.target.value)}
-        aria-label={t('flow.filter.proto')}
-      >
-        <option value="">{t('flow.filter.allProtos')}</option>
-        {Object.entries(PROTO_NAMES).map(([n, name]) => (
-          <option key={n} value={n}>
-            {name}
-          </option>
-        ))}
-      </Select>
-      <TextInput
-        className="nd-flow-port"
-        type="number"
-        min={0}
-        max={65535}
-        placeholder={t('flow.filter.port')}
-        value={portInput}
-        onChange={(e) => setPortInput(e.target.value)}
-        aria-label={t('flow.filter.port')}
-      />
-      <TextInput
-        placeholder={t('flow.filter.peer')}
-        value={peerInput}
-        onChange={(e) => setPeerInput(e.target.value)}
-        aria-label={t('flow.filter.peer')}
-      />
-    </div>
-  );
-
   if (disabled) {
     return (
       <div className="nd-flow">
@@ -271,64 +231,46 @@ export function FlowTab({ node }: { node: NodeDetail }) {
     asAgg.length === 0;
 
   // The trend reads the proto-only rollup, so port/peer/AS narrow only the tabular + Sankey views.
-  const showChartHint = Boolean(port.trim() || peer.trim() || asn.trim());
-
-  // Active-filter chips (one per set filter) — click ✕ to remove one, or "Clear filters" for all.
-  const chips: { key: string; label: string; mono?: boolean; onRemove: () => void }[] = [];
-  if (peer)
-    chips.push({
-      key: 'peer',
-      label: peer,
-      mono: true,
-      onRemove: () => {
-        setPeer('');
-        setPeerInput('');
-      },
-    });
-  if (proto)
-    chips.push({ key: 'proto', label: protoName(Number(proto)), onRemove: () => setProto('') });
-  if (port)
-    chips.push({
-      key: 'port',
-      label: portLabel(Number(port)),
-      onRemove: () => {
-        setPort('');
-        setPortInput('');
-      },
-    });
-  if (asn)
-    chips.push({
-      key: 'asn',
-      label: asn === '0' ? t('flow.as.unknown') : `AS${asn}`,
-      onRemove: () => setAsn(''),
-    });
+  const showChartHint = chartIgnoresFilters(filters);
 
   return (
     <div className="nd-flow">
+      {/* The drill-down governs the whole tab — the chart, all four Top-N cards, the Sankey and the
+          conversations table — so it sits above all of them rather than under any one table's
+          headers (ADR-053 決定 N). The trigger of each cell is what the hand-rolled chip row used to
+          say; the ✕ inside it removes one value, and Clear removes them all. */}
       <div className="nd-flow-toolbar">
-        {filterBar}
+        {/* ⚠️ Both of these render `null` most of the time, so they are wrapped: the toolbar is
+            `space-between` and needs a left-hand child that always exists, or the range control
+            walks to the left edge whenever nothing is filtered. */}
+        <div className="nd-flow-toolbar-actions">
+          <MobileFilterButton
+            columns={filterCols}
+            filters={filters}
+            onOpen={() => setSheet(true)}
+          />
+          <ClearFilters
+            columns={filterCols}
+            filters={filters}
+            onClear={() => setFilters(defaultFilters(filterCols))}
+          />
+        </div>
         <RangeControl value={range} onChange={setRange} />
       </div>
-      {chips.length > 0 && (
-        <div className="nd-flow-chips">
-          <span className="nd-flow-chips-label">{t('flow.filter.active')}</span>
-          {chips.map((c) => (
-            <span className="nd-flow-chip" key={c.key}>
-              <span className={c.mono ? 'mono' : undefined}>{c.label}</span>
-              <button
-                type="button"
-                className="nd-flow-chip-x"
-                aria-label={t('flow.filter.remove')}
-                onClick={c.onRemove}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-          <button type="button" className="nd-flow-chips-clear" onClick={clearFilters}>
-            {t('flow.filter.clear')}
-          </button>
-        </div>
+      <FilterBar
+        columns={filterCols}
+        labels={labels}
+        filters={filters}
+        onChange={setFilters}
+      />
+      {sheet && (
+        <MobileFilterSheet
+          columns={filterCols}
+          labels={labels}
+          filters={filters}
+          onChange={setFilters}
+          onClose={() => setSheet(false)}
+        />
       )}
       {error && <p className="nd-flow-error">{error}</p>}
 

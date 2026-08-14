@@ -49,8 +49,19 @@ export interface EnumFilterSpec<T> {
   kind: 'enum';
   options: readonly FilterOption[];
   /** The row's value(s). An array for a row that legitimately carries several (a tag list); a
-   *  single value is the common case. `null`/`undefined` matches nothing once a selection exists. */
-  readValue: (row: T) => string | readonly string[] | null | undefined;
+   *  single value is the common case. `null`/`undefined` matches nothing once a selection exists.
+   *
+   *  **Optional, and omitting it means "this column is answered by the server"** — the same rule
+   *  `RangeFilterSpec.readTime` and `NumberFilterSpec.readNumber` follow, and `buildPredicate` then
+   *  compiles the column to `null` rather than testing rows against a value it cannot read.
+   *
+   *  ⚠️ It was required until ADR-053 Inc.8, and the trade is worth stating: a **client-side** screen
+   *  that now forgets it stops filtering silently instead of failing to compile. It was made optional
+   *  because the alternative was worse — the Flow tab's drill-downs narrow six *aggregate queries*
+   *  and have no row to read at all, so the only way to satisfy a required accessor was one that
+   *  returns `null`, i.e. a predicate that rejects every row. A missing filter is a bug; a lying
+   *  accessor is a screen that goes blank. If you are writing a client-side enum column, supply it. */
+  readValue?: (row: T) => string | readonly string[] | null | undefined;
   /** Trigger label when nothing is selected ("All kinds"). */
   allLabel: string;
   /** Where the option counts come from. `'client'` counts the rows in the browser (exact and free);
@@ -130,11 +141,45 @@ export interface NumberFilterSpec<T> {
   unit?: string;
 }
 
+/** A column narrowed to a set of **exact values the operator types** (ADR-053 Inc.8, decision P).
+ *
+ * The fifth kind exists because the Flow tab's drill-downs fit none of the other four, and each
+ * near-miss is a lie rather than an inconvenience:
+ *
+ *  - `enum` needs a closed option list. Ports, peer addresses and ASNs have no vocabulary — there
+ *    are 65,536 ports and every IPv4 address is a candidate.
+ *  - `text` is substring/regex, so `80` would offer to match `8080`. The backend matches the port
+ *    **exactly**, so the control would describe a filter the store does not run.
+ *  - `number` is an interval. "80 and 443" is not a range, and a range over ports means nothing an
+ *    operator asks for.
+ *
+ * Transport is the comma-joined set the `enum` kind already uses, so the URL codec, `ClearFilters`
+ * and the mobile sheet need no new spelling. What differs is that the tokens are **produced by
+ * [`parse`], not chosen from a list** — which is also where validation lives, so an unparseable
+ * token never reaches the query. That matters more than usual here: the flow store interpolates
+ * these into SQL after re-parsing them server-side, and the API refuses what it cannot parse.
+ */
+export interface ValuesFilterSpec<T> {
+  kind: 'values';
+  /** Normalize one typed token, or return `null` to drop it. Runs on commit, never per keystroke. */
+  parse: (token: string) => string | null;
+  /** How a stored token reads in the trigger (`6` → `TCP`, `0` → `Unknown AS`). Identity if absent. */
+  format?: (token: string) => string;
+  /** The row's value(s), when the list is filtered in the browser. **A server-side column omits
+   *  it** — the same rule `RangeFilterSpec.readTime` and `NumberFilterSpec.readNumber` follow. */
+  readValues?: (row: T) => readonly string[] | string | null | undefined;
+  placeholder?: string;
+  /** Ceiling on how many values may be set. ⚠️ Mirror the API's own cap — a control that accepts
+   *  more than the endpoint does turns a filter into a 400 the operator cannot see coming. */
+  max?: number;
+}
+
 export type ColumnFilterSpec<T> =
   | EnumFilterSpec<T>
   | TextFilterSpec<T>
   | RangeFilterSpec<T>
-  | NumberFilterSpec<T>;
+  | NumberFilterSpec<T>
+  | ValuesFilterSpec<T>;
 
 /** The shape `filterPredicate` / `filterCounts` walk: a column key paired with its spec. Decoupled
  *  from `Column<T>` so the pure modules never import a component. */
@@ -400,6 +445,41 @@ export interface NumberRange {
 export function encodeNumberRange(v: NumberRange): string {
   if (v.min === null && v.max === null) return '';
   return `${v.min ?? ''}:${v.max ?? ''}`;
+}
+
+// ---------------------------------------------------------------------------
+// Typed value sets — the `values` kind's transport. The wire form is the `enum` kind's comma-joined
+// set; what is new is turning what the operator typed into that form.
+
+/**
+ * Normalize a typed list into the stored set: parse each token, drop what does not parse, dedupe,
+ * and cap.
+ *
+ * ⚠️ **Dropping an unparseable token is right *here* and wrong at the API edge**, and the asymmetry
+ * is deliberate (it is the same one `readFilterParams` documents). Mid-edit the operator has typed
+ * half an address; refusing the whole field would fight them as they type. The API, which receives
+ * a finished request, answers 400 — because silently ignoring `port=abc` there returns the
+ * *unfiltered* top-N and calls it the answer.
+ *
+ * Order is preserved rather than sorted: unlike the `enum` kind there is no option list to sort
+ * against, and the operator's own order is the only meaningful one. Dedupe keeps the first
+ * occurrence so retyping a value does not move it.
+ */
+export function normalizeValues(
+  input: string,
+  parse: (token: string) => string | null,
+  max?: number,
+): string {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of input.split(',')) {
+    const token = parse(raw.trim());
+    if (token === null || token === '' || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+    if (max !== undefined && out.length >= max) break;
+  }
+  return out.join(',');
 }
 
 /** Decode `min:max`. Anything unparseable on a side leaves that side unbounded rather than

@@ -135,7 +135,8 @@
       "30d": "Last 30 days",
       "90d": "Last 90 days",
       "all": "All time"
-    }
+    },
+    "valuesPlaceholder": "Values, comma-separated"
   },
   "scope": {
     "all": "All nodes",

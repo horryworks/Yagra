@@ -5260,6 +5260,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5269,6 +5270,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5278,6 +5280,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5288,6 +5291,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5296,6 +5300,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5304,6 +5309,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5312,6 +5318,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5320,6 +5327,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5383,6 +5391,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5392,6 +5401,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5401,6 +5411,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5411,6 +5422,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5419,6 +5431,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5427,6 +5440,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5435,6 +5449,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5443,6 +5458,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5506,6 +5522,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5515,6 +5532,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5524,6 +5542,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5534,6 +5553,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5542,6 +5562,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5550,6 +5571,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5558,6 +5580,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5566,6 +5589,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5629,6 +5653,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5638,6 +5663,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5647,6 +5673,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5657,6 +5684,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5665,6 +5693,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5673,6 +5702,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5681,6 +5711,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5689,6 +5720,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5752,6 +5784,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5761,6 +5794,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5770,6 +5804,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5780,6 +5815,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5788,6 +5824,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5796,6 +5833,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5804,6 +5842,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5812,6 +5851,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -5875,6 +5915,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5884,6 +5925,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5893,6 +5935,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -5903,6 +5946,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5911,6 +5955,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5919,6 +5964,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5927,6 +5973,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -5935,6 +5982,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -10470,6 +10518,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10479,6 +10528,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10488,6 +10538,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10498,6 +10549,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10506,6 +10558,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10514,6 +10567,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10522,6 +10576,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10530,6 +10585,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -10603,6 +10659,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10612,6 +10669,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10621,6 +10679,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10631,6 +10690,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10639,6 +10699,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10647,6 +10708,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10655,6 +10717,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10663,6 +10726,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -10736,6 +10800,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10745,6 +10810,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10754,6 +10820,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10764,6 +10831,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10772,6 +10840,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10780,6 +10849,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10788,6 +10858,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10796,6 +10867,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -10869,6 +10941,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10878,6 +10951,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10887,6 +10961,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -10897,6 +10972,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10905,6 +10981,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10913,6 +10990,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10921,6 +10999,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -10929,6 +11008,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -11002,6 +11082,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -11011,6 +11092,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -11020,6 +11102,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -11030,6 +11113,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11038,6 +11122,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11046,6 +11131,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11054,6 +11140,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11062,6 +11149,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"
@@ -11135,6 +11223,7 @@
           {
             "name": "from",
             "in": "query",
+            "description": "Window start, Unix seconds. Defaults to one hour before `to`.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -11144,6 +11233,7 @@
           {
             "name": "to",
             "in": "query",
+            "description": "Window end, Unix seconds. Defaults to now.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -11153,6 +11243,7 @@
           {
             "name": "limit",
             "in": "query",
+            "description": "Maximum rows for a top-N aggregation. Clamped to 1..=1000.",
             "required": false,
             "schema": {
               "type": "integer",
@@ -11163,6 +11254,7 @@
           {
             "name": "proto",
             "in": "query",
+            "description": "IP protocol numbers to include, comma-separated (`6` or `6,17`). At most 8; a value that is\nnot a protocol number is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11171,6 +11263,7 @@
           {
             "name": "port",
             "in": "query",
+            "description": "Destination ports to include, comma-separated (`443` or `80,443`). At most 8; a value that is\nnot a port is rejected rather than ignored.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11179,6 +11272,7 @@
           {
             "name": "peer",
             "in": "query",
+            "description": "Peer addresses to include, comma-separated. A row matches when one of these is its source\n**or** its destination. At most 8; a value that is not an IP address is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11187,6 +11281,7 @@
           {
             "name": "asn",
             "in": "query",
+            "description": "AS numbers to include, comma-separated. A row matches when one of these is its source or\ndestination AS; `0` is the unknown-AS bucket. At most 8; a non-numeric value is rejected.",
             "required": false,
             "schema": {
               "type": "string"
@@ -11195,6 +11290,7 @@
           {
             "name": "dir",
             "in": "query",
+            "description": "Which AS side `top-as` aggregates on: `src`, or `dst` (the default).",
             "required": false,
             "schema": {
               "type": "string"

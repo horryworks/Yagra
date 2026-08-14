@@ -140,6 +140,15 @@
   min-width: 0;
 }
 
+/* The `values` kind: one box holding a comma-separated set. Wider than the numeric fields because
+   what goes in it is a list — three IPv6 addresses have to be readable while being edited, and the
+   popover is the only place they are shown in full (the trigger summarizes to "443 +1"). */
+.dt-f-values {
+  width: 100%;
+  min-width: 14em;
+  font-size: var(--font-xs);
+}
+
 .dt-f-num {
   flex: 1;
   /* Narrower than a text filter's field on purpose: two of these plus a separator have to fit the

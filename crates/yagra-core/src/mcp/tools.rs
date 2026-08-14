@@ -3790,6 +3790,13 @@ fn record_tool(tool: &str, outcome: &str) {
 /// Build a [`FlowQuery`] from the shared flow-tool params: typed drill-down filters (an unparseable
 /// `peer` is ignored, never interpolated). Shared by `top_flows` and `flow_fanout`.
 ///
+/// ⚠️ **The tool params stay single-valued while REST took sets** (ADR-053 Inc.8). That is a
+/// deliberate asymmetry, not an oversight: parity is about *which questions can be answered*, and a
+/// model that wants two protocols asks twice — where the WebUI needs one control that can say
+/// "TCP and UDP" because an operator ticking two boxes and getting one is the failure the whole ADR
+/// is about. Widening these means widening the JSON-schema params a model reads, which is a change
+/// to published vocabulary; do it when a model actually needs it, not for symmetry.
+///
 /// The window and the row limit come from [`crate::api::flow::flow_window`], which is the REST
 /// edge's rule. This used to be a hand copy with `limit.unwrap_or(100)` and **no clamp**, while the
 /// REST side clamped to `1..=1000` and its own test calls an unbounded top-N a DoS vector — the
@@ -3805,10 +3812,10 @@ fn flow_query_from(p: &TopFlowsParams) -> FlowQuery {
         from_unix_ms,
         to_unix_ms,
         limit,
-        proto: p.proto,
-        dst_port: p.port,
-        peer,
-        asn: p.asn,
+        proto: p.proto.into_iter().collect(),
+        dst_port: p.port.into_iter().collect(),
+        peer: peer.into_iter().collect(),
+        asn: p.asn.into_iter().collect(),
     }
 }
 
@@ -4218,10 +4225,16 @@ mod tests {
         let q = flow_query_from(&p);
         assert_eq!(q.from_unix_ms, 1_700_000_000_000);
         assert_eq!(q.to_unix_ms, 1_700_003_600_000);
+        // A single tool value becomes a one-element set: `FlowQuery`'s filters are `Vec`s since
+        // ADR-053 Inc.8, but the tool's params stay single-valued on purpose (see `flow_query_from`).
         assert_eq!(
             (q.limit, q.proto, q.dst_port, q.asn),
-            (7, Some(6), Some(443), Some(15169))
+            (7, vec![6], vec![443], vec![15169])
         );
+
+        // And an unset tool param is the empty set, i.e. no filter — not a filter on nothing.
+        let none = flow_query_from(&flow_params(Uuid::new_v4()));
+        assert!(none.proto.is_empty() && none.dst_port.is_empty() && none.asn.is_empty());
     }
 
     /// `peer` is the only free-text flow filter, and ClickHouse SQL interpolates it. It must reach
@@ -4231,21 +4244,23 @@ mod tests {
     fn flow_query_drops_an_unparseable_peer_rather_than_passing_it_through() {
         let mut p = flow_params(Uuid::new_v4());
         p.peer = Some(r#"' OR 1=1 --"#.to_owned());
-        assert_eq!(
-            flow_query_from(&p).peer,
-            None,
+        assert!(
+            flow_query_from(&p).peer.is_empty(),
             "junk peer is dropped, never interpolated"
         );
 
         p.peer = Some("2001:db8::1".to_owned());
         assert_eq!(
             flow_query_from(&p).peer,
-            Some("2001:db8::1".parse::<std::net::IpAddr>().unwrap()),
+            vec!["2001:db8::1".parse::<std::net::IpAddr>().unwrap()],
             "a valid v6 address survives as a typed value"
         );
 
         p.peer = Some("8.8.8.8".to_owned());
-        assert_eq!(flow_query_from(&p).peer, Some("8.8.8.8".parse().unwrap()));
+        assert_eq!(
+            flow_query_from(&p).peer,
+            vec!["8.8.8.8".parse::<std::net::IpAddr>().unwrap()]
+        );
     }
 
     /// The row limit is clamped on **this** surface too.

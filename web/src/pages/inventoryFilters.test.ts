@@ -57,14 +57,17 @@ describe('the offered vocabularies', () => {
     for (const c of COLS) expect(labels[c.key]).toBeTruthy();
   });
 
-  it('reads nothing off a row, because this list is filtered server-side', () => {
-    // ⚠️ The accessor exists only because an enum spec requires one. If one of these ever starts
-    // returning a real value, someone will filter locally — and a local filter here answers "of the
-    // folders you have opened", which is a different question with no sign that it changed.
+  it('declares no row accessor, because this list is filtered server-side', () => {
+    // ⚠️ These carried `readValue: () => null` until the accessor became optional (ADR-053 Inc.8),
+    // and that placeholder was worse than none: `null` means "this row has no value", so a
+    // predicate built over it would reject every row rather than skip the column. Absence is what
+    // says server-side now. If one of these ever gains an accessor, someone will filter locally —
+    // and a local filter here answers "of the folders you have opened", a different question with
+    // no sign that it changed.
     for (const c of COLS) {
       expect(c.filter.kind).toBe('enum');
       if (c.filter.kind !== 'enum') continue;
-      expect(c.filter.readValue({} as never)).toBeNull();
+      expect(c.filter.readValue).toBeUndefined();
     }
   });
 });

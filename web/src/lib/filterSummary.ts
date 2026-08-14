@@ -54,6 +54,16 @@ export function summarize<T>(spec: ColumnFilterSpec<T>, raw: string): FilterSumm
     if (!conditionIsActive(c)) return { kind: 'none' };
     return { kind: 'text', term: c.term, mode: c.mode, not: c.not };
   }
+  if (spec.kind === 'values') {
+    // Same descriptors as `enum` — the trigger reads "443 +1" either way, and the operator has no
+    // reason to care that one set came from a list and the other from typing. `format` is what
+    // turns a stored token back into what they saw (`6` → `TCP`).
+    const sel = decodeSet(raw);
+    const label = (v: string) => spec.format?.(v) ?? v;
+    if (sel.length === 0) return { kind: 'none' };
+    if (sel.length === 1) return { kind: 'one', label: label(sel[0]) };
+    return { kind: 'many', label: label(sel[0]), more: sel.length - 1 };
+  }
   if (spec.kind === 'number') {
     const { min, max } = decodeNumberRange(raw);
     if (min === null && max === null) return { kind: 'none' };

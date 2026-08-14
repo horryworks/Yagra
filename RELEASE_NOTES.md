@@ -39,6 +39,14 @@
   working; an unknown token is a 400 rather than a silently widened result, and a set accepts at
   most 32 values. The same parameters are on the MCP `get_alert_history`, `get_audit` and
   `search_analysis_findings` tools.
+- **The flow endpoints' drill-down filters take several values, and a value they cannot parse is now
+  a 400 rather than being ignored.** `proto`, `port`, `peer` and `asn` on all twelve `/flow/*` and
+  `/nodes/{id}/flow/*` endpoints accept a comma-separated set of up to 8 (`proto=6,17`,
+  `port=80,443`). ⚠️ **The refusal is the part to check before upgrading**: a request like
+  `port=not-a-port` used to be answered with the *unfiltered* top-N — an answer to a question nobody
+  asked — and now returns `invalid_filter`. A client that was relying on a malformed filter being
+  dropped will start seeing errors, which is the point: it was never getting the rows it asked for.
+  The MCP `top_flows` and `flow_fanout` tools are unchanged and still take one value each.
 - **`action` and `status` on `GET /api/v1/audit`, and `scope_level`/`direction` on
   `GET /api/v1/thresholds`, are now strings rather than typed enums in the OpenAPI document** —
   that is what carrying several values requires. The accepted vocabulary has not changed and an

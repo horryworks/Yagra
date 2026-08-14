@@ -2225,7 +2225,7 @@ impl AnalysisRunner {
                 node_id: Some(*node),
                 from_unix_ms: from * 1000,
                 to_unix_ms: to * 1000,
-                proto: None,
+                proto: Vec::new(),
             };
             let pts = flows.series(&q).await.unwrap_or_default();
             if pts.len() < MIN_POINTS {
@@ -2306,16 +2306,19 @@ impl AnalysisRunner {
                 from_unix_ms: recent_from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 10,
-                proto: None,
-                dst_port: None,
-                peer: None,
-                asn: None,
+                proto: Vec::new(),
+                dst_port: Vec::new(),
+                peer: Vec::new(),
+                asn: Vec::new(),
             };
             let base_q = FlowQuery {
                 from_unix_ms: base_from * 1000,
                 to_unix_ms: recent_from * 1000,
                 limit: 100,
-                ..recent_q
+                // `.clone()` rather than the struct-update move: `FlowQuery` stopped being `Copy`
+                // when its filters became `Vec`s (ADR-053 Inc.8), so `..recent_q` would move the
+                // vectors out of a value still used two lines below.
+                ..recent_q.clone()
             };
             let recent = flows.top_talkers(&recent_q).await.unwrap_or_default();
             if recent.is_empty() {
@@ -2384,16 +2387,17 @@ impl AnalysisRunner {
                 from_unix_ms: recent_from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 10,
-                proto: None,
-                dst_port: None,
-                peer: None,
-                asn: None,
+                proto: Vec::new(),
+                dst_port: Vec::new(),
+                peer: Vec::new(),
+                asn: Vec::new(),
             };
             let base_q = FlowQuery {
                 from_unix_ms: base_from * 1000,
                 to_unix_ms: recent_from * 1000,
                 limit: 200,
-                ..recent_q
+                // Clone, not move — see the same note on the talker-shift query above.
+                ..recent_q.clone()
             };
             // Destination AS novelty (the headline signal, using the AS enrichment).
             let recent_as = flows
@@ -2497,10 +2501,10 @@ impl AnalysisRunner {
                 from_unix_ms: from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 50,
-                proto: None,
-                dst_port: None,
-                peer: None,
-                asn: None,
+                proto: Vec::new(),
+                dst_port: Vec::new(),
+                peer: Vec::new(),
+                asn: Vec::new(),
             };
             let fan = flows.fanout_by_src(&q).await.unwrap_or_default();
             for f in fan {
@@ -2567,10 +2571,10 @@ impl AnalysisRunner {
                 from_unix_ms: from * 1000,
                 to_unix_ms: to * 1000,
                 limit: 5,
-                proto: None,
-                dst_port: None,
-                peer: None,
-                asn: None,
+                proto: Vec::new(),
+                dst_port: Vec::new(),
+                peer: Vec::new(),
+                asn: Vec::new(),
             };
             let convos = flows.top_conversations(&conv_q).await.unwrap_or_default();
             let Some(top) = convos.first() else {
@@ -2882,10 +2886,10 @@ impl AnalysisRunner {
                 from_unix_ms: from_s * 1000,
                 to_unix_ms: to_s * 1000,
                 limit: 1,
-                proto: None,
-                dst_port: None,
-                peer: None,
-                asn: None,
+                proto: Vec::new(),
+                dst_port: Vec::new(),
+                peer: Vec::new(),
+                asn: Vec::new(),
             };
             if let Ok(cs) = flows.top_conversations(&q).await {
                 if let Some(c) = cs.first() {
