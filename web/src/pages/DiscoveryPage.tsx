@@ -336,12 +336,15 @@ export function DiscoveryPage() {
               <div className="disco-h">{t('discovery.cols.credential')}</div>
             </div>
             {/* Filter row under the header — same CSS grid rule as `.disco-head` and every
-                `.disco-row` (ADR-053 Inc.6 decision F). The last three columns are the operator's
-                *input* for the import about to happen, so they carry empty cells: filtering a field
-                you are typing into would take the row out from under the cursor. The reachability
-                control sits in the select column, which is the one the badge it filters lives in. */}
+                `.disco-row` (ADR-053 Inc.6 decision F). Four of the six tracks carry an empty cell:
+                the first is 28px and belongs to the select checkbox, and the last three are the
+                operator's *input* for the import about to happen — filtering a field you are typing
+                into would take the row out from under the cursor.
+                ⚠️ A reachability control was put in that 28px track and shipped unusable, which is
+                what a filter row costs when nothing renders it in a test. It is gone rather than
+                relocated; `discoveryFilters.ts` says why. */}
             <div className="disco-filters" role="group" aria-label={t('common:filter.row')}>
-              {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'reach')}
+              <div className="dt-f empty" />
               {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'address')}
               {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'identity')}
               <div className="dt-f empty" />
@@ -567,7 +570,11 @@ function SeenOnNetworkCard({
           onClose={() => setEpSheet(false)}
         />
       )}
-      {endpoints.length > 0 && (
+      {/* ⚠️ Gated on `all`, the UNFILTERED list, not on `endpoints`. Gating on the filtered one made
+          the header and the filter row vanish the moment a filter matched nothing — taking the
+          controls that would undo it along with the rows. `AlertRows`' toolbar slot carries the
+          same warning, and this shipped with the mistake anyway. */}
+      {all.length > 0 && (
         <div className="disco-seen-table">
           <div className="disco-seen-head">
             <div className="disco-h">{t('discovery.seen.cols.address')}</div>
@@ -641,6 +648,9 @@ function SeenOnNetworkCard({
               </div>
             );
           })}
+          {endpoints.length === 0 && (
+            <p className="muted disco-seen-empty">{t('common:filter.noMatch')}</p>
+          )}
         </div>
       )}
       {!authed && <p className="muted">{t('discovery.signIn')}</p>}

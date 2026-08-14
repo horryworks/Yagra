@@ -257,9 +257,6 @@
         "import": "failed to start monitoring that endpoint"
       },
       "filter": {
-        "searchPlaceholder": "Search address, MAC or neighbour…",
-        "searchAria": "Search discovered endpoints",
-        "unmonitoredOnly": "Not yet monitored",
         "endpointNoun": "endpoints",
         "allStates": "Monitored and not",
         "state": {
@@ -311,15 +308,7 @@
       "import": "failed to import"
     },
     "filter": {
-      "searchPlaceholder": "Search address or identity…",
-      "searchAria": "Search discovery results",
-      "reachableOnly": "Answered only",
-      "candidateNoun": "addresses",
-      "allReach": "Answered and not",
-      "reach": {
-        "reachable": "Answered",
-        "silent": "No answer"
-      }
+      "candidateNoun": "addresses"
     }
   }
 }

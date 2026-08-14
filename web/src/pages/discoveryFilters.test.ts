@@ -66,15 +66,14 @@ describe('the sweep-results filter row', () => {
     expect(isAnyFiltered(C_COLS, C_DEFAULTS)).toBe(false);
   });
 
-  it('says which answers to keep, in both directions', () => {
-    // The checkbox could only say "hide the silent ones". "Only the silent ones" — the addresses
-    // worth chasing after a sweep, because something is there and did not answer — was unsayable.
-    expect(hasCand(cand({ reachable: false }), cf({ reach: 'reachable' }))).toBe(false);
-    expect(hasCand(cand(), cf({ reach: 'reachable' }))).toBe(true);
-    expect(hasCand(cand({ reachable: false }), cf({ reach: 'silent' }))).toBe(true);
-    expect(hasCand(cand(), cf({ reach: 'silent' }))).toBe(false);
-    // Both ticked is the same as neither, never "nothing matches".
-    expect(hasCand(cand(), cf({ reach: 'reachable,silent' }))).toBe(true);
+  it('has no reachability control, and shows both kinds of candidate', () => {
+    // ⚠️ The "Answered only" checkbox is gone rather than ported (see `discoveryFilters.ts`). What
+    // must not go with it is the *row*: `!reachable` here does not mean "did not answer" — the
+    // poller reports a candidate that answered SNMP but not ICMP — so a filter that quietly kept
+    // those out would hide exactly the devices worth looking at.
+    expect(C_COLS.map((c) => c.key)).toEqual(['address', 'identity']);
+    expect(hasCand(cand({ reachable: false }), C_DEFAULTS)).toBe(true);
+    expect(hasCand(cand({ reachable: true }), C_DEFAULTS)).toBe(true);
   });
 
   it('asks the address and the identity separately, where the box asked both at once', () => {
@@ -113,7 +112,7 @@ describe('the sweep-results filter row', () => {
 
   it('flips isAnyFiltered for every column', () => {
     for (const c of C_COLS) {
-      expect(isAnyFiltered(C_COLS, cf({ [c.key]: c.key === 'reach' ? 'silent' : 'x' }))).toBe(true);
+      expect(isAnyFiltered(C_COLS, cf({ [c.key]: 'x' }))).toBe(true);
     }
   });
 });

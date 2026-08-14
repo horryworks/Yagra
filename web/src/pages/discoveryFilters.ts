@@ -22,29 +22,30 @@ import type { TFunction } from 'i18next';
 
 // ───────────────────────────────────────────────────────────── sweep candidates
 
-/** Whether a swept address answered anything at all. Its own token set rather than a boolean so the
- *  URL and the control read as what they mean, and so "only the silent ones" — the addresses worth
- *  chasing after a sweep — is as sayable as its opposite. */
-export const CANDIDATE_REACH = ['reachable', 'silent'] as const;
-
 /**
  * The sweep-results filter row.
  *
- * Only the first three columns carry a control. Name, profile and credential are the operator's
- * *input* for the import about to happen — a filter on a field you are in the middle of typing
- * would remove the row out from under the cursor.
+ * Only two columns carry a control. Name, profile and credential are the operator's *input* for the
+ * import about to happen — a filter on a field you are in the middle of typing would remove the row
+ * out from under the cursor.
+ *
+ * ⚠️ **There is no reachability filter, and the "Answered only" checkbox that used to be here is
+ * gone.** Two reasons, and the second is why it is not worth relocating:
+ *
+ *  - **Reachability has no column.** The `ping` badge is drawn *inside* the Address cell, so a
+ *    control for it would have to sit in a bar above the table — a whole bar, on a screen that is
+ *    mostly an import form, for one two-valued question.
+ *  - **The bucket it selects is nearly always empty, and hard to name honestly.** A candidate is
+ *    reported when it answered ICMP **or** gave up an SNMP identity (`yagra-poller/discovery.rs`,
+ *    and `SNMP-only answer still reports the device` pins it), so `!reachable` does not mean "did
+ *    not answer" — it means "answered SNMP but not ping", i.e. a device filtering ICMP. Real, but
+ *    rare, and a label short enough for a filter trigger would be a lie. The Identity column
+ *    already separates "no SNMP" from a device that spoke.
  */
 export function candidateFilters(
   t: TFunction,
 ): Record<string, ColumnFilterSpec<DiscoveryCandidate>> {
   return {
-    reach: {
-      kind: 'enum',
-      options: CANDIDATE_REACH.map((v) => ({ value: v, label: t(`discovery.filter.reach.${v}`) })),
-      readValue: (c) => (c.reachable ? 'reachable' : 'silent'),
-      allLabel: t('discovery.filter.allReach'),
-      counts: 'client',
-    },
     address: {
       kind: 'text',
       modes: TEXT_MODES,
@@ -72,7 +73,6 @@ export function candidateColumns(t: TFunction): FilterableColumn<DiscoveryCandid
 
 export function candidateLabels(t: TFunction): Record<string, string> {
   return {
-    reach: t('discovery.filter.allReach'),
     address: t('discovery.cols.address'),
     identity: t('discovery.cols.identity'),
   };

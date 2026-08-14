@@ -68,10 +68,15 @@
   values.** The checkbox could only say "hide what is not arriving"; "show me only the
   configured-but-silent metrics" — the question when a collection set has stopped working — was
   unsayable. Selecting *Collecting* and *Not configured* together is the old checkbox's meaning.
-- **The "Answered only" and "Not yet monitored" checkboxes on Discovery are now two-valued
-  filters**, so "only the addresses that did not answer" and "the endpoints someone has already
-  imported" can be asked for directly. The seen-endpoints table still opens on *Not yet monitored*,
-  as it always has.
+- **The "Not yet monitored" checkbox on Discovery's seen-endpoints table is now a two-valued
+  filter**, so "the endpoints someone has already imported" can be asked for directly. The table
+  still opens on *Not yet monitored*, as it always has.
+- **The "Answered only" checkbox on Discovery's sweep results is gone, with nothing in its place.**
+  It was never quite what it said: a swept address is reported when it answered ICMP **or** gave up
+  an SNMP identity, so "not answered" actually meant "answered SNMP but not ping" — a device
+  filtering ICMP, which is real but rare and cannot be labelled honestly in a filter's width. The
+  Identity column already separates a device that spoke from one that did not, and the `ping` badge
+  still marks each row.
 - **Device profiles are no longer matched by their role through the search box.** Role is the
   heading rows are grouped under, not a column, so it has a control of its own above the table —
   and, unlike the box, it takes several roles at once.
