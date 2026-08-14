@@ -9,7 +9,15 @@
   flex: 1;
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);
-  overflow: hidden;
+  /* Horizontal, not hidden (ADR-054). This was `overflow: hidden`, which meant a table whose
+     columns needed more room than the pane gave it drew the extra columns *outside the box* with
+     no way to reach them — Settings ▸ API tokens put its Actions column 354px past the edge.
+     `DataTable` now gives the three grids a `min-width` from the columns' own declarations, and
+     this is what turns that overflow into a scrollbar. Vertical stays hidden: `.dt-scroll` owns
+     that axis and the virtualizer measures against it.
+     ⚠️ A table that already fits gets neither scrollbar — the `min-width` is inert below it. */
+  overflow-x: auto;
+  overflow-y: hidden;
   background: var(--bg-secondary);
 }
 

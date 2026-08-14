@@ -192,6 +192,16 @@
   by switching to it — it excludes that column's own filter, the way a spreadsheet's autofilter does.
 
 ### Bug Fixes
+- **A table wider than the pane now scrolls sideways instead of hiding the columns that did not
+  fit.** Settings ▸ Pollers, Forwarding and API tokens each declared more column width than a
+  1280px window gives them — on API tokens by 354px — and the surplus was drawn outside a box that
+  clipped it, so the Actions column existed but could not be reached and no scrollbar said it was
+  there. The same overflow squeezed the first column down to its own padding, which is why its
+  name was blank and its filter button was 14px wide and unreadable. A table that already fits is
+  unchanged and gains no scrollbar.
+- **The notification-channel kind is now written the same way everywhere.** The filter under the
+  Kind column on Alerts ▸ Routing showed the raw token (`pagerduty`, `jsm`) while the dialog above
+  it showed the product name, because the two were separate lists.
 - **A column filter now accepts typing as soon as it is opened.** Clicking a filter took two clicks:
   the panel opened, and the box inside it had to be clicked again before it would take a keystroke.
   The panel is hidden for the frame in which it is measured, and a hidden element cannot be focused,

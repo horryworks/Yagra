@@ -20,6 +20,7 @@ import {
   type RoutingRule,
   type Severity,
 } from '../types/api';
+import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -403,10 +404,15 @@ function AddChannelModal({
       <div className="modal-field">
         <label className="modal-field-label">{t('routing.channelModal.kind')}</label>
         <Select value={kind} onChange={(e) => setKind(e.target.value as ChannelKind)}>
-          <option value="webhook">webhook</option>
-          <option value="email">email</option>
-          <option value="pagerduty">PagerDuty</option>
-          <option value="jsm">Jira Service Management</option>
+          {/* Derived from `CHANNEL_KINDS`, which is what its doc comment always claimed and what
+              nothing actually did — these were four `<option>` literals, so the union and the list
+              an operator can pick from were two copies. A fifth kind is now a compile error in
+              `lib/channelKinds.ts` rather than an option nobody adds. */}
+          {channelKindOptions().map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </Select>
       </div>
       {kind === 'webhook' && (

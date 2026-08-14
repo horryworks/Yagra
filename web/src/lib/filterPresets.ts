@@ -75,7 +75,10 @@ export function discoveredOptions<T>(
   for (const r of rows) {
     const v = read(r);
     if (v != null && v !== '') seen.add(v);
-    if (seen.size > MAX_DISCOVERED_OPTIONS) break;
+    // `>=`, not `>`: the check runs after the insert, so `>` let the 201st value in and returned a
+    // list one longer than the constant naming it. Nothing broke — it is one extra checkbox — but a
+    // cap that does not hold at its own number is a cap nobody can reason about.
+    if (seen.size >= MAX_DISCOVERED_OPTIONS) break;
   }
   return [...seen]
     .sort((a, b) => a.localeCompare(b))

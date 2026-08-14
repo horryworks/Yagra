@@ -13,6 +13,7 @@
 
 import type { TFunction } from 'i18next';
 import type { ColumnFilterSpec } from '../lib/columnFilter';
+import { channelKindLabel } from '../lib/channelKinds';
 import {
   SEVERITIES,
   type NotificationChannel,
@@ -35,7 +36,10 @@ export function channelFilters(
     },
     kind: {
       kind: 'enum',
-      options: kinds.map((k) => ({ value: k, label: k })),
+      // Options come from the rows (so the list only offers kinds that are actually present), but
+      // the *labels* come from the same map the add-channel dialog uses — this column used to read
+      // `pagerduty` under a dialog that read `PagerDuty`.
+      options: kinds.map((k) => ({ value: k, label: channelKindLabel(k) })),
       readValue: (c) => c.kind,
       allLabel: t('routing.channels.allKinds'),
       counts: 'client',

@@ -13,6 +13,7 @@ import { useViewportMode } from '../../lib/viewport';
 import { nextSort, type SortState } from '../../lib/tableSort';
 import { ColumnFilterCell } from './ColumnFilterCell';
 import type { ColumnFilterSpec, FilterState } from '../../lib/columnFilter';
+import { minTableWidth } from '../../lib/tableWidth';
 import './DataTable.css';
 
 export interface Column<T> {
@@ -135,6 +136,16 @@ export function DataTable<T>({
   // fourth grid template anywhere else, and do not let a track become `auto`: an `auto` track sizes
   // to its own content, so the three grids would resolve to different widths from the same string.
   const template = columns.map((c) => c.width ?? '1fr').join(' ');
+  // ⚠️ …and the shared string is **not** enough on its own (ADR-054). Three grids resolve the same
+  // template to different track widths once the pane is narrower than the columns need: a `1fr`
+  // track then collapses to the item's min-content contribution, which here is only its padding —
+  // 28px in `.dt-h`, 16px in `.dt-f` — so the header and the filter row landed their grid lines
+  // 12px apart and the last columns were drawn past the edge of an `overflow: hidden` box, where
+  // nothing could reach them. Handing all three the same `min-width` removes the room to differ and
+  // turns the overflow into a scroll. Inert while the pane is wide enough, which is why the tables
+  // that already fit are untouched.
+  const minWidth = minTableWidth(columns);
+  const widthStyle = minWidth > 0 ? { minWidth: `${minWidth}px` } : undefined;
   // Card mode whenever we're in mobile layout (respects the uiMode='desktop' override): the desktop
   // grid can't fit ~390px. A custom `renderCard` wins; otherwise a generic labeled card is built
   // from the columns. Desktop is byte-for-byte its previous grid self.
@@ -176,7 +187,7 @@ export function DataTable<T>({
   return (
     <div className="dt">
       {!cardMode && (
-        <div className="dt-head" style={{ gridTemplateColumns: template }}>
+        <div className="dt-head" style={{ gridTemplateColumns: template, ...widthStyle }}>
           {columns.map((c) => {
             const cls = c.align === 'right' ? 'dt-h right' : 'dt-h';
             if (!c.sortable || !sort || !onSortChange) {
@@ -210,7 +221,7 @@ export function DataTable<T>({
       {showFilters && (
         <div
           className="dt-filters"
-          style={{ gridTemplateColumns: template }}
+          style={{ gridTemplateColumns: template, ...widthStyle }}
           role="group"
           aria-label={t('filter.row')}
         >
@@ -237,7 +248,11 @@ export function DataTable<T>({
           )}
         </div>
       )}
-      <div className="dt-scroll scroll-y" ref={scrollRef}>
+      {/* The scroller carries the same floor as the two grids above it, or the rows would stop
+          short of the header the moment the table is scrolled sideways. Not in card mode: cards
+          stack to the viewport, and a 1,300px floor on a phone would invent a horizontal scroll
+          for a layout that has no columns to hold up. */}
+      <div className="dt-scroll scroll-y" ref={scrollRef} style={cardMode ? undefined : widthStyle}>
         {rows.length === 0 ? (
           <div className="dt-empty">{loading ? t('loading') : (empty ?? t('noRows'))}</div>
         ) : (

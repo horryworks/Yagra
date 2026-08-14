@@ -48,9 +48,14 @@ export function eventSourceFilters(
       containsSemantics: 'substring',
       placeholder: t('eventSources.cols.name'),
     },
-    // The kinds come from the rows themselves rather than a hardcoded list: `EventSource.kind` is a
-    // bare string on the wire, so a source created by a newer core is a value this build has never
-    // heard of — and one that must still be selectable rather than silently absent from the list.
+    // The kinds come from the rows themselves rather than a hardcoded list, so a source created by
+    // a newer core stays selectable rather than being silently absent from the filter.
+    //
+    // ⚠️ This used to say "`EventSource.kind` is a bare string on the wire". It is not — the
+    // generated contract types it as a union, and the compiler rejected a test row that said
+    // otherwise. The *behaviour* the comment described is still the reason for reading the rows: a
+    // TypeScript union is a compile-time claim, and a core one version ahead puts its new token on
+    // the wire regardless. Reading the rows is right; the stated reason was wrong.
     kind: {
       kind: 'enum',
       options: kinds.map((k) => ({ value: k, label: k })),

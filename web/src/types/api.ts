@@ -448,8 +448,12 @@ export type AlertTransition = components['schemas']['AlertTransition'];
 // ── Notifications ───────────────────────────────────────────────────────────────────────────────
 
 /** Every notification channel kind, in the order the UI offers them. An `as const` array rather
- *  than a bare union because the Routing screen's kind filter iterates it — a union the compiler
- *  knows and nothing can enumerate at runtime is exactly what `extensibility.md` §4 is about. */
+ *  than a bare union because a union the compiler knows and nothing can enumerate at runtime is
+ *  exactly what `extensibility.md` §4 is about.
+ *
+ *  ⚠️ This comment used to say "the Routing screen's kind filter iterates it", and **nothing did** —
+ *  the array was referenced by no other file while `RoutingPage.tsx` spelled the four kinds out as
+ *  `<option>` literals. `lib/channelKinds.ts` is what consumes it now, and it holds the labels. */
 export const CHANNEL_KINDS = ['webhook', 'email', 'pagerduty', 'jsm'] as const;
 
 /** A notification channel kind. Pinned to `schemas.ChannelKind`. */
