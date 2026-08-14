@@ -9,7 +9,7 @@ import { Badge } from '../components/ui/Badge';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { useLayoutStoreContext } from './LayoutStoreContext';
-import { SearchInput } from '../components/ui/TableToolbar';
+import { SearchInput } from '../components/ui/SearchInput';
 import { catalogBySection } from './registry';
 import { countWidgets, filterCatalog } from './catalogFilter';
 import type { Backing } from './types';

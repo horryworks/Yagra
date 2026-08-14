@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Multi-select option list with counts — the control the repository did not have (ADR-053).
 //
-// `FilterSelect` is single-valued and `Segmented` is a radio group, so "syslog AND trap" could not
-// be expressed anywhere in the UI before this. It is deliberately NOT a `<select multiple>`: that
+// The toolbar's `FilterSelect` was single-valued and `Segmented` is a radio group, so "syslog AND
+// trap" could not be expressed anywhere in the UI before this. (`FilterSelect` itself was deleted
+// in Inc.7, once every screen had moved here.) It is deliberately NOT a `<select multiple>`: that
 // control requires ctrl-click to add a second value, which nobody discovers, and it cannot carry a
 // count beside each option.
 //

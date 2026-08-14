@@ -415,6 +415,10 @@
       "phases": {
         "cluster": "Clustering unmatched events…",
         "rank": "Ranking coverage gaps…"
+      },
+      "filter": {
+        "allSources": "All sources",
+        "scopePlaceholder": "Search node…"
       }
     },
     "auth_probe": {
@@ -439,6 +443,14 @@
       "phases": {
         "cluster": "Clustering auth failures…",
         "rank": "Ranking sources…"
+      },
+      "filter": {
+        "allSeverities": "All severities"
+      },
+      "cols": {
+        "source": "Source",
+        "severity": "Severity",
+        "failures": "Failures"
       }
     },
     "event_flap": {
@@ -588,6 +600,10 @@
       "phases": {
         "scan": "Scanning fan-out…",
         "rank": "Ranking scanning sources…"
+      },
+      "filter": {
+        "allPatterns": "All shapes",
+        "nodePlaceholder": "Search node…"
       }
     },
     "saturation": {

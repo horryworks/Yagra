@@ -8,24 +8,38 @@
 //
 // The backend puts the raw source IP in `duration`, which is a display-only field; this reads
 // `detail.source_ip` instead so the value is structured and localizable around.
+//
+// **This is the one of the fifteen report bodies whose chips were a plain severity filter, so it is
+// the one Inc.7 converted** (決定 J). The other twelve select a tool-specific lens — `soon/mid/far`,
+// `chronic/intermittent`, `inverse` — which is not a row attribute and must not be folded into a
+// generic filter. Being a card list with no header row, this gets a `FilterBar` rather than a filter
+// row (決定 E/K), and `ReportToolbar` keeps only the sort control, so the row count is unchanged.
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
+import { ClearFilters } from '../../../components/ui/ClearFilters';
+import { FilterBar } from '../../../components/ui/FilterBar';
+import { MobileFilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
+import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
+import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
+import { facetCounts } from '../../../lib/filterCounts';
+import { applyFilters } from '../../../lib/filterPredicate';
+import { EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
+import { fmtCount, sevOf, sortByDetail, sortCommon } from '../format';
 import {
-  ResultCount,
-  SearchInput,
-  TableSpacer,
-  TableToolbar,
-} from '../../../components/ui/TableToolbar';
-import { Chips, EmptyList, FindingRow, MonoLine, NodeRef, ReportToolbar, RightRail } from '../kit';
-import { detailNum, detailStr, fmtCount, sevOf, sortByDetail, sortCommon } from '../format';
+  authProbeColumns,
+  authProbeFilterLabels,
+  probeCount,
+  probeSource,
+} from '../reportFilters';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
-const srcOf = (f: AnalysisFinding) => detailStr(f, 'source_ip');
-const countOf = (f: AnalysisFinding) => detailNum(f, 'count') ?? 0;
+// Shared with the specs that filter on them (`reportFilters.ts`) — never a second copy.
+const srcOf = probeSource;
+const countOf = probeCount;
 
 function sevColor(f: AnalysisFinding): string {
   const s = sevOf(f);
@@ -59,9 +73,13 @@ function AuthRow({ finding }: { finding: AnalysisFinding }) {
 
 export function AuthProbeBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [query, setQuery] = useState('');
-  const [filter, setFilter] = useState<'all' | 'crit' | 'warn'>('all');
+  const filterCols = useMemo(() => authProbeColumns(t), [t]);
+  const labels = useMemo(() => authProbeFilterLabels(t), [t]);
+  // Component state, not the URL — several report bodies share the `?job=…` route.
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useState<'count' | 'source' | 'node'>('count');
+  const narrowed = isAnyFiltered(filterCols, filters);
 
   const top = useMemo<RankedRow[]>(
     () =>
@@ -77,18 +95,17 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
   );
 
   const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let l = findings.filter(
-      (f) =>
-        (filter === 'all' || sevOf(f) === filter) &&
-        (!q || (srcOf(f) ?? '').toLowerCase().includes(q)),
-    );
-    if (sort === 'count') l = sortByDetail(l, 'count');
-    else if (sort === 'source')
-      l = l.slice().sort((a, b) => (srcOf(a) ?? '').localeCompare(srcOf(b) ?? ''));
-    else l = sortCommon(l, 'node');
-    return l;
-  }, [findings, query, filter, sort]);
+    const shown = applyFilters(findings, filterCols, filters, Date.now());
+    if (sort === 'count') return sortByDetail(shown, 'count');
+    if (sort === 'source')
+      return shown.slice().sort((a, b) => (srcOf(a) ?? '').localeCompare(srcOf(b) ?? ''));
+    return sortCommon(shown, 'node');
+  }, [findings, filterCols, filters, sort]);
+
+  const counts = useMemo(
+    () => ({ severity: facetCounts(findings, filterCols, filters, 'severity', Date.now()) }),
+    [findings, filterCols, filters],
+  );
 
   return (
     <>
@@ -97,12 +114,18 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
           <RankedBars rows={top} />
         </Card>
       )}
+      {/* ⚠️ The action row is gated on `findings`, never on `list`: filtering to zero would
+          otherwise take the controls that undo the filter away with the rows. */}
       <TableToolbar>
-        <SearchInput
-          value={query}
-          onChange={setQuery}
-          placeholder={t('report.auth_probe.searchPlaceholder')}
-          ariaLabel={t('report.auth_probe.searchPlaceholder')}
+        <MobileFilterButton
+          columns={filterCols}
+          filters={filters}
+          onOpen={() => setSheet(true)}
+        />
+        <ClearFilters
+          columns={filterCols}
+          filters={filters}
+          onClear={() => setFilters(defaultFilters(filterCols))}
         />
         <TableSpacer />
         <ResultCount
@@ -111,19 +134,17 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
           noun={t('report.auth_probe.noun')}
         />
       </TableToolbar>
+      {/* A run of `FindingRow`s has no header row to hang a filter row under, so the controls carry
+          their own names (決定 E). */}
+      <FilterBar
+        columns={filterCols}
+        labels={labels}
+        filters={filters}
+        onChange={setFilters}
+        counts={counts}
+      />
       <ReportToolbar
         id="tsr-auth-probe"
-        filters={
-          <Chips
-            value={filter}
-            onChange={setFilter}
-            options={[
-              { value: 'all', label: t('report.common.filters.all') },
-              { value: 'crit', label: t('report.common.summary.critical'), color: 'var(--status-critical)' },
-              { value: 'warn', label: t('report.common.summary.warning'), color: 'var(--status-warning)' },
-            ]}
-          />
-        }
         sort={sort}
         onSort={(v) => setSort(v as 'count' | 'source' | 'node')}
         sortOptions={[
@@ -136,9 +157,21 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
         {list.length ? (
           list.map((f) => <AuthRow key={f.id} finding={f} />)
         ) : (
-          <EmptyList total={findings.length} />
+          // `narrowed`, not `findings.length`: with nothing filtered and no findings the honest
+          // message is "the analysis found nothing", not "your filter hid everything".
+          <EmptyList total={narrowed ? findings.length : 0} />
         )}
       </div>
+      {sheet && (
+        <MobileFilterSheet
+          columns={filterCols}
+          labels={labels}
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          onClose={() => setSheet(false)}
+        />
+      )}
     </>
   );
 }

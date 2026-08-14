@@ -104,6 +104,14 @@
   their hand-written table on purpose**: Device profiles, whose rows are grouped under role
   headings, and the metric editor inside an expanded row, which would be a virtualized list inside
   a virtualized row.
+- **Three Troubleshoot reports gained the filter row.** Unmatched signatures (rule gap) can be
+  narrowed by source kind, signature, event volume and where it was seen; Scan detection filters on
+  every one of its seven columns, so "sources that touched more than 500 destinations" is one
+  control rather than a read-through; and Authentication probes gained a filter bar over the source
+  address, the severity and the failure count. The severity chips there became a multi-select, so
+  "critical and warning" is now sayable and `Info` is selectable at all. The other twelve reports
+  keep their chips on purpose — those select a diagnostic lens (`chronic` vs `intermittent`, for
+  instance), not a row attribute, and a generic filter cannot say them without lying.
 - `GET /api/v1/events` and `GET /api/v1/events/stats` take five new optional filters, and the MCP
   `search_events` tool takes the same five: `action` and `severity` (comma-separated sets, like
   `kind` now is), `msg` + `msg_regex` + `msg_not` for a message-only condition, and `src` +

@@ -13,37 +13,54 @@
 //
 // The horizontal/vertical label is recomputed client-side by `scanPattern` — identical to the Rust
 // comparison including the tie — because the backend ships it inside the English `duration` string.
+//
+// ADR-053 Inc.7 moved the narrowing under the headers. Every one of the seven columns has a filter
+// now, which is the shape this table wanted: five of them are numbers, and "sources that touched
+// more than 500 destinations" was unsayable from a toolbar. Sort stays in the action row (決定 L).
 
 import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '../../../components/ui/Badge';
 import { Card } from '../../../components/ui/Card';
+import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { DataTable, type Column } from '../../../components/ui/DataTable';
 import { EntityName } from '../../../components/ui/EntityName';
 import { Select } from '../../../components/ui/Field';
-import {
-  ResultCount,
-  SearchInput,
-  TableSpacer,
-  TableToolbar,
-} from '../../../components/ui/TableToolbar';
+import { MobileFilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
+import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
+import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
+import { facetCounts } from '../../../lib/filterCounts';
+import { applyFilters } from '../../../lib/filterPredicate';
 import { formatSi } from '../../../lib/format';
 import { ScanPlot, type ScanPoint } from '../ScanPlot';
-import { detailNum, detailStr, fmtCount, scanPattern, sevOf } from '../format';
+import { fmtCount, sevOf } from '../format';
+import {
+  flowScanColumns,
+  flowScanFilters,
+  scanDst,
+  scanFlows,
+  scanPorts,
+  scanShape,
+  scanSource,
+} from '../reportFilters';
 import type { ReportBodyProps } from '../types';
 import type { AnalysisFinding } from '../../../types/api';
 
-const srcOf = (f: AnalysisFinding) => detailStr(f, 'src') ?? '—';
-const dstOf = (f: AnalysisFinding) => detailNum(f, 'distinct_dst') ?? 0;
-const portsOf = (f: AnalysisFinding) => detailNum(f, 'distinct_ports') ?? 0;
-const flowsOf = (f: AnalysisFinding) => detailNum(f, 'flows') ?? 0;
-const patternOf = (f: AnalysisFinding) => scanPattern(dstOf(f), portsOf(f));
+// One definition per value, shared with the specs that filter on it (`reportFilters.ts`).
+const srcOf = scanSource;
+const dstOf = scanDst;
+const portsOf = scanPorts;
+const flowsOf = scanFlows;
+const patternOf = scanShape;
 
 export function FlowScanBody({ findings }: ReportBodyProps) {
   const { t } = useTranslation('troubleshoot');
-  const [query, setQuery] = useState('');
-  const [pattern, setPattern] = useState<'all' | 'horizontal' | 'vertical'>('all');
+  const filterCols = useMemo(() => flowScanColumns(t), [t]);
+  // Component state, not the URL — several report bodies share the `?job=…` route.
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useState<'dst' | 'ports' | 'flows' | 'score'>('dst');
+  const narrowed = isAnyFiltered(filterCols, filters);
 
   const plotPoints = useMemo<ScanPoint[]>(
     () =>
@@ -57,25 +74,28 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
   );
 
   const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    let l = findings.filter(
-      (f) =>
-        (pattern === 'all' || patternOf(f) === pattern) &&
-        (!q || srcOf(f).toLowerCase().includes(q)),
-    );
-    if (sort === 'dst') l = l.slice().sort((a, b) => dstOf(b) - dstOf(a));
-    else if (sort === 'ports') l = l.slice().sort((a, b) => portsOf(b) - portsOf(a));
-    else if (sort === 'flows') l = l.slice().sort((a, b) => flowsOf(b) - flowsOf(a));
-    else l = l.slice().sort((a, b) => b.score - a.score);
-    return l;
-  }, [findings, query, pattern, sort]);
+    const l = applyFilters(findings, filterCols, filters, Date.now()).slice();
+    if (sort === 'dst') return l.sort((a, b) => dstOf(b) - dstOf(a));
+    if (sort === 'ports') return l.sort((a, b) => portsOf(b) - portsOf(a));
+    if (sort === 'flows') return l.sort((a, b) => flowsOf(b) - flowsOf(a));
+    return l.sort((a, b) => b.score - a.score);
+  }, [findings, filterCols, filters, sort]);
 
-  const columns = useMemo<Column<AnalysisFinding>[]>(
-    () => [
+  const counts = useMemo(
+    () => ({ pattern: facetCounts(findings, filterCols, filters, 'pattern', Date.now()) }),
+    [findings, filterCols, filters],
+  );
+
+  const columns = useMemo<Column<AnalysisFinding>[]>(() => {
+    // ⚠️ Named, not indexed: a renamed column key must be a compile error, not a column that ships
+    // with no filter cell under it.
+    const specs = flowScanFilters(t);
+    return [
       {
         key: 'src',
         header: t('report.flow_scan.cols.source'),
         width: 'minmax(150px, 1.2fr)',
+        filter: specs.src,
         render: (f) => (
           <span className="mono" title={srcOf(f)}>
             {srcOf(f)}
@@ -86,6 +106,7 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         key: 'node',
         header: t('report.flow_scan.cols.node'),
         width: 'minmax(130px, 1fr)',
+        filter: specs.node,
         render: (f) => <EntityName name={f.node_name} id={f.node_id ?? undefined} />,
       },
       {
@@ -93,6 +114,7 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         header: t('report.flow_scan.cols.dst'),
         width: '110px',
         align: 'right',
+        filter: specs.dst,
         render: (f) => fmtCount(dstOf(f)),
       },
       {
@@ -100,6 +122,7 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         header: t('report.flow_scan.cols.ports'),
         width: '110px',
         align: 'right',
+        filter: specs.ports,
         render: (f) => fmtCount(portsOf(f)),
       },
       {
@@ -107,12 +130,14 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         header: t('report.flow_scan.cols.flows'),
         width: '90px',
         align: 'right',
+        filter: specs.flows,
         render: (f) => formatSi(flowsOf(f)),
       },
       {
         key: 'pattern',
         header: t('report.flow_scan.cols.pattern'),
         width: '120px',
+        filter: specs.pattern,
         render: (f) => <Badge>{t(`report.flow_scan.pattern.${patternOf(f)}`)}</Badge>,
       },
       {
@@ -120,11 +145,11 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         header: t('report.common.score'),
         width: '70px',
         align: 'right',
+        filter: specs.score,
         render: (f) => String(Math.round(f.score)),
       },
-    ],
-    [t],
-  );
+    ];
+  }, [t]);
 
   return (
     <>
@@ -141,22 +166,18 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
           />
         </Card>
       )}
+      {/* The action row. Everything that narrows the table now lives under its own header. */}
       <TableToolbar>
-        <SearchInput
-          value={query}
-          onChange={setQuery}
-          placeholder={t('report.flow_scan.searchPlaceholder')}
-          ariaLabel={t('report.flow_scan.searchPlaceholder')}
+        <MobileFilterButton
+          columns={filterCols}
+          filters={filters}
+          onOpen={() => setSheet(true)}
         />
-        <Select
-          aria-label={t('report.flow_scan.cols.pattern')}
-          value={pattern}
-          onChange={(e) => setPattern(e.target.value as 'all' | 'horizontal' | 'vertical')}
-        >
-          <option value="all">{t('report.common.filters.all')}</option>
-          <option value="horizontal">{t('report.flow_scan.pattern.horizontal')}</option>
-          <option value="vertical">{t('report.flow_scan.pattern.vertical')}</option>
-        </Select>
+        <ClearFilters
+          columns={filterCols}
+          filters={filters}
+          onClear={() => setFilters(defaultFilters(filterCols))}
+        />
         <Select
           aria-label={t('report.common.sort.label')}
           value={sort}
@@ -173,11 +194,12 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
       <DataTable
         rows={rows}
         columns={columns}
+        filters={filters}
+        onFiltersChange={setFilters}
+        filterCounts={counts}
         rowKey={(f) => f.id}
         empty={
-          findings.length
-            ? t('report.common.list.emptyFiltered')
-            : t('report.common.list.emptyAll')
+          narrowed ? t('report.common.list.emptyFiltered') : t('report.common.list.emptyAll')
         }
         renderCard={(f) => (
           <div className="tsr-card">
@@ -193,6 +215,24 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
         )}
         cardEstimatePx={108}
       />
+      {sheet && (
+        <MobileFilterSheet
+          columns={filterCols}
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          labels={{
+            src: t('report.flow_scan.cols.source'),
+            node: t('report.flow_scan.cols.node'),
+            dst: t('report.flow_scan.cols.dst'),
+            ports: t('report.flow_scan.cols.ports'),
+            flows: t('report.flow_scan.cols.flows'),
+            pattern: t('report.flow_scan.cols.pattern'),
+            score: t('report.common.score'),
+          }}
+          onClose={() => setSheet(false)}
+        />
+      )}
     </>
   );
 }

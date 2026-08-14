@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SearchInput } from '../ui/TableToolbar';
+import { SearchInput } from '../ui/SearchInput';
 import { groupOptions } from '../../lib/nodeTree';
 import { useNodeSearch } from '../../lib/useNodeSearch';
 import { Segmented } from '../../components/ui/Segmented';

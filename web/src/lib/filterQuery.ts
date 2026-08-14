@@ -9,8 +9,10 @@
 /**
  * A filter value for the wire: the value itself, or `undefined` when nothing is set.
  *
- * `''` is the one spelling of "no filter" across every screen (`FilterSelect` supplies that option
- * itself, so a caller cannot pick a different sentinel). It must not reach the query string:
+ * `''` is the one spelling of "no filter" across every screen — `columnFilter.ts::defaultValue`
+ * derives it from the spec, so a caller has no place to invent a different sentinel. (It used to be
+ * `FilterSelect` that supplied it; that component is gone with ADR-053 Inc.7, but the rule it
+ * enforced outlived it.) It must not reach the query string:
  * `services/typedPaths.ts::buildUrl` drops `undefined` but *keeps* `''`, so `severity=` would
  * arrive at the backend as an empty string and be rejected as an unknown severity — a filter nobody
  * set turning into a 400.

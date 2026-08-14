@@ -405,6 +405,10 @@
       "phases": {
         "cluster": "一致しなかったイベントをまとめています…",
         "rank": "カバレッジの欠落をランク付け中…"
+      },
+      "filter": {
+        "allSources": "すべてのソース",
+        "scopePlaceholder": "ノードを検索…"
       }
     },
     "auth_probe": {
@@ -428,6 +432,14 @@
       "phases": {
         "cluster": "認証失敗をクラスタ化中…",
         "rank": "送信元をランク付け中…"
+      },
+      "filter": {
+        "allSeverities": "すべての重大度"
+      },
+      "cols": {
+        "source": "送信元",
+        "severity": "重大度",
+        "failures": "失敗回数"
       }
     },
     "event_flap": {
@@ -573,6 +585,10 @@
       "phases": {
         "scan": "ファンアウトをスキャン中…",
         "rank": "スキャン送信元をランク付け中…"
+      },
+      "filter": {
+        "allPatterns": "すべての形状",
+        "nodePlaceholder": "ノードを検索…"
       }
     },
     "saturation": {
