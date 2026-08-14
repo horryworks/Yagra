@@ -47,8 +47,9 @@ import {
   writeInventoryFilters,
 } from './inventoryFilters';
 import { FilterBar } from '../components/ui/FilterBar';
+import { ClearFilters } from '../components/ui/ClearFilters';
 import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import type { FilterState } from '../lib/columnFilter';
+import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
@@ -199,6 +200,14 @@ export function NodesPage() {
   // an empty box: "show me the URL monitors" is a whole question, and browsing the folder tree
   // while one is set would show every node and look like the control did nothing.
   const filtering = filter.trim().length > 0 || isInventoryFiltered(inventoryFilters);
+  // Clearing everything is one handler, and it writes the URL exactly once. The search box is
+  // component state and the three controls are URL state, so a "clear all" split across two
+  // callbacks would be two `setSearchParams` calls from the same render snapshot — the second
+  // restoring what the first cleared. That bug has already shipped once (`ClearFilters`' own doc).
+  const clearAllFilters = useCallback(() => {
+    setFilter('');
+    setInventoryFilters(defaultFilters(filterCols));
+  }, [filterCols, setInventoryFilters]);
   // Filter mode's server-side page — the nodes that matched. One capped page, never the fleet; the
   // folders a group-name match reveals arrive separately through the per-group member cache below.
   // `appliedTerm` is the debounced term the search was issued for, so the reveal loads in step with
@@ -215,15 +224,32 @@ export function NodesPage() {
   });
   const invalidateMembers = members.invalidate;
 
-  // The nodes the tree renders: browse mode = the union of the lazily-loaded per-group members;
-  // filter mode = the server search's single capped page PLUS those same lazily-loaded members, so a
-  // folder matched by name can show its contents (and a selected group can still roll its subtree
-  // up). Deduped by id — a node is routinely in both lists, and `flatRowKey` is `n:<id>`.
-  // `flattenTree` hides anything neither matching nor under a matched group, so the extra members
-  // cost nothing on screen.
+  // The nodes the tree renders, in three cases rather than two.
+  //
+  //  - **browsing** — the lazily-loaded per-group members.
+  //  - **a text term only** — those members merged with the server search's capped page, so a
+  //    folder matched by *name* can show its contents (and a selected group can still roll its
+  //    subtree up). Deduped by id; `flatRowKey` is `n:<id>`. The merge is safe here because
+  //    `flattenTree` hides every row that does not match the term, so the extra members cost
+  //    nothing on screen.
+  //  - **a state / kind / pool filter** — the server's page ALONE.
+  //
+  // 🚨 That third case is a fix, not a refinement. `flattenTree` narrows by the **text term only**
+  // (`lib/nodeTree.ts::filterTerm`), so with an empty box it hides nothing — and the merge handed
+  // it back every member already cached from browsing, none of which the state/kind/pool filter
+  // had ever been applied to. Picking "Critical" after expanding a few folders left the whole tree
+  // on screen. It is wrong with a term too: the server narrowed its page by text *and* state,
+  // while the members were narrowed by neither, so a node matching the text but not the state
+  // would survive the merge.
+  const serverNarrowed = isInventoryFiltered(inventoryFilters);
   const treeNodes = useMemo(
-    () => (filtering ? mergeNodesById(search.nodes, members.nodes) : members.nodes),
-    [filtering, search.nodes, members.nodes],
+    () =>
+      serverNarrowed
+        ? search.nodes
+        : filtering
+          ? mergeNodesById(search.nodes, members.nodes)
+          : members.nodes,
+    [serverNarrowed, filtering, search.nodes, members.nodes],
   );
 
   // Overlay the live SSE node states (S14) so the tree's status dots update without re-fetching.
@@ -629,6 +655,16 @@ export function NodesPage() {
               labels={filterLabels}
               filters={inventoryFilters}
               onChange={setInventoryFilters}
+            />
+            {/* The search box is a filter the operator can see but the row does not own, so it is
+                counted here as `extra` and cleared by the same handler — an operator who presses
+                "clear all filters" and is still looking at a narrowed tree has been told something
+                untrue. */}
+            <ClearFilters
+              columns={filterCols}
+              filters={inventoryFilters}
+              extraActive={filter.trim() !== ''}
+              onClear={clearAllFilters}
             />
             {filterSheet && (
               <MobileFilterSheet
