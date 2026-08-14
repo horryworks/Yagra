@@ -609,31 +609,36 @@ export function NodesPage() {
                 placeholder={t('inventory.searchPlaceholder')}
               />
             </div>
-            {/* The tree has no header row to hang a filter row under, so the controls carry their
-                own names (ADR-053 Inc.6 decision E). All three are multi-select and reach the
-                server as comma-joined sets. */}
-            <div className="nodes-pane-filters">
-              <MobileFilterButton
-                columns={filterCols}
-                filters={inventoryFilters}
-                onOpen={() => setFilterSheet(true)}
-              />
-              <FilterBar
+          </div>
+          {/* The tree has no header row to hang a filter row under, so the controls carry their
+              own names (ADR-053 Inc.6 decision E). All three are multi-select and reach the server
+              as comma-joined sets.
+              ⚠️ **A sibling of `.nodes-pane-head`, not a child of it.** That header is a
+              single-line flex row with a fixed 38px height, so a control placed inside it shares
+              the line with the title, the buttons and the search box — and the filter bar shipped
+              squeezed to nothing there. The same mistake as putting a filter in Discovery's 28px
+              select column: the container's size was never checked. */}
+          <div className="nodes-pane-filters">
+            <MobileFilterButton
+              columns={filterCols}
+              filters={inventoryFilters}
+              onOpen={() => setFilterSheet(true)}
+            />
+            <FilterBar
+              columns={filterCols}
+              labels={filterLabels}
+              filters={inventoryFilters}
+              onChange={setInventoryFilters}
+            />
+            {filterSheet && (
+              <MobileFilterSheet
                 columns={filterCols}
                 labels={filterLabels}
                 filters={inventoryFilters}
                 onChange={setInventoryFilters}
+                onClose={() => setFilterSheet(false)}
               />
-              {filterSheet && (
-                <MobileFilterSheet
-                  columns={filterCols}
-                  labels={filterLabels}
-                  filters={inventoryFilters}
-                  onChange={setInventoryFilters}
-                  onClose={() => setFilterSheet(false)}
-                />
-              )}
-            </div>
+            )}
           </div>
           <NodeTree
             groups={groups}

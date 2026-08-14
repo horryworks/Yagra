@@ -65,24 +65,33 @@
   padding: 0 9px;
 }
 
-/* The state / kind / pool selects, on their own row under the pane head. Wrapping rather than
+/* The state / kind / pool controls, on their own row under the pane head. Wrapping rather than
    sharing the head's row: the pane is narrow by design (and narrower still on mobile), and three
-   selects beside the search box would squeeze it to nothing. */
+   controls beside the search box would squeeze it to nothing.
+   ⚠️ **That is what this file has said since the row was written, and the markup did not do it** —
+   the row was a *child* of `.nodes-pane-head`, which is a single-line flex row with a fixed 38px
+   height, so it shared the line with the title, the buttons and the search box and rendered as
+   nothing. A comment describing the intended layout is not the layout; it was a sibling only in
+   prose until 2026-08-14. `flex: none` keeps its natural height inside the pane's flex column. */
 .nodes-pane-filters {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
-  padding: 0 var(--space-3) var(--space-2);
+  flex: none;
+  padding: var(--space-1) var(--space-3) var(--space-2);
+  border-bottom: var(--border-width) solid var(--border-color);
 }
 
-.nodes-pane-filters .table-filter {
-  height: 26px;
-  font-size: var(--font-xs);
-  /* Each select takes an equal share of the row and may shrink; a long pool name must not push
-     the others off. `min-width: 0` because a flex item's default `min-width: auto` refuses to
-     shrink below its content. */
-  flex: 1 1 0;
-  min-width: 0;
+/* The pane is narrow, so the bar's triggers wrap rather than each taking a fixed floor. */
+.nodes-pane-filters .fbar {
+  padding: 0;
+  border-bottom: none;
+  gap: var(--space-1) var(--space-2);
+}
+
+.nodes-pane-filters .fbar-item .dt-f-trigger {
+  min-width: 6rem;
 }
 
 /* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). */
