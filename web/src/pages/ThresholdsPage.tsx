@@ -15,7 +15,6 @@
 // as "these are all the rules", which is exactly the wrong belief to hold about alerting config.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -38,18 +37,10 @@ import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { filterableColumns, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
-import {
-  DEFAULT_THRESHOLD_FILTERS,
-  filtersFromState,
-  isFiltered,
-  queryFor,
-  readFilters,
-  stateFromFilters,
-  thresholdFilters,
-  writeFilters,
-} from './thresholdQuery';
+import { queryFor, thresholdFilters } from './thresholdQuery';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
@@ -238,23 +229,106 @@ export function ThresholdsPage() {
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
   const { scopeName } = useEntityNames();
 
-  // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
-  // reload and can be shared. `replace: true` because a settled filter is not a place you
-  // navigated to: pushing one per keystroke would make Back walk through every intermediate
-  // state instead of leaving the screen.
   const [sheet, setSheet] = useState(false);
-  const [params, setParams] = useSearchParams();
-  const filters = useMemo(
-    () => readFilters(params, SCOPE_LEVELS, DIRECTIONS),
-    [params],
-  );
+
+  // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
+  // `useFilterParams` derives the filter state from whatever list it is given, `load` depends on
+  // that state, and an effect depends on `load` — so the list has to be stable. The display columns
+  // are not: they close over `scopeName`, which changes identity every time a name batch resolves,
+  // and the ruleset would be refetched at that moment. The specs depend on `t` alone.
+  const specs = useMemo(() => thresholdFilters(t), [t]);
+  const filterCols = useMemo(() => specColumns(specs), [specs]);
+  const columns = useMemo<Column<StoredThreshold>[]>(() => {
+    const cols: Column<StoredThreshold>[] = [
+      {
+        key: 'scope_level',
+        header: t('thresholds.cols.scope'),
+        width: '1.6fr',
+        render: (row) => (
+          <>
+            <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
+            <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
+          </>
+        ),
+      },
+      {
+        key: 'q',
+        header: t('thresholds.cols.metric'),
+        width: '1.4fr',
+        render: (row) => <span className="mono">{row.metric}</span>,
+      },
+      {
+        key: 'direction',
+        header: t('thresholds.cols.direction'),
+        width: '110px',
+        render: (row) => (
+          <span className="muted">{t(`thresholds.direction.${row.direction}`)}</span>
+        ),
+      },
+      {
+        key: 'bounds',
+        header: t('thresholds.cols.bounds'),
+        width: '170px',
+        render: (row) => (
+          <span className="thresholds-bounds">
+            {row.warning != null && (
+              <Badge tone="warning">
+                {t('thresholds.warnShort')} {row.warning}
+              </Badge>
+            )}
+            {row.critical != null && (
+              <Badge tone="critical">
+                {t('thresholds.critShort')} {row.critical}
+              </Badge>
+            )}
+          </span>
+        ),
+      },
+      {
+        key: 'dwell',
+        header: t('thresholds.cols.dwell'),
+        width: '100px',
+        render: (row) => (
+          <span className="muted">{t('thresholds.dwellValue', { n: row.dwell_samples })}</span>
+        ),
+      },
+      {
+        key: 'actions',
+        header: t('thresholds.cols.actions'),
+        width: '92px',
+        align: 'right',
+        render: (row) =>
+          authed && (
+            <span className="ytable-actions">
+              <IconButton
+                title={t('common:actions.delete')}
+                danger
+                onClick={() => setDeleting(row)}
+              >
+                <TrashIcon />
+              </IconButton>
+            </span>
+          ),
+      },
+    ];
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [authed, scopeName, specs, t]);
+
+  // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
+  // reload and can be shared. Since Inc.10 that is the shared codec (`useFilterParams`) rather
+  // than a per-field `readFilters`/`writeFilters` pair: the column key **is** the query key, so
+  // the bookmarks taken before this change still resolve. `replace: true` lives in the hook,
+  // because a settled filter is not a place you navigated to.
+  const { filters, setFilters } = useFilterParams(filterCols);
+  const filtered = isAnyFiltered(filterCols, filters);
 
   // Refetch whenever the filter changes: the predicate runs in the database, so a browser-side
   // narrowing would only ever examine the 500 rules already on screen — which is the whole
   // reason this screen filters server-side (see `thresholdQuery.ts`).
   const load = useCallback(() => {
     api
-      .listThresholds(queryFor(filters))
+      .listThresholds(queryFor(filterCols, filters))
       .then((p) => {
         setRows(p.items);
         setPage({ total: p.total, truncated: p.truncated });
@@ -264,87 +338,11 @@ export function ThresholdsPage() {
         if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
       })
       .finally(() => setLoading(false));
-  }, [filters]);
+  }, [filterCols, filters]);
 
   useEffect(() => {
     load();
   }, [load]);
-
-  const specs = thresholdFilters(t);
-  const columns: Column<StoredThreshold>[] = [
-    {
-      key: 'scope_level',
-      header: t('thresholds.cols.scope'),
-      width: '1.6fr',
-      render: (row) => (
-        <>
-          <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
-          <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
-        </>
-      ),
-    },
-    {
-      key: 'q',
-      header: t('thresholds.cols.metric'),
-      width: '1.4fr',
-      render: (row) => <span className="mono">{row.metric}</span>,
-    },
-    {
-      key: 'direction',
-      header: t('thresholds.cols.direction'),
-      width: '110px',
-      render: (row) => <span className="muted">{t(`thresholds.direction.${row.direction}`)}</span>,
-    },
-    {
-      key: 'bounds',
-      header: t('thresholds.cols.bounds'),
-      width: '170px',
-      render: (row) => (
-        <span className="thresholds-bounds">
-          {row.warning != null && (
-            <Badge tone="warning">
-              {t('thresholds.warnShort')} {row.warning}
-            </Badge>
-          )}
-          {row.critical != null && (
-            <Badge tone="critical">
-              {t('thresholds.critShort')} {row.critical}
-            </Badge>
-          )}
-        </span>
-      ),
-    },
-    {
-      key: 'dwell',
-      header: t('thresholds.cols.dwell'),
-      width: '100px',
-      render: (row) => (
-        <span className="muted">{t('thresholds.dwellValue', { n: row.dwell_samples })}</span>
-      ),
-    },
-    {
-      key: 'actions',
-      header: t('thresholds.cols.actions'),
-      width: '92px',
-      align: 'right',
-      render: (row) =>
-        authed && (
-          <span className="ytable-actions">
-            <IconButton title={t('common:actions.delete')} danger onClick={() => setDeleting(row)}>
-              <TrashIcon />
-            </IconButton>
-          </span>
-        ),
-    },
-  ];
-  for (const c of columns) c.filter = specs[c.key];
-  const filterCols = filterableColumns(columns);
-  const rowFilters = stateFromFilters(filters);
-  const onRowFilters = (next: FilterState) => {
-    const p = new URLSearchParams(params);
-    writeFilters(p, filtersFromState(next));
-    setParams(p, { replace: true });
-  };
 
   return (
     <div>
@@ -365,15 +363,11 @@ export function ThresholdsPage() {
       ) : (
         <>
           <TableToolbar>
-            <FilterButton
-              columns={filterCols}
-              filters={rowFilters}
-              onOpen={() => setSheet(true)}
-            />
+            <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
             <ClearFilters
               columns={filterCols}
-              filters={rowFilters}
-              onClear={() => onRowFilters(stateFromFilters(DEFAULT_THRESHOLD_FILTERS))}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(filterCols))}
             />
             <TableSpacer />
             {/* Says how many of how many when the server capped the response — never a bare count
@@ -385,7 +379,7 @@ export function ThresholdsPage() {
             )}
             <ResultCount
               shown={rows.length}
-              total={isFiltered(filters) ? page.total : undefined}
+              total={filtered ? page.total : undefined}
               noun={t('common:noun.rule', { count: rows.length })}
             />
             {authed && (
@@ -400,15 +394,15 @@ export function ThresholdsPage() {
           <DataTable
             rows={rows}
             columns={columns}
-            filters={rowFilters}
-            onFiltersChange={onRowFilters}
+            filters={filters}
+            onFiltersChange={setFilters}
             rowKey={(r) => r.id}
             loading={loading}
             // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a
             // filtered query that legitimately returns zero is indistinguishable from a
             // ruleset that has no rules at all — and on this table those read very differently.
             empty={
-              isFiltered(filters) ? (
+              filtered ? (
                 <div className="yt-empty">
                   <p className="yt-empty-title">{t('thresholds.emptyFiltered')}</p>
                 </div>
@@ -423,8 +417,8 @@ export function ThresholdsPage() {
           {sheet && (
             <MobileFilterSheet
               columns={filterCols}
-              filters={rowFilters}
-              onChange={onRowFilters}
+              filters={filters}
+              onChange={setFilters}
               labels={{
                 q: t('thresholds.cols.metric'),
                 scope_level: t('thresholds.cols.scope'),

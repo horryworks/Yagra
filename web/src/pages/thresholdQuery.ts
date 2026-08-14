@@ -12,37 +12,23 @@
 
 import type { TFunction } from 'i18next';
 import {
-  decodeSet,
-  encodeSet,
+  normalizeSets,
   type ColumnFilterSpec,
   type FilterState,
+  type FilterableColumn,
 } from '../lib/columnFilter';
 import { decodeCondition } from '../lib/filterCondition';
-import { isFiltered as isFilteredAgainst, unset } from '../lib/filterQuery';
-import { readIdParam, readSetParam, writeIdParam, writeSetParam } from '../lib/filterParams';
-import {
-  DIRECTIONS,
-  SCOPE_LEVELS,
-  type Direction,
-  type ScopeLevel,
-  type StoredThreshold,
-} from '../types/api';
+import { unset } from '../lib/filterQuery';
+import { DIRECTIONS, SCOPE_LEVELS, type StoredThreshold } from '../types/api';
 
-/** The screen's filter state. `''` means "no filter" for each field. */
-export interface ThresholdFilters {
-  /** Free text over the metric name — matched as a substring, server-side. */
-  q: string;
-  /** Comma-joined `ScopeLevel` tokens; `''` is every level. Same spelling as the API takes. */
-  scopeLevel: string;
-  /** Comma-joined `Direction` tokens; `''` is both. */
-  direction: string;
-}
-
-export const DEFAULT_THRESHOLD_FILTERS: ThresholdFilters = {
-  q: '',
-  scopeLevel: '',
-  direction: '',
-};
+/** The columns this module's functions read (ADR-053 Inc.10, 決定 AA).
+ *
+ *  This module was the clearest case for that decision: most of its 148 lines existed to carry
+ *  three columns between two names for the same thing — `scope_level` ⟷ `scopeLevel` — plus a
+ *  hand-written defaults object and a per-field URL codec that `useFilterParams` already had. What
+ *  is left is the filter row's specs and the one mapping that is genuinely this screen's: which
+ *  query parameter each column becomes. */
+export type ThresholdColumns = readonly FilterableColumn<StoredThreshold>[];
 
 /**
  * The request for one page.
@@ -50,44 +36,20 @@ export const DEFAULT_THRESHOLD_FILTERS: ThresholdFilters = {
  * Every unset filter is `undefined`, never `''`: the client drops `undefined` from the query string,
  * whereas `scope_level=` would arrive as an empty string and be rejected as an unknown level — a
  * filter nobody set turning into a 400.
+ *
+ * ⚠️ **`normalizeSets` is what keeps `?scope_level=galaxy` out of that same 400.** The URL is read
+ * without validation on purpose (`readFilterParams`' rule: a stale bookmark opens the default view
+ * rather than a broken control), so the token this screen does not offer has to be dropped here.
  */
-export function queryFor(f: ThresholdFilters) {
+export function queryFor(columns: ThresholdColumns, s: FilterState) {
+  const f = normalizeSets(columns, s);
   return {
-    q: unset(f.q),
-    scope_level: unset(f.scopeLevel),
+    // The text column stores an encoded condition; only its term reaches this API, which has
+    // neither a regex parameter nor a negated form for `q`.
+    q: unset(decodeCondition(f.q ?? '').term),
+    scope_level: unset(f.scope_level),
     direction: unset(f.direction),
   };
-}
-
-/** Whether anything is narrowing the ruleset — drives the empty state's wording.
- *
- *  ⚠️ Must not be replaced by a `rows.length` check: with the predicate in SQL, a filtered query
- *  that legitimately returns zero is indistinguishable from an empty ruleset. */
-export function isFiltered(f: ThresholdFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_THRESHOLD_FILTERS);
-}
-
-/** Read the filters out of the URL, so a narrowed view survives a reload and can be shared. */
-export function readFilters(
-  params: URLSearchParams,
-  levels: readonly ScopeLevel[],
-  directions: readonly Direction[],
-): ThresholdFilters {
-  return {
-    q: readIdParam(params, 'q') ?? '',
-    // ⚠️ `readSetParam`, not `readEnumParam`: these carry several tokens since Inc.4b. A bookmark
-    // holding one (`?scope_level=node`) still reads correctly — one token is a one-element set.
-    scopeLevel: readSetParam(params, 'scope_level', levels),
-    direction: readSetParam(params, 'direction', directions),
-  };
-}
-
-/** Write the filters back, deleting every key whose value is the default so the unfiltered view
- *  has no query string at all. */
-export function writeFilters(params: URLSearchParams, f: ThresholdFilters): void {
-  writeIdParam(params, 'q', f.q.trim() || null);
-  writeSetParam(params, 'scope_level', f.scopeLevel);
-  writeSetParam(params, 'direction', f.direction);
 }
 
 /**
@@ -102,6 +64,11 @@ export function writeFilters(params: URLSearchParams, f: ThresholdFilters): void
  * and `direction` as comma-separated sets. The URL therefore carries a *joined* value where it used
  * to carry one token — `scope_level=group,node` — which older bookmarks (`scope_level=node`) still
  * read correctly, since one token is a one-element set.
+ *
+ * ⚠️ **Declared in the table's column order.** The page derives its filter list from this record
+ * rather than from the columns — a display column closes over the resolved scope name, so deriving
+ * from it would refetch the ruleset every time a name batch lands — and the mobile sheet lists
+ * filters in the order it is given.
  */
 export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<StoredThreshold>> {
   return {
@@ -109,6 +76,11 @@ export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<
     // server-side with a `truncated` flag, so a browser-side predicate would examine that prefix
     // and report on it — the exact failure the file header opens with, re-entered through the back
     // door. The absence is the declaration.
+    scope_level: {
+      kind: 'enum',
+      options: SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
+      allLabel: t('thresholds.filter.allScopes'),
+    },
     q: {
       kind: 'text',
       // Contains only — the endpoint does a substring match and has no regex parameter to carry a
@@ -117,31 +89,10 @@ export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<
       containsSemantics: 'substring',
       placeholder: t('thresholds.cols.metric'),
     },
-    scope_level: {
-      kind: 'enum',
-      options: SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
-      allLabel: t('thresholds.filter.allScopes'),
-    },
     direction: {
       kind: 'enum',
       options: DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) })),
       allLabel: t('thresholds.filter.allDirections'),
     },
-  };
-}
-
-/** The flat row state ⟷ the request shape. The URL codec stays `readFilters`/`writeFilters`; the
- *  filter row does not get a second one writing the same params (one handler, one write). */
-export function stateFromFilters(f: ThresholdFilters): FilterState {
-  return { q: f.q, scope_level: f.scopeLevel, direction: f.direction };
-}
-
-export function filtersFromState(s: FilterState): ThresholdFilters {
-  // A set column stores its tokens joined and the API takes the same spelling, so both are
-  // pass-throughs — re-encoded only to pin the order, which keeps the URL comparable.
-  return {
-    q: decodeCondition(s.q ?? '').term,
-    scopeLevel: encodeSet(decodeSet(s.scope_level ?? ''), SCOPE_LEVELS),
-    direction: encodeSet(decodeSet(s.direction ?? ''), DIRECTIONS),
   };
 }

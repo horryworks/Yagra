@@ -27,6 +27,18 @@
   desktop filter row does.** "Poll interval" listed *Inherited* and *Overridden* with no numbers
   beside them there, while the row on a desktop had them — the two surfaces were being handed
   different sets of counts. Both now read one source.
+- **Alerts ▸ Alert rules: the "Dwell" column is now "Breaches".** *Dwell* is radar and telecom
+  jargon, not a word network engineers use for this — the number is how many consecutive readings
+  must cross the bound before the alert fires, so the column, the add-rule field and the hint all
+  say that instead. `dwell_samples` is unchanged on the API and in the configuration bundle.
+- **Alerts ▸ History and Alerts ▸ Alert rules: a saved link whose search term begins with `!`, `~`
+  or `\` is written differently.** Those four screens (with Settings ▸ Audit and Troubleshoot ▸ All
+  findings) now share one filter codec with every other list, and it spells a text filter the way
+  the rest of the app does — a leading `!` means *exclude* and a leading `~` means *regular
+  expression*, so a term that starts with one of those characters is escaped with a backslash:
+  `?node_q=%5C%21core` for `!core`. **A link saved before this change still opens**, but a term of
+  that shape reads as the rest of the word — `?node_q=!core` searches for `core`. Every other saved
+  link is unaffected, and nothing changed about what the filters do.
 
 ### Bug Fixes
 - **Five screens drew a desktop column-filter row on a phone, on top of the `Filter` button that is

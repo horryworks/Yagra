@@ -12,14 +12,15 @@
 
 import type { TFunction } from 'i18next';
 import {
-  decodeSet,
-  encodeSet,
+  normalizeSets,
+  rangeSecondsIn,
   type ColumnFilterSpec,
   type FilterState,
+  type FilterableColumn,
 } from '../lib/columnFilter';
 import { decodeCondition } from '../lib/filterCondition';
-import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
-import { rangePresets, rangeSeconds, type RangeToken } from '../lib/filterPresets';
+import { sinceIso, unset } from '../lib/filterQuery';
+import { rangePresets, type RangeToken } from '../lib/filterPresets';
 import {
   AUDIT_ACTIONS,
   AUDIT_STATUS_CLASSES,
@@ -36,28 +37,11 @@ export const PAGE_SIZE = 100;
 /** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
  *  `satisfies` is what makes a token added here without one there a compile error. */
 export const AUDIT_RANGES = ['24h', '7d', '30d', 'all'] as const satisfies readonly RangeToken[];
-export type AuditRange = (typeof AUDIT_RANGES)[number];
 
-/** The screen's filter state. `''` means "no filter" for each optional field. */
-export interface AuditFilters {
-  q: string;
-  /** Comma-joined `AuditAction` tokens; `''` is every kind. Same spelling as the API takes. */
-  action: string;
-  /** Comma-joined `AuditStatusClass` tokens; `''` is every class. */
-  status: string;
-  range: AuditRange;
-}
-
-/**
- * The default view: everything, unfiltered.
- *
- * `all` rather than a bounded window, deliberately, and it is the one place this screen differs from
- * Saved findings. `audit_log_at_idx` orders the table by the same column the cursor pages on, so an
- * unfiltered first page is an index scan of 100 rows however large the log is — the cost `findings`
- * avoids does not exist here. And an audit log that silently withheld older entries on open would be
- * the same class of bug this change exists to fix.
- */
-export const DEFAULT_FILTERS: AuditFilters = { q: '', action: '', status: '', range: 'all' };
+/** The columns this module's functions read. Every one of them takes the screen's
+ *  [`FilterState`] plus the columns it was drawn from — there is no second, API-named copy of the
+ *  state to keep in step (ADR-053 Inc.10, 決定 AA). */
+export type AuditColumns = readonly FilterableColumn<AuditRow>[];
 
 /**
  * The request for one page.
@@ -66,14 +50,26 @@ export const DEFAULT_FILTERS: AuditFilters = { q: '', action: '', status: '', ra
  * whereas `action=` would reach the backend as an empty string and be rejected as an unknown action
  * — a filter nobody set turning into a 400.
  *
+ * ⚠️ **`normalizeSets` is not optional here.** The state comes straight off the controls or off a
+ * hand-typed query string, and `?action=bogus` would otherwise be forwarded verbatim to an endpoint
+ * that rejects unknown actions. Dropping it is the browser's job, exactly as keeping it is the API's.
+ *
  * `nowMs` is a parameter so a relative range is testable without faking the clock.
  */
-export function queryFor(f: AuditFilters, before: string | null, nowMs: number): AuditQuery {
+export function queryFor(
+  columns: AuditColumns,
+  s: FilterState,
+  before: string | null,
+  nowMs: number,
+): AuditQuery {
+  const f = normalizeSets(columns, s);
   return {
-    q: unset(f.q),
+    // The text column stores an encoded condition (`filterCondition.ts`); only its term reaches
+    // this API, which has neither a regex nor a negated form for `q`.
+    q: unset(decodeCondition(f.q ?? '').term),
     action: unset(f.action),
     status: unset(f.status),
-    since: sinceIso(rangeSeconds(f.range), nowMs),
+    since: sinceIso(rangeSecondsIn(columns, f), nowMs),
     before: before ?? undefined,
     limit: PAGE_SIZE,
   };
@@ -91,15 +87,18 @@ export function queryFor(f: AuditFilters, before: string | null, nowMs: number):
  * passes through JavaScript memory. The session cookie rides along; a token-authenticated client
  * calls the endpoint itself.
  */
-export function exportUrl(f: AuditFilters, nowMs: number): string {
+export function exportUrl(columns: AuditColumns, s: FilterState, nowMs: number): string {
+  // Built from `queryFor` rather than beside it: the two must carry the same filter, and the way
+  // that stops being true is one of them gaining a column the other does not know about.
+  const q = queryFor(columns, s, null, nowMs);
   const params = new URLSearchParams();
   const add = (k: string, v: string | undefined) => {
     if (v) params.set(k, v);
   };
-  add('q', unset(f.q));
-  add('action', unset(f.action));
-  add('status', unset(f.status));
-  add('since', sinceIso(rangeSeconds(f.range), nowMs));
+  add('q', q.q);
+  add('action', q.action);
+  add('status', q.status);
+  add('since', q.since);
   const qs = params.toString();
   return qs ? `/api/v1/audit/export.csv?${qs}` : '/api/v1/audit/export.csv';
 }
@@ -130,23 +129,14 @@ export function appendPage<T extends { id: string }>(have: readonly T[], page: r
   return [...have, ...page.filter((r) => !seen.has(r.id))];
 }
 
-/** Whether anything is narrowing the log — drives the empty state's wording.
- *
- *  ⚠️ Must not be replaced by a `rows.length` check. That worked only while every row was in the
- *  browser; with the filter in SQL, a filtered query that legitimately returns zero is
- *  indistinguishable from an empty log, and the screen would say "no audit entries" while a filter
- *  is hiding them. */
-export function isFiltered(f: AuditFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_FILTERS);
-}
-
 /**
  * The Access ▸ Audit filter row, keyed by `Column.key` (ADR-053 Inc.4).
  *
  * The keys are the API's own parameter names (`q` / `action` / `status` / `range`) rather than the
- * old column names (`user`, `action`, `status`, `time`), so `filtersFromState` is a rename-free
- * mapping. This screen keeps its filters in component state, not the URL, so no bookmark depends on
- * them — unlike History, where the same choice was forced by saved links.
+ * old column names (`user`, `action`, `status`, `time`), which is why [`queryFor`] can read the
+ * state directly instead of mapping it through a second, API-named object. This screen keeps its
+ * filters in component state, not the URL, so no bookmark depends on them — unlike History, where
+ * the same choice was forced by saved links.
  *
  * ⚠️ **`q` is a two-column search the filter row cannot express honestly.** The endpoint matches it
  * against the username **and** the action, so it is mounted on the User column, which is the more
@@ -158,6 +148,10 @@ export function isFiltered(f: AuditFilters): boolean {
  * as comma-separated sets. `status` is worth a note — a class is a *range* of HTTP statuses, so a
  * set of classes is a set of ranges, and the backend walks them with `unnest` rather than an `IN`.
  * Nothing about that is visible here, which is the point.
+ *
+ * ⚠️ **Declared in the table's column order.** The page derives its filter list from this record
+ * rather than from the columns (so that a resolved entity name cannot churn the list's identity and
+ * refetch the log), and the mobile sheet lists filters in the order it is given.
  */
 export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<AuditRow>> {
   return {
@@ -166,6 +160,23 @@ export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<Audi
     // its options are status *classes* (`4xx`). Every token would have failed to match, so the
     // first browser-side pass anyone wired onto this screen would have emptied the table under a
     // filter that looked ordinary. The class is derived in SQL; there is nothing on the row to read.
+    range: {
+      kind: 'range',
+      // ⚠️ The presets carry their **real** lengths now (Inc.10), where they used to carry
+      // `seconds: null` "because this list is server-side". That null was inert — the predicate
+      // returns at the missing `readTime` above it — and its only effect was to force a private
+      // seconds table into this file for `queryFor` to read.
+      presets: rangePresets(AUDIT_RANGES, t, 'audit.range.'),
+      // `all` rather than a bounded window, deliberately, and it is the one place this screen
+      // differs from All findings. `audit_log_at_idx` orders the table by the same column the
+      // cursor pages on, so an unfiltered first page is an index scan of 100 rows however large the
+      // log is — the cost `findings` avoids does not exist here. And an audit log that silently
+      // withheld older entries on open would be the same class of bug the server-side move fixed.
+      //
+      // ⚠️ This literal is the screen's whole default state now (Inc.10): `defaultFilters(columns)`
+      // derives the rest, so there is no hand-written defaults object to forget a key in.
+      defaultPreset: 'all',
+    },
     q: {
       kind: 'text',
       // Contains only: the endpoint does a case-insensitive substring, and there is no regex
@@ -184,35 +195,5 @@ export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<Audi
       options: AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
       allLabel: t('audit.filter.allStatuses'),
     },
-    range: {
-      kind: 'range',
-      // ⚠️ The presets carry their **real** lengths now (Inc.10), where they used to carry
-      // `seconds: null` "because this list is server-side". That null was inert — the predicate
-      // returns at the missing `readTime` above it — and its only effect was to force a private
-      // seconds table into this file for `queryFor` to read.
-      presets: rangePresets(AUDIT_RANGES, t, 'audit.range.'),
-      defaultPreset: DEFAULT_FILTERS.range,
-    },
-  };
-}
-
-/** The flat row state ⟷ the request shape. The URL codec stays this module's existing one; the
- *  filter row does not get a second one writing the same params (one handler, one write). */
-export function stateFromFilters(f: AuditFilters): FilterState {
-  return { q: f.q, action: f.action, status: f.status, range: f.range };
-}
-
-export function filtersFromState(s: FilterState): AuditFilters {
-  const range = s.range ?? '';
-  return {
-    // The text column stores an encoded condition; only its term reaches this API.
-    q: decodeCondition(s.q ?? '').term,
-    // Set columns store their tokens joined and the API takes the same spelling; re-encoding only
-    // pins the order, which is what keeps the value comparable as an effect dependency.
-    action: encodeSet(decodeSet(s.action ?? ''), AUDIT_ACTIONS),
-    status: encodeSet(decodeSet(s.status ?? ''), AUDIT_STATUS_CLASSES),
-    range: (AUDIT_RANGES as readonly string[]).includes(range)
-      ? (range as AuditRange)
-      : DEFAULT_FILTERS.range,
   };
 }

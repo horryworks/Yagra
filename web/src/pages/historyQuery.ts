@@ -11,29 +11,25 @@
 import type { TFunction } from 'i18next';
 import {
   decodeSet,
-  encodeSet,
+  normalizeSets,
+  rangeSecondsIn,
   type ColumnFilterSpec,
   type FilterState,
+  type FilterableColumn,
 } from '../lib/columnFilter';
-import { decodeCondition, encodeCondition } from '../lib/filterCondition';
-import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
-import { rangePresets, rangeSeconds, type RangeToken } from '../lib/filterPresets';
-import {
-  readEnumParam,
-  readIdParam,
-  readSetParam,
-  writeEnumParam,
-  writeIdParam,
-  writeSetParam,
-} from '../lib/filterParams';
+import { decodeCondition } from '../lib/filterCondition';
+import { sinceIso, unset } from '../lib/filterQuery';
+import { rangePresets, type RangeToken } from '../lib/filterPresets';
 import { severityLabel, stateLabel } from '../lib/format';
 import { SEVERITY_ORDER } from '../lib/nodeState';
 import { PAGE_SIZE } from './historyCursor';
-import { SEVERITIES, type AlertHistoryRow, type NodeState, type Severity } from '../types/api';
+import { SEVERITIES, type AlertHistoryRow } from '../types/api';
+import type { ScopeIds } from '../troubleshoot/findingsQuery';
 
-/** The lifecycle phases the screen offers, mapped to the API's `resolved` boolean. */
-export const HISTORY_PHASES = ['', 'fired', 'cleared'] as const;
-export type HistoryPhase = (typeof HISTORY_PHASES)[number];
+/** The lifecycle phases the column offers, mapped to the API's `resolved` boolean. `''` — both
+ *  ticked, or neither — is the unfiltered view rather than a third phase. */
+export const HISTORY_PHASES = ['fired', 'cleared'] as const;
+export type HistoryPhase = '' | (typeof HISTORY_PHASES)[number];
 
 /** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
  *  `satisfies` is what makes a token added here without one there a compile error. */
@@ -54,6 +50,11 @@ export type HistoryRange = (typeof HISTORY_RANGES)[number];
  * "forgotten"*, so a column with no filter looks like a bug whatever the reason. Each got a
  * parameter rather than a browser-side predicate, because filtering a keyset-paged list in the
  * browser hides older matches while looking like it worked.
+ *
+ * ⚠️ **Declared in the table's column order.** The page derives its filter list from this record
+ * rather than from the columns — a display column closes over the resolved node name, so deriving
+ * from it would refetch the first page every time a name batch lands, discarding the pages below —
+ * and the mobile sheet lists filters in the order it is given.
  */
 export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<AlertHistoryRow>> {
   return {
@@ -72,19 +73,6 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       kind: 'enum',
       options: SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) })),
       allLabel: t('history.filter.allSeverities'),
-    },
-    state: {
-      kind: 'enum',
-      options: SEVERITY_ORDER.map((s) => ({ value: s, label: stateLabel(s) })),
-      allLabel: t('history.filter.allStates'),
-    },
-    phase: {
-      kind: 'enum',
-      options: [
-        { value: 'fired', label: t('history.phase.fired') },
-        { value: 'cleared', label: t('history.phase.cleared') },
-      ],
-      allLabel: t('history.filter.allPhases'),
     },
     // The node's **current** name, matched as a substring by the server (`node_q`). Deliberately
     // not the same question as the action row's ScopePicker, which selects exactly one node — "every
@@ -114,6 +102,16 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       containsSemantics: 'substring',
       placeholder: t('history.cols.what'),
     },
+    state: {
+      kind: 'enum',
+      options: SEVERITY_ORDER.map((s) => ({ value: s, label: stateLabel(s) })),
+      allLabel: t('history.filter.allStates'),
+    },
+    phase: {
+      kind: 'enum',
+      options: HISTORY_PHASES.map((v) => ({ value: v, label: t(`history.phase.${v}`) })),
+      allLabel: t('history.filter.allPhases'),
+    },
     // Whether the incident was acknowledged. The question this answers — "what fired this week that
     // nobody has looked at" — had to be done by eye before.
     acked: {
@@ -130,118 +128,36 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       // `seconds` — is what stops a client predicate re-applying it against a different clock
       // (Inc.10; `filterPredicate.ts` returns at the accessor, before it reads a length).
       presets: rangePresets(HISTORY_RANGES, t, 'history.range.'),
-      defaultPreset: DEFAULT_FILTERS.range,
+      // `all` rather than a bounded window. `alert_history_cursor_idx` orders the table by exactly
+      // the columns the cursor pages on, so an unfiltered first page is an index seek of 100 rows
+      // however large the log is — and History showing everything on open is what it has always
+      // done. (All findings defaults to 7d for the opposite reason: it has no such index.)
+      //
+      // ⚠️ This literal is the screen's whole default state now (Inc.10): `defaultFilters(columns)`
+      // derives the rest, so there is no hand-written defaults object to forget a key in — and no
+      // second URL codec either, since `useFilterParams` reads and writes these keys directly.
+      defaultPreset: 'all',
     },
   };
 }
 
-// The filter row's state is flat primitives keyed by column (`columnFilter.ts` explains why this is
-// forced rather than chosen); `HistoryFilters` is named by what the API calls things and also
-// carries the scope, which is not a column. These two functions are the only mapping between them.
-//
-// ⚠️ The **URL codec stays `readFilters`/`writeFilters`** below — the filter row does not get its
-// own. Two codecs writing the same `URLSearchParams` is the shape that made "clear all filters" do
-// nothing on the Events page (`useFilterParams.setFilters`): one handler, one write.
+/** The columns this module's functions read (ADR-053 Inc.10, 決定 AA). */
+export type HistoryColumns = readonly FilterableColumn<AlertHistoryRow>[];
 
-export function stateFromFilters(f: HistoryFilters): FilterState {
-  return {
-    severity: f.severity,
-    state: f.state,
-    phase: f.phase,
-    node_q: f.nodeQ ? encodeCondition({ term: f.nodeQ, mode: 'contains', not: false }) : '',
-    metric: f.metric ? encodeCondition({ term: f.metric, mode: 'contains', not: false }) : '',
-    acked: f.acked,
-    range: f.range,
-  };
-}
-
-export function filtersFromState(
-  s: FilterState,
-  scope: { nodeId: string; groupId: string },
-): HistoryFilters {
-  const range = s.range ?? '';
-  return {
-    // A set column stores its tokens joined; the API takes the same spelling, so this is a
-    // pass-through rather than a decode-and-rejoin.
-    severity: joined(s.severity, SEVERITIES),
-    state: joined(s.state, SEVERITY_ORDER),
-    // `phase` maps onto a boolean, so "both ticked" is the same request as "neither" — see
-    // `resolvedFor`. Normalising it here keeps `isFiltered` from calling the unfiltered view filtered.
-    phase: phaseOf(s.phase),
-    // A text column stores an encoded condition; only its term reaches this API (there is no regex
-    // and no negated form on either parameter).
-    nodeQ: decodeCondition(s.node_q ?? '').term,
-    metric: decodeCondition(s.metric ?? '').term,
-    acked: ackedOf(s.acked),
-    range: (HISTORY_RANGES as readonly string[]).includes(range)
-      ? (range as HistoryRange)
-      : DEFAULT_FILTERS.range,
-    nodeId: scope.nodeId,
-    groupId: scope.groupId,
-  };
-}
-
-/** A token set, re-joined in `order` so the same selection is always the same string. */
-function joined(value: string | undefined, order: readonly string[]): string {
-  return encodeSet(decodeSet(value ?? ''), order);
-}
-
-/** Both phases ticked (or neither) is the unfiltered view; one is a filter. */
+/** Both phases ticked (or neither) is the unfiltered view; exactly one is a filter.
+ *
+ *  Reading `picked[0]` without re-checking it is safe only because `queryFor` has already run the
+ *  state through `normalizeSets`, which drops any token the column does not offer. */
 function phaseOf(value: string | undefined): HistoryPhase {
   const picked = decodeSet(value ?? '');
   return picked.length === 1 ? (picked[0] as HistoryPhase) : '';
 }
 
-/** Same rule for ack: both is the unfiltered view. `''` is "either". */
-function ackedOf(value: string | undefined): AckedFilter {
+/** Same rule for ack, straight to the boolean the API takes: `undefined` is "either". */
+function ackedOf(value: string | undefined): boolean | undefined {
   const picked = decodeSet(value ?? '');
-  return picked.length === 1 && (picked[0] === 'true' || picked[0] === 'false')
-    ? (picked[0] as AckedFilter)
-    : '';
+  return picked.length === 1 ? picked[0] === 'true' : undefined;
 }
-
-/** `''` = either, otherwise the acknowledged state to keep. */
-export type AckedFilter = '' | 'true' | 'false';
-
-/** The screen's filter state. `''` means "no filter" for each optional field.
- *
- *  `severity` and `state` are comma-joined token **sets** rather than single values — the API takes
- *  them that way since ADR-053 Inc.4b, and keeping the same spelling here means `queryFor` passes
- *  them through untouched instead of re-encoding a list at the last moment. */
-export interface HistoryFilters {
-  severity: string;
-  state: string;
-  phase: HistoryPhase;
-  /** Substring of the node's current name (`node_q`). */
-  nodeQ: string;
-  /** Substring of the metric name (`metric`). */
-  metric: string;
-  acked: AckedFilter;
-  range: HistoryRange;
-  nodeId: string;
-  groupId: string;
-}
-
-/**
- * The default view: everything, unfiltered.
- *
- * `all` rather than a bounded window. `alert_history_cursor_idx` orders the table by exactly the
- * columns the cursor pages on, so an unfiltered first page is an index seek of 100 rows however
- * large the log is — and History showing everything on open is what it has always done. (Saved
- * findings defaults to 7d for the opposite reason: nothing prunes that table and it has no such
- * index.)
- */
-export const DEFAULT_FILTERS: HistoryFilters = {
-  severity: '',
-  state: '',
-  phase: '',
-  nodeQ: '',
-  metric: '',
-  acked: '',
-  range: 'all',
-  nodeId: '',
-  groupId: '',
-};
 
 /** `resolved` for a phase: `undefined` means "both", which is not the same as `false`. */
 export function resolvedFor(phase: HistoryPhase): boolean | undefined {
@@ -257,76 +173,72 @@ export function resolvedFor(phase: HistoryPhase): boolean | undefined {
  * whereas `severity=` would reach the backend as an empty string and be rejected as an unknown
  * severity — a filter nobody set turning into a 400.
  *
+ * ⚠️ **`normalizeSets` is what keeps a hand-typed `?severity=bogus` out of that same 400**, and on
+ * this screen it does a second job: `phaseOf`/`ackedOf` below read `picked[0]` as a known token,
+ * which is only true downstream of it.
+ *
+ * The scope is a parameter rather than a column because it is not one — the ScopePicker in the
+ * action row answers "all / this group / this node", and its two ids ride in the URL beside the
+ * columns (`useFilterParams.setFilters(next, also)`).
+ *
  * `nowMs` is a parameter so a relative range is testable without faking the clock.
  */
 export function queryFor(
-  f: HistoryFilters,
+  columns: HistoryColumns,
+  s: FilterState,
+  scope: ScopeIds,
   cursor: { before: string; before_id: string } | null,
   nowMs: number,
 ) {
+  const f = normalizeSets(columns, s);
   return {
     limit: PAGE_SIZE,
     severity: unset(f.severity),
     state: unset(f.state),
-    resolved: resolvedFor(f.phase),
-    // `''` means "either", and the two real values are strings in the filter state because that is
-    // what a filter cell stores. Only here do they become the boolean the API takes.
-    acked: f.acked === '' ? undefined : f.acked === 'true',
-    metric: unset(f.metric),
-    node_id: unset(f.nodeId),
-    node_q: unset(f.nodeQ),
-    group_id: unset(f.groupId),
-    since: sinceIso(rangeSeconds(f.range), nowMs),
+    resolved: resolvedFor(phaseOf(f.phase)),
+    // Two ticked boxes are strings in the filter state because that is what a filter cell stores.
+    // Only here do they become the boolean the API takes — and "both" is `undefined`, not `false`.
+    acked: ackedOf(f.acked),
+    // The text columns store an encoded condition; only the term reaches this API, which has
+    // neither a regex nor a negated form for either parameter.
+    metric: unset(decodeCondition(f.metric ?? '').term),
+    node_id: unset(scope.nodeId),
+    node_q: unset(decodeCondition(f.node_q ?? '').term),
+    group_id: unset(scope.groupId),
+    since: sinceIso(rangeSecondsIn(columns, f), nowMs),
     before: cursor?.before,
     before_id: cursor?.before_id,
   };
 }
 
-/** Whether anything is narrowing the log — drives the empty state's wording.
- *
- *  ⚠️ Must not be replaced by a `rows.length` check: with the filter in SQL, a filtered query that
- *  legitimately returns zero is indistinguishable from an empty log. */
-export function isFiltered(f: HistoryFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_FILTERS);
-}
-
 /**
- * Read the filters out of the URL.
+ * The scope ids the URL carries beside the columns, and the writer that puts them back.
  *
- * The scope ids are the reason this screen carries its filters in the URL at all: a node page
- * linking to "this node's alert history" needs somewhere to say which node, and nothing else holds
- * that. The rest ride along so a filtered view can be shared and survives a reload.
+ * They are the reason this screen keeps its filters in the URL at all: a node page linking to
+ * "this node's alert history" needs somewhere to say which node, and nothing else holds that.
+ *
+ * ⚠️ `writeScope` is meant to be handed to `setFilters(next, also)` — **never called beside a
+ * second `setSearchParams`**. Two writes in one handler are both built from this render's snapshot
+ * and React batches them, so the second silently discards the first; that is exactly how "clear all
+ * filters" once cleared the columns and restored them on the Events page.
  */
-export function readFilters(
-  params: URLSearchParams,
-  severities: readonly Severity[],
-  states: readonly NodeState[],
-): HistoryFilters {
+export function readScope(params: URLSearchParams): ScopeIds {
   return {
-    // ⚠️ `readSetParam`, not `readEnumParam`: these carry several tokens now. An older bookmark
-    // holding one (`?severity=critical`) still reads correctly — one token is a one-element set.
-    severity: readSetParam(params, 'severity', severities),
-    state: readSetParam(params, 'state', states),
-    phase: readEnumParam(params, 'phase', HISTORY_PHASES, ''),
-    nodeQ: readIdParam(params, 'node_q') ?? '',
-    metric: readIdParam(params, 'metric') ?? '',
-    acked: readEnumParam<AckedFilter>(params, 'acked', ['', 'true', 'false'], ''),
-    range: readEnumParam(params, 'range', HISTORY_RANGES, DEFAULT_FILTERS.range),
-    nodeId: readIdParam(params, 'node_id') ?? '',
-    groupId: readIdParam(params, 'group_id') ?? '',
+    nodeId: params.get('node_id')?.trim() ?? '',
+    groupId: params.get('group_id')?.trim() ?? '',
   };
 }
 
-/** Write the filters back, deleting every key whose value is the default so the unfiltered view
- *  has no query string at all. */
-export function writeFilters(params: URLSearchParams, f: HistoryFilters): void {
-  writeSetParam(params, 'severity', f.severity);
-  writeSetParam(params, 'state', f.state);
-  writeEnumParam(params, 'phase', f.phase, '');
-  writeIdParam(params, 'node_q', f.nodeQ.trim() || null);
-  writeIdParam(params, 'metric', f.metric.trim() || null);
-  writeEnumParam(params, 'acked', f.acked, '');
-  writeEnumParam(params, 'range', f.range, DEFAULT_FILTERS.range);
-  writeIdParam(params, 'node_id', f.nodeId || null);
-  writeIdParam(params, 'group_id', f.groupId || null);
+export function writeScope(scope: ScopeIds): (params: URLSearchParams) => void {
+  return (params) => {
+    for (const [key, value] of [
+      ['node_id', scope.nodeId],
+      ['group_id', scope.groupId],
+    ] as const) {
+      // Deleted rather than emptied, the same rule `writeFilterParams` follows: a bare URL is the
+      // default view, so a query string always means something is narrowing the list.
+      if (value) params.set(key, value);
+      else params.delete(key);
+    }
+  };
 }

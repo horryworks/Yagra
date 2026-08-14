@@ -36,7 +36,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { filterableColumns, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered, specColumns, type FilterState } from '../lib/columnFilter';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { ScopePicker } from '../components/ScopePicker/ScopePicker';
@@ -44,17 +44,13 @@ import { allScope, type ScopeValue } from '../components/ScopePicker/scope';
 import { reportPathFor, toolById } from './data';
 import { sevOf } from './report/format';
 import {
-  DEFAULT_FILTERS,
   appendPage,
   findingFilters,
-  filtersFromState,
-  isFiltered,
   nextCursor,
   queryFor,
   scopeFilter,
-  stateFromFilters,
+  scopeIsSet,
   type FindingCursor,
-  type FindingFilters,
 } from './findingsQuery';
 import './troubleshoot.css';
 
@@ -67,8 +63,11 @@ const SEV_COLOR: Record<(typeof FINDING_SEVERITIES)[number], string> = {
 
 /** Columns for the virtualized table. Built from the caller's `t` so a language switch rebuilds
  *  the headers and the tool names. */
-function findingColumns(t: TFunction, nodeName: (id: string) => string): Column<SavedFinding>[] {
-  const specs = findingFilters(t);
+function findingColumns(
+  t: TFunction,
+  specs: ReturnType<typeof findingFilters>,
+  nodeName: (id: string) => string,
+): Column<SavedFinding>[] {
   const cols: Column<SavedFinding>[] = [
     {
       key: 'severity',
@@ -149,7 +148,6 @@ export function SavedFindingsPage() {
   const authed = useAuthStore((s) => s.authed);
   const { nodeName } = useEntityNames();
 
-  const [filters, setFilters] = useState<FindingFilters>(DEFAULT_FILTERS);
   const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
   const [sheet, setSheet] = useState(false);
   const [rows, setRows] = useState<SavedFinding[]>([]);
@@ -161,11 +159,20 @@ export function SavedFindingsPage() {
   // overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
 
-  const columns = useMemo(() => findingColumns(t, nodeName), [t, nodeName]);
-  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
-  const rowFilters = useMemo(() => stateFromFilters(filters), [filters]);
-  const onRowFilters = (next: FilterState) =>
-    setFilters(filtersFromState(next, { nodeId: filters.nodeId, groupId: filters.groupId }));
+  // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.** The fetch
+  // effect depends on it, and the display columns close over `nodeName` — which changes identity
+  // every time a name batch resolves. Deriving the filter list from them would refetch the first
+  // page at that moment and throw away every page the operator had scrolled through.
+  const specs = useMemo(() => findingFilters(t), [t]);
+  const filterCols = useMemo(() => specColumns(specs), [specs]);
+  const columns = useMemo(() => findingColumns(t, specs, nodeName), [t, specs, nodeName]);
+  // The filter row's flat state, and since Inc.10 the screen's only copy of it — `queryFor` reads
+  // it directly, so there is no API-named object to convert to and back. Seeded from the specs:
+  // `range` defaults to `7d`, so `{}` would read as one active filter and force the row open.
+  const [rowFilters, setRowFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  // The scope is not a column, and it lives in the picker rather than being copied into the filter
+  // state as well — one source, so "clear all" cannot leave the two disagreeing.
+  const scopeIds = useMemo(() => scopeFilter(scope), [scope]);
 
   // First page — refetched whenever a filter changes, because filtering happens server-side (the
   // table is keyset-paged, so a client-side filter would only ever narrow the pages already
@@ -176,7 +183,7 @@ export function SavedFindingsPage() {
     setLoading(true);
     setError(null);
     api
-      .searchFindings(queryFor(filters, null, Date.now()))
+      .searchFindings(queryFor(filterCols, rowFilters, scopeIds, null, Date.now()))
       .then((page) => {
         if (cancelled) return;
         setRows(page);
@@ -192,13 +199,13 @@ export function SavedFindingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, filters, t]);
+  }, [authed, filterCols, rowFilters, scopeIds, t]);
 
   const loadMore = useCallback(() => {
     if (loadingMore.current || exhausted || !cursor) return;
     loadingMore.current = true;
     api
-      .searchFindings(queryFor(filters, cursor, Date.now()))
+      .searchFindings(queryFor(filterCols, rowFilters, scopeIds, cursor, Date.now()))
       .then((page) => {
         setRows((cur) => appendPage(cur, page));
         const next = nextCursor(page);
@@ -209,7 +216,7 @@ export function SavedFindingsPage() {
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [cursor, exhausted, filters, t]);
+  }, [cursor, exhausted, filterCols, rowFilters, scopeIds, t]);
 
   const open = (f: SavedFinding) => {
     const tool = toolById(f.tool);
@@ -217,11 +224,6 @@ export function SavedFindingsPage() {
     // `/troubleshoot/report/<unknown>` redirects anyway.
     const path = tool ? reportPathFor(tool.id) : '/troubleshoot';
     navigate(`${path}?job=${encodeURIComponent(f.job_id)}`);
-  };
-
-  const pickScope = (v: ScopeValue) => {
-    setScope(v);
-    setFilters((f) => ({ ...f, ...scopeFilter(v) }));
   };
 
   return (
@@ -242,21 +244,23 @@ export function SavedFindingsPage() {
       ) : (
         <>
           <TableToolbar>
-            <ScopePicker value={scope} onChange={pickScope} className="ts-sf-scope" />
+            {/* The picker owns the scope outright — `scopeIds` is derived from it, so there is no
+                second copy in the filter state to keep in step. */}
+            <ScopePicker value={scope} onChange={setScope} className="ts-sf-scope" />
             <FilterButton
               columns={filterCols}
               filters={rowFilters}
               onOpen={() => setSheet(true)}
             />
             {/* The scope narrows this list too, so it is counted and cleared with the columns —
-                a "clear all" that leaves a node selected is a lie. Both go into one write. */}
+                a "clear all" that leaves a node selected is a lie. */}
             <ClearFilters
               columns={filterCols}
               filters={rowFilters}
-              extraActive={filters.nodeId !== '' || filters.groupId !== ''}
+              extraActive={scopeIsSet(scopeIds)}
               onClear={() => {
                 setScope(allScope(t));
-                setFilters(DEFAULT_FILTERS);
+                setRowFilters(defaultFilters(filterCols));
               }}
             />
             <TableSpacer />
@@ -272,18 +276,25 @@ export function SavedFindingsPage() {
             rows={rows}
             columns={columns}
             filters={rowFilters}
-            onFiltersChange={onRowFilters}
+            onFiltersChange={setRowFilters}
             rowKey={(f) => f.id}
             onRowClick={open}
             onReachEnd={exhausted ? undefined : loadMore}
             loading={loading}
-            empty={isFiltered(filters) ? t('findings.empty.filtered') : t('findings.empty.none')}
+            // Keyed off the filters, never off `rows.length`: this list is keyset-paged and
+            // filtered in SQL, so a query that legitimately returns zero is indistinguishable from
+            // a store with nothing in it.
+            empty={
+              isAnyFiltered(filterCols, rowFilters) || scopeIsSet(scopeIds)
+                ? t('findings.empty.filtered')
+                : t('findings.empty.none')
+            }
           />
           {sheet && (
             <MobileFilterSheet
               columns={filterCols}
               filters={rowFilters}
-              onChange={onRowFilters}
+              onChange={setRowFilters}
               labels={{
                 severity: t('findings.cols.severity'),
                 tool: t('findings.cols.tool'),

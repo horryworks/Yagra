@@ -15,8 +15,7 @@ import {
   stateLabel,
 } from '../lib/format';
 import { api } from '../services/api';
-import { SEVERITIES, type AlertHistoryRow } from '../types/api';
-import { SEVERITY_ORDER } from '../lib/nodeState';
+import { type AlertHistoryRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Badge } from '../components/ui/Badge';
 import { useEntityNames } from '../components/ui/EntityName';
@@ -24,21 +23,12 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { filterableColumns, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { useFilterParams } from '../lib/useFilterParams';
 import { AlertSubjectName } from '../widgets/AlertSubjectName';
 import { AlertWhatText } from '../widgets/AlertWhatText';
 import { appendPage, nextCursor } from './historyCursor';
-import {
-  DEFAULT_FILTERS,
-  filtersFromState,
-  historyFilters,
-  isFiltered,
-  queryFor,
-  readFilters,
-  stateFromFilters,
-  writeFilters,
-  type HistoryFilters,
-} from './historyQuery';
+import { historyFilters, queryFor, readScope, writeScope } from './historyQuery';
 // Reused in place rather than moved: ScopePicker already answers "all / this group / this node"
 // with a server-side node typeahead, which is exactly the node_id + group_id pair this screen
 // filters on. It is mounted on the `troubleshoot` i18n namespace, so moving it to components/ means
@@ -59,90 +49,16 @@ export function HistoryPage() {
   const loadingMore = useRef(false);
   const { nodeName } = useEntityNames();
 
-  // The filters live in the URL — the only source of truth for them, so a node page can deep-link
-  // to "this node's alert history" and a narrowed view survives a reload and can be shared.
-  // `replace: true` because a settled filter is not a place you navigated to: pushing one per
-  // change would make Back walk through every intermediate state instead of leaving the screen.
-  const [params, setParams] = useSearchParams();
-  const filters = useMemo(
-    () => readFilters(params, SEVERITIES, SEVERITY_ORDER),
-    [params],
-  );
-  const setFilters = (next: HistoryFilters) => {
-    const p = new URLSearchParams(params);
-    writeFilters(p, next);
-    setParams(p, { replace: true });
-  };
-  // The filter row's flat state, and the one place it maps back onto the request shape. The URL
-  // codec stays `writeFilters` — the row does not get a second one writing the same params.
-  const rowFilters = useMemo(() => stateFromFilters(filters), [filters]);
-  const onRowFilters = (next: FilterState) =>
-    setFilters(filtersFromState(next, { nodeId: filters.nodeId, groupId: filters.groupId }));
-
-  const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
-  const onScope = (v: ScopeValue) => {
-    setScope(v);
-    setFilters({ ...filters, ...scopeFilter(v) });
-  };
-  // A deep link arrives with an id and no label; show the id until the inventory resolves a name.
-  useEffect(() => {
-    if (filters.nodeId && scope.kind !== 'node') {
-      setScope({
-        kind: 'node',
-        id: filters.nodeId,
-        label: nodeScopeLabel(nodeName(filters.nodeId) ?? filters.nodeId, t),
-      });
-    }
-    // Only on arrival: afterwards the picker owns its own label.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Refetch from the top whenever the filter changes — a cursor is only meaningful within one
-  // filter, so carrying it across a change would page into the previous query's results.
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    api
-      .listAlertHistory(queryFor(filters, null, Date.now()))
-      .then((page) => {
-        if (cancelled) return;
-        setRows(page);
-        setCursor(nextCursor(page));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [filters]);
-
-  // Keyset "load older": fetch the next page strictly older than the last loaded row. The log is
-  // append-only and can grow without bound, so we page on scroll instead of one capped fetch.
-  //
-  // The cursor is the (recorded_at, id) pair, not the timestamp alone. A whole flush of alerts is
-  // written in one transaction and shares one recorded_at, so the old timestamp-only cursor skipped
-  // that flush's remaining rows whenever a page boundary landed inside it — silently, and most
-  // often during the fleet-wide events this log exists to explain.
-  const loadMore = useCallback(() => {
-    if (loadingMore.current || cursor === null) return;
-    loadingMore.current = true;
-    api
-      .listAlertHistory(queryFor(filters, cursor, Date.now()))
-      .then((page) => {
-        setRows((cur) => appendPage(cur, page));
-        setCursor(nextCursor(page));
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        loadingMore.current = false;
-      });
-  }, [cursor, filters]);
-
-  // Columns close over `nodeName`, so rebuild them when the inventory resolves.
+  // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`.**
+  // `useFilterParams` derives the filter state from whatever list it is given and the fetch effect
+  // depends on that state, so the list has to be stable — and the display columns are not: they
+  // close over `nodeName`, whose identity changes every time a name batch resolves. Deriving from
+  // them would refetch the first page at that moment and discard every "load older" page below it.
+  const specs = useMemo(() => historyFilters(t), [t]);
+  const filterCols = useMemo(() => specColumns(specs), [specs]);
+  // Columns close over `nodeName`, so they rebuild when the inventory resolves — which is what the
+  // rendered names need and exactly what the filter list must not do.
   const columns = useMemo<Column<AlertHistoryRow>[]>(() => {
-    const specs = historyFilters(t);
     const cols: Column<AlertHistoryRow>[] = [
       {
         key: 'severity',
@@ -222,8 +138,80 @@ export function HistoryPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [nodeName, t]);
-  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
+  }, [nodeName, specs, t]);
+
+  // The filters live in the URL — the only source of truth for them, so a node page can deep-link
+  // to "this node's alert history" and a narrowed view survives a reload and can be shared. Since
+  // Inc.10 that is the shared codec: the column key **is** the query key, and these were already
+  // named after the parameters this screen shipped with, so saved links still resolve.
+  const [params] = useSearchParams();
+  const { filters, setFilters, nowMs } = useFilterParams(filterCols);
+  // The two scope ids are not columns, so they ride alongside — read here, written through
+  // `setFilters`' `also` callback so a change to both is still ONE write to the query string.
+  const scopeIds = useMemo(() => readScope(params), [params]);
+  const filtered = isAnyFiltered(filterCols, filters) || !!scopeIds.nodeId || !!scopeIds.groupId;
+
+  const [scope, setScope] = useState<ScopeValue>(() => allScope(t));
+  const onScope = (v: ScopeValue) => {
+    setScope(v);
+    setFilters(filters, writeScope(scopeFilter(v)));
+  };
+  // A deep link arrives with an id and no label; show the id until the inventory resolves a name.
+  useEffect(() => {
+    if (scopeIds.nodeId && scope.kind !== 'node') {
+      setScope({
+        kind: 'node',
+        id: scopeIds.nodeId,
+        label: nodeScopeLabel(nodeName(scopeIds.nodeId) ?? scopeIds.nodeId, t),
+      });
+    }
+    // Only on arrival: afterwards the picker owns its own label.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refetch from the top whenever the filter changes — a cursor is only meaningful within one
+  // filter, so carrying it across a change would page into the previous query's results.
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    api
+      .listAlertHistory(queryFor(filterCols, filters, scopeIds, null, nowMs))
+      .then((page) => {
+        if (cancelled) return;
+        setRows(page);
+        setCursor(nextCursor(page));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [filterCols, filters, scopeIds, nowMs]);
+
+  // Keyset "load older": fetch the next page strictly older than the last loaded row. The log is
+  // append-only and can grow without bound, so we page on scroll instead of one capped fetch.
+  //
+  // The cursor is the (recorded_at, id) pair, not the timestamp alone. A whole flush of alerts is
+  // written in one transaction and shares one recorded_at, so the old timestamp-only cursor skipped
+  // that flush's remaining rows whenever a page boundary landed inside it — silently, and most
+  // often during the fleet-wide events this log exists to explain.
+  const loadMore = useCallback(() => {
+    if (loadingMore.current || cursor === null) return;
+    loadingMore.current = true;
+    api
+      .listAlertHistory(queryFor(filterCols, filters, scopeIds, cursor, nowMs))
+      .then((page) => {
+        setRows((cur) => appendPage(cur, page));
+        setCursor(nextCursor(page));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        loadingMore.current = false;
+      });
+  }, [cursor, filterCols, filters, scopeIds, nowMs]);
+
 
   return (
     <div className="page-fill">
@@ -238,21 +226,17 @@ export function HistoryPage() {
           "Which node" is what ScopePicker answers instead. */}
       <TableToolbar>
         <ScopePicker value={scope} onChange={onScope} className="table-filter" />
-        <FilterButton
-          columns={filterCols}
-          filters={rowFilters}
-          onOpen={() => setSheet(true)}
-        />
+        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
         {/* The scope is counted and cleared with the columns: it is not a column filter, but it
             narrows this list, and a "clear all" that leaves a node selected is a lie. Both go into
-            ONE write — `setFilters` takes the whole `HistoryFilters`, scope included. */}
+            ONE write — the columns through `setFilters`, the two ids through its `also` callback. */}
         <ClearFilters
           columns={filterCols}
-          filters={rowFilters}
-          extraActive={filters.nodeId !== '' || filters.groupId !== ''}
+          filters={filters}
+          extraActive={!!scopeIds.nodeId || !!scopeIds.groupId}
           onClear={() => {
             setScope(allScope(t));
-            setFilters(DEFAULT_FILTERS);
+            setFilters(defaultFilters(filterCols), writeScope({ nodeId: '', groupId: '' }));
           }}
         />
         <TableSpacer />
@@ -264,8 +248,8 @@ export function HistoryPage() {
       <DataTable
         rows={rows}
         columns={columns}
-        filters={rowFilters}
-        onFiltersChange={onRowFilters}
+        filters={filters}
+        onFiltersChange={setFilters}
         // The row's own id. The composite key this replaces was not unique — two transitions of the
         // same subject and check, in the same millisecond, collided — and a duplicate React key is
         // a silent misrender rather than an error.
@@ -273,7 +257,7 @@ export function HistoryPage() {
         onReachEnd={cursor === null ? undefined : loadMore}
         // Keyed off the filter, never off `rows.length`: with the predicate in SQL, a filtered query
         // that legitimately returns zero is indistinguishable from an empty log.
-        empty={isFiltered(filters) ? t('history.emptyFiltered') : t('history.empty')}
+        empty={filtered ? t('history.emptyFiltered') : t('history.empty')}
         loading={loading}
         // No facet counts: every count here would be a second aggregate query over a table that
         // reaches millions of rows, per popover open. ADR-023 puts UI load third.
@@ -281,8 +265,8 @@ export function HistoryPage() {
       {sheet && (
         <MobileFilterSheet
           columns={filterCols}
-          filters={rowFilters}
-          onChange={onRowFilters}
+          filters={filters}
+          onChange={setFilters}
           labels={{
             severity: t('history.cols.severity'),
             state: t('history.cols.state'),

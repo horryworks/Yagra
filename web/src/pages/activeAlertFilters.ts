@@ -22,8 +22,7 @@
 
 import { alertSubject, type HasSubject } from '../lib/alertSubject';
 import {
-  decodeSet,
-  encodeSet,
+  normalizeSets,
   readFilterParams,
   specColumns,
   writeFilterParams,
@@ -177,19 +176,10 @@ export function readFilters(
   columns: readonly FilterableColumn<FilterableAlert>[],
   params: URLSearchParams,
 ): FilterState {
-  const raw = readFilterParams(columns, params);
-  // Re-encode the sets so a hand-typed or click-ordered URL settles to the spec's option order:
-  // the joined string is an effect key elsewhere and a value that varies by click order cannot be
-  // compared for equality.
-  for (const c of columns) {
-    if (c.filter.kind !== 'enum') continue;
-    const order = c.filter.options.map((o) => o.value);
-    raw[c.key] = encodeSet(
-      decodeSet(raw[c.key] ?? '').filter((v) => order.includes(v)),
-      order,
-    );
-  }
-  return raw;
+  // The set re-encoding this used to spell out inline is `normalizeSets` now (Inc.10, 決定 AA) —
+  // it was the shape the four server-side screens needed, and they needed it for a sharper reason:
+  // an unknown token here just fails to match a row, but there it reaches the API and 400s.
+  return normalizeSets(columns, readFilterParams(columns, params));
 }
 
 /** Write the filters back, deleting every key whose value is the default so the unfiltered view

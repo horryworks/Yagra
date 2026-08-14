@@ -14,6 +14,7 @@ import {
   decodeNumberRange,
   decodeRange,
   decodeSet,
+  rangeSecondsOf,
   type FilterState,
   type FilterableColumn,
   type ColumnFilterSpec,
@@ -83,7 +84,9 @@ function compileColumn<T>(
       return (from === null || ms >= from) && (to === null || ms <= to);
     };
   }
-  const secs = spec.presets.find((p) => p.value === value.preset)?.seconds ?? null;
+  // Shared with every server-side `queryFor`, which asks the same question of the same spec — the
+  // browser resolves the window to a floor, the query resolves it to a `since`.
+  const secs = rangeSecondsOf(spec, raw);
   if (secs === null) return null; // "all time", or a preset a stale URL named that no longer exists
   const floor = nowMs - secs * 1000;
   return (row) => {

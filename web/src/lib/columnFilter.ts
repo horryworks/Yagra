@@ -366,6 +366,41 @@ export function writeFilterParams<T>(
   }
 }
 
+/**
+ * Re-encode every `enum` column's token set in its own options order, dropping tokens the column
+ * does not offer.
+ *
+ * **This is where an unknown token dies, and something has to be** (ADR-053 Inc.10, 決定 AA).
+ * [`readFilterParams`] deliberately does not validate — a stale bookmark must open the default view
+ * rather than a broken control — but the API edge does the opposite and 400s a token it does not
+ * know. So every server-side `queryFor` runs its state through here before building a request;
+ * forget it on a new screen and a hand-edited `?severity=bogus` becomes an error page instead of
+ * the unfiltered list. (It also earns the callers the right to trust the tokens afterwards: alert
+ * history's `phase`/`acked` read `picked[0]` without re-checking it, which is only safe downstream
+ * of this.)
+ *
+ * Ordering is not cosmetic, for the two reasons [`encodeSet`] gives: the joined value is a
+ * `useEffect` dependency key, and a shared link must compare equal to the same view reached by
+ * clicking.
+ *
+ * ⚠️ **The `enum` kind only.** A `values` column has no option list to order against — its tokens
+ * are produced by `parse`, and [`normalizeValues`] is its equivalent, applied where the operator
+ * types rather than where the request is built.
+ */
+export function normalizeSets<T>(
+  columns: readonly FilterableColumn<T>[],
+  state: FilterState,
+): FilterState {
+  const out: FilterState = { ...state };
+  for (const c of columns) {
+    if (c.filter.kind !== 'enum') continue;
+    // `encodeSet` keeps only what the order names, so an unknown token is dropped by construction.
+    const order = c.filter.options.map((o) => o.value);
+    out[c.key] = encodeSet(decodeSet(out[c.key] ?? ''), order);
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Ranges — the `range` kind's transport.
 
@@ -413,6 +448,35 @@ export function decodeRange(raw: string, spec: RangeShape): RangeValue {
   }
   const known = spec.presets.some((p) => p.value === value);
   return { preset: known ? value : spec.defaultPreset, from: '', to: '' };
+}
+
+/**
+ * How far back a range column's stored value reaches, in seconds — `null` for "no lower bound".
+ *
+ * The length comes off the spec's own presets, which `filterPresets.ts::rangePresets` fills from
+ * the one seconds table (Inc.10, 決定 X). Going through [`decodeRange`] first is what makes a
+ * stale or hand-typed value fall back to **the column's default** rather than to "all time": the
+ * widening answer is the dangerous one, which is why `rangeSeconds` refuses a bare `string` at all.
+ *
+ * ⚠️ Answers the relative presets only. [`CUSTOM_RANGE`] reads as `null` here because its window is
+ * two absolute instants rather than a length — a screen offering `custom: true` needs its own
+ * bounds (`components/EventLog/eventRange.ts`), and none of the server-side lists does.
+ */
+export function rangeSecondsOf(spec: RangeShape, raw: string): number | null {
+  const { preset } = decodeRange(raw, spec);
+  return spec.presets.find((p) => p.value === preset)?.seconds ?? null;
+}
+
+/** The same answer for a screen that holds columns and state rather than one spec — which is every
+ *  `queryFor`. Finding the range column by kind is `useFilterParams`' existing assumption (it pins
+ *  its clock the same way): a list has at most one time window. */
+export function rangeSecondsIn<T>(
+  columns: readonly FilterableColumn<T>[],
+  state: FilterState,
+): number | null {
+  const col = columns.find((c) => c.filter.kind === 'range');
+  if (!col || col.filter.kind !== 'range') return null;
+  return rangeSecondsOf(col.filter, state[col.key] ?? '');
 }
 
 // ---------------------------------------------------------------------------

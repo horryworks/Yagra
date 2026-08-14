@@ -114,7 +114,7 @@
   },
   "thresholds": {
     "note": "Hierarchical overrides: profile → group → node. The most specific scope wins.",
-    "explainer": "ICMP liveness (node up/down) alerts automatically — no rule needed. Rules here add metric thresholds on top: each is evaluated live on every matching poll sample, with the most-specific scope winning. Warning/critical bounds and a dwell (consecutive samples before it commits, anti-flap) are per rule.",
+    "explainer": "ICMP liveness (node up/down) alerts automatically — no rule needed. Rules here add metric thresholds on top: each is evaluated live on every matching poll sample, with the most-specific scope winning. Warning/critical bounds and the number of consecutive breaches before it commits (anti-flap) are per rule.",
     "unavailable": "Threshold management is unavailable in skeleton mode.",
     "add": "+ Add rule",
     "cols": {
@@ -122,7 +122,7 @@
       "metric": "Metric",
       "direction": "Direction",
       "bounds": "Bounds",
-      "dwell": "Dwell",
+      "dwell": "Breaches",
       "actions": "Actions"
     },
     "empty": "No threshold rules yet",
@@ -130,7 +130,7 @@
     "truncated": "Showing {{shown}} of {{total}} rules",
     "warnShort": "W",
     "critShort": "C",
-    "dwellValue": "dwell {{n}}",
+    "dwellValue": "{{n}} breaches",
     "delete": "Delete",
     "scopeLevel": {
       "profile": "profile",
@@ -159,12 +159,12 @@
       "metric": "Metric",
       "metricPlaceholder": "metric (e.g. icmp_rtt_ms)",
       "direction": "Direction",
-      "boundsDwell": "Bounds & dwell",
+      "boundsDwell": "Bounds & breaches",
       "warnPlaceholder": "warn",
       "critPlaceholder": "crit",
-      "dwellPlaceholder": "dwell",
-      "dwellTitle": "Dwell: consecutive readings that must breach before the alert fires",
-      "boundsHint": "Warn / crit / dwell are optional. Dwell is how many consecutive readings must cross the bound before the alert fires — higher values suppress flapping (rapid on/off alerts).",
+      "dwellPlaceholder": "breaches",
+      "dwellTitle": "Consecutive breaches: readings that must cross the bound in a row before the alert fires",
+      "boundsHint": "Warn / crit / breaches are optional. Breaches is how many consecutive readings must cross the bound before the alert fires — higher values suppress flapping (rapid on/off alerts).",
       "add": "Add rule"
     },
     "deleteModal": {

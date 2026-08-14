@@ -26,28 +26,16 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { filterableColumns, type FilterState } from '../lib/columnFilter';
+import { defaultFilters, isAnyFiltered, specColumns, type FilterState } from '../lib/columnFilter';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
 import { parseAction } from './auditRow';
-import {
-  appendPage,
-  auditFilters,
-  DEFAULT_FILTERS,
-  exportUrl,
-  filtersFromState,
-  isFiltered,
-  nextCursor,
-  queryFor,
-  stateFromFilters,
-  type AuditFilters,
-} from './auditQuery';
+import { appendPage, auditFilters, exportUrl, nextCursor, queryFor } from './auditQuery';
 
 /** Columns for the virtualized table. Stateless renderers, but the headers + synthetic "sign in"
  *  label are localized, so build them from the calling component's `t` (rebuild on language
  *  change). HTTP method names (POST/PUT/…) and paths are technical and rendered verbatim. */
-function auditColumns(t: TFunction): Column<AuditRow>[] {
-  const specs = auditFilters(t);
+function auditColumns(t: TFunction, specs: ReturnType<typeof auditFilters>) {
   const cols: Column<AuditRow>[] = [
     { key: 'range', header: t('audit.cols.time'), width: '190px', render: (r) => <TimeCell iso={r.at} /> },
     {
@@ -98,16 +86,24 @@ export function AuditPage() {
   // The search box settles before it is sent; the selects commit immediately (picking an option is
   // already a deliberate act, and waiting on it would feel broken).
   const [sheet, setSheet] = useState(false);
-  // The filter row's flat state. The debounce that used to live here is inside
-  // `TextConditionEditor` now — one implementation instead of one per screen.
-  const [rowFilters, setRowFilters] = useState<FilterState>(() =>
-    stateFromFilters(DEFAULT_FILTERS),
-  );
-  const active = useMemo<AuditFilters>(() => filtersFromState(rowFilters), [rowFilters]);
 
   // Columns close over the translator, so rebuild them on a language switch.
-  const columns = useMemo(() => auditColumns(t), [t]);
-  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
+  //
+  // ⚠️ **`filterCols` comes from the specs, not from `filterableColumns(columns)`**, and the
+  // difference is not cosmetic: it is what the fetch effect depends on. Display columns close over
+  // whatever the page renders with, so anything that re-creates them would refetch the log — on
+  // the screens that resolve entity names, that is once per name batch, discarding every page the
+  // operator had scrolled through. The specs depend on `t` alone. (The two lists hold the same
+  // columns; `auditFilters` is declared in the table's order so they agree on that too.)
+  const specs = useMemo(() => auditFilters(t), [t]);
+  const filterCols = useMemo(() => specColumns(specs), [specs]);
+  const columns = useMemo(() => auditColumns(t, specs), [t, specs]);
+  // The filter row's flat state, and since Inc.10 the screen's **only** copy of it — the API-named
+  // `AuditFilters` object it used to be converted into is gone, and `queryFor` reads this directly.
+  // Seeded from the specs rather than from a hand-written defaults object: `range` defaults to a
+  // preset, so `{}` would read as one active filter and force the row open.
+  const [rowFilters, setRowFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  const filtered = isAnyFiltered(filterCols, rowFilters);
 
   // Refetch from the top whenever the filter changes — the cursor is only meaningful within one
   // filter, so carrying it across a change would page into the previous query's results.
@@ -117,7 +113,7 @@ export function AuditPage() {
     setLoading(true);
     setError(null);
     api
-      .listAudit(queryFor(active, null, Date.now()))
+      .listAudit(queryFor(filterCols, rowFilters, null, Date.now()))
       .then((page) => {
         if (cancelled) return;
         setRows(page);
@@ -132,13 +128,13 @@ export function AuditPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, active, t]);
+  }, [authed, filterCols, rowFilters, t]);
 
   const loadMore = useCallback(() => {
     if (loadingMore.current || cursor === null) return;
     loadingMore.current = true;
     api
-      .listAudit(queryFor(active, cursor, Date.now()))
+      .listAudit(queryFor(filterCols, rowFilters, cursor, Date.now()))
       .then((page) => {
         setRows((cur) => appendPage(cur, page));
         setCursor(nextCursor(page));
@@ -147,7 +143,7 @@ export function AuditPage() {
       .finally(() => {
         loadingMore.current = false;
       });
-  }, [active, cursor, t]);
+  }, [cursor, filterCols, rowFilters, t]);
 
   // The export is now everything matching the filter, not the rows that happen to be loaded — the
   // server renders it (`GET /api/v1/audit/export.csv`) with the same filter this page is showing.
@@ -162,7 +158,7 @@ export function AuditPage() {
   // Navigating rather than fetching: the browser's own download handles the file, so a 50k-row
   // export never passes through JS memory, and the filename comes from Content-Disposition.
   const exportCsv = () => {
-    window.location.assign(exportUrl(active, Date.now()));
+    window.location.assign(exportUrl(filterCols, rowFilters, Date.now()));
   };
 
   return (
@@ -188,7 +184,7 @@ export function AuditPage() {
             <ClearFilters
               columns={filterCols}
               filters={rowFilters}
-              onClear={() => setRowFilters(stateFromFilters(DEFAULT_FILTERS))}
+              onClear={() => setRowFilters(defaultFilters(filterCols))}
             />
             <TableSpacer />
             <ResultCount shown={rows.length} noun={t('audit.entry', { count: rows.length })} />
@@ -215,7 +211,7 @@ export function AuditPage() {
             rowKey={(r) => r.id}
             onReachEnd={cursor === null ? undefined : loadMore}
             loading={loading}
-            empty={isFiltered(active) ? t('audit.empty.filtered') : t('audit.empty.none')}
+            empty={filtered ? t('audit.empty.filtered') : t('audit.empty.none')}
           />
           {sheet && (
             <MobileFilterSheet
