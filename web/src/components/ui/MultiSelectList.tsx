@@ -17,7 +17,7 @@
 // The option-search box is a SIBLING of the listbox, never inside it — a listbox may contain only
 // options and groups.
 
-import { useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { FilterOption } from '../../lib/columnFilter';
 import './MultiSelectList.css';
@@ -36,6 +36,10 @@ interface Props {
   label: string;
   /** Show the option-search box once the list is at least this long. */
   searchThreshold?: number;
+  /** Flipped true once the surrounding popover is measured — see `takeFocus` in `ColumnFilterCell`.
+   *  Focuses the option-search box **only when one renders**: a short list has no text entry, and
+   *  moving focus onto an option would pick one of them for no reason. */
+  takeFocus?: boolean;
 }
 
 const SEARCH_THRESHOLD = 8;
@@ -48,11 +52,19 @@ export function MultiSelectList({
   onClear,
   label,
   searchThreshold = SEARCH_THRESHOLD,
+  takeFocus,
 }: Props) {
   const { t } = useTranslation('common');
   const [query, setQuery] = useState('');
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
   const sel = useMemo(() => new Set(selected), [selected]);
+
+  // `searchRef` is null when the list is too short for a search box, so this is also the "no text
+  // entry ⇒ leave focus on the trigger" half of the rule. See `TextConditionEditor` for the timing.
+  useLayoutEffect(() => {
+    if (takeFocus) searchRef.current?.focus({ preventScroll: true });
+  }, [takeFocus]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -83,6 +95,7 @@ export function MultiSelectList({
     <div className="msel">
       {showSearch && (
         <input
+          ref={searchRef}
           type="search"
           className="msel-search"
           value={query}

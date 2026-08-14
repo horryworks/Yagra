@@ -191,6 +191,17 @@
 - On screens whose list is fully in the browser, an option's count says how many rows you would get
   by switching to it — it excludes that column's own filter, the way a spreadsheet's autofilter does.
 
+### Bug Fixes
+- **A column filter now accepts typing as soon as it is opened.** Clicking a filter took two clicks:
+  the panel opened, and the box inside it had to be clicked again before it would take a keystroke.
+  The panel is hidden for the frame in which it is measured, and a hidden element cannot be focused,
+  so the focus the code already asked for was silently dropped. The caret now lands in the panel's
+  text box — the term on a text filter, the value list on the flow drill-downs, the lower bound on a
+  numeric range, and the option search on a long list of choices. A panel with nothing to type in
+  (the time-range presets, a short list of choices) leaves focus on the filter itself rather than
+  picking an option for you, and the mobile filter sheet is unchanged: it shows every column at
+  once, so nothing there has a claim on the keyboard.
+
 ## v0.2.6 — every check on a device runs again, and twenty-two lists can be narrowed
 
 **⚠️ If you are running v0.2.3, v0.2.4 or v0.2.5, upgrade as soon as you can.** Those three

@@ -18,7 +18,7 @@
 //     an operator unable to tell which half was active (the selected fill is one step of background
 //     tone apart). A switch states the *default* too: regex is off unless you turn it on.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TextMode } from '../../lib/columnFilter';
 import {
@@ -41,7 +41,10 @@ interface Props {
    *  term matches from the start of a word, so `PERMIT` does not find `POLICYPERMIT` (`POLICY`
    *  does), and nothing else on screen would explain that. */
   containsSemantics?: 'substring' | 'prefix';
-  autoFocus?: boolean;
+  /** Flipped to true once the surrounding popover is measured and visible — see `takeFocus` in
+   *  `ColumnFilterCell`. Not React's `autoFocus`, and it cannot be: that attribute fires at mount,
+   *  when the popover is still `visibility: hidden` and the input cannot take focus at all. */
+  takeFocus?: boolean;
 }
 
 const DEBOUNCE_MS = 250;
@@ -53,7 +56,7 @@ export function TextConditionEditor({
   allowNot = false,
   placeholder,
   containsSemantics,
-  autoFocus,
+  takeFocus,
 }: Props) {
   const { t } = useTranslation('common');
   /** **The whole condition is draft state, not just the term.** Mode and negation are meaningful
@@ -78,6 +81,15 @@ export function TextConditionEditor({
    *  rather than the one captured when the timer was set. */
   const draftRef = useRef(draft);
   draftRef.current = draft;
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  /** Take focus the frame the popover becomes visible. `useLayoutEffect` rather than `useEffect` so
+   *  the caret is there in the first painted frame, and `preventScroll` because the popover is
+   *  already clamped inside the viewport — a focus that scrolls an ancestor is what
+   *  `AnchoredPopover` records closing a menu in the frame it opened. */
+  useLayoutEffect(() => {
+    if (takeFocus) inputRef.current?.focus({ preventScroll: true });
+  }, [takeFocus]);
 
   // Adopt an externally-changed condition (the cell's clear button, a back/forward navigation), but
   // not the echo of our own commit.
@@ -118,12 +130,12 @@ export function TextConditionEditor({
   return (
     <div className="tcond">
       <input
+        ref={inputRef}
         type="search"
         className="tcond-input"
         value={draft.term}
         placeholder={placeholder ?? t('filter.termPlaceholder')}
         aria-label={placeholder ?? t('filter.termPlaceholder')}
-        autoFocus={autoFocus}
         onChange={(e) => setDraft({ ...draft, term: e.target.value })}
         onKeyDown={(e) => {
           // Enter commits immediately rather than waiting out the debounce — the operator has said

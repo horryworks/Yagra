@@ -11,7 +11,7 @@
 // no header row to hang a filter row on). Two implementations would drift, and mobile is where
 // nobody would notice for a release or two.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AnchoredPopover, focusPopoverTrigger } from './AnchoredPopover';
 import { MultiSelectList } from './MultiSelectList';
@@ -43,12 +43,26 @@ interface BodyProps<T> {
   /** Facet counts for an enum column. Omitted when this list has none to offer. */
   counts?: Record<string, number>;
   label: string;
-  autoFocus?: boolean;
+  /** Move focus into the body's text entry, if it has one.
+   *
+   *  ⚠️ **Not React's `autoFocus`, and it must not become it again.** That attribute fires when the
+   *  element mounts, which here is while `AnchoredPopover` still has the panel `visibility: hidden`
+   *  so it can measure it — and a hidden element cannot take focus, so the call was a silent no-op
+   *  for three increments and every filter needed a second click before it would accept a keystroke.
+   *  This is a *signal* instead: false on mount, flipped true by `onPlacedChange` once the panel is
+   *  placed and visible, which each body watches. The mobile sheet passes nothing — it stacks every
+   *  column, so no single box has a claim on the caret, and taking it would raise the on-screen
+   *  keyboard over the list the operator just opened. */
+  takeFocus?: boolean;
 }
 
 /** The editing surface for one column's filter — shared by the desktop popover and the mobile
- *  sheet. Exactly one `switch` over `spec.kind` exists in the UI, and it is this one. */
-export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus }: BodyProps<T>) {
+ *  sheet. Exactly one `switch` over `spec.kind` exists in the UI, and it is this one.
+ *
+ *  **Where the caret lands, per kind: the body's text entry if it has one, otherwise nowhere.**
+ *  `range` has only presets and a short `enum` has only options, so on those the trigger keeps
+ *  focus — picking an option for the operator would be a choice, not a convenience. */
+export function FilterBody<T>({ spec, value, onChange, counts, label, takeFocus }: BodyProps<T>) {
   if (spec.kind === 'enum') {
     const order = spec.options.map((o) => o.value);
     return (
@@ -61,6 +75,7 @@ export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus 
         onToggle={(v) => onChange(toggleSetValue(value, v, order))}
         onClear={() => onChange('')}
         label={label}
+        takeFocus={takeFocus}
       />
     );
   }
@@ -73,15 +88,15 @@ export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus 
         allowNot={spec.not}
         placeholder={spec.placeholder}
         containsSemantics={spec.containsSemantics}
-        autoFocus={autoFocus}
+        takeFocus={takeFocus}
       />
     );
   }
   if (spec.kind === 'values') {
-    return <ValuesBody spec={spec} value={value} onChange={onChange} autoFocus={autoFocus} />;
+    return <ValuesBody spec={spec} value={value} onChange={onChange} takeFocus={takeFocus} />;
   }
   if (spec.kind === 'number') {
-    return <NumberBody spec={spec} value={value} onChange={onChange} autoFocus={autoFocus} />;
+    return <NumberBody spec={spec} value={value} onChange={onChange} takeFocus={takeFocus} />;
   }
   return <RangeBody spec={spec} value={value} onChange={onChange} label={label} />;
 }
@@ -101,12 +116,12 @@ function ValuesBody<T>({
   spec,
   value,
   onChange,
-  autoFocus,
+  takeFocus,
 }: {
   spec: ValuesFilterSpec<T>;
   value: string;
   onChange: (next: string) => void;
-  autoFocus?: boolean;
+  takeFocus?: boolean;
 }) {
   const { t } = useTranslation('common');
   const [draft, setDraft] = useState(value);
@@ -117,14 +132,18 @@ function ValuesBody<T>({
     commit.current(normalizeValues(settled, spec.parse, spec.max));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- see the note above: only `draft`.
   }, [settled]);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    if (takeFocus) inputRef.current?.focus({ preventScroll: true });
+  }, [takeFocus]);
   return (
     <input
+      ref={inputRef}
       className="field dt-f-values"
       type="text"
       value={draft}
       placeholder={spec.placeholder ?? t('filter.valuesPlaceholder')}
       aria-label={spec.placeholder ?? t('filter.valuesPlaceholder')}
-      autoFocus={autoFocus}
       onChange={(e) => setDraft(e.target.value)}
     />
   );
@@ -141,15 +160,21 @@ function NumberBody<T>({
   spec,
   value,
   onChange,
-  autoFocus,
+  takeFocus,
 }: {
   spec: NumberFilterSpec<T>;
   value: string;
   onChange: (next: string) => void;
-  autoFocus?: boolean;
+  takeFocus?: boolean;
 }) {
   const { t } = useTranslation('common');
   const current = decodeNumberRange(value);
+  // The lower bound, because an interval is read left to right — and it is the one an operator
+  // types alone ("score 8 or worse" is one bound, not a window).
+  const minRef = useRef<HTMLInputElement>(null);
+  useLayoutEffect(() => {
+    if (takeFocus) minRef.current?.focus({ preventScroll: true });
+  }, [takeFocus]);
   // `''` and `0` must stay distinguishable: `Number('')` is 0, so a blank field read through the
   // usual `Number(e.target.value) || null` would silently become a bound of zero.
   const set = (side: 'min' | 'max') => (raw: string) => {
@@ -159,6 +184,7 @@ function NumberBody<T>({
   const field = (side: 'min' | 'max', v: number | null, aria: string) => (
     <span className="dt-f-numfield">
       <input
+        ref={side === 'min' ? minRef : undefined}
         className="field dt-f-num"
         type="number"
         inputMode="decimal"
@@ -168,7 +194,6 @@ function NumberBody<T>({
         step={spec.step}
         aria-label={aria}
         title={aria}
-        autoFocus={autoFocus && side === 'min'}
         onChange={(e) => set(side)(e.target.value)}
       />
       {spec.unit && <span className="dt-f-numunit">{spec.unit}</span>}
@@ -267,6 +292,10 @@ export function ColumnFilterCell<T>({
 }: Props<T>) {
   const { t } = useTranslation('common');
   const [open, setOpen] = useState(false);
+  /** Whether `AnchoredPopover` has measured and painted the panel. Focus cannot move into it before
+   *  that — until placed it is `visibility: hidden`, and a hidden element cannot take focus. This is
+   *  the same wiring `ActionMenu` uses; not having it is why the filter needed a second click. */
+  const [placed, setPlaced] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   const dismiss = useCallback((restoreFocus: boolean) => {
@@ -357,6 +386,7 @@ export function ColumnFilterCell<T>({
         label={t('filter.open', { column: label })}
         align="start"
         onDismiss={dismiss}
+        onPlacedChange={setPlaced}
       >
         <FilterBody
           spec={spec}
@@ -364,7 +394,7 @@ export function ColumnFilterCell<T>({
           onChange={onChange}
           counts={counts}
           label={label}
-          autoFocus
+          takeFocus={placed}
         />
       </AnchoredPopover>
     </div>
