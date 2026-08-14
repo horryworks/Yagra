@@ -119,69 +119,6 @@ export function CollectionEditor({
 
   return (
     <div className="ce">
-      {canEdit && (
-        <div className="ce-add form-row">
-          <TextInput
-            placeholder={t('editor.metricNamePlaceholder')}
-            value={metricName}
-            onChange={(e) => setMetricName(e.target.value)}
-          />
-          <TextInput
-            className="mono"
-            placeholder={t('editor.oidPlaceholder')}
-            value={oid}
-            onChange={(e) => setOid(e.target.value)}
-          />
-          <Select
-            value={collection}
-            onChange={(e) => setCollection(e.target.value as CollectionKind)}
-            aria-label={t('editor.collectionKindAria')}
-          >
-            <option value="scalar">{t('enum.scalar')}</option>
-            <option value="table">{t('enum.tablePerInterface')}</option>
-          </Select>
-          <Select
-            value={metricKind}
-            onChange={(e) => setMetricKind(e.target.value as MetricKind)}
-            aria-label={t('editor.metricKindAria')}
-          >
-            <option value="gauge">{t('enum.gauge')}</option>
-            <option value="counter">{t('enum.counter')}</option>
-          </Select>
-          <Button variant="ghost" onClick={() => setPicking((p) => !p)}>
-            {picking ? t('editor.closeCatalog') : t('editor.browseCatalog')}
-          </Button>
-          <Button variant="primary" onClick={add} disabled={!valid || busy}>
-            {t('editor.addMetric')}
-          </Button>
-        </div>
-      )}
-      {canEdit && picking && (
-        <div className="ce-picker">
-          <TextInput
-            className="ce-picker-search"
-            placeholder={t('editor.pickerSearchPlaceholder')}
-            value={pickQuery}
-            onChange={(e) => setPickQuery(e.target.value)}
-          />
-          {picks.length === 0 ? (
-            <p className="muted">{t('editor.noCatalogMatch')}</p>
-          ) : (
-            <div className="ce-picker-list">
-              {picks.slice(0, 30).map((e) => (
-                <button type="button" className="ce-picker-row" key={e.id} onClick={() => pick(e)}>
-                  <span className="ce-picker-metric">{e.metric_name}</span>
-                  <span className="ce-picker-oid mono">{e.oid}</span>
-                  <span className="muted">
-                    {e.collection} · {e.metric_kind}
-                    {e.vendor ? ` · ${e.vendor}` : ''}
-                  </span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
       {error && <p className="form-error">{error}</p>}
       {items.length === 0 ? (
         <p className="muted">
@@ -217,6 +154,86 @@ export function CollectionEditor({
               </div>
             </div>
           ))}
+        </div>
+      )}
+      {/* ⚠️ **The add form goes BELOW the table, and that is the fix rather than the label.**
+          A line of inputs sitting directly *above* a table is what a filter row looks like
+          everywhere else since ADR-053 Inc.6, so here it read as one: a tester typed a metric name
+          into it and expected the list to narrow. A heading was tried first and is not enough —
+          position is the whole signal, and annotating a shape does not change it.
+          No filter was added instead. Measured on the test server: the largest metric set holds 11
+          metrics and the average is 3.4, so a filter over three rows would be one more control to
+          explain rather than one less. */}
+      {canEdit && (
+        <div className="ce-new">
+          <div className="ce-add-h">{t('editor.newMetric')}</div>
+          <div className="ce-add form-row">
+            <TextInput
+              placeholder={t('editor.metricNamePlaceholder')}
+              value={metricName}
+              onChange={(e) => setMetricName(e.target.value)}
+            />
+            <TextInput
+              className="mono"
+              placeholder={t('editor.oidPlaceholder')}
+              value={oid}
+              onChange={(e) => setOid(e.target.value)}
+            />
+            <Select
+              value={collection}
+              onChange={(e) => setCollection(e.target.value as CollectionKind)}
+              aria-label={t('editor.collectionKindAria')}
+            >
+              <option value="scalar">{t('enum.scalar')}</option>
+              <option value="table">{t('enum.tablePerInterface')}</option>
+            </Select>
+            <Select
+              value={metricKind}
+              onChange={(e) => setMetricKind(e.target.value as MetricKind)}
+              aria-label={t('editor.metricKindAria')}
+            >
+              <option value="gauge">{t('enum.gauge')}</option>
+              <option value="counter">{t('enum.counter')}</option>
+            </Select>
+            <Button variant="ghost" onClick={() => setPicking((p) => !p)}>
+              {picking ? t('editor.closeCatalog') : t('editor.browseCatalog')}
+            </Button>
+            <Button variant="primary" onClick={add} disabled={!valid || busy}>
+              {t('editor.addMetric')}
+            </Button>
+          </div>
+          {/* The catalog picker belongs with the form it fills in, so it moved with it. */}
+          {picking && (
+            <div className="ce-picker">
+              <TextInput
+                className="ce-picker-search"
+                placeholder={t('editor.pickerSearchPlaceholder')}
+                value={pickQuery}
+                onChange={(e) => setPickQuery(e.target.value)}
+              />
+              {picks.length === 0 ? (
+                <p className="muted">{t('editor.noCatalogMatch')}</p>
+              ) : (
+                <div className="ce-picker-list">
+                  {picks.slice(0, 30).map((e) => (
+                    <button
+                      type="button"
+                      className="ce-picker-row"
+                      key={e.id}
+                      onClick={() => pick(e)}
+                    >
+                      <span className="ce-picker-metric">{e.metric_name}</span>
+                      <span className="ce-picker-oid mono">{e.oid}</span>
+                      <span className="muted">
+                        {e.collection} · {e.metric_kind}
+                        {e.vendor ? ` · ${e.vendor}` : ''}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

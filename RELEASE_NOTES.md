@@ -122,6 +122,11 @@
   an `http_auth` credential — or a Meraki API key, which the integration creates rather than an
   operator — could sit in the list and not be filterable at all.
 - Disabled notification channels and routing rules are still dimmed after the table rewrite.
+- **The metric editor's add form has moved below the metric list**, under a "New metric" heading.
+  Above the list it was a line of inputs sitting directly on top of a table — which is now what a
+  filter row looks like everywhere else — so it read as one, and typing a metric name into it did
+  nothing to the list below. No filter was added there instead: the largest metric set holds eleven
+  metrics and the average is between three and four.
 - Negation is offered for both plain terms and regular expressions. It was measured on 6.7M real
   events before it shipped: excluding costs what including costs, on both stores and in both modes.
 - **A plain search term now matches from the start of a word on a log-store deployment**, so

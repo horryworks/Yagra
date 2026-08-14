@@ -176,6 +176,7 @@
     "metricKindAria": "Metric kind",
     "browseCatalog": "Browse catalog",
     "closeCatalog": "Close catalog",
+    "newMetric": "New metric",
     "addMetric": "Add metric",
     "deleteMetric": "Delete metric",
     "pickerSearchPlaceholder": "Search the MIB catalog by name / OID / vendor…",
