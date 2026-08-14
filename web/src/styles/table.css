@@ -39,9 +39,23 @@
 }
 
 .ytable-head,
+.ytable-filters,
 .ytable-row {
   display: grid;
   align-items: center;
+}
+
+/* Filter row under the header (ADR-053 Inc.6), for the screens that keep hand-rolled markup for a
+   reason `DataTable` cannot serve — grouped rows, a matrix layout. It shares its caller's `COLS`
+   const with the header and every row: THREE grids, ONE binding. */
+.ytable-filters {
+  min-height: 36px;
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+html[data-viewport='mobile'] .ytable-filters {
+  display: none;
 }
 
 /* Sentence-case header (NO all-caps), medium weight, sticky for virtual scroll / server paging. */

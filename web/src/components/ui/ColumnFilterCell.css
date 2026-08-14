@@ -123,3 +123,32 @@
 .dt-f-instant-sep {
   color: var(--text-tertiary);
 }
+
+/* The number kind's body: two bounds, either of which may be blank (ADR-053 Inc.6). */
+.dt-f-numrange {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+
+.dt-f-numfield {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.dt-f-num {
+  flex: 1;
+  /* Narrower than a text filter's field on purpose: two of these plus a separator have to fit the
+     same popover width, and a score or a percentage is at most a few characters. */
+  min-width: 4.5em;
+  font-size: var(--font-xs);
+}
+
+.dt-f-numunit {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}

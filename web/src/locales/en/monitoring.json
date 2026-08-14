@@ -46,7 +46,16 @@
       "name": "Name",
       "vendor": "Vendor",
       "pollInterval": "Poll interval",
-      "metricSets": "Metric sets"
+      "metricSets": "Metric sets",
+      "category": "Role"
+    },
+    "filter": {
+      "allCategories": "All roles",
+      "allIntervals": "Any poll interval",
+      "interval": {
+        "inherited": "System default",
+        "overridden": "Overridden"
+      }
     },
     "empty": {
       "none": "No profiles yet",
@@ -251,7 +260,12 @@
         "searchPlaceholder": "Search address, MAC or neighbour…",
         "searchAria": "Search discovered endpoints",
         "unmonitoredOnly": "Not yet monitored",
-        "endpointNoun": "endpoints"
+        "endpointNoun": "endpoints",
+        "allStates": "Monitored and not",
+        "state": {
+          "unmonitored": "Not yet monitored",
+          "monitored": "Already monitored"
+        }
       }
     },
     "scanTitle": "Scan a subnet",
@@ -300,7 +314,12 @@
       "searchPlaceholder": "Search address or identity…",
       "searchAria": "Search discovery results",
       "reachableOnly": "Answered only",
-      "candidateNoun": "addresses"
+      "candidateNoun": "addresses",
+      "allReach": "Answered and not",
+      "reach": {
+        "reachable": "Answered",
+        "silent": "No answer"
+      }
     }
   }
 }

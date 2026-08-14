@@ -11,6 +11,7 @@
 
 import {
   CUSTOM_RANGE,
+  decodeNumberRange,
   decodeRange,
   decodeSet,
   type FilterState,
@@ -37,6 +38,19 @@ function compileColumn<T>(
   if (spec.kind === 'text') {
     const test = compileCondition(decodeCondition(raw));
     return test === null ? null : (row) => test(spec.readText(row));
+  }
+  if (spec.kind === 'number') {
+    if (!spec.readNumber) return null; // server-side: the bounds are already in the query
+    const read = spec.readNumber;
+    const { min, max } = decodeNumberRange(raw);
+    if (min === null && max === null) return null;
+    return (row) => {
+      const n = read(row);
+      // A row with no number is not "0" and not "matches everything" — it is a row the question
+      // cannot be asked of, so a bound excludes it. Same rule the range kind applies to a null time.
+      if (n == null || !Number.isFinite(n)) return false;
+      return (min === null || n >= min) && (max === null || n <= max);
+    };
   }
   // range
   if (!spec.readTime) return null; // server-side: the window is already in the query, not here

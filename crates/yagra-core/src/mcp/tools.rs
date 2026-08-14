@@ -42,7 +42,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use yagra_common::{NodeId, NodeKind, NodeState, Permission, SeriesKey, Severity};
+use yagra_common::{NodeId, NodeKind, Permission, SeriesKey, Severity};
 
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
@@ -180,32 +180,19 @@ impl YagraMcp {
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         let limit = p.limit.unwrap_or(50).clamp(1, 100);
-        // Rejected, never ignored: an unrecognised token dropped here would widen the answer, and
-        // a model that asked for the URL monitors would reason over every node believing it had
-        // the narrower set.
-        let kind = match p.kind.as_deref().map(NodeKind::from_token) {
-            Some(None) => {
-                return tool_bad_params(
-                    "list_nodes",
-                    "unknown kind; must be one of: meraki, url, dns, device",
-                );
-            }
-            other => other.flatten(),
-        };
-        let state = match p.state.as_deref().map(NodeState::from_token) {
-            Some(None) => {
-                return tool_bad_params(
-                    "list_nodes",
-                    "unknown state; must be one of: ok, warning, critical, unreachable, unknown, \
-                     maintenance",
-                );
-            }
-            other => other.flatten(),
-        };
-        let filter = crate::api::nodes::NodeFilter {
-            state,
-            kind,
-            pool: p.pool.clone(),
+        // Parsed through the REST edge's own function, not a copy of it. Rejected, never ignored:
+        // an unrecognised token dropped here would widen the answer, and a model that asked for the
+        // URL monitors would reason over every node believing it had the narrower set. Since
+        // ADR-053 Inc.6 all three take comma-separated sets, which is the whole reason this is one
+        // function — two hand-written parsers would have to agree about the empty set, the unknown
+        // token and the untrimmed name, and nothing would notice when they stopped.
+        let filter = match crate::api::nodes::parse_node_filter(
+            p.state.as_deref(),
+            p.kind.as_deref(),
+            p.pool.as_deref(),
+        ) {
+            Ok(f) => f,
+            Err(e) => return tool_api_error("list_nodes", &e),
         };
         // The scope goes into the query as the same indexed `group_id = ANY(…)` predicate the REST
         // list uses — `NodeListing` takes a `GroupFilter` on every method precisely so no call site
@@ -1083,6 +1070,8 @@ impl YagraMcp {
             node_id: p.node_id,
             node_q: p.node_q,
             group_id: p.group_id,
+            min_score: p.min_score,
+            max_score: p.max_score,
             limit: p.limit,
         };
         match crate::api::analysis::search_saved_findings(&self.state, scope, q).await {
@@ -3323,13 +3312,16 @@ struct ListNodesParams {
     search: Option<String>,
     /// Max nodes to return (1–100, default 50).
     limit: Option<i64>,
-    /// Only nodes in this rolled-up state: `ok` | `warning` | `critical` | `unreachable` |
-    /// `unknown` | `maintenance`.
+    /// Rolled-up states to include, comma-separated: `ok` | `warning` | `critical` |
+    /// `unreachable` | `unknown` | `maintenance`. Omit for all. `warning,critical,unreachable` is
+    /// "everything that is not healthy". An unknown token is an error rather than being ignored.
     state: Option<String>,
-    /// Only nodes of this monitoring kind: `meraki` | `url` | `dns` | `device`.
+    /// Monitoring kinds to include, comma-separated: `meraki` | `url` | `dns` | `device`. Omit for
+    /// all.
     kind: Option<String>,
-    /// Only nodes whose effective poll pool is this one (a node's own pool, else the nearest
-    /// folder ancestor that sets one, else `default`).
+    /// Effective poll pools to include, comma-separated (a node's own pool, else the nearest folder
+    /// ancestor that sets one, else `default`). Omit for all. Pool names are chosen by the
+    /// operator, so an unrecognised one matches nothing rather than being an error.
     pool: Option<String>,
 }
 
@@ -3594,6 +3586,11 @@ struct SearchFindingsParams {
     node_q: Option<String>,
     /// Restrict to findings about nodes in one folder group and everything beneath it.
     group_id: Option<Uuid>,
+    /// Lowest score to include, inclusive. Higher scores are worse, so this is the usual way to ask
+    /// for only the serious findings.
+    min_score: Option<f64>,
+    /// Highest score to include, inclusive.
+    max_score: Option<f64>,
     /// Page size, 1–200 (default 100).
     limit: Option<i64>,
 }

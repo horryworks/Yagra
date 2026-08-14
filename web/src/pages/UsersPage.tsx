@@ -35,23 +35,33 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { FilterBar } from '../components/ui/FilterBar';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import { facetCounts } from '../lib/filterCounts';
+import { buildPredicate } from '../lib/filterPredicate';
+import { userColumns, userFilterLabels } from './userFilters';
 import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
 import './UsersPage.css';
 
 const MIN_PW = 8;
-// Role filter segments, derived from the one ROLES enumeration (reversed: most-privileged first,
-// matching the identity list). The filter key drives the query; the label resolves with `t`.
-const SEGMENTS: readonly ('all' | Role)[] = ['all', ...[...ROLES].reverse()];
+// The role *filter* moved to `pages/userFilters.ts` (ADR-053 Inc.6). It used to be a segmented
+// radio group built from a `['all', ...ROLES.reverse()]` list here — one-of-four by construction, so
+// "operators and admins" could not be asked for. `ROLES` is still imported: the per-row role
+// dropdown below is a different control, and that one really is single-valued.
 
 export function UsersPage() {
   const { t } = useTranslation('access');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<UserSummary[]>([]);
   const [me, setMe] = useState<string | null>(null);
-  const [query, setQuery] = useState('');
-  const [roleFilter, setRoleFilter] = useState('all');
+  const filterCols = useMemo(() => userColumns(t), [t]);
+  const filterLabels = useMemo(() => userFilterLabels(t), [t]);
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
+  const [sheet, setSheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [forbidden, setForbidden] = useState(false);
@@ -102,14 +112,19 @@ export function UsersPage() {
       .catch((e: unknown) => setError(errMsg(e, t('users.err.changeStatus'))));
   };
 
-  const list = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rows.filter(
-      (u) =>
-        (q === '' || u.username.toLowerCase().includes(q)) &&
-        (roleFilter === 'all' || u.role === roleFilter),
-    );
-  }, [rows, query, roleFilter]);
+  const list = useMemo(
+    () => rows.filter(buildPredicate(filterCols, filters, Date.now())),
+    [rows, filterCols, filters],
+  );
+  const facets = useMemo(
+    () =>
+      Object.fromEntries(
+        filterCols
+          .filter((c) => c.filter.kind === 'enum')
+          .map((c) => [c.key, facetCounts(rows, filterCols, filters, c.key, Date.now())]),
+      ),
+    [rows, filterCols, filters],
+  );
 
   return (
     <div>
@@ -130,23 +145,16 @@ export function UsersPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('users.searchPlaceholder')}
-              ariaLabel={t('users.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <div className="segmented" role="group" aria-label={t('users.filterAria')}>
-              {SEGMENTS.map((key) => (
-                <button
-                  key={key}
-                  className={roleFilter === key ? 'on' : ''}
-                  onClick={() => setRoleFilter(key)}
-                >
-                  {t(`users.filter.${key}`)}
-                </button>
-              ))}
-            </div>
+            <ClearFilters
+              columns={filterCols}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(filterCols))}
+            />
             <TableSpacer />
             <ResultCount
               shown={list.length}
@@ -159,6 +167,28 @@ export function UsersPage() {
               </Button>
             )}
           </TableToolbar>
+
+          {/* The identity list is a card per account with no header row, so the controls carry
+              their own names rather than sitting under columns that do not exist (ADR-053 Inc.6
+              decision E). Role went from a one-of-three segmented control to a set, which is what
+              makes "operators and admins" — the accounts that can change anything — sayable. */}
+          <FilterBar
+            columns={filterCols}
+            labels={filterLabels}
+            filters={filters}
+            onChange={setFilters}
+            counts={facets}
+          />
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              labels={filterLabels}
+              filters={filters}
+              onChange={setFilters}
+              counts={facets}
+              onClose={() => setSheet(false)}
+            />
+          )}
 
           {error && <p className="form-error users-error">{error}</p>}
 

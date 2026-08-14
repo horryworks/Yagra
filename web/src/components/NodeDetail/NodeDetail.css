@@ -517,11 +517,25 @@ html[data-viewport='mobile'] .nd-extract-row {
   overflow-y: auto;
 }
 
+/* ⚠️ ONE declaration, THREE grids — the header, the filter row (ADR-053 Inc.6) and every data row.
+   The same rule `DataTable` enforces in TS with a shared template const: if they ever disagree the
+   filter controls sit under the wrong headers, and nothing catches it (`.tsx` tests never run). */
 .nd-if-head,
+.nd-if-filters,
 .nd-if-row {
   display: grid;
   grid-template-columns: minmax(140px, 1.4fr) minmax(140px, 1.6fr) 94px 132px minmax(116px, 1fr);
   align-items: center;
+}
+
+.nd-if-filters {
+  position: sticky;
+  /* Directly under the sticky header, whose height is `LIST_HEAD_H` in InterfacesTab.tsx. */
+  top: 32px;
+  min-height: 34px;
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-color);
+  z-index: 1;
 }
 
 .nd-if-head {
@@ -962,11 +976,21 @@ html[data-viewport='mobile'] .nd-extract-row {
   overflow: hidden;
 }
 
+/* ⚠️ ONE declaration, THREE grids — header, filter row (ADR-053 Inc.6) and every data row. See the
+   note on `.nd-if-head` above: a fourth template computed anywhere else puts the filter controls
+   under the wrong columns and nothing catches it. */
 .nd-coll-mhead,
+.nd-coll-mfilters,
 .nd-coll-mrow {
   display: grid;
   grid-template-columns: 1.6fr 1fr 1fr 120px;
   align-items: center;
+}
+
+.nd-coll-mfilters {
+  min-height: 34px;
+  background: var(--bg-secondary);
+  border-bottom: var(--border-width) solid var(--border-color);
 }
 
 .nd-coll-mhead {

@@ -8,23 +8,20 @@
 // Progress and terminal states arrive over SSE (store.upsertJob); no client-side faking.
 
 import { useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { FilterBar } from '../components/ui/FilterBar';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import {
-  FilterSelect,
-  ResultCount,
-  SearchInput,
-  TableSpacer,
-  TableToolbar,
-} from '../components/ui/TableToolbar';
-import { TOOLS } from './data';
-import {
-  DEFAULT_RUN_FILTERS,
-  isRunFiltered,
-  matchesRun,
-  RUN_STATES,
-  type RunFilters,
-} from './runFilters';
+  defaultFilters,
+  isAnyFiltered,
+  type FilterState,
+} from '../lib/columnFilter';
+import { facetCounts } from '../lib/filterCounts';
+import { buildPredicate } from '../lib/filterPredicate';
+import { runColumns, runFilterLabels } from './runFilters';
 import { useTroubleshootStore } from './store';
 import { reportPathFor, toolById } from './data';
 import { relTime, inputFromJob } from './format';
@@ -141,12 +138,29 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
   const { t } = useTranslation('troubleshoot');
   const jobs = useTroubleshootStore((s) => s.jobs);
   const loaded = useTroubleshootStore((s) => s.loaded);
-  // Only the dedicated Runs page gets the toolbar; the catalog embeds this as a short summary
-  // where three dropdowns above five rows would be noise.
-  const [filters, setFilters] = useState<RunFilters>(DEFAULT_RUN_FILTERS);
-  const set = <K extends keyof RunFilters>(key: K, value: RunFilters[K]) =>
-    setFilters((f) => ({ ...f, [key]: value }));
-  const shown = filterable ? jobs.filter((j) => matchesRun(j, filters)) : jobs;
+  // Only the dedicated Runs page gets the filter controls; the catalog embeds this as a short
+  // summary where three controls above five rows would be noise.
+  const columns = useMemo(() => runColumns(t), [t]);
+  const labels = useMemo(() => runFilterLabels(t), [t]);
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
+  const [sheet, setSheet] = useState(false);
+  // Component state, not the URL: this list is embedded in two places on the same route (the
+  // catalog's summary and the Runs page), and a URL-backed key would be claimed by whichever
+  // mounted — the same reason ReportsPage's three tables keep their filters local (Inc.4).
+  const narrowed = filterable && isAnyFiltered(columns, filters);
+  const shown = useMemo(
+    () => (filterable ? jobs.filter(buildPredicate(columns, filters, Date.now())) : jobs),
+    [filterable, jobs, columns, filters],
+  );
+  const counts = useMemo(
+    () =>
+      Object.fromEntries(
+        columns
+          .filter((c) => c.filter.kind === 'enum')
+          .map((c) => [c.key, facetCounts(jobs, columns, filters, c.key, Date.now())]),
+      ),
+    [jobs, columns, filters],
+  );
 
   if (jobs.length === 0) {
     return <p className="muted">{loaded ? (empty ?? t('runs.empty')) : t('common:loading')}</p>;
@@ -154,34 +168,45 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
   return (
     <>
       {filterable && (
-        <TableToolbar>
-          <SearchInput
-            value={filters.q}
-            onChange={(v) => set('q', v)}
-            placeholder={t('runs.filter.searchPlaceholder')}
-            ariaLabel={t('runs.filter.searchAria')}
+        <>
+          <TableToolbar>
+            <MobileFilterButton
+              columns={columns}
+              filters={filters}
+              onOpen={() => setSheet(true)}
+            />
+            <ClearFilters
+              columns={columns}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(columns))}
+            />
+            <TableSpacer />
+            <ResultCount
+              shown={shown.length}
+              total={narrowed ? jobs.length : undefined}
+              noun={t('runs.noun', { count: shown.length })}
+            />
+          </TableToolbar>
+          {/* A run row is a CSS grid with no header row above it, so the controls carry their own
+              names instead of sitting under columns that do not exist (ADR-053 Inc.6 decision E). */}
+          <FilterBar
+            columns={columns}
+            labels={labels}
+            filters={filters}
+            onChange={setFilters}
+            counts={counts}
           />
-          <FilterSelect
-            value={filters.tool}
-            onChange={(v) => set('tool', v)}
-            options={TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) }))}
-            allLabel={t('schedule.filter.allTools')}
-            ariaLabel={t('schedule.filter.toolAria')}
-          />
-          <FilterSelect
-            value={filters.state}
-            onChange={(v) => set('state', v)}
-            options={RUN_STATES.map((st) => ({ value: st, label: t(`runs.state.${st}`) }))}
-            allLabel={t('runs.filter.allStates')}
-            ariaLabel={t('runs.filter.stateAria')}
-          />
-          <TableSpacer />
-          <ResultCount
-            shown={shown.length}
-            total={isRunFiltered(filters) ? jobs.length : undefined}
-            noun={t('runs.noun', { count: shown.length })}
-          />
-        </TableToolbar>
+          {sheet && (
+            <MobileFilterSheet
+              columns={columns}
+              labels={labels}
+              filters={filters}
+              onChange={setFilters}
+              counts={counts}
+              onClose={() => setSheet(false)}
+            />
+          )}
+        </>
       )}
       {shown.length === 0 ? (
         <p className="muted">{t('common:filter.noMatch')}</p>

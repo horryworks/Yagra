@@ -11,9 +11,17 @@
 // and searching two fields where the row shows five.
 
 import type { TFunction } from 'i18next';
-import type { ColumnFilterSpec } from '../../lib/columnFilter';
-import { isFiltered as isFilteredAgainst, textMatch } from '../../lib/filterQuery';
-import { NEIGHBOR_PROTOS, type Neighbor, type NodeMetricEntry } from '../../types/api';
+import {
+  specColumns,
+  type ColumnFilterSpec,
+  type FilterableColumn,
+} from '../../lib/columnFilter';
+import {
+  METRIC_STATUSES,
+  NEIGHBOR_PROTOS,
+  type Neighbor,
+  type NodeMetricEntry,
+} from '../../types/api';
 
 // ───────────────────────────────────────────────────────────────── interfaces
 
@@ -40,25 +48,52 @@ export interface FilterableInterface {
   oper_status?: number | null;
 }
 
-export interface InterfaceFilters {
-  state: IfState | '';
-  /** Free text over the interface's name and its description. */
-  q: string;
-}
-
-export const DEFAULT_INTERFACE_FILTERS: InterfaceFilters = { state: '', q: '' };
-
-/** Whether one interface survives the filter.
+/**
+ * The Interfaces tab's filter row, keyed by the column it sits under (ADR-053 Inc.6 decision F).
  *
- *  The name falls back to `if<ifindex>` exactly as the row renders it, so typing what is on screen
- *  finds the row even when the device reports no `ifName`. */
-export function matchesInterface(r: FilterableInterface, f: InterfaceFilters): boolean {
-  if (f.state && ifState(r.oper_status) !== f.state) return false;
-  return textMatch(f.q, r.if_name ?? `if${r.ifindex}`, r.if_alias);
+ * The tab keeps its own grid — the rows are `<button>`s that drive the detail dock below, which is
+ * not a shape `DataTable` has — so what moved is the controls, not the table. The one-box search
+ * this replaces read the name and the description together, where the two are separate columns on
+ * screen; splitting them is what lets "port 3 of anything" and "the uplink description" be
+ * different questions.
+ *
+ * ⚠️ The name falls back to `if<ifindex>` exactly as the row renders it, so typing what is on screen
+ * finds the row even when the device reports no `ifName`.
+ */
+export function interfaceFilters(
+  t: TFunction,
+): Record<string, ColumnFilterSpec<FilterableInterface>> {
+  return {
+    if_name: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (r) => [r.if_name ?? `if${r.ifindex}`],
+      containsSemantics: 'substring',
+      placeholder: t('interfaces.colInterface'),
+    },
+    if_alias: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (r) => [r.if_alias],
+      containsSemantics: 'substring',
+      placeholder: t('interfaces.colDescription'),
+    },
+    oper: {
+      kind: 'enum',
+      options: IF_STATES.map((s) => ({ value: s, label: t(`interfaces.state.${s}`) })),
+      // Through `ifState`, so the control and the row's dot can never disagree about what "up"
+      // means — `oper_status` is an integer where 1 is up and `null` is "never answered".
+      readValue: (r) => ifState(r.oper_status),
+      allLabel: t('interfaces.allStates'),
+      counts: 'client',
+    },
+  };
 }
 
-export function isInterfaceFiltered(f: InterfaceFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_INTERFACE_FILTERS);
+export function interfaceColumns(t: TFunction): FilterableColumn<FilterableInterface>[] {
+  return specColumns(interfaceFilters(t));
 }
 
 // ────────────────────────────────────────────────────────────────── neighbours
@@ -109,15 +144,6 @@ export function neighborFilters(t: TFunction): Record<string, ColumnFilterSpec<N
 
 // ────────────────────────────────────────────────────────────────── collection
 
-export interface MetricFilters {
-  /** Hide the metrics that are not arriving. */
-  flowingOnly: boolean;
-  /** Free text over the metric name. */
-  q: string;
-}
-
-export const DEFAULT_METRIC_FILTERS: MetricFilters = { flowingOnly: false, q: '' };
-
 /** Whether a metric has samples in the inventory window.
  *
  *  ⚠️ **`ok` alone is the wrong answer, and it is the obvious one.** `MetricStatus` crosses two
@@ -133,15 +159,38 @@ export function metricIsFlowing(m: NodeMetricEntry): boolean {
   return m.status === 'ok' || m.status === 'unconfigured';
 }
 
-/** Whether one collected metric survives the filter.
+/**
+ * The Collection tab's all-metrics filter row (ADR-053 Inc.6 decision F).
  *
- *  The judgement is the store's own status, rather than a second opinion derived from whether a
- *  last value happens to be present: a metric that stopped arriving an hour ago still has one. */
-export function matchesMetric(m: NodeMetricEntry, f: MetricFilters): boolean {
-  if (f.flowingOnly && !metricIsFlowing(m)) return false;
-  return textMatch(f.q, m.metric);
+ * ⚠️ **The "flowing only" checkbox became a `status` set, and that is a widening, not a rename.**
+ * The checkbox could say "hide what is not arriving" and nothing else; the column it now sits under
+ * renders three distinct statuses, and "show me only the configured-but-silent ones" — the actual
+ * question when a collection set stops working — was unsayable. `metricIsFlowing` survives because
+ * two other places ask it; see its own note on why `ok` alone is the wrong reading.
+ *
+ * The judgement is the store's own status, rather than a second opinion derived from whether a last
+ * value happens to be present: a metric that stopped arriving an hour ago still has one.
+ */
+export function metricFilters(t: TFunction): Record<string, ColumnFilterSpec<NodeMetricEntry>> {
+  return {
+    metric: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (m) => [m.metric],
+      containsSemantics: 'substring',
+      placeholder: t('collection.colMetric'),
+    },
+    status: {
+      kind: 'enum',
+      options: METRIC_STATUSES.map((s) => ({ value: s, label: t(`collection.status.${s}`) })),
+      readValue: (m) => m.status,
+      allLabel: t('collection.filter.allStatuses'),
+      counts: 'client',
+    },
+  };
 }
 
-export function isMetricFiltered(f: MetricFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_METRIC_FILTERS);
+export function metricColumns(t: TFunction): FilterableColumn<NodeMetricEntry>[] {
+  return specColumns(metricFilters(t));
 }

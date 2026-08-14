@@ -4,7 +4,14 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NodeSummary } from '../types/api';
 import { useFilterSearch } from './useFilterSearch';
-import { DEFAULT_INVENTORY_FILTERS, type InventoryFilters } from './inventoryFilters';
+import { inventoryColumns } from './inventoryFilters';
+import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import type { TFunction } from 'i18next';
+
+// The three tree filters became sets in ADR-053 Inc.6; what this file tests is unchanged by that,
+// so the fixture is simply the derived default state rather than a hand-written object.
+const COLS = inventoryColumns(((k: string) => k) as unknown as TFunction, []);
+const DEFAULT_INVENTORY_FILTERS = defaultFilters(COLS);
 
 // The inventory tree's filter-mode search. What is worth testing here is not the request — it is
 // WHEN one is issued: once per burst of keystrokes, again when the caller says the answer is stale,
@@ -222,7 +229,7 @@ describe('useFilterSearch', () => {
 
   // ── The state / kind / pool filters ─────────────────────────────────────────────────────────
 
-  const withFilters = (over: Partial<InventoryFilters>): InventoryFilters => ({
+  const withFilters = (over: FilterState): FilterState => ({
     ...DEFAULT_INVENTORY_FILTERS,
     ...over,
   });
@@ -231,7 +238,7 @@ describe('useFilterSearch', () => {
     // The case an empty-term guard would swallow: "show me the URL monitors" is a whole question,
     // and answering it with the unfiltered tree would look like the control did nothing.
     const { result } = renderHook(
-      (f: InventoryFilters) => useFilterSearch('', f),
+      (f: FilterState) => useFilterSearch('', f),
       { initialProps: withFilters({ kind: 'url' }) },
     );
     await tick(200);
@@ -248,7 +255,7 @@ describe('useFilterSearch', () => {
   it('sends each filter, and sends nothing for one left unset', async () => {
     // `''` must become `undefined`, never an empty string: `?state=` reaches the API edge as a
     // value it cannot parse, which is a 400.
-    renderHook((f: InventoryFilters) => useFilterSearch('sw', f), {
+    renderHook((f: FilterState) => useFilterSearch('sw', f), {
       initialProps: withFilters({ state: 'critical', pool: 'tokyo' }),
     });
     await tick(200);
@@ -264,7 +271,7 @@ describe('useFilterSearch', () => {
   it('re-issues when a filter changes, and not when an unrelated re-render happens', async () => {
     // The filters are re-derived from the URL every render, so the object identity changes
     // constantly. Keying the effect on the object would fire a request per render.
-    const { rerender } = renderHook((f: InventoryFilters) => useFilterSearch('sw', f), {
+    const { rerender } = renderHook((f: FilterState) => useFilterSearch('sw', f), {
       initialProps: withFilters({ kind: 'device' }),
     });
     await tick(200);
@@ -280,7 +287,7 @@ describe('useFilterSearch', () => {
   });
 
   it('stops searching only when the term AND every filter are clear', async () => {
-    const { result, rerender } = renderHook((f: InventoryFilters) => useFilterSearch('', f), {
+    const { result, rerender } = renderHook((f: FilterState) => useFilterSearch('', f), {
       initialProps: withFilters({ state: 'warning' }),
     });
     await tick(200);

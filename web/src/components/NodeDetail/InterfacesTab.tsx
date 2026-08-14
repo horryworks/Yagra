@@ -7,14 +7,13 @@
 // body is a flex column — toolbar (none) → list (flex:1, scrolls) → dock/hint (none). The list
 // refreshes on an interval (shared with the tab badge); per-interface series are loaded lazily.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
 import { formatBps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
-import { TextInput } from '../ui/Field';
 import { MetricChart, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
@@ -23,14 +22,13 @@ import { usePrefsStore } from '../../prefs';
 import { useIsMobileViewport } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
-import {
-  DEFAULT_INTERFACE_FILTERS,
-  IF_STATES,
-  isInterfaceFiltered,
-  matchesInterface,
-  type InterfaceFilters,
-} from './tabFilters';
-import { FilterSelect } from '../ui/TableToolbar';
+import { interfaceColumns } from './tabFilters';
+import { ColumnFilterCell } from '../ui/ColumnFilterCell';
+import { ClearFilters } from '../ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { defaultFilters, isAnyFiltered, type FilterState } from '../../lib/columnFilter';
+import { facetCounts } from '../../lib/filterCounts';
+import { buildPredicate } from '../../lib/filterPredicate';
 
 // In-row sparkline window: last hour at a coarse step (cheap; trend, not precision).
 const SPARK_WINDOW_SECS = 3600;
@@ -58,11 +56,45 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const { t } = useTranslation('nodes');
   // The predicate lives in `tabFilters.ts`: it was hand-rolled here and searched two fields
   // where the row shows five, and a `.tsx` is a file no test runs (testing.md).
-  const [filters, setFilters] = useState<InterfaceFilters>(DEFAULT_INTERFACE_FILTERS);
+  const columns = useMemo(() => interfaceColumns(t), [t]);
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
+  const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const shown = rows.filter((r) => matchesInterface(r, filters));
+  const shown = useMemo(
+    () => rows.filter(buildPredicate(columns, filters, Date.now())),
+    [rows, columns, filters],
+  );
+  const counts = useMemo(
+    () =>
+      Object.fromEntries(
+        columns
+          .filter((c) => c.filter.kind === 'enum')
+          .map((c) => [c.key, facetCounts(rows, columns, filters, c.key, Date.now())]),
+      ),
+    [rows, columns, filters],
+  );
+  // Keyed by the column each control sits under. ⚠️ Untyped, exactly like `DataTable`'s
+  // `specs[c.key]` lookup: rename a key in `tabFilters.ts` and the cell silently stops rendering.
+  const labels: Record<string, string> = {
+    if_name: t('interfaces.colInterface'),
+    if_alias: t('interfaces.colDescription'),
+    oper: t('interfaces.colOper'),
+  };
+  const cell = (key: string) => {
+    const col = columns.find((c) => c.key === key);
+    if (!col) return <div className="dt-f empty" />;
+    return (
+      <ColumnFilterCell
+        spec={col.filter}
+        value={filters[key] ?? ''}
+        onChange={(next) => setFilters({ ...filters, [key]: next })}
+        counts={counts[key]}
+        label={labels[key] ?? key}
+      />
+    );
+  };
   const up = rows.filter((r) => r.oper_status === 1).length;
   const selectedRow = rows.find((r) => r.ifindex === selected) ?? null;
 
@@ -119,21 +151,23 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <b>{up}</b> {t('interfaces.ofUp', { total: rows.length })}
           <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
         </span>
-        <FilterSelect
-          value={filters.state}
-          onChange={(v) => setFilters((f) => ({ ...f, state: v }))}
-          options={IF_STATES.map((s) => ({ value: s, label: t(`interfaces.state.${s}`) }))}
-          allLabel={t('interfaces.allStates')}
-          ariaLabel={t('interfaces.stateAria')}
-        />
-        <TextInput
-          className="nd-if-filter"
-          value={filters.q}
-          onChange={(e) => setFilters((f) => ({ ...f, q: e.target.value }))}
-          placeholder={t('interfaces.filterPlaceholder')}
-          aria-label={t('interfaces.filterPlaceholder')}
+        <MobileFilterButton columns={columns} filters={filters} onOpen={() => setSheet(true)} />
+        <ClearFilters
+          columns={columns}
+          filters={filters}
+          onClear={() => setFilters(defaultFilters(columns))}
         />
       </div>
+      {sheet && (
+        <MobileFilterSheet
+          columns={columns}
+          labels={labels}
+          filters={filters}
+          onChange={setFilters}
+          counts={counts}
+          onClose={() => setSheet(false)}
+        />
+      )}
       {error && <p className="form-error nd-tabpad">{error}</p>}
 
       <div className="nd-if-list" ref={listRef}>
@@ -145,6 +179,17 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           </div>
           <div className="nd-if-h">{t('interfaces.colThroughput')}</div>
           <div className="nd-if-h right">{t('interfaces.colInOut')}</div>
+        </div>
+        {/* A real filter row: same grid rule as `.nd-if-head` and `.nd-if-row` (one CSS
+            declaration, three selectors — the same discipline `DataTable`'s shared template
+            const enforces in TS). The two throughput columns are pictures, not values, so they
+            carry an empty cell rather than a control that could not mean anything. */}
+        <div className="nd-if-filters" role="group" aria-label={t('common:filter.row')}>
+          {cell('if_name')}
+          {cell('if_alias')}
+          {cell('oper')}
+          <div className="dt-f empty" />
+          <div className="dt-f empty" />
         </div>
         {shown.map((r) => {
           const down = r.oper_status != null && r.oper_status !== 1;
@@ -178,8 +223,10 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
         })}
         {shown.length === 0 && (
           <p className="nd-muted nd-tabpad">
-            {isInterfaceFiltered(filters)
-              ? t('interfaces.noMatch', { filter: filters.q })
+            {/* The wording no longer quotes the term: with three columns filterable, naming one
+                of them would point at the wrong control as often as the right one. */}
+            {isAnyFiltered(columns, filters)
+              ? t('common:filter.noMatch')
               : t('interfaces.emptyDiscovered')}
           </p>
         )}

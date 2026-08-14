@@ -551,6 +551,10 @@ pub(crate) struct SavedFindingsQuery {
     pub(crate) node_q: Option<String>,
     /// Restrict to findings about nodes in one folder group **and everything beneath it**.
     pub(crate) group_id: Option<Uuid>,
+    /// Inclusive lower bound on the finding's score. One-sided is the usual shape — "8 or worse".
+    pub(crate) min_score: Option<f64>,
+    /// Inclusive upper bound on the finding's score.
+    pub(crate) max_score: Option<f64>,
     /// Page size, clamped to 200 (default 100).
     pub(crate) limit: Option<i64>,
 }
@@ -666,6 +670,12 @@ pub(crate) async fn search_saved_findings(
         node_q: node_q.as_deref(),
         groups: scope.group_filter(),
         in_group: in_group.as_deref(),
+        // Not clamped and not ordered against each other. A score has no fixed ceiling the edge
+        // could clamp to, and `min > max` is an empty result — which is the truthful answer to what
+        // was asked, unlike a 400 that would make an operator hunt for a typo in a filter they can
+        // see is contradictory.
+        min_score: q.min_score,
+        max_score: q.max_score,
         limit: q.limit.unwrap_or(100).clamp(1, FINDINGS_PAGE_MAX),
     };
     admin.analysis.search_findings(&filter).await.map_err(|e| {

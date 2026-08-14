@@ -30,6 +30,11 @@
       "requeueFailed": "分析を再実行できませんでした。"
     },
     "noun": "件の実行",
+    "cols": {
+      "tool": "分析",
+      "state": "状態",
+      "scope": "対象"
+    },
     "filter": {
       "searchPlaceholder": "対象または要約を検索…",
       "searchAria": "分析の実行を検索",

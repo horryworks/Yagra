@@ -1,0 +1,38 @@
+/* The filter bar: the column filter row's controls for a list that has no columns (ADR-053 Inc.6).
+   Deliberately NOT a grid — see FilterBar.tsx on why `.dt-filters` must not be borrowed here. */
+
+.fbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) 0;
+  border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.fbar-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* The name of what is being filtered. In the filter row this is the column header above the cell;
+   here nothing else says it, so it is part of the control. */
+.fbar-label {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  white-space: nowrap;
+}
+
+/* The cell carries the filter row's own horizontal padding, which is there to align it with a data
+   cell. There is no data cell to align with here, so take it back. */
+.fbar-item .dt-f {
+  padding: 0;
+}
+
+/* A trigger sized by content would jitter as the summary changes; a fixed floor keeps the bar's
+   layout stable while still growing for a long value. */
+.fbar-item .dt-f-trigger {
+  min-width: 8rem;
+}

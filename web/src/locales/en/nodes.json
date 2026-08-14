@@ -62,6 +62,11 @@
     "hideTree": "Collapse inventory",
     "showTree": "Show inventory",
     "filterScanTruncated": "Some matches are not shown: the filter examined as many nodes as it is allowed to. Add a search term to narrow it.",
+    "cols": {
+      "state": "State",
+      "kind": "Kind",
+      "pool": "Pool"
+    },
     "filter": {
       "allStates": "All states",
       "stateAria": "Filter by state",
@@ -346,7 +351,8 @@
     "filter": {
       "searchPlaceholder": "Search metrics…",
       "searchAria": "Search collected metrics",
-      "flowingOnly": "Arriving only"
+      "flowingOnly": "Arriving only",
+      "allStatuses": "Any status"
     }
   },
   "groupDetail": {

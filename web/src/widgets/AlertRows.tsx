@@ -37,17 +37,31 @@ type SortedAlert = ReturnType<typeof sortedAlerts>[number];
  *  `useEntityNames()` resolver in the page, duplicating the batch this list already runs. */
 type RowActions = (alert: SortedAlert, nodeName: string) => ReactNode;
 
-/** Optional row predicate (Alerts ▸ Active). Receives the id→name *resolver* rather than an
- *  already-resolved name, which is the whole reason the filter can live here: `nodeName()` enqueues
- *  every id it is asked about for the next batch request, so a predicate that only needs names when
- *  something is typed can decline to ask. See `pages/activeAlertFilters.ts`. */
-type RowFilter = (alert: SortedAlert, nameOf: NameOf) => boolean;
+/** Optional row predicate (Alerts ▸ Active), supplied as a **factory** over the id→name resolver.
+ *
+ *  Two properties, and both matter. The resolver rather than an already-resolved name, because
+ *  `nodeName()` enqueues every id it is asked about for the next batch request — so a filter that
+ *  only needs names when something is typed can decline to ask. And a factory rather than a
+ *  `(alert, nameOf)` pair, because this is applied per row: the shared predicate compiles a regex
+ *  once when it is built, and calling a per-row function would compile it once per alert — during
+ *  an outage, thousands of times. See `pages/activeAlertFilters.ts`. */
+type RowFilter = (nameOf: NameOf) => (alert: SortedAlert) => boolean;
 
-/** Toolbar rendered above the list. A render prop, not a plain node, because the counts it shows
- *  are derived from the store *and* the filter and are known only here — and because it must keep
- *  rendering when the filter matches nothing, or the controls that would undo the filter vanish
- *  along with the rows. */
-type ToolbarSlot = (counts: { shown: number; total: number }) => ReactNode;
+/** Toolbar (and filter bar) rendered above the list. A render prop, not a plain node, because
+ *  everything it needs is known only here — and because it must keep rendering when the filter
+ *  matches nothing, or the controls that would undo the filter vanish along with the rows.
+ *
+ *  It receives the id→name resolver and the **unfiltered** rows as well as the counts. The resolver
+ *  so the filter controls are built from the same one the predicate uses rather than a second
+ *  `useEntityNames()` in the page (two batchers, two inventory fetches); the unfiltered rows because
+ *  facet counts are computed over the rows passing every *other* column's filter, which is a set
+ *  neither `shown` nor `total` is (`lib/filterCounts.ts`). */
+type ToolbarSlot = (ctx: {
+  shown: number;
+  total: number;
+  nameOf: NameOf;
+  rows: SortedAlert[];
+}) => ReactNode;
 
 interface Props {
   /** Cap the number of rows (e.g. dashboard widget). */
@@ -197,7 +211,7 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
   // drawn. Recomputes when `nodeName` gains a batch of resolutions, which is what lets a search on
   // a node name settle rather than matching only the ids resolved so far.
   const shown = useMemo(
-    () => (filter ? all.filter((a) => filter(a, nodeName)) : all),
+    () => (filter ? all.filter(filter(nodeName)) : all),
     [all, filter, nodeName],
   );
 
@@ -222,7 +236,7 @@ export function AlertRows({ limit, actions, filter, toolbar, empty, emptyFiltere
   if (!toolbar) return body;
   return (
     <>
-      {toolbar({ shown: shown.length, total: all.length })}
+      {toolbar({ shown: shown.length, total: all.length, nameOf: nodeName, rows: all })}
       {body}
     </>
   );

@@ -62,6 +62,11 @@
     "hideTree": "インベントリを折りたたむ",
     "showTree": "インベントリを表示",
     "filterScanTruncated": "一致するノードの一部は表示されていません（絞り込みが調べられる上限まで調べた結果です）。検索語を足して絞り込んでください。",
+    "cols": {
+      "state": "状態",
+      "kind": "種別",
+      "pool": "プール"
+    },
     "filter": {
       "allStates": "すべての状態",
       "stateAria": "状態で絞り込み",
@@ -346,7 +351,8 @@
     "filter": {
       "searchPlaceholder": "メトリクスを検索…",
       "searchAria": "収集中のメトリクスを検索",
-      "flowingOnly": "届いているものだけ"
+      "flowingOnly": "届いているものだけ",
+      "allStatuses": "すべての状態"
     }
   },
   "groupDetail": {

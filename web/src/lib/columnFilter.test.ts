@@ -6,9 +6,12 @@ import {
   activeFilterCount,
   activeFilterKeys,
   clearFilter,
+  decodeNumberRange,
   decodeRange,
   decodeSet,
   defaultFilters,
+  defaultValue,
+  encodeNumberRange,
   encodeRange,
   encodeSet,
   filterableColumns,
@@ -220,6 +223,48 @@ describe('the range codec', () => {
 
   it('reads an empty value as the default', () => {
     expect(decodeRange('', spec).preset).toBe(spec.defaultPreset);
+  });
+});
+
+describe('the numeric-interval codec (ADR-053 Inc.6)', () => {
+  it('round-trips both bounds, one bound, and neither', () => {
+    for (const v of [
+      { min: 3, max: 5 },
+      { min: 3, max: null },
+      { min: null, max: 5 },
+      { min: -2.5, max: 0 },
+    ]) {
+      expect(decodeNumberRange(encodeNumberRange(v))).toEqual(v);
+    }
+    expect(encodeNumberRange({ min: null, max: null })).toBe('');
+  });
+
+  it('keeps zero distinct from "unset" on both sides', () => {
+    // `Number('')` is 0, so the naive encode/decode collapses these two into the same value — and a
+    // bound of zero is a real filter on a score that starts at zero.
+    expect(encodeNumberRange({ min: 0, max: null })).toBe('0:');
+    expect(decodeNumberRange('0:')).toEqual({ min: 0, max: null });
+    expect(decodeNumberRange(':0')).toEqual({ min: null, max: 0 });
+    expect(decodeNumberRange(':')).toEqual({ min: null, max: null });
+  });
+
+  it('leaves an unparseable side unbounded instead of rejecting the value', () => {
+    // A stale bookmark must land on a usable view, the same rule `decodeRange` and `readSetParam`
+    // follow. The API edge's rule is the opposite (400) and that difference is deliberate.
+    expect(decodeNumberRange('abc:5')).toEqual({ min: null, max: 5 });
+    expect(decodeNumberRange('3:xyz')).toEqual({ min: 3, max: null });
+    expect(decodeNumberRange('nonsense')).toEqual({ min: null, max: null });
+    expect(decodeNumberRange('')).toEqual({ min: null, max: null });
+  });
+
+  it('does not share the range kind’s custom spelling', () => {
+    // `custom:from|to` and `min:max` are near enough to invite one codec. They are not the same
+    // thing — one carries presets and a narrowing default, the other carries neither.
+    expect(encodeNumberRange({ min: 1, max: 2 })).not.toContain('|');
+  });
+
+  it('a number column defaults to the empty value', () => {
+    expect(defaultValue<Row>({ kind: 'number', readNumber: (r) => r.at })).toBe('');
   });
 });
 

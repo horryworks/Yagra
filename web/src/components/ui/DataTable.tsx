@@ -5,7 +5,7 @@
 // @tanstack/react-virtual and calls `onReachEnd` when the user nears the bottom so the
 // parent can load the next page.
 
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
@@ -89,6 +89,19 @@ interface Props<T> {
   /** Told which column's popover just opened, so a server-side caller can fetch that column's
    *  counts on demand instead of on every page load (ADR-023). */
   onFilterOpen?: (columnKey: string) => void;
+  /** An editor that grows under a row when it is open, or `null` for a row that is not (ADR-053
+   *  Inc.6 decision H). Metric sets and Device profiles both work this way.
+   *
+   *  ⚠️ **Supplying this switches the whole desktop body to *measured* heights.** Every row is then
+   *  sized by a `ResizeObserver` rather than by the 44px estimate — the same path mobile cards have
+   *  always used, not a new mechanism. That is the trade: an expandable table cannot also have a
+   *  fixed-size virtualizer, so a table that does not need expansion must not pass this. */
+  expanded?: (row: T) => ReactNode | null;
+  /** The `rowKey` of the open row, or `null`. **Required for `expanded` to behave**, and it is not
+   *  merely informational: a measured height is cached per index, so a row that collapses keeps
+   *  reserving its expanded height until the cache is dropped. This value changing is what triggers
+   *  that. One key rather than a set because both callers open exactly one row at a time. */
+  expandedKey?: string | null;
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -111,6 +124,8 @@ export function DataTable<T>({
   onFiltersChange,
   filterCounts,
   onFilterOpen,
+  expanded,
+  expandedKey,
 }: Props<T>) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -125,12 +140,27 @@ export function DataTable<T>({
   // from the columns. Desktop is byte-for-byte its previous grid self.
   const cardMode = useViewportMode() === 'mobile';
 
+  // Heights are measured whenever they can vary — mobile cards always, and an expandable table
+  // because the open row is several times a closed one. Elsewhere the fixed 44px estimate stands,
+  // so the existing tables keep the cheaper path. `estimateSize` stays 44 either way: it is the
+  // pre-measurement guess that keeps the initial scrollbar sane, not the final height.
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: () => (cardMode ? cardEstimatePx : ROW_PX),
     overscan: 12,
   });
+
+  // Drop the cached measurements when the open row changes. Without this a row that has been
+  // collapsed keeps the height it had while open — the list stays full of gaps, which reads as a
+  // rendering bug rather than as a stale cache. `measure()` is a no-op for a table with no
+  // expansion, and the dependency never changes there.
+  useEffect(() => {
+    if (expanded) virtualizer.measure();
+    // `virtualizer` is stable for the life of the component; including it would re-run this on
+    // every scroll frame.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedKey]);
 
   // The filter row draws only when the caller asked for it AND some column opted in — so the ~17
   // existing call sites are unchanged down to the DOM.
@@ -241,27 +271,51 @@ export function DataTable<T>({
                   </div>
                 );
               }
+              const cells = columns.map((c) => (
+                <div key={c.key} className={c.align === 'right' ? 'dt-cell right' : 'dt-cell'}>
+                  {c.render(row)}
+                </div>
+              ));
+              const rowCls = ['dt-row', onRowClick ? 'clickable' : '', rowClass?.(row) ?? '']
+                .filter(Boolean)
+                .join(' ');
+              if (!expanded) {
+                return (
+                  <div
+                    key={rowKey(row)}
+                    className={rowCls}
+                    style={{
+                      gridTemplateColumns: template,
+                      transform: `translateY(${vi.start}px)`,
+                    }}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  >
+                    {cells}
+                  </div>
+                );
+              }
+              // Expandable: the row and its editor share ONE positioned wrapper, and the wrapper is
+              // what the virtualizer measures. Two separate virtual items would let a scroll land
+              // between a row and its own editor.
+              const body = expanded(row);
               return (
                 <div
                   key={rowKey(row)}
-                  className={[
-                    'dt-row',
-                    onRowClick ? 'clickable' : '',
-                    rowClass?.(row) ?? '',
-                  ]
-                    .filter(Boolean)
-                    .join(' ')}
-                  style={{
-                    gridTemplateColumns: template,
-                    transform: `translateY(${vi.start}px)`,
-                  }}
-                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  data-index={vi.index}
+                  ref={virtualizer.measureElement}
+                  className="dt-group"
+                  style={{ transform: `translateY(${vi.start}px)` }}
                 >
-                  {columns.map((c) => (
-                    <div key={c.key} className={c.align === 'right' ? 'dt-cell right' : 'dt-cell'}>
-                      {c.render(row)}
-                    </div>
-                  ))}
+                  <div
+                    className={rowCls}
+                    style={{ gridTemplateColumns: template }}
+                    onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  >
+                    {cells}
+                  </div>
+                  {body !== null && body !== undefined && (
+                    <div className="dt-expansion">{body}</div>
+                  )}
                 </div>
               );
             })}

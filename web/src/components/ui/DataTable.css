@@ -123,6 +123,25 @@
   background: var(--bg-tertiary);
 }
 
+/* An expandable row and its editor, as one measured block (ADR-053 Inc.6). The wrapper carries the
+   absolute positioning the row itself carries elsewhere, so `.dt-row` inside it must go static —
+   two absolutely-positioned boxes at the same offset would stack on top of each other. */
+.dt-group {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+}
+
+.dt-group > .dt-row {
+  position: static;
+}
+
+.dt-expansion {
+  border-bottom: var(--border-width) solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
 .dt-cell {
   display: flex;
   align-items: center;

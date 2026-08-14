@@ -9,9 +9,11 @@
     "ack": {
       "all": "Acked and not",
       "aria": "Filter by acknowledgement",
+      "label": "Acked",
       "acked": "Acked",
       "unacked": "Not acked"
     },
+    "searchLabel": "Node or metric",
     "mute": "Mute",
     "muteHint": "Silence notifications for this check on this node until a time you choose"
   },

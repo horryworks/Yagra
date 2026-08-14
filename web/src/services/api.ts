@@ -77,10 +77,8 @@ import type {
   NodeDetail,
   NodeGroup,
   NodeNameEntry,
-  NodeKind,
   NodePage,
   NodeSearchResult,
-  NodeState,
   NodeStatus,
   MonitoringGap,
   NodeAssignment,
@@ -650,13 +648,18 @@ export const api = {
    *  `search` switches to server-side name/address search — a single capped page (no cursor) of
    *  full node summaries — so the Nodes tree's filter never full-loads the fleet client-side. */
   /** One page of the inventory. Any of `search` / `state` / `kind` / `pool` puts the endpoint into
-   *  filter mode: a single capped page, no cursor, and `truncated` when matches were left out. */
+   *  filter mode: a single capped page, no cursor, and `truncated` when matches were left out.
+   *
+   *  ⚠️ `state` / `kind` / `pool` are **comma-joined sets** since ADR-053 Inc.6, so they are typed
+   *  `string` rather than the member unions — the value `ok,warning` is not a `NodeState`. The edge
+   *  still rejects an unknown state or kind token (400), so this is looser typing here, not a looser
+   *  contract there. */
   listNodesPage: (opts?: {
     cursor?: string;
     limit?: number;
     search?: string;
-    state?: NodeState;
-    kind?: NodeKind;
+    state?: string;
+    kind?: string;
     pool?: string;
   }): Promise<NodePage> =>
     apiGet('/api/v1/nodes', {

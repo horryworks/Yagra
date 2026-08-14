@@ -107,10 +107,18 @@
     "searchAria": "Search users",
     "filterAria": "Filter by role",
     "filter": {
-      "all": "All",
+      "all": "All roles",
+      "allStatuses": "Active and disabled",
+      "allKinds": "All account types",
       "admin": "Admins",
       "operator": "Operators",
       "viewer": "Viewers"
+    },
+    "cols": {
+      "username": "Username",
+      "role": "Role",
+      "status": "Status",
+      "kind": "Account type"
     },
     "you": "You",
     "status": {

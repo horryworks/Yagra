@@ -4,19 +4,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Neighbor, NodeMetricEntry } from '../../types/api';
 import {
-  DEFAULT_INTERFACE_FILTERS,
-  DEFAULT_METRIC_FILTERS,
   IF_STATES,
   ifState,
-  isInterfaceFiltered,
-  isMetricFiltered,
-  matchesInterface,
-  matchesMetric,
+  interfaceColumns,
+  metricColumns,
   metricIsFlowing,
   neighborFilters,
   type FilterableInterface,
-  type InterfaceFilters,
-  type MetricFilters,
 } from './tabFilters';
 import {
   defaultFilters,
@@ -58,11 +52,20 @@ const metric = (over: Partial<NodeMetricEntry> = {}): NodeMetricEntry => ({
   ...over,
 });
 
-const iff = (over: Partial<InterfaceFilters>): InterfaceFilters => ({
-  ...DEFAULT_INTERFACE_FILTERS,
-  ...over,
-});
-const mf = (over: Partial<MetricFilters>): MetricFilters => ({ ...DEFAULT_METRIC_FILTERS, ...over });
+const t = ((k: string) => k) as unknown as Parameters<typeof neighborFilters>[0];
+const NOW = Date.parse('2026-08-13T12:00:00Z');
+
+const IF_COLS = interfaceColumns(t);
+const IF_DEFAULTS = defaultFilters(IF_COLS);
+const iff = (over: FilterState): FilterState => ({ ...IF_DEFAULTS, ...over });
+const hasIf = (row: FilterableInterface, state: FilterState) =>
+  matchesFilters(row, IF_COLS, state, NOW);
+
+const M_COLS = metricColumns(t);
+const M_DEFAULTS = defaultFilters(M_COLS);
+const mf = (over: FilterState): FilterState => ({ ...M_DEFAULTS, ...over });
+const hasMetric = (row: NodeMetricEntry, state: FilterState) =>
+  matchesFilters(row, M_COLS, state, NOW);
 
 describe('ifState', () => {
   it('treats only 1 as up, and a missing answer as unknown', () => {
@@ -81,44 +84,48 @@ describe('ifState', () => {
   });
 });
 
-describe('matchesInterface', () => {
+describe('the interfaces filter row', () => {
   it('shows everything when nothing is set', () => {
-    expect(matchesInterface(iface(), DEFAULT_INTERFACE_FILTERS)).toBe(true);
+    expect(hasIf(iface(), IF_DEFAULTS)).toBe(true);
+    expect(isAnyFiltered(IF_COLS, IF_DEFAULTS)).toBe(false);
   });
 
   it('filters by running state', () => {
-    expect(matchesInterface(iface(), iff({ state: 'up' }))).toBe(true);
-    expect(matchesInterface(iface(), iff({ state: 'down' }))).toBe(false);
-    expect(matchesInterface(iface({ oper_status: 2 }), iff({ state: 'down' }))).toBe(true);
-    expect(matchesInterface(iface({ oper_status: null }), iff({ state: 'unknown' }))).toBe(true);
+    expect(hasIf(iface(), iff({ oper: 'up' }))).toBe(true);
+    expect(hasIf(iface(), iff({ oper: 'down' }))).toBe(false);
+    expect(hasIf(iface({ oper_status: 2 }), iff({ oper: 'down' }))).toBe(true);
+    expect(hasIf(iface({ oper_status: null }), iff({ oper: 'unknown' }))).toBe(true);
+    // …and several at once, which the dropdown could not say: "anything not up" is two buckets.
+    expect(hasIf(iface({ oper_status: null }), iff({ oper: 'down,unknown' }))).toBe(true);
+    expect(hasIf(iface(), iff({ oper: 'down,unknown' }))).toBe(false);
   });
 
-  it('searches the name and the description', () => {
-    expect(matchesInterface(iface(), iff({ q: 'GIGABIT' }))).toBe(true);
-    expect(matchesInterface(iface(), iff({ q: 'uplink' }))).toBe(true);
-    expect(matchesInterface(iface(), iff({ q: 'downlink' }))).toBe(false);
+  it('asks the name and the description separately, where the box asked both at once', () => {
+    expect(hasIf(iface(), iff({ if_name: 'GIGABIT' }))).toBe(true);
+    expect(hasIf(iface(), iff({ if_alias: 'uplink' }))).toBe(true);
+    // The distinction the one box could not draw: this text is in the *description*, not the name.
+    expect(hasIf(iface(), iff({ if_name: 'uplink' }))).toBe(false);
+    expect(hasIf(iface(), iff({ if_alias: 'downlink' }))).toBe(false);
   });
 
   it('finds a nameless interface by the label the row actually shows', () => {
     // The row falls back to `if<ifindex>`, so typing what is on screen has to match.
-    expect(matchesInterface(iface({ if_name: null }), iff({ q: 'if3' }))).toBe(true);
+    expect(hasIf(iface({ if_name: null }), iff({ if_name: 'if3' }))).toBe(true);
   });
 
-  it('flips isFiltered for every field', () => {
-    expect(isInterfaceFiltered(DEFAULT_INTERFACE_FILTERS)).toBe(false);
-    expect(isInterfaceFiltered(iff({ state: 'down' }))).toBe(true);
-    expect(isInterfaceFiltered(iff({ q: 'x' }))).toBe(true);
+  it('flips isAnyFiltered for every column', () => {
+    for (const c of IF_COLS) {
+      expect(isAnyFiltered(IF_COLS, iff({ [c.key]: c.key === 'oper' ? 'up' : 'x' }))).toBe(true);
+    }
   });
 });
 
 describe('the neighbours filter row', () => {
-  const nt = ((k: string) => k) as unknown as Parameters<typeof neighborFilters>[0];
-  const NB_COLS: FilterableColumn<Neighbor>[] = Object.entries(neighborFilters(nt)).map(
+  const NB_COLS: FilterableColumn<Neighbor>[] = Object.entries(neighborFilters(t)).map(
     ([key, filter]) => ({ key, filter }),
   );
   const NB_DEFAULTS = defaultFilters(NB_COLS);
   const nbf = (over: Record<string, string>): FilterState => ({ ...NB_DEFAULTS, ...over });
-  const NOW = Date.parse('2026-08-13T12:00:00Z');
   const has = (row: Neighbor, state: FilterState) => matchesFilters(row, NB_COLS, state, NOW);
 
   it('shows everything when nothing is set', () => {
@@ -160,29 +167,42 @@ describe('the neighbours filter row', () => {
   });
 });
 
-describe('matchesMetric', () => {
+describe('the collection filter row', () => {
   it('shows everything when nothing is set', () => {
-    expect(matchesMetric(metric(), DEFAULT_METRIC_FILTERS)).toBe(true);
-    expect(matchesMetric(metric({ status: 'no_data' }), DEFAULT_METRIC_FILTERS)).toBe(true);
+    expect(hasMetric(metric(), M_DEFAULTS)).toBe(true);
+    expect(hasMetric(metric({ status: 'no_data' }), M_DEFAULTS)).toBe(true);
+    expect(isAnyFiltered(M_COLS, M_DEFAULTS)).toBe(false);
   });
 
-  it('hides only the ones that are not arriving', () => {
-    // `no_data` is the one state that means "nothing is coming".
-    expect(matchesMetric(metric({ status: 'no_data' }), mf({ flowingOnly: true }))).toBe(false);
-    expect(matchesMetric(metric(), mf({ flowingOnly: true }))).toBe(true);
+  it('says which statuses to keep, where the checkbox could only say "hide the silent ones"', () => {
+    // ⚠️ **The widening is the point.** "Show me only the configured-but-silent ones" is the
+    // question an operator asks when a collection set has stopped working, and it was unsayable:
+    // the checkbox's only two positions were "everything" and "everything except no_data".
+    expect(hasMetric(metric({ status: 'no_data' }), mf({ status: 'no_data' }))).toBe(true);
+    expect(hasMetric(metric(), mf({ status: 'no_data' }))).toBe(false);
+    // The old checkbox's meaning, still expressible — as the two statuses that mean "arriving".
+    const flowing = mf({ status: 'ok,unconfigured' });
+    expect(hasMetric(metric({ status: 'no_data' }), flowing)).toBe(false);
+    expect(hasMetric(metric(), flowing)).toBe(true);
   });
 
-  it('keeps an unconfigured metric, because unconfigured means arriving without a collection set', () => {
-    // ⚠️ This asserted the opposite and was wrong. `MetricStatus` crosses two facts: `ok` is
-    // configured AND arriving, `unconfigured` is arriving with NO collection set behind it —
-    // reachability, `http_up`, `dns_up`, the neighbour count, JSON-extracted values.
+  it('offers unconfigured as its own choice, because unconfigured means arriving', () => {
+    // ⚠️ A test here once asserted the opposite and was wrong. `MetricStatus` crosses two facts:
+    // `ok` is configured AND arriving, `unconfigured` is arriving with NO collection set behind it
+    // — reachability, `http_up`, `dns_up`, the neighbour count, JSON-extracted values.
     //
     // The consequence was worst exactly where the tab has least: a URL or DNS monitor has no
     // collection set at all, so every metric it has is `unconfigured`, and "only the ones that are
-    // flowing" emptied the list it was meant to narrow.
-    expect(matchesMetric(metric({ status: 'unconfigured' }), mf({ flowingOnly: true }))).toBe(true);
+    // flowing" emptied the list it was meant to narrow. Splitting the control into the three real
+    // statuses removes the reading that made that possible.
+    const status = M_COLS.find((c) => c.key === 'status')?.filter;
+    expect(status?.kind === 'enum' && status.options.map((o) => o.value)).toEqual([
+      'ok',
+      'no_data',
+      'unconfigured',
+    ]);
     expect(
-      matchesMetric(metric({ metric: 'http_up', status: 'unconfigured' }), mf({ flowingOnly: true })),
+      hasMetric(metric({ metric: 'http_up', status: 'unconfigured' }), mf({ status: 'unconfigured' })),
     ).toBe(true);
   });
 
@@ -201,13 +221,16 @@ describe('matchesMetric', () => {
   });
 
   it('searches the metric name', () => {
-    expect(matchesMetric(metric(), mf({ q: 'ICMP' }))).toBe(true);
-    expect(matchesMetric(metric(), mf({ q: 'cpu' }))).toBe(false);
+    expect(hasMetric(metric(), mf({ metric: 'ICMP' }))).toBe(true);
+    expect(hasMetric(metric(), mf({ metric: 'cpu' }))).toBe(false);
+    // NOT, which the plain box did not offer: "everything that is not an interface counter".
+    expect(hasMetric(metric({ metric: 'if_hc_in_octets' }), mf({ metric: '!if_' }))).toBe(false);
+    expect(hasMetric(metric(), mf({ metric: '!if_' }))).toBe(true);
   });
 
-  it('flips isFiltered for every field', () => {
-    expect(isMetricFiltered(DEFAULT_METRIC_FILTERS)).toBe(false);
-    expect(isMetricFiltered(mf({ flowingOnly: true }))).toBe(true);
-    expect(isMetricFiltered(mf({ q: 'x' }))).toBe(true);
+  it('flips isAnyFiltered for every column', () => {
+    for (const c of M_COLS) {
+      expect(isAnyFiltered(M_COLS, mf({ [c.key]: c.key === 'status' ? 'ok' : 'x' }))).toBe(true);
+    }
   });
 });

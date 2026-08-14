@@ -18,12 +18,15 @@ import { MultiSelectList } from './MultiSelectList';
 import { TextConditionEditor } from './TextConditionEditor';
 import {
   CUSTOM_RANGE,
+  decodeNumberRange,
   decodeRange,
   decodeSet,
   defaultValue,
+  encodeNumberRange,
   encodeRange,
   toggleSetValue,
   type ColumnFilterSpec,
+  type NumberFilterSpec,
   type RangeFilterSpec,
 } from '../../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../../lib/filterCondition';
@@ -71,7 +74,65 @@ export function FilterBody<T>({ spec, value, onChange, counts, label, autoFocus 
       />
     );
   }
+  if (spec.kind === 'number') {
+    return <NumberBody spec={spec} value={value} onChange={onChange} autoFocus={autoFocus} />;
+  }
   return <RangeBody spec={spec} value={value} onChange={onChange} label={label} />;
+}
+
+/** The number kind's body: two bounds, either of which may be left blank.
+ *
+ *  No debounce, unlike `TextConditionEditor`. A number field commits whole values — there is no
+ *  intermediate keystroke that is a *different, valid, more expensive* query the way `1` is on the
+ *  way to `10` in a text search — and the one consumer today re-queries the server, so debouncing
+ *  would only delay a query the operator has finished typing. If a future column proves otherwise,
+ *  debounce there, not here. */
+function NumberBody<T>({
+  spec,
+  value,
+  onChange,
+  autoFocus,
+}: {
+  spec: NumberFilterSpec<T>;
+  value: string;
+  onChange: (next: string) => void;
+  autoFocus?: boolean;
+}) {
+  const { t } = useTranslation('common');
+  const current = decodeNumberRange(value);
+  // `''` and `0` must stay distinguishable: `Number('')` is 0, so a blank field read through the
+  // usual `Number(e.target.value) || null` would silently become a bound of zero.
+  const set = (side: 'min' | 'max') => (raw: string) => {
+    const n = raw.trim() === '' ? null : Number(raw);
+    onChange(encodeNumberRange({ ...current, [side]: Number.isFinite(n) ? n : null }));
+  };
+  const field = (side: 'min' | 'max', v: number | null, aria: string) => (
+    <span className="dt-f-numfield">
+      <input
+        className="field dt-f-num"
+        type="number"
+        inputMode="decimal"
+        value={v ?? ''}
+        min={spec.min}
+        max={spec.max}
+        step={spec.step}
+        aria-label={aria}
+        title={aria}
+        autoFocus={autoFocus && side === 'min'}
+        onChange={(e) => set(side)(e.target.value)}
+      />
+      {spec.unit && <span className="dt-f-numunit">{spec.unit}</span>}
+    </span>
+  );
+  return (
+    <div className="dt-f-numrange">
+      {field('min', current.min, t('filter.atLeast'))}
+      <span className="dt-f-instant-sep" aria-hidden="true">
+        –
+      </span>
+      {field('max', current.max, t('filter.atMost'))}
+    </div>
+  );
 }
 
 /** The range kind's body: the presets, plus the two instants when the custom one is chosen.
@@ -171,6 +232,7 @@ export function ColumnFilterCell<T>({
   const emptyLabel = () => {
     if (spec.kind === 'enum') return spec.allLabel;
     if (spec.kind === 'text') return spec.placeholder ?? t('filter.termPlaceholder');
+    if (spec.kind === 'number') return t('filter.anyValue');
     return t('filter.termPlaceholder');
   };
 
@@ -185,6 +247,14 @@ export function ColumnFilterCell<T>({
         return `${summary.label} ${t('filter.more', { count: summary.more })}`;
       case 'text':
         return summary.term;
+      case 'number':
+        // Three readings, because a one-sided interval read as "3 – " looks unfinished rather than
+        // deliberate — and one-sided is the common case ("score 8 or worse").
+        if (summary.min !== null && summary.max !== null)
+          return `${summary.min} – ${summary.max}`;
+        return summary.min !== null
+          ? t('filter.numMin', { value: summary.min })
+          : t('filter.numMax', { value: summary.max });
     }
   };
 

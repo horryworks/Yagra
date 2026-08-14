@@ -9384,6 +9384,10 @@ export interface operations {
                 node_q?: string;
                 /** @description Restrict to findings about nodes in one folder group **and everything beneath it**. */
                 group_id?: string;
+                /** @description Inclusive lower bound on the finding's score. One-sided is the usual shape — "8 or worse". */
+                min_score?: number;
+                /** @description Inclusive upper bound on the finding's score. */
+                max_score?: number;
                 /** @description Page size, clamped to 200 (default 100). */
                 limit?: number;
             };
@@ -16154,16 +16158,22 @@ export interface operations {
                 /** @description Case-insensitive substring of the node's name or address. */
                 search?: string;
                 /**
-                 * @description Only nodes whose live display state is this one (`ok` | `warning` | `critical` |
-                 *     `unknown` | `unreachable` | `maintenance`).
+                 * @description Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
+                 *     `maintenance`); empty or absent means every state. An unknown token is rejected rather than
+                 *     ignored.
                  */
-                state?: components["schemas"]["NodeState"];
-                /** @description Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`). */
-                kind?: components["schemas"]["NodeKind"];
+                state?: string;
                 /**
-                 * @description Only nodes whose **effective** poll pool is this one — the node's own pool when it sets
-                 *     one, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering
-                 *     on the stored column alone would miss every node that inherits, which is most of them.
+                 * @description Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent
+                 *     means every kind.
+                 */
+                kind?: string;
+                /**
+                 * @description Comma-separated **effective** poll pools — a node's own pool when it sets one, otherwise the
+                 *     nearest folder ancestor that does, otherwise the default pool. Filtering on the stored column
+                 *     alone would miss every node that inherits, which is most of them. Pools are named by the
+                 *     operator, so there is no vocabulary to reject against: an unknown name simply matches
+                 *     nothing.
                  */
                 pool?: string;
             };
@@ -22618,16 +22628,22 @@ export interface operations {
                 /** @description Case-insensitive substring of the node's name or address. */
                 search?: string;
                 /**
-                 * @description Only nodes whose live display state is this one (`ok` | `warning` | `critical` |
-                 *     `unknown` | `unreachable` | `maintenance`).
+                 * @description Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
+                 *     `maintenance`); empty or absent means every state. An unknown token is rejected rather than
+                 *     ignored.
                  */
-                state?: components["schemas"]["NodeState"];
-                /** @description Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`). */
-                kind?: components["schemas"]["NodeKind"];
+                state?: string;
                 /**
-                 * @description Only nodes whose **effective** poll pool is this one — the node's own pool when it sets
-                 *     one, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering
-                 *     on the stored column alone would miss every node that inherits, which is most of them.
+                 * @description Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent
+                 *     means every kind.
+                 */
+                kind?: string;
+                /**
+                 * @description Comma-separated **effective** poll pools — a node's own pool when it sets one, otherwise the
+                 *     nearest folder ancestor that does, otherwise the default pool. Filtering on the stored column
+                 *     alone would miss every node that inherits, which is most of them. Pools are named by the
+                 *     operator, so there is no vocabulary to reject against: an unknown name simply matches
+                 *     nothing.
                  */
                 pool?: string;
             };

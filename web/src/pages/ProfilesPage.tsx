@@ -22,7 +22,19 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, Select, RequiredMark } from '../components/ui/Field';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { FilterBar } from '../components/ui/FilterBar';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import { facetCounts } from '../lib/filterCounts';
+import { buildPredicate } from '../lib/filterPredicate';
+import {
+  profileCategoryColumns,
+  profileColumns,
+  profileFilterLabels,
+} from './monitoringConfigFilters';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
 
@@ -33,7 +45,6 @@ export function ProfilesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
-  const [query, setQuery] = useState('');
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -61,16 +72,48 @@ export function ProfilesPage() {
     load();
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === '') return rows;
-    return rows.filter((p) =>
-      [p.name, p.vendor ?? '', categoryLabel(p.category, t)]
-        .join(' ')
-        .toLowerCase()
-        .includes(q),
+  // Three of the four controls sit under their own column headers (ADR-053 Inc.6 decision F). The
+  // fourth — category — has no column: it *is* the group heading, so it goes in a `FilterBar`
+  // beside the table. The one search box this replaces matched the category label too, and dropping
+  // that silently would take a capability away.
+  const colFilters = useMemo(() => profileColumns(t), [t]);
+  const catCols = useMemo(
+    () =>
+      profileCategoryColumns(
+        t,
+        PROFILE_CATEGORIES.map((c) => ({ token: c.token, label: categoryLabel(c.token, t) })),
+      ),
+    [t],
+  );
+  const allFilterCols = useMemo(() => [...colFilters, ...catCols], [colFilters, catCols]);
+  const [filters, setFilters] = useState<FilterState>({});
+  const [sheet, setSheet] = useState(false);
+
+  const filtered = useMemo(
+    () => rows.filter(buildPredicate(allFilterCols, filters, Date.now())),
+    [rows, allFilterCols, filters],
+  );
+  const catCounts = useMemo(
+    () => ({ category: facetCounts(rows, allFilterCols, filters, 'category', Date.now()) }),
+    [rows, allFilterCols, filters],
+  );
+  const filterLabels: Record<string, string> = useMemo(
+    () => ({ ...profileFilterLabels(t), category: t('profiles.cols.category') }),
+    [t],
+  );
+  const filterCell = (key: string) => {
+    const col = colFilters.find((c) => c.key === key);
+    if (!col) return <div className="dt-f empty" />;
+    return (
+      <ColumnFilterCell
+        spec={col.filter}
+        value={filters[key] ?? ''}
+        onChange={(next) => setFilters({ ...filters, [key]: next })}
+        counts={facetCounts(rows, allFilterCols, filters, key, Date.now())}
+        label={filterLabels[key] ?? key}
+      />
     );
-  }, [rows, query, t]);
+  };
 
   // Group the filtered rows by category, in the canonical display order; trailing "Other"
   // bucket catches any unknown token so nothing is silently hidden.
@@ -107,11 +150,15 @@ export function ProfilesPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('profiles.searchPlaceholder')}
-              ariaLabel={t('profiles.searchAria')}
+            <MobileFilterButton
+              columns={allFilterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
+            />
+            <ClearFilters
+              columns={allFilterCols}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(allFilterCols))}
             />
             <TableSpacer />
             <ResultCount
@@ -125,6 +172,24 @@ export function ProfilesPage() {
               </Button>
             )}
           </TableToolbar>
+          {sheet && (
+            <MobileFilterSheet
+              columns={allFilterCols}
+              labels={filterLabels}
+              filters={filters}
+              onChange={setFilters}
+              counts={catCounts}
+              onClose={() => setSheet(false)}
+            />
+          )}
+          {/* Category has no column of its own — it is the group heading below. */}
+          <FilterBar
+            columns={catCols}
+            labels={filterLabels}
+            filters={filters}
+            onChange={setFilters}
+            counts={catCounts}
+          />
 
           <div className="ytable profiles-table">
             <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
@@ -133,6 +198,22 @@ export function ProfilesPage() {
               <div className="ytable-h">{t('profiles.cols.pollInterval')}</div>
               <div className="ytable-h">{t('profiles.cols.metricSets')}</div>
               <div className="ytable-h right">{t('shared.colActions')}</div>
+            </div>
+            {/* ⚠️ The SAME `COLS` const as the header and every row — three grids, one binding, the
+                discipline `DataTable` enforces for its own. This screen keeps its hand-rolled table
+                because the rows are grouped by category and `DataTable` has no group heading; the
+                trade is stated in `monitoringConfigFilters.ts`. */}
+            <div
+              className="ytable-filters"
+              style={{ gridTemplateColumns: COLS }}
+              role="group"
+              aria-label={t('common:filter.row')}
+            >
+              {filterCell('name')}
+              {filterCell('vendor')}
+              {filterCell('interval')}
+              <div className="dt-f empty" />
+              <div className="dt-f empty" />
             </div>
 
             {filtered.length === 0 ? (

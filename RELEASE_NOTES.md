@@ -50,6 +50,31 @@
   poller running v0.2.4 *and* a poller in a pool named `site-0.2`. Ask about the column you mean
   instead. The Credentials search covered the name and the credential id together; those are two
   columns now.
+- **The same replacement has now reached every remaining screen**: Active alerts, Troubleshoot ▸
+  Runs, Users, the Nodes tree, node detail ▸ Interfaces and ▸ Collection, both Discovery tables,
+  Metric sets and Device profiles. On each of them the one box that searched several fields is gone
+  in favour of a control per column — or, on the lists that have no column headers (Active alerts,
+  Runs, Users, the Nodes tree), a labelled row of the same controls above the list. Every one of
+  them takes **several values** where it used to take one.
+- **`state`, `kind` and `pool` on `GET /api/v1/nodes` now take comma-separated sets**, and so does
+  the MCP `list_nodes` tool. A single value is unchanged. `state=warning,critical,unreachable` is
+  "everything that is not healthy" — three separate looks at the tree before. An unknown `state` or
+  `kind` token is a 400 rather than a silently widened list; a `pool` name is not checked against
+  anything, because pool names are yours, so an unrecognised one simply matches nothing.
+- **`state` and `kind` on `GET /api/v1/nodes` are strings rather than typed enums in the OpenAPI
+  document**, for the same reason `action`/`status` on the audit log are: carrying several values
+  requires it. The accepted vocabulary is unchanged.
+- **The "Arriving only" checkbox on node detail ▸ Collection is now a Status filter with three
+  values.** The checkbox could only say "hide what is not arriving"; "show me only the
+  configured-but-silent metrics" — the question when a collection set has stopped working — was
+  unsayable. Selecting *Collecting* and *Not configured* together is the old checkbox's meaning.
+- **The "Answered only" and "Not yet monitored" checkboxes on Discovery are now two-valued
+  filters**, so "only the addresses that did not answer" and "the endpoints someone has already
+  imported" can be asked for directly. The seen-endpoints table still opens on *Not yet monitored*,
+  as it always has.
+- **Device profiles are no longer matched by their role through the search box.** Role is the
+  heading rows are grouped under, not a column, so it has a control of its own above the table —
+  and, unlike the box, it takes several roles at once.
 
 ### New Features
 - **Alert history can be filtered by node name, by metric and by whether the incident was
@@ -64,9 +89,16 @@
   `GET /api/v1/analysis/findings` and the MCP `search_analysis_findings` tool take `node_q` and `q`,
   where `q` matches the metric **or** the finding kind — the two halves the What column shows. A
   fleet-wide finding has no node, so it never matches `node_q`.
+- **Saved findings can be filtered by score.** `GET /api/v1/analysis/findings` and the MCP
+  `search_analysis_findings` tool take `min_score` and `max_score`, both inclusive and each usable
+  on its own — "score 60 and up" is one bound, not a window. This is the first numeric filter in the
+  WebUI's filter row, which is why it arrived an increment after the other Saved-findings columns.
 - Every list that had a hand-written table now scrolls virtualized and carries the filter row:
   Maintenance windows, Mutes, MIB repository, Classification rules, Event sources, Event rules,
-  Notification routing (both tables), Credentials and Pollers.
+  Notification routing (both tables), Credentials, Pollers and Metric sets. **Two screens keep
+  their hand-written table on purpose**: Device profiles, whose rows are grouped under role
+  headings, and the metric editor inside an expanded row, which would be a virtualized list inside
+  a virtualized row.
 - `GET /api/v1/events` and `GET /api/v1/events/stats` take five new optional filters, and the MCP
   `search_events` tool takes the same five: `action` and `severity` (comma-separated sets, like
   `kind` now is), `msg` + `msg_regex` + `msg_not` for a message-only condition, and `src` +

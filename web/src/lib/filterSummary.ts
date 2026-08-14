@@ -12,6 +12,7 @@
 // are selected has lost the thing the redesign was for.
 
 import {
+  decodeNumberRange,
   decodeRange,
   decodeSet,
   type ColumnFilterSpec,
@@ -31,7 +32,10 @@ export type FilterSummary =
   /** A text condition, decomposed so the trigger can mark negation and mode without re-parsing. */
   | { kind: 'text'; term: string; mode: TextMode; not: boolean }
   /** A range preset. */
-  | { kind: 'preset'; label: string };
+  | { kind: 'preset'; label: string }
+  /** A numeric interval, either end possibly open. The component words it (`≥ 8`, `3 – 5`) because
+   *  which of the three readings applies is a copy decision that needs EN/JA. */
+  | { kind: 'number'; min: number | null; max: number | null };
 
 function labelOf(options: readonly FilterOption[], value: string): string {
   return options.find((o) => o.value === value)?.label ?? value;
@@ -49,6 +53,11 @@ export function summarize<T>(spec: ColumnFilterSpec<T>, raw: string): FilterSumm
     const c = decodeCondition(raw);
     if (!conditionIsActive(c)) return { kind: 'none' };
     return { kind: 'text', term: c.term, mode: c.mode, not: c.not };
+  }
+  if (spec.kind === 'number') {
+    const { min, max } = decodeNumberRange(raw);
+    if (min === null && max === null) return { kind: 'none' };
+    return { kind: 'number', min, max };
   }
   // A range always shows its window, even at the default. The default is 24h, which *narrows* —
   // a trigger reading "All time" or nothing at all while a day-long window is hiding rows is the

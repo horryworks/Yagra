@@ -38,6 +38,8 @@ const RANGE: ColumnFilterSpec<Row> = {
   defaultPreset: '24h',
 };
 
+const NUMBER: ColumnFilterSpec<Row> = { kind: 'number' };
+
 describe('enum summaries', () => {
   it('says nothing when nothing is selected', () => {
     expect(summarize(ENUM, '')).toEqual({ kind: 'none' });
@@ -83,6 +85,27 @@ describe('range summaries', () => {
     expect(summarize(RANGE, '')).toEqual({ kind: 'preset', label: 'Last 24 hours' });
     expect(summarize(RANGE, '24h')).toEqual({ kind: 'preset', label: 'Last 24 hours' });
     expect(summarize(RANGE, 'all')).toEqual({ kind: 'preset', label: 'All time' });
+  });
+});
+
+describe('number summaries (ADR-053 Inc.6)', () => {
+  it('says nothing when both ends are open', () => {
+    expect(summarize(NUMBER, '')).toEqual({ kind: 'none' });
+    expect(summarize(NUMBER, ':')).toEqual({ kind: 'none' });
+  });
+
+  it('reports the two bounds separately so the component can word all three readings', () => {
+    // The wording is the component's, not this module's: "8 and up" / "3 – 5" / "5 and below" each
+    // need EN and JA, and a one-sided interval rendered as "3 – " reads as unfinished input.
+    expect(summarize(NUMBER, '3:5')).toEqual({ kind: 'number', min: 3, max: 5 });
+    expect(summarize(NUMBER, '8:')).toEqual({ kind: 'number', min: 8, max: null });
+    expect(summarize(NUMBER, ':5')).toEqual({ kind: 'number', min: null, max: 5 });
+  });
+
+  it('is active on a bound of zero', () => {
+    // The one that would fail with a truthiness check on the decoded bound.
+    expect(summaryIsActive(NUMBER, '0:')).toBe(true);
+    expect(summarize(NUMBER, '0:')).toEqual({ kind: 'number', min: 0, max: null });
   });
 });
 

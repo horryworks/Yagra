@@ -21,13 +21,22 @@
   flex-direction: column;
 }
 
+/* ⚠️ ONE declaration, THREE grids — header, filter row (ADR-053 Inc.6) and every data row. The
+   same discipline `DataTable` enforces with a shared template const: a fourth template computed
+   anywhere else puts the filter controls under the wrong columns, and `.tsx` tests never run. */
 .disco-head,
+.disco-filters,
 .disco-row {
   display: grid;
   grid-template-columns: 28px 1.4fr 2fr 1.2fr 1.2fr 1.2fr;
   align-items: center;
   gap: 12px;
   padding: 8px 0;
+}
+
+.disco-filters {
+  padding: 4px 0;
+  border-bottom: var(--border-width) solid var(--border-color);
 }
 
 .disco-head {
@@ -174,7 +183,9 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   margin-top: 8px;
 }
 
+/* ⚠️ ONE declaration, THREE grids — see the note on `.disco-head` above. */
 .disco-seen-head,
+.disco-seen-filters,
 .disco-seen-row {
   display: grid;
   grid-template-columns: 1.3fr 1.3fr 1.8fr 1.2fr 1.2fr auto;
@@ -182,6 +193,10 @@ html[data-viewport='mobile'] .disco-head > .disco-h:first-child {
   gap: 12px;
   padding: 8px 0;
   border-bottom: var(--border-width) solid var(--border-color);
+}
+
+.disco-seen-filters {
+  padding: 4px 0;
 }
 
 .disco-seen-row {

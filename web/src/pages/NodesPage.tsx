@@ -25,7 +25,6 @@ import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
-import { NODE_KINDS } from '../types/api';
 import type {
   FleetGroupSummary,
   FleetSummary,
@@ -40,15 +39,16 @@ import { countsTotal, mergeNodesById, type StateCounts } from '../lib/nodeTree';
 import { overlayLiveStates, type LiveOverlay } from '../lib/liveOverlay';
 import { FILTER_SEARCH_LIMIT, useFilterSearch } from './useFilterSearch';
 import {
+  inventoryColumns,
+  inventoryFilterLabels,
   isInventoryFiltered,
-  NODE_STATE_FILTERS,
   readInventoryFilters,
   truncationNotice,
   writeInventoryFilters,
-  type InventoryFilters,
 } from './inventoryFilters';
-import { FilterSelect } from '../components/ui/TableToolbar';
-import { NODE_KIND_SPEC } from '../lib/nodeKind';
+import { FilterBar } from '../components/ui/FilterBar';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import type { FilterState } from '../lib/columnFilter';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
 import { useNodeStates } from '../dashboard/useNodeStates';
@@ -111,20 +111,6 @@ export function NodesPage() {
   const tabParam = searchParams.get('tab') ?? '';
   const tab = normalizeNodeDetailTab(tabParam);
   const [filter, setFilter] = useState('');
-  // The three selects live in the URL beside the selection — they are the part someone shares
-  // ("the URL monitors in the tokyo pool"), and a reload that dropped them would silently widen
-  // the list back to the whole fleet. The text box stays local, as it always has: it is a scratch
-  // typing surface, and the pane it filters is already addressable by the selects.
-  const inventoryFilters = readInventoryFilters(searchParams);
-  const setInventoryFilters = useCallback(
-    (next: InventoryFilters) => {
-      const params = new URLSearchParams(searchParams);
-      writeInventoryFilters(params, next);
-      setSearchParams(params, { replace: true });
-    },
-    [searchParams, setSearchParams],
-  );
-
   // Pick a row → write the selection and reset to Overview (a fresh selection starts on Overview).
   // `replace` keeps rapid clicking out of the browser history.
   const select = useCallback(
@@ -185,6 +171,27 @@ export function NodesPage() {
   const [poolTarget, setPoolTarget] = useState<SuppressionTarget | null>(null);
   // Per-group direct counts (server rollup) → the tree's group-row health bars + the header stats.
   const groupCounts = groupSummary?.groups ?? EMPTY_GROUP_COUNTS;
+
+  // The three controls live in the URL beside the selection — they are the part someone shares
+  // ("the URL monitors in the tokyo pool"), and a reload that dropped them would silently widen
+  // the list back to the whole fleet. The text box stays local, as it always has: it is a scratch
+  // typing surface, and the pane it filters is already addressable by these.
+  //
+  // Since ADR-053 Inc.6 each takes a **set**, so "everything that is not healthy" is one question
+  // rather than three separate looks at the tree. Declared here rather than beside the other URL
+  // state because `pools` is a dependency: pool names are the deployment's own, not an enum.
+  const filterCols = useMemo(() => inventoryColumns(t, pools), [t, pools]);
+  const filterLabels = useMemo(() => inventoryFilterLabels(t), [t]);
+  const [filterSheet, setFilterSheet] = useState(false);
+  const inventoryFilters = readInventoryFilters(filterCols, searchParams);
+  const setInventoryFilters = useCallback(
+    (next: FilterState) => {
+      const params = new URLSearchParams(searchParams);
+      writeInventoryFilters(filterCols, params, next);
+      setSearchParams(params, { replace: true });
+    },
+    [filterCols, searchParams, setSearchParams],
+  );
 
   // Members load lazily, per group, only once that group's contents are on screen (A-3). The hook
   // owns that cache; this page only says what is currently worth having loaded.
@@ -602,34 +609,30 @@ export function NodesPage() {
                 placeholder={t('inventory.searchPlaceholder')}
               />
             </div>
+            {/* The tree has no header row to hang a filter row under, so the controls carry their
+                own names (ADR-053 Inc.6 decision E). All three are multi-select and reach the
+                server as comma-joined sets. */}
             <div className="nodes-pane-filters">
-              <FilterSelect
-                value={inventoryFilters.state}
-                onChange={(v) => setInventoryFilters({ ...inventoryFilters, state: v })}
-                options={NODE_STATE_FILTERS.map((s) => ({
-                  value: s,
-                  label: t(`format:state.${s}`),
-                }))}
-                allLabel={t('inventory.filter.allStates')}
-                ariaLabel={t('inventory.filter.stateAria')}
+              <MobileFilterButton
+                columns={filterCols}
+                filters={inventoryFilters}
+                onOpen={() => setFilterSheet(true)}
               />
-              <FilterSelect
-                value={inventoryFilters.kind}
-                onChange={(v) => setInventoryFilters({ ...inventoryFilters, kind: v })}
-                options={NODE_KINDS.map((k) => ({
-                  value: k,
-                  label: t(NODE_KIND_SPEC[k].labelKey),
-                }))}
-                allLabel={t('inventory.filter.allKinds')}
-                ariaLabel={t('inventory.filter.kindAria')}
+              <FilterBar
+                columns={filterCols}
+                labels={filterLabels}
+                filters={inventoryFilters}
+                onChange={setInventoryFilters}
               />
-              <FilterSelect
-                value={inventoryFilters.pool}
-                onChange={(v) => setInventoryFilters({ ...inventoryFilters, pool: v })}
-                options={pools.map((p) => ({ value: p.name, label: p.name }))}
-                allLabel={t('inventory.filter.allPools')}
-                ariaLabel={t('inventory.filter.poolAria')}
-              />
+              {filterSheet && (
+                <MobileFilterSheet
+                  columns={filterCols}
+                  labels={filterLabels}
+                  filters={inventoryFilters}
+                  onChange={setInventoryFilters}
+                  onClose={() => setFilterSheet(false)}
+                />
+              )}
             </div>
           </div>
           <NodeTree

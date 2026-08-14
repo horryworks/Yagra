@@ -9,9 +9,11 @@
     "ack": {
       "all": "ACK の有無を問わない",
       "aria": "ACK の有無で絞り込む",
+      "label": "ACK",
       "acked": "ACK 済み",
       "unacked": "ACK 未実施"
     },
+    "searchLabel": "ノード / メトリクス",
     "mute": "ミュート",
     "muteHint": "このノードのこのチェックについて、指定した時刻まで通知を停止します"
   },

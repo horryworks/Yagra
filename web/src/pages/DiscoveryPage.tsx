@@ -5,7 +5,7 @@
 // Stored credentials (v2c/v3) are selectable as scan candidates; the one that answers is
 // preselected on the row so import binds it automatically.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
@@ -27,23 +27,54 @@ import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EntityName } from '../components/ui/EntityName';
 import { coverageOf } from './discoveredEndpoints';
 import {
-  DEFAULT_CANDIDATE_FILTERS,
-  DEFAULT_ENDPOINT_FILTERS,
-  isCandidateFiltered,
-  isEndpointFiltered,
-  matchesCandidate,
-  matchesEndpoint,
-  type CandidateFilters,
-  type EndpointFilters,
+  candidateColumns,
+  candidateLabels,
+  endpointColumns,
+  endpointLabels,
+  ENDPOINT_DEFAULT_MONITORED,
 } from './discoveryFilters';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import {
-  TableToolbar,
-  TableSpacer,
-  ResultCount,
-  SearchInput,
-} from '../components/ui/TableToolbar';
+  defaultFilters,
+  isAnyFiltered,
+  type FilterState,
+  type FilterableColumn,
+} from '../lib/columnFilter';
+import { facetCounts } from '../lib/filterCounts';
+import { buildPredicate } from '../lib/filterPredicate';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
 import './DiscoveryPage.css';
+
+/**
+ * One cell of a hand-rolled filter row.
+ *
+ * Shared by the two tables on this page rather than written twice. ⚠️ The key→spec lookup is an
+ * untyped index, exactly as `DataTable`'s is: rename a key in `discoveryFilters.ts` and the cell
+ * quietly becomes an empty one, with nothing to notice it (`.tsx` tests never run).
+ */
+function filterCell<T>(
+  columns: readonly FilterableColumn<T>[],
+  filters: FilterState,
+  onChange: (next: FilterState) => void,
+  counts: Record<string, Record<string, number>>,
+  labels: Record<string, string>,
+  key: string,
+) {
+  const col = columns.find((c) => c.key === key);
+  if (!col) return <div className="dt-f empty" />;
+  return (
+    <ColumnFilterCell
+      spec={col.filter}
+      value={filters[key] ?? ''}
+      onChange={(next) => onChange({ ...filters, [key]: next })}
+      counts={counts[key]}
+      label={labels[key] ?? key}
+    />
+  );
+}
 
 interface RowState {
   selected: boolean;
@@ -71,7 +102,9 @@ export function DiscoveryPage() {
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   // Client-side: a sweep's result set is bounded by the range an operator typed in (ui-conventions).
-  const [filters, setFilters] = useState<CandidateFilters>(DEFAULT_CANDIDATE_FILTERS);
+  const candCols = useMemo(() => candidateColumns(t), [t]);
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(candCols));
+  const [candSheet, setCandSheet] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -160,7 +193,12 @@ export function DiscoveryPage() {
       .catch(() => undefined);
   };
 
-  const shownCandidates = candidates.filter((c) => matchesCandidate(c, filters));
+  const shownCandidates = candidates.filter(buildPredicate(candCols, filters, Date.now()));
+  const candCounts = Object.fromEntries(
+    candCols
+      .filter((c) => c.filter.kind === 'enum')
+      .map((c) => [c.key, facetCounts(candidates, candCols, filters, c.key, Date.now())]),
+  );
 
   const patchRow = (addr: string, patch: Partial<RowState>) =>
     setRowState((cur) => ({ ...cur, [addr]: { ...cur[addr], ...patch } }));
@@ -261,27 +299,33 @@ export function DiscoveryPage() {
       {candidates.length > 0 && (
         <Card title={t('discovery.resultsTitle')} className="disco-results-card">
           <TableToolbar>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('discovery.filter.searchPlaceholder')}
-              ariaLabel={t('discovery.filter.searchAria')}
+            <MobileFilterButton
+              columns={candCols}
+              filters={filters}
+              onOpen={() => setCandSheet(true)}
             />
-            <label className="disco-filter-toggle">
-              <input
-                type="checkbox"
-                checked={filters.reachableOnly}
-                onChange={(e) => setFilters((f) => ({ ...f, reachableOnly: e.target.checked }))}
-              />
-              {t('discovery.filter.reachableOnly')}
-            </label>
+            <ClearFilters
+              columns={candCols}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(candCols))}
+            />
             <TableSpacer />
             <ResultCount
               shown={shownCandidates.length}
-              total={isCandidateFiltered(filters) ? candidates.length : undefined}
+              total={isAnyFiltered(candCols, filters) ? candidates.length : undefined}
               noun={t('discovery.filter.candidateNoun')}
             />
           </TableToolbar>
+          {candSheet && (
+            <MobileFilterSheet
+              columns={candCols}
+              labels={candidateLabels(t)}
+              filters={filters}
+              onChange={setFilters}
+              counts={candCounts}
+              onClose={() => setCandSheet(false)}
+            />
+          )}
           <div className="disco-table">
             <div className="disco-head">
               <div className="disco-h" />
@@ -290,6 +334,19 @@ export function DiscoveryPage() {
               <div className="disco-h">{t('discovery.cols.name')}</div>
               <div className="disco-h">{t('discovery.cols.profile')}</div>
               <div className="disco-h">{t('discovery.cols.credential')}</div>
+            </div>
+            {/* Filter row under the header — same CSS grid rule as `.disco-head` and every
+                `.disco-row` (ADR-053 Inc.6 decision F). The last three columns are the operator's
+                *input* for the import about to happen, so they carry empty cells: filtering a field
+                you are typing into would take the row out from under the cursor. The reachability
+                control sits in the select column, which is the one the badge it filters lives in. */}
+            <div className="disco-filters" role="group" aria-label={t('common:filter.row')}>
+              {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'reach')}
+              {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'address')}
+              {filterCell(candCols, filters, setFilters, candCounts, candidateLabels(t), 'identity')}
+              <div className="dt-f empty" />
+              <div className="dt-f empty" />
+              <div className="dt-f empty" />
             </div>
             {shownCandidates.map((c) => {
               const r = rowState[c.address];
@@ -413,7 +470,17 @@ function SeenOnNetworkCard({
   const [busyId, setBusyId] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [epFilters, setEpFilters] = useState<EndpointFilters>(DEFAULT_ENDPOINT_FILTERS);
+  const epCols = useMemo(() => endpointColumns(t), [t]);
+  const epLabels = useMemo(() => endpointLabels(t), [t]);
+  // ⚠️ Not `defaultFilters(epCols)`: this table's default *narrows*. See
+  // `ENDPOINT_DEFAULT_MONITORED` for why, and note the consequence — `isAnyFiltered` reports true
+  // on the default view, so the row count deliberately always shows the total beside it.
+  const epDefaults = useMemo(
+    () => ({ ...defaultFilters(epCols), monitored: ENDPOINT_DEFAULT_MONITORED }),
+    [epCols],
+  );
+  const [epFilters, setEpFilters] = useState<FilterState>(epDefaults);
+  const [epSheet, setEpSheet] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -449,7 +516,12 @@ function SeenOnNetworkCard({
   // The "unmonitored only" default is what this table has always done, unconditionally and with
   // nothing on screen saying so — see `discoveryFilters.ts`. It is a control now, so an endpoint
   // that disappeared because someone else imported it can be told from one no longer being seen.
-  const endpoints = all.filter((e) => matchesEndpoint(e, epFilters));
+  const endpoints = all.filter(buildPredicate(epCols, epFilters, Date.now()));
+  const epCounts = Object.fromEntries(
+    epCols
+      .filter((c) => c.filter.kind === 'enum')
+      .map((c) => [c.key, facetCounts(all, epCols, epFilters, c.key, Date.now())]),
+  );
 
   return (
     <Card title={t('discovery.seen.title')}>
@@ -463,27 +535,37 @@ function SeenOnNetworkCard({
       </p>
       {all.length > 0 && (
         <TableToolbar>
-          <SearchInput
-            value={epFilters.q}
-            onChange={(v) => setEpFilters((f) => ({ ...f, q: v }))}
-            placeholder={t('discovery.seen.filter.searchPlaceholder')}
-            ariaLabel={t('discovery.seen.filter.searchAria')}
+          <MobileFilterButton
+            columns={epCols}
+            filters={epFilters}
+            onOpen={() => setEpSheet(true)}
           />
-          <label className="disco-filter-toggle">
-            <input
-              type="checkbox"
-              checked={epFilters.unmonitoredOnly}
-              onChange={(e) => setEpFilters((f) => ({ ...f, unmonitoredOnly: e.target.checked }))}
-            />
-            {t('discovery.seen.filter.unmonitoredOnly')}
-          </label>
+          <ClearFilters
+            columns={epCols}
+            filters={epFilters}
+            // Back to *this table's* default, not to the empty state: "unmonitored only" is the
+            // view an operator expects to land on here, and a reset that showed the imported ones
+            // would look like the button had done something else.
+            onClear={() => setEpFilters(epDefaults)}
+          />
           <TableSpacer />
           <ResultCount
             shown={endpoints.length}
-            total={isEndpointFiltered(epFilters) ? all.length : undefined}
+            // Always paired with the total, because the default already narrows.
+            total={all.length}
             noun={t('discovery.seen.filter.endpointNoun')}
           />
         </TableToolbar>
+      )}
+      {epSheet && (
+        <MobileFilterSheet
+          columns={epCols}
+          labels={epLabels}
+          filters={epFilters}
+          onChange={setEpFilters}
+          counts={epCounts}
+          onClose={() => setEpSheet(false)}
+        />
       )}
       {endpoints.length > 0 && (
         <div className="disco-seen-table">
@@ -494,6 +576,16 @@ function SeenOnNetworkCard({
             <div className="disco-h">{t('discovery.cols.profile')}</div>
             <div className="disco-h">{t('discovery.cols.credential')}</div>
             <div className="disco-h" />
+          </div>
+          {/* Same CSS grid rule as the header and every row. The profile and credential columns
+              are the import form's own inputs, and the last is the button. */}
+          <div className="disco-seen-filters" role="group" aria-label={t('common:filter.row')}>
+            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'ip')}
+            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'mac')}
+            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'via')}
+            <div className="dt-f empty" />
+            <div className="dt-f empty" />
+            {filterCell(epCols, epFilters, setEpFilters, epCounts, epLabels, 'monitored')}
           </div>
           {endpoints.map((e) => {
             const r = rows[e.id] ?? { profile_id: '', credential_id: '' };

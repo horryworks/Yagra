@@ -154,6 +154,63 @@ describe('range columns', () => {
   });
 });
 
+describe('number columns (ADR-053 Inc.6)', () => {
+  interface Scored {
+    name: string;
+    score: number | null;
+  }
+  const SCORED: Scored[] = [
+    { name: 'a', score: 0 },
+    { name: 'b', score: 3 },
+    { name: 'c', score: 5 },
+    { name: 'd', score: 9 },
+    { name: 'e', score: null },
+  ];
+  const cols: FilterableColumn<Scored>[] = [
+    { key: 'score', filter: { kind: 'number', readNumber: (r) => r.score } },
+  ];
+  const names = (v: string) => applyFilters(SCORED, cols, { score: v }, NOW).map((r) => r.name);
+
+  it('is inclusive at both ends', () => {
+    // The one thing a numeric filter gets wrong silently: an operator asking for "3 to 5" and not
+    // seeing the rows that are exactly 3 or exactly 5 reads as missing data, not as a boundary.
+    expect(names('3:5')).toEqual(['b', 'c']);
+    expect(names('0:0')).toEqual(['a']);
+  });
+
+  it('accepts a one-sided bound, which is the common shape', () => {
+    expect(names('5:')).toEqual(['c', 'd']);
+    expect(names(':3')).toEqual(['a', 'b']);
+  });
+
+  it('treats zero as a bound, not as "unset"', () => {
+    // `Number('') === 0`, so the sloppy encoding of "no minimum" is indistinguishable from a real
+    // minimum of zero — and on a 0-based score that is the whole list versus one row.
+    expect(names('0:')).toHaveLength(4);
+    expect(names(':0')).toEqual(['a']);
+  });
+
+  it('excludes a row that has no number rather than treating it as zero', () => {
+    // Same rule the range kind applies to a null timestamp: a bound is a question, and a row the
+    // question cannot be asked of is not an answer of "yes".
+    expect(names('0:')).not.toContain('e');
+    expect(names(':100')).not.toContain('e');
+  });
+
+  it('narrows nothing when unset or when both sides are unparseable', () => {
+    expect(names('')).toHaveLength(SCORED.length);
+    expect(names(':')).toHaveLength(SCORED.length);
+    expect(names('junk')).toHaveLength(SCORED.length);
+  });
+
+  it('leaves rows alone when the list is filtered server-side', () => {
+    // Exactly the `readTime: undefined` rule above: the bounds went into the query, so a second
+    // pass here would narrow a page the server already narrowed.
+    const serverSide: FilterableColumn<Scored>[] = [{ key: 'score', filter: { kind: 'number' } }];
+    expect(applyFilters(SCORED, serverSide, { score: '9:' }, NOW)).toHaveLength(SCORED.length);
+  });
+});
+
 describe('buildPredicate', () => {
   it('compiles the regex once rather than per row', () => {
     // Not observable directly; what is observable is that the two entry points agree, so callers

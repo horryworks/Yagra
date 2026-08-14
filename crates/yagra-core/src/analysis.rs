@@ -537,6 +537,13 @@ pub struct FindingSearch<'a> {
     pub groups: crate::repo::GroupFilter<'a>,
     /// The folder-group subtree the caller asked to filter *by* — a request, unlike `groups`.
     pub in_group: Option<&'a [Uuid]>,
+    /// Inclusive lower / upper bound on the finding's score (ADR-053 Inc.6's numeric column).
+    ///
+    /// Inclusive at both ends deliberately: an operator asking for 3–5 and not seeing the rows that
+    /// score exactly 3 or exactly 5 reads as missing data, not as a boundary convention. Either side
+    /// may be `None`, and one-sided is the common shape — "8 or worse" is a bound, not a window.
+    pub min_score: Option<f64>,
+    pub max_score: Option<f64>,
     pub limit: i64,
 }
 
@@ -650,7 +657,9 @@ const FINDING_SEARCH_WHERE: &str = "\
      AND ($9::text IS NULL \
           OR (f.metric ILIKE '%' || $9 || '%' OR f.kind ILIKE '%' || $9 || '%')) \
      AND ($10::text IS NULL \
-          OR f.node_id IN (SELECT id FROM nodes WHERE name ILIKE '%' || $10 || '%'))";
+          OR f.node_id IN (SELECT id FROM nodes WHERE name ILIKE '%' || $10 || '%')) \
+     AND ($11::double precision IS NULL OR f.score >= $11) \
+     AND ($12::double precision IS NULL OR f.score <= $12)";
 
 /// The cross-run findings query. `ORDER BY` matches the cursor in [`FINDING_SEARCH_WHERE`] column
 /// for column, and both match `analysis_findings_created_idx` (migration 0058) — if those three
@@ -661,9 +670,18 @@ fn finding_search_sql() -> String {
          f.metric, f.kind, f.when_label, f.duration, f.created_at \
          FROM analysis_findings f JOIN analysis_jobs j ON j.id = f.job_id \
          WHERE {FINDING_SEARCH_WHERE} \
-         ORDER BY f.created_at DESC, f.id DESC LIMIT $11"
+         ORDER BY f.created_at DESC, f.id DESC LIMIT ${}",
+        FINDING_SEARCH_BINDS + 1
     )
 }
+
+/// How many placeholders [`FINDING_SEARCH_WHERE`] uses. The page size is the one *after* them.
+///
+/// Derived rather than written twice, for the reason `EVENT_FILTER_BINDS` records: renumbering by
+/// hand after widening the predicate is neither a compile error nor a crash — the page size lands in
+/// a filter's slot and the query answers a different question. Here that would be `LIMIT` binding
+/// into `max_score`, i.e. "findings scoring at most 100" returned unpaged.
+const FINDING_SEARCH_BINDS: usize = 12;
 
 /// Columns selected for a schedule row (timestamps projected to epoch-millis, as the job rows are).
 const SCHED_COLS: &str = "id, tool, scope_kind, scope_id, scope_label, params, frequency, \
@@ -933,6 +951,8 @@ impl AnalysisRepo {
             .bind(q.in_group.map(<[Uuid]>::to_vec))
             .bind(q.q)
             .bind(q.node_q)
+            .bind(q.min_score)
+            .bind(q.max_score)
             .bind(q.limit)
             .fetch_all(&self.pool)
             .await?;
@@ -4119,10 +4139,13 @@ mod tests {
         // ORDER BY, and the index in migration 0058. The events list has its own version of this
         // test because the same disagreement shipped there once.
         let sql = finding_search_sql();
+        // The page size is derived from `FINDING_SEARCH_BINDS`, so this asserts the derivation is
+        // right rather than re-hardcoding the number the derivation exists to stop anyone writing.
         assert!(
-            sql.contains("ORDER BY f.created_at DESC, f.id DESC LIMIT $11"),
+            sql.contains("ORDER BY f.created_at DESC, f.id DESC LIMIT $13"),
             "{sql}"
         );
+        assert_eq!(FINDING_SEARCH_BINDS, 12);
         assert!(sql.contains(FINDING_SEARCH_WHERE), "{sql}");
         assert!(
             FINDING_SEARCH_WHERE.contains("(f.created_at, f.id) <"),
@@ -4163,6 +4186,35 @@ mod tests {
                 "{bind} must be concatenated as a bound value: {FINDING_SEARCH_WHERE}"
             );
         }
+    }
+
+    #[test]
+    fn the_score_bounds_are_inclusive_and_every_placeholder_is_used_once() {
+        // Inclusive at both ends. `>` instead of `>=` is the version of this that looks right and
+        // drops exactly the rows sitting on the bound the operator typed — invisible unless you go
+        // looking, because the answer is still plausible.
+        assert!(
+            FINDING_SEARCH_WHERE.contains("($11::double precision IS NULL OR f.score >= $11)"),
+            "{FINDING_SEARCH_WHERE}"
+        );
+        assert!(
+            FINDING_SEARCH_WHERE.contains("($12::double precision IS NULL OR f.score <= $12)"),
+            "{FINDING_SEARCH_WHERE}"
+        );
+        // Every placeholder the predicate declares is actually written, and none beyond it — this is
+        // what makes `FINDING_SEARCH_BINDS` a fact about the string rather than a hopeful constant.
+        // (`search_findings` binds them in order, so a gap here would silently shift every later
+        // filter's value into the wrong clause.)
+        for i in 1..=FINDING_SEARCH_BINDS {
+            assert!(
+                FINDING_SEARCH_WHERE.contains(&format!("${i}")),
+                "${i} is declared by FINDING_SEARCH_BINDS but never used: {FINDING_SEARCH_WHERE}"
+            );
+        }
+        assert!(
+            !FINDING_SEARCH_WHERE.contains(&format!("${}", FINDING_SEARCH_BINDS + 1)),
+            "the predicate uses the slot reserved for LIMIT: {FINDING_SEARCH_WHERE}"
+        );
     }
 
     #[test]

@@ -13,40 +13,37 @@
 // rule exists to prevent (and which Alerts ▸ History and Settings ▸ Audit actually had). Moving it
 // server-side would mean giving the stream a subscription filter — an SSE design change, ADR
 // territory — not adding a query parameter.
+//
+// **ADR-053 Inc.6 moved the controls into a `FilterBar` and the logic onto the shared predicate.**
+// `AlertRows` draws a run of spans with no header row, so there is nowhere to hang a filter row
+// (decision E). What changed for the operator is not the layout: every dimension became a *set*, so
+// "critical and warning" and "unacked, on either of two states" are sayable for the first time, and
+// the free text gained the NOT and regex modes every other list has.
 
 import { alertSubject, type HasSubject } from '../lib/alertSubject';
-import { isFiltered as isFilteredAgainst } from '../lib/filterQuery';
-import { readEnumParam, readIdParam, writeEnumParam, writeIdParam } from '../lib/filterParams';
+import {
+  decodeSet,
+  encodeSet,
+  readFilterParams,
+  specColumns,
+  writeFilterParams,
+  TEXT_MODES,
+  type ColumnFilterSpec,
+  type FilterState,
+  type FilterableColumn,
+} from '../lib/columnFilter';
+import { buildPredicate } from '../lib/filterPredicate';
+import { severityLabel, stateLabel } from '../lib/format';
+import type { TFunction } from 'i18next';
 import type { NodeState, Severity } from '../types/api';
 
-/** The acknowledgement states the screen offers, in the order the dropdown lists them.
+/** The acknowledgement states the screen offers, in the order the list shows them.
  *
  *  Ack is *inbound* state mirrored from the external on-call tool (ADR-015) — Yagra has no ack
  *  action — so this filter answers "has anyone picked this up yet", which is the first question
  *  during triage and the one the read-only pill exists to answer. */
 export const ACK_STATES = ['unacked', 'acked'] as const;
-
-/** Those plus `''` for "no filter". Derived, so the dropdown and the URL codec cannot disagree
- *  about which values exist. */
-export const ACK_FILTERS = ['', ...ACK_STATES] as const;
-export type AckFilter = (typeof ACK_FILTERS)[number];
-
-/** The screen's filter state. `''` means "no filter" for each field. */
-export interface ActiveAlertFilters {
-  severity: Severity | '';
-  state: NodeState | '';
-  ack: AckFilter;
-  /** Free text over the subject and what fired. */
-  q: string;
-}
-
-/** The default view: every open alert, worst first. */
-export const DEFAULT_FILTERS: ActiveAlertFilters = {
-  severity: '',
-  state: '',
-  ack: '',
-  q: '',
-};
+export type AckState = (typeof ACK_STATES)[number];
 
 /**
  * The fields the predicate reads.
@@ -67,44 +64,102 @@ export interface FilterableAlert extends HasSubject {
 export type NameOf = (id: string) => string;
 
 /**
- * Whether one alert survives the filter.
+ * The screen's filter columns.
  *
- * ⚠️ **The `q === ''` early return is load-bearing, not a micro-optimization.** `nameOf` is
- * `useEntityNames`' lazy resolver: asking it about an id *enqueues* that id for the next batch
- * request. Calling it for every alert on every render would resolve the whole outage's node names
- * in order to draw thirty rows, which is precisely what that batching exists to avoid. So names are
- * resolved only once an operator has actually typed something, and the default view costs nothing.
+ * ⚠️ **`nameOf` is a parameter, and the free-text column's `readText` is the only thing that calls
+ * it.** That resolver is `useEntityNames`' lazy one: asking it about an id *enqueues* that id for
+ * the next batch request, so resolving every alert's node name in order to draw thirty rows is
+ * precisely what the batching exists to avoid. `buildPredicate` compiles a column that is not
+ * narrowing to `null` and therefore never reads its row — so with the search box empty, nothing is
+ * asked and the default view costs nothing. That used to be an explicit `if (q === '') return true`
+ * guard in the hand-written predicate; it is now a property of the shared one, which is the whole
+ * reason this screen could move onto it.
  *
- * The free text matches the subject (a node's name **or** its raw UUID, or a pool's name) and the
- * metric that fired. The raw id is included because it is the handle that appears in a deep link
- * and in an API error, so pasting one has to find its row — the same rule as the Credentials list.
+ * The text matches the subject (a node's name **or** its raw UUID, or a pool's name) and the metric
+ * that fired. The raw id is included because it is the handle that appears in a deep link and in an
+ * API error, so pasting one has to find its row — the same rule as the Credentials list.
  */
-export function matchesActiveAlert(
-  a: FilterableAlert,
-  f: ActiveAlertFilters,
+export function activeAlertFilters(
+  t: TFunction,
   nameOf: NameOf,
-): boolean {
-  if (f.severity && a.severity !== f.severity) return false;
-  if (f.state && a.state !== f.state) return false;
-  if (f.ack === 'acked' && !a.acked) return false;
-  if (f.ack === 'unacked' && a.acked) return false;
-
-  const q = f.q.trim().toLowerCase();
-  if (q === '') return true;
-
-  const subject = alertSubject(a);
-  const haystack =
-    subject.kind === 'node' ? [nameOf(subject.nodeId), subject.nodeId] : [subject.name];
-  if (a.metric) haystack.push(a.metric);
-  return haystack.some((s) => s.toLowerCase().includes(q));
+  severities: readonly Severity[],
+  states: readonly NodeState[],
+): Record<string, ColumnFilterSpec<FilterableAlert>> {
+  return {
+    severity: {
+      kind: 'enum',
+      options: severities.map((s) => ({ value: s, label: severityLabel(s) })),
+      readValue: (a) => a.severity,
+      allLabel: t('history.filter.allSeverities'),
+      counts: 'client',
+    },
+    state: {
+      kind: 'enum',
+      options: states.map((s) => ({ value: s, label: stateLabel(s) })),
+      readValue: (a) => a.state,
+      allLabel: t('history.filter.allStates'),
+      counts: 'client',
+    },
+    ack: {
+      kind: 'enum',
+      options: ACK_STATES.map((v) => ({ value: v, label: t(`active.ack.${v}`) })),
+      // Derived from presence, not stored: the row carries who acked it and from which tool, and
+      // only whether it is there is a filter.
+      readValue: (a) => (a.acked ? 'acked' : 'unacked'),
+      allLabel: t('active.ack.all'),
+      counts: 'client',
+    },
+    q: {
+      kind: 'text',
+      // Both modes and NOT: the whole set is in the browser, so a regex costs a pass over a few
+      // thousand rows rather than a query, and "everything except the link-flap noise" is the
+      // triage question this screen exists for.
+      modes: TEXT_MODES,
+      not: true,
+      readText: (a) => {
+        const subject = alertSubject(a);
+        return subject.kind === 'node'
+          ? [nameOf(subject.nodeId), subject.nodeId, a.metric]
+          : [subject.name, a.metric];
+      },
+      containsSemantics: 'substring',
+      placeholder: t('active.searchPlaceholder'),
+    },
+  };
 }
 
-/** Whether anything is narrowing the list — which picks the empty state's wording.
+/** Column keys paired with their specs — what the bar, the sheet and the predicate all walk. */
+export function activeAlertColumns(
+  t: TFunction,
+  nameOf: NameOf,
+  severities: readonly Severity[],
+  states: readonly NodeState[],
+): FilterableColumn<FilterableAlert>[] {
+  return specColumns(activeAlertFilters(t, nameOf, severities, states));
+}
+
+/** Plain-text names for the bar and the mobile sheet, keyed the same way. */
+export function activeAlertLabels(t: TFunction): Record<string, string> {
+  return {
+    severity: t('history.cols.severity'),
+    state: t('history.cols.state'),
+    ack: t('active.ack.label'),
+    q: t('active.searchLabel'),
+  };
+}
+
+/**
+ * The row predicate, built once per `(state, nameOf)` pair.
  *
- *  Derived from the defaults so a filter added without its clause cannot make the screen claim
- *  there is nothing here while a filter is hiding the rows (`lib/filterQuery.ts`). */
-export function isFiltered(f: ActiveAlertFilters): boolean {
-  return isFilteredAgainst(f, DEFAULT_FILTERS);
+ * A **factory** rather than a `(row, nameOf) => boolean`, because `AlertRows` applies it per row: a
+ * regex compiled per row would be compiled once per alert in an outage. `nowMs` is unused — no
+ * column here is a range — but it is passed for the shared signature rather than special-cased.
+ */
+export function alertPredicate(
+  columns: readonly FilterableColumn<FilterableAlert>[],
+  state: FilterState,
+): (a: FilterableAlert) => boolean {
+  return buildPredicate(columns, state, 0);
 }
 
 /**
@@ -113,25 +168,36 @@ export function isFiltered(f: ActiveAlertFilters): boolean {
  * The URL is their only source of truth here: nothing else holds them, so a narrowed triage view
  * survives a reload and can be pasted into a chat during an incident — which is the whole point on
  * a screen two people are looking at at once.
+ *
+ * ⚠️ The keys stayed `severity` / `state` / `ack` / `q`, so links taken before the multi-value
+ * change still open the same view — a single token is a one-element set. Nothing had to be renamed
+ * because these were already the column keys.
  */
 export function readFilters(
+  columns: readonly FilterableColumn<FilterableAlert>[],
   params: URLSearchParams,
-  severities: readonly Severity[],
-  states: readonly NodeState[],
-): ActiveAlertFilters {
-  return {
-    severity: readEnumParam(params, 'severity', ['', ...severities], ''),
-    state: readEnumParam(params, 'state', ['', ...states], ''),
-    ack: readEnumParam(params, 'ack', ACK_FILTERS, ''),
-    q: readIdParam(params, 'q') ?? '',
-  };
+): FilterState {
+  const raw = readFilterParams(columns, params);
+  // Re-encode the sets so a hand-typed or click-ordered URL settles to the spec's option order:
+  // the joined string is an effect key elsewhere and a value that varies by click order cannot be
+  // compared for equality.
+  for (const c of columns) {
+    if (c.filter.kind !== 'enum') continue;
+    const order = c.filter.options.map((o) => o.value);
+    raw[c.key] = encodeSet(
+      decodeSet(raw[c.key] ?? '').filter((v) => order.includes(v)),
+      order,
+    );
+  }
+  return raw;
 }
 
 /** Write the filters back, deleting every key whose value is the default so the unfiltered view
  *  has no query string at all. */
-export function writeFilters(params: URLSearchParams, f: ActiveAlertFilters): void {
-  writeEnumParam(params, 'severity', f.severity, '');
-  writeEnumParam(params, 'state', f.state, '');
-  writeEnumParam(params, 'ack', f.ack, '');
-  writeIdParam(params, 'q', f.q.trim() || null);
+export function writeFilters(
+  columns: readonly FilterableColumn<FilterableAlert>[],
+  params: URLSearchParams,
+  next: FilterState,
+): void {
+  writeFilterParams(columns, params, next);
 }

@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Unit tests for the Nodes tree's state / kind / pool filters (no DOM — Vitest node env).
+//
+// Rewritten for ADR-053 Inc.6, where all three became sets. Every property the single-valued
+// version was tested for still holds; what is new is the set spelling, and one property that only
+// starts to matter once a value can carry several tokens — that the URL settles to a stable order.
 
 import { describe, expect, it } from 'vitest';
+import type { TFunction } from 'i18next';
 import { DISPLAY_ORDER } from '../lib/nodeState';
 import { NODE_KINDS } from '../types/api';
+import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import {
-  DEFAULT_INVENTORY_FILTERS,
+  inventoryColumns,
+  inventoryFilterLabels,
   inventoryKey,
   inventoryQuery,
   isInventoryFiltered,
@@ -13,13 +20,13 @@ import {
   readInventoryFilters,
   truncationNotice,
   writeInventoryFilters,
-  type InventoryFilters,
 } from './inventoryFilters';
 
-const f = (over: Partial<InventoryFilters>): InventoryFilters => ({
-  ...DEFAULT_INVENTORY_FILTERS,
-  ...over,
-});
+const t = ((k: string) => k) as unknown as TFunction;
+const POOLS = [{ name: 'default' }, { name: 'tokyo' }];
+const COLS = inventoryColumns(t, POOLS);
+const DEFAULTS = defaultFilters(COLS);
+const f = (over: FilterState): FilterState => ({ ...DEFAULTS, ...over });
 
 describe('the offered vocabularies', () => {
   it('offers every node state, from the one list that enumerates the union', () => {
@@ -27,16 +34,44 @@ describe('the offered vocabularies', () => {
     // `NodeState` is a generated union with no runtime form of its own.
     expect(NODE_STATE_FILTERS).toEqual(DISPLAY_ORDER);
     expect(NODE_STATE_FILTERS).toHaveLength(6);
+    const state = COLS.find((c) => c.key === 'state')?.filter;
+    expect(state?.kind === 'enum' && state.options.map((o) => o.value)).toEqual([
+      ...NODE_STATE_FILTERS,
+    ]);
   });
 
   it('offers every node kind', () => {
     expect(NODE_KINDS).toEqual(['meraki', 'url', 'dns', 'device']);
+    const kind = COLS.find((c) => c.key === 'kind')?.filter;
+    expect(kind?.kind === 'enum' && kind.options.map((o) => o.value)).toEqual([...NODE_KINDS]);
+  });
+
+  it('takes its pool options from the deployment, not from an enum', () => {
+    // Pools are operator-named, which is why the column list is a function of the fetched list.
+    const pool = COLS.find((c) => c.key === 'pool')?.filter;
+    expect(pool?.kind === 'enum' && pool.options.map((o) => o.value)).toEqual(['default', 'tokyo']);
+  });
+
+  it('labels every column, so the bar never shows a raw key', () => {
+    const labels = inventoryFilterLabels(t);
+    for (const c of COLS) expect(labels[c.key]).toBeTruthy();
+  });
+
+  it('reads nothing off a row, because this list is filtered server-side', () => {
+    // ⚠️ The accessor exists only because an enum spec requires one. If one of these ever starts
+    // returning a real value, someone will filter locally — and a local filter here answers "of the
+    // folders you have opened", which is a different question with no sign that it changed.
+    for (const c of COLS) {
+      expect(c.filter.kind).toBe('enum');
+      if (c.filter.kind !== 'enum') continue;
+      expect(c.filter.readValue({} as never)).toBeNull();
+    }
   });
 });
 
 describe('inventoryQuery', () => {
   it('sends nothing at all for the default filters', () => {
-    expect(inventoryQuery(DEFAULT_INVENTORY_FILTERS)).toEqual({
+    expect(inventoryQuery(DEFAULTS)).toEqual({
       state: undefined,
       kind: undefined,
       pool: undefined,
@@ -52,21 +87,21 @@ describe('inventoryQuery', () => {
     expect(Object.values(q)).not.toContain('');
   });
 
-  it('trims a pool name, and treats whitespace as unset', () => {
-    expect(inventoryQuery(f({ pool: '  tokyo  ' })).pool).toBe('tokyo');
-    expect(inventoryQuery(f({ pool: '   ' })).pool).toBeUndefined();
+  it('passes a set through in the joined spelling the API takes', () => {
+    // The API's own spelling since Inc.6, so there is nothing to re-encode at the last moment.
+    expect(inventoryQuery(f({ state: 'warning,critical,unreachable' })).state).toBe(
+      'warning,critical,unreachable',
+    );
   });
 });
 
 describe('isInventoryFiltered', () => {
   it('is false at the defaults and flips for every field', () => {
-    expect(isInventoryFiltered(DEFAULT_INVENTORY_FILTERS)).toBe(false);
-    for (const key of Object.keys(DEFAULT_INVENTORY_FILTERS) as (keyof InventoryFilters)[]) {
-      // Every field, driven off the defaults object rather than a hand-written list: a filter
-      // added without a case here would leave the tree showing "nothing matches" while rows are
-      // hidden, which is the failure `ui-conventions` names.
-      const changed = f({ [key]: 'x' } as Partial<InventoryFilters>);
-      expect(isInventoryFiltered(changed)).toBe(true);
+    expect(isInventoryFiltered(DEFAULTS)).toBe(false);
+    for (const c of COLS) {
+      // Every field: a filter added without a case here would leave the tree showing "nothing
+      // matches" while rows are hidden, which is the failure `ui-conventions` names.
+      expect(isInventoryFiltered(f({ [c.key]: 'x' }))).toBe(true);
     }
   });
 });
@@ -77,7 +112,7 @@ describe('inventoryKey', () => {
     // render, so keying on identity would re-issue the search on every unrelated re-render.
     expect(inventoryKey(f({ kind: 'url' }))).toBe(inventoryKey(f({ kind: 'url' })));
     expect(inventoryKey(f({ kind: 'url' }))).not.toBe(inventoryKey(f({ kind: 'dns' })));
-    expect(inventoryKey(DEFAULT_INVENTORY_FILTERS)).not.toBe(inventoryKey(f({ pool: 'tokyo' })));
+    expect(inventoryKey(DEFAULTS)).not.toBe(inventoryKey(f({ pool: 'tokyo' })));
   });
 
   it('does not collide across fields', () => {
@@ -90,35 +125,56 @@ describe('the URL codec', () => {
   it('round-trips every field', () => {
     const params = new URLSearchParams();
     const filters = f({ state: 'critical', kind: 'dns', pool: 'tokyo' });
-    writeInventoryFilters(params, filters);
-    expect(readInventoryFilters(params)).toEqual(filters);
+    writeInventoryFilters(COLS, params, filters);
+    expect(readInventoryFilters(COLS, params)).toEqual(filters);
+  });
+
+  it('round-trips a set, and settles it to the option order', () => {
+    // The joined value is `inventoryKey`'s input, so a value that varied with click order would
+    // re-issue the server search for a filter nobody changed.
+    const params = new URLSearchParams('state=unknown,ok');
+    const read = readInventoryFilters(COLS, params);
+    expect(read.state).toBe('ok,unknown');
+    expect(inventoryKey(read)).toBe(
+      inventoryKey(readInventoryFilters(COLS, new URLSearchParams('state=ok,unknown'))),
+    );
   });
 
   it('writes no key at the default, so "?" always means something is narrowing', () => {
     const params = new URLSearchParams('sel=node:abc');
-    writeInventoryFilters(params, DEFAULT_INVENTORY_FILTERS);
+    writeInventoryFilters(COLS, params, DEFAULTS);
     expect(params.toString()).toBe('sel=node%3Aabc');
   });
 
   it('clears a key when the filter goes back to its default', () => {
     const params = new URLSearchParams('state=critical&kind=dns&pool=tokyo');
-    writeInventoryFilters(params, DEFAULT_INVENTORY_FILTERS);
+    writeInventoryFilters(COLS, params, DEFAULTS);
     expect(params.has('state')).toBe(false);
     expect(params.has('kind')).toBe(false);
     expect(params.has('pool')).toBe(false);
   });
 
-  it('falls back to no filter for a value this build does not know', () => {
+  it('drops a state or kind token this build does not know', () => {
     // A bookmark written by a newer build must not break the page. Deliberately the opposite of
     // the API edge, which rejects an unknown token — there, widening would answer a different
     // question than the one asked; here the operator can see the control did not take.
     const params = new URLSearchParams('state=on-fire&kind=switch');
-    expect(readInventoryFilters(params)).toMatchObject({ state: '', kind: '' });
+    expect(readInventoryFilters(COLS, params)).toMatchObject({ state: '', kind: '' });
+    // …and keeps the half it does know.
+    expect(readInventoryFilters(COLS, new URLSearchParams('state=on-fire,ok')).state).toBe('ok');
+  });
+
+  it('keeps a pool name it has never heard of', () => {
+    // ⚠️ The one column that is NOT validated against its options, and deliberately: the pool list
+    // is fetched, so a link opened before that request lands would have its pool filter silently
+    // erased. State and kind are compile-time vocabularies with no such window.
+    const early = inventoryColumns(t, []);
+    expect(readInventoryFilters(early, new URLSearchParams('pool=tokyo')).pool).toBe('tokyo');
   });
 
   it('leaves other query keys alone', () => {
     const params = new URLSearchParams('sel=group:g1&tab=overview');
-    writeInventoryFilters(params, f({ kind: 'url' }));
+    writeInventoryFilters(COLS, params, f({ kind: 'url' }));
     expect(params.get('sel')).toBe('group:g1');
     expect(params.get('tab')).toBe('overview');
     expect(params.get('kind')).toBe('url');

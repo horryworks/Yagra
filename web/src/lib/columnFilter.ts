@@ -110,7 +110,31 @@ export interface RangeFilterSpec<T> {
   readTime?: (row: T) => number | null | undefined;
 }
 
-export type ColumnFilterSpec<T> = EnumFilterSpec<T> | TextFilterSpec<T> | RangeFilterSpec<T>;
+/** A column filtered by a numeric interval, **inclusive at both ends** (ADR-053 Inc.6 decision G).
+ *
+ *  Either end may be left open, which is the common case: "score 8 or worse" is one bound, not a
+ *  window. The transport is one string (`encodeNumberRange`), because `FilterState` is flat — see
+ *  the header — and a column that needed `score_min` + `score_max` would be the first to break it. */
+export interface NumberFilterSpec<T> {
+  kind: 'number';
+  /** The row's value, when the list is filtered in the browser. **A server-side list omits it**,
+   *  exactly as `RangeFilterSpec.readTime` is omitted: the bounds go into the query and a second
+   *  browser-side pass would narrow a page the server already narrowed. */
+  readNumber?: (row: T) => number | null | undefined;
+  /** Bounds and granularity for the two inputs. Advisory — the browser enforces them on the
+   *  spinner, and the codec does not, so a pasted URL outside them still reads back. */
+  min?: number;
+  max?: number;
+  step?: number;
+  /** Short unit shown after each input ("%", "ms"). Not part of the value. */
+  unit?: string;
+}
+
+export type ColumnFilterSpec<T> =
+  | EnumFilterSpec<T>
+  | TextFilterSpec<T>
+  | RangeFilterSpec<T>
+  | NumberFilterSpec<T>;
 
 /** The shape `filterPredicate` / `filterCounts` walk: a column key paired with its spec. Decoupled
  *  from `Column<T>` so the pure modules never import a component. */
@@ -353,4 +377,42 @@ export function toggleSetValue(value: string, token: string, order: readonly str
   if (cur.has(token)) cur.delete(token);
   else cur.add(token);
   return encodeSet([...cur], order);
+}
+
+// ---------------------------------------------------------------------------
+// Numeric intervals — the `number` kind's transport.
+
+/** A decoded numeric interval. `null` on a side means that side is unbounded. */
+export interface NumberRange {
+  min: number | null;
+  max: number | null;
+}
+
+/**
+ * Encode a numeric interval as `min:max`, dropping the key entirely when both ends are open.
+ *
+ * ⚠️ **Deliberately not the `range` kind's `custom:from|to` spelling.** That one separates its two
+ * instants with `|`; this one uses `:`. They look close enough that sharing a codec is tempting, and
+ * they are not the same thing — a range column has presets and a default that narrows, a number
+ * column has neither — so a shared codec would have to carry a preset concept for one caller. The
+ * separator differing is the reminder.
+ */
+export function encodeNumberRange(v: NumberRange): string {
+  if (v.min === null && v.max === null) return '';
+  return `${v.min ?? ''}:${v.max ?? ''}`;
+}
+
+/** Decode `min:max`. Anything unparseable on a side leaves that side unbounded rather than
+ *  rejecting the whole value — the same "a stale bookmark lands on the default view" rule the set
+ *  and range decoders follow. */
+export function decodeNumberRange(raw: string): NumberRange {
+  const i = raw.indexOf(':');
+  if (i < 0) return { min: null, max: null };
+  const num = (s: string): number | null => {
+    const trimmed = s.trim();
+    if (trimmed === '') return null;
+    const n = Number(trimmed);
+    return Number.isFinite(n) ? n : null;
+  };
+  return { min: num(raw.slice(0, i)), max: num(raw.slice(i + 1)) };
 }

@@ -8,7 +8,7 @@
 // Data-table standard v2: a toolbar (count + "+ Add metric set") over the shared `.ytable`; add via
 // modal, delete via confirm modal. Each row expands to its metric editor.
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
@@ -20,18 +20,24 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
 import { TextInput, RequiredMark } from '../components/ui/Field';
 import { IconButton } from '../components/ui/IconButton';
-import { TableToolbar, SearchInput, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
+import { DataTable, type Column } from '../components/ui/DataTable';
+import { ClearFilters } from '../components/ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { defaultFilters, type FilterState } from '../lib/columnFilter';
+import { buildPredicate } from '../lib/filterPredicate';
+import { setColumns, setFilterLabels, metricSetFilters } from './monitoringConfigFilters';
 import { TrashIcon } from '../components/ui/icons';
 import { CollectionEditor } from '../components/CollectionEditor/CollectionEditor';
 import './CollectionTemplatesPage.css';
 
-const COLS = '1.6fr 1.6fr 130px 72px';
 
 export function CollectionTemplatesPage() {
   const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<CollectionTemplate[]>([]);
-  const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<FilterState>({});
+  const [sheet, setSheet] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -55,14 +61,72 @@ export function CollectionTemplatesPage() {
     load();
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === '') return rows;
-    return rows.filter(
-      (tmpl) =>
-        tmpl.name.toLowerCase().includes(q) || (tmpl.description ?? '').toLowerCase().includes(q),
-    );
-  }, [rows, query]);
+  const filterCols = useMemo(() => setColumns(t), [t]);
+  const filtered = useMemo(
+    () => rows.filter(buildPredicate(filterCols, filters, Date.now())),
+    [rows, filterCols, filters],
+  );
+
+  const columns: Column<CollectionTemplate>[] = useMemo(() => {
+    const specs = metricSetFilters(t);
+    const cols: Column<CollectionTemplate>[] = [
+      {
+        key: 'name',
+        header: t('sets.cols.name'),
+        width: '1.6fr',
+        render: (r) => <span className="yt-name-txt">{r.name}</span>,
+      },
+      {
+        key: 'description',
+        header: t('sets.cols.description'),
+        width: '1.6fr',
+        render: (r) => <span className="muted ellipsis">{r.description ?? '—'}</span>,
+      },
+      {
+        key: 'metrics',
+        header: t('sets.cols.metrics'),
+        width: '130px',
+        render: (r) => {
+          const open = openItems === r.id;
+          return (
+            <button
+              type="button"
+              className={`tmpl-metrics-toggle${open ? ' open' : ''}`}
+              aria-expanded={open}
+              onClick={() => setOpenItems((cur) => (cur === r.id ? null : r.id))}
+            >
+              {t('shared.metricsCount', { count: r.item_count })}
+              <svg className="tmpl-metrics-chev" viewBox="0 0 12 12" aria-hidden="true">
+                <path
+                  d="M4 2l4 4-4 4"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.4"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          );
+        },
+      },
+      {
+        key: 'actions',
+        header: t('shared.colActions'),
+        width: '72px',
+        align: 'right',
+        render: (r) =>
+          authed ? (
+            <IconButton title={t('sets.deleteSet')} danger onClick={() => setDeleting(r)}>
+              <TrashIcon />
+            </IconButton>
+          ) : null,
+      },
+    ];
+    // ⚠️ Untyped index lookup — rename a column key and its filter cell silently disappears.
+    for (const c of cols) c.filter = specs[c.key];
+    return cols;
+  }, [t, authed, openItems]);
 
   return (
     <div>
@@ -79,11 +143,15 @@ export function CollectionTemplatesPage() {
       ) : (
         <>
           <TableToolbar>
-            <SearchInput
-              value={query}
-              onChange={setQuery}
-              placeholder={t('sets.searchPlaceholder')}
-              ariaLabel={t('sets.searchAria')}
+            <MobileFilterButton
+              columns={filterCols}
+              filters={filters}
+              onOpen={() => setSheet(true)}
+            />
+            <ClearFilters
+              columns={filterCols}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(filterCols))}
             />
             <TableSpacer />
             <ResultCount
@@ -97,81 +165,46 @@ export function CollectionTemplatesPage() {
               </Button>
             )}
           </TableToolbar>
+          {sheet && (
+            <MobileFilterSheet
+              columns={filterCols}
+              labels={setFilterLabels(t)}
+              filters={filters}
+              onChange={setFilters}
+              onClose={() => setSheet(false)}
+            />
+          )}
 
-          <div className="ytable templates-table">
-            <div className="ytable-head" style={{ gridTemplateColumns: COLS }}>
-              <div className="ytable-h">{t('sets.cols.name')}</div>
-              <div className="ytable-h">{t('sets.cols.description')}</div>
-              <div className="ytable-h">{t('sets.cols.metrics')}</div>
-              <div className="ytable-h right">{t('shared.colActions')}</div>
-            </div>
-
-            {filtered.length === 0 ? (
-              <div className="yt-empty">
-                <p className="yt-empty-title">
-                  {loading
-                    ? t('common:loading')
-                    : rows.length === 0
-                      ? t('sets.empty.none')
-                      : t('sets.empty.noMatch')}
-                </p>
-                {!loading && (
+          {/* Virtualized since ADR-053 Inc.6 — the last of the twelve hand-rolled `ytable` screens
+              to move, held back only because its rows expand. `expandedKey` is what drops the
+              measured height of a row that has just closed. */}
+          <div className="templates-table">
+            <DataTable
+              rows={filtered}
+              columns={columns}
+              rowKey={(r) => r.id}
+              loading={loading}
+              expanded={(r) =>
+                openItems === r.id ? (
+                  <div className="crud-collection">
+                    <CollectionEditor scope="template" scopeId={r.id} canEdit={authed} />
+                  </div>
+                ) : null
+              }
+              expandedKey={openItems}
+              filters={filters}
+              onFiltersChange={setFilters}
+              empty={
+                <>
+                  <p className="yt-empty-title">
+                    {rows.length === 0 ? t('sets.empty.none') : t('sets.empty.noMatch')}
+                  </p>
                   <p className="yt-empty-sub">
                     {rows.length === 0 ? t('sets.empty.noneSub') : t('shared.trySearch')}
                   </p>
-                )}
-              </div>
-            ) : (
-              filtered.map((tmpl) => {
-                const open = openItems === tmpl.id;
-                return (
-                  <Fragment key={tmpl.id}>
-                    <div className="ytable-row" style={{ gridTemplateColumns: COLS }}>
-                      <div className="ytable-cell">
-                        <span className="yt-name-txt">{tmpl.name}</span>
-                      </div>
-                      <div className="ytable-cell ellipsis">
-                        <span className="muted">{tmpl.description ?? '—'}</span>
-                      </div>
-                      <div className="ytable-cell">
-                        <button
-                          type="button"
-                          className={`tmpl-metrics-toggle${open ? ' open' : ''}`}
-                          aria-expanded={open}
-                          onClick={() => setOpenItems((cur) => (cur === tmpl.id ? null : tmpl.id))}
-                        >
-                          {t('shared.metricsCount', { count: tmpl.item_count })}
-                          <svg className="tmpl-metrics-chev" viewBox="0 0 12 12" aria-hidden="true">
-                            <path
-                              d="M4 2l4 4-4 4"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.4"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                            />
-                          </svg>
-                        </button>
-                      </div>
-                      <div className="ytable-cell right">
-                        {authed && (
-                          <span className="ytable-actions">
-                            <IconButton title={t('sets.deleteSet')} danger onClick={() => setDeleting(tmpl)}>
-                              <TrashIcon />
-                            </IconButton>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    {open && (
-                      <div className="crud-collection">
-                        <CollectionEditor scope="template" scopeId={tmpl.id} canEdit={authed} />
-                      </div>
-                    )}
-                  </Fragment>
-                );
-              })
-            )}
+                </>
+              }
+            />
           </div>
         </>
       )}

@@ -16,7 +16,7 @@
 // interval and per-metric thresholds aren't exposed by the API, so those columns are intentionally
 // omitted rather than faked.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import { useRangeStore } from '../../store';
@@ -25,12 +25,13 @@ import type { CollectionTemplate, NodeDetail, NodeMetricEntry } from '../../type
 import { CollectionEditor } from '../CollectionEditor/CollectionEditor';
 import { MetricChart } from '../MetricChart/MetricChart';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
-import { SearchInput } from '../ui/TableToolbar';
-import {
-  DEFAULT_METRIC_FILTERS,
-  matchesMetric,
-  type MetricFilters,
-} from './tabFilters';
+import { ColumnFilterCell } from '../ui/ColumnFilterCell';
+import { ClearFilters } from '../ui/ClearFilters';
+import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { defaultFilters, type FilterState } from '../../lib/columnFilter';
+import { facetCounts } from '../../lib/filterCounts';
+import { buildPredicate } from '../../lib/filterPredicate';
+import { metricColumns } from './tabFilters';
 import { viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
 
@@ -177,7 +178,9 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const { t } = useTranslation('nodes');
   const [data, setData] = useState<Loaded | null>(null);
   // Client-side: one node has metrics in the dozens, and the tab already has them all.
-  const [filters, setFilters] = useState<MetricFilters>(DEFAULT_METRIC_FILTERS);
+  const columns = useMemo(() => metricColumns(t), [t]);
+  const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
+  const [sheet, setSheet] = useState(false);
   // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
   // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).
   const range = useRangeStore((s) => s.range);
@@ -217,7 +220,33 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const flowing = data?.metrics.filter((m) => m.status !== 'no_data') ?? [];
   const state: CollState = !hasSnmp ? 'none' : flowing.length > 0 ? 'ok' : 'failing';
 
-  const shownMetrics = (data?.metrics ?? []).filter((m) => matchesMetric(m, filters));
+  const allMetrics = data?.metrics ?? [];
+  const shownMetrics = allMetrics.filter(buildPredicate(columns, filters, Date.now()));
+  const metricCounts = Object.fromEntries(
+    columns
+      .filter((c) => c.filter.kind === 'enum')
+      .map((c) => [c.key, facetCounts(allMetrics, columns, filters, c.key, Date.now())]),
+  );
+  // ⚠️ Keyed by the column each control sits under, and untyped — exactly like `DataTable`'s
+  // `specs[c.key]` lookup. Rename a key in `tabFilters.ts` and the cell silently disappears.
+  const metricLabels: Record<string, string> = {
+    metric: t('collection.colMetric'),
+    status: t('collection.colStatus'),
+  };
+  const metricCell = (key: string) => {
+    const col = columns.find((c) => c.key === key);
+    if (!col) return <div className="dt-f empty" />;
+    return (
+      <ColumnFilterCell
+        spec={col.filter}
+        value={filters[key] ?? ''}
+        onChange={(next) => setFilters({ ...filters, [key]: next })}
+        counts={metricCounts[key]}
+        label={metricLabels[key] ?? key}
+        align={key === 'status' ? 'right' : undefined}
+      />
+    );
+  };
 
   return (
     <div className="nd-coll">
@@ -280,24 +309,28 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         <section>
           <div className="nd-section-head">
             <div className="nd-section-t">{t('collection.allMetrics')}</div>
-            <SearchInput
-              value={filters.q}
-              onChange={(v) => setFilters((f) => ({ ...f, q: v }))}
-              placeholder={t('collection.filter.searchPlaceholder')}
-              ariaLabel={t('collection.filter.searchAria')}
+            <MobileFilterButton
+              columns={columns}
+              filters={filters}
+              onOpen={() => setSheet(true)}
             />
-            <label className="nd-coll-toggle">
-              <input
-                type="checkbox"
-                checked={filters.flowingOnly}
-                onChange={(e) =>
-                  setFilters((f) => ({ ...f, flowingOnly: e.target.checked }))
-                }
-              />
-              {t('collection.filter.flowingOnly')}
-            </label>
+            <ClearFilters
+              columns={columns}
+              filters={filters}
+              onClear={() => setFilters(defaultFilters(columns))}
+            />
             <RangeControl value={range} onChange={setRange} />
           </div>
+          {sheet && (
+            <MobileFilterSheet
+              columns={columns}
+              labels={metricLabels}
+              filters={filters}
+              onChange={setFilters}
+              counts={metricCounts}
+              onClose={() => setSheet(false)}
+            />
+          )}
           <p className="nd-muted nd-coll-editnote">{t('collection.allMetricsNote')}</p>
           <div className="nd-coll-metrics">
             <div className="nd-coll-mhead">
@@ -305,6 +338,16 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
               <div className="nd-coll-mh">{t('collection.colShape')}</div>
               <div className="nd-coll-mh right">{t('collection.colLastValue')}</div>
               <div className="nd-coll-mh right">{t('collection.colStatus')}</div>
+            </div>
+            {/* Filter row under the header — same CSS grid rule as the header and every row, so
+                the three cannot drift (ADR-053 Inc.6 decision F). Shape and Last value carry empty
+                cells: one is derived from the metric name and the other is a live number, and
+                neither is a question this list can answer. */}
+            <div className="nd-coll-mfilters" role="group" aria-label={t('common:filter.row')}>
+              {metricCell('metric')}
+              <div className="dt-f empty" />
+              <div className="dt-f empty" />
+              {metricCell('status')}
             </div>
             {shownMetrics.map((m) => (
               <MetricRow key={m.metric} nodeId={node.id} entry={m} range={range} />

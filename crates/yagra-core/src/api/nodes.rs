@@ -264,14 +264,18 @@ pub(crate) struct NodePageQuery {
     pub limit: Option<i64>,
     /// Case-insensitive substring of the node's name or address.
     pub search: Option<String>,
-    /// Only nodes whose live display state is this one (`ok` | `warning` | `critical` |
-    /// `unknown` | `unreachable` | `maintenance`).
-    pub state: Option<NodeState>,
-    /// Only nodes of this monitoring kind (`meraki` | `url` | `dns` | `device`).
-    pub kind: Option<NodeKind>,
-    /// Only nodes whose **effective** poll pool is this one — the node's own pool when it sets
-    /// one, otherwise the nearest folder ancestor that does, otherwise the default pool. Filtering
-    /// on the stored column alone would miss every node that inherits, which is most of them.
+    /// Comma-separated display states (`ok` | `warning` | `critical` | `unknown` | `unreachable` |
+    /// `maintenance`); empty or absent means every state. An unknown token is rejected rather than
+    /// ignored.
+    pub state: Option<String>,
+    /// Comma-separated monitoring kinds (`meraki` | `url` | `dns` | `device`); empty or absent
+    /// means every kind.
+    pub kind: Option<String>,
+    /// Comma-separated **effective** poll pools — a node's own pool when it sets one, otherwise the
+    /// nearest folder ancestor that does, otherwise the default pool. Filtering on the stored column
+    /// alone would miss every node that inherits, which is most of them. Pools are named by the
+    /// operator, so there is no vocabulary to reject against: an unknown name simply matches
+    /// nothing.
     pub pool: Option<String>,
 }
 
@@ -291,18 +295,22 @@ pub(crate) struct NodePageQuery {
 /// resolvers every other surface asks. What that buys is that a row can never disagree with the
 /// filter that selected it. What it costs is the bound: past it the answer is a subset, and
 /// `NodePage::truncated` says so rather than letting "no matches" mean "none among the first N".
+///
+/// Each field is a **set**, empty meaning unfiltered (ADR-053 Inc.6). Selecting several states is
+/// how an operator asks the question this screen is for — "show me everything that is not healthy"
+/// is three states, and with one value per filter it was three separate looks at the tree.
 #[derive(Debug, Default, Clone)]
 pub(crate) struct NodeFilter {
-    pub state: Option<NodeState>,
-    pub kind: Option<NodeKind>,
-    pub pool: Option<String>,
+    pub state: Vec<NodeState>,
+    pub kind: Vec<NodeKind>,
+    pub pool: Vec<String>,
 }
 
 impl NodeFilter {
     /// Whether anything at all is set. `search` is handled separately — it is the one filter SQL
     /// can serve, so it narrows the scan rather than the survivors.
     pub(crate) fn is_set(&self) -> bool {
-        self.state.is_some() || self.kind.is_some() || self.pool.is_some()
+        !self.state.is_empty() || !self.kind.is_empty() || !self.pool.is_empty()
     }
 }
 
@@ -455,14 +463,7 @@ async fn list_nodes(
         .unwrap_or(100)
         .clamp(1, crate::repo::NODE_SEARCH_MAX);
     let term = q.search.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let filter = NodeFilter {
-        state: q.state,
-        kind: q.kind,
-        pool: q
-            .pool
-            .map(|p| p.trim().to_owned())
-            .filter(|p| !p.is_empty()),
-    };
+    let filter = parse_node_filter(q.state.as_deref(), q.kind.as_deref(), q.pool.as_deref())?;
     // Filter mode: any of search / state / kind / pool returns a single capped page (no keyset
     // cursor) — the tree narrows the fleet without loading it.
     if term.is_some() || filter.is_set() {
@@ -501,6 +502,64 @@ async fn list_nodes(
     }))
 }
 
+/// Parse the three set filters, in one place, for both the REST edge and the MCP tool.
+///
+/// Same spelling as every other set in the API (ADR-053): comma-separated, empty means unfiltered,
+/// an unknown token is a 400 rather than being dropped — a filter that silently widens is one an
+/// operator reads as "there are no Meraki nodes".
+///
+/// ⚠️ **`pool` is the exception, and it is not an oversight.** State and kind are closed
+/// vocabularies this build owns, so a token outside them is a mistake worth reporting. A pool is a
+/// name the operator invented; there is no list to check against, and refusing an unrecognised one
+/// would mean an empty pool could not be asked about.
+pub(crate) fn parse_node_filter(
+    state: Option<&str>,
+    kind: Option<&str>,
+    pool: Option<&str>,
+) -> Result<NodeFilter, ApiError> {
+    Ok(NodeFilter {
+        state: super::util::parse_set_with(
+            "invalid_state",
+            "state",
+            state,
+            |s| {
+                format!(
+                    "unknown node state {s:?}; must be one of: {}",
+                    NodeState::ALL
+                        .iter()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
+            NodeState::from_token,
+        )?,
+        kind: super::util::parse_set_with(
+            "invalid_kind",
+            "kind",
+            kind,
+            |s| {
+                format!(
+                    "unknown node kind {s:?}; must be one of: {}",
+                    NodeKind::ALL
+                        .iter()
+                        .map(|v| v.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            },
+            NodeKind::from_token,
+        )?,
+        pool: pool
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+            .map(str::to_owned)
+            .collect(),
+    })
+}
+
 /// Keep the candidates that match `filter`, asking the one resolver that owns each question.
 ///
 /// Each resolver is consulted only when its filter is set — a state filter must not pay for the
@@ -513,22 +572,23 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
     let ids: Vec<Uuid> = nodes.iter().map(|n| n.id.as_uuid()).collect();
     let node_ids: Vec<NodeId> = nodes.iter().map(|n| n.id).collect();
     let states = async {
-        match filter.state {
-            Some(_) => display_states(st, &node_ids).await,
-            None => HashMap::new(),
+        if filter.state.is_empty() {
+            HashMap::new()
+        } else {
+            display_states(st, &node_ids).await
         }
     };
     let kinds = async {
-        match (filter.kind, st.admin.as_ref()) {
-            (Some(_), Some(admin)) => node_kinds(admin, &ids).await,
+        match (filter.kind.is_empty(), st.admin.as_ref()) {
+            (false, Some(admin)) => node_kinds(admin, &ids).await,
             // Skeleton mode has no side tables, so every node is a plain device — which is what
             // `build_node_summaries` reports for the same rows, so the two still agree.
             _ => HashMap::new(),
         }
     };
     let pools = async {
-        match (filter.pool.as_deref(), st.admin.as_ref()) {
-            (Some(_), Some(admin)) => Some(super::util::pool_resolver(admin).await),
+        match (filter.pool.is_empty(), st.admin.as_ref()) {
+            (false, Some(admin)) => Some(super::util::pool_resolver(admin).await),
             _ => None,
         }
     };
@@ -536,29 +596,31 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
     nodes
         .into_iter()
         .filter(|n| {
-            if let Some(want) = filter.state {
+            // An empty set is "no filter", never "match nothing" — the same rule the SQL sets use
+            // (a NULL bind rather than an empty array, `analysis.rs::search_findings`).
+            if !filter.state.is_empty() {
                 let have = states
                     .get(&n.id)
                     .copied()
                     .unwrap_or(yagra_common::NodeState::Unknown);
-                if have != want {
+                if !filter.state.contains(&have) {
                     return false;
                 }
             }
-            if let Some(want) = filter.kind {
+            if !filter.kind.is_empty() {
                 let have = kinds
                     .get(&n.id.as_uuid())
                     .copied()
                     .unwrap_or(NodeKind::Device);
-                if have != want {
+                if !filter.kind.contains(&have) {
                     return false;
                 }
             }
-            if let Some(want) = filter.pool.as_deref() {
+            if !filter.pool.is_empty() {
                 let have = pools
                     .as_ref()
                     .map_or(yagra_bus::DEFAULT_POOL, |r| r.resolve_pool(n));
-                if have != want {
+                if !filter.pool.iter().any(|w| w == have) {
                     return false;
                 }
             }
@@ -1970,7 +2032,7 @@ mod tests {
         let st = public_state();
         let scope = super::super::scope::NodeScope::All;
         let want_unknown = NodeFilter {
-            state: Some(NodeState::Unknown),
+            state: vec![NodeState::Unknown],
             ..Default::default()
         };
         let (rows, _) = filtered_node_page(&st, &scope, "", &want_unknown, 100)
@@ -1978,7 +2040,7 @@ mod tests {
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1);
         let want_ok = NodeFilter {
-            state: Some(NodeState::Ok),
+            state: vec![NodeState::Ok],
             ..Default::default()
         };
         let (rows, _) = filtered_node_page(&st, &scope, "", &want_ok, 100)
@@ -2000,7 +2062,7 @@ mod tests {
             (NodeKind::Dns, 0),
         ] {
             let f = NodeFilter {
-                kind: Some(kind),
+                kind: vec![kind],
                 ..Default::default()
             };
             let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
@@ -2018,7 +2080,7 @@ mod tests {
         let st = public_state();
         let scope = super::super::scope::NodeScope::All;
         let f = NodeFilter {
-            pool: Some(yagra_bus::DEFAULT_POOL.to_owned()),
+            pool: vec![yagra_bus::DEFAULT_POOL.to_owned()],
             ..Default::default()
         };
         let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
@@ -2026,10 +2088,78 @@ mod tests {
             .expect("filter succeeds");
         assert_eq!(rows.len(), 1, "the demo node inherits the default pool");
         let f = NodeFilter {
-            pool: Some("tokyo".to_owned()),
+            pool: vec!["tokyo".to_owned()],
             ..Default::default()
         };
         let (rows, _) = filtered_node_page(&st, &scope, "", &f, 100)
+            .await
+            .expect("filter succeeds");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn the_three_node_filters_take_sets_and_an_empty_one_means_unfiltered() {
+        // The inversion that would be silent: an empty set read as "match nothing" makes the whole
+        // tree go blank the moment any *other* filter is set. Every set filter in this codebase
+        // spells "no filter" as empty, and this is where the node list agrees.
+        let none = parse_node_filter(None, None, None).expect("no filter parses");
+        assert!(!none.is_set());
+        let empty = parse_node_filter(Some(""), Some(""), Some("")).expect("empty parses");
+        assert!(
+            !empty.is_set(),
+            "an empty value is no filter, not an empty result"
+        );
+
+        let f = parse_node_filter(Some("warning,critical,unreachable"), None, None)
+            .expect("a set parses");
+        assert_eq!(
+            f.state,
+            vec![
+                NodeState::Warning,
+                NodeState::Critical,
+                NodeState::Unreachable
+            ]
+        );
+        assert!(f.is_set());
+    }
+
+    #[test]
+    fn an_unknown_state_or_kind_is_rejected_but_an_unknown_pool_is_not() {
+        // State and kind are closed vocabularies this build owns, so a token outside them is a
+        // mistake worth a 400 — dropping it would widen the answer and read as "there are no Meraki
+        // nodes". A pool is a name the operator invented, so there is nothing to check against and
+        // an unrecognised one must simply match nothing.
+        assert!(parse_node_filter(Some("melted"), None, None).is_err());
+        assert!(parse_node_filter(None, Some("toaster"), None).is_err());
+        // …and the message names the real vocabulary rather than a copy of it.
+        let err = parse_node_filter(Some("melted"), None, None).unwrap_err();
+        let body = format!("{err:?}");
+        assert!(body.contains("unreachable"), "{body}");
+
+        let f = parse_node_filter(None, None, Some(" tokyo , , osaka ")).expect("pools parse");
+        assert_eq!(f.pool, vec!["tokyo".to_owned(), "osaka".to_owned()]);
+    }
+
+    #[tokio::test]
+    async fn a_state_set_is_a_union_rather_than_an_intersection() {
+        // Two states must return the rows matching *either*. In skeleton mode everything displays
+        // `unknown`, so a set containing it matches and one that does not must not — which is also
+        // the assertion that catches a `contains` written as an `all`.
+        let st = public_state();
+        let scope = super::super::scope::NodeScope::All;
+        let with = NodeFilter {
+            state: vec![NodeState::Ok, NodeState::Unknown],
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, "", &with, 100)
+            .await
+            .expect("filter succeeds");
+        assert_eq!(rows.len(), 1);
+        let without = NodeFilter {
+            state: vec![NodeState::Ok, NodeState::Warning],
+            ..Default::default()
+        };
+        let (rows, _) = filtered_node_page(&st, &scope, "", &without, 100)
             .await
             .expect("filter succeeds");
         assert!(rows.is_empty());

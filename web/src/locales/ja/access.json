@@ -105,8 +105,16 @@
     "searchPlaceholder": "ユーザー名を検索…",
     "searchAria": "ユーザーを検索",
     "filterAria": "ロールで絞り込み",
+    "cols": {
+      "username": "ユーザー名",
+      "role": "ロール",
+      "status": "状態",
+      "kind": "アカウント種別"
+    },
     "filter": {
-      "all": "すべて",
+      "allStatuses": "有効・無効を問わない",
+      "allKinds": "すべてのアカウント種別",
+      "all": "すべてのロール",
       "admin": "管理者",
       "operator": "オペレーター",
       "viewer": "閲覧者"

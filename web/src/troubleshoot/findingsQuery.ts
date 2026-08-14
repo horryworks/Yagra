@@ -9,7 +9,9 @@ import type { SavedFinding, SavedFindingsQuery } from '../types/api';
 import type { ScopeValue } from '../components/ScopePicker/scope';
 import type { TFunction } from 'i18next';
 import {
+  decodeNumberRange,
   decodeSet,
+  encodeNumberRange,
   encodeSet,
   type ColumnFilterSpec,
   type FilterState,
@@ -45,6 +47,13 @@ export interface FindingFilters {
   q: string;
   /** Substring of the node's current name (`node_q`). */
   nodeQ: string;
+  /**
+   * The score interval, encoded as `min:max` — the `number` column kind's transport (ADR-053
+   * Inc.6). Kept as the encoded **string** rather than as two numbers so that it stays a primitive:
+   * it is a `useEffect` dependency, and a `{min, max}` object would compare by reference and refetch
+   * the first page on every render.
+   */
+  score: string;
   range: FindingRange;
   nodeId: string;
   groupId: string;
@@ -62,6 +71,7 @@ export const DEFAULT_FILTERS: FindingFilters = {
   severity: '',
   q: '',
   nodeQ: '',
+  score: '',
   range: '7d',
   nodeId: '',
   groupId: '',
@@ -91,6 +101,7 @@ export function queryFor(
   cursor: FindingCursor | null,
   nowMs: number,
 ): SavedFindingsQuery {
+  const score = decodeNumberRange(f.score);
   return {
     tool: f.tool || undefined,
     severity: f.severity || undefined,
@@ -98,6 +109,10 @@ export function queryFor(
     node_id: f.nodeId || undefined,
     node_q: f.nodeQ || undefined,
     group_id: f.groupId || undefined,
+    // `?? undefined` and not `|| undefined`: a bound of **zero** is a real filter on a score whose
+    // floor is zero, and `||` would drop it — the same trap the codec's own tests pin.
+    min_score: score.min ?? undefined,
+    max_score: score.max ?? undefined,
     since: sinceIso(f.range, nowMs),
     before: cursor?.before,
     before_id: cursor?.before_id,
@@ -152,6 +167,7 @@ export function isFiltered(f: FindingFilters): boolean {
     f.severity !== '' ||
     f.q !== '' ||
     f.nodeQ !== '' ||
+    f.score !== '' ||
     f.nodeId !== '' ||
     f.groupId !== '' ||
     f.range !== DEFAULT_FILTERS.range
@@ -171,8 +187,8 @@ export function isFiltered(f: FindingFilters): boolean {
  * That distinction is invisible from the screen — a user reported both as missing — so the fix was
  * to add the parameters rather than to explain the absence. The Node filter is *not* a duplicate of
  * the action row's ScopePicker: that selects exactly one node, and "every node called core-sw…" was
- * unsayable. **Score is still unfiltered**, and that one is a genuine gap: a numeric range is a
- * filter *kind* this row does not have yet (ADR-053 Inc.6).
+ * unsayable. **Score closed the last one in Inc.6**, and it needed a new filter *kind* rather than a
+ * new parameter shape — which is why it came a increment later than the other two.
  *
  * ⚠️ The range default is `7d`, not `all`, and that is a performance contract rather than a
  * preference — see `DEFAULT_FILTERS` above. `clientRangePresets` is deliberately not reused: these
@@ -221,6 +237,15 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
       containsSemantics: 'substring',
       placeholder: t('findings.cols.what'),
     },
+    // Scores run 0–100 and higher is worse, so the useful question is nearly always one-sided
+    // ("60 and up"). No `readNumber`: the bounds go to the server as `min_score`/`max_score`, and a
+    // browser-side pass would re-filter a keyset page the server already filtered.
+    score: {
+      kind: 'number',
+      min: 0,
+      max: 100,
+      step: 1,
+    },
     range: {
       kind: 'range',
       presets: FINDING_RANGES.map((r) => ({
@@ -240,6 +265,8 @@ export function stateFromFilters(f: FindingFilters): FilterState {
     tool: f.tool,
     node_q: f.nodeQ ? encodeCondition({ term: f.nodeQ, mode: 'contains', not: false }) : '',
     q: f.q ? encodeCondition({ term: f.q, mode: 'contains', not: false }) : '',
+    // Already the column's own encoding, so it passes straight through in both directions.
+    score: f.score,
     range: f.range,
   };
 }
@@ -261,6 +288,9 @@ export function filtersFromState(
     // has a regex or a negated form).
     q: decodeCondition(s.q ?? '').term,
     nodeQ: decodeCondition(s.node_q ?? '').term,
+    // Re-encoded rather than copied: a hand-typed URL may say `03:` or ` 3 : 5 `, and normalising
+    // here keeps the value stable as an effect dependency the way the set columns do.
+    score: encodeNumberRange(decodeNumberRange(s.score ?? '')),
     range: (FINDING_RANGES as readonly string[]).includes(range)
       ? (range as FindingRange)
       : DEFAULT_FILTERS.range,

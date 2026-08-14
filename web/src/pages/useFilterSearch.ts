@@ -12,7 +12,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../services/api';
 import { SEARCH_DEBOUNCE_MS, useDebouncedValue } from '../lib/useDebouncedValue';
-import { inventoryKey, inventoryQuery, type InventoryFilters } from './inventoryFilters';
+import { inventoryKey, inventoryQuery } from './inventoryFilters';
+import type { FilterState } from '../lib/columnFilter';
 import type { NodeSummary } from '../types/api';
 
 /** Cap on filter-mode results — one server page of matches (the server's max). Beyond this the
@@ -44,7 +45,7 @@ export interface FilterSearch {
   refetch: () => void;
 }
 
-export function useFilterSearch(filter: string, filters: InventoryFilters): FilterSearch {
+export function useFilterSearch(filter: string, filters: FilterState): FilterSearch {
   const [nodes, setNodes] = useState<NodeSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [appliedTerm, setAppliedTerm] = useState('');

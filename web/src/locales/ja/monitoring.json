@@ -45,7 +45,16 @@
       "name": "名前",
       "vendor": "ベンダー",
       "pollInterval": "ポーリング間隔",
-      "metricSets": "メトリクスセット"
+      "metricSets": "メトリクスセット",
+      "category": "役割"
+    },
+    "filter": {
+      "allCategories": "すべての役割",
+      "allIntervals": "間隔を問わない",
+      "interval": {
+        "inherited": "システム既定",
+        "overridden": "個別指定"
+      }
     },
     "empty": {
       "none": "プロファイルがありません",
@@ -248,7 +257,12 @@
         "searchPlaceholder": "アドレス・MAC・隣接ノードを検索…",
         "searchAria": "発見したエンドポイントを検索",
         "unmonitoredOnly": "未監視のものだけ",
-        "endpointNoun": "件のエンドポイント"
+        "endpointNoun": "件のエンドポイント",
+        "allStates": "監視の有無を問わない",
+        "state": {
+          "unmonitored": "未監視",
+          "monitored": "監視済み"
+        }
       }
     },
     "scanTitle": "サブネットをスキャン",
@@ -294,7 +308,12 @@
       "searchPlaceholder": "アドレスまたは機種を検索…",
       "searchAria": "ディスカバリ結果を検索",
       "reachableOnly": "応答したものだけ",
-      "candidateNoun": "件のアドレス"
+      "candidateNoun": "件のアドレス",
+      "allReach": "応答の有無を問わない",
+      "reach": {
+        "reachable": "応答あり",
+        "silent": "応答なし"
+      }
     }
   }
 }

@@ -67,6 +67,7 @@ describe('queryFor', () => {
       severity: 'warn',
       q: 'cpu',
       nodeQ: 'core-sw',
+      score: '60:',
       range: '24h',
       nodeId: 'node-7',
       groupId: 'group-3',
@@ -78,11 +79,27 @@ describe('queryFor', () => {
       node_id: 'node-7',
       node_q: 'core-sw',
       group_id: 'group-3',
+      min_score: 60,
+      max_score: undefined,
       since: '2026-08-01T12:00:00.000Z',
       before: '2026-08-02T01:00:00Z',
       before_id: 'f9',
       limit: PAGE_SIZE,
     });
+  });
+
+  it('sends a score bound of zero rather than dropping it', () => {
+    // `f.score || undefined` would be right for every other filter on this screen and wrong for
+    // this one: 0 is a real floor on a 0–100 score, and dropping it widens the search silently.
+    const q = queryFor({ ...DEFAULT_FILTERS, score: '0:20' }, null, NOW);
+    expect(q.min_score).toBe(0);
+    expect(q.max_score).toBe(20);
+  });
+
+  it('omits both bounds when the score column is unset', () => {
+    const q = queryFor(DEFAULT_FILTERS, null, NOW);
+    expect(q.min_score).toBeUndefined();
+    expect(q.max_score).toBeUndefined();
   });
 });
 
