@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.8 — the filter row waits to be asked for
+
 ### Improvements
 - **The column filter row is now hidden until you ask for it.** Press **Filter** in the toolbar
   above any list to show it, press it again to hide it; the choice is remembered across screens and
@@ -19,6 +21,12 @@
   than the space it saves — so opening a shared link that carries a filter shows the row that
   produced it. Use **Clear all filters** beside the button to get back. Nothing changed on a phone:
   the **Filter** button there still opens the same bottom sheet.
+- **The `Filter` and `Clear all filters` buttons are now the same height as the controls beside
+  them.** Both carried the 44px tap target meant for a phone, which is half again taller than the
+  30px pickers and search boxes they share a toolbar with. On a phone both keep the tap target,
+  since there the button is the only way to filter at all. `Filter` also dims while an active
+  filter is holding the row open, rather than only refusing the press — with nothing but a cursor
+  change it read as unresponsive.
 - **Nodes ▸ Discovery, "Seen on network": "Clear all filters (1)" no longer appears on the default
   view.** That table deliberately starts narrowed to unmonitored endpoints, and the button was
   counting that default as a filter the operator had set — so pressing it changed nothing. It now
