@@ -28,7 +28,7 @@ import { RangeControl, resolveRange, type Range } from './RangeControl';
 import { ColumnFilterCell } from '../ui/ColumnFilterCell';
 import { ClearFilters } from '../ui/ClearFilters';
 import {
-  MobileFilterButton,
+  FilterButton,
   MobileFilterSheet,
   useFilterRowVisible,
 } from '../ui/MobileFilterSheet';
@@ -185,7 +185,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
   const columns = useMemo(() => metricColumns(t), [t]);
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
   const [sheet, setSheet] = useState(false);
-  const filterRowVisible = useFilterRowVisible();
+  const filterRowVisible = useFilterRowVisible(columns, filters);
   // The shared window, not a local one: an operator who picks 24h on the Interfaces pane and then
   // opens a metric here expects the same 24 hours (`store.ts` persists it across the panes).
   const range = useRangeStore((s) => s.range);
@@ -314,7 +314,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
         <section>
           <div className="nd-section-head">
             <div className="nd-section-t">{t('collection.allMetrics')}</div>
-            <MobileFilterButton
+            <FilterButton
               columns={columns}
               filters={filters}
               onOpen={() => setSheet(true)}
@@ -349,7 +349,7 @@ export function CollectionTab({ node, canEdit }: { node: NodeDetail; canEdit: bo
                 cells: one is derived from the metric name and the other is a live number, and
                 neither is a question this list can answer. Not drawn on a phone, where four grid
                 tracks in ~366px leave each trigger too narrow to read its own summary —
-                `MobileFilterButton` above is the other half. */}
+                `FilterButton` above is the other half. */}
             {filterRowVisible && (
               <div className="nd-coll-mfilters" role="group" aria-label={t('common:filter.row')}>
                 {metricCell('metric')}

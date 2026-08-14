@@ -32,7 +32,7 @@ import { OverflowMenu } from '../components/ui/OverflowMenu';
 import { TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { channelFilters, routingRuleFilters } from './routingFilters';
 import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
@@ -237,7 +237,7 @@ function ChannelsSection({
     <section>
       <div className="table-toolbar">
         <h2 className="table-section-title">{t('routing.channels.title')}</h2>
-        <MobileFilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
+        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
         <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
         <TableSpacer />
         <ResultCount
@@ -599,7 +599,7 @@ function RulesSection({
     <section className="routing-rules-section">
       <div className="table-toolbar">
         <h2 className="table-section-title">{t('routing.rules.title')}</h2>
-        <MobileFilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
+        <FilterButton columns={filterCols} filters={filters} onOpen={() => setSheet(true)} />
         <ClearFilters columns={filterCols} filters={filters} onClear={clear} />
         <TableSpacer />
         <ResultCount

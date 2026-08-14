@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The mobile answer to the column filter row (ADR-053 decision 14).
+// The mobile answer to the column filter row (ADR-053 decision 14), plus — since Inc.9 — the
+// control that opens and closes that row on a desktop.
 //
 // `DataTable` renders cards on mobile, and a card list has no header row — so there is nowhere to
 // hang a filter row. The action row gets a `Filter (N)` button instead, and it opens the shared
@@ -10,6 +11,12 @@
 //     rather than re-typed. Every one of those was got wrong at least once before `Modal` existed.
 //   - **`FilterBody`**, the same component the desktop popover renders. A second mobile-only editor
 //     would drift, and mobile is where a drift goes unnoticed for a release or two.
+//
+// ⚠️ `FilterButton` is no longer mobile-only, which is why it is no longer called
+// `MobileFilterButton`. The `.mfilt-*` CSS prefix is deliberately left alone: it names the styles
+// this file owns, and renaming it would churn `MobileFilterSheet.css` and the Tier1 phone check
+// (`.mfilt-btn` is how `filterGeometry.spec.ts` asserts the sheet half of the either/or) for
+// nothing this change needs.
 
 import { useTranslation } from 'react-i18next';
 import { Modal } from './Modal';
@@ -21,6 +28,8 @@ import {
   type FilterableColumn,
 } from '../../lib/columnFilter';
 import { summaryIsActive } from '../../lib/filterSummary';
+import { filterRowForced, filterRowVisible } from '../../lib/filterRow';
+import { usePrefsStore } from '../../prefs';
 import { useViewportMode } from '../../lib/viewport';
 import './MobileFilterSheet.css';
 
@@ -90,39 +99,73 @@ export function MobileFilterSheet<T>({
   );
 }
 
-/** The action-row button that opens the sheet. Separate so a screen can place it in its own toolbar
- *  without pulling the sheet's state up before it is needed.
+/**
+ * The action-row control. **One button, two jobs, decided here rather than at ~40 call sites.**
  *
- * **It renders nothing on desktop, and that gate lives here rather than at the call site.**
- * `DataTable` shows the filter row exactly when it is *not* in card mode, off this same
- * `useViewportMode()`; the button is the other half of that either/or, so the two must not be
- * decided in two places. Shipped without this, every desktop screen showed `Filter (N)` in the
- * action row *and* the filter row underneath — two controls editing one state, which is the
- * coexistence this ADR set out to remove. A CSS `display:none` would have fixed the symptom while
- * leaving the decision in a second language, and 29 more screens are still to adopt this pattern.
+ *  - On a phone it opens the sheet, because a card list has no header to hang a row under.
+ *  - On a desktop it opens and closes the filter row (ADR-053 Inc.9). Before Inc.9 it rendered
+ *    nothing here at all, and the row was drawn unconditionally.
+ *
+ * The two are the same either/or they have always been, now with three states instead of two, and
+ * `useFilterRowVisible` below is still the other half. Shipping the desktop half at the call sites
+ * would repeat the failure decision 14 already paid for: `Filter (N)` and the row visible at once,
+ * two controls editing one state.
+ *
+ * ⚠️ **While a filter is narrowing the list the button cannot close the row** (`filterRowForced`).
+ * `aria-disabled` rather than `disabled`, so it stays focusable and its `title` is reachable from
+ * the keyboard — and the way out is the `ClearFilters` button that is guaranteed to be beside it,
+ * since both render off the same non-zero count.
  */
-export function MobileFilterButton<T>({
+export function FilterButton<T>({
   columns,
   filters,
+  baseline,
   onOpen,
 }: {
   columns: readonly FilterableColumn<T>[];
   filters: FilterState;
+  /** The state that counts as "nothing set", for a table whose own default narrows. See
+   *  `activeFilterCount`. Pass the same object to `useFilterRowVisible` and `ClearFilters`, or the
+   *  three will disagree about whether this list is filtered. */
+  baseline?: FilterState;
+  /** Opens the bottom sheet. Mobile-only — the desktop press toggles the row instead. */
   onOpen: () => void;
 }) {
   const { t } = useTranslation('common');
   const mode = useViewportMode();
-  const n = activeFilterCount(columns, filters);
-  if (mode !== 'mobile') return null;
+  const open = usePrefsStore((s) => s.filterRowOpen);
+  const toggle = usePrefsStore((s) => s.toggleFilterRow);
+  const n = activeFilterCount(columns, filters, baseline);
+  const label = n > 0 ? t('filter.buttonCount', { count: n }) : t('filter.button');
+
+  if (mode === 'mobile') {
+    return (
+      <button type="button" className={n > 0 ? 'mfilt-btn on' : 'mfilt-btn'} onClick={onOpen}>
+        {label}
+      </button>
+    );
+  }
+
+  const locked = filterRowForced(n);
+  const shown = filterRowVisible(mode, open, n);
   return (
-    <button type="button" className={n > 0 ? 'mfilt-btn on' : 'mfilt-btn'} onClick={onOpen}>
-      {n > 0 ? t('filter.sheetButtonCount', { count: n }) : t('filter.sheetButton')}
+    <button
+      type="button"
+      className={shown ? 'mfilt-btn on' : 'mfilt-btn'}
+      // Pressed, not checked: this reveals a region rather than selecting a value. Set only on
+      // desktop — the mobile press opens a dialog, which is not a toggle.
+      aria-pressed={shown}
+      aria-disabled={locked || undefined}
+      title={locked ? t('filter.lockedHint') : undefined}
+      onClick={locked ? undefined : toggle}
+    >
+      {label}
     </button>
   );
 }
 
 /**
- * The other half of that either/or: **a filter row or bar draws exactly when the button does not.**
+ * The other half of that either/or: **a filter row or bar draws exactly when this says so.**
  * Every surface that renders `ColumnFilterCell`s in a row asks this before rendering them.
  *
  * It lives here, twenty lines from the button, because the two are one decision — the same reason
@@ -136,7 +179,18 @@ export function MobileFilterButton<T>({
  * A hook rather than a wrapper component on purpose: these rows *are* CSS grids that share a
  * `gridTemplateColumns` with their header, so an element wrapped around one breaks the alignment
  * the row exists to keep.
+ *
+ * ⚠️ **It takes the columns and the current values** (Inc.9) so it can answer "is anything
+ * narrowing this list", which forces the row open. Passing a count in from each caller would put
+ * that arithmetic back in seven places; the rule itself is `lib/filterRow.ts`, where a test runs.
  */
-export function useFilterRowVisible(): boolean {
-  return useViewportMode() !== 'mobile';
+export function useFilterRowVisible<T>(
+  columns: readonly FilterableColumn<T>[],
+  filters: FilterState,
+  /** See `FilterButton.baseline` — the two must be given the same object. */
+  baseline?: FilterState,
+): boolean {
+  const mode = useViewportMode();
+  const open = usePrefsStore((s) => s.filterRowOpen);
+  return filterRowVisible(mode, open, activeFilterCount(columns, filters, baseline));
 }

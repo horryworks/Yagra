@@ -44,12 +44,17 @@ export const test = base.extend<Fixtures>({
   // it automatic means a spec cannot accidentally opt out of the thing that makes it a test.
   mock: [
     async ({ page, mockConfig }, use) => {
+      // ⚠️ `filterRowOpen: true` is a deliberate departure from the shipped default, which is
+      // *closed* (ADR-053 Inc.9). Every filter spec here is about what the row contains and where
+      // it sits, not about whether it appears — making twenty tests press a button first would test
+      // the button twenty times and the geometry once. The default itself is asserted, in both
+      // directions, by `tests/ui/filterToggle.spec.ts`, which seeds it closed.
       await page.addInitScript(() => {
         localStorage.setItem('yagra_token', 'ymock-token');
         localStorage.setItem(
           'yagra_prefs',
           JSON.stringify({
-            state: { theme: 'dark', language: 'en', uiMode: 'desktop' },
+            state: { theme: 'dark', language: 'en', uiMode: 'desktop', filterRowOpen: true },
             version: 0,
           }),
         );

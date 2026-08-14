@@ -26,7 +26,7 @@ import { interfaceColumns } from './tabFilters';
 import { ColumnFilterCell } from '../ui/ColumnFilterCell';
 import { ClearFilters } from '../ui/ClearFilters';
 import {
-  MobileFilterButton,
+  FilterButton,
   MobileFilterSheet,
   useFilterRowVisible,
 } from '../ui/MobileFilterSheet';
@@ -75,7 +75,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
-  const filterRowVisible = useFilterRowVisible();
+  const filterRowVisible = useFilterRowVisible(columns, filters);
 
   const shown = useMemo(
     () => rows.filter(buildPredicate(columns, filters, Date.now())),
@@ -168,7 +168,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <b>{up}</b> {t('interfaces.ofUp', { total: rows.length })}
           <span className="nd-if-summary-hint">{t('interfaces.sparklineHint')}</span>
         </span>
-        <MobileFilterButton columns={columns} filters={filters} onOpen={() => setSheet(true)} />
+        <FilterButton columns={columns} filters={filters} onOpen={() => setSheet(true)} />
         <ClearFilters
           columns={columns}
           filters={filters}
@@ -202,7 +202,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             const enforces in TS). The two throughput columns are pictures, not values, so they
             carry an empty cell rather than a control that could not mean anything.
 
-            Not drawn on a phone — `MobileFilterButton` above is its other half. It shipped without
+            Not drawn on a phone — `FilterButton` above is its other half. It shipped without
             that gate and was the worst-looking of the four: the row is `position: sticky` at
             `top: 32px`, the height of the header, and mobile hides the header — so it pinned itself
             halfway down the scroller and the interface rows ran through the gap above it. */}

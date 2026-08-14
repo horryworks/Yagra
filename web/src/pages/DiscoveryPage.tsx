@@ -37,7 +37,7 @@ import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableTo
 import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import {
-  MobileFilterButton,
+  FilterButton,
   MobileFilterSheet,
   useFilterRowVisible,
 } from '../components/ui/MobileFilterSheet';
@@ -92,7 +92,6 @@ interface RowState {
 export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
-  const filterRowVisible = useFilterRowVisible();
   const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
   const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -110,6 +109,7 @@ export function DiscoveryPage() {
   const candCols = useMemo(() => candidateColumns(t), [t]);
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(candCols));
   const [candSheet, setCandSheet] = useState(false);
+  const filterRowVisible = useFilterRowVisible(candCols, filters);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -304,7 +304,7 @@ export function DiscoveryPage() {
       {candidates.length > 0 && (
         <Card title={t('discovery.resultsTitle')} className="disco-results-card">
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={candCols}
               filters={filters}
               onOpen={() => setCandSheet(true)}
@@ -348,7 +348,7 @@ export function DiscoveryPage() {
                 ⚠️ A reachability control was put in that 28px track and shipped unusable, which is
                 what a filter row costs when nothing renders it in a test. It is gone rather than
                 relocated; `discoveryFilters.ts` says why.
-                Not drawn on a phone (`MobileFilterButton` is the other half): mobile re-templates
+                Not drawn on a phone (`FilterButton` is the other half): mobile re-templates
                 `.disco-head` and `.disco-row` to fixed px + `width: max-content` and scrolls them
                 sideways, and it named two of the three grids — so this row stayed at container
                 width and every control sat somewhere other than under its column. */}
@@ -491,7 +491,6 @@ function SeenOnNetworkCard({
   creds: CredentialSummary[];
 }) {
   const { t } = useTranslation('monitoring');
-  const filterRowVisible = useFilterRowVisible();
   const [page, setPage] = useState<DiscoveredEndpointPage | null>(null);
   const [rows, setRows] = useState<Record<string, { profile_id: string; credential_id: string }>>(
     {},
@@ -510,6 +509,10 @@ function SeenOnNetworkCard({
   );
   const [epFilters, setEpFilters] = useState<FilterState>(epDefaults);
   const [epSheet, setEpSheet] = useState(false);
+  // ⚠️ `epDefaults` as the baseline, on all three controls. Without it `activeFilterCount` reports 1
+  // before the operator has touched anything — the narrowing default counts as a filter — which
+  // since Inc.9 would force this row open forever and lock the toggle meant to close it.
+  const filterRowVisible = useFilterRowVisible(epCols, epFilters, epDefaults);
 
   const load = useCallback(() => {
     api
@@ -564,9 +567,10 @@ function SeenOnNetworkCard({
       </p>
       {all.length > 0 && (
         <TableToolbar>
-          <MobileFilterButton
+          <FilterButton
             columns={epCols}
             filters={epFilters}
+            baseline={epDefaults}
             onOpen={() => setEpSheet(true)}
           />
           <ClearFilters
@@ -575,6 +579,11 @@ function SeenOnNetworkCard({
             // Back to *this table's* default, not to the empty state: "unmonitored only" is the
             // view an operator expects to land on here, and a reset that showed the imported ones
             // would look like the button had done something else.
+            //
+            // …which is also why `baseline` is the same object: counted against the spec defaults
+            // this button read "Clear all filters (1)" on a view nobody had filtered, and pressing
+            // it changed nothing on screen.
+            baseline={epDefaults}
             onClear={() => setEpFilters(epDefaults)}
           />
           <TableSpacer />

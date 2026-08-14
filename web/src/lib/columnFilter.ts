@@ -241,16 +241,26 @@ export function isAnyFiltered<T>(
   return isFiltered(filled, defaults);
 }
 
-/** How many columns are narrowing — the `フィルタ (N)` badge on mobile, and the clear-all affordance.
+/** How many columns are narrowing — the `フィルタ (N)` badge, the clear-all affordance, and (since
+ *  ADR-053 Inc.9) whether the filter row is forced open and its toggle locked.
  *
  *  ⚠️ One column counts once however many dimensions its condition carries. The Events toolbar this
  *  replaced counted `regex` as a filter of its own, so a regex search read as two. A mode is not a
- *  filter. */
+ *  filter.
+ *
+ *  ⚠️ **`baseline` is not decoration.** A table whose *own* default narrows — Discovery's endpoints
+ *  list ships `monitored: 'unmonitored'` — otherwise reports 1 before the operator has touched
+ *  anything, which since Inc.9 would force its filter row open permanently and lock the toggle that
+ *  closes it. Pass the screen's own defaults object there; every other caller wants the spec
+ *  defaults, which is what omitting it gives. */
 export function activeFilterCount<T>(
   columns: readonly FilterableColumn<T>[],
   state: FilterState,
+  baseline?: FilterState,
 ): number {
-  return columns.filter((c) => (state[c.key] ?? '') !== defaultValue(c.filter)).length;
+  return columns.filter(
+    (c) => (state[c.key] ?? '') !== (baseline?.[c.key] ?? defaultValue(c.filter)),
+  ).length;
 }
 
 /** Column keys whose filter is not at its default. */

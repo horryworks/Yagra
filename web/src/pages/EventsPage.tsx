@@ -16,7 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable } from '../components/ui/DataTable';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { eventColumns, eventCard } from '../components/EventLog/eventColumns';
@@ -101,7 +101,7 @@ export function EventsPage() {
           onChange={setNode}
           placeholder={t('nav:nodes.all')}
         />
-        <MobileFilterButton
+        <FilterButton
           columns={filterCols}
           filters={filters}
           onOpen={() => {

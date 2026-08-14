@@ -48,7 +48,7 @@ import { DataTable, type Column } from '../components/ui/DataTable';
 import { sortRows, type SortState } from '../lib/tableSort';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { DEFAULT_TOKEN_SORT, tokenFilters, tokenSortValues } from './apiTokenFilters';
 import { TimeCell } from '../components/ui/tableCells';
@@ -555,7 +555,7 @@ export function ApiTokensPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

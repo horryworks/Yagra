@@ -25,7 +25,7 @@ import type {
 import { DataTable, type Column } from '../ui/DataTable';
 import { TableToolbar, TableSpacer } from '../ui/TableToolbar';
 import { ClearFilters } from '../ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { useClientFilters } from '../../lib/useClientFilters';
 import { neighborFilters } from './tabFilters';
 import {
@@ -168,7 +168,7 @@ export function NeighborsTab({ node }: Props) {
             )}
           </div>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

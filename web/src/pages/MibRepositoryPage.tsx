@@ -37,7 +37,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { TrashIcon } from '../components/ui/icons';
@@ -294,7 +294,7 @@ export function MibRepositoryPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

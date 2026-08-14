@@ -35,7 +35,7 @@ import { Card } from '../components/ui/Card';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { TimeCell } from '../components/ui/tableCells';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
@@ -243,7 +243,7 @@ export function SavedFindingsPage() {
         <>
           <TableToolbar>
             <ScopePicker value={scope} onChange={pickScope} className="ts-sf-scope" />
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={rowFilters}
               onOpen={() => setSheet(true)}

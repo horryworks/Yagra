@@ -22,7 +22,7 @@ import { Badge, type Tone } from '../components/ui/Badge';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { scheduleFilters } from './scheduleFilters';
 import { TimeCell } from '../components/ui/tableCells';
@@ -194,7 +194,7 @@ export function ScheduledPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

@@ -31,7 +31,7 @@ import { TextInput, FieldHint } from '../components/ui/Field';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { pollerFilters } from './pollerFilters';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
@@ -719,7 +719,7 @@ export function PollersPage() {
           )}
 
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

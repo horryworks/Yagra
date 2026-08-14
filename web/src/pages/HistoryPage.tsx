@@ -23,7 +23,7 @@ import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { AlertSubjectName } from '../widgets/AlertSubjectName';
 import { AlertWhatText } from '../widgets/AlertWhatText';
@@ -238,7 +238,7 @@ export function HistoryPage() {
           "Which node" is what ScopePicker answers instead. */}
       <TableToolbar>
         <ScopePicker value={scope} onChange={onScope} className="table-filter" />
-        <MobileFilterButton
+        <FilterButton
           columns={filterCols}
           filters={rowFilters}
           onOpen={() => setSheet(true)}

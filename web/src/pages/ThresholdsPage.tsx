@@ -37,7 +37,7 @@ import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import {
@@ -365,7 +365,7 @@ export function ThresholdsPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={rowFilters}
               onOpen={() => setSheet(true)}

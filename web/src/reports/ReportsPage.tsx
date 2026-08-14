@@ -13,7 +13,7 @@ import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import {
   definitionFilters,
@@ -324,7 +324,7 @@ export function ReportsPage() {
       {tab === 'saved' && (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={runF.filterCols}
               filters={runF.filters}
               onOpen={() => setSheet('saved')}
@@ -373,7 +373,7 @@ export function ReportsPage() {
       {tab === 'templates' && (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={defF.filterCols}
               filters={defF.filters}
               onOpen={() => setSheet('templates')}
@@ -430,7 +430,7 @@ export function ReportsPage() {
       {tab === 'schedules' && (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={schedF.filterCols}
               filters={schedF.filters}
               onOpen={() => setSheet('schedules')}

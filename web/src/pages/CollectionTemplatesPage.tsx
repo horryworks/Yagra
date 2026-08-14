@@ -23,7 +23,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
 import { setColumns, setFilterLabels, metricSetFilters } from './monitoringConfigFilters';
@@ -143,7 +143,7 @@ export function CollectionTemplatesPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

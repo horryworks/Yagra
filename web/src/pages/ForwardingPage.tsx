@@ -46,7 +46,7 @@ import { TextInput, TextArea, Select } from '../components/ui/Field';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
@@ -690,7 +690,7 @@ export function ForwardingPage() {
           )}
 
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

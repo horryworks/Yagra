@@ -13,7 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import {
   defaultFilters,
   isAnyFiltered,
@@ -170,7 +170,7 @@ export function AnalysisRuns({ empty, filterable }: { empty?: string; filterable
       {filterable && (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={columns}
               filters={filters}
               onOpen={() => setSheet(true)}

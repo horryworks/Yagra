@@ -10,6 +10,20 @@
 
 ## Unreleased
 
+### Improvements
+- **The column filter row is now hidden until you ask for it.** Press **Filter** in the toolbar
+  above any list to show it, press it again to hide it; the choice is remembered across screens and
+  across reloads. It reached every list in v0.2.7, which meant it also occupied a band on the many
+  screens nobody was filtering. **While a filter is active the row stays visible and the button
+  will not hide it** — a list with rows missing and no visible control responsible for it is worse
+  than the space it saves — so opening a shared link that carries a filter shows the row that
+  produced it. Use **Clear all filters** beside the button to get back. Nothing changed on a phone:
+  the **Filter** button there still opens the same bottom sheet.
+- **Nodes ▸ Discovery, "Seen on network": "Clear all filters (1)" no longer appears on the default
+  view.** That table deliberately starts narrowed to unmonitored endpoints, and the button was
+  counting that default as a filter the operator had set — so pressing it changed nothing. It now
+  appears only once you actually change something.
+
 ### Bug Fixes
 - **Five screens drew a desktop column-filter row on a phone, on top of the `Filter` button that is
   supposed to replace it.** On the node detail **Interfaces** tab the row also pinned itself

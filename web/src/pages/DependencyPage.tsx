@@ -26,7 +26,7 @@ import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { useClientFilters } from '../lib/useClientFilters';
 import { dependencyFilters } from './dependencyFilters';
 import { EntityName } from '../components/ui/EntityName';
@@ -352,7 +352,7 @@ export function DependencyPage() {
         <>
           {mode === 'derived' && <p className="muted">{t('dependency.editHiddenInDerived')}</p>}
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

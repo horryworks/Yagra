@@ -24,7 +24,7 @@ import { Badge } from '../../../components/ui/Badge';
 import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { DataTable, type Column } from '../../../components/ui/DataTable';
 import { EntityName } from '../../../components/ui/EntityName';
-import { MobileFilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
 import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
 import { Donut, type DonutSegment } from '../../../dashboard/primitives/Donut';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
@@ -169,7 +169,7 @@ export function RuleGapBody({ findings }: ReportBodyProps) {
           moves filtering, not ordering — and a fourth track in `.dt-filters` would slide the filter
           cells out from under their headers (決定 L). */}
       <TableToolbar>
-        <MobileFilterButton
+        <FilterButton
           columns={filterCols}
           filters={filters}
           onOpen={() => setSheet(true)}

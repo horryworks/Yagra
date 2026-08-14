@@ -27,7 +27,7 @@ import { ColumnFilterCell } from '../components/ui/ColumnFilterCell';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
 import {
-  MobileFilterButton,
+  FilterButton,
   MobileFilterSheet,
   useFilterRowVisible,
 } from '../components/ui/MobileFilterSheet';
@@ -47,7 +47,6 @@ const COLS = '1.8fr 1fr 120px 130px 96px';
 export function ProfilesPage() {
   const { t } = useTranslation('monitoring');
   const authed = useAuthStore((s) => s.authed);
-  const filterRowVisible = useFilterRowVisible();
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
   const [unavailable, setUnavailable] = useState(false);
@@ -93,6 +92,10 @@ export function ProfilesPage() {
   const allFilterCols = useMemo(() => [...colFilters, ...catCols], [colFilters, catCols]);
   const [filters, setFilters] = useState<FilterState>({});
   const [sheet, setSheet] = useState(false);
+  // ⚠️ `colFilters`, not `allFilterCols`: each surface answers for the columns it draws. A category
+  // filter is narrowing the list through the `FilterBar` below, which shows itself for exactly that
+  // reason — forcing *this* row open too would reveal a control that is not the one responsible.
+  const filterRowVisible = useFilterRowVisible(colFilters, filters);
 
   const filtered = useMemo(
     () => rows.filter(buildPredicate(allFilterCols, filters, Date.now())),
@@ -155,7 +158,7 @@ export function ProfilesPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={allFilterCols}
               filters={filters}
               onOpen={() => setSheet(true)}

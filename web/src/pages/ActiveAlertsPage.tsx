@@ -26,7 +26,7 @@ import { Button } from '../components/ui/Button';
 import { ResultCount, TableSpacer, TableToolbar } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterBar } from '../components/ui/FilterBar';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../lib/columnFilter';
 import { facetCounts } from '../lib/filterCounts';
 import { RcaModal } from '../components/Rca/RcaModal';
@@ -151,7 +151,7 @@ export function ActiveAlertsPage() {
           return (
             <>
               <TableToolbar>
-                <MobileFilterButton columns={cols} filters={filters} onOpen={() => setSheet(true)} />
+                <FilterButton columns={cols} filters={filters} onOpen={() => setSheet(true)} />
                 <ClearFilters
                   columns={cols}
                   filters={filters}

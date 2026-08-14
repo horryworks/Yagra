@@ -14,7 +14,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { NodeDetail } from '../../types/api';
 import { DataTable } from '../ui/DataTable';
-import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { TableToolbar, TableSpacer, ResultCount } from '../ui/TableToolbar';
 import { useEntityNames } from '../ui/EntityName';
 import { eventColumns, eventCard } from '../EventLog/eventColumns';
@@ -88,7 +88,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
         </Link>
       </div>
       <TableToolbar>
-        <MobileFilterButton
+        <FilterButton
           columns={filterCols}
           filters={filters}
           onOpen={() => {

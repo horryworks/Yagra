@@ -5,7 +5,7 @@
 // @tanstack/react-virtual and calls `onReachEnd` when the user nears the bottom so the
 // parent can load the next page.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
@@ -13,7 +13,7 @@ import { useViewportMode } from '../../lib/viewport';
 import { nextSort, type SortState } from '../../lib/tableSort';
 import { ColumnFilterCell } from './ColumnFilterCell';
 import { useFilterRowVisible } from './MobileFilterSheet';
-import type { ColumnFilterSpec, FilterState } from '../../lib/columnFilter';
+import { filterableColumns, type ColumnFilterSpec, type FilterState } from '../../lib/columnFilter';
 import { minTableWidth } from '../../lib/tableWidth';
 import './DataTable.css';
 
@@ -108,6 +108,10 @@ interface Props<T> {
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
 const CARD_PX = 110; // default estimate for a mobile card before it is measured
+/** Stands in for `filters` on a table that has none. A module constant rather than an inline `{}`
+ *  so the identity is stable — `useFilterRowVisible` only reads it, but an inline object here would
+ *  be a new value every render for anything that later memoizes on it. */
+const EMPTY_FILTERS: FilterState = {};
 
 export function DataTable<T>({
   rows,
@@ -174,14 +178,15 @@ export function DataTable<T>({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedKey]);
 
-  // The filter row draws only when the caller asked for it AND some column opted in — so the ~17
-  // existing call sites are unchanged down to the DOM. The mobile half of the condition is
-  // `useFilterRowVisible()` rather than `!cardMode`, so that this table and the five hand-rolled
-  // filter rows elsewhere read the *same* decision instead of five look-alikes (four of which had
-  // no decision at all — see `MobileFilterSheet.tsx`). Identical value, one source.
-  const filterRowVisible = useFilterRowVisible();
-  const showFilters =
-    filterRowVisible && !!filters && !!onFiltersChange && columns.some((c) => c.filter);
+  // The filter row draws only when the caller asked for it AND some column opted in AND the shared
+  // decision says the row is showing. That last half is `useFilterRowVisible()` rather than a local
+  // `!cardMode`, so this table and the five hand-rolled filter rows elsewhere read the *same*
+  // decision instead of six look-alikes (four of which had no decision at all — see
+  // `MobileFilterSheet.tsx`). Since Inc.9 it also carries the desktop open/closed state, so a
+  // second answer here would leave the row drawn on a screen whose toggle says it is closed.
+  const filterCols = useMemo(() => filterableColumns(columns), [columns]);
+  const rowVisible = useFilterRowVisible(filterCols, filters ?? EMPTY_FILTERS);
+  const showFilters = rowVisible && !!filters && !!onFiltersChange && filterCols.length > 0;
 
   const items = virtualizer.getVirtualItems();
   // Fire the page-load callback once the last virtual row is within view of the end.

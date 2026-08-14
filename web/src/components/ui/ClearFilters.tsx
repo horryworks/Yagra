@@ -30,11 +30,16 @@ interface Props<T> {
    *  picker, say. Counted here, and `onClear` is expected to clear it too: an operator who presses
    *  "clear all filters" and is still looking at a filtered list has been told something untrue. */
   extraActive?: boolean;
+  /** The state `onClear` resets to, when that is not the spec defaults. Discovery's endpoints table
+   *  is the only one: its default narrows (`monitored: 'unmonitored'`), so without this the button
+   *  offered to clear a filter the operator never set — and, on the default view, clearing did not
+   *  change what was on screen. Same object as `FilterButton.baseline` / `useFilterRowVisible`. */
+  baseline?: FilterState;
 }
 
-export function ClearFilters<T>({ columns, filters, onClear, extraActive }: Props<T>) {
+export function ClearFilters<T>({ columns, filters, onClear, extraActive, baseline }: Props<T>) {
   const { t } = useTranslation('common');
-  const count = activeFilterCount(columns, filters) + (extraActive ? 1 : 0);
+  const count = activeFilterCount(columns, filters, baseline) + (extraActive ? 1 : 0);
   if (count === 0) return null;
   return (
     <button type="button" className="clear-filters" onClick={onClear}>

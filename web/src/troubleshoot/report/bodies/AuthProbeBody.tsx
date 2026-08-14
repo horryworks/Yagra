@@ -21,7 +21,7 @@ import { Card } from '../../../components/ui/Card';
 import { RankedBars, type RankedRow } from '../../../dashboard/primitives/RankedBars';
 import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { FilterBar } from '../../../components/ui/FilterBar';
-import { MobileFilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
 import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
 import { facetCounts } from '../../../lib/filterCounts';
@@ -117,7 +117,7 @@ export function AuthProbeBody({ findings }: ReportBodyProps) {
       {/* ⚠️ The action row is gated on `findings`, never on `list`: filtering to zero would
           otherwise take the controls that undo the filter away with the rows. */}
       <TableToolbar>
-        <MobileFilterButton
+        <FilterButton
           columns={filterCols}
           filters={filters}
           onOpen={() => setSheet(true)}

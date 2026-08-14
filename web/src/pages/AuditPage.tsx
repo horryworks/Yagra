@@ -25,7 +25,7 @@ import { Button } from '../components/ui/Button';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { filterableColumns, type FilterState } from '../lib/columnFilter';
 import { TimeCell, HttpStatus, MethodChip, Monogram } from '../components/ui/tableCells';
 import { DownloadIcon } from '../components/ui/icons';
@@ -180,7 +180,7 @@ export function AuditPage() {
       ) : (
         <>
           <TableToolbar>
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={rowFilters}
               onOpen={() => setSheet(true)}

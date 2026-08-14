@@ -45,6 +45,14 @@ interface PrefsStore {
   /** Collapse the Nodes page inventory-tree pane to a slim rail so the node detail uses the full
    *  width (desktop only; on mobile the pane switcher governs). */
   nodesPaneCollapsed: boolean;
+  /** Whether the column filter row is open on desktop (ADR-053 Inc.9). **Closed by default** — the
+   *  row reached every list in Inc.0–8 and then occupied a band on screens nobody was filtering.
+   *
+   *  One global boolean rather than a per-screen map, and the reason it *can* be one is
+   *  `lib/filterRow.ts`: a list that is actually being narrowed shows its row regardless, so there
+   *  is no "closed but filtering" state anyone has to remember. A screen with several tables
+   *  (Reports has three) therefore opens and closes them together, which is the accepted cost. */
+  filterRowOpen: boolean;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -58,6 +66,8 @@ interface PrefsStore {
   setUiMode: (mode: UiMode) => void;
   /** Toggle the Nodes inventory pane between full and a slim rail (persisted). */
   toggleNodesPane: () => void;
+  /** Show or hide the desktop column filter row (global + persisted; see [`filterRowOpen`]). */
+  toggleFilterRow: () => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -70,6 +80,9 @@ export const usePrefsStore = create<PrefsStore>()(
       throughputScale: 'fit',
       uiMode: 'auto',
       nodesPaneCollapsed: false,
+      // Absent from every `yagra_prefs` written before this shipped. `persist` merges the stored
+      // object over the initial state, so a missing key reads as `false` and no migration is owed.
+      filterRowOpen: false,
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
       setLanguage: (language) => set({ language }),
@@ -86,6 +99,7 @@ export const usePrefsStore = create<PrefsStore>()(
         set((s) => ({ throughputScale: s.throughputScale === 'fit' ? 'capacity' : 'fit' })),
       setUiMode: (uiMode) => set({ uiMode }),
       toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
+      toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

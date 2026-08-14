@@ -15,7 +15,7 @@ import { protoName, portLabel } from '../../lib/flowLabels';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterBar } from '../ui/FilterBar';
-import { MobileFilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
 import { defaultFilters, type FilterState } from '../../lib/columnFilter';
 import {
   chartIgnoresFilters,
@@ -244,7 +244,7 @@ export function FlowTab({ node }: { node: NodeDetail }) {
             `space-between` and needs a left-hand child that always exists, or the range control
             walks to the left edge whenever nothing is filtered. */}
         <div className="nd-flow-toolbar-actions">
-          <MobileFilterButton
+          <FilterButton
             columns={filterCols}
             filters={filters}
             onOpen={() => setSheet(true)}

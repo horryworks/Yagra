@@ -48,7 +48,7 @@ import {
 } from './inventoryFilters';
 import { FilterBar } from '../components/ui/FilterBar';
 import { ClearFilters } from '../components/ui/ClearFilters';
-import { MobileFilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { defaultFilters, type FilterState } from '../lib/columnFilter';
 import { useLazyGroupMembers } from './useLazyGroupMembers';
 import { addMenuTarget } from './nodesAddMenu';
@@ -645,7 +645,7 @@ export function NodesPage() {
               squeezed to nothing there. The same mistake as putting a filter in Discovery's 28px
               select column: the container's size was never checked. */}
           <div className="nodes-pane-filters">
-            <MobileFilterButton
+            <FilterButton
               columns={filterCols}
               filters={inventoryFilters}
               onOpen={() => setFilterSheet(true)}

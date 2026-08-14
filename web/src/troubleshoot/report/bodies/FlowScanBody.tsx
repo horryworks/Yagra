@@ -26,7 +26,7 @@ import { ClearFilters } from '../../../components/ui/ClearFilters';
 import { DataTable, type Column } from '../../../components/ui/DataTable';
 import { EntityName } from '../../../components/ui/EntityName';
 import { Select } from '../../../components/ui/Field';
-import { MobileFilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
+import { FilterButton, MobileFilterSheet } from '../../../components/ui/MobileFilterSheet';
 import { ResultCount, TableSpacer, TableToolbar } from '../../../components/ui/TableToolbar';
 import { defaultFilters, isAnyFiltered, type FilterState } from '../../../lib/columnFilter';
 import { facetCounts } from '../../../lib/filterCounts';
@@ -168,7 +168,7 @@ export function FlowScanBody({ findings }: ReportBodyProps) {
       )}
       {/* The action row. Everything that narrows the table now lives under its own header. */}
       <TableToolbar>
-        <MobileFilterButton
+        <FilterButton
           columns={filterCols}
           filters={filters}
           onOpen={() => setSheet(true)}
