@@ -48,4 +48,16 @@ export default tseslint.config(
       globals: globals.node,
     },
   },
+  // The Playwright suite (ADR-052). Node runtime, plus the browser globals the snippets passed to
+  // `page.evaluate()` run against — those bodies are TypeScript here but execute in the page.
+  // Without this block `tests/` was simply not linted, which is not the same as being clean.
+  {
+    files: ['tests/**/*.ts'],
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node, ...globals.browser },
+    },
+  },
 );

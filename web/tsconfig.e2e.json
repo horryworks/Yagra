@@ -1,0 +1,12 @@
+{
+  // Type-checks the Playwright suite, which `tsconfig.json` deliberately does not see
+  // (`include: ["src"]`). Kept separate so `npm run build`'s `tsc --noEmit` stays a check on the
+  // shipped bundle only, and so the Node types the test harness needs cannot leak into `src` —
+  // where `@types/node` would silently retype `setTimeout` and change what compiles.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["tests", "playwright.config.ts"]
+}

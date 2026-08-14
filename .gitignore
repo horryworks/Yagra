@@ -10,6 +10,11 @@ web/dist/
 dist/
 *.tsbuildinfo
 *.zip
+# Playwright run artefacts (ADR-052) — traces, screenshots and reports for failed walks.
+web/test-results/
+web/playwright-report/
+web/blob-report/
+web/.playwright/
 
 # ── Env / secrets ──
 .env

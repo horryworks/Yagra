@@ -24,6 +24,13 @@ ARG WEB_SRC=build
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
+# `@playwright/test` (ADR-052) fetches a ~150 MB Chromium in its install script. This image runs
+# `vite build` and nothing else — it never opens a browser — so the download would be pure build
+# latency on every uncached `npm ci`. The BUNDLE is unaffected either way: the runtime stage below
+# copies only `dist/`, so neither `node_modules` nor a browser has a path into the shipped image.
+# ⚠️ CI's `frontend` job must NOT set this — it runs the suite and needs `npx playwright install
+# chromium` (ADR-052 Inc.5, when the walk moves to CI).
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 # Cache mount for the npm cache: the layer cache alone means any package-lock.json change refetches
 # the whole dependency tree from the registry. Not part of the image, so it does not ship.
 RUN --mount=type=cache,target=/root/.npm npm ci || npm install

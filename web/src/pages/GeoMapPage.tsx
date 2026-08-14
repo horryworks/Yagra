@@ -24,6 +24,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { useGroupSummary } from '../dashboard/useGroupSummary';
 import { usePolled } from '../dashboard/usePolled';
 import { countsTotal, pinRollupFromCounts, worstStateFromCounts } from '../dashboard/widgets/util';
+import { TEST_IDS } from '../testIds';
 import { stateColorVar, stateLabel } from '../lib/format';
 import { DISPLAY_ORDER } from '../lib/nodeState';
 import { api } from '../services/api';
@@ -302,6 +303,7 @@ export function GeoMapPage() {
                   return (
                     <g
                       className="geopage-pin"
+                      data-testid={TEST_IDS.geoMapPin}
                       key={g.id}
                       transform={`translate(${p.x} ${p.y})`}
                       role="button"
