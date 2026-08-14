@@ -99,6 +99,111 @@ describe('flattenTree', () => {
   });
 });
 
+describe('flattenTree — narrowed by a filter the tree cannot see (ADR-053 Inc.6)', () => {
+  // The state / kind / pool controls run server-side, so the caller hands in the rows that survived
+  // and sets `narrowed`. Everything the tree does about "am I filtering" hangs off that flag, and
+  // before it existed every one of those tests was `is the search term non-empty` — so picking
+  // *Critical* with an empty box hid nothing at all.
+  const wide = () =>
+    buildNodeTree(
+      [
+        group('g1', 'Japan'),
+        group('g1a', 'Matsuyama', 'g1'),
+        group('g2', 'Internet Sites'),
+        group('g2a', 'DNS', 'g2'),
+      ],
+      [node('n1', 'fw01', 'g1a'), node('n2', 'test.example', 'g2a', 0, 'critical')],
+    );
+  /** What the page hands in once a state filter has been applied: only the surviving nodes. */
+  const narrowedTree = () =>
+    buildNodeTree(
+      [
+        group('g1', 'Japan'),
+        group('g1a', 'Matsuyama', 'g1'),
+        group('g2', 'Internet Sites'),
+        group('g2a', 'DNS', 'g2'),
+      ],
+      [node('n2', 'test.example', 'g2a', 0, 'critical')],
+    );
+
+  it('drops the folders with nothing left under them', () => {
+    // The reported bug: Japan / Matsuyama have no critical node, and they stayed on screen.
+    const rows = flattenTree(narrowedTree(), { collapsed: {}, filter: '', narrowed: true });
+    expect(rows.map(flatRowKey)).toEqual(['g:g2', 'g:g2a', 'n:n2']);
+  });
+
+  it('keeps every folder when it is NOT told it is narrowing', () => {
+    // The same tree without the flag — which is what shipped, and why nothing was hidden.
+    const rows = flattenTree(narrowedTree(), { collapsed: {}, filter: '' });
+    expect(rows.map(flatRowKey)).toContain('g:g1');
+    expect(rows.map(flatRowKey)).toContain('g:g1a');
+  });
+
+  it('force-expands, so a collapsed folder cannot hide its own match', () => {
+    const rows = flattenTree(narrowedTree(), {
+      collapsed: { g2: true, g2a: true },
+      filter: '',
+      narrowed: true,
+    });
+    expect(rows.map(flatRowKey)).toEqual(['g:g2', 'g:g2a', 'n:n2']);
+  });
+
+  it('does not match a folder by name — a state filter says nothing about names', () => {
+    // ⚠️ The one thing that must stay tied to the term. If `narrowed` also enabled name matching,
+    // an empty term would match every folder (`''.includes('')` is true) and nothing would hide.
+    const rows = flattenTree(narrowedTree(), { collapsed: {}, filter: '', narrowed: true });
+    expect(rows.map(flatRowKey)).not.toContain('g:g1');
+  });
+
+  it('keeps every surviving node, since the rejecting was already done', () => {
+    // Two nodes in one folder, both handed in: the term is empty, so neither may be dropped here.
+    const t = buildNodeTree(
+      [group('g2', 'Internet Sites'), group('g2a', 'DNS', 'g2')],
+      [node('a', 'alpha', 'g2a'), node('b', 'beta', 'g2a', 1)],
+    );
+    const rows = flattenTree(t, { collapsed: {}, filter: '', narrowed: true });
+    expect(rows.map(flatRowKey)).toEqual(['g:g2', 'g:g2a', 'n:a', 'n:b']);
+  });
+
+  it('hides the ungrouped section when nothing ungrouped survived', () => {
+    const t = buildNodeTree([group('g2', 'Sites')], [node('a', 'alpha', 'g2')]);
+    expect(flattenTree(t, { collapsed: {}, filter: '', narrowed: true }).map(flatRowKey)).toEqual([
+      'g:g2',
+      'n:a',
+    ]);
+    // …and keeps it while browsing, where it is also the drop zone.
+    expect(flattenTree(t, { collapsed: {}, filter: '' }).map(flatRowKey)).toContain(
+      'ungrouped-head',
+    );
+  });
+
+  it('still applies the term when both are on', () => {
+    // The rows are already state-filtered; the term narrows them further by name. A node the term
+    // rejects must go, and its folder with it.
+    const t = buildNodeTree(
+      [group('g1', 'Japan'), group('g2', 'Sites')],
+      [node('a', 'alpha', 'g1'), node('b', 'beta', 'g2')],
+    );
+    const rows = flattenTree(t, { collapsed: {}, filter: 'alph', narrowed: true });
+    expect(rows.map(flatRowKey)).toEqual(['g:g1', 'n:a']);
+  });
+
+  it('leaves browsing untouched', () => {
+    // No flag, no term: the whole tree, collapse state honoured — byte-for-byte what it was.
+    // Sibling groups sort by name at equal `sort_order`, so "Internet Sites" precedes "Japan".
+    const rows = flattenTree(wide(), { collapsed: {}, filter: '' });
+    expect(rows.map(flatRowKey)).toEqual([
+      'g:g2',
+      'g:g2a',
+      'n:n2',
+      'g:g1',
+      'g:g1a',
+      'n:n1',
+      'ungrouped-head',
+    ]);
+  });
+});
+
 describe('flattenTree lazy load (A-3)', () => {
   const counts = (partial: Partial<Record<NodeState, number>>): Record<NodeState, number> => ({
     ok: 0,

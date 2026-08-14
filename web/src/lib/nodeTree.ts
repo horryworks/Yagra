@@ -171,6 +171,15 @@ function subtreeMatches(group: TreeGroup, q: string): boolean {
   return group.children.some((c) => subtreeMatches(c, q));
 }
 
+/** Whether anything at all is under this group.
+ *
+ *  The counterpart of {@link subtreeMatches} for the `narrowed` mode, where there is no term to
+ *  match against: the caller has already handed in exactly the nodes that survived a state / kind /
+ *  pool filter, so "has a row" *is* "matches". */
+function subtreeHasNodes(group: TreeGroup): boolean {
+  return group.nodes.length > 0 || group.children.some(subtreeHasNodes);
+}
+
 /** Flatten the visible rows of the inventory tree in display order, honouring collapse state and
  *  the name filter — the single source of truth the virtualized `NodeTree` renders. Collapsed
  *  groups omit their descendants; while filtering, every group is force-expanded and non-matching
@@ -192,13 +201,26 @@ export function flattenTree(
   opts: {
     collapsed: Record<string, boolean>;
     filter: string;
+    /** The nodes handed in have already been narrowed by a filter this function cannot see — the
+     *  tree's state / kind / pool controls, which are applied server-side (ADR-053 Inc.6).
+     *
+     *  🚨 **Without this the tree cannot tell it is filtering at all.** Every "are we filtering"
+     *  test below used to be `the term is non-empty`, so picking *Critical* with an empty search
+     *  box hid nothing: every group stayed on screen, including the ones with no critical node
+     *  under them, and collapsed groups stayed collapsed over their own matches. */
+    narrowed?: boolean;
     groupCounts?: Record<string, StateCounts>;
     loadedGroups?: Set<string>;
     revealedGroups?: Set<string>;
   },
 ): FlatRow[] {
   const q = filterTerm(opts.filter);
-  const filtering = q.length > 0;
+  // Two different questions, and conflating them was the bug. `byTerm` decides what *matches a
+  // name*; `narrowing` decides whether the tree is showing a filtered set at all — which is what
+  // force-expansion, hiding an empty folder and the ungrouped header turn on.
+  const byTerm = q.length > 0;
+  const narrowing = byTerm || opts.narrowed === true;
+  const filtering = narrowing;
   const rows: FlatRow[] = [];
   const counts = opts.groupCounts;
   // Per-group subtree tally from the server direct counts (bottom-up over the built, acyclic tree).
@@ -213,10 +235,14 @@ export function flattenTree(
       : !opts.loadedGroups || opts.loadedGroups.has(id);
 
   const walkGroup = (group: TreeGroup, depth: number, ancestorMatch: boolean): void => {
-    const selfMatch = filtering && group.name.toLowerCase().includes(q);
+    // A folder's own name can only be matched by a term. A state filter says nothing about it.
+    const selfMatch = byTerm && group.name.toLowerCase().includes(q);
     const effMatch = ancestorMatch || selfMatch;
-    // Hide a group entirely when filtering and nothing under it matches.
-    if (filtering && !effMatch && !subtreeMatches(group, q)) return;
+    // Hide a group entirely when nothing under it survives the narrowing. With a term that means
+    // "no name below matches"; without one it means "no rows below at all", because the caller
+    // already removed the rows that did not survive.
+    const keep = byTerm ? subtreeMatches(group, q) : subtreeHasNodes(group);
+    if (narrowing && !effMatch && !keep) return;
 
     const isOpen = filtering ? true : !opts.collapsed[group.id];
     const tally = subtree ? subtree.get(group.id) ?? tallyFromCounts(emptyStateCounts())
@@ -228,8 +254,10 @@ export function flattenTree(
     if (!isOpen) return;
     // Children first, then this group's own member nodes — matching the recursive render order.
     for (const child of group.children) walkGroup(child, depth + 1, effMatch);
+    // Only a term rejects a node here — the state / kind / pool filters already did their rejecting
+    // server-side, so every node still in hand is one the operator asked for.
     const shown = group.nodes.filter(
-      (n) => !filtering || effMatch || n.name.toLowerCase().includes(q),
+      (n) => !byTerm || effMatch || n.name.toLowerCase().includes(q),
     );
     for (const n of shown) rows.push({ kind: 'node', depth: depth + 1, node: n });
     // Members still arriving: one placeholder standing in for the rest. What we already have goes
@@ -242,13 +270,13 @@ export function flattenTree(
 
   for (const g of tree.roots) walkGroup(g, 0, false);
 
-  const ungroupedShown = filtering
+  const ungroupedShown = byTerm
     ? tree.ungrouped.filter((n) => n.name.toLowerCase().includes(q))
     : tree.ungrouped;
   // Show the ungrouped header + its root drop zone whenever there's any inventory (so the drop zone
-  // is reachable next to the groups), but not when filtering yields no ungrouped matches, and not
-  // for a completely empty inventory (the page shows its own empty-state message instead).
-  const showUngrouped = filtering
+  // is reachable next to the groups), but not while narrowing with nothing ungrouped to show, and
+  // not for a completely empty inventory (the page shows its own empty-state message instead).
+  const showUngrouped = narrowing
     ? ungroupedShown.length > 0
     : tree.roots.length > 0 || tree.ungrouped.length > 0;
   if (showUngrouped) {

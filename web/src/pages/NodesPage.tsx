@@ -687,6 +687,9 @@ export function NodesPage() {
             showToolbar={false}
             selected={selected}
             filter={filter}
+            // The tree cannot see the state / kind / pool controls — those run server-side — so it
+            // has to be told, or it does not know it is filtering and hides nothing.
+            narrowed={serverNarrowed}
             onSelectNode={(n) => select({ kind: 'node', id: n.id })}
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
             onOpenNode={(n) => navigate(`/nodes/${n.id}`)}

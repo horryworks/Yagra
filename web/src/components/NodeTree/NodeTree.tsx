@@ -101,6 +101,11 @@ interface Props {
   onSelectGroup?: (group: NodeGroup) => void;
   /** Case-insensitive name filter; non-empty force-expands and hides non-matching rows. */
   filter?: string;
+  /** The nodes handed in were already narrowed by the pane's state / kind / pool controls, which
+   *  run server-side. The tree cannot see those filters, so without this it does not know it is
+   *  filtering at all: every folder stays on screen — including the ones with nothing matching
+   *  under them — and a collapsed folder stays collapsed over its own matches. */
+  narrowed?: boolean;
   /** Render the internal Add-group / drag-hint toolbar (the split hosts Add-group in its pane head). */
   showToolbar?: boolean;
   onOpenNode: (node: NodeSummary) => void;
@@ -165,6 +170,7 @@ export function NodeTree({
   onSelectNode,
   onSelectGroup,
   filter,
+  narrowed,
   showToolbar = true,
   onOpenNode,
   onAddGroup,
@@ -203,7 +209,7 @@ export function NodeTree({
   // non-matching rows are hidden, so matches are always revealed — and a group matched by its own
   // name reveals its whole subtree, members included.
   const q = filterTerm(filter ?? '');
-  const filtering = q.length > 0;
+  const filtering = q.length > 0 || narrowed === true;
   // The flattened, display-ordered list of visible rows — the single source of truth the virtualized
   // body renders (collapse state + filter applied). Only the on-screen window is turned into DOM, so
   // a tens-of-thousands-node inventory stays responsive (S13).
@@ -212,11 +218,12 @@ export function NodeTree({
       flattenTree(tree, {
         collapsed,
         filter: filter ?? '',
+        narrowed,
         groupCounts,
         loadedGroups,
         revealedGroups,
       }),
-    [tree, collapsed, filter, groupCounts, loadedGroups, revealedGroups],
+    [tree, collapsed, filter, narrowed, groupCounts, loadedGroups, revealedGroups],
   );
   const scrollRef = useRef<HTMLDivElement>(null);
   const rowVirtualizer = useVirtualizer({
