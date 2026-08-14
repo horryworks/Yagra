@@ -19,6 +19,8 @@ import {
   type FilterState,
 } from '../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../lib/filterCondition';
+import { sinceIso as sinceIsoFor } from '../lib/filterQuery';
+import { rangePresets, rangeSeconds, type RangeToken } from '../lib/filterPresets';
 import { FINDING_SEVERITIES } from '../types/api';
 import { TOOLS } from './data';
 
@@ -28,16 +30,10 @@ import { TOOLS } from './data';
  */
 export const PAGE_SIZE = 100;
 
-/** The time windows the screen offers. */
-export const FINDING_RANGES = ['24h', '7d', '30d', 'all'] as const;
+/** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
+ *  `satisfies` is what makes a token added here without one there a compile error. */
+export const FINDING_RANGES = ['24h', '7d', '30d', 'all'] as const satisfies readonly RangeToken[];
 export type FindingRange = (typeof FINDING_RANGES)[number];
-
-const RANGE_SECS: Record<FindingRange, number | null> = {
-  '24h': 86_400,
-  '7d': 7 * 86_400,
-  '30d': 30 * 86_400,
-  all: null,
-};
 
 /** The screen's filter state. `''` means "no filter" for each optional field. */
 export interface FindingFilters {
@@ -89,10 +85,14 @@ export interface FindingCursor {
   before_id: string;
 }
 
-/** The `since` bound for a range, or `undefined` for "all time". */
+/** The `since` bound for a range, or `undefined` for "all time".
+ *
+ *  Kept as a screen-local name because callers pass a `FindingRange`, but it holds no arithmetic of
+ *  its own any more (Inc.10): the length comes from `filterPresets.ts` and the instant from
+ *  `filterQuery.ts`. It used to be a private seconds table plus a hand-rolled subtraction — the
+ *  fifth copy of both. */
 export function sinceIso(range: FindingRange, nowMs: number): string | undefined {
-  const secs = RANGE_SECS[range];
-  return secs === null ? undefined : new Date(nowMs - secs * 1000).toISOString();
+  return sinceIsoFor(rangeSeconds(range), nowMs);
 }
 
 /**
@@ -197,18 +197,25 @@ export function isFiltered(f: FindingFilters): boolean {
  * new parameter shape — which is why it came a increment later than the other two.
  *
  * ⚠️ The range default is `7d`, not `all`, and that is a performance contract rather than a
- * preference — see `DEFAULT_FILTERS` above. `clientRangePresets` is deliberately not reused: these
- * presets carry `seconds: null` because the window is applied by the server.
+ * preference — see `DEFAULT_FILTERS` above. `clientRangePresets` is still not reused, but only
+ * because this screen offers a different subset and a different label namespace — the *lengths*
+ * come from `filterPresets.ts` like everyone else's since Inc.10. The reason written here before
+ * ("these presets carry `seconds: null` because the window is applied by the server") was the
+ * belief that produced five private seconds tables; what actually keeps the window out of the
+ * browser is the absent `readTime`, which `filterPredicate.ts` checks first.
  */
 export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<SavedFinding>> {
   return {
+    // ⚠️ **No column here carries a row accessor**, which is what `score` below already says for
+    // its own kind and what Inc.10 made sayable for the other four: this list is answered by the
+    // server, so a browser-side predicate would re-filter one keyset page and hide older matches.
+    // Half a filter row running client-side and half server-side is worse than either.
     severity: {
       kind: 'enum',
       options: FINDING_SEVERITIES.map((s) => ({
         value: s,
         label: t(`findings.severity.${s}`),
       })),
-      readValue: (f) => f.severity,
       allLabel: t('findings.filter.allSeverities'),
     },
     tool: {
@@ -216,7 +223,6 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
       // From the same catalog the launcher offers, so a new analysis appears here with no second
       // list to remember.
       options: TOOLS.map((tool) => ({ value: tool.id, label: t(tool.name) })),
-      readValue: (f) => f.tool,
       allLabel: t('findings.filter.allTools'),
     },
     // The node's **current** name, matched as a substring server-side (`node_q`). A fleet-wide
@@ -227,8 +233,9 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
       modes: ['contains'],
       // The row's `node_name` is the name **as of the run**, while the column renders the current
       // one and the server matches the current one. Reading the stale copy here would make a
-      // browser-side pass disagree with both, so there is deliberately nothing to read.
-      readText: () => [],
+      // browser-side pass disagree with both, so there is deliberately nothing to read — and since
+      // Inc.10 that is spelled as an absent `readText` rather than as one returning `[]`, which was
+      // a predicate rejecting every row waiting for someone to call it.
       containsSemantics: 'substring',
       placeholder: t('findings.cols.node'),
     },
@@ -239,7 +246,6 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
     q: {
       kind: 'text',
       modes: ['contains'],
-      readText: (f) => [f.metric, f.kind],
       containsSemantics: 'substring',
       placeholder: t('findings.cols.what'),
     },
@@ -254,11 +260,7 @@ export function findingFilters(t: TFunction): Record<string, ColumnFilterSpec<Sa
     },
     range: {
       kind: 'range',
-      presets: FINDING_RANGES.map((r) => ({
-        value: r,
-        label: t(`findings.range.${r}`),
-        seconds: null,
-      })),
+      presets: rangePresets(FINDING_RANGES, t, 'findings.range.'),
       defaultPreset: DEFAULT_FILTERS.range,
     },
   };

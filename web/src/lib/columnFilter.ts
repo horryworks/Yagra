@@ -94,8 +94,18 @@ export interface TextFilterSpec<T> {
    *  negates on both backends (ADR-053), so this is about whether *excluding* is meaningful for the
    *  column, never about what it costs. */
   not?: boolean;
-  /** The strings this column matches against. `null`/`undefined` parts are simply not candidates. */
-  readText: (row: T) => readonly (string | null | undefined)[];
+  /** The strings this column matches against. `null`/`undefined` parts are simply not candidates.
+   *
+   *  **Optional, and omitting it means "this column is answered by the server"** — the same rule
+   *  the other four kinds' accessors follow, and `buildPredicate` then compiles the column to
+   *  `null` rather than testing rows it cannot read.
+   *
+   *  ⚠️ It was the last required accessor until ADR-053 Inc.10, and what that cost is worth
+   *  recording: a server-side text column had to write one anyway, so it wrote a *false* one.
+   *  `historyQuery`'s node search returned `[]` — a predicate that rejects every row — because the
+   *  name it matches on lives in `nodes.name` and the row carries only a UUID. The type was
+   *  demanding a lie. If you are writing a client-side text column, supply it. */
+  readText?: (row: T) => readonly (string | null | undefined)[];
   /** What a plain term means on THIS list. Client-side lists are always `'substring'`. A server-side
    *  list must say which the deployment does — PostgreSQL substrings, VictoriaLogs matches whole
    *  tokens, and the divergence is deliberate and measured (ADR-024). `undefined` = unknown, which

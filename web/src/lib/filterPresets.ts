@@ -17,31 +17,80 @@ import type { FilterOption, RangePreset } from './columnFilter';
 
 const DAY = 24 * 60 * 60;
 
+/**
+ * Every relative window any list offers, and **the only place their lengths are written down**
+ * (ADR-053 Inc.10, 決定 X).
+ *
+ * ⚠️ There were four copies of this arithmetic before Inc.10 — here, `eventRange.ts`,
+ * `auditQuery.ts` and `historyQuery.ts` — which is the exact failure this module's header opens by
+ * naming. Worth recording *why* it happened, because the cause was not carelessness:
+ *
+ * A server-side range column writes `readTime: undefined`, because a browser-side pass must not
+ * re-apply a window the query already used. Each of those three screens *also* wrote
+ * `seconds: null` on every preset, as a second belt for the same trouser. But
+ * `filterPredicate.ts` returns at `if (!spec.readTime)` — **before it ever looks at `seconds`** —
+ * so the second guard was inert. Its only real effect was to make the spec unable to state the
+ * window, which forced each screen to keep a private table for its query to read.
+ *
+ * ⇒ **A "just in case" null is not free: it takes the value's home away from it.** Before adding
+ * a defensive default, read the consumer and check whether the first guard already returned.
+ */
+export const RANGE_TOKENS = ['24h', '7d', '30d', '90d', 'all', 'custom'] as const;
+export type RangeToken = (typeof RANGE_TOKENS)[number];
+
+/** Seconds per window; `null` means "no lower bound". `custom` is `null` because its two instants
+ *  are typed by the operator and carried inside the column's value, not derived from a length. */
+const SECONDS: Record<RangeToken, number | null> = {
+  '24h': DAY,
+  '7d': 7 * DAY,
+  '30d': 30 * DAY,
+  '90d': 90 * DAY,
+  all: null,
+  custom: null,
+};
+
+/**
+ * How far back a window reaches, in seconds, or `null` for "no lower bound".
+ *
+ * Typed against [`RangeToken`] rather than `string` on purpose: a screen's own range union is a
+ * subset of it, so passing one is checked at compile time and an unknown token cannot reach here.
+ * A `string` parameter would have to answer *something* for a typo, and the only available answer
+ * is `null` — which widens the query to all time. On Events that is the difference between a 24h
+ * search and a ten-second one (`eventRange.ts`).
+ */
+export function rangeSeconds(token: RangeToken): number | null {
+  return SECONDS[token];
+}
+
+/** Localized presets for a screen's chosen subset of the windows.
+ *
+ *  `Record<RangeToken, …>` above is what makes a new window a compile error rather than a preset
+ *  that renders its own key (extensibility.md §1), and `satisfies` on each screen's array is what
+ *  keeps the subset relation checked in the other direction. */
+export function rangePresets<T extends RangeToken>(
+  values: readonly T[],
+  t: TFunction,
+  prefix: string,
+): RangePreset[] {
+  return values.map((value) => ({
+    value,
+    label: t(`${prefix}${value}`),
+    seconds: SECONDS[value],
+  }));
+}
+
 /** The relative windows a client-side list offers, newest-first, ending in "all time".
  *
  *  ⚠️ The default preset is the caller's decision, not this module's, and it is not always `all`.
  *  A list whose rows come from a bounded query (Events) treats its window as a performance
  *  contract; a list that is fully in the browser (API tokens) has no such constraint and defaults
  *  to `all` because narrowing by default would hide rows nobody asked to hide. */
-export const CLIENT_RANGES = ['24h', '7d', '30d', '90d', 'all'] as const;
+export const CLIENT_RANGES = ['24h', '7d', '30d', '90d', 'all'] as const satisfies readonly RangeToken[];
 export type ClientRange = (typeof CLIENT_RANGES)[number];
 
-const SECONDS: Record<ClientRange, number | null> = {
-  '24h': DAY,
-  '7d': 7 * DAY,
-  '30d': 30 * DAY,
-  '90d': 90 * DAY,
-  all: null,
-};
-
-/** The presets, localized. `Record<ClientRange, …>` above is what makes a new window a compile
- *  error rather than a preset that renders its own key (extensibility.md §1). */
+/** The presets a client-side list offers, localized. */
 export function clientRangePresets(t: TFunction): RangePreset[] {
-  return CLIENT_RANGES.map((value) => ({
-    value,
-    label: t(`common:filter.range.${value}`),
-    seconds: SECONDS[value],
-  }));
+  return rangePresets(CLIENT_RANGES, t, 'common:filter.range.');
 }
 
 /** Options for a column whose values are an `as const` enum with `t()` labels under one prefix.

@@ -38,8 +38,10 @@ function compileColumn<T>(
     };
   }
   if (spec.kind === 'text') {
+    if (!spec.readText) return null; // server-side: the term is already in the query
+    const read = spec.readText;
     const test = compileCondition(decodeCondition(raw));
-    return test === null ? null : (row) => test(spec.readText(row));
+    return test === null ? null : (row) => test(read(row));
   }
   if (spec.kind === 'values') {
     if (!spec.readValues) return null; // server-side: the set is already in the query

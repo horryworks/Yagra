@@ -105,25 +105,26 @@ export function writeFilters(params: URLSearchParams, f: ThresholdFilters): void
  */
 export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<StoredThreshold>> {
   return {
+    // ⚠️ **No column here carries a row accessor** (ADR-053 Inc.10). This list is capped at 500
+    // server-side with a `truncated` flag, so a browser-side predicate would examine that prefix
+    // and report on it — the exact failure the file header opens with, re-entered through the back
+    // door. The absence is the declaration.
     q: {
       kind: 'text',
       // Contains only — the endpoint does a substring match and has no regex parameter to carry a
       // pattern to. There is also no NOT: `q` has no negated form on the wire.
       modes: ['contains'],
-      readText: (r) => [r.metric],
       containsSemantics: 'substring',
       placeholder: t('thresholds.cols.metric'),
     },
     scope_level: {
       kind: 'enum',
-      options:SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
-      readValue: (r) => r.scope_level,
+      options: SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
       allLabel: t('thresholds.filter.allScopes'),
     },
     direction: {
       kind: 'enum',
-      options:DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) })),
-      readValue: (r) => r.direction,
+      options: DIRECTIONS.map((d) => ({ value: d, label: t(`thresholds.direction.${d}`) })),
       allLabel: t('thresholds.filter.allDirections'),
     },
   };

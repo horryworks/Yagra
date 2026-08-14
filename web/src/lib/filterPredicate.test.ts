@@ -123,6 +123,42 @@ describe('text columns', () => {
     expect(() => msgs({ message: '~[', at: 'all' })).not.toThrow();
     expect(msgs({ message: '~[', at: 'all' })).toEqual([]);
   });
+
+  it('leaves rows alone when the list is filtered server-side (ADR-053 Inc.10)', () => {
+    // `readText` was the last accessor the type still *required*, so a server-side text column had
+    // to supply one — and the only one available was a lie. `historyQuery`'s node search returned
+    // `[]`, which reads as "no candidate strings" and therefore matches nothing: the moment
+    // anything called the predicate, a filtered History would have gone blank rather than deferring
+    // to the query that already answered it. Omitting it must mean "not my job", exactly as it does
+    // for `readTime` / `readNumber` / `readValue`.
+    const serverSide: FilterableColumn<Row>[] = [
+      { key: 'message', filter: { kind: 'text', modes: TEXT_MODES, not: true } },
+    ];
+    expect(applyFilters(ROWS, serverSide, { message: 'link' }, NOW)).toHaveLength(4);
+    // …including the shapes that are *not* simply "no term": a negated term and a regex both have
+    // to stay inert too, or half the modes would double-filter.
+    expect(applyFilters(ROWS, serverSide, { message: '!link' }, NOW)).toHaveLength(4);
+    expect(applyFilters(ROWS, serverSide, { message: '~^%LINK' }, NOW)).toHaveLength(4);
+  });
+
+  it('still filters when the accessor returns nothing for a row', () => {
+    // The distinction the previous test turns on: an *absent* accessor is "the server did this",
+    // while an accessor that legitimately returns `[]` for one row is "this row has no candidate
+    // text" and must still be excluded. Conflating the two is what made `() => []` look harmless.
+    const sparse: FilterableColumn<Row>[] = [
+      {
+        key: 'message',
+        filter: {
+          kind: 'text',
+          modes: TEXT_MODES,
+          readText: (r) => (r.kind === 'trap' ? [] : [r.message]),
+        },
+      },
+    ];
+    expect(applyFilters(ROWS, sparse, { message: 'link' }, NOW).map((r) => r.kind)).toEqual([
+      'syslog',
+    ]);
+  });
 });
 
 describe('range columns', () => {

@@ -4,10 +4,17 @@ import type { TFunction } from 'i18next';
 import {
   CLIENT_RANGES,
   MAX_DISCOVERED_OPTIONS,
+  RANGE_TOKENS,
   clientRangePresets,
   discoveredOptions,
   enumOptions,
+  rangePresets,
+  rangeSeconds,
 } from './filterPresets';
+import { AUDIT_RANGES } from '../pages/auditQuery';
+import { HISTORY_RANGES } from '../pages/historyQuery';
+import { EVENT_RANGES } from '../components/EventLog/eventRange';
+import { FINDING_RANGES } from '../troubleshoot/findingsQuery';
 
 /** Echoes the key, so a test can see which key a label was built from. */
 const t = ((key: string) => `«${key}»`) as unknown as TFunction;
@@ -48,6 +55,75 @@ describe('clientRangePresets', () => {
       '«common:filter.range.30d»',
       '«common:filter.range.90d»',
       '«common:filter.range.all»',
+    ]);
+  });
+});
+
+describe('rangeSeconds is the only place a window length is written down (ADR-053 Inc.10)', () => {
+  it('pins every token, spelled out rather than recomputed', () => {
+    // Same rule as above: a test that repeats `7 * DAY` proves the expression was copied, not that
+    // the number is right. These are the values five separate tables used to hold.
+    expect(Object.fromEntries(RANGE_TOKENS.map((v) => [v, rangeSeconds(v)]))).toEqual({
+      '24h': 86_400,
+      '7d': 604_800,
+      '30d': 2_592_000,
+      '90d': 7_776_000,
+      all: null,
+      custom: null,
+    });
+  });
+
+  it('gives `custom` no length, because its two instants are typed rather than derived', () => {
+    expect(rangeSeconds('custom')).toBeNull();
+  });
+
+  // ⚠️ These four are the ones that each held a private copy. The `satisfies` on each array makes
+  // an unknown token a compile error, so what is left to check at runtime is that the shared table
+  // actually answers for every token they offer — a `null` here is not a type error, and on Events
+  // it would silently turn a bounded search into an unbounded one (`eventRange.ts`).
+  const screens = {
+    audit: AUDIT_RANGES,
+    history: HISTORY_RANGES,
+    events: EVENT_RANGES,
+    findings: FINDING_RANGES,
+  };
+
+  for (const [name, tokens] of Object.entries(screens)) {
+    it(`answers for every window ${name} offers`, () => {
+      for (const token of tokens) {
+        expect(RANGE_TOKENS).toContain(token);
+        // `all` and `custom` are legitimately null; every other token must have a real length.
+        if (token !== 'all' && token !== 'custom') {
+          expect(rangeSeconds(token)).toBeGreaterThan(0);
+        }
+      }
+    });
+  }
+
+  it('agrees with the client-side presets, which are built from the same table', () => {
+    for (const p of clientRangePresets(t)) {
+      expect(p.seconds).toBe(rangeSeconds(p.value as (typeof RANGE_TOKENS)[number]));
+    }
+  });
+});
+
+describe('rangePresets', () => {
+  it('keeps the caller order and builds each label under the given prefix', () => {
+    expect(rangePresets(['7d', '24h'] as const, t, 'audit.range.')).toEqual([
+      { value: '7d', label: '«audit.range.7d»', seconds: 604_800 },
+      { value: '24h', label: '«audit.range.24h»', seconds: 86_400 },
+    ]);
+  });
+
+  it('carries the real length even for a server-side screen', () => {
+    // The presets on a server-side list used to be nulled out "because the server applies the
+    // window". That guard was inert — `filterPredicate` returns at the missing `readTime` before
+    // it reads a length — and nulling them is what forced each screen to keep its own table.
+    expect(rangePresets(AUDIT_RANGES, t, 'audit.range.').map((p) => p.seconds)).toEqual([
+      86_400,
+      604_800,
+      2_592_000,
+      null,
     ]);
   });
 });

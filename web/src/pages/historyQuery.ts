@@ -17,6 +17,7 @@ import {
 } from '../lib/columnFilter';
 import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
+import { rangePresets, rangeSeconds, type RangeToken } from '../lib/filterPresets';
 import {
   readEnumParam,
   readIdParam,
@@ -34,16 +35,10 @@ import { SEVERITIES, type AlertHistoryRow, type NodeState, type Severity } from 
 export const HISTORY_PHASES = ['', 'fired', 'cleared'] as const;
 export type HistoryPhase = (typeof HISTORY_PHASES)[number];
 
-/** The time windows the screen offers. */
-export const HISTORY_RANGES = ['24h', '7d', '30d', 'all'] as const;
+/** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
+ *  `satisfies` is what makes a token added here without one there a compile error. */
+export const HISTORY_RANGES = ['24h', '7d', '30d', 'all'] as const satisfies readonly RangeToken[];
 export type HistoryRange = (typeof HISTORY_RANGES)[number];
-
-const RANGE_SECS: Record<HistoryRange, number | null> = {
-  '24h': 86_400,
-  '7d': 7 * 86_400,
-  '30d': 30 * 86_400,
-  all: null,
-};
 
 /**
  * The Alerts ▸ History filter row, keyed by `Column.key` (ADR-053 Inc.4 / Inc.4b).
@@ -65,19 +60,22 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
     // ⚠️ The keys are the query parameters this screen has always used — the column keys were `sev`
     // and `at`, and were renamed to these. That is the cheap direction: a column key is internal,
     // whereas the URL is a bookmark someone holds.
+    // ⚠️ **Not one column here carries a row accessor, and that absence IS the declaration that
+    // this list is answered by the server** (ADR-053 Inc.10). They used to be supplied "because the
+    // spec type asks for them"; Inc.8 made four of the five optional and Inc.10 made the last one
+    // optional, so the reason expired twice over. Supplying one on a server-side column is not
+    // free: it arms a browser-side predicate that runs over **one keyset page**, so the moment
+    // anything on this screen calls `applyFilters` it would hide older rows the query legitimately
+    // returned — and only for the columns that happen to have an accessor, which is the worst
+    // shape (half the filter row silently means something different from the other half).
     severity: {
       kind: 'enum',
       options: SEVERITIES.map((s) => ({ value: s, label: severityLabel(s) })),
-      // Server-side: the predicate is in SQL and these accessors are never called. They are here
-      // because the spec type asks for them, and returning the real field keeps them honest if the
-      // screen ever gains a client-side pass.
-      readValue: (r) => r.severity,
       allLabel: t('history.filter.allSeverities'),
     },
     state: {
       kind: 'enum',
       options: SEVERITY_ORDER.map((s) => ({ value: s, label: stateLabel(s) })),
-      readValue: (r) => r.state,
       allLabel: t('history.filter.allStates'),
     },
     phase: {
@@ -86,7 +84,6 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
         { value: 'fired', label: t('history.phase.fired') },
         { value: 'cleared', label: t('history.phase.cleared') },
       ],
-      readValue: (r) => (r.resolved ? 'cleared' : 'fired'),
       allLabel: t('history.filter.allPhases'),
     },
     // The node's **current** name, matched as a substring by the server (`node_q`). Deliberately
@@ -97,11 +94,11 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
       // Contains only: `node_q` is a substring parameter with no regex and no negated form. Offering
       // either toggle would promise something there is nothing to send.
       modes: ['contains'],
-      // ⚠️ Nothing honest to read: the row carries the subject's **id**, and the name it displays is
-      // resolved separately through `useEntityNames`. So this returns nothing rather than the UUID,
-      // which would make a browser-side pass match on characters the operator never sees. The
-      // predicate is the server's, against `nodes.name`.
-      readText: () => [],
+      // ⚠️ **No `readText`, and this column is why the accessor became optional** (Inc.10). There is
+      // nothing honest to read: the row carries the subject's **id**, and the name it displays is
+      // resolved separately through `useEntityNames`. It used to return `[]` to satisfy a required
+      // field — a predicate that rejects every row, sitting one `useClientFilters` call away from
+      // blanking the page. The predicate is the server's, against `nodes.name`.
       containsSemantics: 'substring',
       placeholder: t('history.cols.node'),
     },
@@ -114,7 +111,6 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
     metric: {
       kind: 'text',
       modes: ['contains'],
-      readText: (r) => [r.metric ?? ''],
       containsSemantics: 'substring',
       placeholder: t('history.cols.what'),
     },
@@ -126,18 +122,14 @@ export function historyFilters(t: TFunction): Record<string, ColumnFilterSpec<Al
         { value: 'true', label: t('history.filter.acked') },
         { value: 'false', label: t('history.filter.unacked') },
       ],
-      readValue: (r) => (r.acked ? 'true' : 'false'),
       allLabel: t('history.filter.allAcked'),
     },
     range: {
       kind: 'range',
-      presets: HISTORY_RANGES.map((r) => ({
-        value: r,
-        label: t(`history.range.${r}`),
-        // Server-side: the window becomes `since`, and a client predicate must not re-apply it
-        // against a clock the server already used (`RangeFilterSpec.readTime`).
-        seconds: null,
-      })),
+      // The window becomes `since` in the query, and the missing `readTime` — not a nulled
+      // `seconds` — is what stops a client predicate re-applying it against a different clock
+      // (Inc.10; `filterPredicate.ts` returns at the accessor, before it reads a length).
+      presets: rangePresets(HISTORY_RANGES, t, 'history.range.'),
       defaultPreset: DEFAULT_FILTERS.range,
     },
   };
@@ -284,7 +276,7 @@ export function queryFor(
     node_id: unset(f.nodeId),
     node_q: unset(f.nodeQ),
     group_id: unset(f.groupId),
-    since: sinceIso(RANGE_SECS[f.range], nowMs),
+    since: sinceIso(rangeSeconds(f.range), nowMs),
     before: cursor?.before,
     before_id: cursor?.before_id,
   };

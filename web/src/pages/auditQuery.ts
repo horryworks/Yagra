@@ -19,6 +19,7 @@ import {
 } from '../lib/columnFilter';
 import { decodeCondition } from '../lib/filterCondition';
 import { isFiltered as isFilteredAgainst, sinceIso, unset } from '../lib/filterQuery';
+import { rangePresets, rangeSeconds, type RangeToken } from '../lib/filterPresets';
 import {
   AUDIT_ACTIONS,
   AUDIT_STATUS_CLASSES,
@@ -32,16 +33,10 @@ import {
  */
 export const PAGE_SIZE = 100;
 
-/** The time windows the screen offers. */
-export const AUDIT_RANGES = ['24h', '7d', '30d', 'all'] as const;
+/** The time windows the screen offers. The lengths are `filterPresets.ts`'s (ADR-053 Inc.10);
+ *  `satisfies` is what makes a token added here without one there a compile error. */
+export const AUDIT_RANGES = ['24h', '7d', '30d', 'all'] as const satisfies readonly RangeToken[];
 export type AuditRange = (typeof AUDIT_RANGES)[number];
-
-const RANGE_SECS: Record<AuditRange, number | null> = {
-  '24h': 86_400,
-  '7d': 7 * 86_400,
-  '30d': 30 * 86_400,
-  all: null,
-};
 
 /** The screen's filter state. `''` means "no filter" for each optional field. */
 export interface AuditFilters {
@@ -78,7 +73,7 @@ export function queryFor(f: AuditFilters, before: string | null, nowMs: number):
     q: unset(f.q),
     action: unset(f.action),
     status: unset(f.status),
-    since: sinceIso(RANGE_SECS[f.range], nowMs),
+    since: sinceIso(rangeSeconds(f.range), nowMs),
     before: before ?? undefined,
     limit: PAGE_SIZE,
   };
@@ -104,7 +99,7 @@ export function exportUrl(f: AuditFilters, nowMs: number): string {
   add('q', unset(f.q));
   add('action', unset(f.action));
   add('status', unset(f.status));
-  add('since', sinceIso(RANGE_SECS[f.range], nowMs));
+  add('since', sinceIso(rangeSeconds(f.range), nowMs));
   const qs = params.toString();
   return qs ? `/api/v1/audit/export.csv?${qs}` : '/api/v1/audit/export.csv';
 }
@@ -166,35 +161,36 @@ export function isFiltered(f: AuditFilters): boolean {
  */
 export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<AuditRow>> {
   return {
+    // ⚠️ **No column here carries a row accessor** (ADR-053 Inc.10), and `status` is why the rule
+    // is worth stating rather than assuming. It used to read `String(r.status)` — `"404"` — while
+    // its options are status *classes* (`4xx`). Every token would have failed to match, so the
+    // first browser-side pass anyone wired onto this screen would have emptied the table under a
+    // filter that looked ordinary. The class is derived in SQL; there is nothing on the row to read.
     q: {
       kind: 'text',
       // Contains only: the endpoint does a case-insensitive substring, and there is no regex
       // parameter to carry a pattern to it. Offering the toggle would promise what cannot be sent.
       modes: ['contains'],
-      readText: (r) => [r.username, r.action],
       containsSemantics: 'substring',
       placeholder: t('audit.cols.user'),
     },
     action: {
       kind: 'enum',
-      options:AUDIT_ACTIONS.map((a) => ({ value: a, label: t(`audit.action.${a}`) })),
-      readValue: (r) => r.action,
+      options: AUDIT_ACTIONS.map((a) => ({ value: a, label: t(`audit.action.${a}`) })),
       allLabel: t('audit.filter.allActions'),
     },
     status: {
       kind: 'enum',
-      options:AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
-      // Server-side: the class is derived in SQL from the numeric status, never read here.
-      readValue: (r) => String(r.status),
+      options: AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
       allLabel: t('audit.filter.allStatuses'),
     },
     range: {
       kind: 'range',
-      presets: AUDIT_RANGES.map((r) => ({
-        value: r,
-        label: t(`audit.range.${r}`),
-        seconds: null,
-      })),
+      // ⚠️ The presets carry their **real** lengths now (Inc.10), where they used to carry
+      // `seconds: null` "because this list is server-side". That null was inert — the predicate
+      // returns at the missing `readTime` above it — and its only effect was to force a private
+      // seconds table into this file for `queryFor` to read.
+      presets: rangePresets(AUDIT_RANGES, t, 'audit.range.'),
       defaultPreset: DEFAULT_FILTERS.range,
     },
   };

@@ -13,21 +13,18 @@
 // executes a `.tsx` test (testing.md).
 
 import { sinceIso } from '../../lib/filterQuery';
+import { rangeSeconds, type RangeToken } from '../../lib/filterPresets';
 
-/** The presets, in the order the dropdown lists them. `custom` reveals the From/To inputs. */
-export const EVENT_RANGES = ['24h', '7d', '30d', 'all', 'custom'] as const;
+/** The presets, in the order the dropdown lists them. `custom` reveals the From/To inputs.
+ *
+ *  `satisfies` pins the subset relation: the lengths live in `filterPresets.ts` (ADR-053 Inc.10),
+ *  so a token added here without one there is a compile error rather than a window of `null` —
+ *  which on this screen would mean an unbounded search, the one thing the header forbids. */
+export const EVENT_RANGES = ['24h', '7d', '30d', 'all', 'custom'] as const satisfies readonly RangeToken[];
 export type EventRange = (typeof EVENT_RANGES)[number];
 
 /** The default view. Bounded — see the file header for why that is not negotiable. */
 export const DEFAULT_EVENT_RANGE: EventRange = '24h';
-
-const RANGE_SECS: Record<EventRange, number | null> = {
-  '24h': 86_400,
-  '7d': 7 * 86_400,
-  '30d': 30 * 86_400,
-  all: null,
-  custom: null,
-};
 
 /** The bounds a filter sends: RFC 3339, or `undefined` for an unbounded side. */
 export interface EventBounds {
@@ -51,7 +48,7 @@ export function boundsFor(
   if (range === 'custom') {
     return { start: custom.from || undefined, end: custom.to || undefined };
   }
-  return { start: sinceIso(RANGE_SECS[range], nowMs), end: undefined };
+  return { start: sinceIso(rangeSeconds(range), nowMs), end: undefined };
 }
 
 /** Whether the range is narrowing anything — for the mobile toggle's "N filters applied" badge.

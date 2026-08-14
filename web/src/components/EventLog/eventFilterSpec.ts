@@ -8,11 +8,13 @@
 // `environment: 'node'` and never executes a `.tsx` test (testing.md), so anything with a judgement
 // in it has to be here to be testable at all.
 //
-// ⚠️ **Every column omits `readTime`/`readValue`-driven client filtering on purpose.** The rows in
-// the browser are one keyset page, not the result set, so filtering them locally would narrow the
-// page and leave the operator paging through a list whose "load more" fetches rows the local
-// predicate then hides. The specs carry the accessors only where a client-side list would need
-// them, and Events needs none of them.
+// ⚠️ **Not one column here carries a row accessor, on purpose.** The rows in the browser are one
+// keyset page, not the result set, so filtering them locally would narrow the page and leave the
+// operator paging through a list whose "load more" fetches rows the local predicate then hides.
+//
+// That sentence was already here and was only three-quarters true until ADR-053 Inc.10: `readText`
+// was the one accessor the type still *required*, so the two text columns carried one each while
+// claiming not to. Making it optional is what let the claim and the code agree.
 
 import type { TFunction } from 'i18next';
 import type { EventRow } from '../../types/api';
@@ -70,7 +72,6 @@ export function eventFilters(
       kind: 'text',
       modes: ['contains', 'regex'],
       not: true,
-      readText: (r) => [r.message],
       containsSemantics,
       placeholder: t('alerts:eventLog.cols.message'),
     },
@@ -105,7 +106,6 @@ export function eventFilters(
       // pattern would mean two different things on two deployments (`events::TextCond`).
       modes: ['contains'],
       not: true,
-      readText: (r) => [r.source_ip, r.node_id],
       containsSemantics,
       placeholder: t('alerts:eventLog.cols.source'),
     };
