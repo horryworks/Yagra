@@ -20,15 +20,16 @@ polling**. Users access it through the WebUI.
 > [CONTRIBUTING.md](CONTRIBUTING.md).
 
 > [!WARNING]
-> **Running v0.2.3, v0.2.4 or v0.2.5? Upgrade to v0.2.6 now.** Those three releases poll a device
+> **Running v0.2.3, v0.2.4 or v0.2.5? Upgrade now.** Those three releases poll a device
 > for only **one** of its checks. On an SNMP node that means the system scalars keep arriving while
 > the interface walk, the vendor health tables, the topology walks and even ICMP are discarded on
 > every cycle — so SNMP data quietly stops filling in. Nothing tells you: the check that survives
 > *is* the liveness check, so the node stays `ok`, no gap is recorded and no alert fires. The
-> smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixes it;
+> smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.2.6 — every check on a device runs again, and twenty-two lists can be narrowed.**
+> Status: **v0.2.7 — every screen filters by its own columns, and the Events search shows what it
+> matched.**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.

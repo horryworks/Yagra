@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.7 — every screen filters by its own columns, and the Events search shows what it matched
+
 ### Breaking changes
 - **The Events screens' filters have moved from the toolbar into a filter row under the column
   headers**, and the toolbar is now an action row. Each column carries its own control: Kind and
