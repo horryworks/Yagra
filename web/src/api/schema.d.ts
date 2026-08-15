@@ -6116,16 +6116,23 @@ export interface components {
         };
         /**
          * @description Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,
-         *     from `rate()` of the octet counters) and In/Out errors (per second).
+         *     from `rate()` of the octet counters), In/Out errors, and In/Out discards (both per second).
          *
-         *     All four share one `timestamps` axis — the union of returned points, with `null` in the gaps —
-         *     so the chart gets aligned series rather than four independently-indexed ones. Derived at query
+         *     Errors and discards are separate because their causes are: an error is a frame that arrived
+         *     damaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong
+         *     with it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the
+         *     wrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.
+         *
+         *     All six share one `timestamps` axis — the union of returned points, with `null` in the gaps —
+         *     so the chart gets aligned series rather than six independently-indexed ones. Derived at query
          *     time (ADR-012); empty when there is no history.
          */
         InterfaceSeries: {
             in_bps: (number | null)[];
+            in_discards: (number | null)[];
             in_errors: (number | null)[];
             out_bps: (number | null)[];
+            out_discards: (number | null)[];
             out_errors: (number | null)[];
             timestamps: number[];
         };
@@ -17782,7 +17789,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description In/out throughput and error rates on one shared timestamp axis */
+            /** @description In/out throughput, error rates and discard rates on one shared timestamp axis */
             200: {
                 headers: {
                     [name: string]: unknown;

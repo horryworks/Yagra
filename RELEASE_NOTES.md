@@ -10,6 +10,22 @@
 
 ## Unreleased
 
+### New Features
+- **Interface discards are now graphed.** `ifInDiscards` / `ifOutDiscards` (IF-MIB
+  `1.3.6.1.2.1.2.2.1.13` and `.19`, standard on essentially every SNMP agent) have been collected
+  since v0.1.x but had no reader, so the counters were in the TSDB and invisible everywhere. A node's
+  **Interfaces** tab now shows a third chart, **Discards (In / Out, /s)**, beside Throughput and
+  Errors, and the dock header gains a **Disc** figure when the rate is non-zero. Discards get their
+  own chart rather than extra lines on the Errors one because the two mean different faults — an
+  error is a frame that arrived damaged (cabling, optics, NIC), a discard is a frame the device
+  dropped although nothing was wrong with it (congestion, queue overflow, ACL).
+- **New dashboard widget: "Most interface discards".** Ranks the fleet's interfaces by discards/sec
+  (in + out), alongside the existing "Most interface errors".
+- **`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series` returns two more arrays**,
+  `in_discards` and `out_discards`, on the same shared timestamp axis as the existing four. This is
+  an additive change — existing clients are unaffected. The MCP `get_interface_series` tool returns
+  them too.
+
 ### Bug Fixes
 - **Data coverage no longer reports healthy URL, DNS and Meraki monitors as silent.** The gauge on
   `Settings ▸ Yagra health` — and the "Stale data" list beside it — asked every node in the

@@ -148,6 +148,10 @@
         "title": "Most interface errors",
         "blurb": "Links shedding the most errors/sec (in+out)."
       },
+      "most-interface-discards": {
+        "title": "Most interface discards",
+        "blurb": "Links dropping the most frames/sec (in+out) — congestion, not damage."
+      },
       "top-talkers": {
         "title": "Top talkers",
         "blurb": "Interfaces moving the most bits now (in+out)."
@@ -342,6 +346,9 @@
     },
     "mostErrors": {
       "empty": "No interface errors. 🎉"
+    },
+    "mostDiscards": {
+      "empty": "No interface discards. 🎉"
     },
     "trafficSpikes": {
       "empty": "No traffic spikes."

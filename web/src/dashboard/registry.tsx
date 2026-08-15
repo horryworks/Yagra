@@ -33,6 +33,7 @@ import {
 } from './widgets/monitoring';
 import {
   BusiestInterfacesWidget,
+  MostDiscardsWidget,
   MostErrorsWidget,
   TopAggActions,
   TopCpuWidget,
@@ -298,6 +299,18 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
     Component: MostErrorsWidget,
+    Actions: TopAggActions,
+  },
+  {
+    type: 'most-interface-discards',
+    title: 'registry.widgets.most-interface-discards.title',
+    section: SECTION.performance,
+    blurb: 'registry.widgets.most-interface-discards.blurb',
+    backing: 'rollup',
+    defaultSpan: 6,
+    allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
+    Component: MostDiscardsWidget,
     Actions: TopAggActions,
   },
   {

@@ -161,6 +161,22 @@ export function MostErrorsWidget({ instance }: WidgetProps) {
   );
 }
 
+/** Interfaces dropping the most frames. Backend-side this is `rate(if_in_discards) +
+ *  rate(if_out_discards)` — in and out combined, the same shape the errors ranking uses. Separate
+ *  from that one because congestion and damage send an operator to different places (ADR-046
+ *  Inc.4); the API and the MCP `top_interfaces rank_by=discards` already existed. */
+export function MostDiscardsWidget({ instance }: WidgetProps) {
+  const { t } = useTranslation('dashboard');
+  return (
+    <InterfaceTopN
+      agg={aggOf(instance.settings)}
+      metric="discards"
+      format={(v) => `${Number(v.toFixed(2))}/s`}
+      empty={t('widgets.mostDiscards.empty')}
+    />
+  );
+}
+
 /** Busiest links — ranked by throughput, but shown as utilization% where the link speed is known
  *  (falls back to absolute bps for links without a known speed). */
 export function BusiestInterfacesWidget({ instance }: WidgetProps) {

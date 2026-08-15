@@ -1102,8 +1102,18 @@ mod tests {
         let json = body_json(resp).await;
         assert!(json["timestamps"].is_array());
         assert_eq!(json["timestamps"].as_array().unwrap().len(), 0);
-        assert!(json["in_bps"].is_array());
-        assert!(json["out_errors"].is_array());
+        // Every series the DTO promises is present, discards included — an absent key would
+        // deserialize as `undefined` in the WebUI and draw an empty chart rather than failing.
+        for k in [
+            "in_bps",
+            "out_bps",
+            "in_errors",
+            "out_errors",
+            "in_discards",
+            "out_discards",
+        ] {
+            assert!(json[k].is_array(), "{k} must be an array");
+        }
     }
 
     #[tokio::test]

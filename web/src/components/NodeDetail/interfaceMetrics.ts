@@ -22,15 +22,33 @@ export function throughputBandwidthOverlay(
   };
 }
 
-/** Latest combined error rate (in + out, errors/sec) from a fetched interface series, or `null`
- *  when the series is absent or carries no error samples. Used for the dock's "Err" stat tile —
- *  the interface row shape has no error count, so it's derived from the series we already load. */
-export function latestErrorRate(series: InterfaceSeries | null): number | null {
+/** Latest combined rate (in + out, per second) across a directional pair of the interface series,
+ *  or `null` when the series is absent or neither direction carries a sample. Parameterized rather
+ *  than duplicated per pair: errors and discards differ only in which two arrays they read, and a
+ *  copy would be a second place to fix the "both directions absent ⇒ null, one absent ⇒ 0" rule. */
+function latestPairRate(
+  series: InterfaceSeries | null,
+  pick: (s: InterfaceSeries) => [(number | null)[] | undefined, (number | null)[] | undefined],
+): number | null {
   if (!series) return null;
-  const inErr = lastNonNull(series.in_errors);
-  const outErr = lastNonNull(series.out_errors);
-  if (inErr == null && outErr == null) return null;
-  return (inErr ?? 0) + (outErr ?? 0);
+  const [inArr, outArr] = pick(series);
+  const inVal = lastNonNull(inArr);
+  const outVal = lastNonNull(outArr);
+  if (inVal == null && outVal == null) return null;
+  return (inVal ?? 0) + (outVal ?? 0);
+}
+
+/** Latest combined error rate (in + out, errors/sec). Used for the dock's "Err" stat tile — the
+ *  interface row shape has no error count, so it's derived from the series we already load. */
+export function latestErrorRate(series: InterfaceSeries | null): number | null {
+  return latestPairRate(series, (s) => [s.in_errors, s.out_errors]);
+}
+
+/** Latest combined discard rate (in + out, discards/sec) for the dock's "Disc" stat tile.
+ *  Deliberately separate from the error rate: a discard is congestion, an error is damage, and
+ *  summing them would tell the operator to check the wrong thing (ADR-046 Inc.4). */
+export function latestDiscardRate(series: InterfaceSeries | null): number | null {
+  return latestPairRate(series, (s) => [s.in_discards, s.out_discards]);
 }
 
 /** Last non-null value of a gapped series array, or `null` when it's empty / all gaps. */

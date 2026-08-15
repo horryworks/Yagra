@@ -1004,6 +1004,8 @@ mod tests {
             out_bps: vec![Some(2.0)],
             in_errors: vec![None],
             out_errors: vec![None],
+            in_discards: vec![None],
+            out_discards: vec![None],
         };
         assert_no_forbidden_keys(
             &serde_json::to_value(&iface_series).unwrap(),

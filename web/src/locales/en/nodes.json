@@ -298,6 +298,7 @@
     "in": "In",
     "out": "Out",
     "err": "Err",
+    "disc": "Disc",
     "closeDetail": "Close detail",
     "closeDetailTitle": "Close detail (or click the row again)",
     "resizeDock": "Drag to resize the charts (double-click to reset)",
@@ -310,6 +311,8 @@
     "noData": "No data for this window yet…",
     "errors": "Errors",
     "errorsUnit": "(In / Out, /s)",
+    "discards": "Discards",
+    "discardsUnit": "(In / Out, /s)",
     "allStates": "Up and down",
     "stateAria": "Filter by running state",
     "state": {

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  latestDiscardRate,
   latestErrorRate,
   sparklinePath,
   throughputBandwidthOverlay,
@@ -15,6 +16,8 @@ function series(partial: Partial<InterfaceSeries>): InterfaceSeries {
     out_bps: [],
     in_errors: [],
     out_errors: [],
+    in_discards: [],
+    out_discards: [],
     ...partial,
   };
 }
@@ -42,6 +45,39 @@ describe('latestErrorRate', () => {
   it('treats a one-sided absence as zero for that direction', () => {
     expect(latestErrorRate(series({ in_errors: [9], out_errors: [] }))).toBe(9);
     expect(latestErrorRate(series({ in_errors: [], out_errors: [3] }))).toBe(3);
+  });
+});
+
+describe('latestDiscardRate', () => {
+  it('returns null for an absent series', () => {
+    expect(latestDiscardRate(null)).toBeNull();
+  });
+
+  it('returns null when there are no discard samples', () => {
+    expect(latestDiscardRate(series({ in_discards: [], out_discards: [] }))).toBeNull();
+    expect(
+      latestDiscardRate(series({ in_discards: [null, null], out_discards: [null] })),
+    ).toBeNull();
+  });
+
+  it('sums the latest non-null in + out discard rates, skipping trailing gaps', () => {
+    expect(latestDiscardRate(series({ in_discards: [1, 2, 3], out_discards: [0, 0, 4] }))).toBe(7);
+    expect(
+      latestDiscardRate(series({ in_discards: [5, null, null], out_discards: [null, 2, null] })),
+    ).toBe(7);
+  });
+
+  // The two helpers read four same-typed arrays off one object, so a transposed pair would be a
+  // silent wrong answer rather than a type error. Feed each pair only its own values and assert
+  // the other reads nothing.
+  it('reads the discard arrays and not the error arrays', () => {
+    const onlyDiscards = series({ in_discards: [11], out_discards: [22] });
+    expect(latestDiscardRate(onlyDiscards)).toBe(33);
+    expect(latestErrorRate(onlyDiscards)).toBeNull();
+
+    const onlyErrors = series({ in_errors: [4], out_errors: [5] });
+    expect(latestErrorRate(onlyErrors)).toBe(9);
+    expect(latestDiscardRate(onlyErrors)).toBeNull();
   });
 });
 

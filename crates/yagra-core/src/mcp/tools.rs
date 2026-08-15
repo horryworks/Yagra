@@ -556,8 +556,12 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "One interface's traffic history: in/out throughput in bits/sec and in/out \
-                       error rates, all on one shared timestamp axis (nulls mark gaps). Give \
+        description = "One interface's traffic history: in/out throughput in bits/sec, in/out error \
+                       rates and in/out discard rates, all on one shared timestamp axis (nulls mark \
+                       gaps). Errors and discards are different faults: an error is a frame that \
+                       arrived damaged (cabling, optics, NIC), a discard is a frame the device \
+                       dropped although nothing was wrong with it (congestion, queue overflow, \
+                       ACL) — do not read one as evidence of the other. Give \
                        `node_id` and `ifindex` (from get_node_status's interfaces). `from`/`to` are \
                        Unix seconds (default: last hour) and `step` is the sample interval in \
                        seconds (clamped; defaults to ~120 points across the window). This is the \
@@ -4535,7 +4539,7 @@ mod tests {
     /// The alignment invariant is what can be silently wrong here: four series on one axis, so a
     /// chart — or a model — can read column `j` across all four without bounds-checking.
     #[tokio::test]
-    async fn an_interface_series_returns_four_arrays_on_one_axis() {
+    async fn an_interface_series_returns_six_arrays_on_one_axis() {
         let r = mcp()
             .interface_series_in(
                 InterfaceSeriesParams {
@@ -4551,7 +4555,14 @@ mod tests {
             .expect("ok");
         let body = json_of(&r);
         let n = body["timestamps"].as_array().expect("timestamps").len();
-        for k in ["in_bps", "out_bps", "in_errors", "out_errors"] {
+        for k in [
+            "in_bps",
+            "out_bps",
+            "in_errors",
+            "out_errors",
+            "in_discards",
+            "out_discards",
+        ] {
             assert_eq!(
                 body[k].as_array().unwrap_or(&Vec::new()).len(),
                 n,

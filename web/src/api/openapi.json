@@ -11535,7 +11535,7 @@
         ],
         "responses": {
           "200": {
-            "description": "In/out throughput and error rates on one shared timestamp axis",
+            "description": "In/out throughput, error rates and discard rates on one shared timestamp axis",
             "content": {
               "application/json": {
                 "schema": {
@@ -24621,16 +24621,28 @@
       },
       "InterfaceSeries": {
         "type": "object",
-        "description": "Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,\nfrom `rate()` of the octet counters) and In/Out errors (per second).\n\nAll four share one `timestamps` axis — the union of returned points, with `null` in the gaps —\nso the chart gets aligned series rather than four independently-indexed ones. Derived at query\ntime (ADR-012); empty when there is no history.",
+        "description": "Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,\nfrom `rate()` of the octet counters), In/Out errors, and In/Out discards (both per second).\n\nErrors and discards are separate because their causes are: an error is a frame that arrived\ndamaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong\nwith it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the\nwrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.\n\nAll six share one `timestamps` axis — the union of returned points, with `null` in the gaps —\nso the chart gets aligned series rather than six independently-indexed ones. Derived at query\ntime (ADR-012); empty when there is no history.",
         "required": [
           "timestamps",
           "in_bps",
           "out_bps",
           "in_errors",
-          "out_errors"
+          "out_errors",
+          "in_discards",
+          "out_discards"
         ],
         "properties": {
           "in_bps": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "in_discards": {
             "type": "array",
             "items": {
               "type": [
@@ -24651,6 +24663,16 @@
             }
           },
           "out_bps": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "out_discards": {
             "type": "array",
             "items": {
               "type": [

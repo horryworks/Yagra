@@ -298,6 +298,7 @@
     "in": "受信",
     "out": "送信",
     "err": "エラー",
+    "disc": "破棄",
     "closeDetail": "詳細を閉じる",
     "closeDetailTitle": "詳細を閉じる（行をもう一度クリックしても閉じます）",
     "resizeDock": "ドラッグでグラフの高さを変更（ダブルクリックで既定に戻す）",
@@ -310,6 +311,8 @@
     "noData": "この期間のデータはまだありません…",
     "errors": "エラー",
     "errorsUnit": "（受信 / 送信, /s）",
+    "discards": "破棄",
+    "discardsUnit": "（受信 / 送信, /s）",
     "allStates": "アップ・ダウンの両方",
     "stateAria": "稼働状態で絞り込む",
     "state": {

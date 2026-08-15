@@ -501,10 +501,15 @@ async fn get_node_metric_range(
 // ── One interface's series ───────────────────────────────────────────────────
 
 /// Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,
-/// from `rate()` of the octet counters) and In/Out errors (per second).
+/// from `rate()` of the octet counters), In/Out errors, and In/Out discards (both per second).
 ///
-/// All four share one `timestamps` axis — the union of returned points, with `null` in the gaps —
-/// so the chart gets aligned series rather than four independently-indexed ones. Derived at query
+/// Errors and discards are separate because their causes are: an error is a frame that arrived
+/// damaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong
+/// with it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the
+/// wrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.
+///
+/// All six share one `timestamps` axis — the union of returned points, with `null` in the gaps —
+/// so the chart gets aligned series rather than six independently-indexed ones. Derived at query
 /// time (ADR-012); empty when there is no history.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceSeries {
@@ -513,6 +518,8 @@ pub(crate) struct InterfaceSeries {
     pub out_bps: Vec<Option<f64>>,
     pub in_errors: Vec<Option<f64>>,
     pub out_errors: Vec<Option<f64>>,
+    pub in_discards: Vec<Option<f64>>,
+    pub out_discards: Vec<Option<f64>>,
 }
 
 #[utoipa::path(
@@ -523,7 +530,7 @@ pub(crate) struct InterfaceSeries {
         RangeQuery,
     ),
     responses(
-        (status = 200, description = "In/out throughput and error rates on one shared timestamp axis", body = InterfaceSeries),
+        (status = 200, description = "In/out throughput, error rates and discard rates on one shared timestamp axis", body = InterfaceSeries),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
@@ -561,11 +568,29 @@ pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) 
     (step, (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS))
 }
 
-/// One interface's four aligned series (ADR-042 I1's `get_interface_series` reads this too).
+/// One interface's six raw counter-rate series, before alignment onto a shared axis.
 ///
-/// The four metric names, the step/lookback rule and the ×8 bytes→bits scaling live here rather
+/// A struct rather than six positional `&[MetricPoint]` arguments **because they are all the same
+/// type**: a transposed pair would compile silently and draw discards on the errors chart. Naming
+/// them is the only thing that makes the call site checkable.
+struct RawInterfaceRates<'a> {
+    in_oct: &'a [MetricPoint],
+    out_oct: &'a [MetricPoint],
+    in_err: &'a [MetricPoint],
+    out_err: &'a [MetricPoint],
+    in_disc: &'a [MetricPoint],
+    out_disc: &'a [MetricPoint],
+}
+
+/// One interface's six aligned series (ADR-042 I1's `get_interface_series` reads this too).
+///
+/// The six metric names, the step/lookback rule and the ×8 bytes→bits scaling live here rather
 /// than in the handler because a second surface needs the same answer, and reproducing it there
 /// would mean a model (or a maintainer) having to know all three.
+///
+/// Discards ride along with errors (ADR-046 Inc.4): `if_in_discards` / `if_out_discards` have been
+/// collected since `7fdf2c8` and had no reader, so this is a read-side change only — nothing about
+/// collection, the bus or the catalog moves.
 pub(crate) async fn interface_series(
     st: &ApiState,
     node: NodeId,
@@ -576,38 +601,46 @@ pub(crate) async fn interface_series(
 ) -> InterfaceSeries {
     let key = |metric: &str| SeriesKey::interface(node, ifindex, metric);
     let (step, lookback) = interface_series_step(from, to, step);
-    // The four series are independent range queries — fan them out concurrently (this endpoint
+    // The six series are independent range queries — fan them out concurrently (this endpoint
     // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
     // they outlive the joined futures.
-    let (k_in, k_out, k_ierr, k_oerr) = (
+    let (k_in, k_out, k_ierr, k_oerr, k_idisc, k_odisc) = (
         key("if_hc_in_octets"),
         key("if_hc_out_octets"),
         key("if_in_errors"),
         key("if_out_errors"),
+        key("if_in_discards"),
+        key("if_out_discards"),
     );
-    let (in_oct, out_oct, in_err, out_err) = tokio::join!(
+    let (in_oct, out_oct, in_err, out_err, in_disc, out_disc) = tokio::join!(
         st.store.rate_range(&k_in, from, to, step, lookback),
         st.store.rate_range(&k_out, from, to, step, lookback),
         st.store.rate_range(&k_ierr, from, to, step, lookback),
         st.store.rate_range(&k_oerr, from, to, step, lookback),
+        st.store.rate_range(&k_idisc, from, to, step, lookback),
+        st.store.rate_range(&k_odisc, from, to, step, lookback),
     );
-    align_interface_series(&in_oct, &out_oct, &in_err, &out_err)
+    align_interface_series(&RawInterfaceRates {
+        in_oct: &in_oct,
+        out_oct: &out_oct,
+        in_err: &in_err,
+        out_err: &out_err,
+        in_disc: &in_disc,
+        out_disc: &out_disc,
+    })
 }
 
-/// Align the four counter-derived series onto one shared axis.
+/// Align the six counter-derived series onto one shared axis.
 ///
 /// Octet rates are scaled ×8 here — the counters are bytes and the chart is bits/sec. Doing it at
 /// the edge rather than in the store keeps the stored series raw (ADR-012), and doing it in one
-/// place keeps the two octet series from drifting apart from the two error series, which are not
-/// scaled.
-fn align_interface_series(
-    in_oct: &[MetricPoint],
-    out_oct: &[MetricPoint],
-    in_err: &[MetricPoint],
-    out_err: &[MetricPoint],
-) -> InterfaceSeries {
+/// place keeps the two octet series from drifting apart from the error and discard series, which
+/// are counts and are not scaled.
+fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
     let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
-    for s in [in_oct, out_oct, in_err, out_err] {
+    for s in [
+        r.in_oct, r.out_oct, r.in_err, r.out_err, r.in_disc, r.out_disc,
+    ] {
         for p in s {
             grid_set.insert(p.t);
         }
@@ -618,10 +651,12 @@ fn align_interface_series(
         grid.iter().map(|t| m.get(t).map(|v| v * scale)).collect()
     };
     InterfaceSeries {
-        in_bps: align(in_oct, 8.0),
-        out_bps: align(out_oct, 8.0),
-        in_errors: align(in_err, 1.0),
-        out_errors: align(out_err, 1.0),
+        in_bps: align(r.in_oct, 8.0),
+        out_bps: align(r.out_oct, 8.0),
+        in_errors: align(r.in_err, 1.0),
+        out_errors: align(r.out_err, 1.0),
+        in_discards: align(r.in_disc, 1.0),
+        out_discards: align(r.out_disc, 1.0),
         timestamps: grid,
     }
 }

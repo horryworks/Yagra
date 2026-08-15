@@ -22,7 +22,12 @@ import { usePrefsStore } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
-import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
+import {
+  latestDiscardRate,
+  latestErrorRate,
+  sparklinePath,
+  throughputBandwidthOverlay,
+} from './interfaceMetrics';
 import {
   defaultDockHeight,
   heightFromDrag,
@@ -571,6 +576,7 @@ function InterfaceDock({
   const ts = series?.timestamps ?? [];
   const hasData = ts.length > 0;
   const errRate = latestErrorRate(series);
+  const discRate = latestDiscardRate(series);
   // Configured-bandwidth overlay for the throughput chart (red line + optional capacity Y-range).
   // ⚠️ Memoized because it returns a FRESH `yRange` array every call, and MetricChart compares that
   // prop by reference (its own doc asks for a stable one). Harmless while the dock only re-rendered
@@ -597,6 +603,18 @@ function InterfaceDock({
         ? [
             { label: t('interfaces.in'), values: series.in_errors, color: SERIES_IN },
             { label: t('interfaces.out'), values: series.out_errors, color: SERIES_OUT },
+          ]
+        : [],
+    [series, t],
+  );
+  // Same In/Out colours as the other two charts on purpose: all three read "colour 1 = in,
+  // colour 2 = out", so `ChartLegend` is reused unchanged and no new series colour is introduced.
+  const discardSeries = useMemo(
+    () =>
+      series
+        ? [
+            { label: t('interfaces.in'), values: series.in_discards, color: SERIES_IN },
+            { label: t('interfaces.out'), values: series.out_discards, color: SERIES_OUT },
           ]
         : [],
     [series, t],
@@ -641,6 +659,14 @@ function InterfaceDock({
               <span>
                 <span className="nd-muted">{t('interfaces.err')}</span>{' '}
                 <span className="nd-if-dock-err">{errRate.toFixed(1)}/s</span>
+              </span>
+            )}
+            {/* Shown only when non-zero, like the error tile: a permanent `Disc 0.0/s` on every
+                healthy interface is noise, and the chart below already says "zero" for free. */}
+            {discRate != null && discRate > 0 && (
+              <span>
+                <span className="nd-muted">{t('interfaces.disc')}</span>{' '}
+                <span className="nd-if-dock-err">{discRate.toFixed(1)}/s</span>
               </span>
             )}
           </span>
@@ -720,6 +746,33 @@ function InterfaceDock({
               legendFormat={(v) => `${formatSi(v)}/s`}
               xRange={win ?? undefined}
               series={errorSeries}
+            />
+          ) : (
+            <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
+          )}
+        </div>
+
+        {/* Discards get their own chart rather than extra series on the errors one (ADR-046
+            Inc.4): the two have different causes — damage vs congestion — and in practice differ
+            by two or three orders of magnitude, so sharing an axis flattens whichever is smaller.
+            No CSS change is needed; `.nd-if-dock-charts` is an auto-fit grid. */}
+        <div className="nd-if-chart">
+          <div className="nd-if-chart-t">
+            <span>
+              {t('interfaces.discards')}{' '}
+              <span className="nd-unit">{t('interfaces.discardsUnit')}</span>
+            </span>
+            <ChartLegend />
+          </div>
+          {hasData ? (
+            <MetricChart
+              title=""
+              {...chartSizing}
+              timestamps={ts}
+              yFormat={formatSi}
+              legendFormat={(v) => `${formatSi(v)}/s`}
+              xRange={win ?? undefined}
+              series={discardSeries}
             />
           ) : (
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
