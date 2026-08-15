@@ -17,7 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { useNodeStates, LIVE_RECONCILE_MS } from '../dashboard/useNodeStates';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { formatExactTime, stateColorVar, stateLabel } from '../lib/format';
 import type { NodeState, TopologyMode, TopologyNode } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -56,7 +56,7 @@ function VerdictTag({ verdict }: { verdict: DiffVerdict }) {
 
 export function DependencyPage() {
   const { t } = useTranslation('topology');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const navigate = useNavigate();
   const [sheet, setSheet] = useState(false);
   const [editing, setEditing] = useState<TopologyNode | null>(null);
@@ -198,7 +198,7 @@ export function DependencyPage() {
                   <input
                     type="checkbox"
                     checked={optedOut.has(r.id)}
-                    disabled={!authed}
+                    disabled={!canConfig}
                     onClick={(e) => e.stopPropagation()}
                     onChange={(e) => {
                       void toggleOptOut(r.id, e.target.checked);
@@ -227,7 +227,7 @@ export function DependencyPage() {
         render: (r) =>
           // Hidden once suppression follows the derived graph: editing `parent_id` there changes
           // nothing, and a button that appears to work but does not is worse than no button.
-          authed && mode !== 'derived' ? (
+          canConfig && mode !== 'derived' ? (
             <Button
               variant="outline"
               onClick={(e) => {
@@ -244,7 +244,7 @@ export function DependencyPage() {
     // here rather than as a filter that can be set from a URL and never seen.
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [authed, comparing, diffs, mode, nameOf, optedOut, t, toggleOptOut]);
+  }, [canConfig, comparing, diffs, mode, nameOf, optedOut, t, toggleOptOut]);
   // Client-side, and URL-backed: one table on this route. ⚠️ The row list is fleet-scaled, which
   // `ui-conventions.md` says needs a server-side path — that predates this change and is unchanged
   // by it; the filter row narrows the same array the page already held.
@@ -318,7 +318,7 @@ export function DependencyPage() {
             )}
             {modeError && <p className="dep-mode-blocked">{modeError}</p>}
 
-            {authed && (
+            {canConfig && (
               <div className="dep-mode-actions">
                 {mode === 'manual' && (
                   <Button variant="outline" disabled={modeBusy} onClick={() => changeMode('shadow')}>

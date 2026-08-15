@@ -22,7 +22,7 @@ import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { usePrefsStore } from '../prefs';
 import { useViewportMode } from '../lib/viewport';
 import type {
@@ -57,6 +57,7 @@ import {
   buildSuppressionIndex,
   nextSuppressionExpiry,
   suppressionPanelRows,
+  releasableRows,
   type ReleaseAction,
   type SuppressionTarget,
 } from '../lib/suppression';
@@ -86,7 +87,12 @@ const EMPTY_GROUP_COUNTS: Record<string, StateCounts> = {};
 export function NodesPage() {
   const { t } = useTranslation('nodes');
   const navigate = useNavigate();
-  const authed = useAuthStore((s) => s.authed);
+  // Three permissions, not one signed-in flag: editing the inventory is ManageConfig, opening a
+  // maintenance window is ManageMaintenance and muting is AckAlerts (`api/maintenance.rs`). They
+  // were all `authed`, so a Viewer was offered every one of them (ADR-056 Inc.2).
+  const canConfig = useCan('manage_config');
+  const canMaintenance = useCan('manage_maintenance');
+  const canAck = useCan('ack_alerts');
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   // Server-side rollups: per-group direct counts drive the tree's group-row health bars (correct
   // over the whole fleet even before members load, A-1/A-3); the fleet summary drives the header
@@ -367,8 +373,10 @@ export function NodesPage() {
   // comment). The exemptions are what stop a released node being offered a release it already has.
   const suppressionRows = useCallback(
     (target: SuppressionTarget, node?: NodeSummary) =>
-      suppressionPanelRows(target, { windows, mutes, groups, node, exemptions }),
-    [windows, mutes, groups, exemptions],
+      releasableRows(suppressionPanelRows(target, { windows, mutes, groups, node, exemptions }), (p) =>
+        p === 'manage_maintenance' ? canMaintenance : canAck,
+      ),
+    [windows, mutes, groups, exemptions, canMaintenance, canAck],
   );
 
   // Right-click / marker click → release. One exhaustive switch, so a new `ReleaseAction` cannot
@@ -539,7 +547,7 @@ export function NodesPage() {
           </>
         }
         actions={
-          authed && (
+          canConfig && (
             // Deliberately top level, not the tree selection: this button survives the inventory
             // pane being collapsed to a rail, where the operator cannot see what is selected. The
             // dialog's Group select is where a different folder gets chosen.
@@ -597,7 +605,7 @@ export function NodesPage() {
                   «
                 </button>
               )}
-              {authed && (
+              {canConfig && (
                 // Both entries target the same folder — the tree selection, or top level. Adding a
                 // node used to be right-click-only, which touch devices never fire.
                 <ActionMenu
@@ -682,7 +690,7 @@ export function NodesPage() {
             groupCounts={groupCounts}
             loadedGroups={members.loadedGroups}
             revealedGroups={members.revealedGroups}
-            canEdit={authed}
+            canEdit={canConfig}
             loading={loading || (filtering && search.loading)}
             showToolbar={false}
             selected={selected}
@@ -696,9 +704,9 @@ export function NodesPage() {
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
             onDeleteGroup={(g) => setDeletingGroup(g)}
-            onEditNode={authed ? (n) => setEditingNode(n) : undefined}
-            onAddNode={authed ? openAddNode : undefined}
-            onDeleteNode={authed ? (n) => setDeletingNode(n) : undefined}
+            onEditNode={canConfig ? (n) => setEditingNode(n) : undefined}
+            onAddNode={canConfig ? openAddNode : undefined}
+            onDeleteNode={canConfig ? (n) => setDeletingNode(n) : undefined}
             onRequestMoveNode={(n) => setMovingNode(n)}
             onMoveNode={moveNode}
             onMoveGroup={moveGroup}
@@ -706,11 +714,11 @@ export function NodesPage() {
             onReorderGroup={reorderGroup}
             suppression={suppression}
             suppressionRows={suppressionRows}
-            onRelease={authed ? release : undefined}
-            onSetMaintenance={authed ? setMaintenance : undefined}
-            onSetMute={authed ? setMute : undefined}
+            onRelease={canMaintenance || canAck ? release : undefined}
+            onSetMaintenance={canMaintenance ? setMaintenance : undefined}
+            onSetMute={canAck ? setMute : undefined}
             pools={pools}
-            onSetPool={authed ? setPool : undefined}
+            onSetPool={canConfig ? setPool : undefined}
           />
           </div>
         )}
@@ -734,7 +742,7 @@ export function NodesPage() {
               key={`${selected.id}:${detailNonce}`}
               nodeId={selected.id}
               variant="inline"
-              canEdit={authed}
+              canEdit={canConfig}
               tab={tab}
               onTabChange={setTab}
               groups={groups}
@@ -747,7 +755,7 @@ export function NodesPage() {
               group={selectedGroup}
               groups={groups}
               nodes={treeNodes}
-              canEdit={authed}
+              canEdit={canConfig}
               onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
               onAddNode={() => openAddNode(selectedGroup.id)}
             />

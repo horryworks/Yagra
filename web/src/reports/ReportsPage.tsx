@@ -23,7 +23,7 @@ import {
 import { usePolled } from '../dashboard/usePolled';
 import { api } from '../services/api';
 import { subscribeReportRuns } from '../services/sse';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { formatTimestamp } from '../lib/format';
 import type {
   ReportDefinition,
@@ -56,8 +56,9 @@ function RunStatus({ run }: { run: ReportRun }) {
 
 export function ReportsPage() {
   const { t } = useTranslation('reports');
-  const role = useAuthStore((s) => s.role);
-  const isAdmin = role === 'admin';
+  // Every action below writes: definitions, schedules, run-now and deleting a run are all
+  // ManageConfig at the edge (`api/reports.rs`).
+  const canConfig = useCan('manage_config');
   const [tab, setTab] = useState<Tab>('saved');
 
   // Saved runs: seed from the API, keep live over SSE.
@@ -182,7 +183,7 @@ export function ReportsPage() {
           <Button variant="ghost" onClick={() => setViewerRunId(r.id)}>
             {t('runs.view')}
           </Button>
-          {isAdmin && (
+          {canConfig && (
             <Button variant="ghost" onClick={() => deleteRun(r)}>
               {t('common:actions.delete')}
             </Button>
@@ -219,17 +220,17 @@ export function ReportsPage() {
       align: 'right',
       render: (d) => (
         <div className="rp-actions">
-          {isAdmin && (
+          {canConfig && (
             <Button variant="primary" disabled={busy === d.id} onClick={() => runNow(d)}>
               {busy === d.id ? t('defs.running') : t('defs.runNow')}
             </Button>
           )}
-          {isAdmin && (
+          {canConfig && (
             <Button variant="ghost" onClick={() => setBuilderFor(d)}>
               {t('common:actions.edit')}
             </Button>
           )}
-          {isAdmin && (
+          {canConfig && (
             <Button variant="ghost" onClick={() => deleteDefinition(d)}>
               {t('common:actions.delete')}
             </Button>
@@ -272,7 +273,7 @@ export function ReportsPage() {
       width: '170px',
       align: 'right',
       render: (s) =>
-        isAdmin ? (
+        canConfig ? (
           <div className="rp-actions">
             <Button variant="ghost" onClick={() => setScheduleFor(s)}>
               {t('common:actions.edit')}
@@ -389,7 +390,7 @@ export function ReportsPage() {
               total={defF.anyFiltered ? definitions.length : undefined}
               noun={t('common:noun.template', { count: defF.shown.length })}
             />
-            {isAdmin && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setBuilderFor('new')}>
                 {t('defs.newReport')}
               </Button>
@@ -405,7 +406,7 @@ export function ReportsPage() {
             empty={
               defF.anyFiltered
                 ? t('common:filter.noMatch')
-                : isAdmin
+                : canConfig
                   ? t('defs.emptyAdmin')
                   : t('defs.empty')
             }
@@ -446,7 +447,7 @@ export function ReportsPage() {
               total={schedF.anyFiltered ? schedules.length : undefined}
               noun={t('noun.schedule', { count: schedF.shown.length })}
             />
-            {isAdmin && (
+            {canConfig && (
               <Button
                 variant="primary"
                 disabled={definitions.length === 0}

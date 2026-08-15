@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import {
   SEVERITIES,
   type EventRule,
@@ -58,7 +58,7 @@ function ruleToInput(r: EventRule): EventRuleInput {
 
 export function EventRulesPage() {
   const { t } = useTranslation('alertsConfig');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<EventRule[]>([]);
   const [sources, setSources] = useState<EventSource[]>([]);
   const [sheet, setSheet] = useState(false);
@@ -153,7 +153,7 @@ export function EventRulesPage() {
         width: '110px',
         align: 'right',
         render: (r) =>
-          authed ? (
+          canConfig ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -180,7 +180,7 @@ export function EventRulesPage() {
     // `toggleEnabled` is rebuilt every render; listing it would rebuild the columns on every
     // keystroke elsewhere and re-run the predicate for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, authed]);
+  }, [t, canConfig]);
 
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
@@ -192,7 +192,11 @@ export function EventRulesPage() {
     <div>
       <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('eventRules.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('eventRules.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -208,7 +212,7 @@ export function EventRulesPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.rule', { count: rows.length })}
             />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('eventRules.add')}
               </Button>

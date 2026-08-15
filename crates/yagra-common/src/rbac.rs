@@ -35,7 +35,13 @@ pub enum Role {
 }
 
 /// A discrete capability checked at the API edge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+// `ToSchema` (added ADR-056 Inc.2) so `GET /api/v1/roles` publishes the seven keys as an enum
+// rather than as an opaque string. The WebUI names a permission at every place it decides whether
+// to draw a write control, and a mistyped name would fail *closed* — the control would vanish for
+// everyone, including an admin, with nothing on screen to see. Typing it makes the typo a compile
+// error instead. The wire bytes do not change: `key()` has always been the serde tag
+// (`matrix_catalog_keys_match_serde`), so an N-1 client reads exactly what it read before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Permission {
     /// View inventory, metrics, and alerts.

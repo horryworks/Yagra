@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAlertStream } from '../hooks/useAlertStream';
-import { useAlertStore, useAuthStore } from '../store';
+import { useAlertStore, useCan } from '../store';
 import { api } from '../services/api';
 import { subjectNodeId } from '../lib/alertSubject';
 import { SEVERITY_ORDER } from '../lib/nodeState';
@@ -54,7 +54,6 @@ export function ActiveAlertsPage() {
   const { t } = useTranslation('alerts');
   useAlertStream();
   const count = useAlertStore((s) => Object.keys(s.alerts).length);
-  const role = useAuthStore((s) => s.role);
   const [rcaEnabled, setRcaEnabled] = useState(false);
   const [explaining, setExplaining] = useState<{ node: string; check: string } | null>(null);
   const [muting, setMuting] = useState<AlertMuteSeed | null>(null);
@@ -114,9 +113,9 @@ export function ActiveAlertsPage() {
     };
   }, []);
 
-  // Both actions are AckAlerts-gated server-side (operator and above) — a viewer would get a 403,
-  // so don't show them a button that only ever fails. Explain additionally needs a provider.
-  const canSuppress = role === 'operator' || role === 'admin';
+  // Both actions are AckAlerts-gated server-side — a caller without it would get a 403, so don't
+  // show a button that only ever fails. Explain additionally needs a provider.
+  const canSuppress = useCan('ack_alerts');
   const canExplain = rcaEnabled && canSuppress;
 
   return (

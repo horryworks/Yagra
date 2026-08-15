@@ -28,7 +28,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useAlertStream } from '../hooks/useAlertStream';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { CatalogModal } from './CatalogModal';
 import { LayoutStoreProvider } from './LayoutStoreContext';
 import { useSharedLayoutStore } from './layoutStore';
@@ -41,7 +41,8 @@ export function SharedDashboardPage() {
   // One SSE subscription for the whole board (alert widgets read the shared store).
   useAlertStream();
 
-  const isAdmin = useAuthStore((s) => s.role) === 'admin';
+  // `PUT /shared-dashboard` is ManageConfig — the board everyone sees is configuration.
+  const canConfig = useCan('manage_config');
 
   const widgets = useSharedLayoutStore((s) => s.widgets);
   const status = useSharedLayoutStore((s) => s.status);
@@ -114,15 +115,12 @@ export function SharedDashboardPage() {
         {t('actions.done')}
       </Button>
     </>
-  ) : (
-    <Button
-      onClick={() => setConfirmEdit(true)}
-      disabled={!isAdmin}
-      title={isAdmin ? undefined : t('shared.adminOnly')}
-    >
-      {t('actions.customize')}
-    </Button>
-  );
+  ) : canConfig ? (
+    // Not `disabled` with an explanatory tooltip, which is what this was: a control nobody may use
+    // is not drawn (ADR-056 Inc.2). A tooltip is hover-only, so on a phone the button read as
+    // broken rather than as forbidden.
+    <Button onClick={() => setConfirmEdit(true)}>{t('actions.customize')}</Button>
+  ) : null;
 
   return (
     <LayoutStoreProvider store={useSharedLayoutStore}>
@@ -163,7 +161,7 @@ export function SharedDashboardPage() {
         ) : widgets.length === 0 ? (
           <div className="mydash-empty">
             <p className="muted">{t('shared.empty')}</p>
-            {isAdmin && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setConfirmEdit(true)}>
                 {t('actions.customize')}
               </Button>

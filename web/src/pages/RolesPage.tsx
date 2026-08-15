@@ -11,7 +11,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
-import type { RoleMatrix } from '../types/api';
+import type { Permission, RoleMatrix } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { useIsMobileViewport } from '../lib/viewport';
@@ -109,7 +109,7 @@ function RowFragment({
   roles,
   t,
 }: {
-  permKey: string;
+  permKey: Permission;
   label: string;
   description: string;
   roles: RoleMatrix['roles'];

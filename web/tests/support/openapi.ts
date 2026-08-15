@@ -419,3 +419,10 @@ export function continuationProps(): string[] {
   }
   return [...found].sort();
 }
+
+/** The members of a named string enum, in document order. Lets a fixture be built from the
+ *  contract instead of transcribing a backend list — see the `/api/v1/roles` override. */
+export function enumOf(schemaName: string): string[] {
+  const schema = DOC.components.schemas[schemaName];
+  return (schema?.enum ?? []).map(String);
+}

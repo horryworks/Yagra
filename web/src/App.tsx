@@ -23,15 +23,22 @@ export function App() {
   const setRole = useAuthStore((s) => s.setRole);
   const scope = useAuthStore((s) => s.scope);
   const setScope = useAuthStore((s) => s.setScope);
+  const setRoleMatrix = useAuthStore((s) => s.setRoleMatrix);
   const theme = usePrefsStore((s) => s.theme);
   const language = usePrefsStore((s) => s.language);
   const viewportMode = useViewportMode();
   const [config, setConfig] = useState<ClientConfig | null>(null);
 
-  // Resolve the current principal's role and visibility scope once we're authenticated but don't
-  // yet know them (after a page reload the token is in localStorage but neither is), and after a
-  // login, which returns the role but not the scope. Role- and scope-gated UI read them from the
-  // auth store. Both clear when signed out.
+  // Resolve the current principal's role, visibility scope and permissions once we're authenticated
+  // but don't yet know them (after a page reload the token is in localStorage but none of them is),
+  // and after a login, which returns the role but not the rest. Role-, scope- and permission-gated
+  // UI read them from the auth store. All three clear when signed out.
+  //
+  // The permissions come from `GET /api/v1/roles` — the server's `Permission::ALL × Role::ALL`
+  // matrix — looked up by this principal's role, so the UI never holds a permission table of its
+  // own (ADR-056 Inc.2). Two requests rather than one added field on `/auth/me` deliberately:
+  // `/roles` has existed since ADR-014, so a newer WebUI in front of an N-1 core still resolves
+  // permissions instead of hiding every write control it has.
   //
   // On failure nothing is set to a non-null value, which is what stops this retrying forever: a
   // failed resolve leaves the state exactly as it found it, so no re-render is triggered.
@@ -39,22 +46,23 @@ export function App() {
     if (!authed || !getToken()) {
       setRole(null);
       setScope(null);
+      setRoleMatrix(null);
       return;
     }
     if (role != null && scope != null) return;
     let cancelled = false;
-    api
-      .me()
-      .then((r) => {
+    Promise.all([api.me(), api.listRoles()])
+      .then(([me, matrix]) => {
         if (cancelled) return;
-        setRole(r.role);
-        setScope(r.scope);
+        setRole(me.role);
+        setScope(me.scope);
+        setRoleMatrix(matrix);
       })
       .catch(() => !cancelled && setRole(null));
     return () => {
       cancelled = true;
     };
-  }, [authed, role, scope, setRole, setScope]);
+  }, [authed, role, scope, setRole, setScope, setRoleMatrix]);
 
   // Reflect the persisted theme onto <html data-theme> (and keep it in sync on change).
   useEffect(() => {

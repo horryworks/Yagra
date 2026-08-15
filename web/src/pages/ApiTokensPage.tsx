@@ -11,7 +11,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg, ApiError } from '../services/api';
-import { useAuthStore } from '../store';
+import { useAuthStore, useCan } from '../store';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import {
   ROLES,
   TOKEN_SURFACES,
@@ -474,8 +476,9 @@ function RevokeTokenModal({
 export function ApiTokensPage() {
   const { t } = useTranslation('settings-tokens');
   const authed = useAuthStore((s) => s.authed);
+  const canUsers = useCan('manage_users');
   const [rows, setRows] = useState<ApiTokenSummary[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -502,10 +505,11 @@ export function ApiTokensPage() {
       .listApiTokens()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
       .catch((e: unknown) => {
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setUnavailable(true);
+        const b = classifyLoadError(e);
+        if (b) setBlock(b);
         else setError(errMsg(e, t('err.load')));
       })
       .finally(() => setLoading(false));
@@ -524,8 +528,8 @@ export function ApiTokensPage() {
   }, [authed, load]);
 
   const columns = useMemo(
-    () => tokenColumns(t, now, authed ? (r) => setRevoking(r) : null),
-    [t, now, authed],
+    () => tokenColumns(t, now, canUsers ? (r) => setRevoking(r) : null),
+    [t, now, canUsers],
   );
   // URL-backed: one table on this route, so the column keys are free and a filtered view can be
   // sent to someone. Counts are exact and free here — every token is already in the browser.
@@ -548,10 +552,8 @@ export function ApiTokensPage() {
         <Card>
           <p className="muted">{t('signInPrompt')}</p>
         </Card>
-      ) : unavailable ? (
-        <Card>
-          <p className="muted">{t('unavailable')}</p>
-        </Card>
+      ) : block ? (
+        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_users" />
       ) : (
         <>
           <TableToolbar>
@@ -571,9 +573,11 @@ export function ApiTokensPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('count', { count: shown.length })}
             />
-            <Button variant="primary" onClick={() => setAdding(true)}>
-              + {t('add.button')}
-            </Button>
+            {canUsers && (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                + {t('add.button')}
+              </Button>
+            )}
           </TableToolbar>
 
           {error && <p className="form-error">{error}</p>}

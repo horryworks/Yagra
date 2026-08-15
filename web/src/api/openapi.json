@@ -27006,6 +27006,19 @@
           }
         }
       },
+      "Permission": {
+        "type": "string",
+        "description": "A discrete capability checked at the API edge.",
+        "enum": [
+          "view",
+          "ack_alerts",
+          "manage_maintenance",
+          "manage_config",
+          "manage_credentials",
+          "manage_users",
+          "view_audit"
+        ]
+      },
       "PermissionInfo": {
         "type": "object",
         "description": "One permission in the role/privilege matrix.",
@@ -27019,7 +27032,7 @@
             "type": "string"
           },
           "key": {
-            "type": "string"
+            "$ref": "#/components/schemas/Permission"
           },
           "label": {
             "type": "string"
@@ -28579,7 +28592,7 @@
             "type": "string"
           },
           "key": {
-            "type": "string"
+            "$ref": "#/components/schemas/Role"
           },
           "label": {
             "type": "string"
@@ -28587,7 +28600,7 @@
           "permissions": {
             "type": "array",
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Permission"
             },
             "description": "The keys of the permissions this role grants."
           }

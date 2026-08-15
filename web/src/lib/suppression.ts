@@ -10,6 +10,7 @@ import type {
   Mute,
   NodeGroup,
   NodeSummary,
+  Permission,
   SuppressionExemption,
 } from '../types/api';
 
@@ -584,4 +585,37 @@ export function suppressionPanelRows(
     });
   }
   return rows;
+}
+
+/**
+ * The privilege a release control needs, decided by what it releases.
+ *
+ * Mirrors `api/maintenance.rs`: everything about a **window** is `ManageMaintenance`
+ * (`end_maintenance_window`, `set_node_maintenance_exemption`) and everything about a **mute** is
+ * `AckAlerts` (`delete_mute`, `set_node_mute_exemption`). They resolve to the same roles today, so
+ * asking for the right one buys nothing this week — it is what lets a future role hold one without
+ * the other (`api-conventions.md`).
+ */
+export function releasePermission(kind: 'maintenance' | 'mute'): Permission {
+  return kind === 'maintenance' ? 'manage_maintenance' : 'ack_alerts';
+}
+
+/**
+ * Drop the control from the blocks the caller may not act on, and **keep the block** (ADR-056).
+ *
+ * A Viewer still needs every one of these rows: "this node is under a maintenance window that ends
+ * at 04:00" is the answer to why it is silent, and hiding it would put back the thing Increment 1
+ * removed — a screen that reports nothing when the truth is that it may not say. What they lose is
+ * the button, because it would only ever 403.
+ *
+ * `can` is passed in rather than read from the store so the rule stays testable here; `.tsx` files
+ * run no tests (`testing.md`).
+ */
+export function releasableRows(
+  rows: SuppressionPanelRow[],
+  can: (perm: Permission) => boolean,
+): SuppressionPanelRow[] {
+  return rows.map((r) =>
+    r.action && !can(releasePermission(r.kind)) ? { ...r, action: null } : r,
+  );
 }

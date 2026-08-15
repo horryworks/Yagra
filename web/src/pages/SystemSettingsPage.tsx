@@ -14,10 +14,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { PermissionHint } from '../components/ui/PermissionHint';
 import { TextInput } from '../components/ui/Field';
 import type { NeighborConfig, RetentionPolicy, RetentionRow } from '../types/api';
 import {
@@ -50,7 +51,7 @@ const MAX = 3600;
 
 export function SystemSettingsPage() {
   const { t } = useTranslation('system');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [value, setValue] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -110,23 +111,25 @@ export function SystemSettingsPage() {
                 setSaved(false);
               }}
               inputMode="numeric"
-              disabled={!authed || !loaded || busy}
+              disabled={!canConfig || !loaded || busy}
               aria-label={t('settings.polling.intervalAria')}
             />
             <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={save} disabled={busy || !loaded}>
                 {t('common:actions.save')}
               </Button>
             )}
           </div>
         </div>
-        {!authed && <p className="muted">{t('settings.signInHint')}</p>}
+        {!canConfig && (
+        <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+      )}
         {error && <p className="form-error">{error}</p>}
         {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
       </Card>
-      <NeighborCard authed={authed} />
-      <RetentionCard authed={authed} />
+      <NeighborCard canConfig={canConfig} />
+      <RetentionCard canConfig={canConfig} />
     </div>
   );
 }
@@ -140,7 +143,7 @@ export function SystemSettingsPage() {
  *  Rendered from `DISCOVERY_WALKS` rather than as one block per walk, so adding one is a registry
  *  entry plus its locale strings — which is exactly what the routing walk (ADR-043 Increment 4)
  *  cost. All judgement is in `neighborSettings.ts` — Vitest never runs a .tsx (testing.md). */
-function NeighborCard({ authed }: { authed: boolean }) {
+function NeighborCard({ canConfig }: { canConfig: boolean }) {
   const { t } = useTranslation('system');
   const [saved, setSavedCfg] = useState<NeighborConfig | null>(null);
   const [form, setForm] = useState<DiscoveryForm | null>(null);
@@ -216,7 +219,7 @@ function NeighborCard({ authed }: { authed: boolean }) {
                 <input
                   type="checkbox"
                   checked={form?.[walk].enabled ?? false}
-                  disabled={!authed || !form || busy}
+                  disabled={!canConfig || !form || busy}
                   onChange={(e) => patch(walk, { enabled: e.target.checked })}
                 />
                 <span>
@@ -242,7 +245,7 @@ function NeighborCard({ authed }: { authed: boolean }) {
                 value={form?.[walk].intervalSecs ?? ''}
                 onChange={(e) => patch(walk, { intervalSecs: e.target.value })}
                 inputMode="numeric"
-                disabled={!authed || !form || busy}
+                disabled={!canConfig || !form || busy}
                 aria-label={`${t(`settings.neighbors.walk.${walk}.name`)} — ${t('settings.neighbors.intervalName')}`}
               />
               <span className="sys-setting-unit muted">{t('settings.polling.seconds')}</span>
@@ -256,14 +259,16 @@ function NeighborCard({ authed }: { authed: boolean }) {
           </div>
         </div>
       ))}
-      {authed && (
+      {canConfig && (
         <div className="sys-setting-actions">
           <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
             {t('common:actions.save')}
           </Button>
         </div>
       )}
-      {!authed && <p className="muted">{t('settings.signInHint')}</p>}
+      {!canConfig && (
+        <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+      )}
       {error && <p className="form-error">{error}</p>}
       {ok && <p className="sys-setting-saved">{t('settings.saved')}</p>}
     </Card>
@@ -271,7 +276,7 @@ function NeighborCard({ authed }: { authed: boolean }) {
 }
 
 /** Settings ▸ System settings ▸ Data retention (ADR-040). */
-function RetentionCard({ authed }: { authed: boolean }) {
+function RetentionCard({ canConfig }: { canConfig: boolean }) {
   const { t } = useTranslation('system');
   const [policy, setPolicy] = useState<RetentionPolicy | null>(null);
   const [form, setForm] = useState<RetentionForm | null>(null);
@@ -332,21 +337,23 @@ function RetentionCard({ authed }: { authed: boolean }) {
           key={row.subject}
           row={row}
           form={form}
-          disabled={!authed || !form || busy}
+          disabled={!canConfig || !form || busy}
           onChange={(field, v) => {
             setForm((f) => (f ? { ...f, [field]: v } : f));
             setSaved(false);
           }}
         />
       ))}
-      {authed && (
+      {canConfig && (
         <div className="sys-setting-actions">
           <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
             {t('common:actions.save')}
           </Button>
         </div>
       )}
-      {!authed && <p className="muted">{t('settings.signInHint')}</p>}
+      {!canConfig && (
+        <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+      )}
       {error && <p className="form-error">{error}</p>}
       {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
     </Card>

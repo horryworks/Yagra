@@ -13,7 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -36,7 +36,7 @@ import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<ClassificationRule[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [sheet, setSheet] = useState(false);
@@ -127,7 +127,7 @@ export function ClassificationRulesPage() {
         width: '110px',
         align: 'right',
         render: (r) =>
-          authed ? (
+          canConfig ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -158,7 +158,7 @@ export function ClassificationRulesPage() {
     // `profileName` and `toggleEnabled` are rebuilt every render; what they read is listed instead,
     // so a keystroke in a filter cell does not rebuild the columns and re-run the predicate.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, authed, profiles]);
+  }, [t, canConfig, profiles]);
 
   // URL-backed: one table on this route, so a narrowed view is linkable.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
@@ -176,7 +176,11 @@ export function ClassificationRulesPage() {
       />
 
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('rules.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('rules.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -192,7 +196,7 @@ export function ClassificationRulesPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.rule', { count: rows.length })}
             />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('rules.addRule')}
               </Button>

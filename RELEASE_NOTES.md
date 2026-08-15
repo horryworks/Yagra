@@ -10,6 +10,27 @@
 
 ## Unreleased
 
+### Improvements
+- **Buttons you are not allowed to press are no longer drawn.** Every write control in the WebUI —
+  every `+ Add`, every edit, every delete, every Save — decided whether to appear from *"am I
+  signed in?"* rather than from *"may I do this?"*. A Viewer was offered `+ Add window` and
+  `+ Add mute`; an Operator was offered every administrator-only `+ Add` on the screens whose list
+  anyone may read. The server refused all of them, so nothing happened that should not have, but
+  the operator had to press the button to find out. Controls now ask for the privilege the action
+  itself requires — the same one the API checks — and are simply absent otherwise. Where a whole
+  panel *is* the action (Configuration bundle's export and import, the three System-settings forms),
+  it now names the privilege you need instead of telling a signed-in user to sign in.
+- **A refusal names the privilege it wants.** A screen you may not read used to say only "you don't
+  have permission"; it now says which of the seven privileges would grant it, taken from the
+  server's own catalogue — the same text `Settings ▸ Roles & privileges` renders. Extended to three
+  screens that previously reported a permission refusal as "unavailable" or as a load error:
+  `Settings ▸ AI analysis`, `Settings ▸ API tokens` and `Settings ▸ Audit log`.
+- **The shared dashboard's `Customize` button is hidden rather than disabled** for an account that
+  cannot change it. It carried its explanation in a hover tooltip, which a touch device never
+  shows — so on a phone the button read as broken.
+- `Settings ▸ Pollers ▸ Register poller` now requires the *Manage configuration* privilege, matching
+  the rest of that screen; it was previously offered to any signed-in account.
+
 ### Bug Fixes
 - **A screen you lack permission for now says so, instead of reporting that it is empty.** Signed
   in as a Viewer, `Nodes ▸ Credentials & secrets` showed "**No credentials yet**" on a deployment

@@ -14,10 +14,11 @@
 import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
+import { PermissionHint } from '../components/ui/PermissionHint';
 import type { ConfigBundle, ImportReport } from '../types/api';
 import {
   bundleFilename,
@@ -32,7 +33,7 @@ import './ConfigBundlePage.css';
 
 export function ConfigBundlePage() {
   const { t } = useTranslation('system');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
 
   return (
     <div>
@@ -44,11 +45,19 @@ export function ConfigBundlePage() {
       <Card title={t('bundle.export.title')}>
         <p className="cb-help muted">{t('bundle.export.help')}</p>
         <p className="cb-help muted">{t('bundle.notBackup')}</p>
-        {authed ? <ExportPanel /> : <p className="muted">{t('settings.signInHint')}</p>}
+        {canConfig ? (
+          <ExportPanel />
+        ) : (
+          <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+        )}
       </Card>
       <Card title={t('bundle.import.title')}>
         <p className="cb-help muted">{t('bundle.import.help')}</p>
-        {authed ? <ImportPanel /> : <p className="muted">{t('settings.signInHint')}</p>}
+        {canConfig ? (
+          <ImportPanel />
+        ) : (
+          <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+        )}
       </Card>
     </div>
   );

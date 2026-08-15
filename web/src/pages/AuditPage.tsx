@@ -18,6 +18,8 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, ApiError } from '../services/api';
 import { useAuthStore } from '../store';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import type { AuditRow } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -79,6 +81,9 @@ export function AuditPage() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // `ViewAudit` is admin-only, so an operator reaching this screen is refused. Say which privilege
+  // that needs instead of painting the server's 403 as a load failure (ADR-056).
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   // Re-entrancy guard: DataTable fires onReachEnd on every render while the last row is in view,
   // so coalesce overlapping page loads into one in-flight request.
   const loadingMore = useRef(false);
@@ -118,9 +123,13 @@ export function AuditPage() {
         if (cancelled) return;
         setRows(page);
         setCursor(nextCursor(page));
+        setBlock(null);
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(e instanceof ApiError ? e.message : t('audit.err.load'));
+        if (cancelled) return;
+        const b = classifyLoadError(e);
+        if (b) setBlock(b);
+        else setError(e instanceof ApiError ? e.message : t('audit.err.load'));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -173,6 +182,12 @@ export function AuditPage() {
         <Card>
           <p className="muted">{t('audit.signInPrompt')}</p>
         </Card>
+      ) : block ? (
+        <LoadBlockNotice
+          block={block}
+          unavailable={t('audit.err.load')}
+          permission="view_audit"
+        />
       ) : (
         <>
           <TableToolbar>

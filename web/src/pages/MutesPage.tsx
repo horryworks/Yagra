@@ -17,7 +17,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -82,7 +82,7 @@ function LiftMuteModal({
 
 export function MutesPage() {
   const { t } = useTranslation('suppression');
-  const authed = useAuthStore((s) => s.authed);
+  const canAck = useCan('ack_alerts');
   const [rows, setRows] = useState<Mute[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -179,7 +179,7 @@ export function MutesPage() {
         width: '92px',
         align: 'right',
         render: (m) =>
-          authed ? (
+          canAck ? (
             <span className="ytable-actions">
               <IconButton title={t('mutes.lift.title')} danger onClick={() => setLifting(m)}>
                 <TrashIcon />
@@ -194,7 +194,7 @@ export function MutesPage() {
     // depending on it would rebuild the columns every render and re-run the predicate. The two
     // things it actually reads are in the list instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, now, authed, groups, nodeName]);
+  }, [t, now, canAck, groups, nodeName]);
 
   // URL-backed: one table on this route, so the column keys are free and a narrowed view can be
   // sent to someone.
@@ -235,7 +235,7 @@ export function MutesPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('mutes.resultNoun')}
             />
-            {authed && (
+            {canAck && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('mutes.add')}
               </Button>

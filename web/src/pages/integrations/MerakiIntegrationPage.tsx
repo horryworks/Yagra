@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg } from '../../services/api';
-import { useAuthStore } from '../../store';
+import { useCan } from '../../store';
 import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Card } from '../../components/ui/Card';
@@ -354,7 +354,7 @@ function CadenceModal({
 
 export function MerakiIntegrationPage() {
   const { t } = useTranslation('system');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [orgs, setOrgs] = useState<MerakiOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -405,7 +405,7 @@ export function MerakiIntegrationPage() {
               type="checkbox"
               checked={pollingOn}
               onChange={togglePolling}
-              disabled={!authed}
+              disabled={!canConfig}
             />
             <span>{pollingOn ? t('meraki.polling.enabled') : t('meraki.polling.paused')}</span>
           </label>
@@ -415,7 +415,7 @@ export function MerakiIntegrationPage() {
         <Card
           title={t('meraki.orgs.title')}
           actions={
-            authed ? (
+            canConfig ? (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('meraki.orgs.add')}
               </Button>
@@ -440,7 +440,7 @@ export function MerakiIntegrationPage() {
                       {t('meraki.tiersPrefix')} {tierList(o.enabled_tiers, t)}
                     </span>
                   </div>
-                  {authed && (
+                  {canConfig && (
                     <div className="meraki-org-actions">
                       <Button variant="outline" onClick={() => setImporting(o)}>
                         {t('meraki.org.import')}
@@ -467,7 +467,7 @@ export function MerakiIntegrationPage() {
       </>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs, loading, block, pollingOn, authed, t]);
+  }, [orgs, loading, block, pollingOn, canConfig, t]);
 
   return (
     <div>

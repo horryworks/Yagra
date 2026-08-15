@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { EventSource } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -24,7 +24,7 @@ import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<EventSource[]>([]);
   const [sheet, setSheet] = useState(false);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -96,7 +96,7 @@ export function EventSourcesPage() {
         width: '130px',
         align: 'right',
         render: (r) =>
-          authed ? (
+          canConfig ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -128,7 +128,7 @@ export function EventSourcesPage() {
     // `rotate` and `toggleEnabled` are rebuilt every render; listing them would rebuild the
     // columns on every keystroke elsewhere and re-run the predicate for nothing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, authed, rows]);
+  }, [t, canConfig, rows]);
 
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
     columns,
@@ -140,7 +140,11 @@ export function EventSourcesPage() {
     <div>
       <PageHeader title={t('nav:events.webhooks')} note={t('eventSources.note')} />
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('eventSources.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('eventSources.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -156,7 +160,7 @@ export function EventSourcesPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('noun.source', { count: rows.length })}
             />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('eventSources.add')}
               </Button>

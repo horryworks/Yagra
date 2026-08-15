@@ -11,7 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { CollectionTemplate } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -35,7 +35,7 @@ import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 export function CollectionTemplatesPage() {
   const { t } = useTranslation('monitoring');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<CollectionTemplate[]>([]);
   const [filters, setFilters] = useState<FilterState>({});
   const [sheet, setSheet] = useState(false);
@@ -115,7 +115,7 @@ export function CollectionTemplatesPage() {
         width: '72px',
         align: 'right',
         render: (r) =>
-          authed ? (
+          canConfig ? (
             <IconButton title={t('sets.deleteSet')} danger onClick={() => setDeleting(r)}>
               <TrashIcon />
             </IconButton>
@@ -125,7 +125,7 @@ export function CollectionTemplatesPage() {
     // ⚠️ Untyped index lookup — rename a column key and its filter cell silently disappears.
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, authed, openItems]);
+  }, [t, canConfig, openItems]);
 
   return (
     <div>
@@ -136,7 +136,11 @@ export function CollectionTemplatesPage() {
       />
 
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('sets.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('sets.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -156,7 +160,7 @@ export function CollectionTemplatesPage() {
               total={rows.length}
               noun={t('sets.noun', { count: rows.length })}
             />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('sets.addSet')}
               </Button>
@@ -184,7 +188,7 @@ export function CollectionTemplatesPage() {
               expanded={(r) =>
                 openItems === r.id ? (
                   <div className="crud-collection">
-                    <CollectionEditor scope="template" scopeId={r.id} canEdit={authed} />
+                    <CollectionEditor scope="template" scopeId={r.id} canEdit={canConfig} />
                   </div>
                 ) : null
               }

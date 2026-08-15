@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import {
   DIRECTIONS,
   SCOPE_LEVELS,
@@ -217,7 +217,7 @@ function DeleteThresholdModal({
 
 export function ThresholdsPage() {
   const { t } = useTranslation('alertsConfig');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<StoredThreshold[]>([]);
   /** Whole-ruleset size and whether `rows` is only a prefix of it — both come from the server. */
   const [page, setPage] = useState<{ total: number; truncated: boolean }>({
@@ -300,7 +300,7 @@ export function ThresholdsPage() {
         width: '92px',
         align: 'right',
         render: (row) =>
-          authed && (
+          canConfig && (
             <span className="ytable-actions">
               <IconButton
                 title={t('common:actions.delete')}
@@ -315,7 +315,7 @@ export function ThresholdsPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [authed, scopeName, specs, t]);
+  }, [canConfig, scopeName, specs, t]);
 
   // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
   // reload and can be shared. Since Inc.10 that is the shared codec (`useFilterParams`) rather
@@ -357,7 +357,11 @@ export function ThresholdsPage() {
       </Card>
 
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('thresholds.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('thresholds.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -380,7 +384,7 @@ export function ThresholdsPage() {
               total={filtered ? page.total : undefined}
               noun={t('common:noun.rule', { count: rows.length })}
             />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 {t('thresholds.add')}
               </Button>

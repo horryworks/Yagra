@@ -16,6 +16,7 @@ export function UserMenu() {
   const setAuthed = useAuthStore((s) => s.setAuthed);
   const setRole = useAuthStore((s) => s.setRole);
   const setScope = useAuthStore((s) => s.setScope);
+  const setRoleMatrix = useAuthStore((s) => s.setRoleMatrix);
   const role = useAuthStore((s) => s.role);
   const scope = useAuthStore((s) => s.scope);
   const navigate = useNavigate();
@@ -37,6 +38,7 @@ export function UserMenu() {
     setAuthed(false);
     setRole(null);
     setScope(null);
+    setRoleMatrix(null);
     setOpen(false);
     navigate('/dashboard');
   };

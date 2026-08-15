@@ -15,7 +15,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { CredentialSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -488,7 +488,7 @@ function DeleteCredentialModal({
 
 export function CredentialsPage() {
   const { t } = useTranslation('access');
-  const authed = useAuthStore((s) => s.authed);
+  const canCredentials = useCan('manage_credentials');
   const [rows, setRows] = useState<CredentialSummary[]>([]);
   const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useState<SortState>(DEFAULT_CREDENTIAL_SORT);
@@ -574,7 +574,7 @@ export function CredentialsPage() {
         width: '92px',
         align: 'right',
         render: (c) =>
-          authed ? (
+          canCredentials ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -597,7 +597,7 @@ export function CredentialsPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, authed, rows]);
+  }, [t, canCredentials, rows]);
 
   // URL-backed: one table on this route.
   const { filterCols, filters, setFilters, clear, shown: matched, counts, anyFiltered } =
@@ -615,7 +615,11 @@ export function CredentialsPage() {
       />
 
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('cred.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_credentials"
+          block={block}
+          unavailable={t('cred.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -631,7 +635,7 @@ export function CredentialsPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.credential', { count: rows.length })}
             />
-            {authed && (
+            {canCredentials && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('cred.add.title')}
               </Button>

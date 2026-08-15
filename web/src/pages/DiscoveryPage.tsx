@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type {
   CredentialSummary,
   DiscoveredEndpoint,
@@ -20,6 +20,7 @@ import type {
 import { expandTargets } from '../lib/cidr';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
+import { PermissionHint } from '../components/ui/PermissionHint';
 import { Button } from '../components/ui/Button';
 import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
@@ -54,7 +55,7 @@ interface RowState {
 
 export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
   const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
   const [scanId, setScanId] = useState<string | null>(null);
@@ -223,7 +224,7 @@ export function DiscoveryPage() {
       />
 
       <Card title={t('discovery.scanTitle')}>
-        {authed ? (
+        {canConfig ? (
           <>
             <div className="disco-form form-row">
               <TextInput
@@ -258,7 +259,7 @@ export function DiscoveryPage() {
             </p>
           </>
         ) : (
-          <p className="muted">{t('discovery.signIn')}</p>
+          <PermissionHint permission="manage_config" signInHint={t('discovery.signIn')} />
         )}
         {error && <p className="form-error">{error}</p>}
         {note && <p className="muted">{note}</p>}
@@ -401,7 +402,7 @@ export function DiscoveryPage() {
               );
             })}
           </div>
-          {authed && (
+          {canConfig && (
             <div className="disco-import">
               {importNote && <span className="disco-import-ok">✓ {importNote}</span>}
               {importError && <span className="disco-import-err">{importError}</span>}
@@ -415,7 +416,7 @@ export function DiscoveryPage() {
         </Card>
       )}
 
-      <SeenOnNetworkCard authed={authed} profiles={profiles} creds={creds} />
+      <SeenOnNetworkCard canConfig={canConfig} profiles={profiles} creds={creds} />
     </div>
   );
 }
@@ -430,11 +431,11 @@ export function DiscoveryPage() {
  *  Importing goes through the same node writer the scan import uses, so classification happens on the
  *  new node's first identity probe exactly as it does for a scanned device. */
 function SeenOnNetworkCard({
-  authed,
+  canConfig,
   profiles,
   creds,
 }: {
-  authed: boolean;
+  canConfig: boolean;
   profiles: ProfileSummary[];
   creds: CredentialSummary[];
 }) {
@@ -599,7 +600,7 @@ function SeenOnNetworkCard({
                 </span>
                 <Select
                   value={r.profile_id}
-                  disabled={!authed || busyId != null}
+                  disabled={!canConfig || busyId != null}
                   onChange={(ev) =>
                     setRows((cur) => ({ ...cur, [e.id]: { ...r, profile_id: ev.target.value } }))
                   }
@@ -613,7 +614,7 @@ function SeenOnNetworkCard({
                 </Select>
                 <Select
                   value={r.credential_id}
-                  disabled={!authed || busyId != null}
+                  disabled={!canConfig || busyId != null}
                   onChange={(ev) =>
                     setRows((cur) => ({ ...cur, [e.id]: { ...r, credential_id: ev.target.value } }))
                   }
@@ -627,7 +628,7 @@ function SeenOnNetworkCard({
                 </Select>
                 <Button
                   variant="primary"
-                  disabled={!authed || busyId != null}
+                  disabled={!canConfig || busyId != null}
                   onClick={() => promote(e)}
                 >
                   {t('discovery.seen.monitor')}
@@ -640,7 +641,9 @@ function SeenOnNetworkCard({
           )}
         </div>
       )}
-      {!authed && <p className="muted">{t('discovery.signIn')}</p>}
+      {!canConfig && (
+        <PermissionHint permission="manage_config" signInHint={t('discovery.signIn')} />
+      )}
       {error && <p className="form-error">{error}</p>}
       {note && <p className="disco-import-ok">✓ {note}</p>}
     </Card>

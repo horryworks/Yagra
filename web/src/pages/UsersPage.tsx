@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import { ROLES, type NodeGroup, type Role, type Scope, type UserKind, type UserSummary } from '../types/api';
 import {
   canHoldScope,
@@ -56,7 +56,7 @@ const MIN_PW = 8;
 
 export function UsersPage() {
   const { t } = useTranslation('access');
-  const authed = useAuthStore((s) => s.authed);
+  const canUsers = useCan('manage_users');
   const [rows, setRows] = useState<UserSummary[]>([]);
   const [me, setMe] = useState<string | null>(null);
   const filterCols = useMemo(() => userColumns(t), [t]);
@@ -156,7 +156,7 @@ export function UsersPage() {
               total={rows.length}
               noun={t('common:noun.user', { count: rows.length })}
             />
-            {authed && (
+            {canUsers && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('users.actions.addUser')}
               </Button>
@@ -232,7 +232,7 @@ export function UsersPage() {
                       </div>
                     </div>
                     <div className="il-right">
-                      {authed ? (
+                      {canUsers ? (
                         <select
                           className={`role-select role-${u.role}`}
                           value={u.role}
@@ -248,7 +248,7 @@ export function UsersPage() {
                       ) : (
                         <span className="muted">{t(`role.${u.role}`)}</span>
                       )}
-                      {authed && (
+                      {canUsers && (
                         <div className="il-actions">
                           <OverflowMenu
                             actions={[

@@ -12,7 +12,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { CollectionTemplate, ProfileInput, ProfileSummary } from '../types/api';
 import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -43,7 +43,7 @@ const COLS = '1.8fr 1fr 120px 130px 96px';
 
 export function ProfilesPage() {
   const { t } = useTranslation('monitoring');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -139,7 +139,11 @@ export function ProfilesPage() {
       />
 
       {block ? (
-        <LoadBlockNotice block={block} unavailable={t('profiles.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('profiles.unavailable')}
+        />
       ) : (
         <>
           <TableToolbar>
@@ -159,7 +163,7 @@ export function ProfilesPage() {
               total={rows.length}
               noun={t('common:noun.profile', { count: rows.length })}
             />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('profiles.addProfile')}
               </Button>
@@ -267,7 +271,7 @@ export function ProfilesPage() {
                             </Button>
                           </div>
                           <div className="ytable-cell right">
-                            {authed && (
+                            {canConfig && (
                               <span className="ytable-actions">
                                 <OverflowMenu
                                   actions={[
@@ -293,7 +297,7 @@ export function ProfilesPage() {
                             <ProfileTemplates
                               profileId={p.id}
                               templates={templates}
-                              canEdit={authed}
+                              canEdit={canConfig}
                             />
                           </div>
                         )}

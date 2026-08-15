@@ -5,8 +5,10 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
-import { useAuthStore } from '../store';
+import { api, errMsg } from '../services/api';
+import { useCan } from '../store';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import {
   ROLES,
   type LdapConfigView,
@@ -431,7 +433,7 @@ function DeleteProviderModal({
  *  switching it on is the whole point of it, but there is nothing to validate until something has
  *  been written. The result is rendered stage by stage rather than as a tick, because the check
  *  deliberately never binds as the user — an `ok` alone would be read as "login works". */
-function DirectoryCard({ authed }: { authed: boolean }) {
+function DirectoryCard({ canUsers }: { canUsers: boolean }) {
   const { t } = useTranslation('settings-auth');
   const [stored, setStored] = useState<LdapConfigView | null>(null);
   const [form, setForm] = useState<LdapFormState>(emptyLdapForm());
@@ -719,7 +721,7 @@ function DirectoryCard({ authed }: { authed: boolean }) {
       {saved && <p className="auth-saved">{t('ldap.saved')}</p>}
 
       <div className="auth-toolbar">
-        <Button variant="primary" onClick={() => void save()} disabled={!authed || busy}>
+        <Button variant="primary" onClick={() => void save()} disabled={!canUsers || busy}>
           {t('common:actions.save')}
         </Button>
         <TextInput
@@ -780,9 +782,9 @@ function DirectoryCard({ authed }: { authed: boolean }) {
 
 export function AuthSettingsPage() {
   const { t } = useTranslation('settings-auth');
-  const authed = useAuthStore((s) => s.authed);
+  const canUsers = useCan('manage_users');
   const [rows, setRows] = useState<OidcProviderSummary[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<OidcProviderSummary | null>(null);
@@ -793,10 +795,10 @@ export function AuthSettingsPage() {
       .listOidcProviders()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
       .catch((e: unknown) => {
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setUnavailable(true);
+        setBlock(classifyLoadError(e));
       })
       .finally(() => setLoading(false));
   }, []);
@@ -824,14 +826,12 @@ export function AuthSettingsPage() {
         </Card>
       )}
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_users" />
       ) : (
         <>
           <div className="auth-toolbar">
-            {authed && (
+            {canUsers && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('add.title')}
               </Button>
@@ -860,7 +860,7 @@ export function AuthSettingsPage() {
                         {t('mappedGroups', { count: Object.keys(p.role_map).length })}
                       </div>
                     </div>
-                    {authed && (
+                    {canUsers && (
                       <OverflowMenu
                         actions={[
                           {
@@ -886,7 +886,7 @@ export function AuthSettingsPage() {
           {/* The directory lives on this page rather than one of its own (ADR-041). "Who may sign
               in" is one subject with two sources, and a separate *Directory* nav item would be the
               second settings screen for one concept that decision 2 exists to prevent. */}
-          <DirectoryCard authed={authed} />
+          <DirectoryCard canUsers={canUsers} />
         </>
       )}
 

@@ -9,8 +9,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
-import { useAuthStore } from '../store';
+import { api, errMsg } from '../services/api';
+import { useAuthStore, useCan } from '../store';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import type { LlmConfigView, LlmProviderChoice } from '../types/api';
 import { formatExactTime } from '../lib/format';
 import {
@@ -33,10 +35,11 @@ import './AiSettingsPage.css';
 export function AiSettingsPage() {
   const { t } = useTranslation('settings-ai');
   const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
 
   const [providers, setProviders] = useState<LlmProviderChoice[]>([]);
   const [stored, setStored] = useState<LlmConfigView | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
 
   const [provider, setProvider] = useState('vertex');
@@ -59,7 +62,7 @@ export function AiSettingsPage() {
       .getLlmConfig()
       .then((res) => {
         setProviders(res.providers);
-        setUnavailable(false);
+        setBlock(null);
         setStored(res.config ?? null);
         if (res.config) {
           setProvider(res.config.provider);
@@ -75,7 +78,8 @@ export function AiSettingsPage() {
         setApiKey('');
       })
       .catch((e: unknown) => {
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setUnavailable(true);
+        const b = classifyLoadError(e);
+        if (b) setBlock(b);
         else setError(errMsg(e, t('loadFailed')));
       })
       .finally(() => setLoading(false));
@@ -151,7 +155,7 @@ export function AiSettingsPage() {
       .finally(() => setTesting(false));
   };
 
-  if (unavailable) {
+  if (block) {
     return (
       <div>
         <PageHeader
@@ -159,9 +163,7 @@ export function AiSettingsPage() {
           trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.ai') }]}
           note={t('note')}
         />
-        <Card>
-          <p className="muted">{t('unavailable')}</p>
-        </Card>
+        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_config" />
       </div>
     );
   }
@@ -182,7 +184,7 @@ export function AiSettingsPage() {
           <Select
             id="ai-provider"
             value={provider}
-            disabled={!authed || loading || busy}
+            disabled={!canConfig || loading || busy}
             onChange={(e) => {
               setProvider(e.target.value);
               setReplaceKey(false);
@@ -214,7 +216,7 @@ export function AiSettingsPage() {
             className="mono"
             value={model}
             placeholder={choice?.suggested_model ?? ''}
-            disabled={!authed || loading || busy}
+            disabled={!canConfig || loading || busy}
             onChange={(e) => {
               setModel(e.target.value);
               dirty();
@@ -233,7 +235,7 @@ export function AiSettingsPage() {
                 id="ai-project"
                 className="mono"
                 value={project}
-                disabled={!authed || loading || busy}
+                disabled={!canConfig || loading || busy}
                 onChange={(e) => {
                   setProject(e.target.value);
                   dirty();
@@ -249,7 +251,7 @@ export function AiSettingsPage() {
                 className="mono"
                 value={location}
                 placeholder={choice.suggested_location ?? ''}
-                disabled={!authed || loading || busy}
+                disabled={!canConfig || loading || busy}
                 onChange={(e) => {
                   setLocation(e.target.value);
                   dirty();
@@ -270,7 +272,7 @@ export function AiSettingsPage() {
               <input
                 type="checkbox"
                 checked={replaceKey}
-                disabled={!authed || busy}
+                disabled={!canConfig || busy}
                 onChange={(e) => {
                   setReplaceKey(e.target.checked);
                   setApiKey('');
@@ -289,7 +291,7 @@ export function AiSettingsPage() {
                 value={apiKey}
                 autoComplete="off"
                 spellCheck={false}
-                disabled={!authed || loading || busy}
+                disabled={!canConfig || loading || busy}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   dirty();
@@ -302,7 +304,7 @@ export function AiSettingsPage() {
                 type="password"
                 value={apiKey}
                 autoComplete="new-password"
-                disabled={!authed || loading || busy}
+                disabled={!canConfig || loading || busy}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   dirty();
@@ -331,7 +333,7 @@ export function AiSettingsPage() {
             className="ai-tokens mono"
             value={maxTokens}
             inputMode="numeric"
-            disabled={!authed || loading || busy}
+            disabled={!canConfig || loading || busy}
             onChange={(e) => {
               setMaxTokens(e.target.value);
               dirty();
@@ -344,7 +346,7 @@ export function AiSettingsPage() {
           <input
             type="checkbox"
             checked={enabled}
-            disabled={!authed || loading || busy}
+            disabled={!canConfig || loading || busy}
             onChange={(e) => {
               setEnabled(e.target.checked);
               dirty();
@@ -356,7 +358,7 @@ export function AiSettingsPage() {
       </Card>
 
       <div className="ai-actions">
-        {authed && (
+        {canConfig && (
           <>
             <Button variant="primary" onClick={save} disabled={busy || loading}>
               {t('common:actions.save')}

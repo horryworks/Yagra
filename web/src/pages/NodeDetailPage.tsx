@@ -9,7 +9,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { NodeGroup } from '../types/api';
 import { Breadcrumb } from '../components/shell/Breadcrumb';
 import { NodeDetail } from '../components/NodeDetail/NodeDetail';
@@ -19,7 +19,7 @@ export function NodeDetailPage() {
   const { t } = useTranslation();
   const { nodeId = '' } = useParams();
   const navigate = useNavigate();
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   // Keep the active sub-tab in the URL so a browser reload restores it instead of snapping back
   // to Overview.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -44,7 +44,7 @@ export function NodeDetailPage() {
       <NodeDetail
         nodeId={nodeId}
         variant="page"
-        canEdit={authed}
+        canEdit={canConfig}
         tab={tab}
         onTabChange={setTab}
         groups={groups}

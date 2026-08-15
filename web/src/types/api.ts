@@ -238,6 +238,11 @@ export const ROLES = ['viewer', 'operator', 'admin'] as const;
 /** A predefined role (snake_case), ordered least → most privileged. Pinned to `schemas.Role`. */
 export type Role = (typeof ROLES)[number];
 
+/** A discrete capability the API edge checks. Generated from the Rust `Permission` enum, so a
+ *  permission this UI names is one the server has (ADR-056 Inc.2) — the alternative, a hand-typed
+ *  string, fails *closed*: a typo hides the control from everyone including an admin. */
+export type Permission = components['schemas']['Permission'];
+
 /** One capability in the role/privilege matrix (`GET /api/v1/roles`). */
 export type PermissionInfo = components['schemas']['PermissionInfo'];
 

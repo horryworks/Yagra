@@ -24,7 +24,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -175,7 +175,7 @@ function DeleteMibEntryModal({
 
 export function MibRepositoryPage() {
   const { t } = useTranslation('monitoring');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<MibCatalogEntry[]>([]);
   const [query, setQuery] = useState('');
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -252,7 +252,7 @@ export function MibRepositoryPage() {
         width: '92px',
         align: 'right',
         render: (e) =>
-          authed ? (
+          canConfig ? (
             <span className="ytable-actions">
               <IconButton
                 title={t('common:actions.delete')}
@@ -265,7 +265,7 @@ export function MibRepositoryPage() {
           ) : null,
       },
     ],
-    [t, authed],
+    [t, canConfig],
   );
 
   // The filter row is a *view* of `query`, not a second copy of it. One state, one writer — the
@@ -299,7 +299,7 @@ export function MibRepositoryPage() {
             <ClearFilters columns={filterCols} filters={filters} onClear={() => setQuery('')} />
             <TableSpacer />
             <ResultCount shown={rows.length} noun={t('mib.noun', { count: rows.length })} />
-            {authed && (
+            {canConfig && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('mib.addEntry')}
               </Button>

@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useAuthStore, useCan } from '../store';
 import type { AnalysisSchedule, AnalysisScheduleStatus } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -127,7 +127,6 @@ function scheduleColumns(
 export function ScheduledPage() {
   const { t } = useTranslation('troubleshoot');
   const authed = useAuthStore((s) => s.authed);
-  const role = useAuthStore((s) => s.role);
   const [rows, setRows] = useState<AnalysisSchedule[]>([]);
   const [flowEnabled, setFlowEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -138,8 +137,8 @@ export function ScheduledPage() {
   const [sheet, setSheet] = useState(false);
 
   // Creating or editing a schedule is `AckAlerts` at the edge, like launching a run — so the
-  // action is offered only to a role that holds it, rather than failing on save.
-  const canWrite = role === 'operator' || role === 'admin';
+  // action is offered only to a caller who holds it, rather than failing on save.
+  const canWrite = useCan('ack_alerts');
 
   const load = useCallback(() => {
     setError(null);

@@ -313,14 +313,18 @@ export function NodeTree({
                       t('tree.suppression.until', { time: formatScheduleTime(r.endsAt) })}
                   </div>
                 )}
-                {canEdit && onRelease && control && (
+                {/* Not gated on `canEdit`: that is ManageConfig (editing the inventory), and
+                    ending a window or lifting a mute is not. The page decides — it withholds
+                    `onRelease` entirely when the caller may release neither kind, and strips the
+                    action from the blocks of the kind they may not (`releasableRows`). */}
+                {onRelease && control && (
                   <div className="ntree-supp-act">
                     <button type="button" onClick={() => act(control.action)}>
                       {t(control.labelKey)}
                     </button>
                   </div>
                 )}
-                {canEdit && onRelease && !control && r.noteKey && (
+                {onRelease && !control && r.noteKey && (
                   <div className="ntree-supp-note">{t(r.noteKey, r.noteParams)}</div>
                 )}
               </div>

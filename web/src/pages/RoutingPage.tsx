@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import {
   type ChannelConfigInput,
   type ChannelKind,
@@ -61,7 +61,7 @@ function EnabledStatus({ enabled }: { enabled: boolean }) {
 
 export function RoutingPage() {
   const { t } = useTranslation('alertsConfig');
-  const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -90,7 +90,11 @@ export function RoutingPage() {
           title={t('nav:alerts.routing')}
           trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
         />
-        <LoadBlockNotice block={block} unavailable={t('routing.unavailable')} />
+        <LoadBlockNotice
+          permission="manage_config"
+          block={block}
+          unavailable={t('routing.unavailable')}
+        />
       </div>
     );
   }
@@ -105,7 +109,7 @@ export function RoutingPage() {
       {error && <p className="form-error routing-error">{error}</p>}
       <ChannelsSection
         channels={channels}
-        authed={authed}
+        canConfig={canConfig}
         loading={loading}
         onChange={load}
         onError={setError}
@@ -113,7 +117,7 @@ export function RoutingPage() {
       <RulesSection
         rules={rules}
         channels={channels}
-        authed={authed}
+        canConfig={canConfig}
         loading={loading}
         onChange={load}
         onError={setError}
@@ -126,13 +130,13 @@ export function RoutingPage() {
 
 function ChannelsSection({
   channels,
-  authed,
+  canConfig,
   loading,
   onChange,
   onError,
 }: {
   channels: NotificationChannel[];
-  authed: boolean;
+  canConfig: boolean;
   loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
@@ -188,7 +192,7 @@ function ChannelsSection({
         width: '96px',
         align: 'right',
         render: (c) =>
-          authed ? (
+          canConfig ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -220,7 +224,7 @@ function ChannelsSection({
     return cols;
     // `toggle` is rebuilt every render; listing it would rebuild the columns on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, authed, channels]);
+  }, [t, canConfig, channels]);
 
   // ⚠️ **Component state, not the URL.** The column key IS the URL key (ADR-053 decision 12), and
   // this route has two tables — both with a `name` and a `status` column. URL-backing either one
@@ -242,7 +246,7 @@ function ChannelsSection({
           total={anyFiltered ? channels.length : undefined}
           noun={t('noun.channel', { count: shown.length })}
         />
-        {authed && (
+        {canConfig && (
           <Button variant="primary" onClick={() => setAdding(true)}>
             {t('routing.channels.add')}
           </Button>
@@ -492,14 +496,14 @@ function AddChannelModal({
 function RulesSection({
   rules,
   channels,
-  authed,
+  canConfig,
   loading,
   onChange,
   onError,
 }: {
   rules: RoutingRule[];
   channels: NotificationChannel[];
-  authed: boolean;
+  canConfig: boolean;
   loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
@@ -559,7 +563,7 @@ function RulesSection({
         width: '96px',
         align: 'right',
         render: (r) =>
-          authed ? (
+          canConfig ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -584,7 +588,7 @@ function RulesSection({
     return cols;
     // `channelName` and `toggle` are rebuilt every render; what they read is listed instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, authed, channels]);
+  }, [t, canConfig, channels]);
 
   // Component state, not the URL — see the channels table above for why this route cannot use it.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
@@ -604,7 +608,7 @@ function RulesSection({
           total={anyFiltered ? rules.length : undefined}
           noun={t('common:noun.rule', { count: shown.length })}
         />
-        {authed && (
+        {canConfig && (
           <Button variant="primary" onClick={() => setAdding(true)} disabled={channels.length === 0}>
             {t('routing.rules.add')}
           </Button>

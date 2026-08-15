@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api, errMsg, ApiError } from '../services/api';
-import { useAuthStore } from '../store';
+import { useAuthStore, useCan } from '../store';
 import type {
   ForwardDestKind,
   ForwardDestStatus,
@@ -50,6 +50,8 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { forwardingFilters } from './forwardingListFilters';
 import { OverflowMenu } from '../components/ui/OverflowMenu';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { EditIcon, PowerIcon, TrashIcon } from '../components/ui/icons';
 import {
   draftFrom,
@@ -67,6 +69,7 @@ function destinationColumns(
   t: TFunction,
   status: Map<string, ForwardDestStatus>,
   rows: readonly ForwardDestination[],
+  canEdit: boolean,
   onEdit: (row: ForwardDestination) => void,
   onTest: (row: ForwardDestination) => void,
   onDelete: (row: ForwardDestination) => void,
@@ -163,12 +166,13 @@ function destinationColumns(
         );
       },
     },
-    {
+    ...(canEdit
+      ? [{
       key: 'actions',
       header: t('cols.actions'),
       width: '96px',
-      align: 'right',
-      render: (r) => (
+      align: 'right' as const,
+      render: (r: ForwardDestination) => (
         <OverflowMenu
           actions={[
             { label: t('actions.edit'), icon: <EditIcon />, onClick: () => onEdit(r) },
@@ -182,7 +186,8 @@ function destinationColumns(
           ]}
         />
       ),
-    },
+    }]
+      : []),
   ];
   // Attached by key, so a column with no spec has no control and a spec with no column is visible
   // here rather than a silent no-op.
@@ -554,9 +559,10 @@ function DeleteModal({
 export function ForwardingPage() {
   const { t } = useTranslation('settings-forwarding');
   const authed = useAuthStore((s) => s.authed);
+  const canConfig = useCan('manage_config');
   const [rows, setRows] = useState<ForwardDestination[]>([]);
   const [status, setStatus] = useState<ForwardStatus | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<ForwardDestination | null>(null);
@@ -571,10 +577,11 @@ export function ForwardingPage() {
       .listForwardDestinations()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
       .catch((e: unknown) => {
-        if (e instanceof ApiError && (e.status === 401 || e.status === 403)) setUnavailable(true);
+        const b = classifyLoadError(e);
+        if (b) setBlock(b);
         else setError(errMsg(e, t('err.load')));
       })
       .finally(() => setLoading(false));
@@ -587,7 +594,7 @@ export function ForwardingPage() {
 
   // Counters are live, so poll them separately from the (edit-driven) destination list.
   useEffect(() => {
-    if (!authed || unavailable) return undefined;
+    if (!authed || block) return undefined;
     let alive = true;
     const tick = () => {
       api
@@ -605,7 +612,7 @@ export function ForwardingPage() {
       alive = false;
       window.clearInterval(id);
     };
-  }, [authed, unavailable]);
+  }, [authed, block]);
 
   const statusById = useMemo(
     () => new Map((status?.destinations ?? []).map((s) => [s.id, s])),
@@ -632,8 +639,8 @@ export function ForwardingPage() {
   );
 
   const columns = useMemo(
-    () => destinationColumns(t, statusById, rows, setEditing, runTest, setDeleting),
-    [t, statusById, rows, runTest],
+    () => destinationColumns(t, statusById, rows, canConfig, setEditing, runTest, setDeleting),
+    [t, statusById, rows, canConfig, runTest],
   );
   // Client-side: the destination list is bounded by what an operator configured, not by fleet size
   // (ui-conventions). URL-backed — one table on this route, so a filtered view is linkable.
@@ -665,10 +672,8 @@ export function ForwardingPage() {
         <Card>
           <p className="muted">{t('signInPrompt')}</p>
         </Card>
-      ) : unavailable ? (
-        <Card>
-          <p className="muted">{t('unavailable')}</p>
-        </Card>
+      ) : block ? (
+        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_config" />
       ) : (
         <>
           {wantsVerbatim && staleP.length > 0 && (
@@ -702,9 +707,11 @@ export function ForwardingPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('count', { count: shown.length })}
             />
-            <Button variant="primary" onClick={() => setAdding(true)}>
-              + {t('add.button')}
-            </Button>
+            {canConfig && (
+              <Button variant="primary" onClick={() => setAdding(true)}>
+                + {t('add.button')}
+              </Button>
+            )}
           </TableToolbar>
 
           {error && <p className="form-error">{error}</p>}

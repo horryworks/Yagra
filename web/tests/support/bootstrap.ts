@@ -4,7 +4,7 @@
 // shapes, `tsc -p tsconfig.e2e.json` fails here instead of the walk quietly testing a fiction.
 
 import type { components } from '../../src/api/schema';
-import { defaultBodyFor, type Json } from './openapi';
+import { defaultBodyFor, enumOf, MOCK_PREFIX, type Json } from './openapi';
 import type { Override } from './mockApi';
 
 type Schemas = components['schemas'];
@@ -40,6 +40,33 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     role: 'admin',
     scope: 'All',
   } satisfies Schemas['AuthMe'] as unknown as Json,
+
+  // 🚨 The same trap as `/auth/me`, one step further along. Since ADR-056 Inc.2 every write
+  // control asks `useCan`, which reads this matrix and looks the caller's role up in it — and the
+  // generator emits **one** `RoleInfo`, keyed `viewer` (the first enum member) granting `["view"]`.
+  // The walk signs in as `admin`, finds no row for it, and every `+ Add`, edit and delete in the
+  // app disappears — with every screen still green, because they all still render.
+  //
+  // Built from the document's own enums rather than transcribed: this fixture is not the RBAC
+  // model (that lives in `rbac.rs` and is tested there), it is "the walk's caller may do
+  // everything", which is what patching `/auth/me` to `admin` already said.
+  '/api/v1/roles': (() => {
+    const perms = enumOf('Permission');
+    return {
+      permissions: perms.map((key) => ({
+        key,
+        label: `${MOCK_PREFIX}${key}`,
+        description: `${MOCK_PREFIX}description`,
+      })),
+      roles: enumOf('Role').map((key) => ({
+        key,
+        label: `${MOCK_PREFIX}${key}`,
+        description: `${MOCK_PREFIX}description`,
+        builtin: true,
+        permissions: perms,
+      })),
+    } as unknown as Json;
+  })(),
 
   // Schema-valid, domain-invalid: `promoted_node_id` is "the node this address became once it is
   // monitored", and the generator fills every nullable uuid. So every discovered endpoint arrived

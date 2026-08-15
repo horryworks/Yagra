@@ -511,9 +511,13 @@ async fn set_user_password(
 }
 
 /// One permission in the role/privilege matrix.
+// `key` is the enum, not a string: the WebUI names a permission wherever it decides whether to draw
+// a write control, so the contract has to publish the seven that exist (ADR-056 Inc.2). The wire
+// bytes are unchanged — `Permission::key()` has always been the serde tag, and
+// `rbac.rs::matrix_catalog_keys_match_serde` is what keeps that true.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct PermissionInfo {
-    key: &'static str,
+    key: Permission,
     label: &'static str,
     description: &'static str,
 }
@@ -521,13 +525,13 @@ pub(crate) struct PermissionInfo {
 /// One role in the matrix: its metadata and the permission keys it grants.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct RoleInfo {
-    key: &'static str,
+    key: Role,
     label: &'static str,
     description: &'static str,
     /// Built-in roles are fixed (custom roles are not configurable yet).
     builtin: bool,
     /// The keys of the permissions this role grants.
-    permissions: Vec<&'static str>,
+    permissions: Vec<Permission>,
 }
 
 /// The permission catalogue plus, for each role, what it grants.
@@ -555,7 +559,7 @@ pub(crate) fn roles_matrix() -> RolesMatrix {
     let permissions = Permission::ALL
         .into_iter()
         .map(|p| PermissionInfo {
-            key: p.key(),
+            key: p,
             label: p.label(),
             description: p.description(),
         })
@@ -563,14 +567,13 @@ pub(crate) fn roles_matrix() -> RolesMatrix {
     let roles = Role::ALL
         .into_iter()
         .map(|r| RoleInfo {
-            key: r.key(),
+            key: r,
             label: r.label(),
             description: r.description(),
             builtin: true,
             permissions: Permission::ALL
                 .into_iter()
                 .filter(|p| r.grants(*p))
-                .map(Permission::key)
                 .collect(),
         })
         .collect();

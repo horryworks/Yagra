@@ -12,7 +12,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
 import { api, errMsg } from '../services/api';
-import { useAuthStore } from '../store';
+import { useCan } from '../store';
 import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -100,7 +100,7 @@ function ClearEndedModal({
 
 export function MaintenancePage() {
   const { t } = useTranslation('suppression');
-  const authed = useAuthStore((s) => s.authed);
+  const canMaintenance = useCan('manage_maintenance');
   const [rows, setRows] = useState<MaintenanceWindow[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
@@ -212,7 +212,7 @@ export function MaintenancePage() {
         width: '120px',
         align: 'right',
         render: (w) =>
-          authed ? (
+          canMaintenance ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -241,7 +241,7 @@ export function MaintenancePage() {
     // values they actually read are listed instead, so the columns (and therefore the predicate)
     // are not rebuilt on every keystroke elsewhere on the page.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, now, authed, groups, profiles, nodeName]);
+  }, [t, now, canMaintenance, groups, profiles, nodeName]);
 
   // URL-backed: one table on this route, so a narrowed view is linkable.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
@@ -281,7 +281,7 @@ export function MaintenancePage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('common:noun.window', { count: shown.length })}
             />
-            {authed && (
+            {canMaintenance && (
               <>
                 {/* Kept mounted and disabled at zero rather than appearing and disappearing: at
                     zero it still tells the operator the capability exists. */}

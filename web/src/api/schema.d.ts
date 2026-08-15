@@ -7154,10 +7154,15 @@ export interface components {
         Ok_: {
             ok: boolean;
         };
+        /**
+         * @description A discrete capability checked at the API edge.
+         * @enum {string}
+         */
+        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "manage_users" | "view_audit";
         /** @description One permission in the role/privilege matrix. */
         PermissionInfo: {
             description: string;
-            key: string;
+            key: components["schemas"]["Permission"];
             label: string;
         };
         /** @description What an out-of-schedule poll dispatched. */
@@ -7849,10 +7854,10 @@ export interface components {
             /** @description Built-in roles are fixed (custom roles are not configurable yet). */
             builtin: boolean;
             description: string;
-            key: string;
+            key: components["schemas"]["Role"];
             label: string;
             /** @description The keys of the permissions this role grants. */
-            permissions: string[];
+            permissions: components["schemas"]["Permission"][];
         };
         /** @description The role-vs-privilege matrix. */
         RolesMatrix: {

@@ -6,8 +6,9 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 import { severityRank } from './lib/format';
+import { grants, permissionLabel } from './lib/permissions';
 import { getToken } from './services/api';
-import type { Alert, Scope } from './types/api';
+import type { Alert, Permission, RoleMatrix, Scope } from './types/api';
 import { DEFAULT_RANGE, type Range } from './components/NodeDetail/RangeControl';
 
 // sessionStorage when available (browser), else a no-op — keeps the store working in the Vitest
@@ -30,19 +31,48 @@ interface AuthStore {
    *  account otherwise has no way to tell a filtered inventory from a small one — every list it
    *  sees is simply shorter, with nothing on screen saying why. */
   scope: Scope | null;
+  /** The server's role/privilege matrix (`GET /api/v1/roles`), or null while it is still
+   *  resolving. Held whole rather than pre-reduced to this principal's permission list so that
+   *  "may I?" and "what is this privilege called?" read the same single source — and so nothing
+   *  here is a second copy of `rbac.rs`. */
+  roleMatrix: RoleMatrix | null;
   setAuthed: (authed: boolean) => void;
   setRole: (role: string | null) => void;
   setScope: (scope: Scope | null) => void;
+  setRoleMatrix: (matrix: RoleMatrix | null) => void;
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
   authed: getToken() != null,
   role: null,
   scope: null,
+  roleMatrix: null,
   setAuthed: (authed) => set({ authed }),
   setRole: (role) => set({ role }),
   setScope: (scope) => set({ scope }),
+  setRoleMatrix: (roleMatrix) => set({ roleMatrix }),
 }));
+
+/**
+ * Whether the current principal may do `perm` — the hook every write control asks before drawing
+ * itself (ADR-056 Inc.2).
+ *
+ * Ask for the permission the *action* requires, never for a role: `useCan('manage_maintenance')`,
+ * not `role === 'admin'`. The mapping from role to permission is the server's and this reads its
+ * answer, so a privilege that moves between roles moves in one place. Answers false while the
+ * matrix is still resolving, so a control appears a moment late rather than appearing and failing.
+ */
+export function useCan(perm: Permission): boolean {
+  return useAuthStore((s) => grants(s.roleMatrix, s.role, perm));
+}
+
+/**
+ * The server's own name for a privilege, for the screens that have to say which one is missing.
+ * Falls back to the permission key before the matrix arrives.
+ */
+export function usePermissionLabel(perm: Permission): string {
+  return useAuthStore((s) => permissionLabel(s.roleMatrix, perm));
+}
 
 // Shared chart time-range so a selection made in one place (Overview Device health, the Interfaces
 // dock, the Metric explorer) carries to the others across navigation — one source of truth for the

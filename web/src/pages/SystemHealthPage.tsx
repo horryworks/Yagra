@@ -24,7 +24,7 @@ import { Button } from '../components/ui/Button';
 import { MetricChart, PALETTE } from '../components/MetricChart/MetricChart';
 import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
 import type { Range } from '../components/NodeDetail/RangeControl';
-import { useAuthStore, useRangeStore } from '../store';
+import { useCan, useRangeStore } from '../store';
 import { api, errMsg } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
 import { PollerHealthWidget, DataCoverageWidget } from '../dashboard/widgets/monitoring';
@@ -392,13 +392,14 @@ const BUNDLE_WINDOWS = [1, 6, 24, 72] as const;
  *  instruction to the operator, not a fault to retry past. */
 function SupportBundleCard() {
   const { t } = useTranslation('system');
-  const role = useAuthStore((s) => s.role);
+  // The bundle endpoint is ManageConfig; ask for that rather than for a role name.
+  const canConfig = useCan('manage_config');
   const [hours, setHours] = useState<number>(6);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ file: string; size: string } | null>(null);
 
-  if (role !== 'admin') return null;
+  if (!canConfig) return null;
 
   const download = () => {
     setBusy(true);
