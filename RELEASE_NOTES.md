@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.10 — an operator can run the monitoring, and a control you may not use is no longer drawn
+
 ### Breaking changes
 - **Operators can now run the monitoring.** `ManageConfig` — the permission behind roughly a
   hundred endpoints, from adding a node to replacing the TLS certificate — was Admin-only, so an
