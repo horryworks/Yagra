@@ -145,7 +145,7 @@ pub(super) struct ConfigBody {
         (status = 204, description = "New default applied from the next poll round"),
         (status = 400, description = "The interval is outside the configured bounds", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has nowhere to persist the default", body = super::error::ErrorBody),
     ),
 )]
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn changing_the_global_interval_is_admin_only() {
+    async fn changing_the_global_interval_is_operator_and_up() {
         assert_eq!(
             send(private_state(), "PUT", "/api/v1/config", None)
                 .await
@@ -446,8 +446,13 @@ mod tests {
                 .status(),
             StatusCode::UNAUTHORIZED,
         );
+        // The default poll interval is monitoring, not deployment: an operator sets it, a viewer
+        // does not (ADR-057). 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
@@ -455,7 +460,7 @@ mod tests {
                 send(st.clone(), "PUT", "/api/v1/config", Some(&token))
                     .await
                     .status(),
-                StatusCode::FORBIDDEN,
+                want,
                 "{role:?}"
             );
         }

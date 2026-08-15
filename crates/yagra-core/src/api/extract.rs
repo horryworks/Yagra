@@ -154,9 +154,26 @@ impl RequiredPermission for ManageUsersPerm {
 
 /// Change monitoring configuration: inventory writes, bindings, thresholds, and operator actions
 /// like an out-of-schedule poll. The broadest write permission in the vocabulary.
+///
+/// Held by Operator and up since ADR-057 — before that it was Admin-only, which made an operator
+/// unable to add a node. Anything that changes the *deployment* rather than what it watches takes
+/// [`ManageSystemPerm`] instead; the two are the halves this one used to be.
 pub struct ManageConfigPerm;
 impl RequiredPermission for ManageConfigPerm {
     const PERMISSION: Permission = Permission::ManageConfig;
+}
+
+/// Change the deployment itself, or send its data somewhere else (ADR-057).
+///
+/// The test for this marker rather than [`ManageConfigPerm`] is **not** "is it dangerous" — plenty
+/// of `ManageConfig` writes are (deleting a node loses its history). It is *what the act touches*:
+/// forwarding and notification delivery send content — log bodies, which routinely carry
+/// credentials — off the box; TLS, upgrade, retention, the AI provider, the configuration bundle,
+/// the support bundle and the poller inventory change the deployment rather than the monitoring it
+/// performs. An operator runs the monitoring; an administrator owns the deployment.
+pub struct ManageSystemPerm;
+impl RequiredPermission for ManageSystemPerm {
+    const PERMISSION: Permission = Permission::ManageSystem;
 }
 
 /// Acknowledge, mute, or snooze alerts — an operational reaction to something happening now,
@@ -199,6 +216,8 @@ pub type RequireView = Require<ViewPerm>;
 pub type RequireManageUsers = Require<ManageUsersPerm>;
 /// Write-gated on monitoring configuration.
 pub type RequireManageConfig = Require<ManageConfigPerm>;
+/// Write-gated on the deployment itself, and on anything that leaves it.
+pub type RequireManageSystem = Require<ManageSystemPerm>;
 /// Gated on alert acknowledgement / muting.
 pub type RequireAckAlerts = Require<AckAlertsPerm>;
 /// Gated on maintenance-window management.

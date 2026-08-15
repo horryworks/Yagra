@@ -384,22 +384,24 @@ const BUNDLE_WINDOWS = [1, 6, 24, 72] as const;
 
 /** Download a support bundle (ADR-045).
  *
- *  Admin-only in the UI because it is Admin-only in the API — the endpoint demands ManageConfig +
+ *  Admin-only in the UI because it is Admin-only in the API — the endpoint demands ManageSystem +
  *  ManageCredentials + ViewAudit, so showing the button to an Operator would be offering a 403.
+ *  ⚠️ Since ADR-057 an Operator holds one of those three, which is what makes the union guard on
+ *  the API side load-bearing rather than decorative.
  *
  *  The failure text is shown verbatim rather than replaced by a generic message: the one refusal
  *  that matters here is the redaction stop, whose message names the file and the rule and is an
  *  instruction to the operator, not a fault to retry past. */
 function SupportBundleCard() {
   const { t } = useTranslation('system');
-  // The bundle endpoint is ManageConfig; ask for that rather than for a role name.
-  const canConfig = useCan('manage_config');
+  // The bundle endpoint needs ManageSystem (plus two more); ask for a permission, not a role.
+  const canSystem = useCan('manage_system');
   const [hours, setHours] = useState<number>(6);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ file: string; size: string } | null>(null);
 
-  if (!canConfig) return null;
+  if (!canSystem) return null;
 
   const download = () => {
     setBusy(true);

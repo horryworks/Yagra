@@ -35,11 +35,11 @@ pub enum Role {
 }
 
 /// A discrete capability checked at the API edge.
-// `ToSchema` (added ADR-056 Inc.2) so `GET /api/v1/roles` publishes the seven keys as an enum
-// rather than as an opaque string. The WebUI names a permission at every place it decides whether
-// to draw a write control, and a mistyped name would fail *closed* — the control would vanish for
-// everyone, including an admin, with nothing on screen to see. Typing it makes the typo a compile
-// error instead. The wire bytes do not change: `key()` has always been the serde tag
+// `ToSchema` (added ADR-056 Inc.2) so `GET /api/v1/roles` publishes the keys as an enum rather than
+// as an opaque string. The WebUI names a permission at every place it decides whether to draw a
+// write control, and a mistyped name would fail *closed* — the control would vanish for everyone,
+// including an admin, with nothing on screen to see. Typing it makes the typo a compile error
+// instead. The wire bytes do not change: `key()` has always been the serde tag
 // (`matrix_catalog_keys_match_serde`), so an N-1 client reads exactly what it read before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -50,10 +50,12 @@ pub enum Permission {
     AckAlerts,
     /// Open or close maintenance windows.
     ManageMaintenance,
-    /// Create/edit nodes, profiles, thresholds.
+    /// Create/edit nodes, profiles, thresholds — what the deployment monitors.
     ManageConfig,
     /// Create/rotate monitoring credentials.
     ManageCredentials,
+    /// Change the deployment itself, and anything that leaves the box (ADR-057).
+    ManageSystem,
     /// Manage users and role assignments.
     ManageUsers,
     /// Read the audit log (who changed what).
@@ -251,36 +253,53 @@ impl Role {
     pub const fn description(self) -> &'static str {
         match self {
             Role::Viewer => "Read-only: inventory, metrics, and alerts within scope.",
+            // Rewritten by ADR-057. It said "Viewer plus incident response", which stopped being
+            // true the moment monitoring configuration moved down to this role — and the privilege
+            // matrix renders it verbatim, so a stale sentence here is a wrong answer on screen.
             Role::Operator => {
-                "Viewer plus incident response: acknowledge/mute alerts, run Troubleshoot \
-                 analyses and AI root-cause explanations, and manage maintenance windows."
+                "Runs the monitoring: everything a Viewer sees, plus the inventory, profiles, \
+                 thresholds, collection, discovery, event rules, monitoring credentials, alert \
+                 response and maintenance windows."
             }
-            Role::Admin => "Full control: configuration, credentials, users, and the audit log.",
+            Role::Admin => {
+                "Owns the deployment: everything an Operator does, plus notification delivery, \
+                 forwarding, TLS, upgrades, retention, users, and the audit log."
+            }
         }
     }
 
     /// Whether this role grants a permission (privilege is cumulative).
+    ///
+    /// The line between Operator and Admin is **what the act touches, not how destructive it is**
+    /// (ADR-057). An operator runs the monitoring — inventory, thresholds, collection, discovery,
+    /// the credentials Yagra uses to reach devices — and an administrator owns the deployment:
+    /// where data is sent, what the process itself runs as, who may sign in.
+    ///
+    /// It used to be one `ManageConfig` covering both, which made an operator unable to add a node.
     #[must_use]
     pub fn grants(self, perm: Permission) -> bool {
         match perm {
             Permission::View => true, // every role can view within its scope
-            Permission::AckAlerts | Permission::ManageMaintenance => self >= Role::Operator,
-            Permission::ManageConfig
-            | Permission::ManageCredentials
-            | Permission::ManageUsers
-            | Permission::ViewAudit => self == Role::Admin,
+            Permission::AckAlerts
+            | Permission::ManageMaintenance
+            | Permission::ManageConfig
+            | Permission::ManageCredentials => self >= Role::Operator,
+            Permission::ManageSystem | Permission::ManageUsers | Permission::ViewAudit => {
+                self == Role::Admin
+            }
         }
     }
 }
 
 impl Permission {
     /// Every permission, in display order (for the role/privilege matrix).
-    pub const ALL: [Permission; 7] = [
+    pub const ALL: [Permission; 8] = [
         Permission::View,
         Permission::AckAlerts,
         Permission::ManageMaintenance,
         Permission::ManageConfig,
         Permission::ManageCredentials,
+        Permission::ManageSystem,
         Permission::ManageUsers,
         Permission::ViewAudit,
     ];
@@ -294,6 +313,7 @@ impl Permission {
             Permission::ManageMaintenance => "manage_maintenance",
             Permission::ManageConfig => "manage_config",
             Permission::ManageCredentials => "manage_credentials",
+            Permission::ManageSystem => "manage_system",
             Permission::ManageUsers => "manage_users",
             Permission::ViewAudit => "view_audit",
         }
@@ -306,8 +326,9 @@ impl Permission {
             Permission::View => "View",
             Permission::AckAlerts => "Respond to incidents",
             Permission::ManageMaintenance => "Manage maintenance",
-            Permission::ManageConfig => "Manage configuration",
+            Permission::ManageConfig => "Manage monitoring",
             Permission::ManageCredentials => "Manage credentials",
+            Permission::ManageSystem => "Manage the deployment",
             Permission::ManageUsers => "Manage users",
             Permission::ViewAudit => "View audit log",
         }
@@ -329,9 +350,18 @@ impl Permission {
             }
             Permission::ManageMaintenance => "Open or close maintenance windows.",
             Permission::ManageConfig => {
-                "Create and edit nodes, profiles, thresholds, and collection."
+                "Decide what is monitored and when to alert: nodes, groups, profiles, thresholds, \
+                 collection, discovery, event rules, and reports."
             }
             Permission::ManageCredentials => "Create, edit, and rotate monitoring credentials.",
+            // Named for the boundary rather than for a list: everything here either changes the
+            // deployment itself or sends its data somewhere else. Keep it in step with every
+            // `RequireManageSystem` call site — the privilege matrix renders this verbatim.
+            Permission::ManageSystem => {
+                "Change the deployment and anything that leaves it: notification delivery, \
+                 forwarding, the TLS certificate, upgrades, data retention, the AI provider, \
+                 the configuration bundle, the support bundle, and the poller inventory."
+            }
             Permission::ManageUsers => "Manage user accounts and role assignments.",
             Permission::ViewAudit => "Read the audit log (who changed what).",
         }
@@ -433,17 +463,49 @@ mod tests {
     fn role_privileges_are_cumulative() {
         assert!(Role::Viewer.grants(Permission::View));
         assert!(!Role::Viewer.grants(Permission::AckAlerts));
+        // A viewer configures nothing, and that is the half of ADR-057 that did not move.
+        assert!(!Role::Viewer.grants(Permission::ManageConfig));
+        assert!(!Role::Viewer.grants(Permission::ManageCredentials));
 
         assert!(Role::Operator.grants(Permission::View));
         assert!(Role::Operator.grants(Permission::AckAlerts));
-        assert!(!Role::Operator.grants(Permission::ManageConfig));
+        // ADR-057: an operator runs the monitoring, so both of these are theirs. Before it, an
+        // operator could not add a node.
+        assert!(Role::Operator.grants(Permission::ManageConfig));
+        assert!(Role::Operator.grants(Permission::ManageCredentials));
+        // …but not the deployment itself. This is the assertion that keeps the split meaningful:
+        // drop it and `ManageSystem` quietly becomes a synonym for `ManageConfig`.
+        assert!(!Role::Operator.grants(Permission::ManageSystem));
 
         assert!(Role::Admin.grants(Permission::ManageConfig));
+        assert!(Role::Admin.grants(Permission::ManageSystem));
         assert!(Role::Admin.grants(Permission::ManageUsers));
 
         // The audit log is admin-only (it exposes who did what across the system).
         assert!(!Role::Operator.grants(Permission::ViewAudit));
         assert!(Role::Admin.grants(Permission::ViewAudit));
+    }
+
+    /// Every permission is granted by some role, and no permission is granted by *every* role
+    /// except `View`.
+    ///
+    /// A regression guard for the split rather than a restatement of it: a new permission that
+    /// nobody grants is dead at the edge (every handler taking it answers 403 forever), and one
+    /// that everybody grants is not a permission. Both are silent — no test fails, no handler
+    /// errors, the button simply never works or always does.
+    #[test]
+    fn every_permission_is_held_by_someone_and_withheld_from_someone() {
+        for perm in Permission::ALL {
+            let holders = Role::ALL.into_iter().filter(|r| r.grants(perm)).count();
+            assert!(holders > 0, "{} is granted by no role", perm.key());
+            if perm != Permission::View {
+                assert!(
+                    holders < Role::ALL.len(),
+                    "{} is granted by every role, so it gates nothing",
+                    perm.key()
+                );
+            }
+        }
     }
 
     #[test]
@@ -492,11 +554,22 @@ mod tests {
         assert!(!s.allows(&BTreeSet::new())); // ungrouped not leaked to scoped user
     }
 
+    /// A scope narrows *which* nodes, never *what* may be done to them — the two axes stay
+    /// independent (ADR-014).
+    ///
+    /// The assertion that moved with ADR-057 is the second one: it used to read
+    /// `!p.can(ManageConfig)`, which passed for the wrong reason — the role lacked the permission
+    /// outright, so the scope was never the thing under test. `ManageSystem` restores the pair
+    /// this test was written to hold: a permission the role has, and one it does not, with the same
+    /// group scope on both.
     #[test]
-    fn scoped_operator_can_ack_but_not_configure() {
+    fn a_scope_narrows_visibility_and_never_privilege() {
         let p = Principal::new(Role::Operator, Scope::groups(["tokyo"]));
         assert!(p.can(Permission::AckAlerts));
-        assert!(!p.can(Permission::ManageConfig));
+        // Held despite the scope: a scoped operator configures monitoring for what they can see.
+        assert!(p.can(Permission::ManageConfig));
+        // Withheld regardless of scope: the deployment is not per-group.
+        assert!(!p.can(Permission::ManageSystem));
     }
 
     #[test]

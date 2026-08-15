@@ -117,7 +117,7 @@ fn parse_profile_body(body: &ProfileBody) -> Result<ParsedProfile, ApiError> {
     responses(
         (status = 200, description = "Every device profile", body = Vec<crate::repo::ProfileSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -138,7 +138,7 @@ async fn list_profiles(
         (status = 201, description = "Profile created", body = CreatedId),
         (status = 400, description = "Empty name, unknown category, or an out-of-bounds poll interval", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -171,7 +171,7 @@ async fn create_profile(
         (status = 204, description = "Profile updated"),
         (status = 400, description = "Empty name, unknown category, or an out-of-bounds poll interval", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such profile", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -212,7 +212,7 @@ async fn update_profile(
     responses(
         (status = 204, description = "Profile deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such profile", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -273,7 +273,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn profiles_are_configuration_and_closed_below_admin() {
+    async fn profiles_are_monitoring_configuration_and_closed_to_a_viewer() {
         for (method, path) in all_routes() {
             assert_eq!(
                 status_of(private_state(), method, &path, None).await,
@@ -286,15 +286,20 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // A profile is how a class of device is polled — monitoring, so an operator holds it and
+        // a viewer does not (ADR-057). 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in all_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

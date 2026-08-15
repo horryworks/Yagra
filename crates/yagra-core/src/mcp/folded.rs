@@ -7,10 +7,10 @@
 //! model picks worse from a longer list. That fold creates a problem the ADR did not anticipate:
 //! **the endpoints behind one tool do not share a permission.**
 //!
-//! The measured spread across the routes folded here is `View` ×28, `ManageConfig` ×15,
-//! `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and two that are
-//! deliberately unauthenticated over REST. Picking one permission for the whole tool fails in both
-//! directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
+//! The measured spread across the routes folded here is `View` ×28, `ManageConfig` ×10,
+//! `ManageSystem` ×6, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
+//! two that are deliberately unauthenticated over REST. Picking one permission for the whole tool
+//! fails in both directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
 //! strict choice recreates the very gap ADR-042 exists to close.
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
@@ -197,7 +197,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         path: "/api/v1/forwarding/status",
         // The one `ManageConfig` member of this family. It names every collector the deployment
         // tees to, which is closer to the forwarding configuration than to a health counter.
-        perm: Some(Permission::ManageConfig),
+        perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
         opaque_ok: None,
         lowered_to: None,
@@ -221,7 +221,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         // answers with build provenance and — once the updater sidecar lands — the registry, the
         // resolved digests and the store images the target compose pins. That is the deployment's
         // configuration, not a health counter (ADR-050 decision 13).
-        perm: Some(Permission::ManageConfig),
+        perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
         opaque_ok: None,
         lowered_to: None,
@@ -367,9 +367,10 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     // ── get_config(kind=…) — ADR-042 I3b ─────────────────────────────────────
     //
     // The configuration-read family, 28 routes behind one `kind`. This is the block that proves the
-    // module doc's point about permission: it spans `ManageConfig` ×14, `View` ×12 and
-    // `ManageUsers` ×2, and one permission for the tool would either hand the identity-provider
-    // configuration to any viewer or refuse a viewer eleven reads the WebUI already shows them.
+    // module doc's point about permission: it spans `ManageConfig` ×10, `View` ×12,
+    // `ManageSystem` ×4 and `ManageUsers` ×2, and one permission for the tool would either hand the
+    // identity-provider configuration to any viewer or refuse a viewer eleven reads the WebUI
+    // already shows them.
     //
     // Order matches `ConfigKind::NAMES`, which matches the order the tool's description lists them,
     // so all three can be read side by side.
@@ -408,7 +409,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "notification_channels",
         method: "GET",
         path: "/api/v1/notification-channels",
-        perm: Some(Permission::ManageConfig),
+        perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
         opaque_ok: None,
         lowered_to: None,
@@ -418,7 +419,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "routing_rules",
         method: "GET",
         path: "/api/v1/routing-rules",
-        perm: Some(Permission::ManageConfig),
+        perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
         opaque_ok: None,
         lowered_to: None,
@@ -582,7 +583,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "forward_destinations",
         method: "GET",
         path: "/api/v1/forwarding/destinations",
-        perm: Some(Permission::ManageConfig),
+        perm: Some(Permission::ManageSystem),
         // Not `POOL_IS_THE_ANSWER`: nobody asked this branch which poller owns anything. The
         // argument is its own, so the sentence is its own.
         inventory_ids_ok: Some(
@@ -650,7 +651,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "llm",
         method: "GET",
         path: "/api/v1/llm/config",
-        perm: Some(Permission::ManageConfig),
+        perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
         opaque_ok: None,
         lowered_to: None,
@@ -907,6 +908,7 @@ mod tests {
             Permission::ManageMaintenance => "RequireManageMaintenance",
             Permission::ManageConfig => "RequireManageConfig",
             Permission::ManageCredentials => "RequireManageCredentials",
+            Permission::ManageSystem => "RequireManageSystem",
             Permission::ManageUsers => "RequireManageUsers",
             Permission::ViewAudit => "RequireViewAudit",
         };

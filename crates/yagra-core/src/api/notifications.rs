@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Notification channels and the routing rules that pick which alerts reach them.
 //!
-//! `ManageConfig` throughout, reads included: a channel holds a sealed credential and a rule
+//! `ManageSystem` throughout, reads included (ADR-057): a channel holds a sealed credential and a rule
 //! decides who gets woken up.
 //!
 //! **The URL validation here is a security boundary, not a typo check.** Core holds the database
@@ -12,7 +12,7 @@
 //! resolved addresses as well — defence in depth, since DNS can change between the two.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig};
+use super::extract::{Admin, RequireManageSystem};
 use super::util::{CreatedId, EnabledBody};
 use super::ApiState;
 use crate::notifications::{ChannelConfig, ChannelKind};
@@ -188,12 +188,12 @@ fn parse_severity_opt(s: Option<&str>) -> Result<Option<Severity>, ()> {
     responses(
         (status = 200, description = "Every channel, without its sealed connection config", body = Vec<crate::notifications::ChannelSummary>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn list_notification_channels(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::notifications::ChannelSummary>>> {
     let list = admin.notifications.list_channels().await.map_err(|e| {
@@ -220,12 +220,12 @@ pub(super) struct CreateChannel {
         (status = 201, description = "Channel created", body = CreatedId),
         (status = 400, description = "Empty name, or a connection config whose URL fails the SSRF / vendor-allowlist check", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn create_notification_channel(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Json(body): Json<CreateChannel>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
@@ -259,13 +259,13 @@ async fn create_notification_channel(
     responses(
         (status = 204, description = "Channel enabled or disabled"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such channel", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_notification_channel_enabled(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<EnabledBody>,
@@ -294,13 +294,13 @@ async fn set_notification_channel_enabled(
     responses(
         (status = 204, description = "Channel deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such channel", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_notification_channel(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
@@ -357,13 +357,13 @@ impl TemplateBody {
         (status = 204, description = "Template saved (or cleared, restoring the built-in wording)"),
         (status = 400, description = "The template does not compile, or is longer than the accepted maximum", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such channel", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_notification_template(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<TemplateBody>,
@@ -475,11 +475,11 @@ pub(super) struct PreviewProblem {
     responses(
         (status = 200, description = "What this template would send; a template that cannot be used is reported in-band alongside the built-in text that would go instead", body = PreviewResult),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
     ),
 )]
 async fn preview_notification_template(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     Json(req): Json<PreviewRequest>,
 ) -> Json<PreviewResult> {
     let needs_json = crate::notify_render::body_must_be_json(req.kind);
@@ -526,11 +526,11 @@ async fn preview_notification_template(
     responses(
         (status = 200, description = "The template variables, with what each one means and whether every alert carries it", body = Vec<yagra_common::TemplateVariable>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
     ),
 )]
 async fn list_template_variables(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
 ) -> Json<Vec<yagra_common::TemplateVariable>> {
     Json(yagra_common::TEMPLATE_VARIABLES.to_vec())
 }
@@ -540,12 +540,12 @@ async fn list_template_variables(
     responses(
         (status = 200, description = "Every routing rule and the channels it fans out to", body = Vec<crate::notifications::RoutingRule>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn list_routing_rules(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::notifications::RoutingRule>>> {
     let list = admin.notifications.list_rules().await.map_err(|e| {
@@ -573,12 +573,12 @@ pub(super) struct CreateRule {
         (status = 201, description = "Rule created", body = CreatedId),
         (status = 400, description = "Empty name, or a severity outside critical|warning|info|null", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn create_routing_rule(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Json(body): Json<CreateRule>,
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
@@ -616,13 +616,13 @@ async fn create_routing_rule(
     responses(
         (status = 204, description = "Rule enabled or disabled"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn set_routing_rule_enabled(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
     Json(body): Json<EnabledBody>,
@@ -647,13 +647,13 @@ async fn set_routing_rule_enabled(
     responses(
         (status = 204, description = "Rule deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_routing_rule(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {

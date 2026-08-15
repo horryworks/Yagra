@@ -945,7 +945,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn anything_that_touches_the_api_key_is_admin_only() {
+    async fn anything_that_touches_the_api_key_is_operator_and_up() {
         // `discover` takes no stored state at all, but it *accepts* a key and calls out with it, so
         // it is gated exactly like the writes.
         for (method, path) in write_routes() {
@@ -960,15 +960,20 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // A cloud-managed fleet is inventory, so ADR-057 puts it with the rest of the monitoring
+        // setup: an operator imports and enables, a viewer does neither. 503 = past the guard.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in write_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

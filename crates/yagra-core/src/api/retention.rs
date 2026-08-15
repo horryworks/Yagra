@@ -18,7 +18,7 @@
 //! policy is not something to hand to anonymous callers.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView};
+use super::extract::{Admin, RequireManageSystem, RequireView};
 use super::ApiState;
 use crate::retention::{self, RetentionSettings, Subject};
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
@@ -173,13 +173,13 @@ pub(crate) async fn retention_policy(st: &ApiState, admin: &super::AdminState) -
         (status = 204, description = "Retention updated. Lowering a window deletes data older than it on the next prune"),
         (status = 400, description = "A window is outside the allowed range", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 502, description = "The flow store rejected the retention change; nothing was saved", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn update_retention(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     State(st): State<ApiState>,
     Json(body): Json<RetentionValues>,

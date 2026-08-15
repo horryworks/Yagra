@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Forwarding (Settings ▸ Forwarding): relay received syslog / SNMP traps / flow exports on to
 // external collectors — a SIEM, an existing syslog estate, an analytics pipeline (ADR-034).
-// ManageConfig-gated and audited: a destination sends log bodies, which routinely carry
+// ManageSystem-gated and audited: a destination sends log bodies, which routinely carry
 // credentials, off-box.
 //
 // Data-table standard v2: a toolbar (New + count) over the shared `DataTable`, edit/test/delete as
@@ -559,7 +559,9 @@ function DeleteModal({
 export function ForwardingPage() {
   const { t } = useTranslation('settings-forwarding');
   const authed = useAuthStore((s) => s.authed);
-  const canConfig = useCan('manage_config');
+  // Forwarding sends log bodies — which routinely carry credentials — off the box, so it stayed
+  // with the administrator when monitoring configuration moved down to the operator (ADR-057).
+  const canSystem = useCan('manage_system');
   const [rows, setRows] = useState<ForwardDestination[]>([]);
   const [status, setStatus] = useState<ForwardStatus | null>(null);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -639,8 +641,8 @@ export function ForwardingPage() {
   );
 
   const columns = useMemo(
-    () => destinationColumns(t, statusById, rows, canConfig, setEditing, runTest, setDeleting),
-    [t, statusById, rows, canConfig, runTest],
+    () => destinationColumns(t, statusById, rows, canSystem, setEditing, runTest, setDeleting),
+    [t, statusById, rows, canSystem, runTest],
   );
   // Client-side: the destination list is bounded by what an operator configured, not by fleet size
   // (ui-conventions). URL-backed — one table on this route, so a filtered view is linkable.
@@ -673,7 +675,7 @@ export function ForwardingPage() {
           <p className="muted">{t('signInPrompt')}</p>
         </Card>
       ) : block ? (
-        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_config" />
+        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_system" />
       ) : (
         <>
           {wantsVerbatim && staleP.length > 0 && (
@@ -707,7 +709,7 @@ export function ForwardingPage() {
               total={anyFiltered ? rows.length : undefined}
               noun={t('count', { count: shown.length })}
             />
-            {canConfig && (
+            {canSystem && (
               <Button variant="primary" onClick={() => setAdding(true)}>
                 + {t('add.button')}
               </Button>

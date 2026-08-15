@@ -87,7 +87,7 @@ pub(super) struct ThresholdQuery {
         (status = 200, description = "A capped page of matching rules, with the matching total", body = ThresholdPage),
         (status = 400, description = "`scope_level` or `direction` names a value outside its vocabulary", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin — the ruleset decides when the fleet pages someone", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig — the ruleset decides when the fleet pages someone", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -188,7 +188,7 @@ pub(super) struct CreateThreshold {
         (status = 201, description = "Rule created", body = CreatedId),
         (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -257,7 +257,7 @@ async fn create_threshold(
     responses(
         (status = 204, description = "Rule deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -334,15 +334,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reading_thresholds_is_admin_only_even_on_a_public_dashboard() {
+    async fn reading_thresholds_needs_manage_config_even_on_a_public_dashboard() {
         // Unlike most reads, the list is `ManageConfig`, not `View`: the ruleset is what decides
         // when the fleet pages someone, and a public dashboard must not expose it.
         assert_eq!(
             status_of(public_state(), "GET", "/api/v1/thresholds", None).await,
             StatusCode::UNAUTHORIZED,
         );
+        // A viewer is refused the ruleset entirely; an operator owns it (ADR-057).
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
@@ -350,7 +354,7 @@ mod tests {
                 // 403, not 401 — "not allowed" and "not logged in" are different fixes.
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

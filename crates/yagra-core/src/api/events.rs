@@ -227,7 +227,7 @@ async fn reload_event_engine(st: &ApiState, admin: &AdminState) {
     responses(
         (status = 200, description = "Every ingest source (never the token hash)", body = Vec<crate::events::EventSourceView>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -281,7 +281,7 @@ pub(crate) struct CreatedSource {
         (status = 201, description = "Source created; the plaintext ingest token appears here only", body = CreatedSource),
         (status = 400, description = "Name is empty or over 120 characters", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -326,7 +326,7 @@ fn no_source(id: Uuid) -> ApiError {
         (status = 204, description = "Source updated"),
         (status = 400, description = "Name is empty or over 120 characters", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such event source", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -365,7 +365,7 @@ pub(crate) struct RotatedToken {
     responses(
         (status = 200, description = "A new ingest token; the plaintext is readable here only", body = RotatedToken),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such event source", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -396,7 +396,7 @@ async fn rotate_event_source_token(
     responses(
         (status = 204, description = "Source deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such event source", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -426,7 +426,7 @@ async fn delete_event_source(
     responses(
         (status = 200, description = "Every stored event rule", body = Vec<crate::events::StoredEventRule>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -544,7 +544,7 @@ fn no_rule(id: Uuid) -> ApiError {
         (status = 201, description = "Rule created", body = CreatedId),
         (status = 400, description = "A pattern does not compile, or a field is outside its accepted range", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -574,7 +574,7 @@ async fn create_event_rule(
         (status = 204, description = "Rule updated"),
         (status = 400, description = "A pattern does not compile, or a field is outside its accepted range", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such event rule", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -607,7 +607,7 @@ async fn update_event_rule(
     responses(
         (status = 204, description = "Rule deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such event rule", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -672,7 +672,7 @@ impl RuleTestResult {
     responses(
         (status = 200, description = "Whether the sample matched; a pattern that does not compile is reported in-band", body = RuleTestResult),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
     ),
 )]
 async fn test_event_rule(
@@ -745,9 +745,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn event_configuration_is_admin_only() {
+    async fn event_configuration_is_operator_and_up() {
         // Including the reads: a source row is an ingest endpoint, and a rule decides what raises
-        // an alert.
+        // an alert. Since ADR-057 that is an operator's to hold — deciding what raises an alert is
+        // running the monitoring — and a viewer's to be refused.
         for (method, path) in config_routes() {
             assert_eq!(
                 send(private_state(), method, &path, None, "{}")
@@ -764,17 +765,31 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // What "past the guard" looks like is 503 (skeleton mode has no store) everywhere but the
+        // rule tester, which reads no store at all: it gets as far as the body, which this loop
+        // sends as `{}`, and answers 422. Naming the code rather than asserting "not 403" is what
+        // keeps this two-directional — a guard that admitted nobody would fail here.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in config_routes() {
+                let want = if want == StatusCode::SERVICE_UNAVAILABLE
+                    && path == "/api/v1/event-rules/test"
+                {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                } else {
+                    want
+                };
                 assert_eq!(
                     send(st.clone(), method, &path, Some(&token), "{}")
                         .await
                         .status(),
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

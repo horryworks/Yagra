@@ -10,6 +10,24 @@
 
 ## Unreleased
 
+### Breaking changes
+- **Operators can now run the monitoring.** `ManageConfig` — the permission behind roughly a
+  hundred endpoints, from adding a node to replacing the TLS certificate — was Admin-only, so an
+  Operator could not add a node, edit a threshold, run a discovery sweep or change a device
+  profile. It has been split. **"Manage monitoring" (the old `manage_config`) and "Manage
+  credentials" are now held by Operator and up**; a new **"Manage the deployment"
+  (`manage_system`)** privilege stays Admin-only and covers what changes the deployment or sends
+  its data elsewhere: notification delivery and routing, forwarding, the TLS certificate, upgrades,
+  data retention, the AI provider, the configuration bundle, the support bundle, and removing a
+  poller.
+  - **This widens what an Operator account can do.** Review your Operator accounts before
+    upgrading. Viewer and Admin are unchanged.
+  - `Settings ▸ Roles & privileges` shows the new matrix. It is derived from the server, so it is
+    always what the API actually enforces.
+  - The `403` descriptions in the OpenAPI document were corrected in both directions: some said
+    "Role below Admin" for endpoints an Operator now reaches, and others named `ManageConfig` for
+    endpoints that now need `ManageSystem`.
+
 ### Improvements
 - **Buttons you are not allowed to press are no longer drawn.** Every write control in the WebUI —
   every `+ Add`, every edit, every delete, every Save — decided whether to appear from *"am I
@@ -21,7 +39,7 @@
   panel *is* the action (Configuration bundle's export and import, the three System-settings forms),
   it now names the privilege you need instead of telling a signed-in user to sign in.
 - **A refusal names the privilege it wants.** A screen you may not read used to say only "you don't
-  have permission"; it now says which of the seven privileges would grant it, taken from the
+  have permission"; it now says which of the eight privileges would grant it, taken from the
   server's own catalogue — the same text `Settings ▸ Roles & privileges` renders. Extended to three
   screens that previously reported a permission refusal as "unavailable" or as a load error:
   `Settings ▸ AI analysis`, `Settings ▸ API tokens` and `Settings ▸ Audit log`.
@@ -32,6 +50,12 @@
   the rest of that screen; it was previously offered to any signed-in account.
 
 ### Bug Fixes
+- **The node tree's right-click menu is back for operators.** The previous release gated the whole
+  context menu on the permission its *strictest* entry needs, so an account that could open a
+  maintenance window or mute a node — the two entries in that menu that are not administration —
+  got no menu at all. Each entry now asks for the permission it actually requires, and the menu
+  opens when at least one of them is available. It read as deliberate because it was consistent: an
+  administrator saw the menu, so nothing looked broken.
 - **A screen you lack permission for now says so, instead of reporting that it is empty.** Signed
   in as a Viewer, `Nodes ▸ Credentials & secrets` showed "**No credentials yet**" on a deployment
   holding two credentials: the list request was refused with `403`, the page had a branch for

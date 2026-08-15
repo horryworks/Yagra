@@ -1009,7 +1009,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn everyone_reads_and_only_admins_write() {
+    async fn everyone_reads_and_operators_and_up_write() {
         for (method, path) in write_routes() {
             assert_eq!(
                 send(private_state(), method, &path, None).await.status(),
@@ -1023,15 +1023,20 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // A report definition is a saved question about the monitoring, so an operator writes
+        // one and a viewer reads the results (ADR-057). 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in write_routes() {
                 assert_eq!(
                     send(st.clone(), method, &path, Some(&token)).await.status(),
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

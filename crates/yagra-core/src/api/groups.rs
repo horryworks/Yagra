@@ -150,7 +150,7 @@ async fn reject_cycle(admin: &Admin, id: Uuid, parent_id: Option<Uuid>) -> Resul
         (status = 201, description = "Group created", body = CreatedId),
         (status = 400, description = "Empty name, unknown group type, or an invalid pool name", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
@@ -184,7 +184,7 @@ async fn create_node_group(
         (status = 204, description = "Group updated"),
         (status = 400, description = "Empty name, unknown group type, an invalid pool name, or a move that would nest the group inside its own subtree", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such group", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -243,7 +243,7 @@ pub(super) struct GroupPlacement {
         (status = 204, description = "Group re-parented and re-ordered"),
         (status = 400, description = "Both before and after given, or a move that would nest the group inside its own subtree", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such group", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -299,7 +299,7 @@ async fn place_group(
         (status = 204, description = "Folder pool set or cleared"),
         (status = 400, description = "Pool name too long or containing characters outside letters, digits, '_' and '-'", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such group", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -343,7 +343,7 @@ pub(super) struct GroupGeo {
         (status = 204, description = "Map pin set or cleared"),
         (status = 400, description = "Only one of latitude/longitude given, or a coordinate out of range", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such group", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -400,7 +400,7 @@ async fn set_node_group_geo(
     responses(
         (status = 204, description = "Group deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such group", body = super::error::ErrorBody),
         (status = 503, description = "This core has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
@@ -463,7 +463,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_tree_reads_openly_but_only_admins_reshape_it() {
+    async fn the_tree_reads_openly_and_operators_reshape_it() {
         // The folder tree is how an operator navigates the fleet, so reading it is `View` and open
         // on a public dashboard (503 = past the guard, into skeleton mode).
         assert_eq!(
@@ -482,15 +482,20 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // The folders an operator files nodes into are theirs to reshape (ADR-057); a viewer
+        // reads the tree and changes none of it. 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in write_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

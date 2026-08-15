@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
@@ -153,6 +155,10 @@ export function UpgradePage() {
   const { t } = useTranslation('settings-upgrade');
   const [status, setStatus] = useState<UpgradeStatus | null>(null);
   const [failed, setFailed] = useState(false);
+  // An upgrade changes the deployment, so an operator is refused the whole page. Distinguish that
+  // from "the updater is unreachable" — they need different fixes, and telling one as the other
+  // sends an operator looking for a broken container (ADR-056).
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -202,8 +208,10 @@ export function UpgradePage() {
       setStatus(s);
       setFailed(false);
       setStale(false);
-    } catch {
-      if (!everSeen.current) setFailed(true);
+    } catch (e: unknown) {
+      const b = classifyLoadError(e);
+      if (b) setBlock(b);
+      else if (!everSeen.current) setFailed(true);
       // The page keeps rendering the last snapshot either way — but it now says so. Before this it
       // showed stale data indistinguishable from live data, which during an upgrade is exactly the
       // moment an operator needs to know which one they are looking at.
@@ -342,6 +350,15 @@ export function UpgradePage() {
       note={t('subtitle')}
     />
   );
+
+  if (block) {
+    return (
+      <div>
+        {header}
+        <LoadBlockNotice block={block} unavailable={t('error')} permission="manage_system" />
+      </div>
+    );
+  }
 
   if (failed) {
     return (

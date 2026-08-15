@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // TLS certificate (Settings ▸ TLS, ADR-044): what the WebUI is serving, and how to replace it.
-// ManageConfig-gated. The private key is write-only — the API never returns it — while the
+// ManageSystem-gated (ADR-057). The private key is write-only — the API never returns it — while the
 // certificate is downloadable, because that is what an operator needs in order to trust a
 // self-signed deployment from Prometheus, curl, or an OS trust store.
 //
@@ -11,6 +11,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { api, errMsg } from '../services/api';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import type { WebTlsStatus } from '../types/api';
 import {
   certificateFilename,
@@ -38,6 +40,9 @@ export function TlsSettingsPage() {
   const { t } = useTranslation('settings-tls');
   const [status, setStatus] = useState<WebTlsStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // The certificate is the deployment's own, so an operator is refused it. Say which privilege
+  // that needs instead of painting the 403 as a load failure (ADR-056).
+  const [loadBlock, setLoadBlock] = useState<LoadBlock | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -52,8 +57,11 @@ export function TlsSettingsPage() {
     try {
       setStatus(await api.getWebTls());
       setLoadError(null);
+      setLoadBlock(null);
     } catch (e) {
-      setLoadError(errMsg(e, t('error.load')));
+      const b = classifyLoadError(e);
+      if (b) setLoadBlock(b);
+      else setLoadError(errMsg(e, t('error.load')));
     }
   }, [t]);
 
@@ -121,6 +129,19 @@ export function TlsSettingsPage() {
   }
 
   const level = view ? expiryLevel(view.expires_in_days) : 'ok';
+
+  if (loadBlock) {
+    return (
+      <div className="tlspage">
+        <PageHeader title={t('title')} note={t('subtitle')} />
+        <LoadBlockNotice
+          block={loadBlock}
+          unavailable={t('error.load')}
+          permission="manage_system"
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="tlspage">

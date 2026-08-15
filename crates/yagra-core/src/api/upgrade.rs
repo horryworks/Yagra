@@ -7,12 +7,13 @@
 //! privileged updater — by tag from a registry, or as an uploaded archive for a site that can reach
 //! no registry at all.
 //!
-//! **`ManageConfig`, not `View`, on the read.** The obvious reading is that a version number is a
+//! **`ManageSystem`, not `View`, on the read.** The obvious reading is that a version number is a
 //! health counter, and ADR-050 first said so. It is not: this answers with build provenance, the
 //! registry the updater pulls from, resolved digests and the store images the target compose pins.
 //! That is deployment configuration, which is exactly the argument `mcp/folded.rs` already records
-//! for putting the `forwarding` section behind `ManageConfig` rather than `View`, and the same bar
-//! `/settings/tls` sits at.
+//! for putting the `forwarding` section behind the same permission rather than `View`, and the same
+//! bar `/settings/tls` sits at. (It read `ManageConfig` until ADR-057 split that permission; the
+//! bar did not move, the name did — `ManageConfig` is now Operator-held.)
 //!
 //! **Provenance stops being bundle-only here.** `source_ref` and `build_profile` distinguish a
 //! release build from a `/flashdeploy` build of the same commit, and until now the only way to read
@@ -34,9 +35,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{
-    Admin, Caller, Leader, RequireManageConfig, RequireManageCredentials, Upgrade,
-};
+use super::extract::{Admin, Caller, Leader, RequireManageSystem, Upgrade};
 use super::ApiState;
 use crate::upgrade::{AvailableVersions, BundleError, Command, RunStatus, SchemaState};
 
@@ -79,14 +78,19 @@ pub(super) fn routes() -> Router<ApiState> {
 
 /// The authorization both write paths require, as one extractor.
 ///
-/// `ManageConfig` alone is not enough: an upgrade replaces the process that holds the KEK, so it is
-/// restricted to someone already trusted with the credentials that process can decrypt — the same
-/// argument ADR-045 used for the support bundle. `Leader` because two cores must not both rewrite
-/// the compose project.
+/// `ManageSystem`: an upgrade replaces the process that holds the KEK, installs a new composition
+/// and restarts the deployment — the definition of changing the deployment rather than the
+/// monitoring it performs. `Leader` because two cores must not both rewrite the compose project.
 ///
 /// One type rather than three parameters repeated on each handler, so the rule and its **order**
 /// are written once: permissions first, availability after, which is what keeps an unauthenticated
 /// caller from learning whether this core is the leader.
+///
+/// 🚨 **This pair used to read `ManageConfig` *and* `ManageCredentials`**, with a note saying the
+/// conjunction bought nothing while both resolved to Admin and existed for the day they came
+/// apart. ADR-057 is that day — it moved both down to Operator, so leaving the conjunction here
+/// would have handed every operator the upgrade button. The note was right, and re-reading it was
+/// the only thing that caught it: nothing here fails to compile when a permission changes hands.
 pub(crate) struct UpgradeWrite;
 
 #[async_trait]
@@ -94,8 +98,7 @@ impl FromRequestParts<ApiState> for UpgradeWrite {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
-        RequireManageConfig::from_request_parts(parts, st).await?;
-        RequireManageCredentials::from_request_parts(parts, st).await?;
+        RequireManageSystem::from_request_parts(parts, st).await?;
         Leader::from_request_parts(parts, st).await?;
         Ok(Self)
     }
@@ -103,17 +106,15 @@ impl FromRequestParts<ApiState> for UpgradeWrite {
 
 /// The authorization for asking the updater to re-read the registry.
 ///
-/// Deliberately **weaker than [`UpgradeWrite`]**: no `ManageCredentials`. That permission is on the
-/// write paths because an upgrade replaces the process holding the KEK, and none of that applies
-/// here — this installs nothing, restarts nothing, and carries no argument. Picking the marker by
-/// what the endpoint *is* (api-conventions.md), it is the read's own `ManageConfig`: it refreshes
-/// the cache that `GET` serves, so anyone who can see the page can update what they are seeing.
+/// The same `ManageSystem` as [`UpgradeWrite`], and no longer weaker than it. It once differed by
+/// omitting `ManageCredentials`, which distinguished "installs nothing" from "replaces the process
+/// holding the KEK" — a distinction ADR-057 dissolved by making both halves of that conjunction
+/// Operator-held. The endpoint is still what it was: it refreshes the cache `GET` serves, so
+/// whoever can see the upgrade page can update what they are seeing, and that page is now
+/// `ManageSystem`.
 ///
 /// `Leader` stays. Two cores sharing a hand-off volume must not both write a request file, and a
 /// standby has no business talking to the registry on the deployment's behalf.
-///
-/// Today `ManageConfig` and `ManageCredentials` resolve to the same accounts, so this buys nothing
-/// yet — it is what lets the two come apart later without silently taking the button with them.
 pub(crate) struct UpgradeCheck;
 
 #[async_trait]
@@ -121,7 +122,7 @@ impl FromRequestParts<ApiState> for UpgradeCheck {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
-        RequireManageConfig::from_request_parts(parts, st).await?;
+        RequireManageSystem::from_request_parts(parts, st).await?;
         Leader::from_request_parts(parts, st).await?;
         Ok(Self)
     }
@@ -239,12 +240,12 @@ pub(crate) struct RunAccepted {
     responses(
         (status = 200, description = "The running build, the applied schema, and the compatibility floor", body = UpgradeStatusResponse),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the manage-configuration permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no metadata store", body = super::error::ErrorBody),
     ),
 )]
 async fn get_upgrade(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     upgrade: Upgrade,
     admin: Admin,
     State(st): State<ApiState>,
@@ -359,7 +360,7 @@ pub(crate) async fn upgrade_status(
         (status = 202, description = "Accepted; the updater will carry it out", body = RunAccepted),
         (status = 400, description = "Not a published release tag", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 409, description = "A run is already in flight", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader", body = super::error::ErrorBody),
     ),
@@ -395,7 +396,7 @@ async fn apply_upgrade(
     responses(
         (status = 202, description = "Accepted; the updater will re-read the registry within a few seconds"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks manage-configuration", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 409, description = "An upgrade is already in flight", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`), or this core is not the leader", body = super::error::ErrorBody),
     ),
@@ -462,7 +463,7 @@ pub(crate) struct BundleQuery {
         (status = 202, description = "Archive stored; the updater will install it", body = RunAccepted),
         (status = 400, description = "Not a published release tag", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 409, description = "A run is already in flight", body = super::error::ErrorBody),
         (status = 413, description = "The archive is larger than this deployment accepts", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no updater (`upgrade_unsupported`), the mechanism is switched off (`upgrade_disabled`), the updater is not running (`upgrade_unavailable`) or does not accept archives (`bundle_not_allowed`), or this core is not the leader", body = super::error::ErrorBody),
@@ -576,7 +577,7 @@ pub(crate) struct UpgradeSwitch {
     responses(
         (status = 204, description = "Stored; the updater picks it up within one of its beats"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks manage-configuration or manage-credentials", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no metadata store, or this core is not the leader", body = super::error::ErrorBody),
     ),
 )]

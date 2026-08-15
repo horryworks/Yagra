@@ -1233,7 +1233,7 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let json = body_json(resp).await;
-        assert_eq!(json["permissions"].as_array().unwrap().len(), 7);
+        assert_eq!(json["permissions"].as_array().unwrap().len(), 8);
         let roles = json["roles"].as_array().unwrap();
         assert_eq!(roles.len(), 3);
         let admin = roles.iter().find(|r| r["key"] == "admin").unwrap();

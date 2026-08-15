@@ -2,7 +2,8 @@
 // System settings (Settings ▸ System settings). System-wide monitoring defaults persisted
 // server-side via /config. Currently: the global default polling interval (seconds), and the data
 // retention policy (ADR-040). Per-profile overrides (Nodes ▸ Device profiles) take precedence over
-// the polling default. ManageConfig-gated — inputs are disabled (and a hint shown) without it; the
+// the polling default. ManageConfig for the polling and discovery cards, ManageSystem for
+// retention (ADR-057) — inputs are disabled (and a hint shown) without it; the
 // scheduler and the prune loops re-read their values each round so a change applies without a
 // restart.
 //
@@ -52,6 +53,7 @@ const MAX = 3600;
 export function SystemSettingsPage() {
   const { t } = useTranslation('system');
   const canConfig = useCan('manage_config');
+  const canSystem = useCan('manage_system');
   const [value, setValue] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -129,7 +131,9 @@ export function SystemSettingsPage() {
         {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}
       </Card>
       <NeighborCard canConfig={canConfig} />
-      <RetentionCard canConfig={canConfig} />
+      {/* Retention is how long each store keeps data — a deployment decision, not a monitoring
+          one, so it asks for ManageSystem while the two cards above stay ManageConfig (ADR-057). */}
+      <RetentionCard canSystem={canSystem} />
     </div>
   );
 }
@@ -276,7 +280,7 @@ function NeighborCard({ canConfig }: { canConfig: boolean }) {
 }
 
 /** Settings ▸ System settings ▸ Data retention (ADR-040). */
-function RetentionCard({ canConfig }: { canConfig: boolean }) {
+function RetentionCard({ canSystem }: { canSystem: boolean }) {
   const { t } = useTranslation('system');
   const [policy, setPolicy] = useState<RetentionPolicy | null>(null);
   const [form, setForm] = useState<RetentionForm | null>(null);
@@ -337,22 +341,22 @@ function RetentionCard({ canConfig }: { canConfig: boolean }) {
           key={row.subject}
           row={row}
           form={form}
-          disabled={!canConfig || !form || busy}
+          disabled={!canSystem || !form || busy}
           onChange={(field, v) => {
             setForm((f) => (f ? { ...f, [field]: v } : f));
             setSaved(false);
           }}
         />
       ))}
-      {canConfig && (
+      {canSystem && (
         <div className="sys-setting-actions">
           <Button variant="primary" onClick={save} disabled={busy || !form || !dirty}>
             {t('common:actions.save')}
           </Button>
         </div>
       )}
-      {!canConfig && (
-        <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+      {!canSystem && (
+        <PermissionHint permission="manage_system" signInHint={t('settings.signInHint')} />
       )}
       {error && <p className="form-error">{error}</p>}
       {saved && <p className="sys-setting-saved">{t('settings.saved')}</p>}

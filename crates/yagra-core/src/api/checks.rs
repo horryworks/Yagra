@@ -1420,18 +1420,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn writing_a_check_takes_manage_config_which_an_operator_does_not_hold() {
-        // What a node monitors is configuration, so the writes sit behind `ManageConfig` (Admin),
-        // not the operational `AckAlerts`/`ManageMaintenance` an operator carries. 403 and 401 must
-        // stay distinguishable — "not logged in" and "not allowed" are different fixes.
+    async fn writing_a_check_takes_manage_config_which_a_viewer_does_not_hold() {
+        // What a node monitors is configuration, so the writes sit behind `ManageConfig` — held by
+        // Operator and up since ADR-057, because deciding what a node monitors *is* running the
+        // monitoring. A viewer is still refused. 403 and 401 must stay distinguishable — "not
+        // logged in" and "not allowed" are different fixes.
         let st = private_state();
         for (role, name) in [(Role::Viewer, "viewer1"), (Role::Operator, "op1")] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), name);
             for (method, path) in routes_under_test() {
-                let want = if method == "GET" {
-                    StatusCode::SERVICE_UNAVAILABLE // both roles hold View
+                // 503 = past the guard, into skeleton mode. Asserting that rather than a bare
+                // "not 403" is what keeps this a two-directional test: a guard that admitted
+                // nobody would fail here even though every FORBIDDEN below still passed.
+                let want = if method == "GET" || role == Role::Operator {
+                    StatusCode::SERVICE_UNAVAILABLE
                 } else {
                     StatusCode::FORBIDDEN
                 };

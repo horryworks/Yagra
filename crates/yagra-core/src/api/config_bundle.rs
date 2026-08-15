@@ -2,7 +2,7 @@
 //! Configuration bundle: export this deployment's monitoring configuration, and import one
 //! produced elsewhere (ADR-040 decision 3).
 //!
-//! Both directions are `ManageConfig` + Admin. The export is gated as tightly as the import even
+//! Both directions are `ManageSystem` + Admin. The export is gated as tightly as the import even
 //! though it only reads: a bundle is the whole configuration — every node, address, threshold,
 //! forwarding target and match rule — which is a reconnaissance document, not a dashboard.
 //!
@@ -16,7 +16,7 @@
 //! separate simulation that could disagree with the real thing.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig};
+use super::extract::{Admin, RequireManageSystem};
 use super::ApiState;
 use crate::config_bundle::{BundleError, ConfigBundle, ImportReport};
 use axum::{extract::DefaultBodyLimit, extract::Query, routing::get, Json, Router};
@@ -54,12 +54,12 @@ pub(crate) struct ImportQuery {
     responses(
         (status = 200, description = "The deployment's monitoring configuration as a portable bundle. Carries no secrets — credentials, channel configs and ingest tokens stay in this deployment", body = ConfigBundle),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 413, description = "A table holds more rows than one bundle carries; use a database dump for a deployment this size", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
-async fn export_bundle(_guard: RequireManageConfig, admin: Admin) -> ApiResult<Json<ConfigBundle>> {
+async fn export_bundle(_guard: RequireManageSystem, admin: Admin) -> ApiResult<Json<ConfigBundle>> {
     let bundle = admin.config_bundle.export().await.map_err(to_api_error)?;
     tracing::info!(
         nodes = bundle.nodes.len(),
@@ -80,13 +80,13 @@ async fn export_bundle(_guard: RequireManageConfig, admin: Admin) -> ApiResult<J
         (status = 200, description = "Import report: per-table counts plus what was skipped or changed and why. With `dry_run` nothing was committed", body = ImportReport),
         (status = 400, description = "Not a Yagra configuration bundle, or a schema version this build cannot read", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 413, description = "The uploaded bundle is larger than the accepted body size", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn import_bundle(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Query(q): Query<ImportQuery>,
     Json(bundle): Json<ConfigBundle>,

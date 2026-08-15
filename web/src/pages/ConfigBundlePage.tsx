@@ -33,7 +33,8 @@ import './ConfigBundlePage.css';
 
 export function ConfigBundlePage() {
   const { t } = useTranslation('system');
-  const canConfig = useCan('manage_config');
+  // An import rewrites the whole configuration in one call (ADR-057).
+  const canSystem = useCan('manage_system');
 
   return (
     <div>
@@ -45,18 +46,18 @@ export function ConfigBundlePage() {
       <Card title={t('bundle.export.title')}>
         <p className="cb-help muted">{t('bundle.export.help')}</p>
         <p className="cb-help muted">{t('bundle.notBackup')}</p>
-        {canConfig ? (
+        {canSystem ? (
           <ExportPanel />
         ) : (
-          <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+          <PermissionHint permission="manage_system" signInHint={t('settings.signInHint')} />
         )}
       </Card>
       <Card title={t('bundle.import.title')}>
         <p className="cb-help muted">{t('bundle.import.help')}</p>
-        {canConfig ? (
+        {canSystem ? (
           <ImportPanel />
         ) : (
-          <PermissionHint permission="manage_config" signInHint={t('settings.signInHint')} />
+          <PermissionHint permission="manage_system" signInHint={t('settings.signInHint')} />
         )}
       </Card>
     </div>

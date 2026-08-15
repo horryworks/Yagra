@@ -3,7 +3,8 @@
 //! drill-down that answers "if this poller dies, what stops being monitored?".
 //!
 //! Reads are `View` and **secret-free by construction**: working-set *counts*, never spec contents.
-//! Removing a decommissioned poller is `ManageConfig`.
+//! Removing a decommissioned poller is `ManageSystem` — the poller fleet is deployment topology,
+//! not monitoring configuration (ADR-057).
 //!
 //! **Almost every read here degrades rather than fails.** The durable inventory, the pool summary's
 //! node counts, the folder-pool resolver and the drill-down's name lookup all fall back to a partial
@@ -16,7 +17,7 @@
 //! node detail's "Polled by" read the same data and cannot disagree.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView, Scoped, VisibleNode};
+use super::extract::{Admin, RequireManageSystem, RequireView, Scoped, VisibleNode};
 use super::util::pool_resolver;
 use super::{AdminState, ApiState};
 use crate::coordinator::PollerView;
@@ -621,14 +622,14 @@ pub(crate) async fn monitoring_gaps(admin: &AdminState) -> Vec<crate::pollers::M
     responses(
         (status = 204, description = "Poller removed from the durable inventory"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such poller", body = super::error::ErrorBody),
         (status = 409, description = "The poller is online and would re-register on its next heartbeat", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_poller(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<String>,
 ) -> ApiResult<StatusCode> {
@@ -680,13 +681,13 @@ pub(super) struct PollerAnchorRequest {
     responses(
         (status = 204, description = "The anchor was set or cleared"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such poller, or no such node", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
     ),
 )]
 async fn set_poller_anchor(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<String>,
     Json(req): Json<PollerAnchorRequest>,

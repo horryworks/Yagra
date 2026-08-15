@@ -171,7 +171,7 @@ async fn get_shared_dashboard(_guard: RequireView, admin: Admin) -> ApiResult<Js
         (status = 200, description = "Layout saved for every user", body = DashboardSaved),
         (status = 400, description = "The layout is not a JSON object", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 413, description = "The layout exceeds the document size cap", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -260,15 +260,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_shared_dashboard_reads_openly_but_is_written_by_admins_only() {
+    async fn the_shared_dashboard_reads_openly_and_is_written_by_operators_and_up() {
         // Read is open on a public deployment (503 = past the guard, into skeleton mode)…
         assert_eq!(
             status_of(public_state(), "GET", "/api/v1/shared-dashboard", None, "").await,
             StatusCode::SERVICE_UNAVAILABLE,
         );
-        // …the write is not, and a non-admin session is 403 rather than 401.
+        // …the write is not. A viewer is 403 rather than 401; an operator is through the guard
+        // (`ManageConfig`, Operator-held since ADR-057) and stopped by skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
@@ -281,7 +285,7 @@ mod tests {
                     "{}"
                 )
                 .await,
-                StatusCode::FORBIDDEN,
+                want,
                 "{role:?}"
             );
         }

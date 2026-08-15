@@ -3,7 +3,7 @@
 //!
 //! Three endpoints: read what is being served, import a certificate, regenerate the self-signed one.
 //!
-//! All three take [`RequireManageConfig`] — this is deployment infrastructure, the same class as
+//! All three take [`RequireManageSystem`] — this is deployment infrastructure, the same class as
 //! retention and the polling defaults, and an Admin is unscoped by construction so there is nothing
 //! for group scoping to narrow. Authorization runs **before** availability (`Require*` first, then
 //! the [`WebTls`] extractor) so an unauthenticated prober cannot learn anything about how this
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::OpenApi;
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Caller, RequireManageConfig, WebTls};
+use super::extract::{Caller, RequireManageSystem, WebTls};
 use super::ApiState;
 use crate::server_cert::CertError;
 use crate::webtls::WebTlsView;
@@ -82,11 +82,11 @@ pub(crate) struct WebTlsRegenerate {
     responses(
         (status = 200, description = "The current certificate, or null if none has been established yet", body = WebTlsResponse),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the manage-configuration permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no certificate store", body = super::error::ErrorBody),
     ),
 )]
-async fn get_web_tls(_guard: RequireManageConfig, tls: WebTls) -> ApiResult<Json<WebTlsResponse>> {
+async fn get_web_tls(_guard: RequireManageSystem, tls: WebTls) -> ApiResult<Json<WebTlsResponse>> {
     let config = tls.view().await.map_err(|e| {
         ApiError::from_internal(
             e.as_ref(),
@@ -108,12 +108,12 @@ async fn get_web_tls(_guard: RequireManageConfig, tls: WebTls) -> ApiResult<Json
         (status = 200, description = "Imported and live; the body is the new certificate's details", body = WebTlsResponse),
         (status = 400, description = "The pair is not usable; the message says which of the checks it failed", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the manage-configuration permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no certificate store", body = super::error::ErrorBody),
     ),
 )]
 async fn put_web_tls(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     State(_st): State<ApiState>,
     tls: WebTls,
     caller: Option<Caller>,
@@ -141,12 +141,12 @@ async fn put_web_tls(
         (status = 200, description = "Generated and live; the body is the new certificate's details", body = WebTlsResponse),
         (status = 400, description = "A supplied name is not a usable hostname or IP address", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the manage-configuration permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no certificate store", body = super::error::ErrorBody),
     ),
 )]
 async fn regenerate_web_tls(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     tls: WebTls,
     caller: Option<Caller>,
     Json(body): Json<WebTlsRegenerate>,

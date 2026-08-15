@@ -713,16 +713,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_viewer_or_operator_cannot_change_what_is_collected() {
+    async fn a_viewer_cannot_change_what_is_collected_but_an_operator_can() {
+        // What is collected is monitoring configuration, so since ADR-057 an operator changes it
+        // and a viewer does not. 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in config_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

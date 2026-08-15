@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // AI analysis (Settings ▸ AI analysis): the single active LLM provider behind "Explain this
-// incident" (ADR-029). ManageConfig-gated. The credential is write-only — the API returns only
+// incident" (ADR-029). ManageSystem-gated (ADR-057: it picks which cloud incident data is sent
+// to). The credential is write-only — the API returns only
 // `has_api_key` — and the provider list, including which vendors send data outside the operator's
 // cloud, comes from the backend so the egress warning cannot drift from what the adapters do.
 //
@@ -35,7 +36,8 @@ import './AiSettingsPage.css';
 export function AiSettingsPage() {
   const { t } = useTranslation('settings-ai');
   const authed = useAuthStore((s) => s.authed);
-  const canConfig = useCan('manage_config');
+  // Picking the LLM provider decides which cloud incident data is sent to (ADR-057).
+  const canSystem = useCan('manage_system');
 
   const [providers, setProviders] = useState<LlmProviderChoice[]>([]);
   const [stored, setStored] = useState<LlmConfigView | null>(null);
@@ -163,7 +165,7 @@ export function AiSettingsPage() {
           trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.ai') }]}
           note={t('note')}
         />
-        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_config" />
+        <LoadBlockNotice block={block} unavailable={t('unavailable')} permission="manage_system" />
       </div>
     );
   }
@@ -184,7 +186,7 @@ export function AiSettingsPage() {
           <Select
             id="ai-provider"
             value={provider}
-            disabled={!canConfig || loading || busy}
+            disabled={!canSystem || loading || busy}
             onChange={(e) => {
               setProvider(e.target.value);
               setReplaceKey(false);
@@ -216,7 +218,7 @@ export function AiSettingsPage() {
             className="mono"
             value={model}
             placeholder={choice?.suggested_model ?? ''}
-            disabled={!canConfig || loading || busy}
+            disabled={!canSystem || loading || busy}
             onChange={(e) => {
               setModel(e.target.value);
               dirty();
@@ -235,7 +237,7 @@ export function AiSettingsPage() {
                 id="ai-project"
                 className="mono"
                 value={project}
-                disabled={!canConfig || loading || busy}
+                disabled={!canSystem || loading || busy}
                 onChange={(e) => {
                   setProject(e.target.value);
                   dirty();
@@ -251,7 +253,7 @@ export function AiSettingsPage() {
                 className="mono"
                 value={location}
                 placeholder={choice.suggested_location ?? ''}
-                disabled={!canConfig || loading || busy}
+                disabled={!canSystem || loading || busy}
                 onChange={(e) => {
                   setLocation(e.target.value);
                   dirty();
@@ -272,7 +274,7 @@ export function AiSettingsPage() {
               <input
                 type="checkbox"
                 checked={replaceKey}
-                disabled={!canConfig || busy}
+                disabled={!canSystem || busy}
                 onChange={(e) => {
                   setReplaceKey(e.target.checked);
                   setApiKey('');
@@ -291,7 +293,7 @@ export function AiSettingsPage() {
                 value={apiKey}
                 autoComplete="off"
                 spellCheck={false}
-                disabled={!canConfig || loading || busy}
+                disabled={!canSystem || loading || busy}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   dirty();
@@ -304,7 +306,7 @@ export function AiSettingsPage() {
                 type="password"
                 value={apiKey}
                 autoComplete="new-password"
-                disabled={!canConfig || loading || busy}
+                disabled={!canSystem || loading || busy}
                 onChange={(e) => {
                   setApiKey(e.target.value);
                   dirty();
@@ -333,7 +335,7 @@ export function AiSettingsPage() {
             className="ai-tokens mono"
             value={maxTokens}
             inputMode="numeric"
-            disabled={!canConfig || loading || busy}
+            disabled={!canSystem || loading || busy}
             onChange={(e) => {
               setMaxTokens(e.target.value);
               dirty();
@@ -346,7 +348,7 @@ export function AiSettingsPage() {
           <input
             type="checkbox"
             checked={enabled}
-            disabled={!canConfig || loading || busy}
+            disabled={!canSystem || loading || busy}
             onChange={(e) => {
               setEnabled(e.target.checked);
               dirty();
@@ -358,7 +360,7 @@ export function AiSettingsPage() {
       </Card>
 
       <div className="ai-actions">
-        {canConfig && (
+        {canSystem && (
           <>
             <Button variant="primary" onClick={save} disabled={busy || loading}>
               {t('common:actions.save')}

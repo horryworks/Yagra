@@ -179,7 +179,7 @@ async fn resolve_scan_credentials(
         (status = 202, description = "Sweep accepted; poll its status by id", body = StartedScan),
         (status = 400, description = "No targets or more than the cap, an unparseable address, or a named credential that is missing or unusable", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -239,7 +239,7 @@ async fn start_discovery_scan(
     responses(
         (status = 200, description = "Progress and the candidates found so far", body = crate::discovery::ScanStatus),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such scan", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -283,7 +283,7 @@ pub(super) struct ImportDiscovered {
         (status = 201, description = "Nodes created, in one transaction", body = ImportResult),
         (status = 400, description = "An unparseable address, an empty name, or a binding id that is not a UUID", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -741,9 +741,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sweeping_and_importing_are_closed_to_everyone_below_admin() {
-        // A sweep sends traffic at the operator's network using credentials it names. That is not
-        // something a viewer or an operator gets to trigger.
+    async fn sweeping_and_importing_are_an_operators_to_do_and_closed_to_a_viewer() {
+        // A sweep sends traffic at the operator's network using credentials it names — which is
+        // exactly an operator's job, so ADR-057 left it on `ManageConfig` and that moved down to
+        // them. A viewer triggers nothing.
         for (method, path) in config_routes() {
             assert_eq!(
                 status_of(private_state(), method, &path, None).await,
@@ -757,14 +758,17 @@ mod tests {
             );
         }
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in config_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }
@@ -813,7 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn promoting_an_endpoint_is_closed_below_admin() {
+    async fn promoting_an_endpoint_is_closed_to_a_viewer() {
         // The import creates a node, so it is `ManageConfig` — the same gate the scan import has,
         // reached from the other of the two discovery paths.
         let path = format!("/api/v1/discovered-endpoints/{ID}/import");
@@ -827,14 +831,17 @@ mod tests {
             "a write guard stays closed on a public-dashboard deployment"
         );
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             assert_eq!(
                 status_of(st.clone(), "POST", &path, Some(&token)).await,
-                StatusCode::FORBIDDEN,
-                "{role:?} must not be able to create a node from an endpoint"
+                want,
+                "{role:?} promoting an endpoint to a monitored node"
             );
         }
     }

@@ -1354,14 +1354,20 @@ mod tests {
         let uid = Uuid::new_v4();
         let token = store.issue(uid, Principal::new(Role::Operator, Scope::All), "op1");
 
-        // Operator can ack alerts but not manage config; the session carries the username + id.
+        // Operator can ack alerts and configure the monitoring, but not the deployment; the
+        // session carries the username + id. `ManageSystem` is the negative case here because
+        // ADR-057 gave the role `ManageConfig` — a test asserting a permission the role simply
+        // lacks proves nothing about whether authorization is consulted at all.
         let session = store
             .authorize(Some(&token), Permission::AckAlerts)
             .expect("operator can ack");
         assert_eq!(session.username, "op1");
         assert_eq!(session.user_id, uid);
+        assert!(store
+            .authorize(Some(&token), Permission::ManageConfig)
+            .is_ok());
         assert!(matches!(
-            store.authorize(Some(&token), Permission::ManageConfig),
+            store.authorize(Some(&token), Permission::ManageSystem),
             Err(AuthError::Forbidden)
         ));
     }
@@ -1514,8 +1520,11 @@ mod tests {
             .expect("operator can ack");
         assert_eq!(s.user_id, uid);
         assert_eq!(s.username, "op");
+        assert!(store
+            .authorize(Some(&token), Permission::ManageConfig)
+            .is_ok());
         assert!(matches!(
-            store.authorize(Some(&token), Permission::ManageConfig),
+            store.authorize(Some(&token), Permission::ManageSystem),
             Err(AuthError::Forbidden)
         ));
     }

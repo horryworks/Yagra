@@ -1868,17 +1868,22 @@ mod tests {
 
     #[tokio::test]
     async fn editing_the_inventory_takes_manage_config() {
-        // Neither viewer nor operator may reshape the inventory — moving a node between folders
-        // rewires which alerts an operator sees, and re-parenting rewires root-cause suppression.
+        // Reshaping the inventory is an operator's job since ADR-057 — moving a node between
+        // folders rewires which alerts an operator sees, and re-parenting rewires root-cause
+        // suppression, both of which are the monitoring rather than the deployment. A viewer still
+        // changes nothing. 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for (role, name) in [(Role::Viewer, "viewer1"), (Role::Operator, "op1")] {
+        for (role, name, want) in [
+            (Role::Viewer, "viewer1", StatusCode::FORBIDDEN),
+            (Role::Operator, "op1", StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), name);
             for (method, path) in write_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

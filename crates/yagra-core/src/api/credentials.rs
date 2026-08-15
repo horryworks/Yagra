@@ -372,7 +372,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_credential_store_is_closed_to_everyone_below_admin() {
+    async fn the_credential_store_is_closed_to_a_viewer_and_open_to_an_operator() {
         // Including the listing: it names what the fleet is polled with, which is a map of what to
         // go after even without the secrets themselves.
         for (method, path) in all_routes() {
@@ -387,15 +387,21 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // ADR-057 moved `ManageCredentials` down to Operator: these are the keys Yagra reaches
+        // *monitored devices* with, not the ones people sign in with, so they belong to whoever
+        // runs the monitoring. A viewer is still refused every one of them, listing included.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in all_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

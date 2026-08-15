@@ -1982,7 +1982,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -2050,7 +2050,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -2125,7 +2125,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -2188,7 +2188,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -2765,7 +2765,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -2815,7 +2815,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -2905,7 +2905,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -3711,7 +3711,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -3781,7 +3781,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -3843,7 +3843,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -3976,7 +3976,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4044,7 +4044,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4106,7 +4106,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4171,7 +4171,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4234,7 +4234,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4297,7 +4297,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4365,7 +4365,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4440,7 +4440,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4503,7 +4503,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -4575,7 +4575,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -6067,7 +6067,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6135,7 +6135,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6220,7 +6220,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6293,7 +6293,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6357,7 +6357,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6418,7 +6418,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6557,7 +6557,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6619,7 +6619,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -6671,7 +6671,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -8451,7 +8451,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -8516,7 +8516,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -8897,7 +8897,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -8972,7 +8972,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -9035,7 +9035,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -9120,7 +9120,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -9205,7 +9205,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -9291,7 +9291,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -12922,7 +12922,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -12990,7 +12990,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13052,7 +13052,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13097,7 +13097,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13152,7 +13152,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13215,7 +13215,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13302,7 +13302,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13489,7 +13489,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13575,7 +13575,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the ManageConfig permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -13762,7 +13762,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -13830,7 +13830,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -13905,7 +13905,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -13968,7 +13968,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -15297,7 +15297,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -15365,7 +15365,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -15430,7 +15430,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -15493,7 +15493,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -16183,7 +16183,7 @@
             }
           },
           "403": {
-            "description": "Role lacks ManageConfig",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -16244,7 +16244,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the manage-configuration permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -16313,7 +16313,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the manage-configuration permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -16384,7 +16384,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the manage-configuration permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -16566,7 +16566,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -17034,7 +17034,7 @@
             }
           },
           "403": {
-            "description": "Role lacks any of ManageConfig, ManageCredentials or ViewAudit",
+            "description": "Role lacks any of ManageSystem, ManageCredentials or ViewAudit",
             "content": {
               "application/json": {
                 "schema": {
@@ -17095,7 +17095,7 @@
             }
           },
           "403": {
-            "description": "Role lacks the manage-configuration permission",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -17165,7 +17165,7 @@
             }
           },
           "403": {
-            "description": "Role lacks manage-configuration or manage-credentials",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -17264,7 +17264,7 @@
             }
           },
           "403": {
-            "description": "Role lacks manage-configuration or manage-credentials",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -17339,7 +17339,7 @@
             }
           },
           "403": {
-            "description": "Role lacks manage-configuration",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -17404,7 +17404,7 @@
             }
           },
           "403": {
-            "description": "Role lacks manage-configuration or manage-credentials",
+            "description": "Role lacks ManageSystem",
             "content": {
               "application/json": {
                 "schema": {
@@ -17502,7 +17502,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin — the ruleset decides when the fleet pages someone",
+            "description": "Role lacks ManageConfig — the ruleset decides when the fleet pages someone",
             "content": {
               "application/json": {
                 "schema": {
@@ -17570,7 +17570,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -17625,7 +17625,7 @@
             }
           },
           "403": {
-            "description": "Role below Admin",
+            "description": "Role lacks ManageConfig",
             "content": {
               "application/json": {
                 "schema": {
@@ -27015,6 +27015,7 @@
           "manage_maintenance",
           "manage_config",
           "manage_credentials",
+          "manage_system",
           "manage_users",
           "view_audit"
         ]

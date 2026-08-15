@@ -122,7 +122,7 @@ pub(super) struct CreateMibEntry {
         (status = 201, description = "Entry added to the catalog", body = CreatedId),
         (status = 400, description = "The metric name is not an identifier, the OID is not dotted-numeric, or collection/metric_kind is outside its vocabulary", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 409, description = "An entry already claims that metric name", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
@@ -186,7 +186,7 @@ async fn create_mib_entry(
     responses(
         (status = 204, description = "Entry removed"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 404, description = "No such entry", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),

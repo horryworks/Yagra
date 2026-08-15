@@ -166,7 +166,7 @@ async fn reload_classifier(admin: &AdminState) {
     responses(
         (status = 200, description = "Every rule, in evaluation order", body = Vec<yagra_common::ClassificationRule>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -191,7 +191,7 @@ async fn list_classification_rules(
         (status = 201, description = "Rule created", body = CreatedId),
         (status = 400, description = "The rule matches nothing, the prefix is not a dotted OID, the regex does not compile, or the profile does not exist", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
     ),
 )]
@@ -232,7 +232,7 @@ async fn create_classification_rule(
         (status = 204, description = "Rule updated"),
         (status = 400, description = "The submitted rule is invalid", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),
     ),
@@ -280,7 +280,7 @@ async fn update_classification_rule(
     responses(
         (status = 204, description = "Rule deleted"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role below Admin", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
         (status = 404, description = "No such rule", body = super::error::ErrorBody),
     ),
@@ -344,7 +344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_ruleset_is_configuration_and_closed_to_everyone_below_admin() {
+    async fn the_ruleset_is_monitoring_configuration_and_closed_to_a_viewer() {
         for (method, path) in all_routes() {
             assert_eq!(
                 status_of(private_state(), method, &path, None).await,
@@ -357,15 +357,21 @@ mod tests {
                 "public {method} {path}"
             );
         }
+        // A viewer is refused; an operator is not. Classification decides which profile a
+        // discovered device gets, which is monitoring setup, so ADR-057 left it on `ManageConfig`
+        // and that permission moved down to Operator. 503 = past the guard, into skeleton mode.
         let st = private_state();
-        for role in [Role::Viewer, Role::Operator] {
+        for (role, want) in [
+            (Role::Viewer, StatusCode::FORBIDDEN),
+            (Role::Operator, StatusCode::SERVICE_UNAVAILABLE),
+        ] {
             let token = st
                 .sessions
                 .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
             for (method, path) in all_routes() {
                 assert_eq!(
                     status_of(st.clone(), method, &path, Some(&token)).await,
-                    StatusCode::FORBIDDEN,
+                    want,
                     "{role:?} {method} {path}"
                 );
             }

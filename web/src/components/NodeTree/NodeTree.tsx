@@ -238,6 +238,20 @@ export function NodeTree({
   const selectNode = (node: NodeSummary) => (onSelectNode ? onSelectNode(node) : onOpenNode(node));
   const selectGroup = (group: NodeGroup) => onSelectGroup?.(group);
 
+  // Whether a right-click on each row kind would produce a menu with anything in it.
+  //
+  // 🚨 **These used to be one `if (!canEdit) return;`**, and that shipped an operator a tree with
+  // no context menu at all — `canEdit` is `ManageConfig`, while the maintenance and mute entries
+  // inside the menu are `ManageMaintenance` and `AckAlerts`, which an operator holds (ADR-057).
+  // Closing a mixed menu on its strictest member takes the looser items with it, silently. It read
+  // as deliberate because it was *consistent*: an admin saw the menu, so nothing looked broken.
+  //
+  // A node row always has one item — Open, which is navigation and needs no permission — so its
+  // menu always opens. The other two are conditional, because an empty menu is worse than none.
+  const canSuppress = !!onSetMaintenance || !!onSetMute;
+  const groupMenuHasItems = canEdit || canSuppress || !!onAddNode;
+  const rootMenuHasItems = !!onAddNode;
+
   // The suppression markers (maintenance wrench + mute bell-off) shown on a row when active, plus
   // the dashed-outline variant for a node released from a suppression it inherited. Each is a
   // button: clicking one opens the panel below, which is the only place in the UI that answers
@@ -580,7 +594,7 @@ export function NodeTree({
         onDragOver={(e) => onRowDragOver(e, target, true)}
         onDrop={(e) => onRowDrop(e, target, true)}
         onContextMenu={(e) => {
-          if (!canEdit) return;
+          if (!groupMenuHasItems) return;
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY, kind: 'group', group });
         }}
@@ -706,7 +720,6 @@ export function NodeTree({
         onDragOver={(e) => onRowDragOver(e, target, false)}
         onDrop={(e) => onRowDrop(e, target, false)}
         onContextMenu={(e) => {
-          if (!canEdit) return;
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY, kind: 'node', node });
         }}
@@ -787,7 +800,7 @@ export function NodeTree({
           dropOnRoot();
         }}
         onContextMenu={(e) => {
-          if (!canEdit) return;
+          if (!rootMenuHasItems) return;
           e.preventDefault();
           setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
         }}
@@ -844,7 +857,7 @@ export function NodeTree({
             <p
               className="muted ntree-empty"
               onContextMenu={(e) => {
-                if (!canEdit) return;
+                if (!rootMenuHasItems) return;
                 e.preventDefault();
                 setMenu({ x: e.clientX, y: e.clientY, kind: 'root' });
               }}
@@ -880,17 +893,24 @@ export function NodeTree({
             suppressionPanel(menu)
           ) : menu.kind === 'group' ? (
             <>
-              <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
-                {t('group.addSubgroup')}
-              </button>
+              {/* Reshaping the folder tree is `ManageConfig`; suppressing it is not. Each item
+                  asks for its own permission so an operator who may open a maintenance window on
+                  a folder still gets that half of the menu (ADR-057). */}
+              {canEdit && (
+                <button type="button" onClick={() => { onAddGroup(menu.group.id); setMenu(null); }}>
+                  {t('group.addSubgroup')}
+                </button>
+              )}
               {onAddNode && (
                 <button type="button" onClick={() => { onAddNode(menu.group.id); setMenu(null); }}>
                   {t('tree.addNodeHere')}
                 </button>
               )}
-              <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
-                {t('tree.editMove')}
-              </button>
+              {canEdit && (
+                <button type="button" onClick={() => { onEditGroup(menu.group); setMenu(null); }}>
+                  {t('tree.editMove')}
+                </button>
+              )}
               {poolMenu(
                 { kind: 'group', id: menu.group.id, name: menu.group.name },
                 menu.group.pool,
@@ -900,10 +920,14 @@ export function NodeTree({
                 undefined,
                 menu,
               )}
-              <div className="ntree-menu-sep" />
-              <button type="button" className="danger" onClick={() => { onDeleteGroup(menu.group); setMenu(null); }}>
-                {t('common:actions.delete')}
-              </button>
+              {canEdit && (
+                <>
+                  <div className="ntree-menu-sep" />
+                  <button type="button" className="danger" onClick={() => { onDeleteGroup(menu.group); setMenu(null); }}>
+                    {t('common:actions.delete')}
+                  </button>
+                </>
+              )}
             </>
           ) : menu.kind === 'node' ? (
             <>
@@ -915,9 +939,11 @@ export function NodeTree({
                   {t('tree.editNodeEllipsis')}
                 </button>
               )}
-              <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
-                {t('tree.moveToGroup')}
-              </button>
+              {canEdit && (
+                <button type="button" onClick={() => { onRequestMoveNode(menu.node); setMenu(null); }}>
+                  {t('tree.moveToGroup')}
+                </button>
+              )}
               {onAddNode && (
                 <button type="button" onClick={() => { onAddNode(menu.node.group_id ?? null); setMenu(null); }}>
                   {t('tree.addNodeEllipsis')}

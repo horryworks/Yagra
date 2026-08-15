@@ -61,7 +61,9 @@ function EnabledStatus({ enabled }: { enabled: boolean }) {
 
 export function RoutingPage() {
   const { t } = useTranslation('alertsConfig');
-  const canConfig = useCan('manage_config');
+  // A notification channel holds a PagerDuty / JSM token, and a routing rule decides where every
+  // alert goes; ADR-057 keeps both with the administrator.
+  const canSystem = useCan('manage_system');
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [block, setBlock] = useState<LoadBlock | null>(null);
@@ -91,7 +93,7 @@ export function RoutingPage() {
           trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
         />
         <LoadBlockNotice
-          permission="manage_config"
+          permission="manage_system"
           block={block}
           unavailable={t('routing.unavailable')}
         />
@@ -109,7 +111,7 @@ export function RoutingPage() {
       {error && <p className="form-error routing-error">{error}</p>}
       <ChannelsSection
         channels={channels}
-        canConfig={canConfig}
+        canSystem={canSystem}
         loading={loading}
         onChange={load}
         onError={setError}
@@ -117,7 +119,7 @@ export function RoutingPage() {
       <RulesSection
         rules={rules}
         channels={channels}
-        canConfig={canConfig}
+        canSystem={canSystem}
         loading={loading}
         onChange={load}
         onError={setError}
@@ -130,13 +132,13 @@ export function RoutingPage() {
 
 function ChannelsSection({
   channels,
-  canConfig,
+  canSystem,
   loading,
   onChange,
   onError,
 }: {
   channels: NotificationChannel[];
-  canConfig: boolean;
+  canSystem: boolean;
   loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
@@ -192,7 +194,7 @@ function ChannelsSection({
         width: '96px',
         align: 'right',
         render: (c) =>
-          canConfig ? (
+          canSystem ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -224,7 +226,7 @@ function ChannelsSection({
     return cols;
     // `toggle` is rebuilt every render; listing it would rebuild the columns on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, canConfig, channels]);
+  }, [t, canSystem, channels]);
 
   // ⚠️ **Component state, not the URL.** The column key IS the URL key (ADR-053 decision 12), and
   // this route has two tables — both with a `name` and a `status` column. URL-backing either one
@@ -246,7 +248,7 @@ function ChannelsSection({
           total={anyFiltered ? channels.length : undefined}
           noun={t('noun.channel', { count: shown.length })}
         />
-        {canConfig && (
+        {canSystem && (
           <Button variant="primary" onClick={() => setAdding(true)}>
             {t('routing.channels.add')}
           </Button>
@@ -496,14 +498,14 @@ function AddChannelModal({
 function RulesSection({
   rules,
   channels,
-  canConfig,
+  canSystem,
   loading,
   onChange,
   onError,
 }: {
   rules: RoutingRule[];
   channels: NotificationChannel[];
-  canConfig: boolean;
+  canSystem: boolean;
   loading: boolean;
   onChange: () => void;
   onError: (m: string) => void;
@@ -563,7 +565,7 @@ function RulesSection({
         width: '96px',
         align: 'right',
         render: (r) =>
-          canConfig ? (
+          canSystem ? (
             <span className="ytable-actions">
               <OverflowMenu
                 actions={[
@@ -588,7 +590,7 @@ function RulesSection({
     return cols;
     // `channelName` and `toggle` are rebuilt every render; what they read is listed instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, canConfig, channels]);
+  }, [t, canSystem, channels]);
 
   // Component state, not the URL — see the channels table above for why this route cannot use it.
   const { filterCols, filters, setFilters, clear, shown, counts, anyFiltered } = useClientFilters(
@@ -608,7 +610,7 @@ function RulesSection({
           total={anyFiltered ? rules.length : undefined}
           noun={t('common:noun.rule', { count: shown.length })}
         />
-        {canConfig && (
+        {canSystem && (
           <Button variant="primary" onClick={() => setAdding(true)} disabled={channels.length === 0}>
             {t('routing.rules.add')}
           </Button>

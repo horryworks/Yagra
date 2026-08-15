@@ -441,7 +441,8 @@ function PollerNodesSection({
 
 export function PollersPage() {
   const { t } = useTranslation('system');
-  const canConfig = useCan('manage_config');
+  // The poller fleet is deployment topology rather than monitoring configuration (ADR-057).
+  const canSystem = useCan('manage_system');
   const [pollers, setPollers] = useState<PollerInfo[]>([]);
   const [pools, setPools] = useState<PoolSummary[]>([]);
   const [gaps, setGaps] = useState<MonitoringGap[]>([]);
@@ -593,7 +594,7 @@ export function PollersPage() {
         header: t('pollers.cols.anchor'),
         width: '130px',
         render: (p) =>
-          canConfig ? (
+          canSystem ? (
             <button type="button" className="poller-drill" onClick={() => setAnchoring(p)}>
               {p.anchor_node_id ? (
                 <EntityName name={nodeName(p.anchor_node_id)} id={p.anchor_node_id} />
@@ -613,7 +614,7 @@ export function PollersPage() {
         width: '58px',
         align: 'right',
         render: (p) =>
-          canConfig && p.status !== 'online' ? (
+          canSystem && p.status !== 'online' ? (
             <span className="ytable-actions">
               <IconButton
                 title={t('pollers.remove.title')}
@@ -628,7 +629,7 @@ export function PollersPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [t, canConfig, pools, coreVersion, nodeName]);
+  }, [t, canSystem, pools, coreVersion, nodeName]);
 
   // URL-backed: the pollers table is the only filtered table on this route — the gap and
   // drill-down subsections below carry no filters of their own.
@@ -728,7 +729,7 @@ export function PollersPage() {
               total={anyFiltered ? pollers.length : undefined}
               noun={t('common:noun.poller', { count: shown.length })}
             />
-            {canConfig && (
+            {canSystem && (
               <Button variant="primary" onClick={() => setRegistering(true)}>
                 {t('pollers.registerButton')}
               </Button>

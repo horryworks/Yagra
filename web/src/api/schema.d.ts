@@ -7158,7 +7158,7 @@ export interface components {
          * @description A discrete capability checked at the API edge.
          * @enum {string}
          */
-        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "manage_users" | "view_audit";
+        Permission: "view" | "ack_alerts" | "manage_maintenance" | "manage_config" | "manage_credentials" | "manage_system" | "manage_users" | "view_audit";
         /** @description One permission in the role/privilege matrix. */
         PermissionInfo: {
             description: string;
@@ -10479,7 +10479,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10539,7 +10539,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10600,7 +10600,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10657,7 +10657,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11146,7 +11146,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11193,7 +11193,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11265,7 +11265,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11925,7 +11925,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11985,7 +11985,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12035,7 +12035,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12151,7 +12151,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12211,7 +12211,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12262,7 +12262,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12314,7 +12314,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12371,7 +12371,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12427,7 +12427,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12487,7 +12487,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12548,7 +12548,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12605,7 +12605,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -12664,7 +12664,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13545,7 +13545,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13605,7 +13605,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13675,7 +13675,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13741,7 +13741,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13791,7 +13791,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13847,7 +13847,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -13965,7 +13965,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14023,7 +14023,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -14070,7 +14070,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15483,7 +15483,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15540,7 +15540,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15876,7 +15876,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15937,7 +15937,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -15994,7 +15994,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16064,7 +16064,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16134,7 +16134,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -16204,7 +16204,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18820,7 +18820,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18880,7 +18880,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18931,7 +18931,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -18969,7 +18969,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19012,7 +19012,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19069,7 +19069,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19139,7 +19139,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19310,7 +19310,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19380,7 +19380,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the ManageConfig permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19535,7 +19535,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19595,7 +19595,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19656,7 +19656,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -19713,7 +19713,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20802,7 +20802,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20862,7 +20862,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20914,7 +20914,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -20971,7 +20971,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21589,7 +21589,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks ManageConfig */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21645,7 +21645,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the manage-configuration permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21705,7 +21705,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the manage-configuration permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21765,7 +21765,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the manage-configuration permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -21930,7 +21930,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22339,7 +22339,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks any of ManageConfig, ManageCredentials or ViewAudit */
+            /** @description Role lacks any of ManageSystem, ManageCredentials or ViewAudit */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22395,7 +22395,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks the manage-configuration permission */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22455,7 +22455,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks manage-configuration or manage-credentials */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22531,7 +22531,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks manage-configuration or manage-credentials */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22603,7 +22603,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks manage-configuration */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22661,7 +22661,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role lacks manage-configuration or manage-credentials */
+            /** @description Role lacks ManageSystem */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22728,7 +22728,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin — the ruleset decides when the fleet pages someone */
+            /** @description Role lacks ManageConfig — the ruleset decides when the fleet pages someone */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22788,7 +22788,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -22836,7 +22836,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Role below Admin */
+            /** @description Role lacks ManageConfig */
             403: {
                 headers: {
                     [name: string]: unknown;

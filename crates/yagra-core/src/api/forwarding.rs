@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Forwarding destinations — the passive-data tee (ADR-034).
 //!
-//! `ManageConfig` throughout. A destination says "everything matching this filter also goes there",
+//! `ManageSystem` throughout (ADR-057): forwarding is the clearest case of "data leaves the box",
+//! so it stayed with the administrator when monitoring configuration moved down to the operator.
+//! A destination says "everything matching this filter also goes there",
 //! so defining one is an egress decision: it sends received syslog, traps and flow exports to a
 //! system outside Yagra, and those payloads routinely contain credentials.
 //!
@@ -20,7 +22,7 @@
 //! catch every possible cycle.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig};
+use super::extract::{Admin, RequireManageSystem};
 use super::util::CreatedId;
 use super::ApiState;
 use axum::{
@@ -381,12 +383,12 @@ fn write_error(e: &anyhow::Error, what: &'static str, msg: &'static str) -> ApiE
     responses(
         (status = 200, description = "Every destination, without its stored secret", body = Vec<crate::forward_store::ForwardDestination>),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
     ),
 )]
 async fn list_forward_destinations(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
 ) -> ApiResult<Json<Vec<crate::forward_store::ForwardDestination>>> {
     let rows = admin.forward.list().await.map_err(|e| {
@@ -406,13 +408,13 @@ async fn list_forward_destinations(
         (status = 201, description = "Destination created", body = CreatedId),
         (status = 400, description = "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, rate limit, or the destination cap)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 409, description = "A destination with that name already exists", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
     ),
 )]
 async fn create_forward_destination(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     State(st): State<ApiState>,
     admin: Admin,
     Json(body): Json<ForwardDestinationBody>,
@@ -454,14 +456,14 @@ async fn create_forward_destination(
         (status = 204, description = "Destination updated; an omitted secret keeps the stored one"),
         (status = 400, description = "Edge validation rejected the destination (target, kind pairing, filter, certificate, credential, or rate limit)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such destination", body = super::error::ErrorBody),
         (status = 409, description = "A destination with that name already exists", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
     ),
 )]
 async fn update_forward_destination(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     State(st): State<ApiState>,
     admin: Admin,
     Path(id): Path<Uuid>,
@@ -491,12 +493,12 @@ async fn update_forward_destination(
     responses(
         (status = 204, description = "Destination deleted, or was already gone"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
     ),
 )]
 async fn delete_forward_destination(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
@@ -524,13 +526,13 @@ async fn delete_forward_destination(
     responses(
         (status = 200, description = "The probe ran; `delivered` says whether it arrived", body = TestResult),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 404, description = "No such destination", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no destination store", body = super::error::ErrorBody),
     ),
 )]
 async fn test_forward_destination(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<TestResult>> {
@@ -581,12 +583,12 @@ pub(crate) struct ForwardingStatus {
     responses(
         (status = 200, description = "Per-destination counters and the pollers that cannot feed them", body = ForwardingStatus),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no forwarder", body = super::error::ErrorBody),
     ),
 )]
 async fn forwarding_status(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     State(st): State<ApiState>,
     admin: Admin,
 ) -> ApiResult<Json<ForwardingStatus>> {
@@ -596,7 +598,7 @@ async fn forwarding_status(
 /// Live forwarding delivery status, shared by `GET /api/v1/forwarding/status` and the MCP
 /// `get_system_health(section="forwarding")` tool (ADR-042 I3a).
 ///
-/// `ManageConfig`, not `View` — unlike the rest of the self-health family. It names every
+/// `ManageSystem`, not `View` — unlike the rest of the self-health family. It names every
 /// destination a deployment tees to, which is closer to the forwarding *configuration* than to a
 /// health counter, and the ledger records that asymmetry rather than smoothing it over.
 pub(crate) fn forwarding_delivery_status(

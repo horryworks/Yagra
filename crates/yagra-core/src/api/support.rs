@@ -10,11 +10,11 @@
 //! # Three permissions, not one
 //!
 //! The bundle is the union of things three separate surfaces answer — configuration
-//! (`ManageConfig`), whether stored credentials still decrypt (`ManageCredentials`), and who did
+//! (`ManageSystem`), whether stored credentials still decrypt (`ManageCredentials`), and who did
 //! what (`ViewAudit`). So the handler demands **all three**, in its signature, rather than picking
 //! the loosest and calling it an admin endpoint.
 //!
-//! Picking one would have made this a privilege-escalation path: a `ManageConfig` operator could
+//! Picking one would have made this a privilege-escalation path: a `ManageSystem` administrator could
 //! download the audit log and the credential report through a route whose name says neither. The
 //! union costs nothing today — only Admin holds all three — and is what keeps that true if a role
 //! ever holds one without the others, which is the whole reason those permissions are separate
@@ -28,7 +28,7 @@
 //! wanted. The one thing that does abort is a redaction hit — see [`crate::support_bundle`].
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireManageCredentials, RequireViewAudit};
+use super::extract::{Admin, RequireManageCredentials, RequireManageSystem, RequireViewAudit};
 use super::ApiState;
 use crate::support_bundle::{
     self, BundleBuilder, BundleError, SecretScan, DEFAULT_SINCE_HOURS, MAX_LOG_BYTES,
@@ -73,13 +73,13 @@ pub(crate) struct BundleQuery {
     responses(
         (status = 200, description = "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and core's own rotated log files. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections", content_type = "application/gzip"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks any of ManageConfig, ManageCredentials or ViewAudit", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks any of ManageSystem, ManageCredentials or ViewAudit", body = super::error::ErrorBody),
         (status = 500, description = "The redaction scan matched, so nothing was released. The rule and the file are named in the log, never the value", body = super::error::ErrorBody),
         (status = 503, description = "Inventory storage is unavailable (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
 async fn support_bundle(
-    _cfg: RequireManageConfig,
+    _cfg: RequireManageSystem,
     _creds: RequireManageCredentials,
     _audit: RequireViewAudit,
     admin: Admin,
@@ -447,9 +447,11 @@ mod tests {
     }
 
     /// The union guard, which is the design decision this module exists for. Viewer and Operator
-    /// are refused with **403** rather than 401 — the two must stay distinguishable — and refused
-    /// even though an Operator holds `ManageConfig`, because the bundle also carries the audit log
-    /// and the credential report.
+    /// are refused with **403** rather than 401 — the two must stay distinguishable — and since
+    /// ADR-057 the Operator case is the interesting one: that role now holds `ManageCredentials`,
+    /// one of the three this endpoint demands, and is still refused because the bundle also carries
+    /// the deployment's own state and the audit log. A union guard is only worth writing when its
+    /// members can come apart, and they now have.
     #[tokio::test]
     async fn a_role_short_of_any_one_permission_gets_403() {
         let st = private_state();

@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! AI-assisted root-cause analysis (ADR-029) — five endpoints across two audiences.
 //!
-//! **Provider configuration is `ManageConfig`.** It picks which cloud the operator's incident data
+//! **Provider configuration is `ManageSystem`.** It picks which cloud the operator's incident data
 //! may cross into and holds a billable credential, so it is an admin concern and its secret is
 //! write-only.
 //!
-//! **Generation is `AckAlerts`, not `ManageConfig`** — deliberately. The people carrying the pager
+//! **Generation is `AckAlerts`, not `ManageSystem`** — deliberately. The people carrying the pager
 //! are exactly who needs the explanation; gating it behind admin would put the feature out of reach
 //! of its users. What bounds abuse is the orchestrator's rate and concurrency caps, not the role
 //! (the conclusion ADR-028 WS-A reached about expensive reads).
@@ -18,7 +18,7 @@
 //! something an unauthenticated prober should be able to read off a 503-vs-403.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Actor, Admin, RequireAckAlerts, RequireManageConfig, Scoped};
+use super::extract::{Actor, Admin, RequireAckAlerts, RequireManageSystem, Scoped};
 use super::ApiState;
 use axum::{
     extract::State,
@@ -205,12 +205,12 @@ pub(crate) struct LlmConfigResponse {
     responses(
         (status = 200, description = "The stored configuration (or null) and the provider choices", body = LlmConfigResponse),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no configuration store", body = super::error::ErrorBody),
     ),
 )]
 async fn get_llm_config(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
 ) -> ApiResult<Json<LlmConfigResponse>> {
     Ok(Json(llm_config_view(&admin).await?))
@@ -246,12 +246,12 @@ pub(crate) async fn llm_config_view(admin: &super::AdminState) -> ApiResult<LlmC
         (status = 204, description = "Configuration saved; an omitted `api_key` keeps the stored one"),
         (status = 400, description = "A field of the configuration is invalid", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no configuration store", body = super::error::ErrorBody),
     ),
 )]
 async fn put_llm_config(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     admin: Admin,
     Json(body): Json<crate::rca::store::LlmConfigInput>,
 ) -> ApiResult<StatusCode> {
@@ -274,12 +274,12 @@ async fn put_llm_config(
     responses(
         (status = 200, description = "The probe ran; `ok` says whether the provider answered", body = LlmTestResult),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the ManageConfig permission", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode: no provider to test", body = super::error::ErrorBody),
     ),
 )]
 async fn test_llm_provider(
-    _guard: RequireManageConfig,
+    _guard: RequireManageSystem,
     State(st): State<ApiState>,
 ) -> ApiResult<Json<LlmTestResult>> {
     let rca = st.rca.as_ref().ok_or_else(ApiError::admin_unavailable)?;
