@@ -10,7 +10,7 @@
     "source_other": "sources"
   },
   "routing": {
-    "unavailable": "Notification routing is unavailable in skeleton mode.",
+    "unavailable": "Notification delivery is unavailable in skeleton mode.",
     "note": "Channels are where alerts go; rules pick which alerts (by severity) reach which channels.",
     "channels": {
       "title": "Notification channels",

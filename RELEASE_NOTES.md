@@ -57,6 +57,12 @@
   screen has**, saying who a change affects.
 - **The global search box now reads "Search nodes…".** It has only ever searched nodes; you had to
   start typing to find that out.
+- **`Alerts ▸ Notification routing` is now `Notification delivery`, and it moved below the two
+  rule screens.** *Routing* already means something else in a network monitoring product — the
+  discovery walk under Monitoring defaults is literally called "Routing adjacency (OSPF / BGP /
+  routes)" — so one word carried two meanings. The order in **Configure** now follows the work:
+  decide what fires (**Metric alert rules**, **Event alert rules**, side by side because they are
+  the two ways an alert comes into existence), then who hears about it, then when to stay quiet.
 - **`Settings ▸ About` moved from the Personal group to the end of System.** It describes the
   deployment, not the account.
 - **A collapsed sidebar now shows the real item names instead of two-letter codes.** It was 52px of

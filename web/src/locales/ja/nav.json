@@ -31,7 +31,7 @@
     "active": "アクティブアラート",
     "history": "履歴",
     "rules": "メトリクスのアラートルール",
-    "routing": "通知ルーティング",
+    "routing": "通知の配信",
     "eventRules": "イベントのアラートルール",
     "maintenance": "メンテナンスウィンドウ",
     "mutes": "ミュート"

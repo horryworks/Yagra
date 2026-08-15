@@ -112,6 +112,21 @@ describe('nav IA', () => {
     ]);
   });
 
+  it('keeps the two alert-rule screens adjacent, ahead of what happens after one fires', () => {
+    // The pair is the point: the two ways an alert comes into existence, side by side and named the
+    // same way. Notification delivery used to sit between them. Order = order of the work (R7):
+    // decide what fires → decide who hears → decide when to stay quiet.
+    const alerts = NAV.find((s) => s.key === 'alerts')!;
+    const configure = alerts.groups.find((g) => g.labelKey === 'groups.configure')!;
+    expect(configure.items.map((i) => i.path)).toEqual([
+      '/alerts/rules',
+      '/alerts/event-rules',
+      '/alerts/routing',
+      '/alerts/maintenance',
+      '/alerts/mutes',
+    ]);
+  });
+
   it('files About under System, and leaves Personal holding only what affects one account', () => {
     // ADR-055 決定 6. About describes the deployment; Personal means "affects only me". Folding
     // Preferences into System instead would make a theme switch look fleet-wide.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Notification routing (Alerts ▸ Notification routing). Two things: notification
+// Notification delivery (Alerts ▸ Notification delivery). Two things: notification
 // CHANNELS (where alerts can go — webhook/email; the connection config is a secret, sealed
 // server-side and never returned) and routing RULES (which alerts, by severity, fan out to
 // which channels). The notifier snapshots these (refreshed ~30s) so edits take effect live;

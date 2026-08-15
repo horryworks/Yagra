@@ -206,19 +206,24 @@ export const NAV: NavSection[] = [
             path: '/alerts/rules',
             implemented: true,
           },
-          {
-            labelKey: 'alerts.routing',
-            descKey: 'descriptions.alertsRouting',
-            path: '/alerts/routing',
-            implemented: true,
-          },
           // Event alert rules stays under Alerts, not Events. It is a thing that PRODUCES alerts,
           // and splitting the two rule screens across two tabs would be the same mistake this
           // increment is fixing, one level up (ADR-055「採らなかった案」).
+          //
+          // ⚠️ It sits directly under Metric alert rules, and the pairing is the point: the two
+          // ways an alert can come into existence, side by side, named the same way. Routing used
+          // to be wedged between them, which broke the pair and put "where alerts go" before the
+          // second way of making one (R7 — the order is the order of the work).
           {
             labelKey: 'alerts.eventRules',
             descKey: 'descriptions.alertsEventRules',
             path: '/alerts/event-rules',
+            implemented: true,
+          },
+          {
+            labelKey: 'alerts.routing',
+            descKey: 'descriptions.alertsRouting',
+            path: '/alerts/routing',
             implemented: true,
           },
           {

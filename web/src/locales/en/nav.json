@@ -31,7 +31,7 @@
     "active": "Active alerts",
     "history": "History",
     "rules": "Metric alert rules",
-    "routing": "Notification routing",
+    "routing": "Notification delivery",
     "eventRules": "Event alert rules",
     "maintenance": "Maintenance windows",
     "mutes": "Mutes"
