@@ -38,16 +38,21 @@ impl InMemorySink {
             .copied()
     }
 
-    /// Distinct node ids that have any recorded sample for `metric`. The skeleton sink keeps only
-    /// the latest value per series (no timestamps), so every stored sample counts as "fresh" —
-    /// this mirrors [`Self::latest`] so the API's derived-state fallback behaves the same in
-    /// skeleton / test mode as it does against a real TSDB (which times the window).
+    /// Distinct node ids that have any recorded sample for **any of** `metrics`. The skeleton sink
+    /// keeps only the latest value per series (no timestamps), so every stored sample counts as
+    /// "fresh" — this mirrors [`Self::latest`] so the API's derived-state fallback behaves the same
+    /// in skeleton / test mode as it does against a real TSDB (which times the window).
+    ///
+    /// Several metrics rather than one because each node kind has its own liveness series and only
+    /// emits that one; the union answers "did we hear from it" without resolving kinds (ADR-059).
+    /// A node matching more than one collapses to a single id — the callers hold sets, and a store
+    /// that double-counted would make the two implementations disagree on the coverage percentage.
     #[must_use]
-    pub fn fresh_node_ids(&self, metric: &str) -> Vec<Uuid> {
+    pub fn fresh_node_ids(&self, metrics: &[&str]) -> Vec<Uuid> {
         let map = self.latest.lock().expect("sink mutex poisoned");
         let mut ids: Vec<Uuid> = map
             .keys()
-            .filter(|k| k.metric == metric)
+            .filter(|k| metrics.contains(&k.metric.as_str()))
             .map(|k| k.node.as_uuid())
             .collect();
         ids.sort();
@@ -117,8 +122,29 @@ mod tests {
         sink.ingest(&result_with(b, "cpu_pct", 50.0));
 
         // Only nodes with a sample for the queried metric are returned (mirrors `latest`).
-        assert_eq!(sink.fresh_node_ids("icmp_rtt_ms"), vec![a.as_uuid()]);
-        assert_eq!(sink.fresh_node_ids("cpu_pct"), vec![b.as_uuid()]);
-        assert!(sink.fresh_node_ids("missing").is_empty());
+        assert_eq!(sink.fresh_node_ids(&["icmp_rtt_ms"]), vec![a.as_uuid()]);
+        assert_eq!(sink.fresh_node_ids(&["cpu_pct"]), vec![b.as_uuid()]);
+        assert!(sink.fresh_node_ids(&["missing"]).is_empty());
+    }
+
+    #[test]
+    fn fresh_node_ids_unions_the_metrics_and_counts_a_node_once() {
+        // ADR-059: the probe asks about every kind's liveness metric at once. A node reporting more
+        // than one must still appear once — the caller divides by the inventory size, so a
+        // double-counted node would push fleet coverage over 100%.
+        let a = NodeId::new();
+        let b = NodeId::new();
+        let sink = InMemorySink::default();
+        sink.ingest(&result_with(a, "icmp_rtt_ms", 9.0));
+        sink.ingest(&result_with(a, "http_up", 1.0));
+        sink.ingest(&result_with(b, "dns_up", 1.0));
+
+        let mut got = sink.fresh_node_ids(&["icmp_rtt_ms", "http_up", "dns_up"]);
+        got.sort();
+        let mut want = vec![a.as_uuid(), b.as_uuid()];
+        want.sort();
+        assert_eq!(got, want);
+        // An empty list asks about nothing, rather than matching everything.
+        assert!(sink.fresh_node_ids(&[]).is_empty());
     }
 }

@@ -10,6 +10,26 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **Data coverage no longer reports healthy URL, DNS and Meraki monitors as silent.** The gauge on
+  `Settings ▸ Yagra health` — and the "Stale data" list beside it — asked every node in the
+  inventory for a recent **ICMP round-trip sample**. A URL monitor, a DNS monitor and a Meraki
+  device are never pinged and have no such series, so three of the four node kinds counted as
+  missing data however well they were working: a site with five devices and five URL monitors read
+  **50% fresh** with every monitor up. Coverage now asks each kind for **its own** liveness metric
+  (`icmp_rtt_ms`, `http_up`, `dns_up`, `meraki_device_up`). The same correction applies to the MCP
+  `get_fleet_summary(kind="coverage")` tool, which shares the calculation.
+- **A node's state no longer falls to "unknown" just because it is not pinged.** Before the alert
+  engine has an opinion about a node — one just added, or any node right after a core restart —
+  its displayed state falls back to "has it reported recently". That fallback also asked only about
+  ICMP, so URL and DNS monitors showed as `unknown` until their first evaluation. It now uses the
+  same per-kind liveness metrics.
+- **The single-node and list views now agree on how old a sample may be.** The fallback above used
+  a 10-minute freshness window when answering for a page of nodes, but **no window at all** when
+  answering for one node, so the same silent node could read `ok` on its detail page and `unknown`
+  in the list. Both now apply the 10-minute window. A node whose last sample is older than that, and
+  which the alert engine has not yet evaluated, now correctly reads `unknown` on its detail page.
+
 ## v0.2.10 — an operator can run the monitoring, and a control you may not use is no longer drawn
 
 ### Breaking changes

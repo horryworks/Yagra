@@ -186,10 +186,16 @@ pub trait MetricStore: Send + Sync {
         agg: TopAgg,
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)>;
-    /// The node ids that have reported `metric` within the trailing `within_secs` window — the
-    /// "fresh" set for fleet data-coverage. The API edge diffs this against the inventory to find
-    /// stale (silent) nodes. Empty if the store has no such data.
-    async fn fresh_node_ids(&self, metric: &str, within_secs: u64) -> Vec<Uuid>;
+    /// The node ids that have reported **any of** `metrics` within the trailing `within_secs`
+    /// window — the "fresh" set for fleet data-coverage. The API edge diffs this against the
+    /// inventory to find stale (silent) nodes. Empty if the store has no such data.
+    ///
+    /// A list rather than one name because liveness is per node kind: a URL monitor is never
+    /// pinged, so asking every node about `icmp_rtt_ms` reported three of the four kinds as silent
+    /// however well they were working (ADR-059). Callers pass `NodeKind::LIVENESS_METRICS` rather
+    /// than assembling their own, and an implementation must return each id **once** even when a
+    /// node has several of the series.
+    async fn fresh_node_ids(&self, metrics: &[&str], within_secs: u64) -> Vec<Uuid>;
 
     /// Like [`fresh_node_ids`], but restricted to `scope` — the fresh subset of a **page** of nodes
     /// rather than the whole fleet (S20). The paged fallback probe (`fresh_fallback_ids`) asks about
@@ -199,7 +205,7 @@ pub trait MetricStore: Send + Sync {
     /// ⇒ empty (no query).
     async fn fresh_node_ids_scoped(
         &self,
-        metric: &str,
+        metrics: &[&str],
         within_secs: u64,
         scope: &[Uuid],
     ) -> Vec<Uuid> {
@@ -207,7 +213,7 @@ pub trait MetricStore: Send + Sync {
             return Vec::new();
         }
         let want: std::collections::HashSet<Uuid> = scope.iter().copied().collect();
-        self.fresh_node_ids(metric, within_secs)
+        self.fresh_node_ids(metrics, within_secs)
             .await
             .into_iter()
             .filter(|id| want.contains(id))
@@ -382,10 +388,10 @@ impl MetricStore for InMemorySink {
         Vec::new()
     }
 
-    async fn fresh_node_ids(&self, metric: &str, _within_secs: u64) -> Vec<Uuid> {
+    async fn fresh_node_ids(&self, metrics: &[&str], _within_secs: u64) -> Vec<Uuid> {
         // Skeleton sink has no timestamps; mirror `latest` (any stored sample counts as fresh) so
         // the API's derived-state fallback is consistent with the real TSDB path.
-        InMemorySink::fresh_node_ids(self, metric)
+        InMemorySink::fresh_node_ids(self, metrics)
     }
 
     async fn interface_delta(
@@ -793,6 +799,26 @@ fn parse_ifindex_values(json: &serde_json::Value) -> std::collections::HashMap<i
     out
 }
 
+/// The `__name__=~"a|b|c"` matcher selecting every one of `metrics` in a single query.
+///
+/// The freshness probes ask about all four node kinds' liveness series at once (ADR-059), and one
+/// selector keeps that one round-trip rather than four. Caller guarantees a non-empty list — an
+/// empty alternation would match every series in the store, which is the opposite of "nothing".
+/// The names are internal `const`s (`[a-z_]` only), so there is nothing to escape; a metric name
+/// operators can supply must never be routed through here.
+fn name_selector(metrics: &[&str]) -> String {
+    format!("__name__=~\"{}\"", metrics.join("|"))
+}
+
+/// Collapse repeated ids, preserving nothing about order (callers hold sets).
+///
+/// A node with several liveness series returns one result row per series, and a caller dividing by
+/// the inventory size would otherwise report more than 100% coverage.
+fn dedup_ids(ids: impl Iterator<Item = Uuid>) -> Vec<Uuid> {
+    let mut seen = std::collections::HashSet::new();
+    ids.filter(|id| seen.insert(*id)).collect()
+}
+
 /// Parse a VictoriaMetrics instant-query response into `(node_id, value)` pairs: each
 /// `data.result[]` series contributes its `metric.node` label (parsed as a UUID) and
 /// `value[1]` (the string-encoded sample). Series without a parseable node label or value are
@@ -1118,10 +1144,17 @@ impl MetricStore for VmStore {
         parse_top_interfaces(&json)
     }
 
-    async fn fresh_node_ids(&self, metric: &str, within_secs: u64) -> Vec<Uuid> {
+    async fn fresh_node_ids(&self, metrics: &[&str], within_secs: u64) -> Vec<Uuid> {
+        if metrics.is_empty() {
+            return Vec::new();
+        }
         let url = format!("{}/api/v1/query", self.base);
         // Every node series that has any sample in the window contributes its node label.
-        let query = format!("last_over_time({metric}[{}s])", within_secs.max(1));
+        let query = format!(
+            "last_over_time({{{}}}[{}s])",
+            name_selector(metrics),
+            within_secs.max(1)
+        );
         let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
             Ok(resp) => resp,
             Err(e) => {
@@ -1133,32 +1166,30 @@ impl MetricStore for VmStore {
             return Vec::new();
         };
         // Reuse the node-label parser; we only need the ids, not the values.
-        parse_top_nodes(&json)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
+        dedup_ids(parse_top_nodes(&json).into_iter().map(|(id, _)| id))
     }
 
     async fn fresh_node_ids_scoped(
         &self,
-        metric: &str,
+        metrics: &[&str],
         within_secs: u64,
         scope: &[Uuid],
     ) -> Vec<Uuid> {
-        if scope.is_empty() {
+        if scope.is_empty() || metrics.is_empty() {
             return Vec::new();
         }
         let url = format!("{}/api/v1/query", self.base);
         // Push the page's node set into the selector so VM returns only those series, not the whole
         // fleet (S20). Node label values are UUIDs (regex-safe: `[0-9a-f-]`), and VM anchors `=~`
-        // fully, so the alternation matches exactly this set. `metric` is an internal constant.
+        // fully, so the alternation matches exactly this set.
         let ids = scope
             .iter()
             .map(Uuid::to_string)
             .collect::<Vec<_>>()
             .join("|");
         let query = format!(
-            "last_over_time({metric}{{node=~\"{ids}\"}}[{}s])",
+            "last_over_time({{{},node=~\"{ids}\"}}[{}s])",
+            name_selector(metrics),
             within_secs.max(1)
         );
         let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
@@ -1171,10 +1202,7 @@ impl MetricStore for VmStore {
         let Ok(json) = resp.json::<serde_json::Value>().await else {
             return Vec::new();
         };
-        parse_top_nodes(&json)
-            .into_iter()
-            .map(|(id, _)| id)
-            .collect()
+        dedup_ids(parse_top_nodes(&json).into_iter().map(|(id, _)| id))
     }
 
     async fn interface_delta(
@@ -1744,7 +1772,7 @@ mod tests {
         // Scope to nodes 0 and 2 (both fresh) → just those, not node 1.
         let scope = vec![ids[0].as_uuid(), ids[2].as_uuid()];
         let mut got = store
-            .fresh_node_ids_scoped("icmp_rtt_ms", 600, &scope)
+            .fresh_node_ids_scoped(&["icmp_rtt_ms"], 600, &scope)
             .await;
         got.sort();
         let mut want = scope.clone();
@@ -1754,14 +1782,81 @@ mod tests {
         // A scoped id with no samples drops out (intersection, not union).
         let stranger = NodeId::new().as_uuid();
         let got = store
-            .fresh_node_ids_scoped("icmp_rtt_ms", 600, &[stranger])
+            .fresh_node_ids_scoped(&["icmp_rtt_ms"], 600, &[stranger])
             .await;
         assert!(got.is_empty());
 
         // Empty scope short-circuits to empty (no fleet scan).
         assert!(store
-            .fresh_node_ids_scoped("icmp_rtt_ms", 600, &[])
+            .fresh_node_ids_scoped(&["icmp_rtt_ms"], 600, &[])
             .await
             .is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_monitor_that_is_never_pinged_still_counts_as_reporting() {
+        // ADR-059, the shipped defect: fleet coverage asked the whole inventory about `icmp_rtt_ms`,
+        // so a URL monitor, a DNS monitor and a Meraki device — none of which is ever pinged — read
+        // as silent however well they were working. Three of four kinds, permanently.
+        use yagra_bus::{CheckOutcome, Sample};
+        use yagra_common::NodeKind;
+        let store = InMemorySink::default();
+        let mut ids = Vec::new();
+        for kind in NodeKind::ALL {
+            let node = NodeId::new();
+            let result = PollResult {
+                job_id: Uuid::nil(),
+                node_id: node,
+                at_unix_ms: 0,
+                outcome: CheckOutcome::Reachable,
+                samples: vec![Sample::gauge(kind.liveness_metric(), 1.0)],
+                interfaces: Vec::new(),
+                sys_descr: None,
+                dns_chain: None,
+                neighbors: None,
+                l3: None,
+                arp: None,
+                routing: None,
+                observational: false,
+                poller_id: None,
+                trace_context: Default::default(),
+            };
+            MetricStore::write(&store, &result).await;
+            ids.push(node.as_uuid());
+        }
+
+        let mut got = MetricStore::fresh_node_ids(&store, &NodeKind::LIVENESS_METRICS, 600).await;
+        got.sort();
+        ids.sort();
+        assert_eq!(got, ids, "every kind's monitor must count as fresh");
+
+        // And the old question still gives the old answer: ICMP alone sees only the device.
+        let icmp_only = MetricStore::fresh_node_ids(&store, &["icmp_rtt_ms"], 600).await;
+        assert_eq!(icmp_only.len(), 1, "the regression this test pins");
+    }
+
+    #[test]
+    fn the_freshness_selector_names_every_liveness_metric_in_one_query() {
+        // The union is served by one `__name__` matcher rather than four round-trips. Pin the
+        // string: only a real VictoriaMetrics can confirm it *matches*, but nothing else in the
+        // suite would notice the selector losing a metric or arriving unquoted.
+        use yagra_common::NodeKind;
+        let sel = name_selector(&NodeKind::LIVENESS_METRICS);
+        assert_eq!(
+            sel,
+            "__name__=~\"meraki_device_up|http_up|dns_up|icmp_rtt_ms\""
+        );
+        assert_eq!(
+            format!("last_over_time({{{sel}}}[600s])"),
+            "last_over_time({__name__=~\"meraki_device_up|http_up|dns_up|icmp_rtt_ms\"}[600s])"
+        );
+    }
+
+    #[test]
+    fn repeated_ids_collapse_so_coverage_cannot_exceed_the_inventory() {
+        // One node with several liveness series returns one result row per series.
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        assert_eq!(dedup_ids([a, b, a, a].into_iter()), vec![a, b]);
     }
 }

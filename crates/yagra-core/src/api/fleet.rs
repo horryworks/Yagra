@@ -23,7 +23,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
-use yagra_common::{NodeId, NodeState};
+use yagra_common::{NodeId, NodeKind, NodeState};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -261,7 +261,13 @@ pub(crate) async fn group_summary(
 
 // ── Data coverage (the blind-spot detector) ──────────────────────────────────
 
-/// How recent a node's last ICMP sample must be to count as "fresh" (silent beyond this ⇒ stale).
+/// How recent a node's last liveness sample must be to count as "fresh" (silent beyond this ⇒
+/// stale).
+///
+/// A flat window rather than a multiple of each node's own interval: resolving the effective
+/// interval per node would pull the scheduler's resolver into a rollup, and the flat window's known
+/// wrong answer — a node polled less often than this always reads stale — predates the per-kind
+/// work and is unchanged by it (ADR-059).
 const COVERAGE_FRESH_SECS: u64 = 600;
 /// Cap on the returned watchlist. A fleet that is 90% stale has a systemic problem, not 40,000
 /// individual ones, so the first 50 names are as much as a human can act on.
@@ -366,9 +372,13 @@ pub(crate) async fn coverage(
         .into_iter()
         .filter(|n| scope.allows_group(n.group.map(|g| g.as_uuid())))
         .collect();
+    // Every kind's liveness series, not just ICMP's. A URL monitor is never pinged, so asking the
+    // whole inventory about `icmp_rtt_ms` reported three of the four kinds as permanently silent —
+    // the blind-spot detector's own blind spot (ADR-059). The union needs no kind resolution: a
+    // node emits the one series its kind decides, so "fresh in any" is "fresh in its own".
     let fresh_ids: HashSet<Uuid> = st
         .store
-        .fresh_node_ids("icmp_rtt_ms", COVERAGE_FRESH_SECS)
+        .fresh_node_ids(&NodeKind::LIVENESS_METRICS, COVERAGE_FRESH_SECS)
         .await
         .into_iter()
         .collect();

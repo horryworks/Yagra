@@ -24,7 +24,7 @@ use yagra_common::{
     DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT,
     METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_BODY_MATCH,
     METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE,
-    METRIC_HTTP_UP, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
+    METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -51,7 +51,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                     };
                     let mut samples = vec![Sample::gauge("icmp_loss_pct", probe.loss_pct)];
                     if let Some(rtt) = probe.rtt_ms {
-                        samples.push(Sample::gauge("icmp_rtt_ms", rtt));
+                        samples.push(Sample::gauge(METRIC_ICMP_RTT_MS, rtt));
                     }
                     result(job, at_unix_ms, outcome, samples)
                 }

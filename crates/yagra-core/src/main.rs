@@ -4293,7 +4293,7 @@ mod tests {
         ) -> Vec<(Uuid, i32, f64)> {
             Vec::new()
         }
-        async fn fresh_node_ids(&self, _m: &str, _w: u64) -> Vec<Uuid> {
+        async fn fresh_node_ids(&self, _m: &[&str], _w: u64) -> Vec<Uuid> {
             Vec::new()
         }
         async fn interface_delta(

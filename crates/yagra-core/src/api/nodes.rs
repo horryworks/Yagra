@@ -38,9 +38,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::time::Instant;
 use uuid::Uuid;
-use yagra_common::{
-    DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, SeriesKey, UrlCheckConfig,
-};
+use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -91,15 +89,20 @@ pub(crate) fn routes() -> Router<ApiState> {
 
 // ── Display state: the one answer to "how is this node doing?" ───────────────
 
-/// Freshness window for the coarse fallback probe: a node with an ICMP RTT sample within this
+/// Freshness window for the coarse fallback probe: a node with a liveness sample within this
 /// window is treated as `ok`, else `unknown` (matches the fleet-coverage staleness horizon).
 const FALLBACK_FRESH_SECS: u64 = 600;
 
-/// The metric the fallback probe asks about. Named once so the three probes below (single, paged,
-/// fleet-wide) cannot end up asking about different series.
-const FALLBACK_METRIC: &str = "icmp_rtt_ms";
+/// The metrics the fallback probe asks about: **every node kind's liveness series**, because a URL
+/// monitor, a DNS monitor and a Meraki device are never pinged and so have no `icmp_rtt_ms` at all.
+/// Asking only about ICMP made those three kinds fall to `unknown` whenever the engine had no
+/// opinion yet — the same defect that made fleet coverage report them as silent (ADR-059).
+///
+/// The union answers without resolving each node's kind, which would put three database reads on
+/// the node-list path for an answer that is identical either way.
+const FALLBACK_METRICS: [&str; NodeKind::ALL.len()] = NodeKind::LIVENESS_METRICS;
 
-/// **The display rule itself**: the engine's opinion when it has one, otherwise a recent ICMP
+/// **The display rule itself**: the engine's opinion when it has one, otherwise a recent liveness
 /// sample means `ok` and silence means `unknown`.
 ///
 /// Pure — every caller brings its own already-batched inputs, and nothing here does I/O. It is a
@@ -118,19 +121,24 @@ pub(crate) fn state_or_fallback(known: Option<NodeState>, fresh: bool) -> NodeSt
 /// The rolled-up state to display for one node.
 ///
 /// The alert engine's opinion when it has one. When it does not — a just-added node, or right
-/// after a core restart before the first sweep — fall back to a recent ICMP sample meaning `ok`.
-/// **Every surface that reports a node's state must go through this or [`display_states`]**, or
-/// the same node reads differently depending on which endpoint you ask.
+/// after a core restart before the first sweep — fall back to a recent liveness sample meaning
+/// `ok`. **Every surface that reports a node's state must go through this or [`display_states`]**,
+/// or the same node reads differently depending on which endpoint you ask.
 pub(crate) async fn display_state(st: &ApiState, node: NodeId) -> NodeState {
     let known = st.alerts.node_state(node);
     // One node, one round-trip — and only when the engine has nothing to say. Anything holding a
     // page of nodes takes `display_states` instead, which asks once for the whole page (S20).
+    //
+    // The scoped freshness probe rather than `latest`: `latest` has **no window**, so this path
+    // called a node `ok` off a sample from any time in history while the paged path beside it
+    // required one inside `FALLBACK_FRESH_SECS`. One rule, two implementations, two answers about
+    // the same node depending on which endpoint was asked (ADR-059 decision 4).
     let fresh = known.is_none()
-        && st
+        && !st
             .store
-            .latest(&SeriesKey::node(node, FALLBACK_METRIC))
+            .fresh_node_ids_scoped(&FALLBACK_METRICS, FALLBACK_FRESH_SECS, &[node.as_uuid()])
             .await
-            .is_some();
+            .is_empty();
     state_or_fallback(known, fresh)
 }
 
@@ -152,7 +160,7 @@ pub(crate) async fn display_states(st: &ApiState, nodes: &[NodeId]) -> HashMap<N
         HashSet::new()
     } else {
         st.store
-            .fresh_node_ids_scoped(FALLBACK_METRIC, FALLBACK_FRESH_SECS, &unobserved)
+            .fresh_node_ids_scoped(&FALLBACK_METRICS, FALLBACK_FRESH_SECS, &unobserved)
             .await
             .into_iter()
             .collect()
@@ -178,7 +186,7 @@ pub(crate) async fn fresh_fallback_ids(st: &ApiState, unobserved: &[NodeId]) -> 
     }
     let scope: Vec<Uuid> = unobserved.iter().map(NodeId::as_uuid).collect();
     st.store
-        .fresh_node_ids_scoped(FALLBACK_METRIC, FALLBACK_FRESH_SECS, &scope)
+        .fresh_node_ids_scoped(&FALLBACK_METRICS, FALLBACK_FRESH_SECS, &scope)
         .await
         .into_iter()
         .collect()
@@ -194,7 +202,7 @@ pub(crate) async fn fresh_fallback_ids(st: &ApiState, unobserved: &[NodeId]) -> 
 /// has swept). Takes the store rather than `ApiState` because the report renderer has no `ApiState`.
 pub(crate) async fn fresh_fleet_ids(store: &dyn crate::store::MetricStore) -> HashSet<Uuid> {
     store
-        .fresh_node_ids(FALLBACK_METRIC, FALLBACK_FRESH_SECS)
+        .fresh_node_ids(&FALLBACK_METRICS, FALLBACK_FRESH_SECS)
         .await
         .into_iter()
         .collect()

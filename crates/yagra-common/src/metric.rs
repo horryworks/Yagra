@@ -25,6 +25,14 @@ pub enum MetricKind {
     Counter,
 }
 
+/// Round-trip time of an ICMP probe, in milliseconds — an ordinary device's liveness series.
+///
+/// Named because [`crate::NodeKind::liveness_metric`] has to say it and the poller has to emit it,
+/// and those are two different crates. The other three kinds' liveness metrics already had
+/// constants (`METRIC_HTTP_UP`, `METRIC_DNS_UP`, `METRIC_MERAKI_DEVICE_UP`); this one was a literal
+/// in both places, which is what let the fleet-coverage query hardcode it for every kind (ADR-059).
+pub const METRIC_ICMP_RTT_MS: &str = "icmp_rtt_ms";
+
 /// Whether `name` is a legal Prometheus/VictoriaMetrics metric name — `[a-zA-Z_:][a-zA-Z0-9_:]*`,
 /// non-empty. Series identity is the single biggest cardinality risk (ADR-011), so this is the
 /// shape check applied at every edge where a metric name enters series identity: the API (operator
