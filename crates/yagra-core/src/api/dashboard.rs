@@ -16,6 +16,11 @@
 //!   without that guard every public visitor would share one nameless layout.
 //! - The Shared Dashboard reads like any other dashboard data (open on a public deployment) but
 //!   writes are `ManageConfig`: the change lands on every user's screen.
+//!
+//! Both `PUT`s are in `changes_monitoring_config`'s exception list. A layout is presentation state
+//! no rebuild input reads, and it is saved on every widget add, move, resize and setting change —
+//! so counting it made laying out a dashboard force a full-fleet re-resolution on the next tick.
+//! That went unnoticed for releases because the recomputed answer was always correct.
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Caller, RequireManageConfig, RequireView};

@@ -70,6 +70,16 @@
   the rest of that screen; it was previously offered to any signed-in account.
 
 ### Bug Fixes
+- **Saving a dashboard layout no longer makes the server re-resolve the whole fleet.** Every
+  successful write to `/api/v1` marks the monitoring configuration as changed, which is what tells
+  four background jobs their cached work is stale. Saving a dashboard did that too, although a
+  widget layout is not an input to any of them — so moving a widget cost the deployment a full node
+  scan, a per-node poll-spec rebuild with credential decryption, an alert-configuration reload, a
+  poller-coverage recount and, within five minutes, a topology re-derivation. Since a layout is
+  saved on every add, move, resize and setting change, one editing session repeated all of that
+  many times. Nothing failed and nothing was logged, because the recomputed answer was always
+  correct; the cost was only visible as CPU, and only at fleet scale. `PUT /api/v1/dashboard` and
+  `PUT /api/v1/shared-dashboard` are now exempt, as `PUT /api/v1/preferences` already was.
 - **The node tree's right-click menu is back for operators.** The previous release gated the whole
   context menu on the permission its *strictest* entry needs, so an account that could open a
   maintenance window or mute a node — the two entries in that menu that are not administration —

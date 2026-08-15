@@ -495,9 +495,10 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
 /// tick to redo a full-fleet rebuild across tens of thousands of nodes.
 ///
 /// ⚠️ **Not all of them are reads, and the charter is really "writes nothing the rebuild reads".**
-/// `/api/v1/preferences` is a genuine write; it is here because what it writes is one account's UI
-/// chrome, which no rebuild input touches, and because a UI gesture can emit one per adjustment.
-/// Judge a new exception by what the rebuild reads, not by the HTTP verb.
+/// The preferences and dashboard routes are genuine writes; they are here because what they write is
+/// *presentation state* — an opaque blob no rebuild input touches — and because each is driven by a
+/// direct-manipulation gesture that emits a save per adjustment. Judge a new exception by what the
+/// rebuild reads, not by the HTTP verb.
 ///
 /// They stay **audited**; only the dirty signal is suppressed.
 fn changes_monitoring_config(path: &str) -> bool {
@@ -512,13 +513,20 @@ fn changes_monitoring_config(path: &str) -> bool {
         // GET beside it serves and changes nothing this deployment monitors — the POST is only
         // because it reaches out over the network, not because it writes configuration.
         || path == "/api/v1/system/upgrade/check"
-        // One account's WebUI preferences (ADR-058) — an opaque blob no rebuild input reads. Unlike
-        // the entries above this is a real write, and it is the reason the doc comment says to judge
-        // by what the rebuild reads. A dock-resize handle can emit one per adjustment, so counting
-        // it would make a UI gesture trigger a full-fleet re-resolution.
-        // ⚠️ `PUT /api/v1/dashboard` has the same non-reason to bump and is NOT excluded — a
-        // pre-existing bug, filed separately rather than fixed silently here.
-        || path == "/api/v1/preferences")
+        // Presentation state: one account's WebUI preferences (ADR-058) and the saved dashboard
+        // layouts (`api/dashboard.rs`). All three store an opaque JSON document the backend never
+        // parses and no rebuild input reads. Unlike the entries above these are real writes, and
+        // they are the reason the doc comment says to judge by what the rebuild reads.
+        //
+        // Each is also driven by direct manipulation — dragging a widget, dragging the interface
+        // dock's edge — so a single layout session emits many saves. Counting them made *laying out
+        // a dashboard* force a full-fleet re-resolution on the next tick: a DB scan, a per-node spec
+        // build and a credential decrypt in the scheduler, plus the alert-config, pool-coverage and
+        // topology rebuilds. Nothing failed and nothing was logged; the deployment just did the work
+        // again for no reason, and only at fleet scale was it large enough to matter.
+        || path == "/api/v1/preferences"
+        || path == "/api/v1/dashboard"
+        || path == "/api/v1/shared-dashboard")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA
@@ -1455,6 +1463,30 @@ mod tests {
         ] {
             assert!(changes_monitoring_config(path), "{path} must invalidate");
         }
+    }
+
+    #[test]
+    fn saving_presentation_state_does_not_dirty_the_config_generation() {
+        // These three store an opaque JSON document the backend never parses and no rebuild input
+        // reads, and each is written by a direct-manipulation gesture that saves per adjustment.
+        // Counting them made *laying out a dashboard* force a full-fleet re-resolution on the next
+        // tick — a DB scan, a per-node spec build and a credential decrypt in the scheduler, plus
+        // three other rebuilds. Nothing failed and nothing was logged, which is why it survived: a
+        // redundant rebuild produces the right answer, just at fleet-scale cost.
+        for path in [
+            "/api/v1/preferences",
+            "/api/v1/dashboard",
+            "/api/v1/shared-dashboard",
+        ] {
+            assert!(
+                !changes_monitoring_config(path),
+                "{path} must not invalidate"
+            );
+        }
+        // Exact match, not a prefix: a future sibling under one of these names is a new endpoint
+        // that has to argue for its own exemption rather than inheriting one.
+        assert!(changes_monitoring_config("/api/v1/dashboards"));
+        assert!(changes_monitoring_config("/api/v1/preferences/reset"));
     }
 
     // ── AI-assisted RCA (ADR-029) ────────────────────────────────────────────
