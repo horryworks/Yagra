@@ -10,6 +10,13 @@
 
 ## Unreleased
 
+## v0.2.9 — the menu says what each screen is for, and passive monitoring gets its own tab
+
+Every change in this release is in the WebUI's navigation and wording. Nothing in the backend
+moved: no API endpoint changed shape, no database migration ran, and a poller from v0.2.8 works
+unchanged. **Four screens changed address, and every old address redirects with its query string
+intact**, so bookmarks and links keep working.
+
 ### Improvements
 - **Passive monitoring has its own top-level tab: `Events`.** Receiving and reading events were
   under `Alerts` while relaying them was under `Settings ▸ Forwarding`, so nothing in the menu named
