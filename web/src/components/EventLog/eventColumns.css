@@ -148,3 +148,18 @@
   color: var(--text-secondary);
   font-size: var(--font-sm);
 }
+
+/* Where the fleet is listening for syslog and traps (ADR-055 決定 3). Sits with `.ev-widened` above
+   the table rather than inside the page note, so the note stays one clean line — the thing G1
+   asserts on every screen — while this one may wrap over several endpoints. */
+.ev-listening {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+/* Nothing bound is a configuration answer, not an error: it names the env vars that turn reception
+   on, and reads as guidance rather than a failure. */
+.ev-listening.none {
+  color: var(--text-tertiary);
+}

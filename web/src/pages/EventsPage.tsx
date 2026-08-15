@@ -10,9 +10,10 @@
 // default view. Fetch/paging, columns and the filter descriptors are shared with the NodeDetail
 // Events tab via components/EventLog. Empty in skeleton mode.
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { api } from '../services/api';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useEntityNames } from '../components/ui/EntityName';
 import { DataTable } from '../components/ui/DataTable';
@@ -32,10 +33,39 @@ import {
   useWidenedEventLog,
   useSearchSemantics,
 } from '../components/EventLog/useEventFilters';
+import { eventListeners, type ListenerBinding } from '../components/EventLog/listeners';
 import { useFilterParams } from '../lib/useFilterParams';
 import { defaultFilters, isAnyFiltered } from '../lib/columnFilter';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { readIdParam, writeIdParam } from '../lib/filterParams';
+
+/**
+ * Where the fleet is currently listening for syslog and traps (ADR-055 決定 3).
+ *
+ * `undefined` until the fetch settles, and the caller renders nothing until then — "no listener is
+ * bound" is a claim, and making it before the answer arrives states the opposite of the truth for
+ * the first paint of a perfectly healthy deployment.
+ *
+ * Best-effort by design: `GET /api/v1/pollers` needs only View, but it 503s as `admin_unavailable`
+ * on a core without admin state. A failure leaves the line off. The event log is the screen; this
+ * is context, and context must never be able to take the screen down with it.
+ */
+function useEventListeners(): ListenerBinding[] | undefined {
+  const [bindings, setBindings] = useState<ListenerBinding[] | undefined>();
+  useEffect(() => {
+    let live = true;
+    api
+      .listPollers()
+      .then((res) => {
+        if (live) setBindings(eventListeners(res.pollers));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return bindings;
+}
 
 export function EventsPage() {
   const { t } = useTranslation('alerts');
@@ -44,6 +74,7 @@ export function EventsPage() {
   const { nodeName } = useEntityNames();
   const semantics = useSearchSemantics();
   const [sheet, setSheet] = useState(false);
+  const bindings = useEventListeners();
 
   const filterCols = useMemo(() => eventFilterColumns(t, { semantics }), [t, semantics]);
   const { filters, setFilters, nowMs } = useFilterParams(filterCols);
@@ -90,6 +121,23 @@ export function EventsPage() {
         trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.events') }]}
         note={t('events.note')}
       />
+      {/* The answer to "where do I point my devices". It lives on this screen rather than beside
+          the webhook list because this is where someone who sees no syslog comes looking — and
+          because `Webhook sources` no longer claims to cover it (ADR-055 決定 3 / R1). Rendered
+          only once the fetch settles: saying "nothing is bound" before the answer arrives would be
+          false on a healthy deployment's first paint. */}
+      {bindings !== undefined &&
+        (bindings.length === 0 ? (
+          <p className="ev-listening none">{t('events.listeningNone')}</p>
+        ) : (
+          <p className="ev-listening">
+            {t('events.listening', {
+              endpoints: bindings
+                .map((b) => `${b.kind} ${b.bind} (${b.pollers.join(', ')})`)
+                .join(' · '),
+            })}
+          </p>
+        ))}
       {/* An action row, not a filter bar. The node picker stays here rather than becoming the
           Source column's filter: it resolves a name to an id against the inventory, which is a
           different question from "does this row's source contain these characters", and nesting its

@@ -72,6 +72,30 @@ describe('nav IA', () => {
     expect(pollers?.implemented).toBe(true);
   });
 
+  it('orders Nodes ▸ Monitoring setup in the order the work is done', () => {
+    // ADR-055 R7. Not cosmetic: it ran profiles-first, and the profiles entry's own description
+    // says "Attach Metric sets here" — two items further down. A menu that tells the reader to
+    // start at the end is the failure this pins against, so re-sorting it is a deliberate act.
+    const nodes = NAV.find((s) => s.key === 'nodes')!;
+    const setup = nodes.groups.find((g) => g.labelKey === 'groups.monitoringConfig')!;
+    expect(setup.items.map((i) => i.path)).toEqual([
+      '/nodes/mib',
+      '/nodes/collection-templates',
+      '/nodes/profiles',
+      '/nodes/classification-rules',
+    ]);
+  });
+
+  it('files About under System, and leaves Personal holding only what affects one account', () => {
+    // ADR-055 決定 6. About describes the deployment; Personal means "affects only me". Folding
+    // Preferences into System instead would make a theme switch look fleet-wide.
+    const settings = NAV.find((s) => s.key === 'settings')!;
+    const system = settings.groups.find((g) => g.labelKey === 'groups.system')!;
+    const personal = settings.groups.find((g) => g.labelKey === 'groups.personal')!;
+    expect(system.items[system.items.length - 1].path).toBe('/settings/about');
+    expect(personal.items.map((i) => i.path)).toEqual(['/settings/preferences']);
+  });
+
   it('the Nodes ▸ Dependencies placeholder was removed (now a Topology redirect)', () => {
     const nodes = NAV.find((s) => s.key === 'nodes')!;
     expect(sectionItems(nodes).some((i) => i.path === '/nodes/dependencies')).toBe(false);

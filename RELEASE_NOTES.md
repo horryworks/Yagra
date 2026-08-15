@@ -10,6 +10,34 @@
 
 ## Unreleased
 
+### Improvements
+- **Four menu items were renamed to say what they are.** `Alerts ▸ Alert rules` is now **Metric
+  alert rules** and `Alerts ▸ Event rules` is now **Event alert rules** — both produce alerts, and
+  the old pair named one by its output and the other by its input, so neither said what kind of
+  rule it was. `Settings ▸ System health` is now **Yagra health** and `Settings ▸ System settings`
+  is now **Monitoring defaults**: two adjacent items both beginning "System" answered completely
+  different questions ("is Yagra itself OK" vs "how should the fleet be polled"). No URL changed
+  and no bookmark broke.
+- **`Nodes ▸ Monitoring config` is now `Monitoring setup`, and its items are in the order you build
+  them**: MIB repository → Metric sets → Device profiles → Classification rules. Device profiles
+  used to come first while its own description said "Attach Metric sets here" — two entries further
+  down.
+- **The Events page now says where Yagra is listening.** A line under the title names each bound
+  syslog and SNMP-trap endpoint and the pollers holding it, so "I sent syslog and see nothing" can
+  be answered on the screen where it is asked. When no listener is bound it names the environment
+  variables that enable them instead. Nothing new is collected — this is the same data
+  `Settings ▸ Pollers` already showed.
+- **The Acked filter on Active alerts now explains where Acked comes from.** Acknowledgement is
+  mirrored inbound from your on-call tool (PagerDuty / JSM) and Yagra never sets it; that was
+  previously only a parenthetical under the page title, which is not where anyone looking for the
+  ack action goes. The parenthetical is gone from the title now that the filter says it.
+- **Shared dashboard, My dashboard and Preferences now have the one-line description every other
+  screen has**, saying who a change affects.
+- **The global search box now reads "Search nodes…".** It has only ever searched nodes; you had to
+  start typing to find that out.
+- **`Settings ▸ About` moved from the Personal group to the end of System.** It describes the
+  deployment, not the account.
+
 ## v0.2.8 — the filter row waits to be asked for
 
 ### Improvements

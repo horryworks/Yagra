@@ -40,6 +40,7 @@ export function PreferencesPage() {
       <PageHeader
         title={t('prefs.title')}
         trail={[{ label: t('nav:sections.settings') }, { label: t('prefs.title') }]}
+        note={t('prefs.pageNote')}
       />
       <Card title={t('prefs.appearance')}>
         <div className="pref-row">

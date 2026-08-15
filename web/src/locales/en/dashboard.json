@@ -9,6 +9,7 @@
     "discard": "Discard changes"
   },
   "my": {
+    "pageNote": "Your own boards. Nobody else sees them.",
     "loadSlow": "Loading your dashboard is taking longer than expected.",
     "loading": "Loading your dashboard…",
     "empty": "This board is empty.",
@@ -19,6 +20,7 @@
     "cancelBody": "Discard the changes you made in this editing session? The board returns to how it was when you opened Customize."
   },
   "shared": {
+    "pageNote": "The board every user sees. Only an admin can change it.",
     "adminOnly": "Only admins can customize the shared dashboard",
     "editingWarning": "Editing the shared dashboard — changes are visible to all users.",
     "loadSlow": "Loading the shared dashboard is taking longer than expected.",

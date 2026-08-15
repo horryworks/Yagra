@@ -1,7 +1,7 @@
 {
   "active": {
     "card": "Active",
-    "note": "{{count}} active · triage view (ack & escalation are handled in your external tool)",
+    "note": "{{count}} active · triage view",
     "empty": "No active alerts.",
     "emptyFiltered": "No active alerts match these filters.",
     "searchPlaceholder": "Search node or metric…",
@@ -13,6 +13,7 @@
       "acked": "Acked",
       "unacked": "Not acked"
     },
+    "ackedHint": "Acked arrives from your on-call tool (PagerDuty / JSM). Yagra shows it and never sets it.",
     "searchLabel": "Node or metric",
     "mute": "Mute",
     "muteHint": "Silence notifications for this check on this node until a time you choose"
@@ -66,6 +67,8 @@
   },
   "events": {
     "note": "Received syslog / SNMP-trap / webhook events. Unmatched events are kept for 24h to help author rules; matched events follow the alert-history retention.",
+    "listening": "Listening: {{endpoints}}",
+    "listeningNone": "No syslog or trap listener is bound. Set YAGRA_SYSLOG_BIND / YAGRA_TRAP_BIND on a poller to receive them; webhook senders are configured under Webhook sources.",
     "empty": "No events received yet.",
     "events": "events",
     "eventsLoaded": "events loaded",

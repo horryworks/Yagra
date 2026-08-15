@@ -107,6 +107,12 @@ export function activeAlertFilters(
       readValue: (a) => (a.acked ? 'acked' : 'unacked'),
       allLabel: t('active.ack.all'),
       counts: 'client',
+      // Said HERE because this is where someone looking for the ack action arrives (ADR-055 R6).
+      // Yagra has no Ack button by decision (ADR-015); the state arrives inbound from the on-call
+      // tool. That used to be a parenthetical under the page title, and the person who wrote the
+      // decision still had to ask where the button was — so a filter offering `acked` with no
+      // on-screen path to it is exactly the case the rule is about.
+      hint: t('active.ackedHint'),
     },
     q: {
       kind: 'text',

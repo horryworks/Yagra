@@ -44,8 +44,26 @@ export interface RangePreset extends FilterOption {
 // error at the call site and no crash. TypeScript caught it here as an assignability failure on the
 // spec literal, one layer away from where it would have gone wrong. Do not rename these back.
 
+/**
+ * What every filter spec may carry, whatever its kind.
+ *
+ * `hint` renders **inside `FilterBody`**, which is the one editor both the desktop popover and the
+ * mobile sheet mount — so there is no second place to forget it, and no way for the two surfaces to
+ * say different things (a divergence of exactly that shape shipped in v0.2.8, where the phone sheet
+ * and the desktop row were handed different option counts).
+ *
+ * It exists for ADR-055 R6: a column whose values arrive from somewhere the screen has no other
+ * chance to name. `Acked` is the case that motivated it — the state is mirrored inbound from
+ * PagerDuty/JSM, Yagra never sets it, and the only place that was said was a parenthetical under
+ * the page title, which demonstrably did not reach the reader. Do not use it to restate what the
+ * options already say.
+ */
+export interface FilterSpecCommon {
+  hint?: string;
+}
+
 /** A column whose values come from a closed set: multi-select with counts. */
-export interface EnumFilterSpec<T> {
+export interface EnumFilterSpec<T> extends FilterSpecCommon {
   kind: 'enum';
   options: readonly FilterOption[];
   /** The row's value(s). An array for a row that legitimately carries several (a tag list); a
@@ -85,7 +103,7 @@ export interface EnumFilterSpec<T> {
 // exactly the trade this increment decided against.
 
 /** A column matched by free text. */
-export interface TextFilterSpec<T> {
+export interface TextFilterSpec<T> extends FilterSpecCommon {
   kind: 'text';
   /** Which modes this column offers, in the order they appear. A column the backend cannot run a
    *  regex against ships `['contains']` and the toggle does not render. */
@@ -115,7 +133,7 @@ export interface TextFilterSpec<T> {
 }
 
 /** A column filtered by a relative time window. */
-export interface RangeFilterSpec<T> {
+export interface RangeFilterSpec<T> extends FilterSpecCommon {
   kind: 'range';
   presets: readonly RangePreset[];
   /** Whether the [`CUSTOM_RANGE`] preset reveals two absolute instants. A column without it offers
@@ -136,7 +154,7 @@ export interface RangeFilterSpec<T> {
  *  Either end may be left open, which is the common case: "score 8 or worse" is one bound, not a
  *  window. The transport is one string (`encodeNumberRange`), because `FilterState` is flat — see
  *  the header — and a column that needed `score_min` + `score_max` would be the first to break it. */
-export interface NumberFilterSpec<T> {
+export interface NumberFilterSpec<T> extends FilterSpecCommon {
   kind: 'number';
   /** The row's value, when the list is filtered in the browser. **A server-side list omits it**,
    *  exactly as `RangeFilterSpec.readTime` is omitted: the bounds go into the query and a second
@@ -169,7 +187,7 @@ export interface NumberFilterSpec<T> {
  * token never reaches the query. That matters more than usual here: the flow store interpolates
  * these into SQL after re-parsing them server-side, and the API refuses what it cannot parse.
  */
-export interface ValuesFilterSpec<T> {
+export interface ValuesFilterSpec<T> extends FilterSpecCommon {
   kind: 'values';
   /** Normalize one typed token, or return `null` to drop it. Runs on commit, never per keystroke. */
   parse: (token: string) => string | null;

@@ -120,6 +120,7 @@ export function MyDashboardPage() {
         <PageHeader
           title={t('nav:dashboard.my')}
           trail={[{ label: t('nav:sections.dashboard') }, { label: t('nav:dashboard.my') }]}
+          note={t('my.pageNote')}
           actions={actions}
         />
 

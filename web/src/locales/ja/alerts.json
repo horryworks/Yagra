@@ -1,7 +1,7 @@
 {
   "active": {
     "card": "アクティブ",
-    "note": "{{count}} 件がアクティブ · 振り分け用の一覧です（ACK とエスカレーションは外部ツール側で行います）",
+    "note": "{{count}} 件がアクティブ · 振り分け用の一覧です",
     "empty": "アクティブなアラートはありません。",
     "emptyFiltered": "この絞り込みに一致するアクティブなアラートがありません。",
     "searchPlaceholder": "ノードまたはメトリクスを検索…",
@@ -13,6 +13,7 @@
       "acked": "ACK 済み",
       "unacked": "ACK 未実施"
     },
+    "ackedHint": "ACK はオンコールツール（PagerDuty / JSM）から届きます。Yagra は表示するだけで、自分では付けません。",
     "searchLabel": "ノード / メトリクス",
     "mute": "ミュート",
     "muteHint": "このノードのこのチェックについて、指定した時刻まで通知を停止します"
@@ -66,6 +67,8 @@
   },
   "events": {
     "note": "受信した syslog / SNMP トラップ / webhook のイベントです。ルールに一致しなかったイベントは、ルールを書く材料として 24 時間保持します。一致したイベントはアラート履歴の保持期間に従います。",
+    "listening": "受信待ち: {{endpoints}}",
+    "listeningNone": "syslog・トラップの受信口がありません。受信するにはポーラーに YAGRA_SYSLOG_BIND / YAGRA_TRAP_BIND を設定してください。Webhook の送信元は「Webhook 送信元」で設定します。",
     "empty": "受信したイベントはまだありません。",
     "events": "件のイベント",
     "eventsLoaded": "件のイベントを読み込み",

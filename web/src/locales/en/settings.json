@@ -1,6 +1,7 @@
 {
   "prefs": {
     "title": "Preferences",
+    "pageNote": "Theme, language and layout — this account only.",
     "appearance": "Appearance",
     "theme": "Theme",
     "themeHelp": "Light and dark both use the Yagra token palette.",

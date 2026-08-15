@@ -61,8 +61,21 @@ interface BodyProps<T> {
  *
  *  **Where the caret lands, per kind: the body's text entry if it has one, otherwise nowhere.**
  *  `range` has only presets and a short `enum` has only options, so on those the trigger keeps
- *  focus — picking an option for the operator would be a choice, not a convenience. */
-export function FilterBody<T>({ spec, value, onChange, counts, label, takeFocus }: BodyProps<T>) {
+ *  focus — picking an option for the operator would be a choice, not a convenience.
+ *
+ *  `spec.hint` renders here rather than at either call site, so the popover and the sheet cannot
+ *  say different things (ADR-055 R6). */
+export function FilterBody<T>(props: BodyProps<T>) {
+  if (!props.spec.hint) return <FilterEditor {...props} />;
+  return (
+    <>
+      <p className="dt-f-hint">{props.spec.hint}</p>
+      <FilterEditor {...props} />
+    </>
+  );
+}
+
+function FilterEditor<T>({ spec, value, onChange, counts, label, takeFocus }: BodyProps<T>) {
   if (spec.kind === 'enum') {
     const order = spec.options.map((o) => o.value);
     return (

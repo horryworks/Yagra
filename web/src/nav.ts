@@ -69,8 +69,26 @@ export const NAV: NavSection[] = [
         ],
       },
       {
+        // ⚠️ ORDER IS THE ORDER OF THE WORK (ADR-055 R7): what to read → the bundle that names it →
+        // the profile that attaches the bundle → the rule that assigns the profile. It ran the
+        // other way and the first item's own description said "Attach Metric sets here", which is
+        // two entries further down — the menu was telling the reader to start at the end.
         labelKey: 'groups.monitoringConfig',
         items: [
+          {
+            labelKey: 'nodes.mib',
+            descKey: 'descriptions.nodesMib',
+            path: '/nodes/mib',
+            implemented: true,
+            mono: 'Mb',
+          },
+          {
+            labelKey: 'nodes.metricSets',
+            descKey: 'descriptions.nodesMetricSets',
+            path: '/nodes/collection-templates',
+            implemented: true,
+            mono: 'Ms',
+          },
           {
             labelKey: 'nodes.profiles',
             descKey: 'descriptions.nodesProfiles',
@@ -85,20 +103,6 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Cl',
           },
-          {
-            labelKey: 'nodes.metricSets',
-            descKey: 'descriptions.nodesMetricSets',
-            path: '/nodes/collection-templates',
-            implemented: true,
-            mono: 'Ms',
-          },
-          {
-            labelKey: 'nodes.mib',
-            descKey: 'descriptions.nodesMib',
-            path: '/nodes/mib',
-            implemented: true,
-            mono: 'Mb',
-          },
         ],
       },
     ],
@@ -110,7 +114,13 @@ export const NAV: NavSection[] = [
     groups: [
       {
         items: [
-          { labelKey: 'topology.map', path: '/topology/map', implemented: true, mono: 'Nm' },
+          {
+            labelKey: 'topology.map',
+            descKey: 'descriptions.topologyMap',
+            path: '/topology/map',
+            implemented: true,
+            mono: 'Nm',
+          },
           {
             labelKey: 'topology.dependency',
             descKey: 'descriptions.topologyDependency',
@@ -229,6 +239,7 @@ export const NAV: NavSection[] = [
         items: [
           {
             labelKey: 'settings.systemHealth',
+            descKey: 'descriptions.settingsSystemHealth',
             path: '/settings/system-health',
             implemented: true,
             mono: 'Sh',
@@ -260,7 +271,13 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Ai',
           },
-          { labelKey: 'settings.system', path: '/settings/system', implemented: true, mono: 'Sy' },
+          {
+            labelKey: 'settings.system',
+            descKey: 'descriptions.settingsSystem',
+            path: '/settings/system',
+            implemented: true,
+            mono: 'Sy',
+          },
           { labelKey: 'settings.tls', path: '/settings/tls', implemented: true, mono: 'Tl' },
           {
             labelKey: 'settings.configBundle',
@@ -276,6 +293,10 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Up',
           },
+          // About sits at the end of System, not in Personal. It describes the deployment (build,
+          // licence, links), which is the same subject as everything above it; `Personal` means
+          // "settings that affect only me", and a version number is not one (ADR-055 決定 6).
+          { labelKey: 'settings.about', path: '/settings/about', implemented: true, mono: 'Ab' },
         ],
       },
       {
@@ -302,6 +323,10 @@ export const NAV: NavSection[] = [
         ],
       },
       {
+        // One item, and the group header stays. Folding Preferences into System would put a
+        // theme switch beside fleet-wide defaults and make it look like it changed them for
+        // everyone — the line between "affects only me" and "affects the deployment" is the whole
+        // reason this group exists (ADR-055 決定 6).
         labelKey: 'groups.personal',
         items: [
           {
@@ -310,7 +335,6 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Pf',
           },
-          { labelKey: 'settings.about', path: '/settings/about', implemented: true, mono: 'Ab' },
         ],
       },
     ],

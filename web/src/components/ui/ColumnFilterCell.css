@@ -161,3 +161,14 @@
   color: var(--text-tertiary);
   font-size: var(--font-xs);
 }
+
+/* A column's one-line explanation (ADR-055 R6), above the editor in BOTH the popover and the mobile
+   sheet — `FilterBody` renders it, so there is one copy. `max-width` rather than a fixed width: the
+   popover sizes itself to its editor, and a long hint must not be what decides how wide it opens. */
+.dt-f-hint {
+  margin: 0 0 8px;
+  max-width: 22em;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  line-height: 1.45;
+}
