@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import {
   DIRECTIONS,
@@ -44,6 +44,8 @@ import { queryFor, thresholdFilters } from './thresholdQuery';
 import { DataTable, type Column } from '../components/ui/DataTable';
 import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 /** Create a threshold rule (focused-editing modal). */
 function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -222,7 +224,7 @@ export function ThresholdsPage() {
     total: 0,
     truncated: false,
   });
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -332,11 +334,9 @@ export function ThresholdsPage() {
       .then((p) => {
         setRows(p.items);
         setPage({ total: p.total, truncated: p.truncated });
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, [filterCols, filters]);
 
@@ -356,10 +356,8 @@ export function ThresholdsPage() {
         <p className="thresholds-note">{t('thresholds.explainer')}</p>
       </Card>
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('thresholds.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('thresholds.unavailable')} />
       ) : (
         <>
           <TableToolbar>

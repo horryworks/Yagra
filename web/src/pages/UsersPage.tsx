@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import { ROLES, type NodeGroup, type Role, type Scope, type UserKind, type UserSummary } from '../types/api';
 import {
@@ -29,7 +29,6 @@ const CREATABLE_USER_KINDS = ['local', 'service'] as const satisfies readonly Us
 type CreatableUserKind = (typeof CREATABLE_USER_KINDS)[number];
 import { dateOnly, relativeTime } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -45,6 +44,8 @@ import { buildPredicate } from '../lib/filterPredicate';
 import { userColumns, userFilterLabels } from './userFilters';
 import { Monogram } from '../components/ui/tableCells';
 import { KeyIcon, TrashIcon, PowerIcon, BoxIcon } from '../components/ui/icons';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import './UsersPage.css';
 
 const MIN_PW = 8;
@@ -63,8 +64,7 @@ export function UsersPage() {
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(filterCols));
   const [sheet, setSheet] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [unavailable, setUnavailable] = useState(false);
-  const [forbidden, setForbidden] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   // Open dialogs: add form, and the user targeted by a password change / delete.
   const [adding, setAdding] = useState(false);
@@ -77,14 +77,9 @@ export function UsersPage() {
       .listUsers()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
-        setForbidden(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-        else if (e instanceof ApiError && (e.code === 'forbidden' || e.status === 403))
-          setForbidden(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -134,14 +129,14 @@ export function UsersPage() {
         note={t('users.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('users.unavailable')}</p>
-        </Card>
-      ) : forbidden ? (
-        <Card>
-          <p className="muted">{t('users.forbidden')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice
+          block={block}
+          unavailable={t('users.unavailable')}
+          // Kept rather than falling back to the shared sentence: this one already names the role
+          // that would let you in, which is what ADR-056 Increment 2 will give every screen.
+          forbidden={t('users.forbidden')}
+        />
       ) : (
         <>
           <TableToolbar>

@@ -10,6 +10,22 @@
 
 ## Unreleased
 
+### Bug Fixes
+- **A screen you lack permission for now says so, instead of reporting that it is empty.** Signed
+  in as a Viewer, `Nodes ▸ Credentials & secrets` showed "**No credentials yet**" on a deployment
+  holding two credentials: the list request was refused with `403`, the page had a branch for
+  "this deployment has no admin state" and none for "you may not see this", and the refusal fell
+  through into an empty table. **The failure arrived in the shape of a success**, so nothing —
+  no test, no log line, no glance at the screen — could tell it apart from a genuinely empty list.
+  Sixteen screens shared that code and only one of them (Users) handled the refusal; all sixteen
+  now go through one shared classifier, and a test fails the build if a new screen hand-rolls it
+  again. The `+ Add credential` button that a Viewer could press — and that would only fail on
+  submit — is gone with it, because a blocked screen no longer renders its toolbar at all.
+- **Correction to the v0.2.9 notes.** They said moving Credentials into `Nodes` left the entry
+  "visible-but-forbidden" for a Viewer. That described what *should* have happened. What actually
+  happened is the empty list above; the move did not cause it (the defect predates it by many
+  releases) but did take it from the bottom of Settings to the second item under Nodes.
+
 ## v0.2.9 — the menu says what each screen is for, and passive monitoring gets its own tab
 
 Every change in this release is in the WebUI's navigation and wording. Nothing in the backend

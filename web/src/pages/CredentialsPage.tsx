@@ -14,11 +14,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CredentialSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -57,6 +56,8 @@ import {
 } from './credentialList';
 import { CREDENTIAL_KINDS, type CredentialKind } from '../lib/credentialKinds';
 import './CredentialsPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 /** The creatable kinds and their type come from `lib/credentialKinds.ts`, which is also what the
  *  node-binding, URL-monitor and discovery pickers filter on — one list, so a kind added here
@@ -491,7 +492,7 @@ export function CredentialsPage() {
   const [rows, setRows] = useState<CredentialSummary[]>([]);
   const [sheet, setSheet] = useState(false);
   const [sort, setSort] = useState<SortState>(DEFAULT_CREDENTIAL_SORT);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<CredentialSummary | null>(null);
@@ -502,11 +503,9 @@ export function CredentialsPage() {
       .listCredentials()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -615,10 +614,8 @@ export function CredentialsPage() {
         note={t('cred.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('cred.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('cred.unavailable')} />
       ) : (
         <>
           <TableToolbar>

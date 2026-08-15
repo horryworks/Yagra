@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, errMsg, ApiError } from '../../services/api';
+import { api, errMsg } from '../../services/api';
 import { useAuthStore } from '../../store';
 import type { MerakiNetwork, MerakiOrg, MerakiOrgOption } from '../../types/api';
 import { PageHeader } from '../../components/ui/PageHeader';
@@ -21,6 +21,8 @@ import { TextInput, Select } from '../../components/ui/Field';
 import { MerakiImportModal } from '../../components/MerakiImport/MerakiImportModal';
 import { SELECTABLE_MERAKI_TIERS } from '../merakiTiers';
 import './MerakiIntegrationPage.css';
+import { classifyLoadError, type LoadBlock } from '../../lib/loadState';
+import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 
 // The visible region name is a translation key; the base_url (the technical Meraki endpoint) is not.
 const REGIONS: { labelKey: string; base_url: string }[] = [
@@ -355,7 +357,7 @@ export function MerakiIntegrationPage() {
   const authed = useAuthStore((s) => s.authed);
   const [orgs, setOrgs] = useState<MerakiOrg[]>([]);
   const [loading, setLoading] = useState(true);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [pollingOn, setPollingOn] = useState(true);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState<MerakiOrg | null>(null);
@@ -368,11 +370,9 @@ export function MerakiIntegrationPage() {
       .then(([list, polling]) => {
         setOrgs(list);
         setPollingOn(polling.enabled);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -394,12 +394,8 @@ export function MerakiIntegrationPage() {
   };
 
   const content = useMemo(() => {
-    if (unavailable) {
-      return (
-        <Card>
-          <p className="muted">{t('integrations.unavailable')}</p>
-        </Card>
-      );
+    if (block) {
+      return <LoadBlockNotice block={block} unavailable={t('integrations.unavailable')} />;
     }
     return (
       <>
@@ -471,7 +467,7 @@ export function MerakiIntegrationPage() {
       </>
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgs, loading, unavailable, pollingOn, authed, t]);
+  }, [orgs, loading, block, pollingOn, authed, t]);
 
   return (
     <div>

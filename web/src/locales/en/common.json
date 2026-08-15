@@ -1,6 +1,9 @@
 {
   "loading": "Loading…",
   "noRows": "No rows.",
+  "loadBlock": {
+    "forbidden": "You don't have permission to view this. Ask an administrator if you need access."
+  },
   "copy": {
     "copied": "Copied",
     "copyId": "Copy id"

@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import {
   type ChannelConfigInput,
@@ -22,7 +22,6 @@ import {
 } from '../types/api';
 import { channelKindOptions } from '../lib/channelKinds';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
@@ -39,6 +38,8 @@ import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
 import { hasTemplate } from './channelTemplate';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import './RoutingPage.css';
 
 const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'neutral'> = {
@@ -63,7 +64,7 @@ export function RoutingPage() {
   const authed = useAuthStore((s) => s.authed);
   const [channels, setChannels] = useState<NotificationChannel[]>([]);
   const [rules, setRules] = useState<RoutingRule[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,11 +73,9 @@ export function RoutingPage() {
       .then(([ch, ru]) => {
         setChannels(ch);
         setRules(ru);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -84,16 +83,14 @@ export function RoutingPage() {
     load();
   }, [load]);
 
-  if (unavailable) {
+  if (block) {
     return (
       <div>
         <PageHeader
           title={t('nav:alerts.routing')}
           trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.routing') }]}
         />
-        <Card>
-          <p className="muted">{t('routing.unavailable')}</p>
-        </Card>
+        <LoadBlockNotice block={block} unavailable={t('routing.unavailable')} />
       </div>
     );
   }

@@ -11,12 +11,11 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate, ProfileInput, ProfileSummary } from '../types/api';
 import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -37,6 +36,8 @@ import {
 } from './monitoringConfigFilters';
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 const COLS = '1.8fr 1fr 120px 130px 96px';
 
@@ -45,7 +46,7 @@ export function ProfilesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<ProfileSummary[]>([]);
   const [templates, setTemplates] = useState<CollectionTemplate[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ProfileSummary | null>(null);
@@ -58,12 +59,9 @@ export function ProfilesPage() {
       .listProfiles()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-        else if (e instanceof ApiError && e.status === 401) setUnavailable(false);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
     api.listCollectionTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
@@ -140,10 +138,8 @@ export function ProfilesPage() {
         note={t('profiles.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('profiles.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('profiles.unavailable')} />
       ) : (
         <>
           <TableToolbar>

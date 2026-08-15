@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import {
   SEVERITIES,
@@ -11,7 +11,6 @@ import {
   type Severity,
 } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -27,6 +26,8 @@ import { eventRuleFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import { severityLabel } from '../lib/format';
 import './EventRulesPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'info'> = {
   critical: 'critical',
@@ -61,7 +62,7 @@ export function EventRulesPage() {
   const [rows, setRows] = useState<EventRule[]>([]);
   const [sources, setSources] = useState<EventSource[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EventRule | null>(null);
@@ -73,11 +74,9 @@ export function EventRulesPage() {
       .listEventRules()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
     api
       .listEventSources()
@@ -192,8 +191,8 @@ export function EventRulesPage() {
   return (
     <div>
       <PageHeader title={t('nav:alerts.eventRules')} note={t('eventRules.note')} />
-      {unavailable ? (
-        <Card>{t('eventRules.unavailable')}</Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('eventRules.unavailable')} />
       ) : (
         <>
           <TableToolbar>

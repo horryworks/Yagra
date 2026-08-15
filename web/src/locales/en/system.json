@@ -284,6 +284,7 @@
     "status": {
       "checking": "Checking…",
       "unavailable": "Unavailable",
+      "forbidden": "No permission",
       "notConfigured": "Not configured",
       "pollingPaused": "Connected · polling paused",
       "connected_one": "Connected · {{count}} org",

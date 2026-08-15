@@ -278,6 +278,7 @@
     "status": {
       "checking": "確認中…",
       "unavailable": "利用不可",
+      "forbidden": "権限なし",
       "notConfigured": "未設定",
       "pollingPaused": "接続済み · ポーリング停止中",
       "connected_other": "接続済み · {{count}} 組織"

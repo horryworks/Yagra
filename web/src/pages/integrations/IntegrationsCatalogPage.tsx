@@ -9,14 +9,19 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { api, ApiError } from '../../services/api';
+import { api } from '../../services/api';
 import { PageHeader } from '../../components/ui/PageHeader';
-import { Card } from '../../components/ui/Card';
+import { classifyLoadError } from '../../lib/loadState';
+import { LoadBlockNotice } from '../../components/ui/LoadBlockNotice';
 import './IntegrationsCatalogPage.css';
 
+// ADR-056: `forbidden` is its own state and not folded into `not-configured`. The catch below used
+// to map every failure to "not configured", which reads as a fact about the deployment when it is
+// really a fact about the caller — the same lie the Credentials screen was telling, one card wide.
 type MerakiStatus =
   | { kind: 'loading' }
   | { kind: 'unavailable' }
+  | { kind: 'forbidden' }
   | { kind: 'not-configured' }
   | { kind: 'connected'; orgs: number; pollingOn: boolean };
 
@@ -26,6 +31,8 @@ function merakiStatusLabel(s: MerakiStatus, t: TFunction): string {
       return t('integrations.status.checking');
     case 'unavailable':
       return t('integrations.status.unavailable');
+    case 'forbidden':
+      return t('integrations.status.forbidden');
     case 'not-configured':
       return t('integrations.status.notConfigured');
     case 'connected':
@@ -37,7 +44,7 @@ function merakiStatusLabel(s: MerakiStatus, t: TFunction): string {
 /** Chip tone classes are neutral/derived — never the --status-* node-state palette. */
 function merakiStatusTone(s: MerakiStatus): string {
   if (s.kind === 'connected') return s.pollingOn ? 'ok' : 'paused';
-  if (s.kind === 'unavailable') return 'muted';
+  if (s.kind === 'unavailable' || s.kind === 'forbidden') return 'muted';
   return 'idle';
 }
 
@@ -58,11 +65,8 @@ export function IntegrationsCatalogPage() {
       })
       .catch((e: unknown) => {
         if (!alive) return;
-        if (e instanceof ApiError && e.code === 'admin_unavailable') {
-          setMeraki({ kind: 'unavailable' });
-        } else {
-          setMeraki({ kind: 'not-configured' });
-        }
+        const block = classifyLoadError(e);
+        setMeraki(block ? { kind: block } : { kind: 'not-configured' });
       });
     return () => {
       alive = false;
@@ -97,10 +101,8 @@ export function IntegrationsCatalogPage() {
         </div>
       </div>
 
-      {meraki.kind === 'unavailable' && (
-        <Card>
-          <p className="muted">{t('integrations.unavailable')}</p>
-        </Card>
+      {(meraki.kind === 'unavailable' || meraki.kind === 'forbidden') && (
+        <LoadBlockNotice block={meraki.kind} unavailable={t('integrations.unavailable')} />
       )}
     </div>
   );

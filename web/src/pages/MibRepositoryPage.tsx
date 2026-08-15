@@ -23,11 +23,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { useDebouncedValue } from '../lib/useDebouncedValue';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionKind, MetricKind, MibCatalogEntry } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -43,6 +42,8 @@ import { decodeCondition, encodeCondition } from '../lib/filterCondition';
 import { TrashIcon } from '../components/ui/icons';
 import { mibEntryReady } from './mibEntryForm';
 import './MibRepositoryPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 /** Create a catalog entry (focused-editing modal). Same fields + OID gate as the old inline row. */
 function AddMibEntryModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
@@ -177,7 +178,7 @@ export function MibRepositoryPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<MibCatalogEntry[]>([]);
   const [query, setQuery] = useState('');
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<MibCatalogEntry | null>(null);
@@ -188,11 +189,9 @@ export function MibRepositoryPage() {
       .listMibCatalog(q.trim() || undefined)
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -287,10 +286,8 @@ export function MibRepositoryPage() {
         note={t('mib.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('mib.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('mib.unavailable')} />
       ) : (
         <>
           <TableToolbar>

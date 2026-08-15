@@ -16,11 +16,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, ApiError } from '../services/api';
+import { api } from '../services/api';
 import { useAuthStore } from '../store';
 import type { Mute, NodeGroup } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
@@ -36,6 +35,8 @@ import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { formatScheduleTime } from '../lib/format';
 import { muteFilters } from './suppressionFilters';
 import './MutesPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 /** Confirm + lift a mute. Destructive-consent chrome comes from the shared modal; only the
  *  sentence and the confirm label are this dialog's own (the action is "lift", not "delete"). */
@@ -84,7 +85,7 @@ export function MutesPage() {
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<Mute[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [lifting, setLifting] = useState<Mute | null>(null);
@@ -95,11 +96,9 @@ export function MutesPage() {
       .listMutes()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -219,10 +218,8 @@ export function MutesPage() {
         }
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('mutes.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('mutes.unavailable')} />
       ) : (
         <>
           <TableToolbar>

@@ -12,11 +12,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { ClassificationRule, ClassificationRuleInput, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -32,6 +31,8 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { classificationRuleFilters } from './classificationFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
 import './ClassificationRulesPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 export function ClassificationRulesPage() {
   const { t } = useTranslation('monitoring');
@@ -39,7 +40,7 @@ export function ClassificationRulesPage() {
   const [rows, setRows] = useState<ClassificationRule[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<ClassificationRule | null>(null);
@@ -51,12 +52,9 @@ export function ClassificationRulesPage() {
       .listClassificationRules()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-        else if (e instanceof ApiError && e.status === 401) setUnavailable(false);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
     api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
   }, []);
@@ -177,10 +175,8 @@ export function ClassificationRulesPage() {
         note={t('rules.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('rules.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('rules.unavailable')} />
       ) : (
         <>
           <TableToolbar>

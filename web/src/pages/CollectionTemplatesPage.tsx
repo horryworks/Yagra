@@ -10,11 +10,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { CollectionTemplate } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -30,6 +29,8 @@ import { setColumns, setFilterLabels, metricSetFilters } from './monitoringConfi
 import { TrashIcon } from '../components/ui/icons';
 import { CollectionEditor } from '../components/CollectionEditor/CollectionEditor';
 import './CollectionTemplatesPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 
 export function CollectionTemplatesPage() {
@@ -38,7 +39,7 @@ export function CollectionTemplatesPage() {
   const [rows, setRows] = useState<CollectionTemplate[]>([]);
   const [filters, setFilters] = useState<FilterState>({});
   const [sheet, setSheet] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<CollectionTemplate | null>(null);
@@ -49,11 +50,9 @@ export function CollectionTemplatesPage() {
       .listCollectionTemplates()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -136,10 +135,8 @@ export function CollectionTemplatesPage() {
         note={t('sets.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('sets.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('sets.unavailable')} />
       ) : (
         <>
           <TableToolbar>

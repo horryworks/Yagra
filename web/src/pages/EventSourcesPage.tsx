@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { EventSource } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -20,13 +19,15 @@ import { useClientFilters } from '../lib/useClientFilters';
 import { eventSourceFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon, KeyIcon } from '../components/ui/icons';
 import './EventSourcesPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 export function EventSourcesPage() {
   const { t } = useTranslation('alertsConfig');
   const authed = useAuthStore((s) => s.authed);
   const [rows, setRows] = useState<EventSource[]>([]);
   const [sheet, setSheet] = useState(false);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<EventSource | null>(null);
@@ -40,11 +41,9 @@ export function EventSourcesPage() {
       .listEventSources()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
@@ -140,8 +139,8 @@ export function EventSourcesPage() {
   return (
     <div>
       <PageHeader title={t('nav:events.webhooks')} note={t('eventSources.note')} />
-      {unavailable ? (
-        <Card>{t('eventSources.unavailable')}</Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('eventSources.unavailable')} />
       ) : (
         <>
           <TableToolbar>

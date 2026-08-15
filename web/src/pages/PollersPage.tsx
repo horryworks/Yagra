@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, ApiError, errMsg } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type {
   MonitoringGap,
@@ -21,7 +21,6 @@ import type {
   PoolSummary,
 } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Modal } from '../components/ui/Modal';
@@ -48,6 +47,8 @@ import {
   POLLER_UP_COMMAND,
 } from '../lib/pollers';
 import './PollersPage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 const REFRESH_MS = 10_000;
 
@@ -444,7 +445,7 @@ export function PollersPage() {
   const [pollers, setPollers] = useState<PollerInfo[]>([]);
   const [pools, setPools] = useState<PoolSummary[]>([]);
   const [gaps, setGaps] = useState<MonitoringGap[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [registering, setRegistering] = useState(false);
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
@@ -645,11 +646,9 @@ export function PollersPage() {
       .then((res) => {
         setPollers(res.pollers);
         setPools(res.pools);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
     // Monitoring gaps are best-effort context (store-and-forward, Phase 3) — a read error just leaves
     // the section hidden; it must never block the fleet table.
@@ -704,10 +703,8 @@ export function PollersPage() {
         note={t('pollers.note')}
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('pollers.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('pollers.unavailable')} />
       ) : (
         <>
           {pools.length > 0 && (

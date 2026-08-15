@@ -11,11 +11,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
 import { Link } from 'react-router-dom';
-import { api, errMsg, ApiError } from '../services/api';
+import { api, errMsg } from '../services/api';
 import { useAuthStore } from '../store';
 import type { MaintenanceWindow, NodeGroup, ProfileSummary } from '../types/api';
 import { PageHeader } from '../components/ui/PageHeader';
-import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
 import { Badge } from '../components/ui/Badge';
@@ -32,6 +31,8 @@ import { formatScheduleTime } from '../lib/format';
 import { isEnded, windowStatus } from './maintenanceStatus';
 import { windowFilters } from './suppressionFilters';
 import './MaintenancePage.css';
+import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 /** Confirm + delete a maintenance window (destructive-consent modal). */
 function DeleteWindowModal({
@@ -103,7 +104,7 @@ export function MaintenancePage() {
   const [rows, setRows] = useState<MaintenanceWindow[]>([]);
   const [groups, setGroups] = useState<NodeGroup[]>([]);
   const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [unavailable, setUnavailable] = useState(false);
+  const [block, setBlock] = useState<LoadBlock | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -116,11 +117,9 @@ export function MaintenancePage() {
       .listMaintenanceWindows()
       .then((list) => {
         setRows(list);
-        setUnavailable(false);
+        setBlock(null);
       })
-      .catch((e: unknown) => {
-        if (e instanceof ApiError && e.code === 'admin_unavailable') setUnavailable(true);
-      })
+      .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
   }, []);
 
@@ -265,10 +264,8 @@ export function MaintenancePage() {
         }
       />
 
-      {unavailable ? (
-        <Card>
-          <p className="muted">{t('maintenance.unavailable')}</p>
-        </Card>
+      {block ? (
+        <LoadBlockNotice block={block} unavailable={t('maintenance.unavailable')} />
       ) : (
         <>
           <TableToolbar>
