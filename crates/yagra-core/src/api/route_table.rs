@@ -1115,6 +1115,22 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_system_health"),
     ),
     ("GET", "/api/v1/pools", INFRA, Tool("get_system_health")),
+    (
+        "GET",
+        "/api/v1/preferences",
+        Global("the caller's own WebUI preferences, keyed by the signed-in account; the document names no node and no group"),
+        Exempt(
+            "the caller's own WebUI chrome — an opaque blob the backend never parses, keyed by the \
+             signed-in account; it describes no node, metric or alert, and an MCP client has no \
+             viewport to apply it to",
+        ),
+    ),
+    (
+        "PUT",
+        "/api/v1/preferences",
+        Global("the caller's own WebUI preferences; the write can only ever reach the caller's own row"),
+        NO_MCP_WRITE,
+    ),
     ("GET", "/api/v1/profiles", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/profiles", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/profiles/:id", ADMIN_CFG, NO_MCP_WRITE),

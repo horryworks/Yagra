@@ -23,6 +23,38 @@ use uuid::Uuid;
 /// which would have become a compile error the moment either domain moved out.
 pub(crate) const MAX_JSON_DOC_BYTES: usize = 262_144;
 
+/// Validate an **opaque client-authored JSON document** — the shape the backend stores without
+/// interpreting.
+///
+/// Two checks, and they are the only two the server can be responsible for: the body is a JSON
+/// object (not an array or a scalar, which the client could not read back as a document), and it is
+/// small enough not to be an attack. Each caller supplies its own typed error codes, because the
+/// WebUI branches on them, and its own cap, because "how big is reasonable" is a per-domain
+/// judgement — a dashboard layout and a preferences blob are not the same kind of thing.
+pub(crate) fn validate_opaque_doc(
+    body: &serde_json::Value,
+    invalid_code: &'static str,
+    too_large_code: &'static str,
+    noun: &str,
+    max_bytes: usize,
+) -> Result<(), ApiError> {
+    if !body.is_object() {
+        return Err(ApiError::bad_request(
+            invalid_code,
+            format!("{noun} must be a JSON object"),
+        ));
+    }
+    // `to_vec` failing means the value cannot be serialized at all; treat that as over-size rather
+    // than letting it through unmeasured.
+    if serde_json::to_vec(body).map_or(usize::MAX, |v| v.len()) > max_bytes {
+        return Err(ApiError::payload_too_large(
+            too_large_code,
+            format!("{noun} exceeds {max_bytes} bytes"),
+        ));
+    }
+    Ok(())
+}
+
 /// How many tokens one comma-separated set parameter may name.
 ///
 /// Not a query-cost guard — that was measured and there isn't one: on 6.7M events an `in(…)` list

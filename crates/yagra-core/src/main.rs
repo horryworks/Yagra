@@ -68,6 +68,8 @@ mod pollers;
 mod pool_coverage;
 /// Effective poll-pool resolution (node > ancestor folder > default).
 mod poolres;
+/// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
+mod preferences;
 mod ratelimit;
 mod rca;
 mod repo;
@@ -130,6 +132,7 @@ use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mib::MibRepo;
 use notifications::NotificationRepo;
 use pollers::PollerRepo;
+use preferences::UserPrefsRepo;
 use repo::{NodeListing, NodeRepo, StaticNodeList};
 use secrets::CredentialStore;
 use sink::InMemorySink;
@@ -752,6 +755,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         audit: audit_repo.clone(),
         dashboards: Arc::new(DashboardRepo::new(repo.pool())),
         shared_dashboard: Arc::new(SharedDashboardRepo::new(repo.pool())),
+        prefs: Arc::new(UserPrefsRepo::new(repo.pool())),
         scheduler_stats: scheduler_stats.clone(),
         poll: dispatcher,
         analysis,

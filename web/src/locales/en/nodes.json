@@ -300,6 +300,7 @@
     "err": "Err",
     "closeDetail": "Close detail",
     "closeDetailTitle": "Close detail (or click the row again)",
+    "resizeDock": "Drag to resize the charts (double-click to reset)",
     "throughput": "Throughput",
     "throughputUnit": "(In / Out, bps)",
     "bandwidth": "Bandwidth",

@@ -19,7 +19,7 @@
 
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, Caller, RequireManageConfig, RequireView};
-use super::util::MAX_JSON_DOC_BYTES;
+use super::util::{validate_opaque_doc, MAX_JSON_DOC_BYTES};
 use super::ApiState;
 use axum::{routing::get, Json, Router};
 use serde::Serialize;
@@ -52,22 +52,18 @@ pub(super) fn routes() -> Router<ApiState> {
 }
 
 /// Reject a layout that is not a JSON object, or is too big to be a real board.
+///
+/// The two checks live in [`validate_opaque_doc`] because `api/preferences.rs` needs the same pair
+/// over a different document with different codes and a different cap. What stays here is this
+/// domain's half — the codes the WebUI branches on and the noun its messages use.
 fn validate_layout(body: &Value) -> Result<(), ApiError> {
-    if !body.is_object() {
-        return Err(ApiError::bad_request(
-            "invalid_layout",
-            "dashboard layout must be a JSON object",
-        ));
-    }
-    // `to_vec` failing means the value cannot be serialized at all; treat that as over-size rather
-    // than letting it through unmeasured.
-    if serde_json::to_vec(body).map_or(usize::MAX, |v| v.len()) > MAX_JSON_DOC_BYTES {
-        return Err(ApiError::payload_too_large(
-            "layout_too_large",
-            format!("dashboard layout exceeds {MAX_JSON_DOC_BYTES} bytes"),
-        ));
-    }
-    Ok(())
+    validate_opaque_doc(
+        body,
+        "invalid_layout",
+        "layout_too_large",
+        "dashboard layout",
+        MAX_JSON_DOC_BYTES,
+    )
 }
 
 /// The caller's saved layout, or JSON `null` when they have never saved one — an explicit null

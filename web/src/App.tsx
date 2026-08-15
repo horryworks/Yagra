@@ -12,6 +12,7 @@ import { AppRoutes } from './routes';
 import { useTranslation } from 'react-i18next';
 import { api, getToken, setUnauthorizedHandler, type ClientConfig } from './services/api';
 import { applyLanguage, applyTheme, usePrefsStore } from './prefs';
+import { loadServerPrefs, resetServerPrefs } from './serverPrefs';
 import { applyViewportMode, useViewportMode } from './lib/viewport';
 import i18n from './i18n';
 import { useAuthStore } from './store';
@@ -63,6 +64,19 @@ export function App() {
       cancelled = true;
     };
   }, [authed, role, scope, setRole, setScope, setRoleMatrix]);
+
+  // Pull this account's server-side preferences once per sign-in (ADR-058), so a setting made on
+  // another machine is in place here. Deliberately not part of the effect above: that one is a
+  // precondition for rendering role-gated UI, whereas this one only refines values the local store
+  // already holds — it must never gate, retry or report. Signing out resets the sync so the next
+  // account does not inherit the previous one's "endpoint unsupported" verdict.
+  useEffect(() => {
+    if (!authed || !getToken()) {
+      resetServerPrefs();
+      return;
+    }
+    void loadServerPrefs();
+  }, [authed]);
 
   // Reflect the persisted theme onto <html data-theme> (and keep it in sync on change).
   useEffect(() => {

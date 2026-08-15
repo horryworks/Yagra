@@ -53,6 +53,16 @@ interface PrefsStore {
    *  is no "closed but filtering" state anyone has to remember. A screen with several tables
    *  (Reports has three) therefore opens and closes them together, which is the accepted cost. */
   filterRowOpen: boolean;
+  /** How tall the operator dragged the node-detail Interfaces chart dock, in px (issue #65).
+   *  `null` = never resized, so the dock picks a height from the container it is actually in
+   *  instead of pinning whatever one window happened to be on the day it was first opened.
+   *
+   *  ⚠️ **This one has a second, authoritative home: the server** (ADR-058, `serverPrefs.ts`). The
+   *  copy here is the local cache — it paints the first frame with no flash, and it is the whole
+   *  answer when signed out, offline, or talking to a core that predates the endpoint. The sync
+   *  module adopts the server's value into this field on load and mirrors writes back out; nothing
+   *  else should call the setter directly. */
+  interfaceDockHeight: number | null;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
   setLanguage: (language: Language) => void;
@@ -68,6 +78,9 @@ interface PrefsStore {
   toggleNodesPane: () => void;
   /** Show or hide the desktop column filter row (global + persisted; see [`filterRowOpen`]). */
   toggleFilterRow: () => void;
+  /** Record the Interfaces dock height locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
+   *  syncs it to the account (see [`interfaceDockHeight`]). */
+  setInterfaceDockHeight: (px: number | null) => void;
 }
 
 export const usePrefsStore = create<PrefsStore>()(
@@ -83,6 +96,9 @@ export const usePrefsStore = create<PrefsStore>()(
       // Absent from every `yagra_prefs` written before this shipped. `persist` merges the stored
       // object over the initial state, so a missing key reads as `false` and no migration is owed.
       filterRowOpen: false,
+      // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
+      // object over the initial state, so a missing key reads as `null` and no migration is owed.
+      interfaceDockHeight: null,
       setTheme: (theme) => set({ theme }),
       toggleTheme: () => set((s) => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
       setLanguage: (language) => set({ language }),
@@ -100,6 +116,7 @@ export const usePrefsStore = create<PrefsStore>()(
       setUiMode: (uiMode) => set({ uiMode }),
       toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
+      setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
     }),
     { name: 'yagra_prefs', storage: createJSONStorage(localStore) },
   ),

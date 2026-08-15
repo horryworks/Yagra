@@ -28,6 +28,26 @@
     "Role below Admin" for endpoints an Operator now reaches, and others named `ManageConfig` for
     endpoints that now need `ManageSystem`.
 
+### New Features
+- **The interface charts are bigger, and you can decide how big.** The throughput and error charts
+  under `Nodes ▸ <node> ▸ Interfaces` were a fixed 132px tall — the second-smallest chart in the
+  product, and too small to read a trend off (issue #65). They now **open roughly twice that height**
+  on an ordinary screen, and the dock they sit in has a **drag handle along its top edge**: pull it up
+  for taller charts, down for more of the interface list. The handle is keyboard-operable (`↑`/`↓`
+  once focused) and double-clicking it restores the default. The list above always keeps a few rows,
+  so the dock cannot take the whole pane. Unchanged on phones, where both charts already stack and
+  the dock scrolls.
+- **A WebUI preference can now follow you to another machine.** The chart-dock height is saved
+  against your **account**, on the server, rather than only in the browser that set it — so signing in
+  from a second machine, a second browser, or after a deployment moves from `http://…:3000` to
+  `https://…`, restores it. Two new endpoints back it, `GET` and `PUT /api/v1/preferences`, holding
+  **one opaque JSON document per account**: the server stores it and never reads inside it, so a
+  future preference needs no API change and no migration. Preferences are strictly per-account — an
+  API token is refused (`403 session_required`; a token names no person), and on a public-dashboard
+  deployment an anonymous visitor is refused too, because a shared preferences row would be
+  everyone's. A core that predates this answers `404` and the WebUI keeps using the browser-local
+  value without saying anything.
+
 ### Improvements
 - **Buttons you are not allowed to press are no longer drawn.** Every write control in the WebUI —
   every `+ Add`, every edit, every delete, every Save — decided whether to appear from *"am I

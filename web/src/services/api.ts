@@ -1958,6 +1958,19 @@ export const api = {
   putSharedDashboard: (layout: unknown): Promise<{ ok: boolean }> =>
     apiPut('/api/v1/shared-dashboard', { body: layout }),
 
+  /** The caller's saved WebUI preferences, or `null` if none saved yet (ADR-058). Opaque JSON on
+   *  the same contract as the dashboard layout: the client owns the shape (`prefs/serverPrefs.ts`)
+   *  and the server stores it verbatim, keyed by the signed-in account.
+   *
+   *  ⚠️ A core that predates ADR-058 answers a **bodyless 404**. Callers must treat 404/405 and a
+   *  `null` body as the same thing — "keep the browser-local value" — and must not surface it. */
+  getPreferences: (): Promise<unknown> => apiGet('/api/v1/preferences'),
+
+  /** Save (replace) the caller's WebUI preferences. ⚠️ Every call writes an audit row (there is no
+   *  per-route opt-out), so callers must debounce rather than save per input event. */
+  putPreferences: (prefs: unknown): Promise<{ ok: boolean }> =>
+    apiPut('/api/v1/preferences', { body: prefs }),
+
   /** The current principal (role). Requires a valid session. */
   me: (): Promise<AuthMe> => apiGet('/api/v1/auth/me'),
 

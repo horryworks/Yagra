@@ -2616,6 +2616,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The caller's saved preferences, or JSON `null` when they have never saved any — an explicit null
+         *     rather than 404, so the client keeps its browser-local values instead of showing an error.
+         * @description That choice is load-bearing for N-1: a core that predates this endpoint answers a bodyless 404,
+         *     and `null` means the same thing to the client, so the WebUI has **one** fallback path rather
+         *     than two.
+         */
+        get: operations["get_preferences"];
+        /**
+         * Save (replace) the caller's preferences. Mutating, so `audit_mw` records it automatically.
+         * @description ⚠️ There is no per-route audit opt-out, so **every** save writes one row. Debouncing on the
+         *     client is therefore a precondition of this endpoint, not a nicety — a control that saved per
+         *     pointer event would flood the audit log and the backend has no defence against it.
+         */
+        put: operations["put_preferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profiles": {
         parameters: {
             query?: never;
@@ -7367,6 +7396,10 @@ export interface components {
             pool: string;
             /** @description `"nodes_without_live_poller"` when the pool has nodes but no live poller, else `null`. */
             warning?: string | null;
+        };
+        /** @description A save's acknowledgement. The document is not echoed back — the client already has it. */
+        PreferencesSaved: {
+            ok: boolean;
         };
         /** @description One field that could not be used. */
         PreviewProblem: {
@@ -19498,6 +19531,131 @@ export interface operations {
                 };
             };
             /** @description This deployment has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The caller's opaque preferences document, or JSON null when they have never saved one */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description No valid bearer token — preferences are keyed by account, so this stays closed in public-dashboard mode */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description An API token names no person, so it cannot read someone's preferences */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    put_preferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": unknown;
+            };
+        };
+        responses: {
+            /** @description Preferences saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PreferencesSaved"];
+                };
+            };
+            /** @description The preferences document is not a JSON object */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token — preferences are keyed by account, so this stays closed in public-dashboard mode */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description An API token names no person, so it cannot write someone's preferences */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The session's account no longer exists */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The preferences document exceeds the size cap */
+            413: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
             503: {
                 headers: {
                     [name: string]: unknown;

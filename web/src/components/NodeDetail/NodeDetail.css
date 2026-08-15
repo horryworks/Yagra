@@ -654,17 +654,68 @@ html[data-viewport='mobile'] .nd-extract-row {
   display: block;
 }
 
-/* Bottom detail dock: pinned below the list with the selected interface's charts + controls. */
+/* Bottom detail dock: pinned below the list with the selected interface's charts + controls.
+   Its height comes from the component as an inline style on the desktop — an operator preference
+   that persists to their account (ADR-058). There is deliberately no `max-height` here: the bounds
+   live once, in `interfaceDockHeight.ts`, where a test can reach them and where the handle's
+   `aria-valuemin`/`aria-valuemax` read the same numbers the drag obeys.
+
+   ⚠️ `overflow: hidden`, NOT `auto`. The charts run in MetricChart's `fill` mode, and a scrolling
+   ancestor is exactly the oscillation its header warns about: the plot outgrows the pane, a
+   scrollbar appears, the scrollbar shrinks the pane, the ResizeObserver flickers. Clipping is the
+   fix — the charts shrink instead of the dock scrolling. (Mobile restores the scroller below; it
+   keeps fixed-height charts and no handle, so it is not in that loop.) */
 .nd-if-dock {
   flex: none;
-  max-height: 46%;
-  overflow-y: auto;
+  overflow: hidden;
   border-top: var(--border-width) solid var(--border-color);
   background: var(--bg-secondary);
   padding: 14px 18px 16px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* Drag the dock's TOP edge to make the charts taller (issue #65). The mirror image of
+   `.geopage-resize`: the handle sits ABOVE the pane it sizes, so dragging UP grows it — see the
+   sign note in `interfaceDockHeight.ts`. The negative margins bleed it to the dock's edges so it
+   reads as the dock's own top rail, and the dock's `gap` then spaces the head below it.
+   Not rendered on mobile (see the `data-viewport` block near the end of this file). */
+.nd-if-resize {
+  flex: none;
+  margin: -14px -18px 0;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: ns-resize;
+  touch-action: none; /* the drag is ours; the browser must not scroll the list instead */
+}
+
+.nd-if-resize-grip {
+  width: 34px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--border-color);
+  transition: background var(--transition);
+}
+
+.nd-if-resize:hover .nd-if-resize-grip,
+.nd-if-resize:focus-visible .nd-if-resize-grip {
+  background: var(--accent-color);
+}
+
+/* The grip is the focus mark (ui-conventions: focus is a colour change, never an outline). */
+.nd-if-resize:focus-visible {
+  outline: none;
+}
+
+/* Touch: a 14px rail is not a 44px target. Channel 2 (`hover: none`), independent of layout mode,
+   so a tablet forced to the desktop shell still gets a grabbable rail. */
+@media (hover: none) {
+  .nd-if-resize {
+    height: 22px;
+  }
 }
 
 .nd-if-dock-head {
@@ -734,17 +785,43 @@ html[data-viewport='mobile'] .nd-extract-row {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 18px;
+  /* Claim the dock's slack so a resize lands on the CHARTS, not on empty space below them.
+     ⚠️ `grid-auto-rows` is what makes the row height *definite*, and it is load-bearing: an `auto`
+     row sizes to its content, and a `fill` chart inside one collapses to MetricChart's
+     `MIN_PLOT_HEIGHT` (40px) — smaller than before this change, i.e. the exact inverse of the fix.
+     It has to be the *implicit* row property because `auto-fit` lays out one row on a wide pane and
+     two on a narrow one. */
+  flex: 1;
+  min-height: 0;
+  grid-auto-rows: minmax(0, 1fr);
 }
 
+/* A column so the title keeps its own height and the chart takes the rest. A grid item has an
+   automatic minimum size in the block axis too, hence the explicit `min-height: 0`. */
 .nd-if-chart {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
-/* Reserve the chart height while data loads so the dock is full-height from the first render — the
-   selected row's auto-scroll measures the final layout instead of a still-growing dock. Height
-   mirrors the dock MetricChart's `height={132}`. */
+/* MetricChart's `fill` wrapper measures its own box, so it needs a definite one. Same shape as
+   `dashboard/WidgetFrame.css` gives a resizable widget cell. */
+.nd-if-chart > .metricchart-fill {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Reserve chart space while data loads, so the dock is full-height from the first render and the
+   selected row's auto-scroll measures the final layout instead of a still-growing dock. On the
+   desktop `flex: 1` fills exactly what the chart will; the `min-height` only bites in the mobile
+   dock, which is content-sized.
+   Deliberately NOT a mirror of any chart height — it is a reservation, and the ResizeObserver
+   corrects whatever it gets wrong. (It *was* a hand-kept mirror of `height={132}`, and it had
+   already gone stale for the mobile 164 case.) */
 .nd-if-chart-empty {
-  height: 132px;
+  flex: 1;
+  min-height: 132px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1300,10 +1377,25 @@ html[data-viewport='mobile'] .nd-if-cell.right {
 /* The selected-interface dock takes up to ~60% of the screen on mobile so the throughput + errors
    charts (taller here) are actually readable; its charts already stack (auto-fit). The × still
    closes it to get the full list back. Let the head wrap rather than overflow. */
+/* The mobile dock keeps exactly the behaviour it had before issue #65: content-sized under a 60dvh
+   cap, fixed-height charts, and it scrolls rather than shrinking. No drag handle either — the
+   component does not render one here.
+   Why mobile is excluded rather than adapted: both charts always stack on a phone, so dragging
+   would only split the same 60dvh two ways (~170px each, which is what they already get). Against
+   that: a 44px `touch-action: none` rail directly above a scrolling list is a mis-grab hazard, and
+   `.nd-if-dock-head` wraps to 2–3 lines here, which `overflow: hidden` would clip. Issue #65 is a
+   big-screen complaint. */
 html[data-viewport='mobile'] .nd-if-dock {
   max-height: 60vh; /* fallback for browsers without dvh */
   max-height: 60dvh;
   overflow-y: auto;
+}
+
+/* Undo the desktop fill chain: content-sized rows, so the fixed-height charts keep their height and
+   the dock grows to them instead of dividing a height it was not given. */
+html[data-viewport='mobile'] .nd-if-dock-charts {
+  flex: none;
+  grid-auto-rows: auto;
 }
 
 html[data-viewport='mobile'] .nd-if-dock-head {

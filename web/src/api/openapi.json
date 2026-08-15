@@ -13731,6 +13731,144 @@
         }
       }
     },
+    "/api/v1/preferences": {
+      "get": {
+        "tags": [
+          "preferences"
+        ],
+        "summary": "The caller's saved preferences, or JSON `null` when they have never saved any — an explicit null\nrather than 404, so the client keeps its browser-local values instead of showing an error.",
+        "description": "That choice is load-bearing for N-1: a core that predates this endpoint answers a bodyless 404,\nand `null` means the same thing to the client, so the WebUI has **one** fallback path rather\nthan two.",
+        "operationId": "get_preferences",
+        "responses": {
+          "200": {
+            "description": "The caller's opaque preferences document, or JSON null when they have never saved one",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token — preferences are keyed by account, so this stays closed in public-dashboard mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it cannot read someone's preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "preferences"
+        ],
+        "summary": "Save (replace) the caller's preferences. Mutating, so `audit_mw` records it automatically.",
+        "description": "⚠️ There is no per-route audit opt-out, so **every** save writes one row. Debouncing on the\nclient is therefore a precondition of this endpoint, not a nicety — a control that saved per\npointer event would flood the audit log and the backend has no defence against it.",
+        "operationId": "put_preferences",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Preferences saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PreferencesSaved"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The preferences document is not a JSON object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token — preferences are keyed by account, so this stays closed in public-dashboard mode",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "An API token names no person, so it cannot write someone's preferences",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The session's account no longer exists",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The preferences document exceeds the size cap",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/profiles": {
       "get": {
         "tags": [
@@ -27432,6 +27570,18 @@
               "null"
             ],
             "description": "`\"nodes_without_live_poller\"` when the pool has nodes but no live poller, else `null`."
+          }
+        }
+      },
+      "PreferencesSaved": {
+        "type": "object",
+        "description": "A save's acknowledgement. The document is not echoed back — the client already has it.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
           }
         }
       },

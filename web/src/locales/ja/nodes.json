@@ -300,6 +300,7 @@
     "err": "エラー",
     "closeDetail": "詳細を閉じる",
     "closeDetailTitle": "詳細を閉じる（行をもう一度クリックしても閉じます）",
+    "resizeDock": "ドラッグでグラフの高さを変更（ダブルクリックで既定に戻す）",
     "throughput": "スループット",
     "throughputUnit": "（受信 / 送信, bps）",
     "bandwidth": "帯域幅",

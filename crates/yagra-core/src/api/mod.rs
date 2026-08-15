@@ -61,6 +61,7 @@ mod notifications;
 mod oidc;
 pub mod openapi;
 pub(crate) mod pollers;
+mod preferences;
 mod profiles;
 pub(crate) mod rca;
 pub(crate) mod reports;
@@ -107,6 +108,7 @@ use crate::maintenance::MaintenanceRepo;
 use crate::mib::MibRepo;
 use crate::notifications::NotificationRepo;
 use crate::pollers::PollerRepo;
+use crate::preferences::UserPrefsRepo;
 
 use crate::repo::{NodeListing, NodeRepo};
 use crate::reports::ReportRunner;
@@ -147,6 +149,8 @@ pub struct AdminState {
     pub dashboards: Arc<DashboardRepo>,
     /// The single global "Shared Dashboard" layout (admin-edited, shown to all users).
     pub shared_dashboard: Arc<SharedDashboardRepo>,
+    /// Per-account WebUI preferences — one opaque JSON document per account (ADR-058).
+    pub prefs: Arc<UserPrefsRepo>,
     /// Live poll-loop self-monitoring counters (the poller-health endpoint).
     pub scheduler_stats: Arc<crate::scheduler::SchedulerStats>,
     /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
@@ -368,6 +372,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(eventlog::routes())
         .merge(audit::routes())
         .merge(dashboard::routes())
+        // Per-account WebUI preferences (ADR-058), in `api/preferences.rs`.
+        .merge(preferences::routes())
         .merge(mib::routes())
         .merge(api_tokens::routes())
         .merge(session::routes())
@@ -481,12 +487,17 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
 /// ~22 write handlers — keeping the S6 signal's safe-over-invalidation property (a needed rebuild is
 /// never skipped because someone forgot to add a path).
 ///
-/// The exceptions are the endpoints that are **reads wearing POST**: they create a job or a report,
-/// touch no node, profile, threshold, group or credential, and are admission-controlled precisely
-/// because they are expensive to *run*, not because they change anything. Counting them as config
-/// writes would defeat S6 exactly when it matters most — during an incident, when an operator is
-/// launching analyses and asking for explanations, every one of them would force the next 30s tick
-/// to redo a full-fleet rebuild across tens of thousands of nodes.
+/// Most of the exceptions are endpoints that are **reads wearing POST**: they create a job or a
+/// report, touch no node, profile, threshold, group or credential, and are admission-controlled
+/// precisely because they are expensive to *run*, not because they change anything. Counting them as
+/// config writes would defeat S6 exactly when it matters most — during an incident, when an operator
+/// is launching analyses and asking for explanations, every one of them would force the next 30s
+/// tick to redo a full-fleet rebuild across tens of thousands of nodes.
+///
+/// ⚠️ **Not all of them are reads, and the charter is really "writes nothing the rebuild reads".**
+/// `/api/v1/preferences` is a genuine write; it is here because what it writes is one account's UI
+/// chrome, which no rebuild input touches, and because a UI gesture can emit one per adjustment.
+/// Judge a new exception by what the rebuild reads, not by the HTTP verb.
 ///
 /// They stay **audited**; only the dirty signal is suppressed.
 fn changes_monitoring_config(path: &str) -> bool {
@@ -500,7 +511,14 @@ fn changes_monitoring_config(path: &str) -> bool {
         // Asks the updater to re-read the registry's tag list (ADR-050). It refreshes a cache the
         // GET beside it serves and changes nothing this deployment monitors — the POST is only
         // because it reaches out over the network, not because it writes configuration.
-        || path == "/api/v1/system/upgrade/check")
+        || path == "/api/v1/system/upgrade/check"
+        // One account's WebUI preferences (ADR-058) — an opaque blob no rebuild input reads. Unlike
+        // the entries above this is a real write, and it is the reason the doc comment says to judge
+        // by what the rebuild reads. A dock-resize handle can emit one per adjustment, so counting
+        // it would make a UI gesture trigger a full-fleet re-resolution.
+        // ⚠️ `PUT /api/v1/dashboard` has the same non-reason to bump and is NOT excluded — a
+        // pre-existing bug, filed separately rather than fixed silently here.
+        || path == "/api/v1/preferences")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA

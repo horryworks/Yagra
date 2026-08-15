@@ -19,9 +19,18 @@ import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
 import { usePrefsStore } from '../../prefs';
-import { useIsMobileViewport } from '../../lib/viewport';
+import { setInterfaceDockHeight } from '../../serverPrefs';
+import { useViewportMode } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
 import { latestErrorRate, sparklinePath, throughputBandwidthOverlay } from './interfaceMetrics';
+import {
+  defaultDockHeight,
+  heightFromDrag,
+  heightFromKey,
+  resolveDockHeight,
+  DOCK_MIN_PX,
+  LIST_MIN_PX,
+} from './interfaceDockHeight';
 import { interfaceColumns } from './tabFilters';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
@@ -48,6 +57,22 @@ function stickyChromeHeight(list: HTMLElement): number {
   );
 }
 
+/** The height `.nd-if-list` and the dock share: the tab body minus the fixed chrome above them —
+ *  the toolbar, plus the error banner when one is showing. Measured rather than mirrored, for the
+ *  same reason `stickyChromeHeight` measures.
+ *
+ *  ⚠️ NOT `window.innerHeight`. This pane sits under the app shell's top bar, the node identity
+ *  header and the tab strip, which cost roughly 230px on a 720p window — sizing the dock against the
+ *  window would let it push the list off the bottom.
+ *  ⚠️ A future `flex: none` sibling of `.nd-if` must be added to this selector, or the dock
+ *  over-claims by that sibling's height. */
+function dockBudget(root: HTMLElement): number {
+  const chrome = Array.from(
+    root.querySelectorAll(':scope > .nd-if-toolbar, :scope > .form-error'),
+  ).reduce((h, el) => h + el.getBoundingClientRect().height, 0);
+  return root.clientHeight - chrome;
+}
+
 /** Human oper label from ifOperStatus (1 = up). */
 function operLabel(oper: number | null, t: TFunction): string {
   if (oper == null) return t('interfaces.operUnknown');
@@ -62,6 +87,26 @@ interface Props {
   error: string | null;
 }
 
+/** Everything the dock needs to be resizable, or `null` where it is not (mobile). Bundled because
+ *  the alternative is seven props whose one shared meaning is "the operator can drag this". */
+interface DockResize {
+  /** Current height in px, already clamped for the container. */
+  height: number;
+  /** Bounds, for the handle's `aria-valuemin`/`aria-valuemax`. Same numbers the drag obeys —
+   *  they come from `interfaceDockHeight.ts` rather than being restated here. */
+  min: number;
+  max: number;
+  /** Double-click: back to the height an operator who never dragged would get. */
+  onReset: () => void;
+  handleProps: {
+    onPointerDown: (e: React.PointerEvent) => void;
+    onPointerMove: (e: React.PointerEvent) => void;
+    onPointerUp: (e: React.PointerEvent) => void;
+    onPointerCancel: (e: React.PointerEvent) => void;
+    onKeyDown: (e: React.KeyboardEvent) => void;
+  };
+}
+
 export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const { t } = useTranslation('nodes');
   // The predicate lives in `tabFilters.ts`: it was hand-rolled here and searched two fields
@@ -71,6 +116,44 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  // The tab root, held in *state* rather than a ref. ⚠️ A ref does not work here: this component
+  // returns an early tree while it has no rows, so on the render the measuring effect first ran
+  // `rootRef.current` was null — and with the element arriving later and no dependency naming it,
+  // the effect never ran again. The dock then sized against a budget of 0, which means an infinite
+  // ceiling, which means a drag could squeeze the interface list to nothing. State makes the
+  // element's arrival a render the effect can depend on.
+  const [rootEl, setRootEl] = useState<HTMLDivElement | null>(null);
+
+  // ── Dock resize (issue #65) ──────────────────────────────────────────────────────────────────
+  // The state and the handlers live HERE rather than in `InterfaceDock`, and that is a constraint
+  // rather than a preference: the keep-in-view ResizeObserver below is in this component and has to
+  // be able to see that a drag is in progress. Moving `drag` down into the dock silently
+  // reintroduces the scroll defect described on that observer.
+  const mobile = useViewportMode() === 'mobile';
+  const storedHeight = usePrefsStore((s) => s.interfaceDockHeight);
+  // The height while a gesture is in flight. Kept local so a drag does not write to the store (and
+  // therefore to the server) once per frame — the store gets one write on release.
+  const [liveHeight, setLiveHeight] = useState<number | null>(null);
+  const [budget, setBudget] = useState(0);
+  const drag = useRef<{ y: number; h: number } | null>(null);
+  const raf = useRef(0);
+  const pointerY = useRef(0);
+
+  const dockHeight = resolveDockHeight(liveHeight ?? storedHeight, budget);
+
+  // Measure the space the list and the dock share. Observes `.nd-if` ONLY, which is `height: 100%`
+  // — nothing inside it can change its size, so this observer cannot loop with the dock's own
+  // height. (Observing the list or the dock instead would.) The toolbar re-wraps only when the
+  // width changes, which resizes `.nd-if` too; the error banner does not, hence the `error` dep.
+  useLayoutEffect(() => {
+    if (!rootEl) return;
+    const measure = () => setBudget(dockBudget(rootEl));
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(rootEl);
+    return () => ro.disconnect();
+  }, [rootEl, error]);
 
   const shown = useMemo(
     () => rows.filter(buildPredicate(columns, filters, Date.now())),
@@ -129,10 +212,92 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
     if (selected == null) return;
     const list = listRef.current;
     if (!list || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => keepSelectedInView());
+    const ro = new ResizeObserver(() => {
+      // ⚠️ Not during a drag. A drag resizes the list every frame, and the selected row is sitting
+      // exactly on the boundary being dragged (the branch below leaves it flush with `lr.bottom`),
+      // so this would scroll the list under the operator's cursor one frame at a time — and in one
+      // direction only, because the shrink branch guards the top edge alone. Dragging back would
+      // not restore where they were. Applied once on pointer-up instead.
+      if (drag.current) return;
+      keepSelectedInView();
+    });
     ro.observe(list);
     return () => ro.disconnect();
   }, [selected, keepSelectedInView]);
+
+  const onResizeDown = useCallback(
+    (e: React.PointerEvent) => {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      e.preventDefault(); // no text selection across the list while dragging
+      drag.current = { y: e.clientY, h: dockHeight };
+      pointerY.current = e.clientY;
+      setLiveHeight(dockHeight);
+    },
+    [dockHeight],
+  );
+
+  const onResizeMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!drag.current) return;
+      pointerY.current = e.clientY;
+      // Coalesce to one update per frame: pointermove can outrun paint, and each update resizes two
+      // uPlot instances. Same shape as `dashboard/useResizeHandle.ts`.
+      cancelAnimationFrame(raf.current);
+      raf.current = requestAnimationFrame(() => {
+        const d = drag.current;
+        if (!d) return;
+        setLiveHeight(heightFromDrag(d.h, d.y, pointerY.current, budget));
+      });
+    },
+    [budget],
+  );
+
+  const endResize = useCallback(
+    (e: React.PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      (e.target as Element).releasePointerCapture?.(e.pointerId);
+      cancelAnimationFrame(raf.current);
+      const final = heightFromDrag(d.h, d.y, pointerY.current, budget);
+      drag.current = null;
+      setLiveHeight(null);
+      // One store write — and therefore one PUT and one audit row — per gesture.
+      setInterfaceDockHeight(final);
+      keepSelectedInView();
+    },
+    [budget, keepSelectedInView],
+  );
+
+  const onResizeKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Keyboard-operable, like every other primary control (ui-conventions.md). ⚠️ ArrowUp grows
+      // here — the handle sits above the dock — which is the opposite of the Geo map's handle.
+      const next = heightFromKey(dockHeight, e.key, budget);
+      if (next == null) return;
+      e.preventDefault();
+      setInterfaceDockHeight(next);
+    },
+    [dockHeight, budget],
+  );
+
+  // Bundled so the dock takes one prop rather than seven, and so `null` says "no resize here"
+  // in one place. Null on mobile: the dock is content-sized there and its charts keep a fixed
+  // height — see the `data-viewport` block in NodeDetail.css for why.
+  const resize: DockResize | null = mobile
+    ? null
+    : {
+        height: dockHeight,
+        min: DOCK_MIN_PX,
+        max: Math.max(DOCK_MIN_PX, budget - LIST_MIN_PX),
+        onReset: () => setInterfaceDockHeight(defaultDockHeight(budget)),
+        handleProps: {
+          onPointerDown: onResizeDown,
+          onPointerMove: onResizeMove,
+          onPointerUp: endResize,
+          onPointerCancel: endResize,
+          onKeyDown: onResizeKey,
+        },
+      };
 
   if (loaded && rows.length === 0) {
     return (
@@ -144,7 +309,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   }
 
   return (
-    <div className="nd-if">
+    <div className="nd-if" ref={setRootEl}>
       <div className="nd-if-toolbar">
         <span className="nd-if-summary">
           <b>{up}</b> {t('interfaces.ofUp', { total: rows.length })}
@@ -240,7 +405,12 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
       </div>
 
       {selectedRow ? (
-        <InterfaceDock nodeId={nodeId} row={selectedRow} onClose={() => setSelected(null)} />
+        <InterfaceDock
+          nodeId={nodeId}
+          row={selectedRow}
+          onClose={() => setSelected(null)}
+          resize={resize}
+        />
       ) : (
         <div className="nd-if-dockhint">{t('interfaces.dockHint')}</div>
       )}
@@ -347,19 +517,29 @@ function InterfaceDock({
   nodeId,
   row,
   onClose,
+  resize,
 }: {
   nodeId: string;
   row: InterfaceRow;
   onClose: () => void;
+  /** Desktop only; `null` on mobile, where the dock is content-sized (see NodeDetail.css). */
+  resize: DockResize | null;
 }) {
   const { t } = useTranslation('nodes');
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
   const toggleThroughputScale = usePrefsStore((s) => s.toggleThroughputScale);
-  // Taller charts on a phone so the interface detail actually fills the screen (the dock is capped
-  // at 50dvh; two ~160px charts + head land near that half-screen budget).
-  const chartHeight = useIsMobileViewport() ? 164 : 132;
+  // How the charts are sized, as ONE object used by both so the pair cannot drift.
+  //
+  // Desktop: `fill`, tracking the dock's height via MetricChart's own ResizeObserver. That is not a
+  // stylistic choice — `height` is part of MetricChart's rebuild key, so a fixed height would
+  // destroy and reconstruct both uPlot instances on every frame of a drag, while `fill` just calls
+  // `plot.setSize()`. ⚠️ Never pass `height` alongside `fill`: it stays in the effect deps, so a
+  // varying one silently brings the rebuild back.
+  //
+  // Mobile: a fixed height, because there is no drag handle there and the dock is content-sized.
+  const chartSizing = resize ? ({ fill: true } as const) : ({ height: 164 } as const);
   const tick = useRefreshTick();
   const [series, setSeries] = useState<InterfaceSeries | null>(null);
   const [win, setWin] = useState<[number, number] | null>(null);
@@ -392,11 +572,59 @@ function InterfaceDock({
   const hasData = ts.length > 0;
   const errRate = latestErrorRate(series);
   // Configured-bandwidth overlay for the throughput chart (red line + optional capacity Y-range).
-  const bw = throughputBandwidthOverlay(row.if_speed_bps, throughputScale);
+  // ⚠️ Memoized because it returns a FRESH `yRange` array every call, and MetricChart compares that
+  // prop by reference (its own doc asks for a stable one). Harmless while the dock only re-rendered
+  // on a 15s tick; during a drag it would be a `setData` — a scale reset plus a redraw — per frame.
+  const bw = useMemo(
+    () => throughputBandwidthOverlay(row.if_speed_bps, throughputScale),
+    [row.if_speed_bps, throughputScale],
+  );
   const hasBandwidth = bw.referenceLine != null;
+  // Same reason: a fresh array each render is a fresh `series` prop.
+  const throughputSeries = useMemo(
+    () =>
+      series
+        ? [
+            { label: t('interfaces.in'), values: series.in_bps, color: SERIES_IN },
+            { label: t('interfaces.out'), values: series.out_bps, color: SERIES_OUT },
+          ]
+        : [],
+    [series, t],
+  );
+  const errorSeries = useMemo(
+    () =>
+      series
+        ? [
+            { label: t('interfaces.in'), values: series.in_errors, color: SERIES_IN },
+            { label: t('interfaces.out'), values: series.out_errors, color: SERIES_OUT },
+          ]
+        : [],
+    [series, t],
+  );
 
   return (
-    <div className="nd-if-dock">
+    <div className="nd-if-dock" style={resize ? { height: `${resize.height}px` } : undefined}>
+      {resize && (
+        /* The dock's top edge, as a real control: focusable, announced, and arrow-key operable.
+           How much of the screen the charts get is an operator decision (issue #65), not chrome.
+           `role="slider"` with explicit bounds — the Geo map's equivalent omits valuemin/valuemax
+           and should not be copied on that point. */
+        <div
+          className="nd-if-resize"
+          role="slider"
+          tabIndex={0}
+          aria-label={t('interfaces.resizeDock')}
+          aria-orientation="vertical"
+          aria-valuenow={resize.height}
+          aria-valuemin={resize.min}
+          aria-valuemax={resize.max}
+          title={t('interfaces.resizeDock')}
+          onDoubleClick={resize.onReset}
+          {...resize.handleProps}
+        >
+          <span className="nd-if-resize-grip" aria-hidden="true" />
+        </div>
+      )}
       <div className="nd-if-dock-head">
         <StatusDot state={operState(row.oper_status ?? null)} withLabel={false} />
         <span className="mono nd-if-dock-name">{row.if_name ?? `if${row.ifindex}`}</span>
@@ -461,17 +689,14 @@ function InterfaceDock({
           {hasData ? (
             <MetricChart
               title=""
-              height={chartHeight}
+              {...chartSizing}
               timestamps={ts}
               yFormat={formatSi}
               legendFormat={formatBps}
               yRange={bw.yRange}
               xRange={win ?? undefined}
               referenceLine={bw.referenceLine}
-              series={[
-                { label: t('interfaces.in'), values: series!.in_bps, color: SERIES_IN },
-                { label: t('interfaces.out'), values: series!.out_bps, color: SERIES_OUT },
-              ]}
+              series={throughputSeries}
             />
           ) : (
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
@@ -489,15 +714,12 @@ function InterfaceDock({
           {hasData ? (
             <MetricChart
               title=""
-              height={chartHeight}
+              {...chartSizing}
               timestamps={ts}
               yFormat={formatSi}
               legendFormat={(v) => `${formatSi(v)}/s`}
               xRange={win ?? undefined}
-              series={[
-                { label: t('interfaces.in'), values: series!.in_errors, color: SERIES_IN },
-                { label: t('interfaces.out'), values: series!.out_errors, color: SERIES_OUT },
-              ]}
+              series={errorSeries}
             />
           ) : (
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>

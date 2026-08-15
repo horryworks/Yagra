@@ -43,6 +43,9 @@
 //! * **`user_dashboards` / `shared_dashboard`** — widget layouts embed references (node ids, group
 //!   ids, metric names) that the importer cannot validate, so a carried layout would render broken
 //!   widgets with no error. Held back deliberately until widgets can be validated.
+//! * **`user_preferences`** — per-account WebUI chrome (ADR-058), an opaque blob nothing on this
+//!   side parses. It belongs to a *person*, not to a deployment's configuration, and carrying it
+//!   would move one operator's screen settings onto another deployment's accounts.
 //! * **`maintenance_windows` / `mutes`** — bounded-in-time operational state, not configuration.
 //! * **The four retention windows of `app_settings`** — retention is a policy of the *target*
 //!   deployment (its disks, its compliance window), and lowering one deletes data. An import is not
