@@ -1,8 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Lazy route group: Settings — seventeen administration screens (system health, pollers,
-// forwarding, integrations, AI, credentials, users/roles/auth/TLS/tokens, audit, system, config
-// bundle, preferences, about). Mounted by `routes.tsx` at `settings/*` through `React.lazy`: this
-// is the largest group by far and almost none of it is on an operator's daily path.
+// Lazy route group: Settings — fifteen administration screens (Yagra health, pollers, integrations,
+// AI, users/roles/auth/TLS/tokens, audit, monitoring defaults, config bundle, upgrade, preferences,
+// about). Mounted by `routes.tsx` at `settings/*` through `React.lazy`: this is the largest group by
+// far and almost none of it is on an operator's daily path.
+//
+// Two screens left in ADR-055 Inc.2 and their old paths redirect from `routes.tsx`: Forwarding to
+// the Events tab (it relays received passive data, and the rest of that pipeline was already
+// there), and Credentials to Nodes (device keys are part of collection, not of who may sign in).
 //
 // One boundary for the whole group: the group component stays mounted across its screens, so only
 // the first entry suspends and moving between settings tabs never flashes the fallback. See
@@ -14,11 +18,9 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { SystemHealthPage } from '../pages/SystemHealthPage';
 import { PollersPage } from '../pages/PollersPage';
-import { ForwardingPage } from '../pages/ForwardingPage';
 import { IntegrationsCatalogPage } from '../pages/integrations/IntegrationsCatalogPage';
 import { MerakiIntegrationPage } from '../pages/integrations/MerakiIntegrationPage';
 import { AiSettingsPage } from '../pages/AiSettingsPage';
-import { CredentialsPage } from '../pages/CredentialsPage';
 import { UsersPage } from '../pages/UsersPage';
 import { RolesPage } from '../pages/RolesPage';
 import { AuthSettingsPage } from '../pages/AuthSettingsPage';
@@ -38,11 +40,9 @@ export default function SettingsRoutes() {
       <Route index element={<Navigate to="/settings/system-health" replace />} />
       <Route path="system-health" element={<SystemHealthPage />} />
       <Route path="pollers" element={<PollersPage />} />
-      <Route path="forwarding" element={<ForwardingPage />} />
       <Route path="integrations" element={<IntegrationsCatalogPage />} />
       <Route path="integrations/meraki" element={<MerakiIntegrationPage />} />
       <Route path="ai" element={<AiSettingsPage />} />
-      <Route path="credentials" element={<CredentialsPage />} />
       <Route path="users" element={<UsersPage />} />
       <Route path="roles" element={<RolesPage />} />
       <Route path="auth" element={<AuthSettingsPage />} />

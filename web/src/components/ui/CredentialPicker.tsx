@@ -106,7 +106,7 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
               })}
             </div>
           )}
-          <Link className="cred-picker-manage" to="/settings/credentials">
+          <Link className="cred-picker-manage" to="/nodes/credentials">
             {t('credPicker.manage')} →
           </Link>
         </div>

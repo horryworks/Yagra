@@ -103,7 +103,7 @@ test.describe('the Events filter row', () => {
   test.use({ mockConfig: { overrides: BOOTSTRAP_OVERRIDES } });
 
   test('writes its condition to the URL and reads it back', async ({ page, mock }) => {
-    await page.goto('/alerts/events');
+    await page.goto('/events');
     await expect(page.getByRole('group', { name: 'Column filters' })).toBeVisible();
 
     await page.getByRole('button', { name: /Filter by Message/ }).click();

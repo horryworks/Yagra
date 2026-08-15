@@ -75,6 +75,18 @@ export const NAV: NavSection[] = [
         // two entries further down — the menu was telling the reader to start at the end.
         labelKey: 'groups.monitoringConfig',
         items: [
+          // The keys for reaching monitored devices. They lived under Settings ▸ Access next to
+          // Users, Roles and Authentication — which is how a person signs in to Yagra, a different
+          // subject with a different blast radius (ADR-055 決定 4 / R8). A device profile is
+          // defined as "which sets, how often, WITH WHICH CREDENTIAL", so this is a part of
+          // collection, and it comes first because nothing below it can be tried without it.
+          {
+            labelKey: 'nodes.credentials',
+            descKey: 'descriptions.nodesCredentials',
+            path: '/nodes/credentials',
+            implemented: true,
+            mono: 'Cr',
+          },
           {
             labelKey: 'nodes.mib',
             descKey: 'descriptions.nodesMib',
@@ -143,7 +155,6 @@ export const NAV: NavSection[] = [
         items: [
           { labelKey: 'alerts.active', path: '/alerts', implemented: true, mono: 'Ac' },
           { labelKey: 'alerts.history', path: '/alerts/history', implemented: true, mono: 'Hi' },
-          { labelKey: 'alerts.events', path: '/alerts/events', implemented: true, mono: 'Ev' },
         ],
       },
       {
@@ -163,19 +174,15 @@ export const NAV: NavSection[] = [
             implemented: true,
             mono: 'Nt',
           },
+          // Event alert rules stays under Alerts, not Events. It is a thing that PRODUCES alerts,
+          // and splitting the two rule screens across two tabs would be the same mistake this
+          // increment is fixing, one level up (ADR-055「採らなかった案」).
           {
             labelKey: 'alerts.eventRules',
             descKey: 'descriptions.alertsEventRules',
             path: '/alerts/event-rules',
             implemented: true,
             mono: 'Er',
-          },
-          {
-            labelKey: 'alerts.eventSources',
-            descKey: 'descriptions.alertsEventSources',
-            path: '/alerts/event-sources',
-            implemented: true,
-            mono: 'Es',
           },
           {
             labelKey: 'alerts.maintenance',
@@ -190,6 +197,47 @@ export const NAV: NavSection[] = [
             path: '/alerts/mutes',
             implemented: true,
             mono: 'Mu',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    // Passive monitoring gets its own tab (ADR-055 決定 2). Its pipeline used to be split across
+    // two: receiving and reading were under Alerts, relaying was under Settings ▸ Forwarding, and
+    // nothing named the whole. The URLs had to move with it — `sectionForPath` matches on
+    // `'/' + section.key`, so a screen at `/alerts/events` cannot light an `Events` tab. Old
+    // addresses redirect (`MovedTo`, which keeps the query string).
+    //
+    // ⚠️ The name does not cover flow, which also arrives on its own and which Forwarding also
+    // relays. It fits today's screens — there is no flow LIST, only the node's Flow tab and the
+    // widgets — and it is chosen knowing that building one is the moment to revisit the name.
+    key: 'events',
+    labelKey: 'sections.events',
+    path: '/events',
+    groups: [
+      {
+        items: [
+          {
+            labelKey: 'events.all',
+            descKey: 'descriptions.eventsAll',
+            path: '/events',
+            implemented: true,
+            mono: 'Ev',
+          },
+          {
+            labelKey: 'events.webhooks',
+            descKey: 'descriptions.eventsWebhooks',
+            path: '/events/webhooks',
+            implemented: true,
+            mono: 'Wh',
+          },
+          {
+            labelKey: 'events.forwarding',
+            descKey: 'descriptions.eventsForwarding',
+            path: '/events/forwarding',
+            implemented: true,
+            mono: 'Fw',
           },
         ],
       },
@@ -252,13 +300,6 @@ export const NAV: NavSection[] = [
             mono: 'Po',
           },
           {
-            labelKey: 'settings.forwarding',
-            descKey: 'descriptions.settingsForwarding',
-            path: '/settings/forwarding',
-            implemented: true,
-            mono: 'Fw',
-          },
-          {
             labelKey: 'settings.integrations',
             path: '/settings/integrations',
             implemented: true,
@@ -300,15 +341,10 @@ export const NAV: NavSection[] = [
         ],
       },
       {
+        // Who may sign in to Yagra and what they may do. Device credentials are NOT this — they
+        // moved to Nodes ▸ Monitoring setup (ADR-055 決定 4).
         labelKey: 'groups.access',
         items: [
-          {
-            labelKey: 'settings.credentials',
-            descKey: 'descriptions.settingsCredentials',
-            path: '/settings/credentials',
-            implemented: true,
-            mono: 'Cr',
-          },
           { labelKey: 'settings.users', path: '/settings/users', implemented: true, mono: 'Us' },
           { labelKey: 'settings.roles', path: '/settings/roles', implemented: true, mono: 'Rl' },
           { labelKey: 'settings.auth', path: '/settings/auth', implemented: true, mono: 'Au' },

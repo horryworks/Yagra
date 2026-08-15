@@ -656,8 +656,8 @@ export function ForwardingPage() {
   return (
     <div className="page-fill">
       <PageHeader
-        title={t('nav:settings.forwarding')}
-        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.forwarding') }]}
+        title={t('nav:events.forwarding')}
+        trail={[{ label: t('nav:sections.events') }, { label: t('nav:events.forwarding') }]}
         note={t('note')}
       />
 

@@ -253,7 +253,7 @@ export function DiscoveryPage() {
               <Trans
                 t={t}
                 i18nKey="discovery.credsLink"
-                components={{ lnk: <Link to="/settings/credentials" /> }}
+                components={{ lnk: <Link to="/nodes/credentials" /> }}
               />
             </p>
           </>

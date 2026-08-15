@@ -41,7 +41,7 @@ polling**. Users access it through the WebUI.
 > with offline **IP→ASN enrichment** naming the autonomous systems behind the traffic; incoming
 > **SNMP traps are decoded to human-readable names** with built-in trap rules. Every
 > binary exports **OpenTelemetry traces** (opt-in) and now reports **host-resource trends** (CPU /
-> load / memory / disk) for the core and each poller in System Health, and shuts down gracefully on
+> load / memory / disk) for the core and each poller in Yagra health, and shuts down gracefully on
 > restart. The WebUI switches between **English and 日本語** on the fly across most screens, and
 > **SNMPv3** nodes collect per-interface metrics via a GETBULK table walk. Users can now sign in with
 > **single sign-on (OpenID Connect)** alongside local accounts, and the **core runs highly
@@ -64,7 +64,7 @@ polling**. Users access it through the WebUI.
 > the same walks surface **hosts on your network that nothing is monitoring**. Yagra now also
 > **watches its own coverage**: a poller pool that still has nodes but no live poller raises a
 > critical alert, instead of letting a whole site drift quietly to *unknown* while every dashboard
-> stays calm. For deployments nobody can open a shell on, Settings ▸ System Health produces a
+> stays calm. For deployments nobody can open a shell on, Settings ▸ Yagra health produces a
 > **downloadable support bundle** — health sections, applied migrations, the allow-listed
 > environment and core's own rotated logs, scanned for secrets before it is written. And the **LLM
 > root-cause explanation now investigates rather than guesses**, calling the read-only MCP tools
@@ -140,10 +140,10 @@ API v2) and Jira Service Management (Alerts API) with native fire/resolve lifecy
   poller and forwarded to core over the bus. Enable per site via `YAGRA_SYSLOG_BIND` /
   `YAGRA_TRAP_BIND` (see `docker-compose.yml`). **SNMPv3 traps are not supported yet.**
 - **Webhooks** are received on the core API: `POST /api/v1/ingest/webhook/<source-id>`
-  with a per-source bearer token (create sources under *Alerts ▸ Event sources*).
-- Rules (*Alerts ▸ Event rules*) assign severity, an auto-close TTL, an optional
+  with a per-source bearer token (create sources under *Events ▸ Webhook sources*).
+- Rules (*Alerts ▸ Event alert rules*) assign severity, an auto-close TTL, an optional
   clear-pattern (e.g. link-up clears link-down), and a fire threshold (N events in M
-  seconds). Received events are browsable under *Alerts ▸ Events*.
+  seconds). Received events are browsable under *Events ▸ Events*.
 
 > **Deployment notes:** event→node correlation uses the datagram **source IP** — if
 > Docker's bridge networking rewrites it on your host, run the poller with
@@ -203,7 +203,7 @@ client and is revocable from the same page.)
 
 The same kind of token also authenticates the **REST API** — tick **REST API** as well, or issue a
 separate token for it. Leaving an assistant's token to MCP alone is the point of that field. For
-unattended use, set the token's owner to a **service account** (Settings ▸ Users & roles → account
+unattended use, set the token's owner to a **service account** (Settings ▸ Users → account
 type *Service account*): it has no password and cannot sign in, so the credential outlives whoever
 created it, and disabling that one account stops every token it owns.
 

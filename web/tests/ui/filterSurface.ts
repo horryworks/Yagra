@@ -207,7 +207,7 @@ export const MUST_FILTER: Record<string, string> = {
   '/nodes/mib': 'a server-side filter row: typing has to reach the request',
   '/nodes/profiles': 'the last hand-rolled row (a grouped `.ytable`, not a `.dt`) — Inc.10',
   '/alerts': 'FilterBar over an SSE-fed list (Inc.6)',
-  '/alerts/events': 'the URL-backed filter row (Inc.2)',
+  '/events': 'the URL-backed filter row (Inc.2)',
   '/alerts/history': 'server-side, and the one that shipped never reaching the request',
   '/settings/users': 'the identity list — FilterBar, not a row',
   '/settings/audit': 'server-side filter row',

@@ -83,7 +83,7 @@ export function EventsTab({ node }: { node: NodeDetail }) {
   return (
     <div className="nd-ev">
       <div className="nd-ev-head">
-        <Link className="nd-ev-open" to={`/alerts/events?node_id=${encodeURIComponent(node.id)}`}>
+        <Link className="nd-ev-open" to={`/events?node_id=${encodeURIComponent(node.id)}`}>
           {t('eventLog.openInEvents')} →
         </Link>
       </div>

@@ -22,7 +22,8 @@ describe('nav IA', () => {
     expect(sectionForPath('/nodes/profiles').key).toBe('nodes');
     expect(sectionForPath('/nodes/abc-123').key).toBe('nodes'); // node detail
     expect(sectionForPath('/alerts/rules').key).toBe('alerts');
-    expect(sectionForPath('/settings/credentials').key).toBe('settings');
+    expect(sectionForPath('/nodes/credentials').key).toBe('nodes');
+    expect(sectionForPath('/events/webhooks').key).toBe('events');
     expect(sectionForPath('/topology/map').key).toBe('topology');
     expect(sectionForPath('/dashboard/reports').key).toBe('dashboard'); // Reports moved here from Metrics
   });
@@ -36,6 +37,30 @@ describe('nav IA', () => {
     // The route redirects to /topology/dependency, but the path must still resolve to a section
     // so nothing off-nav lights the wrong tab in transit.
     expect(sectionForPath('/nodes/dependencies').key).toBe('nodes');
+  });
+
+  it('resolves every address ADR-055 vacated, so nothing lights a wrong tab in transit', () => {
+    // These four redirect (`MovedTo` in routes.tsx). They still have to resolve to *a* section:
+    // `sectionForPath` falls back to NAV[0] otherwise, so an old bookmark would flash Dashboard
+    // before landing. The old owner is the right answer here — it is where the URL still says it is.
+    expect(sectionForPath('/alerts/events').key).toBe('alerts');
+    expect(sectionForPath('/alerts/event-sources').key).toBe('alerts');
+    expect(sectionForPath('/settings/forwarding').key).toBe('settings');
+    expect(sectionForPath('/settings/credentials').key).toBe('settings');
+  });
+
+  it('gives passive monitoring one tab, and puts every one of its screens under it', () => {
+    // ADR-055 決定 2. The reason the URLs moved at all: `sectionForPath` matches on
+    // `'/' + section.key`, so a screen left at `/alerts/events` could not light this tab.
+    const events = NAV.find((s) => s.key === 'events')!;
+    expect(sectionItems(events).map((i) => i.path)).toEqual([
+      '/events',
+      '/events/webhooks',
+      '/events/forwarding',
+    ]);
+    for (const item of sectionItems(events)) {
+      expect(sectionForPath(item.path).key).toBe('events');
+    }
   });
 
   it('falls back to the first section for unknown paths', () => {
@@ -79,6 +104,7 @@ describe('nav IA', () => {
     const nodes = NAV.find((s) => s.key === 'nodes')!;
     const setup = nodes.groups.find((g) => g.labelKey === 'groups.monitoringConfig')!;
     expect(setup.items.map((i) => i.path)).toEqual([
+      '/nodes/credentials',
       '/nodes/mib',
       '/nodes/collection-templates',
       '/nodes/profiles',

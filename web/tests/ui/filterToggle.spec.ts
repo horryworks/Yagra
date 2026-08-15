@@ -99,7 +99,7 @@ test.describe('while a filter is narrowing the list', () => {
   test('the row is forced open and the toggle refuses to close it', async ({ page }) => {
     // Events, because its filters live in the URL — which is how the row gets forced open for
     // someone who was *sent* a link rather than having set the filter themselves.
-    await page.goto('/alerts/events');
+    await page.goto('/events');
     await expect(toggle(page)).toBeVisible({ timeout: 15_000 });
     await toggle(page).click();
 

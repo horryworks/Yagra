@@ -4,6 +4,7 @@
     "nodes": "Nodes",
     "topology": "Topology",
     "alerts": "Alerts",
+    "events": "Events",
     "troubleshoot": "Troubleshoot",
     "settings": "Settings"
   },
@@ -18,7 +19,8 @@
     "profiles": "Device profiles",
     "classificationRules": "Classification rules",
     "metricSets": "Metric sets",
-    "mib": "MIB repository"
+    "mib": "MIB repository",
+    "credentials": "Credentials & secrets"
   },
   "topology": {
     "map": "Network map",
@@ -30,11 +32,14 @@
     "history": "History",
     "rules": "Metric alert rules",
     "routing": "Notification routing",
-    "events": "Events",
     "eventRules": "Event alert rules",
-    "eventSources": "Event sources",
     "maintenance": "Maintenance windows",
     "mutes": "Mutes"
+  },
+  "events": {
+    "all": "Events",
+    "webhooks": "Webhook sources",
+    "forwarding": "Forwarding"
   },
   "troubleshoot": {
     "all": "Tools",
@@ -45,11 +50,9 @@
   "settings": {
     "systemHealth": "Yagra health",
     "pollers": "Pollers",
-    "forwarding": "Forwarding",
     "integrations": "Integrations",
     "ai": "AI analysis",
     "tls": "TLS certificate",
-    "credentials": "Credentials & secrets",
     "users": "Users",
     "roles": "Roles & privileges",
     "auth": "Authentication",
@@ -76,10 +79,13 @@
     "nodesClassificationRules": "Auto-assign profiles and folders to discovered nodes",
     "nodesMetricSets": "Named metric bundles (OID → metric) that device profiles attach",
     "nodesMib": "Upload MIB files to resolve OIDs into named metrics",
+    "nodesCredentials": "Credentials Yagra uses to reach monitored devices — SNMP and API. Encrypted at rest.",
     "alertsRules": "Active monitoring — thresholds on the metrics Yagra polls. Overrides run profile → group → node.",
     "alertsRouting": "Channels and rules that deliver alert notifications",
     "alertsEventRules": "Passive monitoring — patterns matched against the events on the Events tab.",
-    "alertsEventSources": "Syslog and SNMP trap listeners",
+    "eventsAll": "Passive monitoring — syslog, SNMP traps and webhook events that arrive on their own.",
+    "eventsWebhooks": "Senders authorized to POST events to Yagra over HTTP",
+    "eventsForwarding": "Relay received syslog and traps to external collectors",
     "alertsMaintenance": "Planned work — node enters maintenance, excluded from SLA",
     "alertsMutes": "Silence notifications only — state and SLA unaffected",
     "topologyMap": "The connectivity graph Yagra derived from CDP/LLDP and shared subnets",
@@ -89,9 +95,7 @@
     "troubleshootScheduled": "Analyses that run on their own, on a preset cadence",
     "settingsSystemHealth": "Whether Yagra itself is healthy — the poll loop, its stores, and host resources",
     "settingsSystem": "Fleet-wide monitoring defaults, neighbor discovery, and how long each store keeps data",
-    "settingsCredentials": "SNMP and API credentials, encrypted at rest",
     "settingsPollers": "Distributed poller fleet status",
-    "settingsForwarding": "Relay received syslog and traps to external collectors",
     "settingsApiTokens": "Long-lived tokens for AI/MCP and API clients",
     "settingsAi": "The language model that writes incident explanations",
     "settingsConfigBundle": "Export or import the monitoring configuration as a portable file",

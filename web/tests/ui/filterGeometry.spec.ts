@@ -67,7 +67,7 @@ test.describe('the toolbar the filter button sits in', () => {
   test('the filter buttons are the same height as the controls beside them', async ({ page }) => {
     // `message` is the Message column's key, and the column key *is* the URL key (ADR-053 decision
     // 12 refuses a prefix). `msg` is the API's parameter name and does not appear in a URL.
-    await page.goto('/alerts/events?message=router');
+    await page.goto('/events?message=router');
     const picker = page.locator('.nodepick-control.field');
     const button = page.locator('.mfilt-btn').first();
     const clear = page.getByRole('button', { name: /Clear all filters/ });

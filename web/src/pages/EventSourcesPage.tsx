@@ -139,7 +139,7 @@ export function EventSourcesPage() {
 
   return (
     <div>
-      <PageHeader title={t('nav:alerts.eventSources')} note={t('eventSources.note')} />
+      <PageHeader title={t('nav:events.webhooks')} note={t('eventSources.note')} />
       {unavailable ? (
         <Card>{t('eventSources.unavailable')}</Card>
       ) : (

@@ -4,6 +4,7 @@
     "nodes": "ノード",
     "topology": "トポロジ",
     "alerts": "アラート",
+    "events": "イベント",
     "troubleshoot": "トラブルシュート",
     "settings": "設定"
   },
@@ -18,7 +19,8 @@
     "profiles": "デバイスプロファイル",
     "classificationRules": "分類ルール",
     "metricSets": "メトリクスセット",
-    "mib": "MIB リポジトリ"
+    "mib": "MIB リポジトリ",
+    "credentials": "認証情報とシークレット"
   },
   "topology": {
     "map": "ネットワークマップ",
@@ -30,11 +32,14 @@
     "history": "履歴",
     "rules": "メトリクスのアラートルール",
     "routing": "通知ルーティング",
-    "events": "イベント",
     "eventRules": "イベントのアラートルール",
-    "eventSources": "イベントソース",
     "maintenance": "メンテナンスウィンドウ",
     "mutes": "ミュート"
+  },
+  "events": {
+    "all": "イベント",
+    "webhooks": "Webhook 送信元",
+    "forwarding": "転送"
   },
   "troubleshoot": {
     "all": "診断ツール",
@@ -45,11 +50,9 @@
   "settings": {
     "systemHealth": "Yagra ヘルス",
     "pollers": "ポーラー",
-    "forwarding": "転送",
     "integrations": "連携",
     "ai": "AI 分析",
     "tls": "TLS 証明書",
-    "credentials": "認証情報とシークレット",
     "users": "ユーザー",
     "roles": "ロールと権限",
     "auth": "認証",
@@ -76,10 +79,13 @@
     "nodesClassificationRules": "検出したノードにプロファイルとフォルダを自動で割り当てるルール",
     "nodesMetricSets": "デバイスプロファイルに取り付ける、名前付きのメトリクスの束（OID → メトリクス）",
     "nodesMib": "MIB ファイルを取り込んで、OID を名前付きメトリクスに変換",
+    "nodesCredentials": "監視対象の機器に接続するための認証情報（SNMP・API）。保存時に暗号化されます",
     "alertsRules": "能動監視 — ポーリングで集めた値のしきい値。上書きは プロファイル → グループ → ノード の順",
     "alertsRouting": "アラート通知を届けるチャネルと配信ルール",
     "alertsEventRules": "受動監視 — Events タブに届いたイベントに対する一致条件",
-    "alertsEventSources": "syslog と SNMP トラップの受信口",
+    "eventsAll": "受動監視 — 自分から取りに行かず届く syslog・SNMP トラップ・webhook",
+    "eventsWebhooks": "HTTP でイベントを送ってくる、許可済みの送信元",
+    "eventsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
     "alertsMaintenance": "計画作業 — ノードをメンテナンス状態にして SLA から除外",
     "alertsMutes": "通知だけを止める — 状態と SLA はそのまま",
     "topologyMap": "CDP/LLDP と同一サブネットから自動で導いた接続グラフ",
@@ -89,9 +95,7 @@
     "troubleshootScheduled": "決めた周期で自動的に走る分析",
     "settingsSystemHealth": "Yagra 自身が健康か — ポーリングループ・各ストア・ホストの資源",
     "settingsSystem": "フリート全体の監視既定値・隣接探索・各ストアの保持期間",
-    "settingsCredentials": "SNMP と API の認証情報（暗号化して保存）",
     "settingsPollers": "分散ポーラーの稼働状況",
-    "settingsForwarding": "受信した syslog・トラップを外部コレクタへ中継",
     "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン",
     "settingsAi": "障害の説明文を書かせる言語モデルの設定",
     "settingsConfigBundle": "監視設定を可搬なファイルとして書き出し・取り込み",

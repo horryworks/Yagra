@@ -610,8 +610,8 @@ export function CredentialsPage() {
   return (
     <div>
       <PageHeader
-        title={t('nav:settings.credentials')}
-        trail={[{ label: t('nav:sections.settings') }, { label: t('nav:settings.credentials') }]}
+        title={t('nav:nodes.credentials')}
+        trail={[{ label: t('nav:sections.nodes') }, { label: t('nav:nodes.credentials') }]}
         note={t('cred.note')}
       />
 

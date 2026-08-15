@@ -19,6 +19,7 @@ import { lazy, Suspense } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AppShell } from './components/shell/AppShell';
+import { MovedTo } from './components/shell/MovedTo';
 import { LoginPage } from './pages/LoginPage';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
 import { MyDashboardPage } from './dashboard/MyDashboardPage';
@@ -43,6 +44,19 @@ import { MutesPage } from './pages/MutesPage';
 const TopologyRoutes = lazy(() => import('./routeGroups/topology'));
 const TroubleshootRoutes = lazy(() => import('./routeGroups/troubleshoot'));
 const SettingsRoutes = lazy(() => import('./routeGroups/settings'));
+const EventsRoutes = lazy(() => import('./routeGroups/events'));
+
+/** Credentials, lazily — a group of one, and the only per-PAGE split here.
+ *
+ *  ADR-055 moved it out of Settings and into Nodes, where it belongs by subject (they are keys for
+ *  reaching devices, not for signing in to Yagra). Nodes has no lazy group, and the reason the rest
+ *  of the split is per-group — a group stays mounted so moving between its screens never re-suspends
+ *  — has nothing to say about a screen with no siblings. It stays lazy because it is 685 lines of
+ *  configuration form on a tab an operator otherwise opens all day: changing which tab owns it is
+ *  no reason to grow the initial chunk. */
+const CredentialsPage = lazy(() =>
+  import('./pages/CredentialsPage').then((m) => ({ default: m.CredentialsPage })),
+);
 
 /** Layout route for the lazy groups: holds the one Suspense boundary, inside the AppShell so the
  *  top bar and sidebar stay put while a group's chunk arrives. The fallback is the app's existing
@@ -89,11 +103,24 @@ export function AppRoutes() {
         <Route path="alerts/history" element={<HistoryPage />} />
         <Route path="alerts/rules" element={<ThresholdsPage />} />
         <Route path="alerts/routing" element={<RoutingPage />} />
-        <Route path="alerts/events" element={<EventsPage />} />
         <Route path="alerts/event-rules" element={<EventRulesPage />} />
-        <Route path="alerts/event-sources" element={<EventSourcesPage />} />
         <Route path="alerts/maintenance" element={<MaintenancePage />} />
         <Route path="alerts/mutes" element={<MutesPage />} />
+
+        {/* Events (ADR-055 Inc.2). The log itself and the webhook list stay statically imported —
+            the log is on an operator's daily path, and both already were. Forwarding is the one
+            configuration-weight screen here (774 lines) and is lazy in the group below, exactly as
+            it was under Settings; moving tabs is no reason to grow the initial chunk. */}
+        <Route path="events" element={<EventsPage />} />
+        <Route path="events/webhooks" element={<EventSourcesPage />} />
+
+        {/* Where those four screens used to live. `MovedTo` rather than `Navigate` because
+            `/alerts/events?node_id=…` is a real link (the node's Events tab emits it) and a bare
+            redirect drops the query, landing on every node's events with nothing to show for it. */}
+        <Route path="alerts/events" element={<MovedTo to="/events" />} />
+        <Route path="alerts/event-sources" element={<MovedTo to="/events/webhooks" />} />
+        <Route path="settings/forwarding" element={<MovedTo to="/events/forwarding" />} />
+        <Route path="settings/credentials" element={<MovedTo to="/nodes/credentials" />} />
 
         {/* Settings lands on System health (the first sidebar item). Kept here rather than inside
             the group so a bare `/settings` redirects without fetching the settings chunk — a
@@ -109,6 +136,10 @@ export function AppRoutes() {
           <Route path="topology/*" element={<TopologyRoutes />} />
           <Route path="troubleshoot/*" element={<TroubleshootRoutes />} />
           <Route path="settings/*" element={<SettingsRoutes />} />
+          {/* Events — only Forwarding is behind this; the two static `events` paths above outrank
+              the splat, the same way `settings` does. */}
+          <Route path="events/*" element={<EventsRoutes />} />
+          <Route path="nodes/credentials" element={<CredentialsPage />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/dashboard" replace />} />

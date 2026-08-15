@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Events (Alerts ▸ Events). Append-only log of received passive events (syslog / SNMP traps /
+// Events (Events ▸ Events). Append-only log of received passive events (syslog / SNMP traps /
 // webhooks), keyset-paged newest-first. The rule-authoring surface: browse what devices actually
 // send, then write rules against it.
 //
 // **Every filter lives in the URL** (ADR-053). It used to be one param (`node_id`) plus five pieces
 // of component state, so a link to "trap events mentioning BGP in the last week" could not be sent
 // to anyone. The column keys are the URL keys — see `lib/columnFilter.ts` for why there is no
-// prefix — and a filter at its default deletes its key, so a bare `/alerts/events` is always the
+// prefix — and a filter at its default deletes its key, so a bare `/events` is always the
 // default view. Fetch/paging, columns and the filter descriptors are shared with the NodeDetail
 // Events tab via components/EventLog. Empty in skeleton mode.
 
@@ -117,8 +117,8 @@ export function EventsPage() {
   return (
     <div className="page-fill">
       <PageHeader
-        title={t('nav:alerts.events')}
-        trail={[{ label: t('nav:sections.alerts') }, { label: t('nav:alerts.events') }]}
+        title={t('nav:events.all')}
+        trail={[{ label: t('nav:sections.events') }, { label: t('nav:events.all') }]}
         note={t('events.note')}
       />
       {/* The answer to "where do I point my devices". It lives on this screen rather than beside

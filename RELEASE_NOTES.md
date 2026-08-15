@@ -11,6 +11,28 @@
 ## Unreleased
 
 ### Improvements
+- **Passive monitoring has its own top-level tab: `Events`.** Receiving and reading events were
+  under `Alerts` while relaying them was under `Settings ▸ Forwarding`, so nothing in the menu named
+  the pipeline as one thing. Four screens moved, and **every old address redirects, keeping its
+  query string** — a bookmarked `/alerts/events?node_id=…` still opens that node's events:
+
+  | Was | Is now |
+  |---|---|
+  | `Alerts ▸ Events` — `/alerts/events` | `Events ▸ Events` — `/events` |
+  | `Alerts ▸ Event sources` — `/alerts/event-sources` | `Events ▸ Webhook sources` — `/events/webhooks` |
+  | `Settings ▸ Forwarding` — `/settings/forwarding` | `Events ▸ Forwarding` — `/events/forwarding` |
+  | `Settings ▸ Credentials & secrets` — `/settings/credentials` | `Nodes ▸ Monitoring setup ▸ Credentials & secrets` — `/nodes/credentials` |
+
+  `Event alert rules` deliberately **stays under Alerts**: it produces alerts, and splitting the two
+  rule screens across two tabs would repeat the problem being fixed.
+- **`Event sources` is now `Webhook sources`, because that is all it manages.** Its description
+  claimed "Syslog and SNMP trap listeners" and the screen has only ever held webhook senders. The
+  question that description was really answering — *where do I send syslog?* — is now answered on
+  the Events page itself (see below).
+- **Credentials moved to Nodes because they are device keys, not sign-in.** They sat in
+  `Settings ▸ Access` beside Users, Roles and Authentication, which is how a *person* signs in to
+  Yagra. ⚠️ The page still requires **ManageCredentials**, so on a Viewer account the entry is now
+  visible-but-forbidden inside Nodes where it was previously buried in Settings.
 - **Four menu items were renamed to say what they are.** `Alerts ▸ Alert rules` is now **Metric
   alert rules** and `Alerts ▸ Event rules` is now **Event alert rules** — both produce alerts, and
   the old pair named one by its output and the other by its input, so neither said what kind of

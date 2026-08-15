@@ -109,7 +109,7 @@ export const NODE_DETAIL_TAB_META: Record<NodeDetailTab, NodeDetailTabMeta> = {
   // address_map is built with `or_insert` — first row wins — and a URL monitor's `address` is its
   // *target's* resolved IP. A monitor can therefore shadow a real inventory device and be
   // attributed its syslog/traps. Hiding Events here hides the symptom of that misattribution too;
-  // the events themselves stay reachable at /alerts/events?node_id=<id>.
+  // the events themselves stay reachable at /events?node_id=<id>.
   events: { labelKey: 'tabs.events', kinds: ['device', 'meraki'] },
   flow: { labelKey: 'tabs.flow', kinds: DEVICE_ONLY },
 };

@@ -110,7 +110,7 @@ export function EventFeedActions({ instance, setSettings }: WidgetProps) {
         <option value="trap">{t('widgets.eventFeed.trap')}</option>
         <option value="webhook">{t('widgets.eventFeed.webhook')}</option>
       </Select>
-      <Button variant="ghost" onClick={() => navigate('/alerts/events')}>
+      <Button variant="ghost" onClick={() => navigate('/events')}>
         {t('widgets.eventFeed.viewAll')}
       </Button>
     </>
