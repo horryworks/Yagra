@@ -500,6 +500,12 @@ async fn audit_mw(State(st): State<ApiState>, req: Request, next: Next) -> Respo
 /// direct-manipulation gesture that emits a save per adjustment. Judge a new exception by what the
 /// rebuild reads, not by the HTTP verb.
 ///
+/// One shape is checked mechanically rather than left to that judgement:
+/// `every_read_shaped_write_route_is_exempt_from_the_dirty_signal` fails when a mutating route's
+/// handler demands only a *read* permission and the path is not listed here. It cannot see the
+/// entries that legitimately demand `ManageConfig` — a config **test** is still a read — so the
+/// judgement above remains the rule and the test is a floor under its most obvious violation.
+///
 /// They stay **audited**; only the dirty signal is suppressed.
 fn changes_monitoring_config(path: &str) -> bool {
     !(path.starts_with("/api/v1/analysis/")
@@ -526,7 +532,22 @@ fn changes_monitoring_config(path: &str) -> bool {
         // again for no reason, and only at fleet scale was it large enough to matter.
         || path == "/api/v1/preferences"
         || path == "/api/v1/dashboard"
-        || path == "/api/v1/shared-dashboard")
+        || path == "/api/v1/shared-dashboard"
+        // Resolving a batch of node ids to display names (`useEntityNames`). A `RequireView` read
+        // that is a POST only because the id list is too long for a query string — and it fires on
+        // **every** table that renders a node reference, which made it the largest source of
+        // spurious rebuilds in the product. Measured on the test server 2026-08-15: fourteen page
+        // reloads, no other write in the window, and the next scheduler sweep lost its cache.
+        || path == "/api/v1/node-names"
+        // The "test this before you save it" probes. Each compiles a pattern, opens an outbound
+        // connection, or asks a vendor API a question, and writes nothing — the same shape as
+        // `/notification-channels/preview` above, and pressed the same way: repeatedly, while
+        // someone iterates on a form. That one was exempt and these four were not, which is the
+        // drift `every_read_shaped_write_route_is_exempt_from_the_dirty_signal` now prevents.
+        || path == "/api/v1/event-rules/test"
+        || path == "/api/v1/llm/test"
+        || path == "/api/v1/settings/ldap/test"
+        || path == "/api/v1/meraki/orgs/discover")
 }
 
 /// Liveness probe for the deploy/orchestrator — no auth, no store access. Both the leader and HA
@@ -1487,6 +1508,99 @@ mod tests {
         // that has to argue for its own exemption rather than inheriting one.
         assert!(changes_monitoring_config("/api/v1/dashboards"));
         assert!(changes_monitoring_config("/api/v1/preferences/reset"));
+    }
+
+    /// A route registered with a mutating method whose handler asks only for a **read** permission
+    /// is by definition not a config write, so it must not dirty the generation.
+    ///
+    /// This is the one part of the exception list that can be mechanized. The judgement the doc
+    /// comment describes — "does the rebuild read what this writes?" — cannot be, because a config
+    /// *test* legitimately demands `ManageConfig` while writing nothing; those four had drifted out
+    /// of the list for exactly that reason and were only found by measuring a live deployment.
+    /// `POST /api/v1/node-names` is the case this test would have caught for free: a `RequireView`
+    /// batch id→name lookup that is a POST only because the id list is too long for a query string,
+    /// firing on every table that shows a node reference.
+    ///
+    /// Deliberately source-text and deliberately skip-on-unknown, in the same shape as
+    /// `openapi.rs::every_documented_body_is_the_type_its_handler_returns`: a handler whose guards
+    /// this cannot parse is skipped rather than failed, and the count is asserted so "the parser
+    /// stopped matching" cannot masquerade as "everything is exempt".
+    #[test]
+    fn every_read_shaped_write_route_is_exempt_from_the_dirty_signal() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
+        let mut examined = 0usize;
+        let mut offenders = Vec::new();
+
+        for entry in std::fs::read_dir(&dir).expect("read src/api") {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("read module");
+
+            for chunk in src.split(".route(").skip(1) {
+                let Some(route) = chunk.split('"').nth(1) else {
+                    continue;
+                };
+                // `audit_mw` never reaches these two families, so they are not this list's business.
+                if !route.starts_with("/api/v1/")
+                    || route.starts_with("/api/v1/auth/")
+                    || route.starts_with("/api/v1/ingest/")
+                {
+                    continue;
+                }
+                let head = &chunk[..chunk.len().min(400)];
+                for verb in ["post(", "put(", "delete(", "patch("] {
+                    let Some(handler) = head.split(verb).nth(1).and_then(|r| r.split(')').next())
+                    else {
+                        continue;
+                    };
+                    let handler = handler.trim();
+                    // The signature runs to the `{` that opens the body — the same cut
+                    // `openapi.rs` makes. Stopping at a newline instead would silently mis-read
+                    // every single-line signature (a third of them) by scanning into the body.
+                    let Some(sig) = src
+                        .split_once(&format!("async fn {handler}("))
+                        .and_then(|(_, s)| s.split_once('{'))
+                        .map(|(s, _)| s)
+                    else {
+                        continue; // handler lives in another module, or an unparsed shape
+                    };
+                    let mut guards: Vec<String> = sig
+                        .match_indices("Require")
+                        .map(|(i, _)| {
+                            sig[i..]
+                                .chars()
+                                .take_while(char::is_ascii_alphanumeric)
+                                .collect()
+                        })
+                        .collect();
+                    if sig.contains(": Caller") {
+                        guards.push("Caller".to_owned());
+                    }
+                    if guards.is_empty() {
+                        continue; // no permission guard at all — nothing to conclude
+                    }
+                    examined += 1;
+                    let read_only = guards.iter().all(|g| g == "RequireView" || g == "Caller");
+                    if read_only && changes_monitoring_config(route) {
+                        offenders.push(format!("{verb}…) {route} → {handler} {guards:?}"));
+                    }
+                }
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these mutating routes need only a read permission, so they write no config — add them \
+             to changes_monitoring_config's exception list: {offenders:#?}"
+        );
+        // A floor, not the exact count: new endpoints land here all the time, but a parser that
+        // silently stopped matching would report zero offenders out of zero routes and pass.
+        assert!(
+            examined >= 30,
+            "only examined {examined} mutating routes — the signature parser has probably drifted"
+        );
     }
 
     // ── AI-assisted RCA (ADR-029) ────────────────────────────────────────────

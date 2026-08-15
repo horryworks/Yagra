@@ -70,16 +70,30 @@
   the rest of that screen; it was previously offered to any signed-in account.
 
 ### Bug Fixes
-- **Saving a dashboard layout no longer makes the server re-resolve the whole fleet.** Every
-  successful write to `/api/v1` marks the monitoring configuration as changed, which is what tells
-  four background jobs their cached work is stale. Saving a dashboard did that too, although a
-  widget layout is not an input to any of them — so moving a widget cost the deployment a full node
-  scan, a per-node poll-spec rebuild with credential decryption, an alert-configuration reload, a
-  poller-coverage recount and, within five minutes, a topology re-derivation. Since a layout is
-  saved on every add, move, resize and setting change, one editing session repeated all of that
-  many times. Nothing failed and nothing was logged, because the recomputed answer was always
-  correct; the cost was only visible as CPU, and only at fleet scale. `PUT /api/v1/dashboard` and
-  `PUT /api/v1/shared-dashboard` are now exempt, as `PUT /api/v1/preferences` already was.
+- **Reading a page no longer makes the server re-resolve the whole fleet.** Every successful write
+  to `/api/v1` marks the monitoring configuration as changed, which is what tells four background
+  jobs their cached work is stale. Seven endpoints that change no configuration were doing that,
+  the worst by a wide margin being `POST /api/v1/node-names` — the batch id→name lookup every table
+  showing a node reference calls on **each render**. So merely opening or reloading a page cost the
+  deployment a full node scan, a per-node poll-spec rebuild with credential decryption, an
+  alert-configuration reload, a poller-coverage recount and, within five minutes, a topology
+  re-derivation. Nothing failed and nothing was logged, because the recomputed answer was always
+  correct; the cost was visible only as CPU, and only at fleet scale. Now exempt:
+  - `POST /api/v1/node-names` — resolves ids to display names; a `POST` only because the id list is
+    too long for a query string.
+  - `PUT /api/v1/dashboard` and `PUT /api/v1/shared-dashboard` — a widget layout is presentation
+    state, and it is saved on every add, move, resize and setting change, so one editing session
+    repeated all of the above many times over.
+  - `POST /api/v1/event-rules/test`, `POST /api/v1/llm/test`,
+    `POST /api/v1/settings/ldap/test` and `POST /api/v1/meraki/orgs/discover` — the
+    "test this before you save it" probes, pressed repeatedly while someone iterates on a form.
+    `POST /api/v1/notification-channels/preview` was already exempt for exactly this reason; these
+    four had drifted out of the list.
+
+  A test now fails the build when a route registered with a mutating method has a handler that
+  demands only a read permission and is not exempt — which is the shape `node-names` had. It
+  cannot cover the four config-test probes, because a test that writes nothing still legitimately
+  requires the *Manage monitoring* privilege; those were found by measuring a running deployment.
 - **The node tree's right-click menu is back for operators.** The previous release gated the whole
   context menu on the permission its *strictest* entry needs, so an account that could open a
   maintenance window or mute a node — the two entries in that menu that are not administration —
