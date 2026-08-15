@@ -17,6 +17,20 @@
 
 import type { AnalysisToolKey } from '../types/api';
 
+/**
+ * What a tool reads, and therefore which cluster it belongs to on the catalog.
+ *
+ * A runtime array so `i18nEnumKeys.test.ts` can demand a label in both locales — EN/JA parity
+ * proves the two agree, never that either is complete, so a group added without strings would be
+ * missing from both and render as a raw key.
+ *
+ * ⚠️ NOT `Method`, which is close enough to be tempting and wrong: that is the *technique*
+ * (six values — stat, ml, topo, probe, passive, flow) and it cuts across these. `saturation`
+ * reads metrics and flow together and is `stat`; `rule_gap` is `passive` by both, coincidentally.
+ */
+export const TOOL_GROUPS = ['metrics', 'passive', 'flow', 'cross'] as const;
+export type ToolGroup = (typeof TOOL_GROUPS)[number];
+
 /** Analysis technique behind a tool — colours it on the card (categorical, series palette). */
 export type Method = 'stat' | 'ml' | 'topo' | 'probe' | 'passive' | 'flow';
 
@@ -39,6 +53,8 @@ export const METHODS: Record<Method, MethodMeta> = {
 export interface Tool {
   /** Matches the backend tool key. */
   id: AnalysisToolKey;
+  /** Which cluster the catalog files it under. */
+  group: ToolGroup;
   /** Monospace monogram tile (2 chars). */
   mono: string;
   /** i18next key (troubleshoot ns) — resolve with `t()`. */
@@ -76,6 +92,7 @@ export const TERMINAL_JOB_STATES = ['failed', 'cancelled'] as const;
 export const TOOLS: Tool[] = [
   {
     id: 'anomaly',
+    group: 'metrics',
     mono: 'An',
     name: 'tools.anomaly.name',
     method: 'ml',
@@ -88,6 +105,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'correlation',
+    group: 'metrics',
     mono: 'Co',
     name: 'tools.correlation.name',
     method: 'stat',
@@ -100,6 +118,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'capacity',
+    group: 'metrics',
     mono: 'Cf',
     name: 'tools.capacity.name',
     method: 'stat',
@@ -112,6 +131,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'flap',
+    group: 'metrics',
     mono: 'Fl',
     name: 'tools.flap.name',
     method: 'stat',
@@ -125,6 +145,7 @@ export const TOOLS: Tool[] = [
   // ── Passive monitoring (events, ADR-024) ──
   {
     id: 'event_storm',
+    group: 'passive',
     mono: 'Es',
     name: 'tools.event_storm.name',
     method: 'passive',
@@ -137,6 +158,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'event_flap',
+    group: 'passive',
     mono: 'Ef',
     name: 'tools.event_flap.name',
     method: 'passive',
@@ -149,6 +171,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'severity_shift',
+    group: 'passive',
     mono: 'Sv',
     name: 'tools.severity_shift.name',
     method: 'passive',
@@ -161,6 +184,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'rule_gap',
+    group: 'passive',
     mono: 'Rg',
     name: 'tools.rule_gap.name',
     method: 'passive',
@@ -173,6 +197,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'auth_probe',
+    group: 'passive',
     mono: 'Au',
     name: 'tools.auth_probe.name',
     method: 'passive',
@@ -186,6 +211,7 @@ export const TOOLS: Tool[] = [
   // ── Flow monitoring (ClickHouse, ADR-031) ──
   {
     id: 'traffic_anomaly',
+    group: 'flow',
     mono: 'Ta',
     name: 'tools.traffic_anomaly.name',
     method: 'flow',
@@ -198,6 +224,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'talker_shift',
+    group: 'flow',
     mono: 'Ts',
     name: 'tools.talker_shift.name',
     method: 'flow',
@@ -210,6 +237,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'new_destination',
+    group: 'flow',
     mono: 'Nd',
     name: 'tools.new_destination.name',
     method: 'flow',
@@ -222,6 +250,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'flow_scan',
+    group: 'flow',
     mono: 'Sc',
     name: 'tools.flow_scan.name',
     method: 'flow',
@@ -235,6 +264,7 @@ export const TOOLS: Tool[] = [
   // ── Cross-store ──
   {
     id: 'saturation',
+    group: 'cross',
     mono: 'St',
     name: 'tools.saturation.name',
     method: 'flow',
@@ -247,6 +277,7 @@ export const TOOLS: Tool[] = [
   },
   {
     id: 'incident_correlate',
+    group: 'cross',
     mono: 'Ic',
     name: 'tools.incident_correlate.name',
     method: 'topo',

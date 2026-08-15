@@ -15,11 +15,14 @@
 //   4. **No `console.error`.**
 //   5. **No request the OpenAPI document does not describe.** A hand-rolled `fetch` that escaped
 //      the typed client, or a stale committed document, shows up here.
+//   6. **Its filter controls sit under their columns** (ADR-053) — see the note at the assertion.
+//   7. **It explains itself in one line, on screen** (ADR-055 R2). `NOTE_EXEMPT` in `screens.ts`
+//      holds the two screens that argue out of it, each with its reason.
 
 import { expect, test } from '../support/app';
 import { MOCK_PREFIX } from '../support/openapi';
 import { inspectFilterSurface, MUST_FILTER } from './filterSurface';
-import { ALL_SCREENS, SCREEN_EXPECT, type Expect } from './screens';
+import { ALL_SCREENS, NOTE_EXEMPT, SCREEN_EXPECT, type Expect } from './screens';
 
 /** How long a screen gets to show its data. Generous: the settings group lazy-loads a chunk. */
 const RENDER_TIMEOUT = 15_000;
@@ -118,6 +121,22 @@ for (const screen of ALL_SCREENS) {
       expect(
         await page.locator('.dt-f-trigger').count(),
         `${screen.path} has no filter control — ${MUST_FILTER[screen.path]}`,
+      ).toBeGreaterThan(0);
+    }
+
+    // 7. **It says what it is, without being hovered** (ADR-055 G1 / R2). One line under the title,
+    //    on every screen, and `NOTE_EXEMPT` is where a screen argues it should not have one. Free
+    //    here for the same reason as check 6 — the page is open and settled — and it catches the
+    //    thing nothing else can: a new screen that ships explaining itself nowhere. Four screens
+    //    were in that state when this was written, including the product's own landing page.
+    if (!NOTE_EXEMPT[screen.path]) {
+      const note = page.locator('.pageheader-note');
+      await expect(note, `${screen.path} has no one-line description under its title`).toHaveCount(
+        1,
+      );
+      expect(
+        (await note.innerText()).trim().length,
+        `${screen.path}: its description is empty`,
       ).toBeGreaterThan(0);
     }
   });

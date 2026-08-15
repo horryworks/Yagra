@@ -7,7 +7,7 @@
 
 import { useTranslation } from 'react-i18next';
 import { PageHeader } from '../components/ui/PageHeader';
-import { TOOLS } from './data';
+import { TOOLS, TOOL_GROUPS } from './data';
 import { runningCount, useTroubleshootStore } from './store';
 import { ToolCard } from './ToolCard';
 import { LaunchDrawer } from './LaunchDrawer';
@@ -53,11 +53,22 @@ export function TroubleshootCatalogPage() {
         <h2>{t('catalog.toolsHeading')}</h2>
         <span>{t('catalog.toolsSub')}</span>
       </div>
-      <div className="ts-tool-grid">
-        {TOOLS.map((t) => (
-          <ToolCard key={t.id} tool={t} />
-        ))}
-      </div>
+      {/* Grouped by what each tool reads, not flat (ADR-055 Inc.5 / R7). Fifteen cards in one grid
+          is a wall an operator has to read end to end to find the one for the question they have;
+          four clusters of two to five is a decision they can make from the headings. The design
+          system has described the catalog in exactly these four groups since ADR-022 — the screen
+          simply never showed them. Iterating TOOL_GROUPS rather than the tools means a new group
+          appears here the moment it exists. */}
+      {TOOL_GROUPS.map((group) => (
+        <div key={group}>
+          <h3 className="ts-group-head">{t(`catalog.group.${group}`)}</h3>
+          <div className="ts-tool-grid">
+            {TOOLS.filter((tool) => tool.group === group).map((tool) => (
+              <ToolCard key={tool.id} tool={tool} />
+            ))}
+          </div>
+        </div>
+      ))}
 
       <LaunchDrawer />
     </div>

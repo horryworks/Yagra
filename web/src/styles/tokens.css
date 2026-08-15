@@ -112,7 +112,10 @@
   --row-h: 30px;
   --topbar-h: 52px;
   --sidebar-w: 220px;
-  --sidebar-w-collapsed: 52px;
+  /* Wide enough for a wrapped two-line label, because the collapsed rail shows the real item name
+     now rather than a two-letter monogram (ADR-055 R4). Collapsing therefore buys 100px instead of
+     168px — the trade taken deliberately, since a rail nobody can read saves nothing. */
+  --sidebar-w-collapsed: 120px;
   --transition: 0.15s ease;
 
   /* ---- responsive / mobile (ADR-027; ui-conventions.md "Responsive / mobile") ----

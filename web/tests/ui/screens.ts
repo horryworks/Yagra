@@ -48,6 +48,23 @@ export const EXTRA_SCREENS: Screen[] = [
 
 export const ALL_SCREENS: Screen[] = [...NAV_SCREENS, ...EXTRA_SCREENS];
 
+/**
+ * Screens that legitimately have no `.pageheader-note` — ADR-055 G1's exemption table.
+ *
+ * Two rows, and that number is the argument for the check existing at all: the ADR reserved the
+ * right to abandon G1 if the exemptions outgrew ten, on the grounds that maintaining an exception
+ * list is not the same as being protected. Measured before writing it, four screens rendered a
+ * `PageHeader` with no note (fixed in Inc.1) and two rendered no `PageHeader` at all — these.
+ *
+ * A reason here is not a formality. When one of these screens gains a normal header, its row is
+ * what tells the next person the exemption has expired.
+ */
+export const NOTE_EXEMPT: Record<string, string> = {
+  '/login': 'The sign-in form, outside the app shell. It has no page header and wants none.',
+  '/nodes/00000000-0000-4000-8000-000000000001':
+    'Node detail carries its own identity header (name, address, kind badges) instead of the shared one — the subject IS the explanation.',
+};
+
 export type Expect =
   /** A generated `ymock-` string is visible: the data reached the screen. The default. */
   | { kind: 'marker' }

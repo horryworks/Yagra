@@ -1,9 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Left sidebar (§2.1, decision 4): the selected section's sub-features, split into labeled groups
-// so read/monitor screens sit apart from configuration screens. Collapsible to an icon-only rail.
+// so read/monitor screens sit apart from configuration screens. Collapsible to a narrow rail.
 // Active item = accent (orange) left border + tertiary background. Items whose backend isn't built yet are
 // gathered into a trailing "Coming soon" group (dimmed, each marked with a small dot) so the IA
 // stays complete without cluttering the working items.
+//
+// COLLAPSED STILL READS (ADR-055 R4). The rail used to be 52px of two-letter monograms — `Ms`,
+// `Mb`, `Cl`, `Pr` — which are legible only to someone who already knows the menu, i.e. exactly the
+// person who does not need it. It is 120px now and shows the real label, wrapping to two lines;
+// `NavItem.mono` is gone rather than left unused. What collapsing buys drops from 168px to 100px,
+// and that is the trade: a rail nobody can read is not saving anything, it is just narrower.
+//
+// The group headers do go away when collapsed — a rule between groups says "these cluster" without
+// spending a line on a word that will not fit — but no *item* is ever reduced to a code.
 
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -52,22 +61,14 @@ export function SideBar() {
                 // `end` so the section-root item (e.g. /nodes) isn't kept active on children.
                 end={item.path === section.path || item.path.split('/').length <= 2}
                 className={({ isActive }) => (isActive ? 'sidebar-item active' : 'sidebar-item')}
-                title={
-                  item.descKey ? `${t(item.labelKey)} — ${t(item.descKey)}` : t(item.labelKey)
-                }
+                title={`${t(item.labelKey)} — ${t(item.descKey)}`}
               >
-                {collapsed ? (
-                  <span className="sidebar-mono">{item.mono}</span>
-                ) : (
-                  <>
-                    <span className="sidebar-label">{t(item.labelKey)}</span>
-                    {item.liveBadge === 'troubleshoot-runs' && runningRuns > 0 && (
-                      <span className="sidebar-count">{runningRuns}</span>
-                    )}
-                    {!item.implemented && (
-                      <span className="sidebar-soon" title={t('shell.notImplemented')} />
-                    )}
-                  </>
+                <span className="sidebar-label">{t(item.labelKey)}</span>
+                {item.liveBadge === 'troubleshoot-runs' && runningRuns > 0 && (
+                  <span className="sidebar-count">{runningRuns}</span>
+                )}
+                {!item.implemented && (
+                  <span className="sidebar-soon" title={t('shell.notImplemented')} />
                 )}
               </NavLink>
             ))}

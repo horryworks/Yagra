@@ -130,13 +130,25 @@
   flex: none;
 }
 
+/* Collapsed rail (ADR-055 R4). It shows the real label, wrapped to at most two lines, instead of
+   the two-letter monogram it used to — a code only helps someone who already knows the menu. The
+   fixed height goes with it: `Classification rules` needs two lines and a row that clips its own
+   second line would be the same failure in a new place. */
 .sidebar.collapsed .sidebar-item {
-  justify-content: center;
-  padding: 0;
+  height: auto;
+  min-height: var(--row-h);
+  padding: 6px 10px;
+  align-items: center;
 }
 
-.sidebar-mono {
-  font-size: var(--font-xs);
-  font-weight: var(--weight-medium);
-  font-family: var(--font-family);
+.sidebar.collapsed .sidebar-label {
+  white-space: normal;
+  overflow: hidden;
+  /* Two lines is enough for every label in the menu today, and the `title` carries the whole thing
+     plus its description if a future one overflows. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  font-size: var(--font-sm);
+  line-height: 1.3;
 }

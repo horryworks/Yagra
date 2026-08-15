@@ -8,7 +8,13 @@
       "avgRuntime": "avg runtime"
     },
     "toolsHeading": "Diagnostic tools",
-    "toolsSub": "Pick a tool, set its scope, and run it as a job."
+    "toolsSub": "Pick a tool, set its scope, and run it as a job.",
+    "group": {
+      "metrics": "Metrics",
+      "passive": "Passive events",
+      "flow": "Traffic flow",
+      "cross": "Across stores"
+    }
   },
   "runs": {
     "pageNote": "{{n}} running · background diagnostic jobs with live progress and results",

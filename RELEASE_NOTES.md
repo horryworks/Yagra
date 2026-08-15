@@ -59,6 +59,15 @@
   start typing to find that out.
 - **`Settings ▸ About` moved from the Personal group to the end of System.** It describes the
   deployment, not the account.
+- **A collapsed sidebar now shows the real item names instead of two-letter codes.** It was 52px of
+  `Ms`, `Mb`, `Cl`, `Pr` — legible only to someone who already knew the menu, which is precisely
+  the person who does not need it. The rail is 120px now and wraps the label over two lines, so
+  collapsing buys 100px of width instead of 168px. Group headings still disappear when collapsed;
+  no *item* is reduced to a code.
+- **Every menu item now has a one-line description.** Half of them had none — 21 of 42 — and the
+  missing half included the pairs most easily confused with each other.
+- **`Troubleshoot ▸ Tools` groups its fifteen analyses into Metrics, Passive events, Traffic flow
+  and Across stores**, instead of one flat wall of cards you had to read end to end.
 
 ## v0.2.8 — the filter row waits to be asked for
 

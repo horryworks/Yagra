@@ -92,7 +92,7 @@ import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
 import { RUN_STATUS } from './reports/runStatus';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
-import { TERMINAL_JOB_STATES } from './troubleshoot/data';
+import { TERMINAL_JOB_STATES, TOOL_GROUPS } from './troubleshoot/data';
 import { FINDING_RANGES } from './troubleshoot/findingsQuery';
 import { HTTP_AUTH_SCHEMES } from './pages/httpAuthCredential';
 import { BUNDLE_TABLES } from './pages/configBundle';
@@ -368,6 +368,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       { en: enTroubleshoot, ja: jaTroubleshoot },
       'runs.state.',
       TERMINAL_JOB_STATES,
+    );
+  });
+
+  it('every Troubleshoot tool group has a heading (troubleshoot:catalog.group.*)', () => {
+    // The catalog builds `catalog.group.${group}` while iterating TOOL_GROUPS (ADR-055 Inc.5), so a
+    // group added without strings renders its own key as a heading — and does so in BOTH locales,
+    // which is exactly what parity cannot see.
+    expectKeys(
+      'tool group',
+      { en: enTroubleshoot, ja: jaTroubleshoot },
+      'catalog.group.',
+      TOOL_GROUPS,
     );
   });
 

@@ -13,14 +13,21 @@
 export interface NavItem {
   /** i18n key into the `nav` namespace (e.g. 'nodes.all'). Resolved via `t()` at render. */
   labelKey: string;
-  /** Optional i18n key into `descriptions.*` — a one-line hover tooltip for non-obvious items. */
-  descKey?: string;
+  /**
+   * i18n key into `descriptions.*` — the one line under the label saying what the screen is for.
+   *
+   * **Required, and that is ADR-055's G2** (R3: every menu item explains itself). It was optional
+   * and half the menu had gone without: 21 of 42 items, and the missing half included the pairs
+   * most easily confused with each other. The ADR proposed a test asserting every item has one;
+   * a required field is the same guarantee enforced a step earlier and with no exemption list to
+   * maintain, which is what `extensibility.md` §1 says to prefer. `nav.test.ts` still checks the
+   * key *resolves*, because the compiler cannot know whether the string exists.
+   */
+  descKey: string;
   /** Absolute route path. */
   path: string;
   /** Has a real backend today. false ⇒ ComingSoon placeholder. */
   implemented: boolean;
-  /** Short monogram shown in the collapsed icon rail. */
-  mono: string;
   /** Optional live count badge keyed by a discriminator the SideBar resolves to a store value
    *  (e.g. 'troubleshoot-runs' ⇒ number of running analysis jobs). */
   liveBadge?: 'troubleshoot-runs';
@@ -49,9 +56,24 @@ export const NAV: NavSection[] = [
     groups: [
       {
         items: [
-          { labelKey: 'dashboard.shared', path: '/dashboard', implemented: true, mono: 'Sh' },
-          { labelKey: 'dashboard.my', path: '/dashboard/my', implemented: true, mono: 'My' },
-          { labelKey: 'dashboard.reports', path: '/dashboard/reports', implemented: true, mono: 'Rp' },
+          {
+            labelKey: 'dashboard.shared',
+            descKey: 'descriptions.dashboardShared',
+            path: '/dashboard',
+            implemented: true,
+          },
+          {
+            labelKey: 'dashboard.my',
+            descKey: 'descriptions.dashboardMy',
+            path: '/dashboard/my',
+            implemented: true,
+          },
+          {
+            labelKey: 'dashboard.reports',
+            descKey: 'descriptions.dashboardReports',
+            path: '/dashboard/reports',
+            implemented: true,
+          },
         ],
       },
     ],
@@ -64,8 +86,18 @@ export const NAV: NavSection[] = [
       {
         labelKey: 'groups.inventory',
         items: [
-          { labelKey: 'nodes.all', path: '/nodes', implemented: true, mono: 'Al' },
-          { labelKey: 'nodes.discovery', path: '/nodes/discovery', implemented: true, mono: 'Di' },
+          {
+            labelKey: 'nodes.all',
+            descKey: 'descriptions.nodesAll',
+            path: '/nodes',
+            implemented: true,
+          },
+          {
+            labelKey: 'nodes.discovery',
+            descKey: 'descriptions.nodesDiscovery',
+            path: '/nodes/discovery',
+            implemented: true,
+          },
         ],
       },
       {
@@ -85,35 +117,30 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.nodesCredentials',
             path: '/nodes/credentials',
             implemented: true,
-            mono: 'Cr',
           },
           {
             labelKey: 'nodes.mib',
             descKey: 'descriptions.nodesMib',
             path: '/nodes/mib',
             implemented: true,
-            mono: 'Mb',
           },
           {
             labelKey: 'nodes.metricSets',
             descKey: 'descriptions.nodesMetricSets',
             path: '/nodes/collection-templates',
             implemented: true,
-            mono: 'Ms',
           },
           {
             labelKey: 'nodes.profiles',
             descKey: 'descriptions.nodesProfiles',
             path: '/nodes/profiles',
             implemented: true,
-            mono: 'Pr',
           },
           {
             labelKey: 'nodes.classificationRules',
             descKey: 'descriptions.nodesClassificationRules',
             path: '/nodes/classification-rules',
             implemented: true,
-            mono: 'Cl',
           },
         ],
       },
@@ -131,16 +158,19 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.topologyMap',
             path: '/topology/map',
             implemented: true,
-            mono: 'Nm',
           },
           {
             labelKey: 'topology.dependency',
             descKey: 'descriptions.topologyDependency',
             path: '/topology/dependency',
             implemented: true,
-            mono: 'Dp',
           },
-          { labelKey: 'topology.geo', path: '/topology/geo', implemented: true, mono: 'Ge' },
+          {
+            labelKey: 'topology.geo',
+            descKey: 'descriptions.topologyGeo',
+            path: '/topology/geo',
+            implemented: true,
+          },
         ],
       },
     ],
@@ -153,8 +183,18 @@ export const NAV: NavSection[] = [
       {
         labelKey: 'groups.monitor',
         items: [
-          { labelKey: 'alerts.active', path: '/alerts', implemented: true, mono: 'Ac' },
-          { labelKey: 'alerts.history', path: '/alerts/history', implemented: true, mono: 'Hi' },
+          {
+            labelKey: 'alerts.active',
+            descKey: 'descriptions.alertsActive',
+            path: '/alerts',
+            implemented: true,
+          },
+          {
+            labelKey: 'alerts.history',
+            descKey: 'descriptions.alertsHistory',
+            path: '/alerts/history',
+            implemented: true,
+          },
         ],
       },
       {
@@ -165,14 +205,12 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.alertsRules',
             path: '/alerts/rules',
             implemented: true,
-            mono: 'Ru',
           },
           {
             labelKey: 'alerts.routing',
             descKey: 'descriptions.alertsRouting',
             path: '/alerts/routing',
             implemented: true,
-            mono: 'Nt',
           },
           // Event alert rules stays under Alerts, not Events. It is a thing that PRODUCES alerts,
           // and splitting the two rule screens across two tabs would be the same mistake this
@@ -182,21 +220,18 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.alertsEventRules',
             path: '/alerts/event-rules',
             implemented: true,
-            mono: 'Er',
           },
           {
             labelKey: 'alerts.maintenance',
             descKey: 'descriptions.alertsMaintenance',
             path: '/alerts/maintenance',
             implemented: true,
-            mono: 'Mw',
           },
           {
             labelKey: 'alerts.mutes',
             descKey: 'descriptions.alertsMutes',
             path: '/alerts/mutes',
             implemented: true,
-            mono: 'Mu',
           },
         ],
       },
@@ -223,21 +258,18 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.eventsAll',
             path: '/events',
             implemented: true,
-            mono: 'Ev',
           },
           {
             labelKey: 'events.webhooks',
             descKey: 'descriptions.eventsWebhooks',
             path: '/events/webhooks',
             implemented: true,
-            mono: 'Wh',
           },
           {
             labelKey: 'events.forwarding',
             descKey: 'descriptions.eventsForwarding',
             path: '/events/forwarding',
             implemented: true,
-            mono: 'Fw',
           },
         ],
       },
@@ -250,13 +282,17 @@ export const NAV: NavSection[] = [
     groups: [
       {
         items: [
-          { labelKey: 'troubleshoot.all', path: '/troubleshoot', implemented: true, mono: 'To' },
+          {
+            labelKey: 'troubleshoot.all',
+            descKey: 'descriptions.troubleshootAll',
+            path: '/troubleshoot',
+            implemented: true,
+          },
           {
             labelKey: 'troubleshoot.runs',
             descKey: 'descriptions.troubleshootRuns',
             path: '/troubleshoot/runs',
             implemented: true,
-            mono: 'Ar',
             liveBadge: 'troubleshoot-runs',
           },
           {
@@ -264,14 +300,12 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.troubleshootScheduled',
             path: '/troubleshoot/scheduled',
             implemented: true,
-            mono: 'Sc',
           },
           {
             labelKey: 'troubleshoot.findings',
             descKey: 'descriptions.troubleshootFindings',
             path: '/troubleshoot/findings',
             implemented: true,
-            mono: 'Sf',
           },
         ],
       },
@@ -290,54 +324,58 @@ export const NAV: NavSection[] = [
             descKey: 'descriptions.settingsSystemHealth',
             path: '/settings/system-health',
             implemented: true,
-            mono: 'Sh',
           },
           {
             labelKey: 'settings.pollers',
             descKey: 'descriptions.settingsPollers',
             path: '/settings/pollers',
             implemented: true,
-            mono: 'Po',
           },
           {
             labelKey: 'settings.integrations',
+            descKey: 'descriptions.settingsIntegrations',
             path: '/settings/integrations',
             implemented: true,
-            mono: 'In',
           },
           {
             labelKey: 'settings.ai',
             descKey: 'descriptions.settingsAi',
             path: '/settings/ai',
             implemented: true,
-            mono: 'Ai',
           },
           {
             labelKey: 'settings.system',
             descKey: 'descriptions.settingsSystem',
             path: '/settings/system',
             implemented: true,
-            mono: 'Sy',
           },
-          { labelKey: 'settings.tls', path: '/settings/tls', implemented: true, mono: 'Tl' },
+          {
+            labelKey: 'settings.tls',
+            descKey: 'descriptions.settingsTls',
+            path: '/settings/tls',
+            implemented: true,
+          },
           {
             labelKey: 'settings.configBundle',
             descKey: 'descriptions.settingsConfigBundle',
             path: '/settings/config-bundle',
             implemented: true,
-            mono: 'Cb',
           },
           {
             labelKey: 'settings.upgrade',
             descKey: 'descriptions.settingsUpgrade',
             path: '/settings/upgrade',
             implemented: true,
-            mono: 'Up',
           },
           // About sits at the end of System, not in Personal. It describes the deployment (build,
           // licence, links), which is the same subject as everything above it; `Personal` means
           // "settings that affect only me", and a version number is not one (ADR-055 決定 6).
-          { labelKey: 'settings.about', path: '/settings/about', implemented: true, mono: 'Ab' },
+          {
+            labelKey: 'settings.about',
+            descKey: 'descriptions.settingsAbout',
+            path: '/settings/about',
+            implemented: true,
+          },
         ],
       },
       {
@@ -345,17 +383,36 @@ export const NAV: NavSection[] = [
         // moved to Nodes ▸ Monitoring setup (ADR-055 決定 4).
         labelKey: 'groups.access',
         items: [
-          { labelKey: 'settings.users', path: '/settings/users', implemented: true, mono: 'Us' },
-          { labelKey: 'settings.roles', path: '/settings/roles', implemented: true, mono: 'Rl' },
-          { labelKey: 'settings.auth', path: '/settings/auth', implemented: true, mono: 'Au' },
+          {
+            labelKey: 'settings.users',
+            descKey: 'descriptions.settingsUsers',
+            path: '/settings/users',
+            implemented: true,
+          },
+          {
+            labelKey: 'settings.roles',
+            descKey: 'descriptions.settingsRoles',
+            path: '/settings/roles',
+            implemented: true,
+          },
+          {
+            labelKey: 'settings.auth',
+            descKey: 'descriptions.settingsAuth',
+            path: '/settings/auth',
+            implemented: true,
+          },
           {
             labelKey: 'settings.apiTokens',
             descKey: 'descriptions.settingsApiTokens',
             path: '/settings/api-tokens',
             implemented: true,
-            mono: 'Tk',
           },
-          { labelKey: 'settings.audit', path: '/settings/audit', implemented: true, mono: 'Ad' },
+          {
+            labelKey: 'settings.audit',
+            descKey: 'descriptions.settingsAudit',
+            path: '/settings/audit',
+            implemented: true,
+          },
         ],
       },
       {
@@ -367,9 +424,9 @@ export const NAV: NavSection[] = [
         items: [
           {
             labelKey: 'settings.preferences',
+            descKey: 'descriptions.settingsPreferences',
             path: '/settings/preferences',
             implemented: true,
-            mono: 'Pf',
           },
         ],
       },

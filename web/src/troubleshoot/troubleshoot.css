@@ -197,6 +197,18 @@
   color: var(--text-secondary);
 }
 
+/* Cluster heading inside the catalog (ADR-055 Inc.5). The same eyebrow treatment the sidebar gives
+   its groups — this is a divider between kinds of tool, not a second page title, so it must not
+   compete with the `ts-section-label` h2 above it. */
+.ts-group-head {
+  margin: 20px 0 10px;
+  font-size: var(--font-xs);
+  font-weight: var(--weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
 .ts-tool-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(330px, 1fr));
