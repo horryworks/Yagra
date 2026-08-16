@@ -45,6 +45,11 @@
   unknown, which also corrects `in_util_pct` / `out_util_pct` — utilisation had been computed
   against a rate no interface actually has. Affected ports show a blank speed until the device
   reports one; nothing else changes.
+  - **Ports already recorded that way are corrected on upgrade.** The interface upsert preserves a
+    stored value when a poll reports nothing for it — which is what lets the metadata walk and the
+    optical probe write different columns of one row — so the poller fix alone could not clean up
+    after itself. A one-time migration clears the sentinel. Only the exact saturation value is
+    touched; it is not a rate any interface has.
 
 - **The optical chart shows the transceiver's own acceptable power window.** A dBm figure on its own
   cannot be judged — -7 dBm is comfortable on one module and failing on another — so the module's

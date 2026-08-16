@@ -1,0 +1,31 @@
+-- 0086_clear_saturated_if_speed — retire the `ifSpeed` saturation sentinel already in the table.
+--
+-- ADR-063 decision 7 stopped the poller from STORING `u32::MAX` as though it were a speed. That fix
+-- alone does not clean up, and the reason is the upsert's COALESCE:
+--
+--     if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed)
+--
+-- which is exactly the property that lets the interface-metadata walk and the optical probe write
+-- disjoint columns of one row without clobbering each other (migrations 0084, 0085). The poller now
+-- sends NULL for these ports, and COALESCE faithfully keeps the old wrong number. **A row that is
+-- already wrong can never heal itself**, so the correction has to happen once, here.
+--
+-- Confirmed on the test server after shipping the poller fix: `10GE0/0/0` and `10GE0/0/1` still read
+-- 4294967295, i.e. a 10G port advertising itself as 4.29 Gbps, with `in_util_pct` computed against
+-- that same number.
+--
+-- Why matching the exact value is safe rather than a heuristic: 4294967295 is not a rate any
+-- interface has. It is `u32::MAX` — what a 32-bit `ifSpeed` gauge reports when the real rate exceeds
+-- what it can express, i.e. a "too big to say" marker. The nearest real Ethernet rates either side
+-- are 2.5 Gbps and 5 Gbps. Nothing legitimately reports 4.294967295 Gbps.
+--
+-- Ports whose device does publish a usable `ifHighSpeed` are re-populated on the next poll; the rest
+-- read "unknown", which is the truth. `ifHighSpeed` is only absent for links at/above the cap, so no
+-- interface below 4.29 Gbps is touched by this at all.
+--
+-- reversible: a one-time data correction, no schema change. An older core SELECTs `if_speed` by name
+-- and renders NULL as "no speed known" — the same thing it shows for any interface that never
+-- advertised a rate — so a rollback runs unchanged. What it loses on those ports is a bandwidth
+-- reference line that was drawn at the wrong value anyway.
+
+UPDATE interfaces SET if_speed = NULL WHERE if_speed = 4294967295;
