@@ -4348,6 +4348,7 @@ mod tests {
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
+            poller_logs: None,
         }
     }
 

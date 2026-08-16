@@ -99,6 +99,7 @@ mod topology_mode;
 mod topology_projection;
 // What this deployment is running and how far back it can be taken (ADR-050). Named apart from
 // `repo`, which *applies* migrations; this one reasons about what applying them cost.
+mod poller_logs;
 mod poller_upgrade;
 mod upgrade;
 mod url_check;
@@ -945,6 +946,27 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // been replaced — converges here rather than silently disagreeing with what was chosen.
     upgrade.publish_enabled(upgrade.enabled().await);
 
+    // Support-log retrieval from remote-site pollers (ADR-045 Inc.4). The reply subscriber is a
+    // process-lifetime task rather than one started per bundle: a subscription set up at request
+    // time races the first chunk, and a bundle is taken during an incident, which is the worst
+    // moment for a race that loses evidence.
+    //
+    // Deliberately **not** leader-gated. A bundle is an on-demand read a standby must be able to
+    // serve — ADR-016's whole point is that either core answers — and two cores subscribed here is
+    // harmless: each routes only by its own request ids and drops the rest.
+    let poller_log_collector = Arc::new(poller_logs::PollerLogCollector::new(bus.clone()));
+    match bus.subscribe_poller_log_chunks().await {
+        Ok(stream) => {
+            let collector = poller_log_collector.clone();
+            spawn_cancellable(&shutdown, collector.run_reply_loop(Box::pin(stream)));
+        }
+        // Not fatal: the support bundle degrades to "no remote poller logs", which it already
+        // reports by name. Nothing else in core depends on this subscription.
+        Err(e) => {
+            tracing::warn!(error = %e, "support-log replies unavailable; remote poller logs will be recorded as gaps");
+        }
+    }
+
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
         store,
@@ -971,6 +993,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         upgrade: Some(upgrade),
         metrics: Some(metrics.clone()),
         started: std::time::SystemTime::now(),
+        poller_logs: Some(poller_log_collector),
     };
 
     // Establish the certificate BEFORE the listener binds, so "core is healthy" implies the file
@@ -1504,6 +1527,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         upgrade: None,
         metrics: Some(metrics.clone()),
         started: std::time::SystemTime::now(),
+        poller_logs: None,
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
 }

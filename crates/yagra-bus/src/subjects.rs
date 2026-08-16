@@ -123,6 +123,37 @@ pub fn upgrade_for(poller: &str) -> String {
     format!("{ROOT}.poller.upgrade.{}", sanitize_token(poller))
 }
 
+/// Subject core publishes one poller's support-log request on, e.g. `yagra.poller.logs.edge-1`
+/// (ADR-045 Inc.4).
+///
+/// **Its own token, for the same reason [`upgrade_for`] has one.** A poller build that predates the
+/// support-log path never subscribes here, so the request is delivered to nobody and core's deadline
+/// records the site as unrepresented — the desired N-1 behaviour obtained structurally rather than
+/// by a version check. Riding on the assignment stream would instead put a request into the sequence
+/// `seq` gap-detection guards.
+///
+/// ⚠️ Neither `yagra.poller.assign.>` nor `yagra.poller.upgrade.>` covers this. Both allow-lists
+/// need their own entry — `yagra-authz`'s per-poller grant and the static account in
+/// `docker/nats/nats-server.conf` — and missing either is a runtime denial with no compile error.
+/// **Subscribe must be scoped to the poller's own id**: a wildcard would let one site receive
+/// another site's request and answer it with its own log.
+#[must_use]
+pub fn poller_logs_for(poller: &str) -> String {
+    format!("{ROOT}.poller.logs.{}", sanitize_token(poller))
+}
+
+/// Subject pollers publish support-log chunks back on, consumed by core (ADR-045 Inc.4).
+///
+/// One shared subject rather than one per request: core correlates by
+/// [`crate::messages::PollerLogChunk::request_id`], and a per-request subject would mean a
+/// subscribe/unsubscribe round trip on the bus for every bundle. Deliberately **not** under
+/// `yagra.poller.logs.`, so the poller's publish grant cannot be widened into the request subject
+/// family — a poller that could publish there could ask another site for its log.
+#[must_use]
+pub fn poller_log_reply() -> String {
+    format!("{ROOT}.poller.logreply")
+}
+
 /// Subject core publishes pool-scoped discovery jobs on (the discovery analogue of
 /// [`jobs_for_pool`]), e.g. `yagra.discovery.jobs.tokyo`. Pollers in the pool queue-subscribe.
 #[must_use]
@@ -251,6 +282,29 @@ mod tests {
     #[test]
     fn sanitize_token_maps_empty_to_unknown() {
         assert_eq!(sanitize_token(""), "unknown");
+    }
+
+    /// The support-log family, and the two isolation properties that make it safe (ADR-045 Inc.4).
+    ///
+    /// The request must be per-poller so no site can be handed another site's request, and the reply
+    /// must sit **outside** the request family so a poller's publish grant on it cannot be widened
+    /// into one that lets it ask.
+    #[test]
+    fn the_support_log_family_is_addressed_and_the_reply_sits_outside_it() {
+        assert_eq!(poller_logs_for("edge-1"), "yagra.poller.logs.edge-1");
+        assert_eq!(
+            poller_logs_for("poller.tokyo.example.com"),
+            "yagra.poller.logs.poller-tokyo-example-com"
+        );
+        assert_eq!(poller_log_reply(), "yagra.poller.logreply");
+
+        // `yagra.poller.logs.>` must not match the reply — otherwise granting a poller publish on
+        // its own reply subject would be one wildcard away from granting it the request subject.
+        assert!(!poller_log_reply().starts_with("yagra.poller.logs."));
+        // …and the request family is not covered by either existing per-poller wildcard, which is
+        // why both allow-lists need a new line rather than inheriting one.
+        assert!(!poller_logs_for("edge-1").starts_with("yagra.poller.assign."));
+        assert!(!poller_logs_for("edge-1").starts_with("yagra.poller.upgrade."));
     }
 
     #[test]

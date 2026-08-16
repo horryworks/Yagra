@@ -84,6 +84,10 @@ pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
             subjects::discovery_results(),
             subjects::heartbeat(),
             subjects::sync_request(),
+            // Support-log chunks (ADR-045 Inc.4). Publish only, and on the *reply* subject only —
+            // the request family `yagra.poller.logs.{id}` is subscribe-side below and must never
+            // appear here, or a compromised site could ask another site for its log body.
+            subjects::poller_log_reply(),
         ],
         // core → this poller. The working-set (`assign.{id}`) and pool jobs — which carry the
         // continuous monitoring credentials — are scoped to this poller / its pool only, so a
@@ -102,6 +106,11 @@ pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
             // publish rights here could order an upgrade — or a downgrade — at another site.
             // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
             subjects::upgrade_for(&scope.id),
+            // Its own support-log request, and only its own (ADR-045 Inc.4). A wildcard here would
+            // let one site receive another site's request and answer it — the reply carries a log
+            // body, so the mis-delivery would be a disclosure rather than a routing annoyance.
+            // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
+            subjects::poller_logs_for(&scope.id),
             "_INBOX.>".to_owned(),
         ],
     }
@@ -527,6 +536,31 @@ mod tests {
         // ...and flows.raw (ADR-034 Increment 2 — the verbatim relay that feeds flow forwarding).
         assert!(perms.publish.contains(&"yagra.flows.raw".to_owned()));
         assert!(perms.publish.contains(&"yagra.poller.heartbeat".to_owned()));
+    }
+
+    /// The support-log family (ADR-045 Inc.4), whose asymmetry is the security property: a poller
+    /// may **answer** on the shared reply subject and may **be asked** only on its own id. The
+    /// inverse of either would let one site pull another site's log body off the bus.
+    #[test]
+    fn a_poller_may_answer_a_log_request_but_never_issue_one() {
+        let perms = allow_list(&PollerScope::new("edge-1", "tokyo"));
+        assert!(perms
+            .subscribe
+            .contains(&"yagra.poller.logs.edge-1".to_owned()));
+        assert!(perms.publish.contains(&"yagra.poller.logreply".to_owned()));
+        // Never the other way round: no publish on any request subject…
+        assert!(
+            !perms
+                .publish
+                .iter()
+                .any(|s| s.starts_with("yagra.poller.logs")),
+            "publishing a request would let this site order another site to send its log"
+        );
+        // …and no subscribe that reaches beyond this poller's own request subject.
+        for s in &perms.subscribe {
+            assert_ne!(s, "yagra.poller.logs.>");
+            assert_ne!(s, "yagra.poller.logs.*");
+        }
     }
 
     #[test]

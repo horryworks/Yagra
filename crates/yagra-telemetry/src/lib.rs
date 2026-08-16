@@ -100,7 +100,13 @@ fn retain_hours_from(raw: Option<&str>) -> usize {
 /// interleave each other's lines — the hazard ADR-045 決定 2 named for HA cores, and the reason a
 /// poller pool needs its id here (ADR-045 Inc.3). The instance is sanitized because it becomes a
 /// path component and arrives from `YAGRA_POLLER_ID`, which an operator sets by hand.
-fn file_prefix(service_name: &str, instance: Option<&str>) -> String {
+///
+/// Public because a **reader** has to name the same files: [`collect_logs`] selects by prefix, and a
+/// caller that rebuilt the name itself would carry a second copy of this sanitization rule —
+/// the exact drift that would make a poller unable to find its own log after somebody put a dot in
+/// `YAGRA_POLLER_ID` (ADR-045 Inc.4).
+#[must_use]
+pub fn file_prefix(service_name: &str, instance: Option<&str>) -> String {
     let Some(raw) = instance.map(str::trim).filter(|s| !s.is_empty()) else {
         return service_name.to_owned();
     };
@@ -147,6 +153,98 @@ fn file_writer(
             );
             None
         }
+    }
+}
+
+// ── Reading the files back ────────────────────────────────────────────────────────────────────
+// The collector lives here, beside the writer, because its correctness is entirely a property of
+// how the files are named: `file_prefix` above plus `tracing-appender`'s `YYYY-MM-DD-HH` suffix.
+// It has two consumers — core's support bundle (ADR-045 決定 2 / Inc.3) and a remote poller
+// answering a request for its own log (Inc.4) — and they must select by the *same* rules, or a
+// remote site's contribution to a bundle would be chosen differently from a co-located one's.
+
+/// The log files one [`collect_logs`] call selected, and what it left behind.
+pub struct CollectedLogs {
+    /// `(filename, contents)`, newest first.
+    pub files: Vec<(String, Vec<u8>)>,
+    /// Files that matched the window but did not fit under the byte cap.
+    pub dropped_for_size: usize,
+    /// Files present in the directory but older than the window.
+    pub outside_window: usize,
+}
+
+/// Collect the rolling log files for `prefix` written at or after `since`, newest first, up to
+/// `max_bytes`.
+///
+/// Newest-first is the ordering that matters: when the cap bites, the hour you are debugging is the
+/// one you keep. `tracing-appender` embeds `YYYY-MM-DD-HH` in the name, so a lexicographic sort is
+/// a chronological one and no per-file metadata read is needed to order them.
+///
+/// The newest file is being appended to as this runs, so its last line may be truncated. That is
+/// accepted rather than worked around — the alternative is skipping the current hour, which is the
+/// hour that matters most.
+///
+/// An unreadable directory is an empty result, never an error: file logging is opt-in, so "there is
+/// nothing here" is the common case and must not cost the caller the rest of its work.
+#[must_use]
+pub fn collect_logs(
+    dir: &std::path::Path,
+    prefix: &str,
+    since: std::time::SystemTime,
+    max_bytes: usize,
+) -> CollectedLogs {
+    let mut names: Vec<String> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with(prefix))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(dir = %dir.display(), error = %e, "log collection: directory unreadable");
+            return CollectedLogs {
+                files: Vec::new(),
+                dropped_for_size: 0,
+                outside_window: 0,
+            };
+        }
+    };
+    names.sort_unstable();
+    names.reverse();
+
+    let mut files = Vec::new();
+    let mut total = 0usize;
+    let mut dropped_for_size = 0usize;
+    let mut outside_window = 0usize;
+    for name in names {
+        let path = dir.join(&name);
+        let Ok(meta) = std::fs::metadata(&path) else {
+            continue;
+        };
+        // An mtime the platform will not give us is treated as in-window: a file we cannot date is
+        // better carried than silently skipped.
+        if meta.modified().is_ok_and(|m| m < since) {
+            outside_window += 1;
+            continue;
+        }
+        if total.saturating_add(usize::try_from(meta.len()).unwrap_or(usize::MAX)) > max_bytes {
+            dropped_for_size += 1;
+            continue;
+        }
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                total += bytes.len();
+                files.push((name, bytes));
+            }
+            Err(e) => {
+                tracing::warn!(file = %name, error = %e, "log collection: file unreadable");
+            }
+        }
+    }
+    CollectedLogs {
+        files,
+        dropped_for_size,
+        outside_window,
     }
 }
 
@@ -441,6 +539,102 @@ mod tests {
             file_prefix("yagra-poller", Some("tokyo dc1")),
             "yagra-poller-tokyo-dc1"
         );
+    }
+
+    /// Newest-first with the cap applied, and the drop **counted** — a truncated log that says
+    /// nothing about being truncated reads as "nothing was logged", which is a wrong answer rather
+    /// than a missing one. (Moved here from `yagra-core` in ADR-045 Inc.4, when a second consumer
+    /// appeared: the reader has to live beside the writer that names the files.)
+    #[test]
+    fn logs_are_newest_first_and_a_truncation_is_reported() {
+        let dir = std::env::temp_dir().join(format!("yagra-logcollect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for hour in ["10", "11", "12"] {
+            std::fs::write(
+                dir.join(format!("yagra-core.2026-08-06-{hour}.log")),
+                [b'x'; 100],
+            )
+            .unwrap();
+        }
+        // An unrelated file in the same directory is not swept up.
+        std::fs::write(dir.join("other.log"), b"nope").unwrap();
+
+        let all = collect_logs(&dir, "yagra-core", std::time::UNIX_EPOCH, 1_000);
+        assert_eq!(
+            all.files
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "yagra-core.2026-08-06-12.log",
+                "yagra-core.2026-08-06-11.log",
+                "yagra-core.2026-08-06-10.log"
+            ],
+            "newest first — when the cap bites, the hour being debugged is the one kept"
+        );
+
+        // A cap that fits only two files keeps the two newest and says one was dropped.
+        let capped = collect_logs(&dir, "yagra-core", std::time::UNIX_EPOCH, 250);
+        assert_eq!(capped.files.len(), 2);
+        assert_eq!(capped.dropped_for_size, 1);
+        assert_eq!(capped.files[0].0, "yagra-core.2026-08-06-12.log");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Selection is by the prefix [`file_prefix`] builds, and one poller's id can be a prefix of
+    /// another's. This is what makes one shared log volume safe for a pool (ADR-045 Inc.3/Inc.4) —
+    /// and it is why the reader is here rather than in either consumer.
+    #[test]
+    fn one_instances_files_are_not_another_instances() {
+        let dir = std::env::temp_dir().join(format!("yagra-logprefix-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in [
+            "yagra-poller-edge-1.2026-08-16-10.log",
+            "yagra-poller-edge-10.2026-08-16-10.log",
+            "yagra-core.2026-08-16-10.log",
+        ] {
+            std::fs::write(dir.join(name), b"{}\n").unwrap();
+        }
+
+        let mine = collect_logs(
+            &dir,
+            &format!("{}.", file_prefix("yagra-poller", Some("edge-1"))),
+            std::time::UNIX_EPOCH,
+            10_000,
+        );
+        assert_eq!(
+            mine.files
+                .iter()
+                .map(|(n, _)| n.as_str())
+                .collect::<Vec<_>>(),
+            vec!["yagra-poller-edge-1.2026-08-16-10.log"],
+            "edge-1 is a prefix of edge-10; the dot separator is what keeps them apart"
+        );
+
+        // Core's bundle collector selects the whole family with the bare service name, which must
+        // still see both pollers and never core's own file.
+        let pool = collect_logs(&dir, "yagra-poller", std::time::UNIX_EPOCH, 10_000);
+        assert_eq!(pool.files.len(), 2);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A missing log directory is an empty result, never an error. File logging is opt-in, so the
+    /// common case is that there is nothing here — and it must not cost the caller the rest of its
+    /// work.
+    #[test]
+    fn an_absent_log_directory_costs_nothing() {
+        let logs = collect_logs(
+            std::path::Path::new("/nonexistent/yagra/logs"),
+            "yagra-core",
+            std::time::UNIX_EPOCH,
+            1,
+        );
+        assert!(logs.files.is_empty());
+        assert_eq!(logs.dropped_for_size, 0);
     }
 
     /// The shutdown contract: a task wrapped by [`spawn_cancellable`] stops promptly once the token

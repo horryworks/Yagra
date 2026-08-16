@@ -46,7 +46,6 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use std::io::Write;
-use std::path::Path;
 use std::time::SystemTime;
 
 /// Names the archive so a file on disk is identifiable without the tool that wrote it — the same
@@ -436,14 +435,16 @@ fn standing_omissions() -> Vec<Omission> {
              rather than their contents; the WebUI answers questions about the contents.",
         ),
         Omission::new(
-            "Log files from any poller that does not share this host's filesystem",
-            "A co-located poller's log is carried (look for logs/yagra-poller-*), because it is a \
-             file on a volume core can read. A remote-site poller's log is not: it lives at its \
-             own site, and shipping log bodies over the bus is a different mechanism. What every \
-             poller reports regardless — heartbeat counters, poll-loop statistics and host \
-             resources — is in health/pollers.json, health/poller_health.json and \
-             health/hosts.json. Compare those against the logs actually present here to see which \
-             pollers are unrepresented.",
+            "Log files from a poller that is neither co-located nor reachable on the bus",
+            "Poller logs arrive by two paths and each covers what the other cannot. A co-located \
+             poller's log is read off the shared volume (look for logs/yagra-poller-*) and that is \
+             the only path that survives the poller dying. A remote-site poller is asked over the \
+             bus and answers with its own log (logs/remote/*) — the only path that reaches another \
+             host, and it needs that poller to be running and to advertise the capability. Every \
+             site that was asked and produced nothing is listed by name in this same section, with \
+             why. What every poller reports regardless — heartbeat counters, poll-loop statistics \
+             and host resources — is in health/pollers.json, health/poller_health.json and \
+             health/hosts.json.",
         ),
         Omission::new(
             "Why an SNMP walk returned no rows",
@@ -698,85 +699,16 @@ fn readme_text(m: &Manifest) -> String {
 
 // ── Log files ─────────────────────────────────────────────────────────────────────────────────
 
-/// One collected log file plus how big it was.
-pub struct CollectedLogs {
-    pub files: Vec<(String, Vec<u8>)>,
-    /// Files that matched the window but did not fit under [`MAX_LOG_BYTES`].
-    pub dropped_for_size: usize,
-    /// Files present in the directory but older than the window.
-    pub outside_window: usize,
-}
-
-/// Collect the rolling log files for `prefix` written at or after `since`, newest first, up to
-/// `max_bytes`.
+/// Reading rotated log files back is [`yagra_telemetry`]'s job, because it is the thing that named
+/// and wrote them: the collector's correctness is entirely a property of `file_prefix` plus
+/// `tracing-appender`'s `YYYY-MM-DD-HH` suffix.
 ///
-/// Newest-first is the ordering that matters: when the cap bites, the hour you are debugging is the
-/// one you keep. `tracing-appender` embeds `YYYY-MM-DD-HH` in the name, so a lexicographic sort is
-/// a chronological one and no per-file metadata read is needed to order them.
-///
-/// The newest file is being appended to as this runs, so its last line may be truncated. That is
-/// accepted rather than worked around — the alternative is skipping the current hour, which is the
-/// hour that matters most.
-pub fn collect_logs(
-    dir: &Path,
-    prefix: &str,
-    since: SystemTime,
-    max_bytes: usize,
-) -> CollectedLogs {
-    let mut names: Vec<String> = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .filter_map(Result::ok)
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
-            .filter_map(|e| e.file_name().into_string().ok())
-            .filter(|n| n.starts_with(prefix))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(dir = %dir.display(), error = %e, "support bundle: log directory unreadable");
-            return CollectedLogs {
-                files: Vec::new(),
-                dropped_for_size: 0,
-                outside_window: 0,
-            };
-        }
-    };
-    names.sort_unstable();
-    names.reverse();
-
-    let mut files = Vec::new();
-    let mut total = 0usize;
-    let mut dropped_for_size = 0usize;
-    let mut outside_window = 0usize;
-    for name in names {
-        let path = dir.join(&name);
-        let Ok(meta) = std::fs::metadata(&path) else {
-            continue;
-        };
-        // An mtime the platform will not give us is treated as in-window: a file we cannot date is
-        // better carried than silently skipped.
-        if meta.modified().is_ok_and(|m| m < since) {
-            outside_window += 1;
-            continue;
-        }
-        if total.saturating_add(usize::try_from(meta.len()).unwrap_or(usize::MAX)) > max_bytes {
-            dropped_for_size += 1;
-            continue;
-        }
-        match std::fs::read(&path) {
-            Ok(bytes) => {
-                total += bytes.len();
-                files.push((name, bytes));
-            }
-            Err(e) => {
-                tracing::warn!(file = %name, error = %e, "support bundle: log file unreadable");
-            }
-        }
-    }
-    CollectedLogs {
-        files,
-        dropped_for_size,
-        outside_window,
-    }
-}
+/// Re-exported here rather than wrapped so this module's callers keep one import, and so the second
+/// consumer added in ADR-045 Inc.4 — a remote poller collecting *its own* log to answer a request —
+/// selects files by the identical rules. Two collectors would mean a remote site's contribution to a
+/// bundle was chosen differently from a co-located one's, which is a difference nobody would notice
+/// until the two disagreed about which hour to keep.
+pub use yagra_telemetry::collect_logs;
 
 // ── PostgreSQL introspection ──────────────────────────────────────────────────────────────────
 
@@ -954,7 +886,6 @@ pub fn provenance(started: SystemTime) -> Provenance {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::UNIX_EPOCH;
 
     fn scan_with(literals: &[&str]) -> SecretScan {
         SecretScan {
@@ -1285,61 +1216,6 @@ mod tests {
             .collect();
         in_manifest.sort();
         assert_eq!(in_archive, in_manifest);
-    }
-
-    /// Newest-first with the cap applied, and the drop **counted** — a truncated log that says
-    /// nothing about being truncated reads as "nothing was logged", which is a wrong answer rather
-    /// than a missing one.
-    #[test]
-    fn logs_are_newest_first_and_a_truncation_is_reported() {
-        let dir = std::env::temp_dir().join(format!("yagra-bundle-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        for hour in ["10", "11", "12"] {
-            std::fs::write(
-                dir.join(format!("yagra-core.2026-08-06-{hour}.log")),
-                [b'x'; 100],
-            )
-            .unwrap();
-        }
-        // An unrelated file in the same directory is not swept up.
-        std::fs::write(dir.join("other.log"), b"nope").unwrap();
-
-        let all = collect_logs(&dir, "yagra-core", UNIX_EPOCH, 1_000);
-        assert_eq!(
-            all.files
-                .iter()
-                .map(|(n, _)| n.as_str())
-                .collect::<Vec<_>>(),
-            vec![
-                "yagra-core.2026-08-06-12.log",
-                "yagra-core.2026-08-06-11.log",
-                "yagra-core.2026-08-06-10.log"
-            ],
-            "newest first — when the cap bites, the hour being debugged is the one kept"
-        );
-
-        // A cap that fits only two files keeps the two newest and says one was dropped.
-        let capped = collect_logs(&dir, "yagra-core", UNIX_EPOCH, 250);
-        assert_eq!(capped.files.len(), 2);
-        assert_eq!(capped.dropped_for_size, 1);
-        assert_eq!(capped.files[0].0, "yagra-core.2026-08-06-12.log");
-
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// A missing log directory is an empty result, never an error. File logging is opt-in, so the
-    /// common case is that there is nothing here — and it must not cost the operator the rest of
-    /// the bundle.
-    #[test]
-    fn an_absent_log_directory_costs_nothing() {
-        let logs = collect_logs(
-            Path::new("/nonexistent/yagra/logs"),
-            "yagra-core",
-            UNIX_EPOCH,
-            1,
-        );
-        assert!(logs.files.is_empty());
-        assert_eq!(logs.dropped_for_size, 0);
     }
 
     /// The README is what a reviewer reads, so the omissions have to reach it — not just

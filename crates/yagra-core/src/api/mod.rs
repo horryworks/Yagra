@@ -320,6 +320,14 @@ pub struct ApiState {
     /// When this process started. The bundle reports uptime from it, which is how "did core restart
     /// while nobody was looking?" is answered from a bundle taken afterwards.
     pub started: std::time::SystemTime,
+    /// Retrieval of a remote-site poller's log over the bus, for the support bundle (ADR-045
+    /// Inc.4). `None` in skeleton mode and wherever there is no bus — the bundle then records every
+    /// non-co-located poller as unrepresented, which is the honest answer rather than an absence.
+    ///
+    /// On [`ApiState`] rather than [`AdminState`] because it is a bus seam, not a store, and because
+    /// holding it here keeps the disclosure boundary visible: this is the one handle in the API
+    /// state that can make another host send its log body.
+    pub poller_logs: Option<Arc<crate::poller_logs::PollerLogCollector>>,
 }
 
 /// Build the `/api/v1` router backed by the given state.
@@ -629,6 +637,7 @@ mod tests {
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
+            poller_logs: None,
         }
     }
 
@@ -666,6 +675,7 @@ mod tests {
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
+            poller_logs: None,
         };
         (state, token)
     }
@@ -701,6 +711,7 @@ mod tests {
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
+            poller_logs: None,
         };
         (state, token)
     }

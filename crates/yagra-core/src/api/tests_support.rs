@@ -42,6 +42,7 @@ fn base(store: Arc<dyn MetricStore>, public_dashboard: bool) -> ApiState {
         // the scrape as an omission rather than carrying one.
         metrics: None,
         started: std::time::SystemTime::now(),
+        poller_logs: None,
     }
 }
 

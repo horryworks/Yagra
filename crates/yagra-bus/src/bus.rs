@@ -8,7 +8,8 @@
 
 use crate::messages::{
     AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, PollerUpgradeMsg, RawFlowDatagram, SyncMsg, SyncRequest,
+    PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram, SyncMsg,
+    SyncRequest,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -112,6 +113,24 @@ pub trait UpgradeBus: Send + Sync {
     async fn publish_poller_upgrade(&self, msg: PollerUpgradeMsg) -> Result<(), BusError>;
 }
 
+/// Support-log retrieval from a poller that does not share core's filesystem (ADR-045 Inc.4).
+///
+/// A fifth seam rather than methods on [`SyncBus`], for the reason [`UpgradeBus`] is one: the two
+/// ends are different code and want different surfaces, and this one crosses a *disclosure*
+/// boundary — a request on it makes a site send its log body, which is the one thing on this bus
+/// that has never travelled before. Keeping it off the working-set trait means nothing that merely
+/// distributes polling work holds a handle that can ask for it.
+///
+/// Both directions live on one trait because the in-memory implementation must be able to drive
+/// both ends of a round trip in a unit test; the NATS implementation splits them by subject.
+#[async_trait]
+pub trait LogBus: Send + Sync {
+    /// Ask one poller for a window of its own log — core side.
+    async fn publish_poller_log_request(&self, msg: PollerLogRequest) -> Result<(), BusError>;
+    /// Send one slice of the answer — poller side.
+    async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError>;
+}
+
 /// The discovery-sweep side of the bus (Phase C).
 ///
 /// A third seam rather than more methods on [`Bus`] because the two ends are different code:
@@ -186,6 +205,10 @@ pub struct InMemoryBus {
     auth_revokes: broadcast::Sender<AuthRevoke>,
     // Per-poller upgrade commands (ADR-051), carrying their routing key like `sync` does.
     poller_upgrades: broadcast::Sender<(String, PollerUpgradeMsg)>,
+    // Support-log requests (ADR-045 Inc.4). The request carries its routing key like `sync` does;
+    // the reply is a single fan-in subject, so it needs none.
+    poller_log_requests: broadcast::Sender<(String, PollerLogRequest)>,
+    poller_log_chunks: broadcast::Sender<PollerLogChunk>,
 }
 
 impl InMemoryBus {
@@ -207,6 +230,8 @@ impl InMemoryBus {
         let (discovery_results, _) = broadcast::channel(capacity);
         let (auth_revokes, _) = broadcast::channel(capacity);
         let (poller_upgrades, _) = broadcast::channel(capacity);
+        let (poller_log_requests, _) = broadcast::channel(capacity);
+        let (poller_log_chunks, _) = broadcast::channel(capacity);
         Self {
             jobs,
             results,
@@ -223,6 +248,8 @@ impl InMemoryBus {
             discovery_results,
             auth_revokes,
             poller_upgrades,
+            poller_log_requests,
+            poller_log_chunks,
         }
     }
 
@@ -326,6 +353,21 @@ impl InMemoryBus {
     pub fn subscribe_poller_upgrades(&self) -> broadcast::Receiver<(String, PollerUpgradeMsg)> {
         self.poller_upgrades.subscribe()
     }
+
+    /// Subscribe to support-log requests, with the poller id they are addressed to — poller side
+    /// (ADR-045 Inc.4). The caller keeps only the tuples matching its own id, exactly as
+    /// [`Self::subscribe_sync`] does.
+    #[must_use]
+    pub fn subscribe_poller_log_requests(&self) -> broadcast::Receiver<(String, PollerLogRequest)> {
+        self.poller_log_requests.subscribe()
+    }
+
+    /// Subscribe to support-log chunks — core side (ADR-045 Inc.4). A single fan-in channel; the
+    /// consumer routes by `request_id`.
+    #[must_use]
+    pub fn subscribe_poller_log_chunks(&self) -> broadcast::Receiver<PollerLogChunk> {
+        self.poller_log_chunks.subscribe()
+    }
 }
 
 impl Default for InMemoryBus {
@@ -426,6 +468,19 @@ impl PeerBus for InMemoryBus {
 impl UpgradeBus for InMemoryBus {
     async fn publish_poller_upgrade(&self, msg: PollerUpgradeMsg) -> Result<(), BusError> {
         let _ = self.poller_upgrades.send((msg.poller_id.clone(), msg));
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl LogBus for InMemoryBus {
+    async fn publish_poller_log_request(&self, msg: PollerLogRequest) -> Result<(), BusError> {
+        let _ = self.poller_log_requests.send((msg.poller_id.clone(), msg));
+        Ok(())
+    }
+
+    async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError> {
+        let _ = self.poller_log_chunks.send(msg);
         Ok(())
     }
 }
@@ -819,5 +874,50 @@ mod tests {
         let (id, got) = rx.recv().await.unwrap();
         assert_eq!(id, "edge-tokyo-1");
         assert_eq!(got, msg);
+    }
+
+    /// The support-log round trip, both directions, over the in-memory bus (ADR-045 Inc.4). The
+    /// channel exists for the reason every other one does: without it, core's collector and the
+    /// poller's responder would only be exercisable against a live NATS — and this pair carries log
+    /// **bodies**, which is the traffic on this bus least suited to being tested only in production.
+    #[tokio::test]
+    async fn a_support_log_request_and_its_chunks_reach_the_other_side() {
+        use crate::messages::{encode_raw, PollerLogChunk, PollerLogRequest};
+
+        let bus = InMemoryBus::new(8);
+        let mut requests = bus.subscribe_poller_log_requests();
+        let mut chunks = bus.subscribe_poller_log_chunks();
+
+        let req = PollerLogRequest {
+            poller_id: "edge-tokyo-1".to_owned(),
+            request_id: Uuid::from_u128(7),
+            since_unix_s: 1_786_400_000,
+            max_bytes: 2 * 1024 * 1024,
+        };
+        LogBus::publish_poller_log_request(&bus, req.clone())
+            .await
+            .unwrap();
+        // The routing key travels beside the message, the in-memory stand-in for a per-poller
+        // subject — so a test can prove a request addressed to one site does not read as one
+        // addressed to another.
+        let (id, got) = requests.recv().await.unwrap();
+        assert_eq!(id, "edge-tokyo-1");
+        assert_eq!(got, req);
+
+        let chunk = PollerLogChunk {
+            request_id: req.request_id,
+            poller_id: "edge-tokyo-1".to_owned(),
+            seq: 0,
+            last: true,
+            name: "yagra-poller-edge-tokyo-1.2026-08-16-10.log".to_owned(),
+            bytes: encode_raw(b"{\"message\":\"hi\"}\n"),
+            refused: None,
+        };
+        LogBus::publish_poller_log_chunk(&bus, chunk.clone())
+            .await
+            .unwrap();
+        let back = chunks.recv().await.unwrap();
+        assert_eq!(back, chunk);
+        assert_eq!(back.slice().unwrap(), b"{\"message\":\"hi\"}\n");
     }
 }

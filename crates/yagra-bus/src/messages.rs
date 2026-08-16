@@ -83,6 +83,16 @@ pub const CAP_HTTP_BODY: &str = "http-body";
 /// it, and never a version skew nobody was told about.
 pub const CAP_SELF_UPGRADE: &str = "self-upgrade";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can answer a
+/// [`PollerLogRequest`] with its own on-disk log (ADR-045 Inc.4).
+///
+/// Conditional, like [`CAP_SELF_UPGRADE`] and unlike the four unconditional ones: a poller writes
+/// log files only when `YAGRA_LOG_DIR` is set, and asking one that has none produces an empty reply
+/// indistinguishable from a poller that is not listening. Core reads absence as "will not answer"
+/// and says so in the bundle's omissions **naming the poller**, which is the whole difference
+/// between "this site sent nothing" and "there was nothing to send".
+pub const CAP_LOG_SHIP: &str = "log-ship";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -917,6 +927,86 @@ pub struct PollerUpgradeMsg {
     pub step: UpgradeStep,
 }
 
+/// Core asking one poller for a window of its own on-disk log (ADR-045 Inc.4).
+///
+/// Published on [`crate::subjects::poller_logs_for`] — its own subject family addressed to a single
+/// poller, for the same reason [`PollerUpgradeMsg`] has one: a build that has never heard of it does
+/// not subscribe, so the request reaches nobody rather than being mis-parsed. Core absorbs the
+/// silence with a deadline and names the poller in the bundle's omissions.
+///
+/// **This is the half of the support bundle the disk cannot reach.** A co-located poller's log is
+/// read straight off the shared volume (Inc.3); a poller at another site has its own disk, and this
+/// is the only way its log crosses.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollerLogRequest {
+    /// Sanitized id of the poller this is addressed to. Redundant with the subject on purpose,
+    /// exactly as [`PollerUpgradeMsg::poller_id`] is: a reply must never be attributed to the wrong
+    /// site because of a routing mistake.
+    pub poller_id: String,
+    /// Correlates every [`PollerLogChunk`] of the answer. Core has one collector per request and
+    /// routes replies by this.
+    pub request_id: Uuid,
+    /// Oldest log file to consider, as Unix seconds. Files last written before it are skipped.
+    pub since_unix_s: i64,
+    /// How many **raw** log bytes this poller may send in total. It stops at the cap and says so, so
+    /// one verbose site cannot fill the bundle.
+    pub max_bytes: u64,
+}
+
+/// One slice of a poller's answer to a [`PollerLogRequest`] (ADR-045 Inc.4).
+///
+/// Chunked because NATS's default maximum payload is 1 MB and an hour of a busy poller's JSON lines
+/// is larger than that. The shape follows [`DiscoveryResult`]'s: a flat struct with a terminal flag
+/// rather than an enum, so a field added later is ignored by an older consumer instead of failing
+/// the decode.
+///
+/// **A refusal is also an answer.** When the poller's own secret scan matches, it sends a single
+/// chunk carrying [`PollerLogChunk::refused`] and no bytes — see that field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PollerLogChunk {
+    /// Echoes [`PollerLogRequest::request_id`].
+    pub request_id: Uuid,
+    /// Which poller this is from. Core carries it into the archive path, so a bundle from a fleet
+    /// says which site each file came from.
+    pub poller_id: String,
+    /// Position in this reply, from 0. Core reassembles in this order and reports a gap rather than
+    /// silently concatenating out of order.
+    pub seq: u32,
+    /// Set on the final chunk of the reply, including a refusal or an empty answer. Core stops
+    /// waiting for this poller when it arrives.
+    pub last: bool,
+    /// The log file this slice belongs to, e.g. `yagra-poller-edge-1.2026-08-16-10.log`. Empty on a
+    /// terminal marker that carries no bytes.
+    #[serde(default)]
+    pub name: String,
+    /// This slice of `name`, base64-encoded ([`encode_raw`]). Base64 rather than a `String` because
+    /// a chunk boundary falls at an arbitrary byte offset and would otherwise split a multi-byte
+    /// character; the bytes are reassembled before anyone reads them as text.
+    #[serde(default)]
+    pub bytes: String,
+    /// Why this poller sent nothing, when it chose not to.
+    ///
+    /// Names the **rule**, never the value — the same contract as
+    /// [`crate::messages`]'s peers and as core's own redaction refusal, because this string is
+    /// logged and then written into the bundle a human reviews. The poller refuses rather than
+    /// redacts for the reason ADR-045 決定 4 gives: redacting assumes the pattern set is complete.
+    #[serde(default)]
+    pub refused: Option<String>,
+}
+
+impl PollerLogChunk {
+    /// Decode [`Self::bytes`] back to the slice the poller read. `None` when the field is not valid
+    /// base64 — a corrupt chunk drops that slice rather than taking down the collector, the same
+    /// reaction [`EventMsg::raw_bytes`] has.
+    #[must_use]
+    pub fn slice(&self) -> Option<Vec<u8>> {
+        if self.bytes.is_empty() {
+            return Some(Vec::new());
+        }
+        data_encoding::BASE64.decode(self.bytes.as_bytes()).ok()
+    }
+}
+
 /// What kind of check to run. Tagged so new protocols can be added without breaking
 /// older consumers (they ignore unknown fields; an unknown *tag* is skipped by the
 /// poller's malformed-message handling, so old pollers simply ignore newer check kinds).
@@ -1033,6 +1123,67 @@ pub enum CheckSpec {
     /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpRouting`], following the same pairing as every
     /// other v2c/v3 pair here.
     SnmpV3Routing(SnmpV3RoutingCheck),
+}
+
+impl CheckSpec {
+    /// Every plaintext credential this spec carries, for a fail-closed scan that must run where the
+    /// credentials are (ADR-045 Inc.4).
+    ///
+    /// # Why this lives on the message type
+    ///
+    /// The support bundle's redaction scan is built from the *literal* secret values a process can
+    /// see, because a pattern set only describes leaks somebody imagined. Core's set comes from its
+    /// own environment — which is why it structurally cannot cover a device's SNMP community: that
+    /// value is decrypted from the credential store and inlined **here**, and only the poller holding
+    /// this spec has it in plaintext. So the scan over a poller's log has to run on the poller, and
+    /// the poller needs this list.
+    ///
+    /// Written beside the fields rather than anywhere else for the reason `extensibility.md` §1
+    /// gives: the match is exhaustive, so a variant added with a new credential field will not
+    /// compile until somebody decides whether it belongs here. A `_ =>` arm would make the *safe*
+    /// answer the silent one — a new credential simply stops being enforced, with every test green.
+    ///
+    /// Returns borrowed strings and includes duplicates; the caller dedupes and applies its own
+    /// length floor. **Never log the result.**
+    #[must_use]
+    pub fn secret_literals(&self) -> Vec<&str> {
+        // v3 (USM) carries the same two optional passphrases in every variant.
+        fn v3<'a>(auth: Option<&'a str>, private: Option<&'a str>) -> Vec<&'a str> {
+            auth.into_iter().chain(private).collect()
+        }
+        match self {
+            // Neither carries a credential: ICMP has no authentication, and a DNS query is
+            // unauthenticated by construction.
+            Self::Icmp(_) | Self::Dns(_) => Vec::new(),
+            Self::Snmp(c) => vec![c.community.as_str()],
+            Self::SnmpTable(c) => vec![c.community.as_str()],
+            Self::SnmpOptical(c) => vec![c.community.as_str()],
+            Self::SnmpMau(c) => vec![c.community.as_str()],
+            Self::SnmpNeighbors(c) => vec![c.community.as_str()],
+            Self::SnmpL3(c) => vec![c.community.as_str()],
+            Self::SnmpArp(c) => vec![c.community.as_str()],
+            Self::SnmpRouting(c) => vec![c.community.as_str()],
+            Self::SnmpV3(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3Table(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3Optical(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3Mau(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3Neighbors(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3L3(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3Arp(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3Routing(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            // Only the secret half of each scheme. The username, the header *name* and the URL are
+            // structural — they identify which account, not how to use it — and are exactly what a
+            // log has to keep saying for a misconfiguration to stay diagnosable. `HttpAuth`'s manual
+            // `Debug` draws the same line.
+            Self::Http(c) => match c.auth.as_ref() {
+                Some(yagra_common::HttpAuth::Basic { password, .. }) => vec![password.as_str()],
+                Some(yagra_common::HttpAuth::Bearer { token }) => vec![token.as_str()],
+                Some(yagra_common::HttpAuth::Header { value, .. }) => vec![value.as_str()],
+                None => Vec::new(),
+            },
+            Self::MerakiCollect(c) => vec![c.api_key.as_str()],
+        }
+    }
 }
 
 /// ICMP echo parameters.

@@ -40,6 +40,7 @@ mod neighbors;
 mod optical;
 mod routing;
 mod store_forward;
+mod support_logs;
 mod worker;
 mod working_set;
 
@@ -300,6 +301,26 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    // Support-log requests (ADR-045 Inc.4): core asks this poller for a window of its own on-disk
+    // log so a support bundle can carry a remote site's evidence. Subscribed only when there is a
+    // log directory to read — a poller with no file layer would answer every request with an empty
+    // reply, which core cannot tell apart from "answered nothing on purpose". Absence of
+    // `CAP_LOG_SHIP` is what makes core say so by name instead.
+    if let Some(dir) = yagra_telemetry::log_dir() {
+        let sub = Box::pin(bus.subscribe_poller_log_requests(&identity.id).await?);
+        let log_bus: Arc<dyn yagra_bus::LogBus> = bus.clone();
+        spawn_cancellable(
+            &shutdown,
+            support_logs::run_log_request_loop(
+                sub,
+                identity.id.clone(),
+                dir,
+                working_set.clone(),
+                log_bus,
+            ),
+        );
+    }
+
     // Local scheduler: every 500ms, drain due specs into a bounded channel feeding the worker loop.
     let (jobs_tx, jobs_rx) = mpsc::channel::<PollJob>(256);
     spawn_cancellable(&shutdown, run_local_scheduler(working_set.clone(), jobs_tx));
@@ -490,6 +511,16 @@ fn self_upgrade_cap() -> Option<String> {
     (now.saturating_sub(written_at) <= 60).then(|| yagra_bus::CAP_SELF_UPGRADE.to_owned())
 }
 
+/// [`yagra_bus::CAP_LOG_SHIP`], but only when there is a log file to ship (ADR-045 Inc.4).
+///
+/// One condition, and it is the same one the subscribe above is gated on, deliberately read from the
+/// same place: `yagra_telemetry::log_dir()`. If these two ever disagreed the failure would be
+/// silent in the worse direction — core would ask a poller that is not listening and wait out the
+/// whole deadline, then record the site as unresponsive when it was merely never subscribed.
+fn log_ship_cap() -> Option<String> {
+    yagra_telemetry::log_dir().map(|_| yagra_bus::CAP_LOG_SHIP.to_owned())
+}
+
 /// Wait for in-flight probes to finish, up to `budget`.
 ///
 /// A probe that is mid-flight when the process exits is a poll that happened and was thrown away:
@@ -671,6 +702,12 @@ async fn run_heartbeat_loop<B>(
             // (ADR-051). Claiming it unconditionally would make core send commands into sites that
             // cannot act on them, and report every such site as "will upgrade" when it will not.
             .chain(self_upgrade_cap())
+            // Conditional for the same shape of reason (ADR-045 Inc.4): this poller can answer a
+            // support-log request only if it has a file layer to read. Without the claim core does
+            // not ask, and the bundle names the site as unrepresented — which is the true statement.
+            // Claiming it unconditionally would turn "there is nothing to send" into an empty reply
+            // core cannot distinguish from a deliberate one.
+            .chain(log_ship_cap())
             .collect(),
             host: Some(host_collector.sample()),
             leaving,

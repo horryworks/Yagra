@@ -53,10 +53,15 @@ services:
       YAGRA_POLLER_ID: ${YAGRA_POLLER_ID:?set YAGRA_POLLER_ID, e.g. edge-tokyo-1}
       # Pool this poller serves — core assigns nodes to pollers by pool (ADR-009).
       YAGRA_POLLER_POOL: ${YAGRA_POLLER_POOL:?set YAGRA_POLLER_POOL, e.g. tokyo}
-      # On-disk rotated logs (ADR-045). ⚠️ At a remote site these are for *you*, not for the
-      # central support bundle: core reads a co-located poller's files off a shared volume, and
-      # your disk is not that volume. Keep them anyway — they are the only record of a run that
-      # has already ended, and `docker logs` needs a shell on this box.
+      # On-disk rotated logs (ADR-045). Two consumers, and both need this set:
+      #   * you, on this box — the only record of a run that has already ended, since `docker logs`
+      #     needs a shell here;
+      #   * the central support bundle — core asks this poller for a window of these files over the
+      #     bus and carries the answer under logs/remote/ (ADR-045 Inc.4). **Unset this and the
+      #     poller stops advertising `log-ship`, so core does not ask and the bundle records this
+      #     site by name as unrepresented.** That is the honest outcome, not a silent one.
+      # Before sending, the poller scans these files for the device credentials it currently holds
+      # and refuses the whole reply on a match — core's own scan cannot see a device community.
       YAGRA_LOG_DIR: ${YAGRA_LOG_DIR-/var/log/yagra}
       # ── TLS ───────────────────────────────────────────────────────────────────────
       # CA (or self-signed server) cert that signs the NATS server cert, mounted from
@@ -236,6 +241,7 @@ services:
 
 volumes:
   pollerbuf:   # store-and-forward result buffer (Phase 3)
-  pollerlogs:  # this poller's rotated log files (ADR-045). Local evidence only — the central
-               # support bundle cannot reach a remote site's disk.
+  pollerlogs:  # this poller's rotated log files (ADR-045). Read here by you, and sent to core on
+               # request for the central support bundle (Inc.4) — core cannot mount this disk, so
+               # the bus is the only crossing. A run that has already ended is readable here only.
   # upgradedata:   # poller ⇄ site-updater hand-off (ADR-051; uncomment with the block above)

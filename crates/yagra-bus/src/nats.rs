@@ -10,10 +10,11 @@
 //! pool subject and pollers consume them with a **queue group** so each job is delivered
 //! to exactly one poller (load-balanced), while results fan in on a single subject.
 
-use crate::bus::{Bus, BusError, DiscoveryBus, PeerBus, SyncBus, UpgradeBus};
+use crate::bus::{Bus, BusError, DiscoveryBus, LogBus, PeerBus, SyncBus, UpgradeBus};
 use crate::messages::{
     AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, PollerUpgradeMsg, RawFlowDatagram, SyncMsg, SyncRequest,
+    PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram, SyncMsg,
+    SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -315,6 +316,55 @@ impl NatsBus {
         }))
     }
 
+    /// Subscribe to this poller's support-log requests — poller side (ADR-045 Inc.4). A plain
+    /// subscribe on a subject addressed to one poller, like the upgrade stream and for the same
+    /// reason.
+    ///
+    /// **A build that does not call this receives nothing**, which is the whole N-1 story for the
+    /// family: an older poller is never asked, so core's deadline expires and the bundle records
+    /// that site as unrepresented rather than mis-parsing a request it half-understands.
+    pub async fn subscribe_poller_log_requests(
+        &self,
+        poller_id: &str,
+    ) -> Result<impl Stream<Item = PollerLogRequest>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::poller_logs_for(poller_id))
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe poller log requests: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<PollerLogRequest>(&msg.payload) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed PollerLogRequest from bus");
+                    None
+                }
+            }
+        }))
+    }
+
+    /// Subscribe to support-log chunks from every poller — core side (ADR-045 Inc.4). One fan-in
+    /// subject; the consumer routes by `request_id`, so a chunk for a request that has already
+    /// timed out is dropped rather than mis-attributed.
+    pub async fn subscribe_poller_log_chunks(
+        &self,
+    ) -> Result<impl Stream<Item = PollerLogChunk>, BusError> {
+        let sub = self
+            .client
+            .subscribe(subjects::poller_log_reply())
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe poller log chunks: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<PollerLogChunk>(&msg.payload) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed PollerLogChunk from bus");
+                    None
+                }
+            }
+        }))
+    }
+
     /// Subscribe (in a queue group) to discovery jobs — poller side. Malformed messages skipped.
     pub async fn subscribe_discovery_jobs(
         &self,
@@ -597,6 +647,29 @@ impl UpgradeBus for NatsBus {
             .publish(subject, payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish upgrade to {poller}: {e}")))
+    }
+}
+
+#[async_trait]
+impl LogBus for NatsBus {
+    async fn publish_poller_log_request(&self, msg: PollerLogRequest) -> Result<(), BusError> {
+        let subject = subjects::poller_logs_for(&msg.poller_id);
+        let poller = msg.poller_id.clone();
+        let payload = serde_json::to_vec(&msg)
+            .map_err(|e| BusError::Publish(format!("encode poller log request: {e}")))?;
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish log request to {poller}: {e}")))
+    }
+
+    async fn publish_poller_log_chunk(&self, msg: PollerLogChunk) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&msg)
+            .map_err(|e| BusError::Publish(format!("encode poller log chunk: {e}")))?;
+        self.client
+            .publish(subjects::poller_log_reply(), payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish poller log chunk: {e}")))
     }
 }
 

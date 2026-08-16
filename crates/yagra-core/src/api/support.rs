@@ -30,6 +30,7 @@
 use super::error::{ApiError, ApiResult};
 use super::extract::{Admin, RequireManageCredentials, RequireManageSystem, RequireViewAudit};
 use super::ApiState;
+use crate::poller_logs::RemoteLogs;
 use crate::support_bundle::{
     self, BundleBuilder, BundleError, SecretScan, DEFAULT_SINCE_HOURS, MAX_LOG_BYTES,
     MAX_SINCE_HOURS,
@@ -79,7 +80,7 @@ pub(crate) struct BundleQuery {
     get, path = "/api/v1/system/support-bundle", tag = "system",
     params(BundleQuery),
     responses(
-        (status = 200, description = "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and the rotated log files of core and any co-located poller. With `node_id`, also a `node/` section describing that one node — its inventory row and owning poller, its stored interface rows, the metrics it is configured to collect, which of those are arriving, and its alerts. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections", content_type = "application/gzip"),
+        (status = 200, description = "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and rotated log files — core's, any co-located poller's, and any remote-site poller's that answered a request on the bus within the collection deadline. With `node_id`, also a `node/` section describing that one node — its inventory row and owning poller, its stored interface rows, the metrics it is configured to collect, which of those are arriving, and its alerts. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections", content_type = "application/gzip"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks any of ManageSystem, ManageCredentials or ViewAudit", body = super::error::ErrorBody),
         (status = 500, description = "The redaction scan matched, so nothing was released. The rule and the file are named in the log, never the value", body = super::error::ErrorBody),
@@ -318,6 +319,13 @@ async fn build(
         ),
     }
 
+    // ── Remote-site poller logs, over the bus (ADR-045 Inc.4) ─────────────────────────────────
+    // Asked for here, before the blocking section, because it is the last thing in `build` that
+    // awaits: a fan-out to every site plus a bounded wait for the answers. The result is moved into
+    // the blocking closure below, which decides which of them to keep — that decision needs the
+    // on-disk file list, and reading it is itself blocking.
+    let remote = collect_remote_poller_logs(st, admin, hours).await;
+
     // ── Logs, then assembly ───────────────────────────────────────────────────────────────────
     // Everything from here is synchronous and unbounded-ish: `collect_logs` reads up to
     // MAX_LOG_BYTES (24 MB) of rotated log files off disk, and `finish` then runs the redaction
@@ -328,7 +336,7 @@ async fn build(
     // read (`yagra-poller`) already follow.
     let scan = SecretScan::from_env();
     tokio::task::spawn_blocking(move || {
-        collect_logs(&mut b, hours);
+        collect_logs(&mut b, hours, remote);
         b.finish(&scan, now)
     })
     .await
@@ -500,7 +508,7 @@ async fn add_node_section(
 /// The "not configured" branch is not an error and says so in words an operator can act on: file
 /// logging is opt-in, and a bundle from a deployment without it is still worth having — it just
 /// cannot answer what happened before the current process started.
-fn collect_logs(b: &mut BundleBuilder, hours: u32) {
+fn collect_logs(b: &mut BundleBuilder, hours: u32, remote: RemoteLogs) {
     let Some(dir) = yagra_telemetry::log_dir() else {
         b.omit(
             "logs/",
@@ -508,6 +516,9 @@ fn collect_logs(b: &mut BundleBuilder, hours: u32) {
              future bundle can carry core's own log, including a panic from a run that has already \
              ended. Without it the logs exist only in `docker logs` on the host.",
         );
+        // A remote site's log arrives over the bus and never touches this directory, so it is still
+        // worth carrying — the two paths share only the archive they land in.
+        add_remote_poller_logs(b, remote, &std::collections::BTreeSet::new());
         return;
     };
     let since = std::time::SystemTime::now()
@@ -544,7 +555,8 @@ fn collect_logs(b: &mut BundleBuilder, hours: u32) {
         );
     }
 
-    collect_poller_logs(b, &dir, since);
+    let colocated = collect_poller_logs(b, &dir, since);
+    add_remote_poller_logs(b, remote, &colocated);
 }
 
 /// Where a co-located poller writes its own rolling log files: a subdirectory of core's log
@@ -564,31 +576,37 @@ const POLLER_LOG_SUBDIR: &str = "pollers";
 /// core even start".
 const POLLER_LOG_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-/// Add any co-located poller's rotated log files.
+/// Add any co-located poller's rotated log files, and return the poller ids they covered.
 ///
 /// **This reaches only pollers that share a filesystem with core** — the single-node composition,
 /// where they are two containers on one host. A remote-site poller writes its logs at its own site
-/// and nothing here can see them; that is stated in the manifest rather than left as an absence,
-/// because "no poller logs" and "no poller" look identical in an archive.
+/// and nothing here can see them; since ADR-045 Inc.4 those arrive over the bus instead
+/// ([`add_remote_poller_logs`]), and whichever path fails still says so in the manifest rather than
+/// leaving an absence, because "no poller logs" and "no poller" look identical in an archive.
 ///
 /// What it *does* reach, and the bus never will, is a poller that is **no longer running**. That
 /// is the whole reason this exists alongside the bus path: a poller killed by the OOM killer
 /// cannot answer a request, but its last hour is on disk. Same argument ADR-045 決定 2 made for
 /// core, one component over.
+///
+/// The returned id set is what stops the two paths carrying the same file twice for a co-located
+/// poller that also answered on the bus.
 fn collect_poller_logs(
     b: &mut BundleBuilder,
     core_dir: &std::path::Path,
     since: std::time::SystemTime,
-) {
+) -> std::collections::BTreeSet<String> {
+    let mut covered = std::collections::BTreeSet::new();
     let dir = core_dir.join(POLLER_LOG_SUBDIR);
     if !dir.is_dir() {
         b.omit(
             "logs/ (poller)",
             "no co-located poller log directory. A poller writes here only when it shares core's \
              log volume and sets YAGRA_LOG_DIR to the pollers/ subdirectory; a remote-site poller \
-             never can, because its disk is at its own site.",
+             never can, because its disk is at its own site — it is asked over the bus instead, and \
+             any site that did not answer is listed separately below.",
         );
-        return;
+        return covered;
     }
     let collected = support_bundle::collect_logs(&dir, "yagra-poller", since, POLLER_LOG_MAX_BYTES);
     if collected.files.is_empty() && collected.dropped_for_size == 0 {
@@ -600,6 +618,9 @@ fn collect_poller_logs(
         );
     }
     for (name, bytes) in collected.files {
+        if let Some(id) = poller_id_from_log_name(&name) {
+            covered.insert(id);
+        }
         b.add_bytes(
             &format!("logs/{name}"),
             "One rotated hour of a co-located poller's structured log (JSON lines). The filename \
@@ -615,6 +636,78 @@ fn collect_poller_logs(
                  kept. This budget is separate from core's, so nothing of core's log was displaced."
             ),
         );
+    }
+    covered
+}
+
+/// Recover the poller id from a log filename written by `yagra_telemetry::file_prefix`:
+/// `yagra-poller-<id>.<YYYY-MM-DD-HH>.log`.
+///
+/// Used only to avoid carrying a co-located poller's log twice when it answers on the bus as well.
+/// A name that does not parse yields `None`, which costs a duplicate rather than a missing file —
+/// the safe direction for a diagnostic artefact.
+fn poller_id_from_log_name(name: &str) -> Option<String> {
+    let rest = name.strip_prefix("yagra-poller-")?;
+    let (id, _) = rest.split_once('.')?;
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+/// Ask every live poller that can answer for its own log, over the bus (ADR-045 Inc.4).
+///
+/// Which pollers: those the coordinator currently considers **online** and that advertise
+/// [`yagra_bus::CAP_LOG_SHIP`]. The capability is the difference between "this site sent nothing"
+/// and "there was nothing to send" — a poller with no file layer would answer every request with an
+/// empty reply, indistinguishable from one that is not subscribed at all.
+///
+/// Returns an empty result — never an error — when there is no collector (skeleton mode) or no
+/// write side. A bundle is requested because something is broken; a bus that is down is a section
+/// this bundle lacks, not a reason to refuse it.
+async fn collect_remote_poller_logs(
+    st: &ApiState,
+    admin: &super::AdminState,
+    hours: u32,
+) -> RemoteLogs {
+    let Some(collector) = st.poller_logs.as_ref() else {
+        return RemoteLogs::default();
+    };
+    let targets: Vec<String> = admin
+        .coordinator
+        .poller_views(std::time::Instant::now())
+        .into_iter()
+        .filter(|v| v.online && v.caps.iter().any(|c| c == yagra_bus::CAP_LOG_SHIP))
+        .map(|v| v.id)
+        .collect();
+    let since = chrono::Utc::now() - chrono::Duration::hours(i64::from(hours));
+    collector.collect(&targets, since.timestamp()).await
+}
+
+/// Add what the remote pollers sent, and name every one that sent nothing.
+///
+/// `already_on_disk` holds the ids the disk path already covered, so a co-located poller that also
+/// answered on the bus does not appear twice. Its disk copy wins, deliberately: it is the one that
+/// survives the poller dying, and it was collected under the same cap as core's own log.
+fn add_remote_poller_logs(
+    b: &mut BundleBuilder,
+    remote: RemoteLogs,
+    already_on_disk: &std::collections::BTreeSet<String>,
+) {
+    for f in remote.files {
+        if already_on_disk.contains(&f.poller_id) {
+            continue;
+        }
+        b.add_bytes(
+            &format!("logs/remote/{}", f.name),
+            "One rotated hour of a remote-site poller's structured log (JSON lines), sent over the \
+             bus. The poller scanned it for its own device credentials before sending — core's scan \
+             cannot see those",
+            f.bytes,
+        );
+    }
+    for gap in remote.gaps {
+        if already_on_disk.contains(&gap.poller_id) {
+            continue;
+        }
+        b.omit(format!("logs/remote/ ({})", gap.poller_id), gap.why);
     }
 }
 

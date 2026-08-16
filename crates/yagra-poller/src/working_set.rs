@@ -363,6 +363,35 @@ impl WorkingSet {
     pub fn sync_state(&self) -> (Option<Uuid>, u64) {
         (self.epoch, self.last_seq)
     }
+
+    /// Every plaintext device credential currently in this working set, deduplicated (ADR-045
+    /// Inc.4).
+    ///
+    /// Feeds the fail-closed scan the poller runs over its own log before shipping it. Core's
+    /// equivalent set comes from core's environment and therefore **cannot** contain a device
+    /// community string — that value is decrypted from the credential store and inlined into the
+    /// spec, so this collection is the only place it exists in plaintext outside the device.
+    ///
+    /// Built on demand rather than maintained incrementally: a set updated on every `apply` would
+    /// either grow without bound or need eviction, and this runs once per support bundle. The cost
+    /// is the residual hole worth knowing about — **a credential that has since been removed from
+    /// the working set is not in this set**, so a log line written while it was in use would not be
+    /// caught. Same class of gap as core's "a secret this process cannot see".
+    ///
+    /// **Never log the result.**
+    #[must_use]
+    pub fn secret_literals(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .nodes
+            .values()
+            .flatten()
+            .flat_map(|s| s.spec.check.secret_literals())
+            .map(str::to_owned)
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
 }
 
 /// Pair a node's new spec list against what it already had, donating each surviving spec's previous

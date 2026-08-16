@@ -17166,7 +17166,7 @@
         ],
         "responses": {
           "200": {
-            "description": "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and the rotated log files of core and any co-located poller. With `node_id`, also a `node/` section describing that one node — its inventory row and owning poller, its stored interface rows, the metrics it is configured to collect, which of those are arriving, and its alerts. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections",
+            "description": "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and rotated log files — core's, any co-located poller's, and any remote-site poller's that answered a request on the bus within the collection deadline. With `node_id`, also a `node/` section describing that one node — its inventory row and owning poller, its stored interface rows, the metrics it is configured to collect, which of those are arriving, and its alerts. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections",
             "content": {
               "application/gzip": {}
             }

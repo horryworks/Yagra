@@ -31,6 +31,19 @@
     absence. It *does* reach a poller that has since died, which is the case a live request never
     can.
   - The poller log budget is separate from core's, so this cannot displace core's own log.
+- **A remote-site poller's log now reaches the bundle too, over the bus.** Core asks every live
+  poller that advertises the capability for a window of its own log and carries the answers under
+  `logs/remote/`. This is the half a shared volume structurally cannot reach: a poller at a
+  monitored site has its own disk.
+  - **The poller scans its own log before sending, and refuses the whole reply on a match.** It has
+    to be that way round: core's redaction scan is built from the secrets core can see, which never
+    include a monitored device's SNMP community — that value is decrypted by core and then lives in
+    the poller. The refusal names the rule and never the value, and reaches the bundle as an
+    explanation rather than an absence.
+  - **Every site that was asked and sent nothing is listed by name**, with why — unreachable, out of
+    order, refused, or "answered, and had nothing in that window". "No file from Tokyo" and "no
+    poller in Tokyo" are indistinguishable in an archive unless someone writes the difference down.
+  - It cannot fail a bundle. A site that is gone costs a 20-second wait once and then an omission.
 
 ### Improvements
 - `MANIFEST.json`'s omission list is more specific about what a bundle cannot answer — including
@@ -43,6 +56,15 @@
   `docker-compose.deploy.yml` now mount the shared `logdata` volume into the poller and set
   `YAGRA_LOG_DIR=/var/log/yagra/pollers`. Without it the poller logs to stdout only, exactly as
   before, and the bundle records that no co-located poller log directory was found.
+- **A remote-site poller must have `YAGRA_LOG_DIR` set to take part in the bus path**, and be
+  upgraded to a build that understands the request. `docker-compose.poller.yml` already sets it.
+  A poller without it does not advertise `log-ship`, core does not ask, and the bundle names the
+  site as unrepresented rather than waiting on it.
+- **Exposing the bus to remote sites needs two new subject grants.** `docker/nats/nats-server.conf`
+  gains `yagra.poller.logs.>` (subscribe) and `yagra.poller.logreply` (publish) on the static
+  `poller` account; the Auth Callout path grants the same pair scoped to each poller's own id.
+  Replace the file if you deployed a copy of it — a missing grant is denied silently by the broker,
+  so the only symptom is that remote sites are always recorded as not having answered.
 
 ## v0.2.11 — an interface says what it negotiated, what it is made of, and how much light it sees
 
