@@ -47,6 +47,43 @@ pub enum CollectionKind {
     Optical,
 }
 
+impl CollectionKind {
+    /// Every variant, for exhaustive iteration in tests.
+    pub const ALL: [Self; 3] = [Self::Scalar, Self::Table, Self::Optical];
+
+    /// The token stored in the `collection` column of `collection_items` /
+    /// `collection_template_items`.
+    ///
+    /// ⚠️ **This is a database value, so it is frozen.** Renaming one makes every existing row
+    /// unreadable, and the column has no CHECK constraint to notice.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scalar => "scalar",
+            Self::Table => "table",
+            Self::Optical => "optical",
+        }
+    }
+
+    /// Parse the stored token back, or `None` when this binary does not know it.
+    ///
+    /// 🚨 **This function exists because its absence shipped a silent, total failure.** The reader
+    /// used to be a `match` ending in `_ => CollectionKind::Scalar`, so the moment `optical` rows
+    /// were seeded they read back as scalars: the scheduler put them in the SNMP **GET** list, no
+    /// optical probe was ever built, and the metric inventory reported them as node-level. Nothing
+    /// errored, nothing logged, and every test passed — because every test used the enum directly
+    /// and never went through the database. A wildcard over a domain enum is exactly the failure
+    /// `.claude/rules/extensibility.md` §1 forbids, and this is what it looks like in production.
+    ///
+    /// `None` rather than a default is the point: the caller has to decide what an unknown token
+    /// means, and "an older binary reading a newer row" is a real case — a rollback after this
+    /// shipped will find `optical` rows it cannot run.
+    #[must_use]
+    pub fn from_token(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.as_str() == s)
+    }
+}
+
 /// Which vendor dialect an [`CollectionKind::Optical`] item speaks, selected by the item's `oid`.
 ///
 /// Every dialect answers the same two questions — "what is this port receiving" and "what is it
@@ -1489,6 +1526,47 @@ mod tests {
         }
         for bad in [-742.0, 742.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
             assert!(!is_plausible_dbm(bad), "{bad} should be refused");
+        }
+    }
+
+    /// Every kind survives the trip through its **stored** token.
+    ///
+    /// 🚨 This is the test whose absence let ADR-062 ship inert. The reader in `yagra-core` ended
+    /// in `_ => Scalar`, so `optical` rows came back as scalars and no optical probe was ever
+    /// built — silently, with every other test green, because they all used the enum directly and
+    /// never went through the database. A round trip is the only shape that catches it.
+    #[test]
+    fn every_collection_kind_round_trips_through_its_stored_token() {
+        for kind in CollectionKind::ALL {
+            assert_eq!(
+                CollectionKind::from_token(kind.as_str()),
+                Some(kind),
+                "{kind:?} does not survive its own token"
+            );
+        }
+        // Distinct tokens, or two kinds would read back as one.
+        let mut tokens: Vec<&str> = CollectionKind::ALL.iter().map(|k| k.as_str()).collect();
+        tokens.sort_unstable();
+        let before = tokens.len();
+        tokens.dedup();
+        assert_eq!(before, tokens.len(), "two kinds share a stored token");
+        // An unknown token is refused rather than defaulted — the caller decides what it means.
+        assert_eq!(CollectionKind::from_token("something_new"), None);
+        assert_eq!(CollectionKind::from_token(""), None);
+    }
+
+    /// The stored token and the JSON tag are produced by two different mechanisms — `as_str` and
+    /// `#[serde(rename_all)]` — and nothing makes them agree. They must, because the same value is
+    /// both a database column and an API field.
+    #[test]
+    fn the_stored_token_and_the_serde_tag_agree_for_every_kind() {
+        for kind in CollectionKind::ALL {
+            let json = serde_json::to_string(&kind).expect("serialize");
+            assert_eq!(
+                json,
+                format!("\"{}\"", kind.as_str()),
+                "{kind:?}: stored token and serde tag disagree"
+            );
         }
     }
 

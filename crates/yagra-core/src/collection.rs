@@ -22,11 +22,28 @@ pub struct StoredCollectionItem {
     pub enabled: bool,
 }
 
+/// Read the stored `collection` token back into its kind.
+///
+/// 🚨 **This used to be its own `match` ending in `_ => Scalar`, and that wildcard shipped a silent
+/// total failure.** ADR-062's `optical` rows were seeded, read back as scalars, dispatched as SNMP
+/// GETs of a table root, and produced nothing — with no error, no log line, and a green test suite,
+/// because every test constructed the enum directly instead of going through the database. The
+/// token list now lives on the enum ([`CollectionKind::from_token`]) so adding a variant cannot
+/// leave a reader behind.
+///
+/// An unknown token still has to mean *something* here, since the row exists and the query already
+/// succeeded. `Scalar` remains the fallback — it is the shape that asks the device for one OID and
+/// stops — but it is now reached only by a token no binary knows, and it says so.
 fn parse_collection_kind(s: &str) -> CollectionKind {
-    match s {
-        "table" => CollectionKind::Table,
-        _ => CollectionKind::Scalar,
-    }
+    CollectionKind::from_token(s).unwrap_or_else(|| {
+        tracing::warn!(
+            token = %s,
+            "unknown collection kind in the database — treating it as a scalar GET. This row was \
+             written by a newer core; the metric it names will not be collected correctly until \
+             this binary is upgraded."
+        );
+        CollectionKind::Scalar
+    })
 }
 
 fn parse_metric_kind(s: &str) -> MetricKind {
@@ -535,5 +552,44 @@ mod tests {
                 "SQL may be being built by string concatenation ({builder}); bind the value instead"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    /// The reader accepts every token the writer can produce.
+    ///
+    /// 🚨 The bug this pins was invisible from either side alone: the seeder wrote `optical`
+    /// correctly and the enum handled it correctly, but the reader in between fell through a
+    /// wildcard to `Scalar`. The scheduler then built an SNMP GET of a table root, the optical
+    /// probe was never created, and `list_node_metrics` reported the metric as node-level — all
+    /// without an error or a log line. Only a test that crosses the writer/reader seam sees it.
+    #[test]
+    fn the_reader_accepts_every_token_the_seeder_writes() {
+        for kind in CollectionKind::ALL {
+            assert_eq!(
+                parse_collection_kind(kind.as_str()),
+                kind,
+                "{kind:?} does not survive the database round trip"
+            );
+        }
+    }
+
+    /// An unknown token degrades to a scalar GET rather than failing the whole query — an older
+    /// core must still be able to read a newer core's rows, losing only the metric it cannot run.
+    #[test]
+    fn an_unknown_token_degrades_instead_of_failing() {
+        assert_eq!(
+            parse_collection_kind("from_the_future"),
+            CollectionKind::Scalar
+        );
+    }
+
+    #[test]
+    fn metric_kinds_round_trip_too() {
+        assert_eq!(parse_metric_kind("counter"), MetricKind::Counter);
+        assert_eq!(parse_metric_kind("gauge"), MetricKind::Gauge);
     }
 }

@@ -28,11 +28,9 @@ pub struct MibEntry {
 }
 
 fn collection_str(k: CollectionKind) -> &'static str {
-    match k {
-        CollectionKind::Scalar => "scalar",
-        CollectionKind::Table => "table",
-        CollectionKind::Optical => "optical",
-    }
+    // Shared with the seeder and the reader (`CollectionKind::from_token`) so the three cannot
+    // drift — a token only two of them knew is what made ADR-062 silently collect nothing.
+    k.as_str()
 }
 
 fn metric_kind_str(k: MetricKind) -> &'static str {

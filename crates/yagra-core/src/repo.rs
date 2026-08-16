@@ -17,7 +17,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 use sqlx::Row;
 use uuid::Uuid;
-use yagra_common::{CollectionKind, CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
+use yagra_common::{CredentialId, GroupId, MetricKind, Node, NodeId, ProfileId};
 
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
 use crate::neighbors::AdjacencySettings;
@@ -1752,11 +1752,9 @@ impl NodeRepo {
             .execute(&self.pool)
             .await?;
             for item in template.items {
-                let collection = match item.kind {
-                    CollectionKind::Scalar => "scalar",
-                    CollectionKind::Table => "table",
-                    CollectionKind::Optical => "optical",
-                };
+                // One source for the stored token, shared with the reader — see
+                // `CollectionKind::from_token`, whose absence once made a whole feature inert.
+                let collection = item.kind.as_str();
                 let metric_kind = match item.metric_kind {
                     MetricKind::Gauge => "gauge",
                     MetricKind::Counter => "counter",
