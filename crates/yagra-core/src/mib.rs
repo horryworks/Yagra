@@ -31,6 +31,7 @@ fn collection_str(k: CollectionKind) -> &'static str {
     match k {
         CollectionKind::Scalar => "scalar",
         CollectionKind::Table => "table",
+        CollectionKind::Optical => "optical",
     }
 }
 

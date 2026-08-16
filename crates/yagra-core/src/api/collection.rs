@@ -27,7 +27,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::resolve_collection_set;
+use yagra_common::{
+    resolve_collection_set, OpticalFlavor, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
+};
 
 /// An interface whose metadata has not been refreshed within this window is flagged stale. The UI
 /// shows the row either way — a switch that stopped answering SNMP still has ports.
@@ -116,13 +118,40 @@ fn validate_item(body: &CreateCollectionItem) -> Result<(), ApiError> {
             "oid must be a dotted numeric OID",
         ));
     }
-    if !matches!(body.collection.as_str(), "scalar" | "table")
+    if !matches!(body.collection.as_str(), "scalar" | "table" | "optical")
         || !matches!(body.metric_kind.as_str(), "gauge" | "counter")
     {
         return Err(ApiError::bad_request(
             "invalid_collection_item",
-            "collection must be scalar|table and metric_kind gauge|counter",
+            "collection must be scalar|table|optical and metric_kind gauge|counter",
         ));
+    }
+    // An optical item is not free-form: its OID selects a vendor dialect the poller implements,
+    // and its metric name says which of the two readings it publishes (ADR-062). Both are refused
+    // at the edge rather than accepted and ignored — an item that is stored, listed in the
+    // collection editor and silently never collected is the worst of the three outcomes.
+    if body.collection == "optical" {
+        if OpticalFlavor::from_root(&body.oid).is_none() {
+            return Err(ApiError::bad_request(
+                "unknown_optical_dialect",
+                "oid must be the entry OID of a supported optical MIB",
+            ));
+        }
+        if !matches!(
+            body.metric_name.as_str(),
+            METRIC_IF_RX_POWER_DBM | METRIC_IF_TX_POWER_DBM
+        ) {
+            return Err(ApiError::bad_request(
+                "invalid_optical_metric",
+                "an optical item must be named if_rx_power_dbm or if_tx_power_dbm",
+            ));
+        }
+        if body.metric_kind != "gauge" {
+            return Err(ApiError::bad_request(
+                "invalid_optical_metric",
+                "optical power is a gauge, never a counter",
+            ));
+        }
     }
     Ok(())
 }
@@ -657,6 +686,63 @@ mod tests {
     use yagra_common::{Principal, Role, Scope};
 
     const ID: &str = "00000000-0000-0000-0000-000000000001";
+
+    fn body(metric: &str, oid: &str, collection: &str, metric_kind: &str) -> CreateCollectionItem {
+        CreateCollectionItem {
+            metric_name: metric.to_owned(),
+            oid: oid.to_owned(),
+            collection: collection.to_owned(),
+            metric_kind: metric_kind.to_owned(),
+            enabled: None,
+        }
+    }
+
+    /// An optical item is refused unless it names a dialect the poller implements AND one of the
+    /// two readings it can publish.
+    ///
+    /// Refusing at the edge rather than ignoring later is the whole point: an item that is stored,
+    /// listed in the collection editor, and silently never collected is worse than a 400 — the
+    /// operator has no way to tell it apart from a device that has no optics.
+    #[test]
+    fn an_optical_item_must_name_a_known_dialect_and_reading() {
+        // The shape the built-in templates use.
+        for metric in [METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM] {
+            for flavor in OpticalFlavor::ALL {
+                assert!(
+                    validate_item(&body(metric, flavor.root_oid(), "optical", "gauge")).is_ok(),
+                    "{metric} on {flavor:?} should be accepted"
+                );
+            }
+        }
+
+        let huawei = OpticalFlavor::Huawei.root_oid();
+        // An OID that is a valid OID but not a dialect entry point.
+        let err = validate_item(&body(
+            METRIC_IF_RX_POWER_DBM,
+            "1.3.6.1.4.1.9999.1",
+            "optical",
+            "gauge",
+        ))
+        .expect_err("unknown dialect must be refused");
+        assert_eq!(err.code(), "unknown_optical_dialect");
+        // A metric name the poller has no reading for.
+        let err = validate_item(&body("if_optical_temperature", huawei, "optical", "gauge"))
+            .expect_err("unknown reading must be refused");
+        assert_eq!(err.code(), "invalid_optical_metric");
+        // Optical power is a level, not an odometer — a counter would be served through rate().
+        let err = validate_item(&body(METRIC_IF_RX_POWER_DBM, huawei, "optical", "counter"))
+            .expect_err("a counter must be refused");
+        assert_eq!(err.code(), "invalid_optical_metric");
+    }
+
+    /// The optical rules apply to optical items only — a table item pointed at the same OID is
+    /// still an ordinary walk, and must not inherit the naming restriction.
+    #[test]
+    fn the_optical_rules_do_not_leak_onto_ordinary_items() {
+        let oid = OpticalFlavor::Huawei.root_oid();
+        assert!(validate_item(&body("huawei_something", oid, "table", "gauge")).is_ok());
+        assert!(validate_item(&body("anything", "1.3.6.1.2.1.1.3.0", "scalar", "counter")).is_ok());
+    }
 
     /// Every configuration route this module serves — the interface list is deliberately absent,
     /// since it is the one endpoint here gated on `View`.

@@ -10,6 +10,7 @@ import {
   formatBytes,
   formatCount,
   formatDaysToExpiry,
+  formatDbm,
   formatUptimeTicks,
   formatUtil,
   httpStatusLabel,
@@ -290,5 +291,37 @@ describe('format', () => {
 
     const raw = scalarDisplay('snmp_oid_1_3_6', 42);
     expect(raw).toEqual({ label: 'snmp_oid_1_3_6', value: '42', known: false });
+  });
+});
+
+describe('formatDbm', () => {
+  it('shows an em dash when the port reports no level', () => {
+    expect(formatDbm(null)).toBe('—');
+    expect(formatDbm(undefined)).toBe('—');
+    expect(formatDbm(Number.NaN)).toBe('—');
+  });
+
+  // Optical levels are normally negative — the formatters beside this one mishandle that, which is
+  // why dBm gets its own rather than reusing formatBps/formatBytes.
+  it('keeps the sign on a normal receive level', () => {
+    expect(formatDbm(-7.42)).toBe('-7.4 dBm');
+    expect(formatDbm(-20)).toBe('-20.0 dBm');
+  });
+
+  // 0 dBm is one milliwatt: a real, strong reading, not an absence.
+  it('renders 0 dBm as a value', () => {
+    expect(formatDbm(0)).toBe('0.0 dBm');
+  });
+
+  // Half a dB matters in a link budget, so the decimal stays even on whole numbers — otherwise a
+  // link drifting past an integer would look flat on exactly those ticks.
+  it('always keeps one decimal, including on whole numbers', () => {
+    expect(formatDbm(3)).toBe('3.0 dBm');
+    expect(formatDbm(-7)).toBe('-7.0 dBm');
+  });
+
+  // ⚠️ dBm is logarithmic: it must never be SI-scaled the way bit rates are.
+  it('never applies an SI prefix', () => {
+    expect(formatDbm(-1500)).toBe('-1500.0 dBm');
   });
 });

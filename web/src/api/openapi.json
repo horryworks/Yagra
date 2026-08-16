@@ -20723,7 +20723,8 @@
         "description": "How a [`CollectionItem`] is collected from the agent.",
         "enum": [
           "scalar",
-          "table"
+          "table",
+          "optical"
         ]
       },
       "CollectionTemplateItemRow": {
@@ -24621,7 +24622,7 @@
       },
       "InterfaceSeries": {
         "type": "object",
-        "description": "Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per\nsecond** and in **packets per second**, In/Out errors, and In/Out discards.\n\nOnly the throughput pair has two units, and that is a property of the MIB rather than a\nshortcut: IF-MIB counts errored and discarded frames but never their octets, so\n`in_errors`/`out_errors`/`in_discards`/`out_discards` are packets per second and there is no\nbits-per-second form of them to ask for.\n\n`in_ucast_pps`/`out_ucast_pps` are **unicast only** (`ifHCInUcastPkts`/`ifHCOutUcastPkts`);\nmulticast and broadcast frames are not counted. The name says so rather than the documentation\nalone, so that a future total can be added as a new field instead of silently changing what an\nexisting number means. Two consequences for a client: on a link carrying heavy broadcast the\npacket rate reads low, and dividing bits by packets overstates the average frame size.\n\nErrors and discards are separate because their causes are: an error is a frame that arrived\ndamaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong\nwith it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the\nwrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.\n\nAll eight share one `timestamps` axis — the union of returned points, with `null` in the gaps —\nso the chart gets aligned series rather than eight independently-indexed ones. Derived at query\ntime (ADR-012); empty when there is no history. The packet counters entered the default\ncollection set in ADR-060, so on a deployment upgraded from an earlier version the pps arrays\nare empty for every window predating that upgrade while the bps arrays are populated.",
+        "description": "Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per\nsecond** and in **packets per second**, In/Out errors, and In/Out discards.\n\nOnly the throughput pair has two units, and that is a property of the MIB rather than a\nshortcut: IF-MIB counts errored and discarded frames but never their octets, so\n`in_errors`/`out_errors`/`in_discards`/`out_discards` are packets per second and there is no\nbits-per-second form of them to ask for.\n\n`in_ucast_pps`/`out_ucast_pps` are **unicast only** (`ifHCInUcastPkts`/`ifHCOutUcastPkts`);\nmulticast and broadcast frames are not counted. The name says so rather than the documentation\nalone, so that a future total can be added as a new field instead of silently changing what an\nexisting number means. Two consequences for a client: on a link carrying heavy broadcast the\npacket rate reads low, and dividing bits by packets overstates the average frame size.\n\nErrors and discards are separate because their causes are: an error is a frame that arrived\ndamaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong\nwith it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the\nwrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.\n\n`rx_power_dbm`/`tx_power_dbm` are the transceiver's received and transmitted optical power in\n**dBm**, and differ from the six above in three ways worth knowing (ADR-062). They are gauges,\nnot counter rates — the value is read as reported, not differentiated. They are **normally\nnegative**: a healthy receive level is roughly −3 to −20 dBm, and 0 dBm means one milliwatt, not\n\"nothing\". And they are **populated only for optical ports** — a copper port, a virtual\ninterface, or a device whose transceiver MIB Yagra does not speak leaves both arrays entirely\n`null`, which is the intended way for a client to tell an optical interface from any other.\nThe figure is the **module's** reading; a multi-lane transceiver (QSFP) reports its first lane\nrather than an aggregate, and per-lane series are deliberately not offered.\n\nAll ten share one `timestamps` axis — the union of returned points, with `null` in the gaps —\nso the chart gets aligned series rather than ten independently-indexed ones. Derived at query\ntime (ADR-012); empty when there is no history. The packet counters entered the default\ncollection set in ADR-060 and the optical readings in ADR-062, so on a deployment upgraded from\nan earlier version those arrays are empty for every window predating that upgrade while the bps\narrays are populated.",
         "required": [
           "timestamps",
           "in_bps",
@@ -24631,7 +24632,9 @@
           "in_errors",
           "out_errors",
           "in_discards",
-          "out_discards"
+          "out_discards",
+          "rx_power_dbm",
+          "tx_power_dbm"
         ],
         "properties": {
           "in_bps": {
@@ -24714,11 +24717,31 @@
               "format": "double"
             }
           },
+          "rx_power_dbm": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
           "timestamps": {
             "type": "array",
             "items": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          "tx_power_dbm": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
             }
           }
         }

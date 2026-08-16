@@ -32,6 +32,127 @@ pub enum CollectionKind {
     /// A table *column* base OID walked with GETBULK — one value per row/interface,
     /// keyed by the trailing sub-identifier (the ifIndex).
     Table,
+    /// An optical-transceiver (DDM/DOM) probe: several correlated columns walked together and
+    /// normalised to dBm, keyed by a **real** ifIndex (ADR-062).
+    ///
+    /// Not a [`CollectionKind::Table`] because one OID does not make one metric here. The
+    /// standard spelling (ENTITY-SENSOR-MIB) needs value + scale + precision + type + a
+    /// free-text description correlated across five columns before a single dBm reading exists,
+    /// and most vendors key the result by `entPhysicalIndex` (the transceiver is a *part*, not a
+    /// port) which must be mapped to an ifIndex before the sample means anything to the rest of
+    /// the system. The poller owns all of that; see [`OpticalFlavor`].
+    ///
+    /// The item's `oid` is the flavour's **entry OID**, not a column base — it selects which
+    /// vendor dialect to speak. An `oid` no [`OpticalFlavor::from_root`] recognises is skipped.
+    Optical,
+}
+
+/// Which vendor dialect an [`CollectionKind::Optical`] item speaks, selected by the item's `oid`.
+///
+/// Every dialect answers the same two questions — "what is this port receiving" and "what is it
+/// transmitting", in dBm — and differs only in where the numbers live, how they are scaled, and
+/// what indexes them. Keeping the dialect in an enum rather than in extra `CollectionItem`
+/// columns is what lets a new vendor be one arm here instead of a schema migration (ADR-046
+/// decision 6 declined a `unit` column; this ADR does not reopen it — the unit is in the metric
+/// *name*, `if_rx_power_dbm`, exactly as `icmp_rtt_ms` does it).
+///
+/// ⚠️ **Only the dialects whose scale factor was verified against the vendor MIB are here.**
+/// MikroTik's `mtxrOpticalTable` was left out deliberately: the column numbers were confirmed but
+/// the scale was not, and a wrong scale produces a plausible-looking wrong number, which is worse
+/// than no chart at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpticalFlavor {
+    /// ENTITY-SENSOR-MIB (RFC 3433) — Cisco, Arista, and most vendors that implement ENTITY-MIB.
+    /// The only vendor-neutral spelling, and the most expensive to read: the sensor rows carry a
+    /// *type*, a *scale* and a *precision* that must be combined, and nothing but the physical
+    /// entity's free-text name says whether a row is the transmit or the receive sensor.
+    EntitySensor,
+    /// HUAWEI-ENTITY-EXTENT-MIB `hwOpticalModuleInfoTable` — Rx `.8`, Tx `.9`, both dBm × 100,
+    /// indexed by `entPhysicalIndex`.
+    Huawei,
+    /// JUNIPER-DOM-MIB `jnxDomCurrentTable` — Rx `.5`, Tx `.7`, both dBm × 100, and **indexed by
+    /// ifIndex directly**, so no entity mapping is needed.
+    Juniper,
+    /// HH3C-TRANSCEIVER-INFO-MIB `hh3cTransceiverInfoTable` — Tx `.11`, Rx `.12`, both dBm × 100,
+    /// indexed by ifIndex. Covers H3C and the HPE Comware switches OEMed from it.
+    H3c,
+}
+
+impl OpticalFlavor {
+    /// Every dialect, for exhaustive iteration in tests and seeding.
+    pub const ALL: [Self; 4] = [Self::EntitySensor, Self::Huawei, Self::Juniper, Self::H3c];
+
+    /// The entry OID that selects this dialect — the value an [`CollectionKind::Optical`] item
+    /// carries in its `oid` field.
+    #[must_use]
+    pub const fn root_oid(self) -> &'static str {
+        match self {
+            Self::EntitySensor => "1.3.6.1.2.1.99.1.1.1",
+            Self::Huawei => "1.3.6.1.4.1.2011.5.25.31.1.1.3.1",
+            Self::Juniper => "1.3.6.1.4.1.2636.3.18.1.1.1",
+            Self::H3c => "1.3.6.1.4.1.25506.2.70.1.1.1",
+        }
+    }
+
+    /// The dialect an item's `oid` selects, or `None` when nothing recognises it.
+    ///
+    /// `None` is not an error: an operator may have typed an OID by hand, and an older core may
+    /// have seeded a dialect this binary predates. The poller skips it rather than failing the job.
+    #[must_use]
+    pub fn from_root(oid: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|f| f.root_oid() == oid)
+    }
+
+    /// Whether the dialect's rows are already keyed by ifIndex.
+    ///
+    /// `false` means the rows are keyed by `entPhysicalIndex` and must be translated through
+    /// ENTITY-MIB's `entAliasMappingIdentifier` before they can be attached to an interface —
+    /// a row that does not translate is **dropped**, never emitted under its raw index (ADR-062
+    /// decision 3): an untranslated row lands on `MetricDimension::Entity`, which means it costs
+    /// a series and appears on no chart.
+    #[must_use]
+    pub const fn is_ifindex_keyed(self) -> bool {
+        match self {
+            Self::Juniper | Self::H3c => true,
+            Self::EntitySensor | Self::Huawei => false,
+        }
+    }
+
+    /// Display name of the built-in collection template that carries this dialect.
+    #[must_use]
+    pub const fn template_name(self) -> &'static str {
+        match self {
+            Self::EntitySensor => T_OPTICAL_STD,
+            Self::Huawei => T_OPTICAL_HUAWEI,
+            Self::Juniper => T_OPTICAL_JUNIPER,
+            Self::H3c => T_OPTICAL_H3C,
+        }
+    }
+}
+
+/// Receive optical power, dBm. **The module's reading, not a per-lane one** — a multi-lane QSFP
+/// reports one figure per module here, and a future per-lane metric gets its own name rather than
+/// silently redefining this one (the `in_ucast_pps` lesson from ADR-060 decision 3).
+pub const METRIC_IF_RX_POWER_DBM: &str = "if_rx_power_dbm";
+
+/// Transmit optical power, dBm. Module-level, with the same caveat as [`METRIC_IF_RX_POWER_DBM`].
+pub const METRIC_IF_TX_POWER_DBM: &str = "if_tx_power_dbm";
+
+/// The plausible range of a real optical power reading, in dBm.
+///
+/// Transceivers live between roughly −40 dBm (below any receiver's sensitivity — what a dark fibre
+/// reports) and +10 dBm (above any pluggable's launch power). A normalised value outside this is
+/// not a dim link, it is a **scale that was applied wrongly**, and dropping it is the honest
+/// response: a wrong-by-100× number plots as a smooth, believable line.
+pub const OPTICAL_DBM_MIN: f64 = -60.0;
+/// Upper end of [`OPTICAL_DBM_MIN`]'s plausible window.
+pub const OPTICAL_DBM_MAX: f64 = 20.0;
+
+/// Whether a normalised dBm reading is inside the plausible window.
+#[must_use]
+pub fn is_plausible_dbm(v: f64) -> bool {
+    v.is_finite() && (OPTICAL_DBM_MIN..=OPTICAL_DBM_MAX).contains(&v)
 }
 
 /// One thing to collect: a stable metric name, the OID to collect it from, how to collect
@@ -349,6 +470,15 @@ const T_CISCO_IPSEC: &str = "Cisco IPsec tunnels";
 const T_FORTINET_VPN: &str = "Fortinet VPN";
 const T_PANOS: &str = "Palo Alto sessions/VPN";
 
+// ── Optical transceiver (DDM/DOM) — one per vendor dialect (ADR-062) ────────────────
+// A fourth tier. Split by dialect rather than folded into the vendor-health templates above
+// because the *reading* differs, not just the OID: see `OpticalFlavor`. Each carries the same
+// two metric names, so a node bound to two of them by mistake still produces one series pair.
+const T_OPTICAL_STD: &str = "Optical transceivers (ENTITY-SENSOR)";
+const T_OPTICAL_HUAWEI: &str = "Optical transceivers (Huawei)";
+const T_OPTICAL_JUNIPER: &str = "Optical transceivers (Juniper)";
+const T_OPTICAL_H3C: &str = "Optical transceivers (H3C/Comware)";
+
 /// The built-in collection templates shipped with Yagra (seeded on startup).
 ///
 /// Three tiers (see the name constants above). Vendor OIDs are best-effort common columns
@@ -580,7 +710,59 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
                 vendor_scalar("panos_gp_active_tunnels", "1.3.6.1.4.1.25461.2.1.2.5.1.3.0"),
             ],
         },
+        // ── Optical transceivers (ADR-062) ──
+        // ⚠️ APPEND-ONLY, and this is the one array in this file where that matters: `repo.rs`
+        // derives each template's seed id from its **index here** (`SeedRange::CollectionTemplates
+        // .id(i)`), so inserting above re-keys every template after it and silently breaks the
+        // profile→template links of existing deployments. `builtin_profiles` has an end-of-array
+        // guard test; this array has none, so the discipline is on the reader.
+        //
+        // Each template's items are `Optical`, and their `oid` is the dialect's **entry** OID, not
+        // a column base — one item does not map to one column here (see `CollectionKind::Optical`).
+        // Two items per dialect so the inventory stays honest: `list_node_metrics` joins configured
+        // items against real series by metric name, and a single "if_optical_power" family row
+        // would report `no_data` forever while the two real series reported `unconfigured`.
+        optical_template(OpticalFlavor::EntitySensor),
+        optical_template(OpticalFlavor::Huawei),
+        optical_template(OpticalFlavor::Juniper),
+        optical_template(OpticalFlavor::H3c),
     ]
+}
+
+/// The built-in optical template for one dialect: the same two metric names, pointed at the
+/// dialect's entry OID.
+fn optical_template(flavor: OpticalFlavor) -> BuiltinTemplate {
+    let item = |metric: &str| CollectionItem {
+        metric_name: metric.to_owned(),
+        oid: flavor.root_oid().to_owned(),
+        kind: CollectionKind::Optical,
+        metric_kind: MetricKind::Gauge,
+    };
+    BuiltinTemplate {
+        name: flavor.template_name(),
+        description: match flavor {
+            OpticalFlavor::EntitySensor => {
+                "Transceiver receive/transmit optical power in dBm, read from ENTITY-SENSOR-MIB \
+                 (RFC 3433) and attached to interfaces through ENTITY-MIB's alias mapping. The \
+                 vendor-neutral spelling — Cisco, Arista and most implementers of ENTITY-MIB."
+            }
+            OpticalFlavor::Huawei => {
+                "Transceiver receive/transmit optical power in dBm, read from Huawei's \
+                 hwOpticalModuleInfoTable and attached to interfaces through ENTITY-MIB's alias \
+                 mapping."
+            }
+            OpticalFlavor::Juniper => {
+                "Transceiver receive/transmit optical power in dBm, read from JUNIPER-DOM-MIB. \
+                 Indexed by ifIndex directly, so no entity mapping is needed."
+            }
+            OpticalFlavor::H3c => {
+                "Transceiver receive/transmit optical power in dBm, read from \
+                 HH3C-TRANSCEIVER-INFO-MIB. Covers H3C and the HPE Comware switches OEMed from \
+                 it; devices without the MIB simply return no rows."
+            }
+        },
+        items: vec![item(METRIC_IF_RX_POWER_DBM), item(METRIC_IF_TX_POWER_DBM)],
+    }
 }
 
 /// The built-in device profiles: split by **functional role (category) × vendor-NOS family**,
@@ -610,31 +792,60 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Cisco IOS/IOS-XE router",
             C::Router,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_IOS, T_ENTITY_SENSORS, T_BGP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_CISCO_IOS,
+                T_ENTITY_SENSORS,
+                T_BGP,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "Cisco IOS-XR router",
             C::Router,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_XR, T_ENTITY_SENSORS, T_BGP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_CISCO_XR,
+                T_ENTITY_SENSORS,
+                T_BGP,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "Juniper MX router",
             C::Router,
             Some("Juniper"),
-            vec![TEMPLATE_STANDARD_SNMP, T_JUNIPER, T_ENTITY_SENSORS, T_BGP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_JUNIPER,
+                T_ENTITY_SENSORS,
+                T_BGP,
+                T_OPTICAL_JUNIPER,
+            ],
         ),
         prof(
             "Huawei NE/AR router",
             C::Router,
             Some("Huawei"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_ENTITY_SENSORS, T_BGP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HUAWEI,
+                T_ENTITY_SENSORS,
+                T_BGP,
+                T_OPTICAL_HUAWEI,
+            ],
         ),
         prof(
             "Nokia SR router",
             C::Router,
             Some("Nokia"),
-            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_BGP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_ENTITY_SENSORS,
+                T_BGP,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "MikroTik RouterOS",
@@ -646,56 +857,96 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Generic router",
             C::Router,
             None,
-            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_BGP],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_ENTITY_SENSORS,
+                T_BGP,
+                T_OPTICAL_STD,
+            ],
         ),
         // ── Switches (L3 / L2) ──
         prof(
             "Cisco Catalyst switch (IOS/IOS-XE)",
             C::L3Switch,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_IOS, T_ENTITY_SENSORS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_CISCO_IOS,
+                T_ENTITY_SENSORS,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "Cisco Nexus switch (NX-OS)",
             C::L3Switch,
             Some("Cisco"),
-            vec![TEMPLATE_STANDARD_SNMP, T_CISCO_NXOS, T_ENTITY_SENSORS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_CISCO_NXOS,
+                T_ENTITY_SENSORS,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "Arista EOS switch",
             C::L3Switch,
             Some("Arista"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HOST_RESOURCES, T_ENTITY_SENSORS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HOST_RESOURCES,
+                T_ENTITY_SENSORS,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "Juniper EX/QFX switch",
             C::L3Switch,
             Some("Juniper"),
-            vec![TEMPLATE_STANDARD_SNMP, T_JUNIPER, T_ENTITY_SENSORS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_JUNIPER,
+                T_ENTITY_SENSORS,
+                T_OPTICAL_JUNIPER,
+            ],
         ),
         prof(
             "Huawei CloudEngine switch",
             C::L3Switch,
             Some("Huawei"),
-            vec![TEMPLATE_STANDARD_SNMP, T_HUAWEI, T_ENTITY_SENSORS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_HUAWEI,
+                T_ENTITY_SENSORS,
+                T_OPTICAL_HUAWEI,
+            ],
         ),
         prof(
             "Aruba/HPE switch",
             C::L3Switch,
             Some("Aruba/HPE"),
-            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_HOST_RESOURCES],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_ENTITY_SENSORS,
+                T_HOST_RESOURCES,
+                T_OPTICAL_H3C,
+            ],
         ),
         prof(
             "Dell switch",
             C::L3Switch,
             Some("Dell"),
-            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_HOST_RESOURCES],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_ENTITY_SENSORS,
+                T_HOST_RESOURCES,
+                T_OPTICAL_STD,
+            ],
         ),
         prof(
             "Extreme EXOS switch",
             C::L3Switch,
             Some("Extreme Networks"),
-            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS],
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_OPTICAL_STD],
         ),
         prof(
             "Brocade / Ruckus switch",
@@ -737,7 +988,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Generic switch",
             C::L2Switch,
             None,
-            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS],
+            vec![TEMPLATE_STANDARD_SNMP, T_ENTITY_SENSORS, T_OPTICAL_STD],
         ),
         // ── Firewalls ──
         prof(
@@ -751,6 +1002,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 T_CISCO_RA_VPN,
                 T_CISCO_IPSEC,
                 T_ENTITY_SENSORS,
+                T_OPTICAL_STD,
             ],
         ),
         prof(
@@ -796,7 +1048,12 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
             "Juniper SRX firewall",
             C::Firewall,
             Some("Juniper"),
-            vec![TEMPLATE_STANDARD_SNMP, T_JUNIPER, T_ENTITY_SENSORS],
+            vec![
+                TEMPLATE_STANDARD_SNMP,
+                T_JUNIPER,
+                T_ENTITY_SENSORS,
+                T_OPTICAL_JUNIPER,
+            ],
         ),
         prof(
             "Huawei USG firewall",
@@ -807,6 +1064,7 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 T_HUAWEI,
                 T_HUAWEI_USG_SESSIONS,
                 T_ENTITY_SENSORS,
+                T_OPTICAL_HUAWEI,
             ],
         ),
         prof(
@@ -1150,6 +1408,87 @@ mod tests {
                 MetricKind::Counter,
                 "{metric} is a raw counter (rate() at query time, ADR-012)"
             );
+        }
+    }
+
+    /// Every optical dialect ships a template, and every one of those templates collects exactly
+    /// the two metric names the poller knows how to publish.
+    ///
+    /// The pairing is what keeps the metric inventory honest: `list_node_metrics` joins configured
+    /// items against real series **by name**, so a template naming anything else would report
+    /// `no_data` forever beside two series reporting `unconfigured`.
+    #[test]
+    fn every_optical_dialect_has_a_template_carrying_both_readings() {
+        let templates = builtin_templates();
+        for flavor in OpticalFlavor::ALL {
+            let t = templates
+                .iter()
+                .find(|t| t.name == flavor.template_name())
+                .unwrap_or_else(|| panic!("no template for {flavor:?}"));
+            let mut names: Vec<&str> = t.items.iter().map(|i| i.metric_name.as_str()).collect();
+            names.sort_unstable();
+            assert_eq!(names, [METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM]);
+            for item in &t.items {
+                assert_eq!(item.kind, CollectionKind::Optical, "{flavor:?}");
+                // Optical power is a level, never an odometer. A counter here would make the API
+                // serve it through rate(), plotting the change in a logarithm per second.
+                assert_eq!(item.metric_kind, MetricKind::Gauge, "{flavor:?}");
+                // The item's OID selects the dialect, so it must be the root the poller matches on
+                // and not one of the underlying columns.
+                assert_eq!(item.oid, flavor.root_oid(), "{flavor:?}");
+            }
+        }
+    }
+
+    /// ⚠️ The optical templates must stay at the END of `builtin_templates()`.
+    ///
+    /// `repo.rs` derives a template's seed id from its index in this array, so inserting one above
+    /// re-keys every template after it and silently breaks the profile→template links of every
+    /// existing deployment. `builtin_profiles` has an end-of-array guard; this array had none, and
+    /// this is it.
+    #[test]
+    fn optical_templates_stay_at_the_end_of_the_array() {
+        let templates = builtin_templates();
+        let tail: Vec<&str> = templates
+            .iter()
+            .rev()
+            .take(OpticalFlavor::ALL.len())
+            .map(|t| t.name)
+            .collect();
+        for flavor in OpticalFlavor::ALL {
+            assert!(
+                tail.contains(&flavor.template_name()),
+                "{flavor:?}'s template moved out of the array tail — seed ids are array positions"
+            );
+        }
+    }
+
+    /// Every profile that attaches an optical template attaches exactly one.
+    ///
+    /// Two dialects on one node is not a crash — the poller runs both and publishes whichever
+    /// answers — but it is always a mistake in the catalog: a box speaks one transceiver MIB, and
+    /// the second walk is a per-poll SNMP session spent on a table that will never have rows.
+    #[test]
+    fn no_builtin_profile_attaches_two_optical_dialects() {
+        let optical: Vec<&str> = OpticalFlavor::ALL
+            .iter()
+            .map(|f| f.template_name())
+            .collect();
+        for p in builtin_profiles() {
+            let n = p.templates.iter().filter(|t| optical.contains(t)).count();
+            assert!(n <= 1, "{} attaches {n} optical templates", p.name);
+        }
+    }
+
+    /// A plausibility window that rejected everything would satisfy any "bad values are dropped"
+    /// test while silently discarding every real reading, so the accepting cases are pinned too.
+    #[test]
+    fn the_plausible_dbm_window_admits_real_readings_and_rejects_scale_errors() {
+        for ok in [-40.0, -20.0, -7.42, 0.0, 3.0] {
+            assert!(is_plausible_dbm(ok), "{ok} should be plausible");
+        }
+        for bad in [-742.0, 742.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(!is_plausible_dbm(bad), "{bad} should be refused");
         }
     }
 

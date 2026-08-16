@@ -320,6 +320,12 @@
     "errOut": "Out errors",
     "discIn": "In discards",
     "discOut": "Out discards",
+    "optical": "Optical power",
+    "opticalUnit": "(Rx / Tx, dBm)",
+    "opticalRx": "Rx power",
+    "opticalTx": "Tx power",
+    "opticalRxShort": "Rx",
+    "opticalTxShort": "Tx",
     "allStates": "Up and down",
     "stateAria": "Filter by running state",
     "state": {

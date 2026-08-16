@@ -17,17 +17,17 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, PollJob, SnmpArpCheck, SnmpArpColumn,
-    SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck,
-    SnmpNeighborColumn, SnmpRouteProbe, SnmpRoutingCheck, SnmpRoutingColumn, SnmpTableCheck,
-    SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3RoutingCheck,
-    SnmpV3TableCheck, SyncBus,
+    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, OpticalProbe, PollJob, SnmpArpCheck,
+    SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn,
+    SnmpNeighborCheck, SnmpNeighborColumn, SnmpOpticalCheck, SnmpRouteProbe, SnmpRoutingCheck,
+    SnmpRoutingColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check,
+    SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
     builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
     builtin_neighbor_columns, builtin_routing_columns, route_probe_columns, route_probe_oid,
     CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node, NodeId, NodeKind, NodeRows,
-    ProfileId, UrlCheckConfig,
+    OpticalFlavor, ProfileId, UrlCheckConfig, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -277,6 +277,78 @@ pub fn build_snmp_checks(
         timeout_ms,
     });
     (scalar_check, table_check)
+}
+
+/// Group a node's optical collection items into one probe per dialect (ADR-062).
+///
+/// An item's `oid` names the dialect and its `metric_name` says which of the two readings it is,
+/// so an operator can disable either half at node scope and get exactly that. Items whose OID no
+/// dialect claims are dropped here rather than sent: core is where a metric name is decided, and
+/// a probe the poller cannot interpret is a job it would spend a session on for nothing.
+fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
+    let mut probes: Vec<OpticalProbe> = Vec::new();
+    for item in items.iter().filter(|i| i.kind == CollectionKind::Optical) {
+        let Some(flavor) = OpticalFlavor::from_root(&item.oid) else {
+            continue;
+        };
+        let probe = match probes.iter_mut().find(|p| p.flavor == flavor) {
+            Some(p) => p,
+            None => {
+                probes.push(OpticalProbe {
+                    flavor,
+                    rx_metric: None,
+                    tx_metric: None,
+                });
+                probes.last_mut().expect("just pushed")
+            }
+        };
+        match item.metric_name.as_str() {
+            METRIC_IF_RX_POWER_DBM => probe.rx_metric = Some(item.metric_name.clone()),
+            METRIC_IF_TX_POWER_DBM => probe.tx_metric = Some(item.metric_name.clone()),
+            // The API edge refuses any other name for an optical item; a row that predates that
+            // rule (or arrived by config bundle) is skipped rather than published under a name
+            // the poller has no reading for.
+            _ => {}
+        }
+    }
+    probes.retain(|p| p.rx_metric.is_some() || p.tx_metric.is_some());
+    probes
+}
+
+/// Build the SNMP v2c optical-transceiver check, or `None` when the node collects no optics.
+#[must_use]
+pub fn build_snmp_optical_check(
+    community: &str,
+    items: &[CollectionItem],
+    timeout_ms: u32,
+) -> Option<SnmpOpticalCheck> {
+    let probes = optical_probes(items);
+    (!probes.is_empty()).then(|| SnmpOpticalCheck {
+        community: community.to_owned(),
+        probes,
+        timeout_ms,
+    })
+}
+
+/// Build the SNMP v3 (USM) optical-transceiver check — the v3 analogue of
+/// [`build_snmp_optical_check`].
+#[must_use]
+pub fn build_snmp_v3_optical_check(
+    secret: &SnmpV3Secret,
+    items: &[CollectionItem],
+    timeout_ms: u32,
+) -> Option<SnmpV3OpticalCheck> {
+    let probes = optical_probes(items);
+    (!probes.is_empty()).then(|| SnmpV3OpticalCheck {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        probes,
+        timeout_ms,
+    })
 }
 
 /// Build the SNMP v2c CDP/LLDP neighbour check for a node (ADR-038).
@@ -699,6 +771,19 @@ pub fn assemble_node_jobs(
                 let job = build_snmp_table_job(node, check, interval_secs, Uuid::new_v4());
                 jobs.push((job, "snmp_table"));
             }
+            // Optical rides `interval_secs`, not a slow adjacency cadence: optical power drifts
+            // continuously with temperature and age, and it shares a time axis with throughput in
+            // the interface dock (ADR-062).
+            if let Some(check) = build_snmp_optical_check(community, items, SNMP_TIMEOUT_MS) {
+                let job = PollJob::snmp_optical(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    check,
+                    interval_secs,
+                );
+                jobs.push((job, "snmp_optical"));
+            }
             if neighbors.neighbors_enabled {
                 let job = PollJob::snmp_neighbors(
                     Uuid::new_v4(),
@@ -753,6 +838,17 @@ pub fn assemble_node_jobs(
             if let Some(check) = build_snmp_v3_table_check(secret, items, SNMP_TIMEOUT_MS) {
                 let job = build_snmp_v3_table_job(node, check, interval_secs, Uuid::new_v4());
                 jobs.push((job, "snmp_v3_table"));
+            }
+            // See the v2c arm: optical rides the metric interval, not the adjacency cadence.
+            if let Some(check) = build_snmp_v3_optical_check(secret, items, SNMP_TIMEOUT_MS) {
+                let job = PollJob::snmp_v3_optical(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    check,
+                    interval_secs,
+                );
+                jobs.push((job, "snmp_v3_optical"));
             }
             if neighbors.neighbors_enabled {
                 let job = PollJob::snmp_v3_neighbors(
@@ -1441,6 +1537,112 @@ mod tests {
             kind,
             metric_kind: yagra_common::MetricKind::Gauge,
         }
+    }
+
+    /// An optical item for `flavor`, publishing under `metric`.
+    fn optical_item(metric: &str, flavor: OpticalFlavor) -> CollectionItem {
+        item(metric, flavor.root_oid(), CollectionKind::Optical)
+    }
+
+    #[test]
+    fn optical_items_group_into_one_probe_per_dialect() {
+        let items = vec![
+            optical_item(METRIC_IF_RX_POWER_DBM, OpticalFlavor::Huawei),
+            optical_item(METRIC_IF_TX_POWER_DBM, OpticalFlavor::Huawei),
+        ];
+        let check = build_snmp_optical_check("public", &items, 1000).expect("a probe");
+        assert_eq!(
+            check.probes.len(),
+            1,
+            "one dialect must not become two sessions"
+        );
+        assert_eq!(check.probes[0].flavor, OpticalFlavor::Huawei);
+        assert_eq!(
+            check.probes[0].rx_metric.as_deref(),
+            Some(METRIC_IF_RX_POWER_DBM)
+        );
+        assert_eq!(
+            check.probes[0].tx_metric.as_deref(),
+            Some(METRIC_IF_TX_POWER_DBM)
+        );
+    }
+
+    /// Disabling one half at node scope must collect the other half, not both and not neither.
+    /// The resolver filters disabled rows before we see them, so a missing item is the whole signal.
+    #[test]
+    fn one_disabled_half_leaves_the_other_collected() {
+        let items = vec![optical_item(METRIC_IF_RX_POWER_DBM, OpticalFlavor::Juniper)];
+        let check = build_snmp_optical_check("public", &items, 1000).expect("a probe");
+        assert_eq!(
+            check.probes[0].rx_metric.as_deref(),
+            Some(METRIC_IF_RX_POWER_DBM)
+        );
+        assert!(check.probes[0].tx_metric.is_none());
+    }
+
+    /// A node bound to two vendor profiles gets both dialects, each once.
+    #[test]
+    fn two_dialects_on_one_node_stay_separate_probes() {
+        let items = vec![
+            optical_item(METRIC_IF_RX_POWER_DBM, OpticalFlavor::Huawei),
+            optical_item(METRIC_IF_TX_POWER_DBM, OpticalFlavor::Huawei),
+            optical_item(METRIC_IF_RX_POWER_DBM, OpticalFlavor::EntitySensor),
+        ];
+        let check = build_snmp_optical_check("public", &items, 1000).expect("probes");
+        assert_eq!(check.probes.len(), 2);
+    }
+
+    /// An OID no dialect claims produces no job at all — core is where a metric name is decided,
+    /// and a probe the poller cannot interpret would spend an SNMP session per poll for nothing.
+    #[test]
+    fn an_unrecognised_optical_oid_yields_no_check() {
+        let items = vec![item(
+            METRIC_IF_RX_POWER_DBM,
+            "1.3.6.1.4.1.99999.1",
+            CollectionKind::Optical,
+        )];
+        assert!(build_snmp_optical_check("public", &items, 1000).is_none());
+    }
+
+    /// A metric name outside the pair has no reading to publish, so it contributes nothing — and,
+    /// being the only item, leaves no probe behind either.
+    #[test]
+    fn an_optical_item_with_an_unknown_metric_name_is_dropped() {
+        let items = vec![optical_item("if_optical_something", OpticalFlavor::H3c)];
+        assert!(build_snmp_optical_check("public", &items, 1000).is_none());
+    }
+
+    /// A node with no optical items gets no optical job — the overwhelmingly common case, and the
+    /// one that decides whether this feature costs every SNMP node an extra session per poll.
+    #[test]
+    fn a_node_with_no_optical_items_gets_no_optical_check() {
+        let items = vec![
+            item(
+                "snmp_sys_uptime_ticks",
+                "1.3.6.1.2.1.1.3.0",
+                CollectionKind::Scalar,
+            ),
+            item(
+                "if_hc_in_octets",
+                "1.3.6.1.2.1.31.1.1.1.6",
+                CollectionKind::Table,
+            ),
+        ];
+        assert!(build_snmp_optical_check("public", &items, 1000).is_none());
+        assert!(build_snmp_v3_optical_check(&v3_secret(), &items, 1000).is_none());
+    }
+
+    /// The v3 twin carries the same probes and the caller's USM identity.
+    #[test]
+    fn the_v3_optical_check_mirrors_the_v2c_one() {
+        let items = vec![
+            optical_item(METRIC_IF_RX_POWER_DBM, OpticalFlavor::Juniper),
+            optical_item(METRIC_IF_TX_POWER_DBM, OpticalFlavor::Juniper),
+        ];
+        let v2c = build_snmp_optical_check("public", &items, 1000).expect("v2c");
+        let v3 = build_snmp_v3_optical_check(&v3_secret(), &items, 1000).expect("v3");
+        assert_eq!(v2c.probes, v3.probes);
+        assert_eq!(v3.user, "monitor");
     }
 
     #[test]

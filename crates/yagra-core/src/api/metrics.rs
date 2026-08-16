@@ -31,7 +31,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{CollectionItem, IfIndex, MetricKind, NodeId, SeriesKey};
+use yagra_common::{
+    CollectionItem, IfIndex, MetricKind, NodeId, SeriesKey, METRIC_IF_RX_POWER_DBM,
+    METRIC_IF_TX_POWER_DBM,
+};
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -194,6 +197,13 @@ fn join_inventory(
                     match item.kind {
                         yagra_common::CollectionKind::Scalar => MetricDimension::None,
                         yagra_common::CollectionKind::Table => MetricDimension::Entity,
+                        // An optical probe only ever publishes under a resolved ifIndex — a row
+                        // it could not attach to an interface is dropped poller-side rather than
+                        // stored (ADR-062 decision 3), so `Interface` is the honest guess for a
+                        // configured-but-silent optical metric. It is also the actionable one:
+                        // `Entity` would tell the reader to go looking for a node aggregate that
+                        // will never exist.
+                        yagra_common::CollectionKind::Optical => MetricDimension::Interface,
                     },
                     |s| dimension_of(s, &known),
                 ),
@@ -519,11 +529,22 @@ async fn get_node_metric_range(
 /// with it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the
 /// wrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.
 ///
-/// All eight share one `timestamps` axis — the union of returned points, with `null` in the gaps —
-/// so the chart gets aligned series rather than eight independently-indexed ones. Derived at query
+/// `rx_power_dbm`/`tx_power_dbm` are the transceiver's received and transmitted optical power in
+/// **dBm**, and differ from the six above in three ways worth knowing (ADR-062). They are gauges,
+/// not counter rates — the value is read as reported, not differentiated. They are **normally
+/// negative**: a healthy receive level is roughly −3 to −20 dBm, and 0 dBm means one milliwatt, not
+/// "nothing". And they are **populated only for optical ports** — a copper port, a virtual
+/// interface, or a device whose transceiver MIB Yagra does not speak leaves both arrays entirely
+/// `null`, which is the intended way for a client to tell an optical interface from any other.
+/// The figure is the **module's** reading; a multi-lane transceiver (QSFP) reports its first lane
+/// rather than an aggregate, and per-lane series are deliberately not offered.
+///
+/// All ten share one `timestamps` axis — the union of returned points, with `null` in the gaps —
+/// so the chart gets aligned series rather than ten independently-indexed ones. Derived at query
 /// time (ADR-012); empty when there is no history. The packet counters entered the default
-/// collection set in ADR-060, so on a deployment upgraded from an earlier version the pps arrays
-/// are empty for every window predating that upgrade while the bps arrays are populated.
+/// collection set in ADR-060 and the optical readings in ADR-062, so on a deployment upgraded from
+/// an earlier version those arrays are empty for every window predating that upgrade while the bps
+/// arrays are populated.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceSeries {
     pub timestamps: Vec<i64>,
@@ -535,6 +556,8 @@ pub(crate) struct InterfaceSeries {
     pub out_errors: Vec<Option<f64>>,
     pub in_discards: Vec<Option<f64>>,
     pub out_discards: Vec<Option<f64>>,
+    pub rx_power_dbm: Vec<Option<f64>>,
+    pub tx_power_dbm: Vec<Option<f64>>,
 }
 
 #[utoipa::path(
@@ -583,11 +606,12 @@ pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) 
     (step, (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS))
 }
 
-/// One interface's eight raw counter-rate series, before alignment onto a shared axis.
+/// One interface's ten raw series, before alignment onto a shared axis.
 ///
-/// A struct rather than eight positional `&[MetricPoint]` arguments **because they are all the same
+/// A struct rather than ten positional `&[MetricPoint]` arguments **because they are all the same
 /// type**: a transposed pair would compile silently and draw discards on the errors chart. Naming
-/// them is the only thing that makes the call site checkable.
+/// them is the only thing that makes the call site checkable. The optical pair makes that sharper
+/// still — swapping receive for transmit produces two plausible lines and no other symptom.
 struct RawInterfaceRates<'a> {
     in_oct: &'a [MetricPoint],
     out_oct: &'a [MetricPoint],
@@ -597,6 +621,10 @@ struct RawInterfaceRates<'a> {
     out_err: &'a [MetricPoint],
     in_disc: &'a [MetricPoint],
     out_disc: &'a [MetricPoint],
+    /// Gauges, not counter rates — read through `range`, not `rate_range`.
+    rx_dbm: &'a [MetricPoint],
+    /// See [`RawInterfaceRates::rx_dbm`].
+    tx_dbm: &'a [MetricPoint],
 }
 
 /// One interface's eight aligned series (ADR-042 I1's `get_interface_series` reads this too).
@@ -626,7 +654,7 @@ pub(crate) async fn interface_series(
     // The eight series are independent range queries — fan them out concurrently (this endpoint
     // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
     // they outlive the joined futures.
-    let (k_in, k_out, k_ipkt, k_opkt, k_ierr, k_oerr, k_idisc, k_odisc) = (
+    let (k_in, k_out, k_ipkt, k_opkt, k_ierr, k_oerr, k_idisc, k_odisc, k_rx, k_tx) = (
         key("if_hc_in_octets"),
         key("if_hc_out_octets"),
         key("if_hc_in_ucast_pkts"),
@@ -635,8 +663,14 @@ pub(crate) async fn interface_series(
         key("if_out_errors"),
         key("if_in_discards"),
         key("if_out_discards"),
+        key(METRIC_IF_RX_POWER_DBM),
+        key(METRIC_IF_TX_POWER_DBM),
     );
-    let (in_oct, out_oct, in_pkt, out_pkt, in_err, out_err, in_disc, out_disc) = tokio::join!(
+    // ⚠️ The optical pair uses `range`, not `rate_range`. Differentiating dBm would plot the
+    // *change* in a logarithmic level per second, which is not a quantity anyone wants and would
+    // read as a flat zero on a healthy link — the failure mode ADR-012 exists to prevent, arrived
+    // at from the other direction.
+    let (in_oct, out_oct, in_pkt, out_pkt, in_err, out_err, in_disc, out_disc, rx_dbm, tx_dbm) = tokio::join!(
         st.store.rate_range(&k_in, from, to, step, lookback),
         st.store.rate_range(&k_out, from, to, step, lookback),
         st.store.rate_range(&k_ipkt, from, to, step, lookback),
@@ -645,6 +679,8 @@ pub(crate) async fn interface_series(
         st.store.rate_range(&k_oerr, from, to, step, lookback),
         st.store.rate_range(&k_idisc, from, to, step, lookback),
         st.store.rate_range(&k_odisc, from, to, step, lookback),
+        st.store.range(&k_rx, from, to, step),
+        st.store.range(&k_tx, from, to, step),
     );
     align_interface_series(&RawInterfaceRates {
         in_oct: &in_oct,
@@ -655,6 +691,8 @@ pub(crate) async fn interface_series(
         out_err: &out_err,
         in_disc: &in_disc,
         out_disc: &out_disc,
+        rx_dbm: &rx_dbm,
+        tx_dbm: &tx_dbm,
     })
 }
 
@@ -668,6 +706,7 @@ fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
     let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for s in [
         r.in_oct, r.out_oct, r.in_pkt, r.out_pkt, r.in_err, r.out_err, r.in_disc, r.out_disc,
+        r.rx_dbm, r.tx_dbm,
     ] {
         for p in s {
             grid_set.insert(p.t);
@@ -687,6 +726,10 @@ fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
         out_errors: align(r.out_err, 1.0),
         in_discards: align(r.in_disc, 1.0),
         out_discards: align(r.out_disc, 1.0),
+        // Already dBm — the poller normalised every vendor's raw integer before publishing, so
+        // there is no scale left to apply here and no vendor knowledge in this layer.
+        rx_power_dbm: align(r.rx_dbm, 1.0),
+        tx_power_dbm: align(r.tx_dbm, 1.0),
         timestamps: grid,
     }
 }

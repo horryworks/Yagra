@@ -320,6 +320,12 @@
     "errOut": "送信エラー",
     "discIn": "受信破棄",
     "discOut": "送信破棄",
+    "optical": "光レベル",
+    "opticalUnit": "（受光 / 発光, dBm）",
+    "opticalRx": "受光レベル",
+    "opticalTx": "発光レベル",
+    "opticalRxShort": "受光",
+    "opticalTxShort": "発光",
     "allStates": "アップ・ダウンの両方",
     "stateAria": "稼働状態で絞り込む",
     "state": {

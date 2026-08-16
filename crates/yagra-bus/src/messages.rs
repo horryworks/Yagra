@@ -31,7 +31,7 @@ use uuid::Uuid;
 use yagra_common::{
     ArpColumn, ArpSummary, DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth,
     HttpMethod, IfIndex, InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind,
-    NeighborColumn, NeighborSet, NodeId, RoutingColumn, RoutingSnapshot, SeriesKey,
+    NeighborColumn, NeighborSet, NodeId, OpticalFlavor, RoutingColumn, RoutingSnapshot, SeriesKey,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -291,6 +291,48 @@ impl PollJob {
             node_id,
             target,
             check: CheckSpec::SnmpNeighbors(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v2c optical-transceiver probe job (ADR-062).
+    #[must_use]
+    pub fn snmp_optical(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpOpticalCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpOptical(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v3 (USM) optical-transceiver probe job (ADR-062).
+    #[must_use]
+    pub fn snmp_v3_optical(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3OpticalCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3Optical(check),
             interval_secs,
             credential_ref: None,
             probe_identity: false,
@@ -853,6 +895,22 @@ pub enum CheckSpec {
     /// Like the variants around it, an older poller that doesn't know this tag simply skips the
     /// job (N-1 compatible): a v3 node just keeps getting scalars + ICMP until the poller upgrades.
     SnmpV3Table(SnmpV3TableCheck),
+    /// SNMP v2c optical-transceiver (DDM/DOM) probe — receive/transmit power in dBm (ADR-062).
+    ///
+    /// Kept out of [`CheckSpec::SnmpTable`] because one OID does not make one metric: the
+    /// vendor-neutral spelling correlates five ENTITY-SENSOR-MIB columns, and most dialects key
+    /// their rows by `entPhysicalIndex`, which the poller translates to a real ifIndex before
+    /// publishing so everything downstream sees an ordinary per-interface gauge.
+    ///
+    /// Runs at the **normal metric interval**, unlike [`CheckSpec::SnmpNeighbors`] — optical power
+    /// drifts continuously with temperature and age, and it shares a chart with throughput, so a
+    /// slower cadence would draw a sparser line against the same time axis for no saving worth
+    /// having. The result is **observational** ([`PollResult::observational`]): a transceiver that
+    /// will not answer says nothing about whether the device is up.
+    SnmpOptical(SnmpOpticalCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpOptical`], following the same v2c/v3 pairing as
+    /// every other SNMP check here (split by credential shape, not by walk logic).
+    SnmpV3Optical(SnmpV3OpticalCheck),
     /// HTTP/HTTPS URL-endpoint check (status/up + TLS cert expiry). Like the variants above,
     /// an older poller that doesn't know this tag simply skips the job (N-1 compatible).
     Http(HttpCheck),
@@ -1164,6 +1222,67 @@ pub struct SnmpNeighborCheck {
     /// Neighbour table columns to walk, keeping raw instance indices and raw octets.
     #[serde(default)]
     pub columns: Vec<SnmpNeighborColumn>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// One optical dialect to probe, and the metric names its two readings publish under.
+///
+/// `rx_metric`/`tx_metric` are `Option` rather than fixed constants because an operator can
+/// disable either half of the built-in template at node scope, and because core stays the one
+/// place a TSDB metric name is decided (the same reason `meta_columns` travels on the wire).
+/// Both `None` is a probe with nothing to do; core does not emit one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpticalProbe {
+    /// Which vendor dialect to read.
+    pub flavor: OpticalFlavor,
+    /// Metric name for receive power, or `None` to skip it.
+    #[serde(default)]
+    pub rx_metric: Option<String>,
+    /// Metric name for transmit power, or `None` to skip it.
+    #[serde(default)]
+    pub tx_metric: Option<String>,
+}
+
+/// SNMP v2c optical-transceiver probe parameters (ADR-062).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpOpticalCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Dialects to read. Normally one; a node bound to two vendor profiles gets both, and the
+    /// poller publishes whichever answers.
+    #[serde(default)]
+    pub probes: Vec<OpticalProbe>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) optical-transceiver probe parameters — the v3 analogue of [`SnmpOpticalCheck`].
+/// Auth/priv keys are resolved/decrypted by core and inlined here (ADR-018/020); the poller never
+/// reads the secret store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3OpticalCheck {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// Dialects to read.
+    #[serde(default)]
+    pub probes: Vec<OpticalProbe>,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -2830,6 +2949,61 @@ mod tests {
         let spec3 = CheckSpec::SnmpV3L3(v3);
         let wire3 = serde_json::to_string(&spec3).unwrap();
         assert!(wire3.contains(r#""kind":"snmp_v3_l3""#), "{wire3}");
+    }
+
+    /// ADR-062's optical check, N-1 sensitive in the same way every other check spec is.
+    #[test]
+    fn an_optical_check_tolerates_missing_and_unknown_fields() {
+        let v2c: SnmpOpticalCheck =
+            serde_json::from_str(r#"{"community":"public","future":1}"#).unwrap();
+        assert!(v2c.probes.is_empty());
+        assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
+        let v3: SnmpV3OpticalCheck =
+            serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
+        assert!(v3.auth_key.is_none() && v3.probes.is_empty());
+
+        // A probe may name only one of the two readings — that is how an operator disabling one
+        // half of the built-in template reaches the poller.
+        let probe: OpticalProbe =
+            serde_json::from_str(r#"{"flavor":"huawei","rx_metric":"if_rx_power_dbm"}"#).unwrap();
+        assert_eq!(probe.flavor, yagra_common::OpticalFlavor::Huawei);
+        assert!(probe.tx_metric.is_none());
+
+        // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
+        let spec = CheckSpec::SnmpOptical(v2c);
+        let wire = serde_json::to_string(&spec).unwrap();
+        assert!(wire.contains(r#""kind":"snmp_optical""#), "{wire}");
+        let spec3 = CheckSpec::SnmpV3Optical(v3);
+        let wire3 = serde_json::to_string(&spec3).unwrap();
+        assert!(wire3.contains(r#""kind":"snmp_v3_optical""#), "{wire3}");
+    }
+
+    /// Every optical dialect survives the wire under a stable token.
+    ///
+    /// The token is the N/N-1 contract: a core that learns a new dialect sends a tag an older
+    /// poller cannot parse, and `de_lenient_specs` then drops **that one spec** rather than the
+    /// chunk. Renaming an existing one would instead make every current poller silently stop
+    /// collecting optics, with no error anywhere.
+    #[test]
+    fn every_optical_flavor_round_trips_under_a_stable_token() {
+        for flavor in yagra_common::OpticalFlavor::ALL {
+            let probe = OpticalProbe {
+                flavor,
+                rx_metric: Some("if_rx_power_dbm".to_owned()),
+                tx_metric: None,
+            };
+            let wire = serde_json::to_string(&probe).unwrap();
+            let back: OpticalProbe = serde_json::from_str(&wire).unwrap();
+            assert_eq!(back, probe, "{flavor:?} did not round trip");
+        }
+        // Pinned literally: these strings are the wire, not an implementation detail.
+        let wire = serde_json::to_string(&OpticalProbe {
+            flavor: yagra_common::OpticalFlavor::EntitySensor,
+            rx_metric: None,
+            tx_metric: None,
+        })
+        .unwrap();
+        assert!(wire.contains(r#""flavor":"entity_sensor""#), "{wire}");
     }
 
     /// ADR-043 Increment 3's result field, N-1 sensitive in exactly the way `l3` was.

@@ -3,8 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   FAULT_SERIES,
   faultValues,
+  hasOpticalData,
   latestDiscardRate,
   latestErrorRate,
+  latestRxPower,
+  latestTxPower,
+  OPTICAL_SERIES,
+  opticalValues,
+  opticalYRange,
   sparklinePath,
   throughputBandwidthOverlay,
   throughputPair,
@@ -23,6 +29,8 @@ function series(partial: Partial<InterfaceSeries>): InterfaceSeries {
     out_errors: [],
     in_discards: [],
     out_discards: [],
+    rx_power_dbm: [],
+    tx_power_dbm: [],
     ...partial,
   };
 }
@@ -219,5 +227,111 @@ describe('faultValues', () => {
     for (const spec of FAULT_SERIES) {
       expect(faultValues(partial, spec)).toEqual([]);
     }
+  });
+});
+
+// ── Optical power (ADR-062) ──────────────────────────────────────────────────────────
+
+describe('hasOpticalData', () => {
+  // This predicate IS the "show the chart when the port is optical" rule, so its edges are the
+  // feature's edges rather than a detail of it.
+  it('is false before the fetch settles, and that must not be read as "not optical"', () => {
+    expect(hasOpticalData(null)).toBe(false);
+  });
+
+  it('is false for a copper port, whose optical arrays are empty or all gaps', () => {
+    expect(hasOpticalData(series({}))).toBe(false);
+    expect(hasOpticalData(series({ rx_power_dbm: [null, null], tx_power_dbm: [null] }))).toBe(false);
+  });
+
+  it('is true when either direction has ever reported', () => {
+    expect(hasOpticalData(series({ rx_power_dbm: [null, -7.4] }))).toBe(true);
+    expect(hasOpticalData(series({ tx_power_dbm: [-2.1] }))).toBe(true);
+  });
+
+  // 🚨 The one that a truthiness test would get wrong. 0 dBm is one milliwatt — a strong signal,
+  // and the exact value a healthy short-reach link sits near. `.some(Boolean)` would call this
+  // port copper and hide its chart.
+  it('is true for a reading of exactly 0 dBm', () => {
+    expect(hasOpticalData(series({ rx_power_dbm: [0] }))).toBe(true);
+  });
+
+  it('is false when the core predates the optical fields entirely', () => {
+    const partial = { timestamps: [1] } as unknown as InterfaceSeries;
+    expect(hasOpticalData(partial)).toBe(false);
+  });
+});
+
+describe('opticalValues', () => {
+  // Same transposition hazard as `faultValues`, and worse in consequence: rx and tx are the same
+  // type, the same magnitude and both plausible, so a swap produces a chart nobody can see is wrong.
+  it('reads only the array its spec names', () => {
+    const only = series({ tx_power_dbm: [-2.1] });
+    for (const spec of OPTICAL_SERIES) {
+      expect(opticalValues(only, spec)).toEqual(spec.key === 'tx_power_dbm' ? [-2.1] : []);
+    }
+  });
+
+  it('yields an empty array when the core did not send the field', () => {
+    const partial = { timestamps: [1] } as unknown as InterfaceSeries;
+    for (const spec of OPTICAL_SERIES) {
+      expect(opticalValues(partial, spec)).toEqual([]);
+    }
+  });
+
+  it('gives every line its own palette slot and label key', () => {
+    expect(new Set(OPTICAL_SERIES.map((s) => s.colorIndex)).size).toBe(OPTICAL_SERIES.length);
+    expect(new Set(OPTICAL_SERIES.map((s) => s.labelKey)).size).toBe(OPTICAL_SERIES.length);
+  });
+});
+
+describe('opticalYRange', () => {
+  it('is undefined when there is nothing to bound', () => {
+    expect(opticalYRange(null)).toBeUndefined();
+    expect(opticalYRange(series({}))).toBeUndefined();
+    expect(opticalYRange(series({ rx_power_dbm: [null] }))).toBeUndefined();
+  });
+
+  // The point of bounding at all: an axis that included 0 would squash the band a real link lives
+  // in. Both ends must come from the data, not from zero.
+  it('brackets the data across both directions with a dB of headroom', () => {
+    const r = opticalYRange(series({ rx_power_dbm: [-7.4, -8.2], tx_power_dbm: [-2.1] }));
+    expect(r).toEqual([-10, -1]);
+  });
+
+  it('never returns a zero-height range for a dead-flat series', () => {
+    const r = opticalYRange(series({ rx_power_dbm: [-7, -7, -7] }));
+    expect(r).toBeDefined();
+    expect(r![1]).toBeGreaterThan(r![0]);
+  });
+
+  it('ignores gaps and non-finite values rather than collapsing on them', () => {
+    const r = opticalYRange(series({ rx_power_dbm: [null, -7.4, Number.NaN] }));
+    expect(r).toEqual([-9, -6]);
+  });
+});
+
+describe('latestRxPower / latestTxPower', () => {
+  it('are null for an absent series and for a port that reports nothing', () => {
+    expect(latestRxPower(null)).toBeNull();
+    expect(latestTxPower(null)).toBeNull();
+    expect(latestRxPower(series({ rx_power_dbm: [null, null] }))).toBeNull();
+  });
+
+  it('read the last non-null sample of their own direction', () => {
+    const s = series({ rx_power_dbm: [-7.4, null], tx_power_dbm: [-2.1, -2.3] });
+    expect(latestRxPower(s)).toBe(-7.4);
+    expect(latestTxPower(s)).toBe(-2.3);
+  });
+
+  // Not summed, unlike the error and discard tiles: adding two logarithms yields no physical
+  // quantity, so the two tiles stay independent.
+  it('keep the two directions independent', () => {
+    expect(latestRxPower(series({ tx_power_dbm: [-2.1] }))).toBeNull();
+    expect(latestTxPower(series({ rx_power_dbm: [-7.4] }))).toBeNull();
+  });
+
+  it('report a genuine 0 dBm rather than treating it as absent', () => {
+    expect(latestRxPower(series({ rx_power_dbm: [0] }))).toBe(0);
   });
 });

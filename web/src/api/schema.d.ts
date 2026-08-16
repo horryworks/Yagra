@@ -4530,7 +4530,7 @@ export interface components {
          * @description How a [`CollectionItem`] is collected from the agent.
          * @enum {string}
          */
-        CollectionKind: "scalar" | "table";
+        CollectionKind: "scalar" | "table" | "optical";
         /** @description One metric inside a collection template. */
         CollectionTemplateItemRow: {
             collection: string;
@@ -6134,11 +6134,22 @@ export interface components {
          *     with it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the
          *     wrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.
          *
-         *     All eight share one `timestamps` axis — the union of returned points, with `null` in the gaps —
-         *     so the chart gets aligned series rather than eight independently-indexed ones. Derived at query
+         *     `rx_power_dbm`/`tx_power_dbm` are the transceiver's received and transmitted optical power in
+         *     **dBm**, and differ from the six above in three ways worth knowing (ADR-062). They are gauges,
+         *     not counter rates — the value is read as reported, not differentiated. They are **normally
+         *     negative**: a healthy receive level is roughly −3 to −20 dBm, and 0 dBm means one milliwatt, not
+         *     "nothing". And they are **populated only for optical ports** — a copper port, a virtual
+         *     interface, or a device whose transceiver MIB Yagra does not speak leaves both arrays entirely
+         *     `null`, which is the intended way for a client to tell an optical interface from any other.
+         *     The figure is the **module's** reading; a multi-lane transceiver (QSFP) reports its first lane
+         *     rather than an aggregate, and per-lane series are deliberately not offered.
+         *
+         *     All ten share one `timestamps` axis — the union of returned points, with `null` in the gaps —
+         *     so the chart gets aligned series rather than ten independently-indexed ones. Derived at query
          *     time (ADR-012); empty when there is no history. The packet counters entered the default
-         *     collection set in ADR-060, so on a deployment upgraded from an earlier version the pps arrays
-         *     are empty for every window predating that upgrade while the bps arrays are populated.
+         *     collection set in ADR-060 and the optical readings in ADR-062, so on a deployment upgraded from
+         *     an earlier version those arrays are empty for every window predating that upgrade while the bps
+         *     arrays are populated.
          */
         InterfaceSeries: {
             in_bps: (number | null)[];
@@ -6149,7 +6160,9 @@ export interface components {
             out_discards: (number | null)[];
             out_errors: (number | null)[];
             out_ucast_pps: (number | null)[];
+            rx_power_dbm: (number | null)[];
             timestamps: number[];
+            tx_power_dbm: (number | null)[];
         };
         /** @description One ranked interface in a fleet interface Top-N. */
         InterfaceTopEntry: {

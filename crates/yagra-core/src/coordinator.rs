@@ -1005,6 +1005,11 @@ fn spec_required_caps(spec: &JobSpec) -> Vec<&'static str> {
         | CheckSpec::SnmpTable(_)
         | CheckSpec::SnmpV3(_)
         | CheckSpec::SnmpV3Table(_)
+        // Optical needs no capability gate: a poller that has never heard of the spec skips it
+        // (per-element decode), and one that has produces either readings or nothing. There is no
+        // way for it to answer confidently and wrongly, which is the test this list applies.
+        | CheckSpec::SnmpOptical(_)
+        | CheckSpec::SnmpV3Optical(_)
         | CheckSpec::SnmpNeighbors(_)
         | CheckSpec::SnmpV3Neighbors(_)
         | CheckSpec::SnmpL3(_)

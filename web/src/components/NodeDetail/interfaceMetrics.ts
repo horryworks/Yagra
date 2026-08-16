@@ -87,6 +87,92 @@ export function faultValues(series: InterfaceSeries, spec: FaultSeriesSpec): (nu
   return series[spec.key] ?? [];
 }
 
+/** Which of the interface series' optical arrays one line of the optical chart reads. */
+export type OpticalSeriesKey = 'rx_power_dbm' | 'tx_power_dbm';
+
+export interface OpticalSeriesSpec {
+  key: OpticalSeriesKey;
+  /** `nodes`-namespace key for the line's label (and its legend key). */
+  labelKey: string;
+  /** Slot in `MetricChart`'s `PALETTE`. */
+  colorIndex: number;
+}
+
+/** The two lines of the optical-power chart, in legend order (ADR-062).
+ *
+ *  Same shape as [`FAULT_SERIES`] and for the same reason: one object builds both the uPlot series
+ *  and the legend swatches, so they cannot disagree. */
+export const OPTICAL_SERIES: readonly OpticalSeriesSpec[] = [
+  { key: 'rx_power_dbm', labelKey: 'interfaces.opticalRx', colorIndex: 0 },
+  { key: 'tx_power_dbm', labelKey: 'interfaces.opticalTx', colorIndex: 1 },
+];
+
+/** The values one optical line plots. Missing arrays become empty ones for the same reason as
+ *  [`throughputPair`]: a new WebUI can be talking to a core that predates the optical fields, and
+ *  `undefined` reaching uPlot takes the whole dock down. */
+export function opticalValues(series: InterfaceSeries, spec: OpticalSeriesSpec): (number | null)[] {
+  return series[spec.key] ?? [];
+}
+
+/** Whether this interface is an optical one — i.e. whether the chart should exist at all.
+ *
+ *  **This is the whole implementation of "show optical power when the port is optical"** (ADR-062
+ *  decision 4). There is deliberately no "is optical" flag on the interface: a reading having
+ *  arrived *is* the evidence, and a second source of truth would eventually disagree with the
+ *  first. A copper port, a VLAN interface, or a device whose transceiver MIB Yagra does not speak
+ *  all produce arrays that are absent or entirely null, and get no chart.
+ *
+ *  ⚠️ **`null` is not `0` here.** A transceiver reporting exactly 0 dBm (one milliwatt) is a
+ *  strong, perfectly normal signal, so emptiness has to be tested by `!= null` rather than by
+ *  truthiness — `.some(Boolean)` would hide a healthy port.
+ *
+ *  ⚠️ **The caller must not ask this until the fetch has settled.** Before the first response the
+ *  series is `null` and this answers `false`, which is correct as "nothing to draw yet" and wrong
+ *  as "this port has no optics" — rendering an absence as a decision is the bug this comment
+ *  exists to prevent. */
+export function hasOpticalData(series: InterfaceSeries | null): boolean {
+  if (!series) return false;
+  return OPTICAL_SERIES.some((spec) => (series[spec.key] ?? []).some((v) => v != null));
+}
+
+/** Y-axis range for the optical chart: the data's own span with 1 dB of headroom either side,
+ *  rounded outward to a whole dB, or `undefined` when there is nothing to bound.
+ *
+ *  Charts elsewhere let uPlot pick, but dBm needs saying explicitly for two reasons. The values are
+ *  **negative**, so an axis anchored at zero would push every real reading into the bottom sliver of
+ *  the plot. And the interesting variation is **small** — a link degrading by 3 dB is a link in
+ *  trouble — so an auto-range that included zero would flatten exactly the movement worth seeing.
+ *
+ *  The floor is not clamped to the plausible window: a reading outside it never reaches the client
+ *  (the poller drops it), so anything here is real and should be drawn where it falls. */
+export function opticalYRange(series: InterfaceSeries | null): [number, number] | undefined {
+  if (!series) return undefined;
+  let lo = Number.POSITIVE_INFINITY;
+  let hi = Number.NEGATIVE_INFINITY;
+  for (const spec of OPTICAL_SERIES) {
+    for (const v of series[spec.key] ?? []) {
+      if (v == null || !Number.isFinite(v)) continue;
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  }
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return undefined;
+  // A dead-flat series would otherwise ask uPlot for a zero-height range.
+  return [Math.floor(lo) - 1, Math.ceil(hi) + 1];
+}
+
+/** Latest receive level in dBm for the dock's stat tile, or `null` when the port is not optical. */
+export function latestRxPower(series: InterfaceSeries | null): number | null {
+  return series ? lastNonNull(series.rx_power_dbm) : null;
+}
+
+/** Latest transmit level in dBm for the dock's stat tile. Separate from the receive tile rather
+ *  than summed: unlike the error and discard pairs these are not two halves of one quantity, and
+ *  adding two logarithms would produce a number with no physical meaning. */
+export function latestTxPower(series: InterfaceSeries | null): number | null {
+  return series ? lastNonNull(series.tx_power_dbm) : null;
+}
+
 /** Latest combined rate (in + out, per second) across a directional pair of the interface series,
  *  or `null` when the series is absent or neither direction carries a sample. Parameterized rather
  *  than duplicated per pair: errors and discards differ only in which two arrays they read, and a

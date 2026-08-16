@@ -1755,6 +1755,7 @@ impl NodeRepo {
                 let collection = match item.kind {
                     CollectionKind::Scalar => "scalar",
                     CollectionKind::Table => "table",
+                    CollectionKind::Optical => "optical",
                 };
                 let metric_kind = match item.metric_kind {
                     MetricKind::Gauge => "gauge",

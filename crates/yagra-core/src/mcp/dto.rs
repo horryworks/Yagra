@@ -1008,6 +1008,10 @@ mod tests {
             out_errors: vec![None],
             in_discards: vec![None],
             out_discards: vec![None],
+            // Negative on purpose: a real receive level is, and a canary built from positive
+            // placeholders would not exercise the shape any client actually sees (ADR-062).
+            rx_power_dbm: vec![Some(-7.4)],
+            tx_power_dbm: vec![Some(-2.1)],
         };
         assert_no_forbidden_keys(
             &serde_json::to_value(&iface_series).unwrap(),

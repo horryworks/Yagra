@@ -86,7 +86,7 @@ import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
-import { FAULT_SERIES } from './components/NodeDetail/interfaceMetrics';
+import { FAULT_SERIES, OPTICAL_SERIES } from './components/NodeDetail/interfaceMetrics';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
 import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
@@ -304,6 +304,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // colour is which — leaving four indistinguishable lines with no key.
     const keys = FAULT_SERIES.map((s) => s.labelKey);
     expectKeys('fault series', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every optical power line has a label (nodes:interfaces.*)', () => {
+    // Same hazard as the fault lines, and one degree worse: the optical chart's two lines are the
+    // ONLY thing distinguishing receive from transmit. A raw key in that legend leaves two
+    // same-shaped lines with nothing to tell them apart.
+    const keys = OPTICAL_SERIES.map((s) => s.labelKey);
+    expectKeys('optical series', { en: enNodes, ja: jaNodes }, '', keys);
   });
 
   it('every report run state has a badge label (reports:run.status.*)', () => {

@@ -12,7 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
-import { formatBps, formatPps, formatSi } from '../../lib/format';
+import { formatBps, formatDbm, formatPps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
 import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
@@ -26,8 +26,14 @@ import { useRefreshTick } from '../../lib/refreshTick';
 import {
   FAULT_SERIES,
   faultValues,
+  hasOpticalData,
   latestDiscardRate,
   latestErrorRate,
+  latestRxPower,
+  latestTxPower,
+  OPTICAL_SERIES,
+  opticalValues,
+  opticalYRange,
   sparklinePath,
   throughputBandwidthOverlay,
   throughputPair,
@@ -633,6 +639,30 @@ function InterfaceDock({
         : [],
     [series, faultKeys],
   );
+  // The optical chart exists only for ports that actually report light (ADR-062). The test is the
+  // data itself — there is no "is optical" flag to disagree with — and it is asked here rather than
+  // in the JSX so the rule stays in a file Vitest runs.
+  const isOptical = hasOpticalData(series);
+  const opticalKeys = useMemo(
+    () =>
+      OPTICAL_SERIES.map((spec) => ({
+        spec,
+        label: t(spec.labelKey),
+        color: PALETTE[spec.colorIndex],
+      })),
+    [t],
+  );
+  const opticalSeries = useMemo(
+    () =>
+      series && isOptical
+        ? opticalKeys.map(({ spec, ...key }) => ({ ...key, values: opticalValues(series, spec) }))
+        : [],
+    [series, isOptical, opticalKeys],
+  );
+  // Memoized for the same reason as `bw`: MetricChart compares `yRange` by reference.
+  const opticalRange = useMemo(() => (isOptical ? opticalYRange(series) : undefined), [series, isOptical]);
+  const rxPower = latestRxPower(series);
+  const txPower = latestTxPower(series);
 
   return (
     <div className="nd-if-dock" style={resize ? { height: `${resize.height}px` } : undefined}>
@@ -682,6 +712,21 @@ function InterfaceDock({
                 <span className="nd-muted">{t('interfaces.disc')}</span>{' '}
                 <span className="nd-if-dock-err">{formatPps(discRate)}</span>
               </span>
+            )}
+            {/* Shown whenever the port is optical, NOT only when non-zero like the two above. A
+                receive level of 0 dBm is a strong signal, not an absence — hiding it would hide the
+                healthiest case (ADR-062). */}
+            {isOptical && (
+              <>
+                <span>
+                  <span className="nd-muted">{t('interfaces.opticalRxShort')}</span>{' '}
+                  {formatDbm(rxPower)}
+                </span>
+                <span>
+                  <span className="nd-muted">{t('interfaces.opticalTxShort')}</span>{' '}
+                  {formatDbm(txPower)}
+                </span>
+              </>
             )}
           </span>
           <RangeControl value={range} onChange={setRange} />
@@ -790,6 +835,40 @@ function InterfaceDock({
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
           )}
         </div>
+
+        {/* Optical power, drawn ONLY for a port that reports it (ADR-062). Every other chart in
+            this dock exists for every interface; this one is the fleet's answer to "is this port
+            optical", so a copper port sees two charts exactly as before. The grid is auto-fit, so
+            the third card wraps to a second row on a narrow pane rather than squeezing all three —
+            see `.nd-if-dock-charts`, whose minimum column width was raised for this. */}
+        {isOptical && (
+          <div className="nd-if-chart">
+            <div className="nd-if-chart-t">
+              <span>
+                {t('interfaces.optical')}{' '}
+                <span className="nd-unit">{t('interfaces.opticalUnit')}</span>
+              </span>
+              <ChartLegend entries={opticalKeys} />
+            </div>
+            {hasData ? (
+              <MetricChart
+                title=""
+                {...chartSizing}
+                timestamps={ts}
+                // `formatSi` would strip the unit and SI-scale a logarithm; dBm gets its own
+                // formatter on both the axis and the cursor legend.
+                yFormat={formatDbm}
+                legendFormat={formatDbm}
+                yRange={opticalRange}
+                xRange={win ?? undefined}
+                series={opticalSeries}
+                syncKey={DOCK_CURSOR_SYNC}
+              />
+            ) : (
+              <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

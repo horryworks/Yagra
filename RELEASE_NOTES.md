@@ -11,6 +11,37 @@
 ## Unreleased
 
 ### New Features
+- **Optical transceivers report their transmit and receive light levels.** A node's **Interfaces**
+  tab gains a third chart, **Optical power (Rx / Tx, dBm)**, for any port that has a transceiver in
+  it, plus **Rx** and **Tx** figures in the dock header. Fibre degrades gradually — a receive level
+  drifting from -7 dBm toward -18 dBm is a link on its way out — and until now Yagra could not show
+  that at all.
+  - **The chart appears only for ports that report light.** There is no setting and no "is optical"
+    flag: a copper port, a virtual interface, or a device whose transceiver MIB Yagra does not speak
+    simply keeps the two charts it has always had.
+  - **Four vendor dialects are read**, each attached to the matching built-in device profiles:
+    ENTITY-SENSOR-MIB (Cisco, Arista and other standards-based agents), Huawei
+    `hwOpticalModuleInfoTable`, JUNIPER-DOM-MIB, and HH3C-TRANSCEIVER-INFO-MIB (H3C and the HPE
+    Comware switches OEMed from it). Every reading is normalised to dBm before storage, so
+    `if_rx_power_dbm` and `if_tx_power_dbm` mean the same thing on every vendor.
+  - **Most vendors report optical power against a physical-entity index, not an interface index.**
+    Yagra resolves that to a real ifIndex through ENTITY-MIB's alias mapping; a row that cannot be
+    attached to an interface is discarded rather than stored under an index no chart can use.
+  - Readings outside a transceiver's physically possible range are discarded, so a vendor whose
+    scaling differs from its own MIB produces a gap rather than a plausible wrong number. A
+    multi-lane transceiver (QSFP) reports its first lane; per-lane series are not offered.
+  - **`GET /api/v1/nodes/{id}/interfaces/{ifindex}/series` gains `rx_power_dbm` and
+    `tx_power_dbm`**, on the same shared timestamp axis as the existing eight arrays and likewise
+    exposed through the MCP `get_interface_series` tool. Both are **gauges read as reported**, not
+    counter rates, and are **normally negative** — 0 dBm is one milliwatt, not "no signal". They are
+    entirely `null` for a port with no transceiver, which is how a client tells an optical
+    interface from any other.
+  - **An upgraded deployment has no optical history before the upgrade**, so the chart is empty for
+    older windows and fills in from the first poll onward.
+  - **Not included:** module temperature, voltage and laser bias current, and threshold alerts on
+    optical power. Alerting on a per-interface metric is separate work — an alert is currently
+    identified by node and metric name with no room for an interface, so a threshold would be shared
+    by every port on the device and could not say which one crossed it.
 - **The interface Throughput chart switches between bits/sec and packets/sec.** A device's
   forwarding ceiling is often a packet rate rather than a bit rate, so a link with bandwidth to
   spare can still be saturated — until now there was no way to see that. A **bps / pps** button in
@@ -48,6 +79,11 @@
   rather than silently changing what an existing number means.
 
 ### Improvements
+- **The interface charts wrap to a second row instead of being squeezed.** The dock lays its charts
+  out on the available width, and the minimum readable width per chart has been raised from 220px to
+  320px — so three charts sit side by side on a wide pane and drop to two-plus-one on a narrower
+  one, rather than shrinking until the axes are unreadable. Narrow panes showing two charts now stack
+  them sooner for the same reason.
 - **Every chart's legend now reads the latest values when nothing is hovering it.** The legend is
   live — it reports the sample under the cursor — so with no cursor on the plot, which is how a
   chart spends nearly all of its time, every row read `--`. It now falls back to the most recent

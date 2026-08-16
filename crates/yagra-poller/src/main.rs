@@ -36,6 +36,7 @@ mod limiter;
 mod listeners;
 mod location;
 mod neighbors;
+mod optical;
 mod routing;
 mod store_forward;
 mod worker;

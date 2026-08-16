@@ -212,6 +212,22 @@ export function formatPps(pps: number | null): string {
   return `${v.toFixed(v >= 100 || Number.isInteger(v) ? 0 : 1)} ${units[u]}`;
 }
 
+/** Format an optical power level in dBm, or `—` when the port reports none (ADR-062).
+ *
+ *  ⚠️ **None of the formatters above can stand in for this one.** dBm is logarithmic, so it must
+ *  never be SI-scaled — "−7.4 dBm" has no kilo- or milli- form, and `formatBps`-style scaling would
+ *  invent one. It is also normally **negative**, which the other numeric formatters here handle
+ *  badly: `formatBytes` returns `—` for anything below zero, and the `while (v >= 1000)` loops in
+ *  `formatBps`/`formatPps` never run, so a negative would print with the base unit attached.
+ *
+ *  Always one decimal, including on whole numbers. Half a dB is a meaningful change in a link
+ *  budget, so dropping the decimal for round values would make a degrading link look like a stable
+ *  one on exactly the ticks where it crossed an integer. */
+export function formatDbm(dbm: number | null | undefined): string {
+  if (dbm == null || !Number.isFinite(dbm)) return '—';
+  return `${dbm.toFixed(1)} dBm`;
+}
+
 /** Format a utilization percentage, or `—` when unknown (no speed / no data). Whole numbers
  *  (including 0 and 100) show no decimal ("0%", "75%"); sub-10 fractions keep one place. */
 export function formatUtil(pct: number | null): string {

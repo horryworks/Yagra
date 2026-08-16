@@ -8,6 +8,7 @@
 //! (ADR-012).
 
 use crate::limiter::PollLimiter;
+use crate::optical;
 use crate::store_forward::StoreForwardSink;
 use futures::stream::{Stream, StreamExt};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -103,6 +104,23 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         CheckSpec::SnmpV3Table(table) => {
             let timeout = Duration::from_millis(u64::from(table.timeout_ms));
             execute_snmp_v3_table(job, transport, at_unix_ms, table, timeout).await
+        }
+        CheckSpec::SnmpOptical(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_optical(job, transport, at_unix_ms, &check.probes, timeout, &walker).await
+        }
+        CheckSpec::SnmpV3Optical(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
+                user: check.user.clone(),
+                security_level: check.security_level.clone(),
+                auth_protocol: check.auth_protocol.clone(),
+                auth_key: check.auth_key.clone(),
+                priv_protocol: check.priv_protocol.clone(),
+                priv_key: check.priv_key.clone(),
+            });
+            execute_optical(job, transport, at_unix_ms, &check.probes, timeout, &walker).await
         }
         CheckSpec::SnmpNeighbors(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
@@ -769,6 +787,299 @@ async fn execute_table_walk(
         // Stamped by `run_stream` from the poll span before publish (empty here = no trace).
         trace_context: Default::default(),
     }
+}
+
+/// Row budget for one ENTITY-MIB walk.
+///
+/// `entPhysicalTable` is one row per part — a fully populated chassis switch runs to a few
+/// thousand — and the alias and containment columns are walked once per poll. The bound is what
+/// stops a pathological agent from turning an optical probe into an unbounded read.
+const OPTICAL_ENTITY_MAX_ROWS: usize = 8192;
+
+/// Execute an optical-transceiver (DDM/DOM) probe — ADR-062.
+///
+/// Two shapes, chosen per dialect by [`optical::simple_dialect`]:
+///
+/// - **Plain columns** (Huawei / Juniper / H3C): one numeric walk of two columns and a fixed
+///   multiplier. Juniper and H3C key their rows by ifIndex already; Huawei keys them by
+///   `entPhysicalIndex` and needs the same translation as the dialect below.
+/// - **ENTITY-SENSOR-MIB** (Cisco / Arista and anything else standards-based): four numeric
+///   columns correlated per sensor, plus the entity's free text to say which direction it is.
+///
+/// The result is **observational**. A device whose transceivers will not answer — because it has
+/// none, because the MIB is unimplemented, or because the view excludes it — is not unreachable,
+/// and reporting it as such would page someone about a healthy box. Everything else here is best
+/// effort by design: an unreadable dialect logs and contributes nothing.
+async fn execute_optical(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    probes: &[yagra_bus::OpticalProbe],
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let mut samples = Vec::new();
+    // Built lazily and at most once per poll: both dialects that need it walk the same two
+    // ENTITY-MIB columns, and a node bound to two vendor profiles must not walk them twice.
+    let mut entity: Option<optical::EntityIndex> = None;
+
+    for probe in probes {
+        if probe.rx_metric.is_none() && probe.tx_metric.is_none() {
+            continue;
+        }
+        let readings = match optical::simple_dialect(probe.flavor) {
+            Some(dialect) => walk_simple_optical(job, transport, walker, timeout, &dialect).await,
+            None => walk_entity_sensor_optical(job, transport, walker, timeout).await,
+        };
+        if readings.is_empty() {
+            continue;
+        }
+
+        // Translate entPhysicalIndex → ifIndex for the dialects that need it. A row that does not
+        // translate is DROPPED: emitting it under its raw entity index would land the series on
+        // `MetricDimension::Entity`, which costs storage and appears on no chart (decision 3).
+        let resolved = if probe.flavor.is_ifindex_keyed() {
+            readings
+        } else {
+            let idx = match &entity {
+                Some(idx) => idx,
+                None => {
+                    entity = Some(walk_entity_index(job, transport, walker, timeout).await);
+                    entity.as_ref().expect("just assigned")
+                }
+            };
+            let before = readings.len();
+            let mapped: Vec<optical::OpticalSample> = readings
+                .into_iter()
+                .filter_map(|s| {
+                    idx.ifindex_for(s.ifindex)
+                        .map(|ifindex| optical::OpticalSample { ifindex, ..s })
+                })
+                .collect();
+            if mapped.len() < before {
+                tracing::debug!(
+                    job_id = %job.job_id,
+                    flavor = ?probe.flavor,
+                    dropped = before - mapped.len(),
+                    "optical rows dropped: no interface maps to their physical entity"
+                );
+            }
+            mapped
+        };
+
+        for s in optical::dedupe_readings(resolved) {
+            let metric = match s.reading {
+                optical::OpticalReading::Rx => probe.rx_metric.as_ref(),
+                optical::OpticalReading::Tx => probe.tx_metric.as_ref(),
+            };
+            if let Some(name) = metric {
+                samples.push(Sample::interface(
+                    name.clone(),
+                    IfIndex(s.ifindex),
+                    s.dbm,
+                    MetricKind::Gauge,
+                ));
+            }
+        }
+    }
+
+    PollResult {
+        job_id: job.job_id,
+        node_id: job.node_id,
+        at_unix_ms,
+        // Never a liveness statement — see the doc comment.
+        outcome: CheckOutcome::Reachable,
+        samples,
+        interfaces: Vec::new(),
+        sys_descr: None,
+        dns_chain: None,
+        neighbors: None,
+        l3: None,
+        arp: None,
+        routing: None,
+        observational: true,
+        poller_id: None,
+        trace_context: Default::default(),
+    }
+}
+
+/// Walk a two-column optical dialect and scale it to dBm. Indices are whatever the dialect keys
+/// on; the caller translates them if needed.
+async fn walk_simple_optical(
+    job: &PollJob,
+    transport: &dyn Transport,
+    walker: &SnmpWalker,
+    timeout: Duration,
+    dialect: &optical::SimpleDialect,
+) -> Vec<optical::OpticalSample> {
+    let columns = vec![dialect.rx_oid.to_owned(), dialect.tx_oid.to_owned()];
+    let rows = match walker.walk(transport, job.target, &columns, timeout).await {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "optical walk failed");
+            return Vec::new();
+        }
+    };
+    rows.into_iter()
+        .filter_map(|row| {
+            let reading = if row.oid_base == dialect.rx_oid {
+                optical::OpticalReading::Rx
+            } else if row.oid_base == dialect.tx_oid {
+                optical::OpticalReading::Tx
+            } else {
+                return None;
+            };
+            Some(optical::OpticalSample {
+                ifindex: row.ifindex,
+                reading,
+                dbm: row.value * dialect.scale,
+            })
+        })
+        .collect()
+}
+
+/// Walk ENTITY-SENSOR-MIB and correlate its columns into dBm readings keyed by
+/// `entPhysicalIndex`.
+///
+/// Four numeric columns in one session, then the entity text in a second — the same two-session
+/// shape the interface walk uses, and for the same reason: the numeric and string walkers are
+/// separate transports.
+async fn walk_entity_sensor_optical(
+    job: &PollJob,
+    transport: &dyn Transport,
+    walker: &SnmpWalker,
+    timeout: Duration,
+) -> Vec<optical::OpticalSample> {
+    let columns = vec![
+        optical::ENT_SENSOR_TYPE.to_owned(),
+        optical::ENT_SENSOR_SCALE.to_owned(),
+        optical::ENT_SENSOR_PRECISION.to_owned(),
+        optical::ENT_SENSOR_VALUE.to_owned(),
+    ];
+    let rows = match walker.walk(transport, job.target, &columns, timeout).await {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "entity-sensor walk failed");
+            return Vec::new();
+        }
+    };
+    let mut types: HashMap<u32, i64> = HashMap::new();
+    let mut scales: HashMap<u32, i64> = HashMap::new();
+    let mut precisions: HashMap<u32, i64> = HashMap::new();
+    let mut values: HashMap<u32, i64> = HashMap::new();
+    for row in rows {
+        let v = row.value as i64;
+        let bucket = match row.oid_base.as_str() {
+            optical::ENT_SENSOR_TYPE => &mut types,
+            optical::ENT_SENSOR_SCALE => &mut scales,
+            optical::ENT_SENSOR_PRECISION => &mut precisions,
+            optical::ENT_SENSOR_VALUE => &mut values,
+            _ => continue,
+        };
+        bucket.insert(row.ifindex, v);
+    }
+    if values.is_empty() {
+        return Vec::new();
+    }
+
+    // Only now walk the text, and only for the entities that produced a candidate reading.
+    let text = walk_entity_text(job, transport, walker, timeout).await;
+
+    // Ascending entity order so "first lane wins" in `dedupe_readings` is deterministic.
+    let mut ents: Vec<u32> = values.keys().copied().collect();
+    ents.sort_unstable();
+    ents.into_iter()
+        .filter_map(|ent| {
+            let dbm = optical::entity_sensor_dbm(
+                *values.get(&ent)?,
+                *types.get(&ent)?,
+                // `units(9)` / no decimals are the MIB's own defaults for an agent that omits them.
+                scales.get(&ent).copied().unwrap_or(9),
+                precisions.get(&ent).copied().unwrap_or(0),
+            )?;
+            let reading = optical::reading_from_text(text.get(&ent)?)?;
+            Some(optical::OpticalSample {
+                ifindex: ent,
+                reading,
+                dbm,
+            })
+        })
+        .collect()
+}
+
+/// `entPhysicalIndex` → the best free text describing it (`entPhysicalName` preferred, falling
+/// back to `entPhysicalDescr`).
+///
+/// Both are walked because vendors disagree on which one carries the direction: Cisco puts it in
+/// `entPhysicalDescr`, and some agents leave that generic and put the useful string in
+/// `entPhysicalName`. Whichever parses wins — `reading_from_text` refuses anything ambiguous, so
+/// preferring one cannot silently pick a wrong direction.
+async fn walk_entity_text(
+    job: &PollJob,
+    transport: &dyn Transport,
+    walker: &SnmpWalker,
+    timeout: Duration,
+) -> HashMap<u32, String> {
+    let columns = vec![
+        optical::ENT_PHYSICAL_DESCR.to_owned(),
+        optical::ENT_PHYSICAL_NAME.to_owned(),
+    ];
+    let mut out: HashMap<u32, String> = HashMap::new();
+    match walker
+        .walk_strings(transport, job.target, &columns, timeout)
+        .await
+    {
+        Ok(rows) => {
+            for row in rows {
+                // Device-supplied text: kept only to classify, never rendered or used as a label.
+                if optical::reading_from_text(&row.value).is_some() {
+                    out.insert(row.ifindex, row.value);
+                } else {
+                    out.entry(row.ifindex).or_insert(row.value);
+                }
+            }
+        }
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "entity text walk failed");
+        }
+    }
+    out
+}
+
+/// Walk the two ENTITY-MIB relations that attach a physical entity to an interface.
+async fn walk_entity_index(
+    job: &PollJob,
+    transport: &dyn Transport,
+    walker: &SnmpWalker,
+    timeout: Duration,
+) -> optical::EntityIndex {
+    let mut idx = optical::EntityIndex::default();
+    let columns = vec![
+        optical::ENT_ALIAS_MAPPING.to_owned(),
+        optical::ENT_PHYSICAL_CONTAINED_IN.to_owned(),
+    ];
+    match walker
+        .walk_instances(
+            transport,
+            job.target,
+            &columns,
+            timeout,
+            OPTICAL_ENTITY_MAX_ROWS,
+        )
+        .await
+    {
+        Ok(rows) => {
+            let (alias, parent): (Vec<_>, Vec<_>) = rows
+                .into_iter()
+                .partition(|r| r.oid_base == optical::ENT_ALIAS_MAPPING);
+            idx.add_alias_rows(&alias);
+            idx.add_parent_rows(&parent);
+        }
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "entity index walk failed");
+        }
+    }
+    idx
 }
 
 /// Execute a CDP/LLDP neighbour walk (v2c or v3, selected by `walker`) — ADR-038.
