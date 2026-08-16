@@ -670,7 +670,16 @@ async fn preflight(
 /// The part of [`preflight`] that is not about a tag, so the check that names no release can share
 /// it. Kept as one function for the reason `preflight` gives: a second copy is how one path ends up
 /// missing the 409.
-async fn reachable(upgrade: &crate::upgrade::UpgradeRepo, now: i64) -> Result<(), ApiError> {
+///
+/// `pub(super)` because `api/bus.rs` asks the same question for the same reason (ADR-065): turning
+/// remote-poller acceptance on ends in the same `docker compose up -d` through the same sidecar, so
+/// it needs the same four refusals — and each of the four carries a *different* operator-facing
+/// message. Re-deriving them there would be four chances to say something less useful, plus the 409
+/// that stops two concurrent recreations of the same stack.
+pub(super) async fn reachable(
+    upgrade: &crate::upgrade::UpgradeRepo,
+    now: i64,
+) -> Result<(), ApiError> {
     // First, because it outranks every check below it. The switch defaults to on, so a deployment
     // with no mechanism at all would otherwise fall through to `upgrade_unavailable` and be told
     // its updater is not running — naming a container it was never given, and sending the operator

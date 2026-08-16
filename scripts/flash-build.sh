@@ -65,10 +65,11 @@ docker run --rm \
     cargo clippy --workspace --profile $PROFILE -- -D warnings
     cargo build  --profile $PROFILE --bin yagra-core --bin yagra-poller
     install -m0755 target/$PROFILE/yagra-core target/$PROFILE/yagra-poller /out/
-    install -m0644 docker-compose.deploy.yml docker-compose.poller.yml scripts/yagra-backup.sh /out/
+    install -m0644 docker-compose.deploy.yml docker-compose.poller.yml scripts/yagra-backup.sh docker/nats/nats-server.conf /out/
   "
 
 say "binaries in $OUT"
-# The two release artifacts are listed too: the `prebuilt` Dockerfile stage COPYs them, so a missing
-# one fails the image build rather than producing a core image that cannot be upgraded from.
-ls -l "$OUT/yagra-core" "$OUT/yagra-poller" "$OUT/docker-compose.deploy.yml" "$OUT/docker-compose.poller.yml" "$OUT/yagra-backup.sh"
+# The release artifacts are listed too: the `prebuilt` Dockerfile stage COPYs them, so a missing one
+# fails the image build rather than producing a core image that cannot be upgraded from — or, for
+# nats-server.conf, one whose `bus-cert` one-shot has nothing to install (ADR-065).
+ls -l "$OUT/yagra-core" "$OUT/yagra-poller" "$OUT/docker-compose.deploy.yml" "$OUT/docker-compose.poller.yml" "$OUT/yagra-backup.sh" "$OUT/nats-server.conf"

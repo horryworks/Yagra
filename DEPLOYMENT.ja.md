@@ -265,78 +265,116 @@ poller は自身の Prometheus `/metrics` を `0.0.0.0:9100` で提供します�
 
 > **バスはデバイス資格情報を平文で運びます。** 単一ホストなら問題ありません（内部 Docker ネットワーク、何も公開しない）。バスがリモート拠点へ信頼境界を越える瞬間、**まず** TLS 暗号化と認証が必須になります。`:4222` を平文で公開しては**いけません**。
 
-### ステップ 1 — 中央スタックで NATS の TLS + auth を有効化
+### ステップ 1 — リモートポーラーを受け入れる（WebUI）
 
-これは `docker-compose.deploy.yml` の `nats` サービスに（コメントで）既に用意されているオプトインブロックです。5 手順すべてが必須です:
+**Settings ▸ Pollers ▸ リモートポーラー** で「リモートポーラーを受け入れる」を押します。拠点が接続する
+ホスト名または IP アドレスを入力してください。この宛先がバス証明書に入ります。**証明書に入っていない
+宛先へ接続する拠点は接続できません。**
 
-**1a. サーバ証明書を生成**して `./certs` に置きます。SAN には各ポーラがダイヤルする正確なホスト/IP を**必ず**含めます:
+中央でやることはこれだけです。Yagra は次を行います。
 
-```bash
-mkdir -p certs
-openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  -keyout certs/server-key.pem -out certs/server-cert.pem \
-  -subj "/CN=yagra-nats" \
-  -addext "subjectAltName=DNS:nats,DNS:core.example.com,IP:192.168.1.2"
-```
+- その宛先を含むバス証明書を再発行する（証明書は初回起動時に自動生成済み。秘密鍵は他の秘密と同じく
+  PostgreSQL に封筒暗号で保存され、バスが読むボリュームへ書き出されるだけ）
+- バスの TLS とパスワード認証を有効にしてポートを公開し、同じ変更で同居する core とポーラーも
+  `tls://` に移す
+- 設定を `.env` に書く。**`.env` はアップグレードで保護されます** — 手で書き換えた compose ファイルは
+  保護されません（下記）
 
-証明書は自己署名なので、それ自身が CA です。ステップ 5 で `server-cert.pem`（**公開証明書のみ。鍵は絶対に渡さない**）を配布します。
+> **1 分ほど監視が止まります。** NATS は TLS と平文を同時に提供できないため、バス・core・同居ポーラーの
+> 3 つが作り直されます。先にデプロイ全体のメンテナンス期間が開くので通知は出ません。この画面はその間
+> 切断されますが、これは異常ではありません。期間中のアラートは後追い記録されません（メトリクスは
+> 記録されます）。
 
-**1b. バスのパスワードを設定**（意図的に既定値なし）を `.env` に:
+<details>
+<summary>WebUI が使えない場合（シェルから設定する）</summary>
+
+`docker-compose.deploy.yml` と同じ場所の `.env` に次を書き、
+`docker compose -p yagra -f docker-compose.deploy.yml up -d` を実行します。WebUI が書くのと同じキーで、
+**compose の編集は不要**です。
 
 ```ini
-YAGRA_NATS_CORE_PASSWORD=a-strong-core-bus-password
-YAGRA_NATS_POLLER_PASSWORD=a-strong-poller-bus-password
-YAGRA_NATS_PORT=4222        # バスを公開するホストポート
-YAGRA_CERT_DIR=./certs
+YAGRA_NATS_ARGS=-js -c /etc/nats/nats-server.conf
+YAGRA_NATS_BIND=0.0.0.0
+YAGRA_NATS_CORE_PASSWORD=強いコア用バスパスワード
+YAGRA_NATS_POLLER_PASSWORD=強いポーラー用バスパスワード
+YAGRA_CORE_BUS_URL=tls://core:強いコア用バスパスワード@nats:4222
+YAGRA_POLLER_BUS_URL=tls://poller:強いポーラー用バスパスワード@nats:4222
+YAGRA_BUS_CA_FILE=/etc/nats/certs/server-cert.pem
+# バス証明書に追加する宛先（内部の既定名に追加されます）:
+YAGRA_BUS_TLS_SANS=core.example.com,192.168.1.2
 ```
 
-**1c. auth/TLS 設定を読み込む。** `docker-compose.deploy.yml` の `nats` サービスで `command: ["-js"]` をコメントアウトし、その下のブロックをコメント解除します（`command: ["-js", "-c", "/etc/nats/nats-server.conf"]` を設定し、2 つのパスワードを注入し、`docker/nats/nats-server.conf` + `./certs` をマウントし、`${YAGRA_NATS_PORT:-4222}:4222` を公開します）。
+戻すときはこれらの行を消して、もう一度 up し直します。
+</details>
 
-**1d. 内部クライアントも TLS に切り替える** — サーバ全体 TLS では平文ポートが残らないため、同居する core と poller も `tls://` を使う必要があります。`core` には:
-```yaml
-YAGRA_BUS_URL: tls://core:${YAGRA_NATS_CORE_PASSWORD}@nats:4222
-```
-ローカルの `poller` には:
-```yaml
-YAGRA_BUS_URL: tls://poller:${YAGRA_NATS_POLLER_PASSWORD}@nats:4222
-```
-そして**両方**に `YAGRA_BUS_CA_FILE: /etc/nats/certs/server-cert.pem` と `- ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro` ボリュームマウントを追加します。
+> **`openssl` の手順が無くなった理由と、それが重要な理由。** 以前の手順は証明書を手で作り、
+> `docker-compose.deploy.yml` を 2 か所書き換えるものでした。どちらも見た目より悪い状態でした。
+> Settings ▸ Upgrade は**その compose ファイルを target イメージの中身で置き換える**ため、編集は
+> 次のアップグレードで消えます。そして消えた後、**中央のスタックは正常に動き続け、リモートポーラーだけが
+> 黙って接続できなくなります**。さらに、手順がマウントしろと言っていた `docker/nats/nats-server.conf`
+> は**公開イメージに入っていません**でした。構成 [A](#a--単一ノード-docker-pull) で立てたデプロイには
+> そのファイルが無く、バスが起動に失敗します。どちらも解決済みです — 設定ファイルは core イメージに
+> 同梱されて自動でボリュームへ置かれ、切り替えは `.env` の変数で表現されます（アップグレードが保護します）。
 
-**1e.** `certs/server-cert.pem`（公開証明書のみ）を各リモートポーラの運用者に渡します — これが相手側の `YAGRA_BUS_CA_FILE` になります。
+### ステップ 2 — 拠点にトークンを発行して一式をダウンロードする
 
-中央スタックを起動し直します（`docker compose -f docker-compose.deploy.yml up -d`）。
+**Settings ▸ Pollers** の **トークン** 列に、そのポーラーが専用トークンを持つのか、デプロイ全体で共通の
+ブートストラップシークレットを使っているのかが出ます。クリックして「トークンを発行してダウンロード」を
+押してください。
 
-`nats-server.conf` は `core` にフルアクセスを、`poller` アカウントには最小権限（publish は結果/イベント/heartbeat のみ、subscribe は自分のジョブ + 作業セット割当のみ）を与えます。静的アカウントの制限に注意: **`poller` アカウントは 1 つを共有**するため、認証済みのどのポーラも任意プールの割当を読めます — テナント境界ではありません。バス資格情報をポーラ単位にスコープするには、オプションの **NATS Auth Callout** 連携（`docker/nats/nats-server.conf` の `auth_callout` ブロックと、`.env.example` の `YAGRA_NATS_CALLOUT_*` / `YAGRA_CALLOUT_SEED_DIR` 変数）を有効化してください: core が接続してくる各ポーラに、そのプールのサブジェクトだけにスコープした資格情報を発行するようになります。
+拠点に必要なものが `.tar.gz` で 1 つ落ちます。`.env`（id・pool・バストークン）、
+`certs/server-cert.pem`（拠点が固定する証明書）、この core のイメージから取り出した
+`docker-compose.poller.yml`、そして手順書です。**ポーラーがまだ存在しなくても構いません** —
+トークンの発行が登録を兼ねるので、拠点でまだ何も動いていない段階で準備できます。
 
-### ステップ 2 — WebUI でポーラを登録
+> **トークンはそのファイルの中だけにあります。** Yagra は SHA-256 のダイジェストしか保存しません。
+> アーカイブを失くしたら新しいトークンを発行してください。発行した時点で古いものは無効になります。
 
-**Settings ▸ Pollers ▸ "Register poller"** を開きます。リモートホスト用のすぐ使える `.env`（id / pool / bus URL）を生成します。このポーラに担当させたいプールを割り当てます。
+利便性以外に、これで得られるものが 2 つあります。
 
-### ステップ 3 — リモートポーラの起動
+- **登録されていないポーラー id は、どんなシークレットを示しても拒否されます。** 以前は id が自己申告で
+  何とも照合されていなかったため、1 拠点の `.env` が漏れると**任意の id を名乗れました** — そして core が
+  その id に送る working set には、その id に割り当てられたノードの SNMP コミュニティや API トークンが
+  平文で入っています。
+- **専用トークンを持つポーラーは、共通シークレットでは開けなくなります。** つまりトークンの発行は
+  拠点ごとに爆風半径を狭める作業です。トークンを持たないポーラーは共通シークレットのままなので、
+  アップグレードしても既存のフリートは動き続けます。トークン列はその状態を見るためのものです。
 
-リモート拠点のマシンで、`docker-compose.poller.yml`（ポーラ**のみ**を動かす）を使います:
+「トークンを失効」は、拠点を共通シークレットに戻します（漏洩後に新しいものを発行する前など）。
+ポーラーの削除とは別物です — 削除はアンカーや履歴も一緒に消します。
+
+### ステップ 3 — リモートポーラーを起動する
+
+拠点のマシンで:
 
 ```bash
-# 生成された .env を docker-compose.poller.yml の隣に置き、CA 証明書を ./certs へ
-mkdir -p certs && cp /path/to/server-cert.pem certs/
-
+tar xzf yagra-poller-edge-tokyo-1.tar.gz
+cd yagra-poller-edge-tokyo-1        # 展開した場所
 docker compose -f docker-compose.poller.yml up -d
 ```
 
-必須の 3 変数（未設定だと compose がエラー終了）— 生成された `.env` が提供します:
+10 秒ほどで Pollers ページに現れ、core がそのプールのノードを割り当て始めます。
 
-```ini
-YAGRA_BUS_URL=tls://poller:a-strong-poller-bus-password@core.example.com:4222
-YAGRA_POLLER_ID=edge-tokyo-1        # 安定・ポーラごとに一意
-YAGRA_POLLER_POOL=tokyo             # このポーラが担当するプール
-YAGRA_BUS_CA_FILE=/etc/yagra/certs/server-cert.pem
-```
+`docker-compose.poller.yml` は `network_mode: host` を使い（受動イベントの相関がデータグラムの
+実際の送信元 IP を見られるように、また raw ICMP がホストのインタフェースに届くように）、`NET_RAW` を
+付与します。
 
-`docker-compose.poller.yml` は `network_mode: host` を使い（受動 syslog/trap の相関が実際のデータグラム送信元 IP を見え、raw ICMP がホストのインターフェースに届く）、`NET_RAW` を付与します。
+> **特権ポートの注意。** リモートポーラーは**非 root** で動く（ファイル capability の `NET_RAW` のみ）ため、`:514`/`:162`（1024 未満）を bind できません。既定の高いポート（`1514`/`1162`）を使ってホストのファイアウォールで転送する（`iptables … REDIRECT 514→1514`）か、機器から直接高いポートへ送ってください。
 
-> **特権ポートの注意。** リモートポーラは**非 root**（ファイル capability `NET_RAW` のみ）で動くため、`:514`/`:162`（< 1024）をバインドできません。既定の高ポート（`1514`/`1162`）を使ってホストのファイアウォールでリダイレクト（`iptables … REDIRECT 514→1514`）するか、デバイスを直接高ポートへ向けてください。起動後数秒で Pollers ページに現れ、core がそのプールのノードを割り当て始めます。
+プールをスケールするには、同じ `YAGRA_POLLER_POOL`（と異なる `YAGRA_POLLER_ID`）でポーラーを増やします。core がプール内で再配分し、喪失時にはフェイルオーバーします。稼働ポーラーが 0 のプールはレガシーな都度 publish にフォールバックするので、ローリング更新中もノードが暗くなりません。
 
-プールをスケールするには、同じ `YAGRA_POLLER_POOL`（かつ別々の `YAGRA_POLLER_ID`）でポーラを増やします — core がプールをそれらへ再分散し、喪失時はフェイルオーバーします。生存ポーラが 0 のプールはレガシーの per-job publish にフォールバックするため、ロールアウト中もノードが止まりません。
+### 任意 — ポーラーごとにバス資格情報を絞る（Auth Callout）
+
+NATS の静的アカウントは `core` に全権を、`poller` に最小権限を与えます（publish は結果・イベント・
+ハートビートのみ、subscribe は自分のジョブとワーキングセットのみ）。ただし **`poller` アカウントは
+1 つの共有**なので、認証済みのポーラーはどのプールの割り当ても読めます。テナント境界ではありません。
+
+**NATS Auth Callout** を有効にすると core がバスの認可サービスになり、接続してくるポーラーごとに
+その id 専用のスコープを持つ資格情報を発行します。ステップ 2 のポーラー別トークンを検査するのも
+この経路です。アカウントの nkey ペアを作り（`nk -gen account -pubout`）、core に
+`YAGRA_NATS_CALLOUT_SEED_FILE` でシードを渡し、`YAGRA_NATS_CALLOUT_ISSUER` に公開鍵を設定して、
+同梱の `nats-server.conf` の `auth_callout` ブロックのコメントを外します。有効にすると、core は
+ハートビートからポーラーの行を作り直さなくなるので、**WebUI でのポーラー削除が効くようになります。**
 
 ---
 

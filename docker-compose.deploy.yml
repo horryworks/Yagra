@@ -91,6 +91,63 @@ services:
       - logdata:/logs
     restart: "no"
 
+  # ── Bus TLS volume init — same one-shot pattern, third volume (ADR-065) ──
+  # The bus certificate is shared by two containers running as different users: `bus-cert-init`
+  # below writes it as core's uid 10001, and `nats` reads it as uid 1000 through `group_add`. So
+  # somebody has to arrange the directory before either starts, for exactly the reasons `tls-init`
+  # above spells out — Docker seeds an empty named volume from the image that mounts it FIRST, and
+  # neither of those images can fix an ordering it lost or a volume that already exists.
+  #
+  #   /etc/nats        0755  core owns it; nats needs to traverse and read the configuration file,
+  #                          which is public (it holds `$VAR` references, never a secret).
+  #   /etc/nats/certs  0750  the private key lives here, 0640 — `o=` is what keeps it off any other
+  #                          container that ever mounts this volume.
+  bus-init:
+    image: busybox:stable
+    command:
+      - sh
+      - -c
+      - "mkdir -p /etc/nats/certs && chown -R 10001:10001 /etc/nats && chmod 0755 /etc/nats && chmod 0750 /etc/nats/certs"
+    volumes:
+      - buscerts:/etc/nats
+    restart: "no"
+
+  # ── Bus certificate + NATS configuration (ADR-065) ──
+  # Mints the self-signed certificate the bus serves, materializes it, and copies the NATS server
+  # configuration out of the core image onto the same volume. Runs from the core image so the
+  # certificate rules live in one place (`crates/yagra-core/src/bus_cert.rs`), and runs as a
+  # ONE-SHOT before nats because core cannot do it: core needs the bus to start, and the bus needs
+  # the certificate. Idempotent — with a valid certificate stored it only rewrites the files.
+  #
+  # ⚠️ This container applies database migrations, and it is usually the first thing to. That is
+  # forced by the same cycle: the table it reads is created by a migration, migrations are applied
+  # by core, core waits for the bus, the bus waits for this. Same binary, same embedded set, and
+  # sqlx takes an advisory lock, so core applying them a moment later is a no-op. The practical
+  # consequence: on a fresh deployment a migration failure surfaces here rather than in core.
+  bus-cert-init:
+    image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
+    pull_policy: always
+    command: ["bus-cert"]
+    depends_on:
+      postgres: { condition: service_started }
+      kek-init: { condition: service_completed_successfully }
+      bus-init: { condition: service_completed_successfully }
+    environment:
+      YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
+      # The same KEK every other secret is sealed with — the bus private key is not a special case.
+      YAGRA_KEK_FILE: /kek/key
+      YAGRA_BUS_TLS_DIR: /etc/nats
+      # Extra subject alternative names, ADDED to the internal defaults (`nats`, loopback). A remote
+      # poller's TLS handshake fails unless the exact address it dials is in this list. The WebUI
+      # switch reissues the certificate with the address the operator types, so this is only for a
+      # deployment that has to set it from a shell.
+      YAGRA_BUS_TLS_SANS: ${YAGRA_BUS_TLS_SANS:-}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - kekdata:/kek:ro
+      - buscerts:/etc/nats
+    restart: "no"
+
   # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
   core:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
@@ -108,7 +165,18 @@ services:
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
-      YAGRA_BUS_URL: nats://nats:4222
+      # Plaintext on the internal network by default. Settings ▸ Pollers ▸ Remote pollers rewrites
+      # this to `tls://core:<password>@nats:4222` in `.env` when remote acceptance is turned on —
+      # server-wide TLS leaves no plaintext port, so the co-located clients move with the bus
+      # (ADR-065). Core reports which of the two it is using on Settings ▸ Pollers.
+      YAGRA_BUS_URL: ${YAGRA_CORE_BUS_URL:-nats://nats:4222}
+      # Pins the bus certificate. Empty means "no CA", which is the plaintext case — core applies the
+      # same empty-means-unset rule the poller does. The certificate is one Yagra minted and signed
+      # itself, so it is in no container's trust store and this is not optional once TLS is on.
+      YAGRA_BUS_CA_FILE: ${YAGRA_BUS_CA_FILE:-}
+      # Where core reads the bus certificate back from, so Settings ▸ Pollers can say whether the
+      # bus is actually serving the certificate that is stored. Read-only: `bus-cert-init` writes it.
+      YAGRA_BUS_TLS_DIR: /etc/nats
       YAGRA_TSDB_URL: http://victoriametrics:8428
       # Event log store (ADR-024): passive events searched from + written to VictoriaLogs;
       # PostgreSQL keeps only alert-linked rows. Unset to keep events entirely in PostgreSQL.
@@ -200,6 +268,10 @@ services:
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
       # Host-resources "metrics" trend (capacity only — core never writes here).
       - vmdata:/hostfs/vm:ro
+      # The bus certificate (ADR-065) — read-only here. `bus-cert-init` is the only writer, and core
+      # reads the materialized file only to answer "is the bus serving what is stored?". It is also
+      # where YAGRA_BUS_CA_FILE points once the bus is TLS.
+      - buscerts:/etc/nats:ro
       # Offline IP→ASN dataset (ADR-031) — read-only, from the named `ipasndata` volume that the
       # `ipasn-updater` sidecar writes. A named volume persists across redeploys and is untouched by
       # the runner's `git clean` (no host path). If the file is absent core just runs enrichment off
@@ -249,7 +321,10 @@ services:
       # The shared log volume has to be arranged before this poller tries to write into it.
       log-init: { condition: service_completed_successfully }
     environment:
-      YAGRA_BUS_URL: nats://nats:4222
+      # Moves to `tls://poller:<password>@nats:4222` with the bus — see the note on core's
+      # YAGRA_BUS_URL above. This co-located poller is the one that stops during the switch.
+      YAGRA_BUS_URL: ${YAGRA_POLLER_BUS_URL:-nats://nats:4222}
+      YAGRA_BUS_CA_FILE: ${YAGRA_BUS_CA_FILE:-}
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
       # SUBDIRECTORY of core's log volume is load-bearing — core collects by filename prefix, and
       # keeping the two apart on disk means neither collector can sweep up the other's files. Each
@@ -293,6 +368,9 @@ services:
       # outage longer than the in-memory ring drops the oldest results, and a poller restart
       # mid-outage loses everything it was holding.
       - pollerbuf:/var/lib/yagra/buffer
+      # The bus certificate this poller pins once the bus is TLS (ADR-065). A remote-site poller
+      # gets the same file by hand; this one shares the volume because it is on the same host.
+      - buscerts:/etc/nats:ro
       # Shared with core so the support bundle can carry this poller's log — including the last
       # hour of a poller that has since died, which is the case no bus request can ever answer.
       - logdata:/var/log/yagra
@@ -358,46 +436,75 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
 
+  # ── The bus (ADR-003), and the switch that lets remote sites reach it (ADR-065) ──────────────
+  #
+  # DEFAULT: plaintext on the internal Docker network, published on loopback only. Nothing that
+  # matters crosses a host boundary, so nothing needs encrypting.
+  #
+  # To accept pollers from REMOTE sites, use **Settings ▸ Pollers ▸ Remote pollers** in the WebUI.
+  # Do not hand-edit this service. Everything below is driven by variables the updater sidecar
+  # writes into `.env`, and that is the whole design:
+  #
+  #   * **This file is replaced on every upgrade** with the copy inside the target image (ADR-050
+  #     decision 5). Hand edits here do not survive it — and the way they fail is the worst kind:
+  #     the central stack keeps working, and every remote poller silently stops connecting. `.env`
+  #     IS preserved, so a switch expressed as variables survives.
+  #   * **The certificate and this server's configuration come from `bus-cert-init` above**, not
+  #     from a bind mount of a git checkout. The previous procedure mounted
+  #     `./docker/nats/nats-server.conf`, which is absent from published images: Docker creates an
+  #     empty DIRECTORY at a missing bind-mount source, nats is handed a directory as its `-c`
+  #     argument, and the bus fails to start.
+  #
+  # What the switch sets, for a deployment that has to do it from a shell (all in `.env`):
+  #   YAGRA_NATS_ARGS=-js -c /etc/nats/nats-server.conf   load the TLS + auth configuration
+  #   YAGRA_NATS_BIND=0.0.0.0                             publish the bus port off-host
+  #   YAGRA_NATS_CORE_PASSWORD / YAGRA_NATS_POLLER_PASSWORD
+  #   YAGRA_CORE_BUS_URL=tls://core:<core pw>@nats:4222
+  #   YAGRA_POLLER_BUS_URL=tls://poller:<poller pw>@nats:4222
+  #   YAGRA_BUS_CA_FILE=/etc/nats/certs/server-cert.pem
+  # Server-wide TLS leaves no plaintext port, which is why the last three are not optional: the
+  # co-located core and poller move to `tls://` in the same change.
+  #
+  # (RECOMMENDED, ADR-030) Scope credentials per poller as well: generate an account nkey pair
+  # (`nk -gen account -pubout`), give core the SEED file + YAGRA_NATS_CALLOUT_SEED_FILE (see the
+  # `core` service above), set YAGRA_NATS_CALLOUT_ISSUER=<the A... public key> here, and uncomment
+  # the `auth_callout` block in the shipped nats-server.conf. Then a compromised poller can read
+  # only its OWN pool's device credentials, not the fleet's.
   nats:
     image: nats:2-alpine
-    command: ["-js"]   # JetStream for durable job delivery
+    # `-js` alone = JetStream on a plaintext bus. The switch appends `-c /etc/nats/nats-server.conf`.
+    # A string rather than a list because compose substitutes variables into a string and then
+    # word-splits it; a list entry would arrive as one argument containing spaces.
+    command: ${YAGRA_NATS_ARGS:--js}
+    depends_on:
+      # The certificate and the configuration have to be on the volume before this reads them. With
+      # TLS off it costs one already-satisfied wait; with TLS on it is what stops nats from starting
+      # against an empty directory.
+      bus-cert-init: { condition: service_completed_successfully }
+    environment:
+      # Referenced by the shipped configuration. nats-server EXITS on a referenced-and-unset
+      # variable (fail-closed — it never starts with an anonymous password), so these carry
+      # placeholder defaults that are only ever *used* once the switch has replaced them: with
+      # `-c` absent the configuration is not read at all, so the value is inert.
+      YAGRA_NATS_CORE_PASSWORD: ${YAGRA_NATS_CORE_PASSWORD:-bus-disabled}
+      YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:-bus-disabled}
+      # Per-poller scoping (ADR-030) — the account PUBLIC key core logs on startup. Inert unless the
+      # `auth_callout` block in nats-server.conf is uncommented.
+      YAGRA_NATS_CALLOUT_ISSUER: ${YAGRA_NATS_CALLOUT_ISSUER:-}
+    # nats runs as uid 1000 and the private key on the bus volume is 0640 owned by core's uid 10001,
+    # so it reads the key as a supplementary group member — the same mechanism `web` uses for the
+    # WebUI certificate, and for the same reason. See `bus-init` above for who arranges the volume.
+    group_add:
+      - "10001"
+    volumes:
+      - buscerts:/etc/nats:ro
+    ports:
+      # Loopback by default: reachable for a `nats` CLI on this host and off the network. The switch
+      # sets YAGRA_NATS_BIND=0.0.0.0, and it does that *together* with TLS + auth — the bus carries
+      # plaintext device credentials (ADR-020), so publishing it without them is the one combination
+      # that must not be reachable by editing a single variable.
+      - "${YAGRA_NATS_BIND:-127.0.0.1}:${YAGRA_NATS_PORT:-4222}:4222"
     restart: unless-stopped
-    # ── OPTIONAL: accept remote-site pollers (TLS + auth) ─────────────────────────────
-    # DEFAULT (above) = plaintext internal bus: core/poller/nats share the Docker network
-    # and nothing is exposed. To let pollers connect from REMOTE sites over the WAN, the
-    # bus must be TLS + authenticated FIRST — job messages carry plaintext device
-    # credentials (ADR-020). To enable, do ALL of the following:
-    #   1. Generate a server cert into ./certs (openssl one-liner is in
-    #      docker/nats/nats-server.conf); the cert SAN must include this host's public
-    #      name/IP that pollers will dial.
-    #   2. Set YAGRA_NATS_CORE_PASSWORD and YAGRA_NATS_POLLER_PASSWORD in `.env`.
-    #   3. Comment out the plaintext `command: ["-js"]` line above and uncomment the
-    #      block below (loads the auth/TLS config, keeps JetStream on).
-    #   4. Switch the INTERNAL clients to TLS too — server-wide TLS leaves no plaintext
-    #      port. On `core` set:
-    #        YAGRA_BUS_URL: tls://core:${YAGRA_NATS_CORE_PASSWORD}@nats:4222
-    #      on `poller` set:
-    #        YAGRA_BUS_URL: tls://poller:${YAGRA_NATS_POLLER_PASSWORD}@nats:4222
-    #      and on BOTH add  YAGRA_BUS_CA_FILE: /etc/nats/certs/server-cert.pem  plus a
-    #        - ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro   volume mount.
-    #   5. Hand ./certs/server-cert.pem (public cert only) to each remote poller as its
-    #      YAGRA_BUS_CA_FILE (see docker-compose.poller.yml).
-    #   6. (RECOMMENDED, ADR-030) Scope credentials per poller: generate an account nkey pair
-    #      (`nk -gen account -pubout`), give core the SEED file + YAGRA_NATS_CALLOUT_SEED_FILE
-    #      (see the `core` service below), set YAGRA_NATS_CALLOUT_ISSUER=<the A... public key>
-    #      here, and uncomment the `auth_callout` block in docker/nats/nats-server.conf. Then a
-    #      compromised poller can only read its OWN pool's device credentials, not the fleet's.
-    # command: ["-js", "-c", "/etc/nats/nats-server.conf"]
-    # environment:
-    #   YAGRA_NATS_CORE_PASSWORD: ${YAGRA_NATS_CORE_PASSWORD:?set a core bus password in .env}
-    #   YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:?set a poller bus password in .env}
-    #   # Step 6 only (per-poller scoping): the account PUBLIC key core logs on startup.
-    #   YAGRA_NATS_CALLOUT_ISSUER: ${YAGRA_NATS_CALLOUT_ISSUER:?set the callout account public key}
-    # volumes:
-    #   - ./docker/nats/nats-server.conf:/etc/nats/nats-server.conf:ro
-    #   - ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro
-    # ports:
-    #   - "${YAGRA_NATS_PORT:-4222}:4222"   # bus — expose ONLY with TLS+auth enabled above
 
   victoriametrics:
     # Pinned, not `:latest` — this holds the metrics history, and ADR-017 makes "an upgrade must
@@ -741,9 +848,55 @@ services:
           mv "$$D/status.json.tmp" "$$D/status.json"
         }
 
+        # Turn remote-poller acceptance on or off (ADR-065). Rewrites an ALLOW-LISTED set of keys in
+        # the host's `.env` and recreates the three services that read them.
+        #
+        # The allow-list is the security property, not a tidiness measure. core writes the request
+        # file, so "write any line into .env" would be "core can set any variable in this
+        # composition", which is a wider capability than ADR-051 grants — the whole design there is
+        # that core names a value and never a mechanism. Every key written here is spelled out
+        # below; nothing from the request file becomes a key.
+        #
+        # Arguments: <mode> <core password> <poller password>.
+        set_env() { # <key> <value>  — replace or append, atomically, preserving everything else
+          E="$$WORKDIR/.env"
+          touch "$$E"
+          grep -v "^$$1=" "$$E" > "$$E.tmp" 2>/dev/null || true
+          [ -n "$$2" ] && printf '%s=%s\n' "$$1" "$$2" >> "$$E.tmp"
+          mv "$$E.tmp" "$$E"
+        }
+        bus_switch() {
+          MODE="$$1"; CPW="$$2"; PPW="$$3"
+          if [ "$$MODE" = "on" ]; then
+            set_env YAGRA_NATS_ARGS "-js -c /etc/nats/nats-server.conf"
+            set_env YAGRA_NATS_BIND "0.0.0.0"
+            set_env YAGRA_NATS_CORE_PASSWORD "$$CPW"
+            set_env YAGRA_NATS_POLLER_PASSWORD "$$PPW"
+            set_env YAGRA_CORE_BUS_URL "tls://core:$$CPW@nats:4222"
+            set_env YAGRA_POLLER_BUS_URL "tls://poller:$$PPW@nats:4222"
+            set_env YAGRA_BUS_CA_FILE "/etc/nats/certs/server-cert.pem"
+          else
+            # Cleared rather than set to a plaintext value: the compose file already carries the
+            # right defaults, so removing the line is what returns this deployment to them. Setting
+            # them here would be a second copy of those defaults, in a file no upgrade replaces.
+            for k in YAGRA_NATS_ARGS YAGRA_NATS_BIND YAGRA_NATS_CORE_PASSWORD \
+                     YAGRA_NATS_POLLER_PASSWORD YAGRA_CORE_BUS_URL YAGRA_POLLER_BUS_URL \
+                     YAGRA_BUS_CA_FILE; do
+              set_env "$$k" ""
+            done
+          fi
+          # Only the three services that read those variables. `up -d` with no arguments would
+          # recreate this container too, killing the process performing the change.
+          ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d bus-init bus-cert-init nats core poller ) \
+            || return 1
+          return 0
+        }
+
         handle() {
           SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
           TAG=$$(field tag); BY=$$(field requested_by)
+          BUSMODE=$$(field bus_mode)
+          BUSCPW=$$(field bus_core_password); BUSPPW=$$(field bus_poller_password)
           rm -f "$$D/request"
           CMDSAFE=unknown; BUNDLE=
           # An upgrade replaces core but NOT this container, so a new core paired with an old
@@ -774,6 +927,41 @@ services:
             # maintenance window it never opened. The observable is available.json's written_at,
             # which is what the page watches. Refusal is core's to report: it answers 503 while the
             # switch is off, so reaching the branch below means a race with the toggle.
+            # Remote-poller acceptance (ADR-065). It installs no image and names no release, so it
+            # skips the tag check below and returns from here — but unlike `refresh` it DOES write
+            # a status.json, because core is restarted by it and the operator needs the same "what
+            # happened to my click" record an upgrade leaves. `settle_finished_run` claims it on the
+            # way back up, which is what closes the maintenance window core opened.
+            bus)
+              CMDSAFE=bus
+              if paused; then reject "$$ID" "the upgrade mechanism is switched off in Settings ▸ Upgrade"; return; fi
+              [ -n "$$WORKDIR" ] || { reject "$$ID" "cannot locate the compose project directory"; return; }
+              [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
+                || { reject "$$ID" "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml"; return; }
+              # Every field re-checked here, not only in core: this container reads the file as root,
+              # and a request file is the one thing core can write into the shared volume.
+              case "$$BUSMODE" in on|off) ;; *) reject "$$ID" "unsupported bus mode"; return ;; esac
+              if [ "$$BUSMODE" = "on" ]; then
+                for pw in "$$BUSCPW" "$$BUSPPW"; do
+                  echo "$$pw" | grep -Eq '^[A-Za-z0-9]{16,64}$$' \
+                    || { reject "$$ID" "malformed bus password"; return; }
+                done
+              fi
+              echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
+              START=$$(date +%s)
+              printf '{"id":"%s","command":"bus","target":null,"state":"running","step":"compose","message":"reconfiguring the bus","started_at":%s,"finished_at":null,"requested_by":"%s"}\n' \
+                "$$ID" "$$START" "$$BY" > "$$D/status.json.tmp"
+              mv "$$D/status.json.tmp" "$$D/status.json"
+              if bus_switch "$$BUSMODE" "$$BUSCPW" "$$BUSPPW"; then
+                ST=succeeded; MSG="remote pollers are now $$([ "$$BUSMODE" = on ] && echo accepted || echo refused)"
+              else
+                ST=failed; MSG="docker compose up failed; the previous bus settings are still in .env"
+              fi
+              printf '{"id":"%s","command":"bus","target":null,"state":"%s","step":"compose","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
+                "$$ID" "$$ST" "$$MSG" "$$START" "$$(date +%s)" "$$BY" > "$$D/status.json.tmp"
+              mv "$$D/status.json.tmp" "$$D/status.json"
+              return
+              ;;
             refresh)
               if paused; then echo "refresh ignored: the mechanism is switched off" >&2; return; fi
               list_releases
@@ -836,6 +1024,10 @@ volumes:
   chdata:    # ClickHouse flow store (ADR-031)
   kekdata:   # persistent key-encryption key (see kek-init) — credentials survive restarts
   pollerbuf: # store-and-forward result buffer (Phase 3) — survives poller restarts
+  buscerts:  # bus TLS certificate + the NATS server configuration (ADR-065). Written by
+             # bus-cert-init, read by nats/core/poller. Like tlsdata it is a materialization of a
+             # PostgreSQL row, not the source of truth: deleting it is safe and the next `up`
+             # rewrites it. See bus-init for who arranges its ownership.
   tlsdata:   # WebUI TLS certificate (ADR-044) — core writes it, web reads it; see tls-init.
              # A cache of the PostgreSQL row, not the source of truth: deleting it is safe and
              # core rewrites it on the next start.

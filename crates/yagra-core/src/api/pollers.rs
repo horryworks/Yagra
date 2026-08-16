@@ -43,7 +43,9 @@ use yagra_common::{HostSample, NodeId};
     delete_poller,
     node_assignment,
     list_monitoring_gaps,
-    set_poller_anchor
+    set_poller_anchor,
+    issue_poller_token,
+    revoke_poller_token
 ))]
 pub(super) struct Doc;
 
@@ -57,6 +59,14 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/pollers/:id/anchor",
             axum::routing::put(set_poller_anchor),
+        )
+        // Issue returns the whole site bundle rather than a token (ADR-065 Inc.4): the token exists
+        // only at this instant, and every other thing the site needs is derivable here and nowhere
+        // else. Two calls would mean a token in a JSON body that somebody has to keep until the
+        // second call.
+        .route(
+            "/api/v1/pollers/:id/token",
+            axum::routing::post(issue_poller_token).delete(revoke_poller_token),
         )
         .route("/api/v1/nodes/:node_id/assignment", get(node_assignment))
         .route("/api/v1/monitoring-gaps", get(list_monitoring_gaps))
@@ -127,6 +137,14 @@ pub(crate) struct PollerInfo {
     /// and nothing backfills them, so whatever they would have received while it was down is gone
     /// (the same set `monitoring_gaps` stamps onto a healed gap).
     listeners: Vec<String>,
+    /// Whether this poller has a bus token of its own (ADR-065). `false` means it is admitted by
+    /// the deployment-wide bootstrap secret, which every poller was before tokens existed and which
+    /// a co-located poller on an unencrypted internal bus still is.
+    // Never the token, and never its digest — this is the one fact the page needs, and it is what
+    // tells an operator which sites still share one credential.
+    has_token: bool,
+    /// When its token was issued, RFC 3339. `null` when it has none.
+    token_issued_at: Option<String>,
 }
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
@@ -228,6 +246,9 @@ fn build_pollers_response(
                 listeners: lv
                     .filter(|_| online)
                     .map_or_else(Vec::new, |v| v.listeners.clone()),
+                // Durable-only: a token is a property of the inventory row, not of the connection.
+                has_token: inv.is_some_and(|r| r.has_token),
+                token_issued_at: inv.and_then(|r| r.token_issued_at.clone()),
             }
         })
         .collect();
@@ -658,6 +679,252 @@ async fn delete_poller(
     }
 }
 
+/// What a new site needs, beyond its own name.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub(super) struct PollerTokenRequest {
+    /// The pool this poller serves. Only used when the poller is not in the inventory yet — an
+    /// existing poller keeps the pool it reported.
+    #[serde(default)]
+    pool: Option<String>,
+    /// The hostname or IP address the site will dial. Must be one the bus certificate covers, or
+    /// the site's connection fails with nothing visible centrally. Defaults to the first name on
+    /// the certificate that is not an internal one.
+    #[serde(default)]
+    host: Option<String>,
+    /// The bus port at that address. Defaults to 4222.
+    #[serde(default)]
+    port: Option<u16>,
+}
+
+/// How long a generated poller token is, in characters of `[A-Za-z0-9]`.
+///
+/// 40 characters is ~238 bits. It is typed by nobody — it arrives inside a generated `.env` — so
+/// there is no length worth trading entropy for.
+const POLLER_TOKEN_LEN: usize = 40;
+
+/// Names a bus certificate carries for the deployment's own containers, which no remote site dials.
+///
+/// Used only to pick a *default* host for the bundle. Getting the default wrong costs an operator
+/// one form field; leaving it out entirely would cost every operator one, on the field most likely
+/// to be filled in wrongly.
+const INTERNAL_NAMES: &[&str] = &["nats", "localhost", "127.0.0.1", "::1"];
+
+/// Issue a poller a bus token of its own and return the archive its site needs.
+///
+/// The response is the archive, not the token: this is the only moment the token exists in the
+/// clear — only its digest is stored — and everything else the site needs is derivable here. See
+/// `poller_bundle.rs`.
+///
+/// Creates the inventory row when the poller has not connected yet, which is what lets a site be
+/// prepared before anything is running there. That is also what makes the callout able to refuse an
+/// unregistered id: something has to be able to register one first.
+#[utoipa::path(
+    post, path = "/api/v1/pollers/{id}/token", tag = "pollers",
+    params(("id" = String, Path, description = "Poller id")),
+    request_body = PollerTokenRequest,
+    responses(
+        (status = 200, description = "A gzipped tar archive holding the site's .env, the bus certificate, the composition and a README", content_type = "application/gzip"),
+        (status = 400, description = "The poller id is not usable as a bus identity, or no address was given and none could be derived", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode, or this deployment has no bus certificate yet", body = super::error::ErrorBody),
+    ),
+)]
+async fn issue_poller_token(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    bus: super::extract::BusTls,
+    caller: Option<super::extract::Caller>,
+    Path(id): Path<String>,
+    Json(req): Json<PollerTokenRequest>,
+) -> ApiResult<axum::response::Response> {
+    // The id becomes a NATS connection username and a subject component, so it is validated at the
+    // edge rather than after it has been written into a certificate-signed scope.
+    if id.is_empty() || yagra_bus::subjects::sanitize_token(&id) != id {
+        return Err(ApiError::bad_request(
+            "invalid_poller_id",
+            "a poller id may contain only letters, digits, dash and underscore",
+        ));
+    }
+    let cert = bus
+        .view()
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "read the bus certificate",
+                "failed to read the bus certificate",
+            )
+        })?
+        .ok_or_else(|| {
+            ApiError::unavailable(
+                "bus_certificate_missing",
+                "this deployment has no bus certificate yet, so a remote poller has nothing to pin",
+            )
+        })?;
+
+    let host = match req.host.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+        Some(h) => h.to_owned(),
+        // Falling back to the first non-internal SAN rather than refusing: on a deployment where
+        // remote acceptance is already on, that name is exactly the one the operator typed when
+        // they turned it on, and asking again would be asking them to repeat themselves.
+        None => cert
+            .sans
+            .iter()
+            .find(|s| !INTERNAL_NAMES.contains(&s.as_str()))
+            .cloned()
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "no_external_address",
+                    "give the address this site will dial — the bus certificate covers only this \
+                     deployment's own names, so there is nothing to guess from",
+                )
+            })?,
+    };
+    // Refused rather than issued-and-broken. A bundle naming an address the certificate does not
+    // carry produces a poller that starts, fails its handshake at a site nobody is watching, and
+    // never appears here — the exact failure this whole increment exists to remove.
+    if !cert.sans.iter().any(|s| s.eq_ignore_ascii_case(&host)) {
+        return Err(ApiError::bad_request(
+            "address_not_in_certificate",
+            format!(
+                "the bus certificate does not cover {host}. Reissue it with that address first, at \
+                 Settings ▸ Pollers ▸ Remote pollers"
+            ),
+        ));
+    }
+
+    let pool = req
+        .pool
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(yagra_bus::DEFAULT_POOL);
+    if yagra_bus::subjects::sanitize_token(pool) != pool {
+        return Err(ApiError::bad_request(
+            "invalid_pool",
+            "a pool name may contain only letters, digits, dash and underscore",
+        ));
+    }
+
+    let token = random_token();
+    admin
+        .pollers
+        .issue_token(
+            &id,
+            pool,
+            &crate::token::token_hash(&token),
+            caller.map(|c| c.0.user_id),
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "issue a poller token",
+                "failed to issue the poller token",
+            )
+        })?;
+
+    let compose = std::fs::read_to_string(COMPOSE_IN_IMAGE).map_err(|e| {
+        ApiError::from_internal(
+            &e,
+            "read the poller composition out of this image",
+            "this core image ships no poller composition",
+        )
+    })?;
+    let bytes = crate::poller_bundle::build(&crate::poller_bundle::SiteBundleInput {
+        poller_id: &id,
+        pool,
+        host: &host,
+        port: req.port.unwrap_or(4222),
+        token: &token,
+        ca_certificate: &cert.certificate,
+        compose: &compose,
+        core_version: env!("CARGO_PKG_VERSION"),
+        mtime: u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0),
+    })
+    .map_err(|e| {
+        ApiError::from_internal(
+            &e,
+            "build the poller site bundle",
+            "failed to build the poller site bundle",
+        )
+    })?;
+
+    tracing::warn!(poller = %id, %pool, %host, "issued a bus token for a poller");
+    use axum::response::IntoResponse;
+    Ok((
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                "application/gzip".to_owned(),
+            ),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                format!(
+                    "attachment; filename=\"{}\"",
+                    crate::poller_bundle::file_name(&id)
+                ),
+            ),
+        ],
+        bytes,
+    )
+        .into_response())
+}
+
+/// Where the core image keeps the composition a remote site runs (`docker/yagra-rust.Dockerfile`).
+const COMPOSE_IN_IMAGE: &str = "/usr/share/yagra/docker-compose.poller.yml";
+
+/// A poller token: `[A-Za-z0-9]` only.
+///
+/// The charset is not aesthetic — the value is pasted into a URL inside a `.env` a shell sources,
+/// and anything with meaning to either is a place for the two to disagree.
+fn random_token() -> String {
+    use rand::Rng;
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::thread_rng();
+    (0..POLLER_TOKEN_LEN)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
+}
+
+/// Revoke a poller's token, returning it to the deployment-wide bootstrap secret.
+///
+/// Not the same thing as deleting the poller: an operator revoking a leaked token wants the site
+/// back on a new one, not its inventory row, anchor and history gone.
+#[utoipa::path(
+    delete, path = "/api/v1/pollers/{id}/token", tag = "pollers",
+    params(("id" = String, Path, description = "Poller id")),
+    responses(
+        (status = 204, description = "The token was revoked"),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 404, description = "No such poller", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode: no durable poller store", body = super::error::ErrorBody),
+    ),
+)]
+async fn revoke_poller_token(
+    _guard: RequireManageSystem,
+    admin: Admin,
+    Path(id): Path<String>,
+) -> ApiResult<StatusCode> {
+    match admin.pollers.revoke_token(&id).await {
+        Ok(true) => {
+            tracing::warn!(poller = %id, "revoked a poller's bus token");
+            Ok(StatusCode::NO_CONTENT)
+        }
+        Ok(false) => Err(ApiError::not_found(
+            "poller_not_found",
+            format!("no poller {id}"),
+        )),
+        Err(e) => Err(ApiError::from_internal(
+            e.as_ref(),
+            "revoke poller token",
+            "failed to revoke the poller token",
+        )),
+    }
+}
+
 /// Where a poller attaches to the monitored network.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PollerAnchorRequest {
@@ -1041,6 +1308,8 @@ mod tests {
             last_incarnation: None,
             mgmt_addrs: Vec::new(),
             anchor_node_id: None,
+            has_token: false,
+            token_issued_at: None,
         }
     }
 }

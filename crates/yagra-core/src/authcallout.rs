@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_nats::Client;
 use futures::StreamExt;
-use yagra_authz::{AccountSigner, Decision};
+use yagra_authz::{AccountSigner, Decision, Expected};
 
 /// The NATS system subject the server publishes auth-callout requests on.
 const AUTH_SUBJECT: &str = "$SYS.REQ.USER.AUTH";
@@ -39,6 +39,7 @@ pub async fn run_auth_callout(
     client: Client,
     signer: Arc<AccountSigner>,
     bootstrap_secret: String,
+    pollers: Arc<crate::pollers::PollerRepo>,
 ) {
     let mut sub = match client
         .queue_subscribe(AUTH_SUBJECT, AUTH_QUEUE.to_owned())
@@ -65,7 +66,30 @@ pub async fn run_auth_callout(
                 continue;
             }
         };
-        match signer.handle_request(request_jwt, &bootstrap_secret, unix_now_secs()) {
+        // Parse first, so the id the connection is claiming can be looked up before anything is
+        // compared (ADR-065 Inc.3). The id is self-asserted — that is exactly why it is the key to
+        // a row rather than something to trust.
+        let pending = match AccountSigner::parse(request_jwt) {
+            Ok(p) => p,
+            Err(_) => {
+                metrics::counter!("yagra_core_authz_denied_total", "reason" => "parse_error")
+                    .increment(1);
+                continue;
+            }
+        };
+        // No id at all: hand it to `decide`, which refuses with the reason that names the actual
+        // problem. Looking `None` up would report "unknown poller", which would send an operator
+        // hunting for an inventory row for a connection that never named one.
+        let material = match pending.poller_id() {
+            Some(id) => pollers.auth_material(id).await,
+            None => Some(crate::pollers::PollerAuth::Bootstrap),
+        };
+        let expected = match &material {
+            Some(crate::pollers::PollerAuth::Token(hash)) => Expected::TokenHash(hash),
+            Some(crate::pollers::PollerAuth::Bootstrap) => Expected::Shared(&bootstrap_secret),
+            None => Expected::Unknown,
+        };
+        match signer.decide(&pending, expected, unix_now_secs()) {
             Ok(handled) => {
                 match &handled.decision {
                     Decision::Issued { pool, .. } => {
@@ -82,8 +106,9 @@ pub async fn run_auth_callout(
                 }
             }
             Err(_) => {
-                // Unparseable request: we can't even address a scoped reply. Count and drop.
-                metrics::counter!("yagra_core_authz_denied_total", "reason" => "parse_error")
+                // Signing or encoding failed after a clean parse — we have a reply subject but
+                // nothing to put on it. Count and drop rather than publishing a malformed answer.
+                metrics::counter!("yagra_core_authz_denied_total", "reason" => "sign_error")
                     .increment(1);
             }
         }

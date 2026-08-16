@@ -46,6 +46,8 @@ import {
   workingSetLabel,
   POLLER_UP_COMMAND,
 } from '../lib/pollers';
+import { saveBlob } from '../lib/download';
+import { BusPanel } from './BusPanel';
 import './PollersPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
@@ -195,6 +197,98 @@ function SetAnchorModal({
             {t('pollers.anchor.reported', { addrs: poller.mgmt_addrs.join(', ') })}
           </p>
         )}
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Issue a poller its own bus token and download the archive its site needs (ADR-065 Inc.3/4).
+ *
+ *  The download IS the token: only a digest is stored, so nothing can hand it over a second time.
+ *  Revocation lives here too because it is the same subject and the same consequence — the site
+ *  stops connecting until it is given a new archive. */
+function PollerTokenModal({
+  poller,
+  onClose,
+  onChanged,
+}: {
+  poller: PollerInfo;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [host, setHost] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+
+  const issue = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .issuePollerToken(poller.id, {
+        pool: poller.pool || undefined,
+        host: host.trim() || undefined,
+      })
+      .then(({ blob, filename }) => {
+        saveBlob(blob, filename || `yagra-poller-${poller.id}.tar.gz`);
+        setDone(true);
+        onChanged();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.token.issueFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  const revoke = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .revokePollerToken(poller.id)
+      .then(() => {
+        onChanged();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.token.revokeFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.token.title', { id: poller.id })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {done ? t('pollers.register.done') : t('common:actions.cancel')}
+          </Button>
+          {poller.has_token && (
+            <Button variant="danger" onClick={revoke} disabled={busy}>
+              {t('pollers.token.revoke')}
+            </Button>
+          )}
+          <Button variant="primary" onClick={issue} disabled={busy}>
+            {poller.has_token ? t('pollers.token.reissue') : t('pollers.token.issue')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <p className="modal-confirm-text">
+          {poller.has_token ? t('pollers.token.introOwn') : t('pollers.token.introShared')}
+        </p>
+        <label className="form-label">
+          {t('pollers.token.host.label')}
+          <TextInput
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+            placeholder="yagra.example.net"
+          />
+        </label>
+        <FieldHint>{t('pollers.token.host.hint')}</FieldHint>
+        {/* Said before the click. Re-issuing invalidates the archive the site is currently using. */}
+        {poller.has_token && <p className="form-hint">{t('pollers.token.reissueWarning')}</p>}
+        {done && <p className="form-hint">{t('pollers.token.downloaded')}</p>}
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>
@@ -451,6 +545,7 @@ export function PollersPage() {
   const [registering, setRegistering] = useState(false);
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
   const [anchoring, setAnchoring] = useState<PollerInfo | null>(null);
+  const [tokenFor, setTokenFor] = useState<PollerInfo | null>(null);
   const { nodeName } = useEntityNames();
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
@@ -609,6 +704,33 @@ export function PollersPage() {
           ),
       },
       {
+        // Which sites still share one credential (ADR-065 Inc.3). Worth a column rather than a
+        // detail: "shared" is the state that makes one site's leaked `.env` everyone's problem, and
+        // an operator cannot otherwise tell the two apart.
+        key: 'token',
+        header: t('pollers.cols.token'),
+        width: '128px',
+        render: (p) =>
+          canSystem ? (
+            <button
+              type="button"
+              className="poller-drill"
+              onClick={() => setTokenFor(p)}
+              title={
+                p.has_token && p.token_issued_at
+                  ? t('pollers.token.issuedAt', { when: formatExactTime(p.token_issued_at) })
+                  : t('pollers.token.sharedHint')
+              }
+            >
+              {p.has_token ? t('pollers.token.own') : t('pollers.token.shared')}
+            </button>
+          ) : (
+            <span className="muted">
+              {p.has_token ? t('pollers.token.own') : t('pollers.token.shared')}
+            </span>
+          ),
+      },
+      {
         key: 'actions',
         header: t('pollers.cols.actions'),
         width: '58px',
@@ -708,6 +830,11 @@ export function PollersPage() {
         <LoadBlockNotice block={block} unavailable={t('pollers.unavailable')} />
       ) : (
         <>
+          {/* The bus itself, above the pools it carries (ADR-065). Renders nothing for a caller
+              who may not manage the deployment, and nothing on a deployment with no bus
+              certificate store — so a viewer's page is unchanged. */}
+          <BusPanel />
+
           {pools.length > 0 && (
             <div className="pool-strip">
               {pools.map((p) => (
@@ -764,6 +891,15 @@ export function PollersPage() {
       )}
 
       {registering && <RegisterPollerModal onClose={() => setRegistering(false)} />}
+      {tokenFor && (
+        <PollerTokenModal
+          poller={tokenFor}
+          onClose={() => setTokenFor(null)}
+          // Reload rather than close: after issuing, the dialog stays open showing that the
+          // download happened, and the row behind it has to stop saying "shared".
+          onChanged={load}
+        />
+      )}
       {anchoring && (
         <SetAnchorModal
           poller={anchoring}

@@ -126,7 +126,14 @@ RUN --mount=type=cache,target=/app/target \
 # error — `cp: '...' and '/app/...' are the same file`, exit 1, whole build dead. That shipped
 # because this stage is the one `/flashdeploy` prunes (BIN_SRC=prebuilt) and no `main` push runs CI,
 # so nothing evaluated the line until `/release`'s pre-flight build did.
-RUN cp scripts/yagra-backup.sh /app/yagra-backup.sh
+#
+# The NATS server configuration travels the same way and for the same reason (ADR-065). It used to
+# ship only in the git repository while the remote-poller procedure told operators to bind-mount it,
+# so a deployment installed from published images had nothing at that path — Docker created an empty
+# DIRECTORY there, nats got a directory as its `-c` argument, and the bus never started. `yagra-core
+# bus-cert` copies it out of the image onto the bus volume, so there is nothing to fetch.
+RUN cp scripts/yagra-backup.sh /app/yagra-backup.sh \
+ && cp docker/nats/nats-server.conf /app/nats-server.conf
 
 # ── prebuilt — take binaries compiled outside by scripts/flash-build.sh (BIN_SRC=prebuilt) ──
 #
@@ -153,7 +160,7 @@ COPY --chmod=0755 yagra-core yagra-poller /app/
 # stages must offer them at the same path: the runtime stage below copies from whichever won, and
 # must not know which that was. Getting this wrong breaks ONLY the flash path, because BuildKit
 # never evaluates the stage it did not select.
-COPY docker-compose.deploy.yml docker-compose.poller.yml yagra-backup.sh /app/
+COPY docker-compose.deploy.yml docker-compose.poller.yml yagra-backup.sh nats-server.conf /app/
 
 # ── The selector. BuildKit builds only the stage this resolves to. ──
 FROM ${BIN_SRC} AS bins
@@ -207,7 +214,18 @@ COPY --from=bins /app/yagra-core /usr/local/bin/yagra-core
 # Release artifacts an upgrade reads back out of this image (ADR-050 decisions 5 and 9): the
 # composition for the version being installed, and the backup procedure of record (ADR-040) for the
 # version being replaced. Copied out with `docker cp`, never executed here.
-COPY --from=bins /app/docker-compose.deploy.yml /app/yagra-backup.sh /usr/share/yagra/
+#
+# `nats-server.conf` joins them for the same reason one increment later (ADR-065): `yagra-core
+# bus-cert` copies it onto the bus volume so a deployment installed from published images has it
+# without cloning anything. The path is pinned from the Rust side by
+# `bus_cert::CONF_IN_IMAGE`, and `the_conf_path_in_the_image_matches_what_the_dockerfile_installs`
+# reads this file to check the two still agree — a mismatch is not a compile error, it is a
+# one-shot that fails on a deployment.
+#
+# `docker-compose.poller.yml` is here too, and not by symmetry: the site bundle core builds for a
+# remote poller (ADR-065 Inc.4) puts this exact file in the archive, so the composition a site runs
+# is the one that shipped with the core it will talk to.
+COPY --from=bins /app/docker-compose.deploy.yml /app/docker-compose.poller.yml /app/yagra-backup.sh /app/nats-server.conf /usr/share/yagra/
 USER yagra
 EXPOSE 8080
 # Liveness: the binary probes its own /healthz (dependency-free — the slim runtime has no curl/wget).

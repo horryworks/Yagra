@@ -10,6 +10,56 @@
 
 ## Unreleased
 
+### New Features
+- **Standing up a poller at a remote site is now done from the WebUI.** Settings ▸ Pollers grew a
+  **Remote pollers** panel and a **Token** column. Previously this meant generating a certificate
+  with `openssl`, hand-editing two blocks of `docker-compose.deploy.yml`, and handing every site the
+  same password. None of that is needed any more.
+  - **The bus certificate is generated for you and kept in PostgreSQL**, the same way the WebUI's
+    own certificate is (the private key envelope-encrypted, the certificate itself plaintext because
+    it is public). The panel shows what it covers, when it expires and its fingerprint, and reissues
+    it with the addresses your sites will dial. There is no import — a bus certificate only has to
+    be trusted by pollers Yagra also configures.
+  - **"Accept remote pollers" is a switch.** It reissues the certificate for the address you give
+    it, turns on TLS and authentication, publishes the bus port, and moves the co-located core and
+    poller to `tls://` in the same change. The bus, core and that poller are recreated, so monitoring
+    stops for roughly a minute — a fleet-wide maintenance window is opened first so nothing pages.
+  - **Each poller can have a bus token of its own**, and issuing one downloads a single archive
+    holding everything the site needs: its `.env`, the certificate to pin, `docker-compose.poller.yml`
+    taken from this core's image, and a README. The site's whole procedure is unpack and
+    `docker compose up -d`. The token is stored only as a SHA-256 digest, so it is shown once and
+    cannot be recovered — issue a new one if the archive is lost.
+
+### Security
+- **A poller id that is not in the inventory is now refused, whatever secret it presents.** The
+  connection's poller id was self-asserted and checked against nothing, so a `.env` leaked at one
+  site let the holder claim *any* id — and the working set core then sent it carries the plaintext
+  SNMP communities, SNMPv3 credentials and API tokens of whatever nodes that id is assigned. This is
+  closed without issuing any tokens at all.
+- **A poller that has its own token can no longer be admitted by the deployment-wide bootstrap
+  secret**, so issuing tokens narrows the blast radius one site at a time. A poller with no token
+  still uses the shared secret, which is what keeps an existing fleet connected across this upgrade;
+  the Token column on Settings ▸ Pollers shows which pollers are still in that state.
+- **Removing a poller now sticks** on a deployment using NATS Auth Callout. NATS does not
+  re-authenticate an established connection, so a deleted poller's live heartbeat used to recreate
+  its inventory row within ten seconds — refusing its next connection was not enough on its own.
+
+### Bug Fixes
+- **The compose edits that enabled the TLS bus were erased by every upgrade, and only remote sites
+  noticed.** Settings ▸ Upgrade reinstalls `docker-compose.deploy.yml` from the target image, so the
+  bus reverted to plaintext and core to `nats://` while the central stack kept working perfectly —
+  the quietest possible failure. The switch is now expressed as `.env` variables, which upgrades do
+  preserve, and the `nats` service reads them without any compose edit.
+- **`docker/nats/nats-server.conf` was not inside the published images**, so a deployment installed
+  without a repository checkout had nothing at the path the procedure told it to bind-mount. Docker
+  creates an empty *directory* there, nats was handed a directory as its `-c` argument, and the bus
+  failed to start — taking core with it. The file now ships in the core image and is placed on the
+  bus volume automatically.
+- **Core ignored `YAGRA_BUS_CA_FILE`.** The documented procedure told you to set it on core, and
+  core connected to NATS with no root certificate regardless — so turning the bus TLS would have
+  left core unable to reach its own bus. It is now read, with the same empty-means-unset rule the
+  poller applies.
+
 ## v0.2.12 — the support bundle reaches the poller that did the polling, wherever that poller runs
 
 ### New Features

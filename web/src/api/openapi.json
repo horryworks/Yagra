@@ -13679,6 +13679,149 @@
         }
       }
     },
+    "/api/v1/pollers/{id}/token": {
+      "post": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "Issue a poller a bus token of its own and return the archive its site needs.",
+        "description": "The response is the archive, not the token: this is the only moment the token exists in the\nclear — only its digest is stored — and everything else the site needs is derivable here. See\n`poller_bundle.rs`.\n\nCreates the inventory row when the poller has not connected yet, which is what lets a site be\nprepared before anything is running there. That is also what makes the callout able to refuse an\nunregistered id: something has to be able to register one first.",
+        "operationId": "issue_poller_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Poller id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PollerTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A gzipped tar archive holding the site's .env, the bus certificate, the composition and a README",
+            "content": {
+              "application/gzip": {}
+            }
+          },
+          "400": {
+            "description": "The poller id is not usable as a bus identity, or no address was given and none could be derived",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode, or this deployment has no bus certificate yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "Revoke a poller's token, returning it to the deployment-wide bootstrap secret.",
+        "description": "Not the same thing as deleting the poller: an operator revoking a leaked token wants the site\nback on a new one, not its inventory row, anchor and history gone.",
+        "operationId": "revoke_poller_token",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Poller id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The token was revoked"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such poller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode: no durable poller store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pools": {
       "get": {
         "tags": [
@@ -15652,6 +15795,210 @@
           },
           "503": {
             "description": "This core has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/bus": {
+      "get": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "The bus certificate and whether this deployment accepts remote-site pollers.",
+        "operationId": "get_bus",
+        "responses": {
+          "200": {
+            "description": "The bus certificate and the remote-acceptance state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no bus certificate store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/bus/certificate": {
+      "post": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "Mint a new bus certificate covering the given names.",
+        "operationId": "regenerate_bus_cert",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BusCertRegenerate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Generated and written; the body is the new certificate's details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A supplied name is not a usable hostname or IP address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no bus certificate store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/settings/bus/remote": {
+      "put": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "Turn acceptance of remote-site pollers on or off.",
+        "description": "The bus, this core and the co-located poller are all recreated, so monitoring stops for as long\nas that takes. A fleet-wide maintenance window is opened first.",
+        "operationId": "set_bus_remote",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BusRemoteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted; the bus is being recreated and this core will restart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BusRemoteAccepted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Enabling without an address remote pollers can dial",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "An upgrade or another bus change is already running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No updater is deployed, or it is switched off",
             "content": {
               "application/json": {
                 "schema": {
@@ -20183,6 +20530,181 @@
           "table": {
             "type": "string",
             "description": "The table the note is about."
+          }
+        }
+      },
+      "BusCertRegenerate": {
+        "type": "object",
+        "description": "Which names a regenerated bus certificate should cover.",
+        "properties": {
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Hostnames and IP addresses remote pollers will dial, added to the deployment's internal\ndefaults. A poller's connection fails unless the exact address it dials is present, so this\nis the field that decides whether a new site can connect."
+          }
+        }
+      },
+      "BusRemoteAccepted": {
+        "type": "object",
+        "description": "What the switch returns. The poller secret appears **once**.",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "ca_certificate": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The certificate a remote poller must pin as its `YAGRA_BUS_CA_FILE`, in PEM. `null` when\ndisabling."
+          },
+          "id": {
+            "type": "string",
+            "description": "Identifier for this change, matching the run reported by the upgrade status endpoint."
+          },
+          "maintenance_window_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The fleet-wide maintenance window opened for the duration, or `null` if one could not be\nopened. Monitoring stops for as long as the bus is being recreated."
+          },
+          "poller_secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The bootstrap secret a remote poller presents when it connects, shown **once**. Store it\nnow — it is written into the deployment's environment and is never returned again."
+          }
+        }
+      },
+      "BusRemoteRequest": {
+        "type": "object",
+        "description": "Turn acceptance of remote-site pollers on or off.",
+        "required": [
+          "enabled"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "`true` encrypts and authenticates the bus and publishes its port; `false` returns it to the\ninternal-only plaintext bus and stops every remote poller from connecting."
+          },
+          "names": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Hostnames and IP addresses remote pollers will dial. Used to reissue the certificate before\nthe bus restarts, so the names are already right when it comes back. Ignored when disabling."
+          }
+        }
+      },
+      "BusResponse": {
+        "type": "object",
+        "description": "The bus, as Settings ▸ Pollers shows it.",
+        "required": [
+          "remote_enabled",
+          "can_switch"
+        ],
+        "properties": {
+          "can_switch": {
+            "type": "boolean",
+            "description": "Whether the switch below can be operated. `false` means the updater sidecar that performs it\nis not deployed, is switched off, or has stopped reporting — the certificate is still\nreadable, but turning remote acceptance on or off needs a shell on the host."
+          },
+          "certificate": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BusTlsView",
+                "description": "The certificate the bus serves, or `null` if none has been established yet."
+              }
+            ]
+          },
+          "remote_enabled": {
+            "type": "boolean",
+            "description": "Whether this core is talking to the bus over TLS, which is what accepting remote-site\npollers requires."
+          }
+        }
+      },
+      "BusTlsView": {
+        "type": "object",
+        "description": "The bus certificate as the settings card shows it. Never includes the private key.",
+        "required": [
+          "certificate",
+          "subject",
+          "issuer",
+          "sans",
+          "not_before",
+          "not_after",
+          "fingerprint_sha256",
+          "key_algorithm",
+          "expires_in_days",
+          "issued_at",
+          "materialized",
+          "key_unreadable"
+        ],
+        "properties": {
+          "certificate": {
+            "type": "string",
+            "description": "The certificate in PEM. This is what a remote poller uses as its `YAGRA_BUS_CA_FILE` — a\nself-signed certificate is its own certificate authority. Safe to distribute; the private\nkey never leaves the server."
+          },
+          "expires_in_days": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Days until expiry; negative once it has passed."
+          },
+          "fingerprint_sha256": {
+            "type": "string",
+            "description": "Lowercase hex SHA-256 of the certificate. Compare it against the file a site was given to\nconfirm the site is holding this certificate and not an older one."
+          },
+          "issued_at": {
+            "type": "string",
+            "description": "When this certificate was generated, RFC 3339."
+          },
+          "issued_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The account that asked for it, if a signed-in user did. Empty for the one generated\nautomatically before the bus first started."
+          },
+          "issuer": {
+            "type": "string",
+            "description": "Distinguished name of the issuer. Equal to `subject`, because this certificate is\nself-signed."
+          },
+          "key_algorithm": {
+            "type": "string",
+            "description": "Key type and size, for example `ECDSA P-256`."
+          },
+          "key_unreadable": {
+            "type": "boolean",
+            "description": "Whether the private key can still be decrypted. `false` means the encryption key has changed\nor been lost, and a new certificate has to be generated — which every remote site must then\nbe given."
+          },
+          "materialized": {
+            "type": "boolean",
+            "description": "Whether the files the bus reads match this certificate. `false` means it is stored but has\nnot reached the volume yet — the bus is still serving whatever it started with."
+          },
+          "not_after": {
+            "type": "string",
+            "description": "End of the validity window, RFC 3339."
+          },
+          "not_before": {
+            "type": "string",
+            "description": "Start of the validity window, RFC 3339."
+          },
+          "sans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The hostnames and IP addresses this certificate is valid for. A remote poller's connection\nfails unless the exact address it dials appears here."
+          },
+          "subject": {
+            "type": "string",
+            "description": "Distinguished name of the certificate's subject."
           }
         }
       },
@@ -27394,7 +27916,8 @@
           "results_total",
           "mgmt_addrs",
           "caps",
-          "listeners"
+          "listeners",
+          "has_token"
         ],
         "properties": {
           "anchor_node_id": {
@@ -27434,6 +27957,10 @@
               "null"
             ],
             "description": "First durably-recorded contact (RFC 3339); `null` if not yet persisted."
+          },
+          "has_token": {
+            "type": "boolean",
+            "description": "Whether this poller has a bus token of its own (ADR-065). `false` means it is admitted by\nthe deployment-wide bootstrap secret, which every poller was before tokens existed and which\na co-located poller on an unencrypted internal bus still is."
           },
           "id": {
             "type": "string",
@@ -27481,6 +28008,13 @@
           "status": {
             "type": "string",
             "description": "`\"online\"` when it is beating within the offline window, else `\"offline\"`."
+          },
+          "token_issued_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "When its token was issued, RFC 3339. `null` when it has none."
           },
           "version": {
             "type": [
@@ -27579,6 +28113,35 @@
           "truncated": {
             "type": "boolean",
             "description": "Whether `nodes` is a capped page of `total`."
+          }
+        }
+      },
+      "PollerTokenRequest": {
+        "type": "object",
+        "description": "What a new site needs, beyond its own name.",
+        "properties": {
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The hostname or IP address the site will dial. Must be one the bus certificate covers, or\nthe site's connection fails with nothing visible centrally. Defaults to the first name on\nthe certificate that is not an internal one."
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool this poller serves. Only used when the poller is not in the inventory yet — an\nexisting poller keeps the pool it reported."
+          },
+          "port": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The bus port at that address. Defaults to 4222.",
+            "minimum": 0
           }
         }
       },

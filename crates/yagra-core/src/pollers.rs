@@ -40,6 +40,14 @@ pub struct PollerRow {
     /// graph. `None` means core places the poller from `mgmt_addrs` instead — or, if that matches
     /// nothing, that the poller is unplaced and derived suppression stays blocked.
     pub anchor_node_id: Option<Uuid>,
+    /// Whether this poller has a bus token of its own (ADR-065). `false` means it is admitted by
+    /// the deployment-wide bootstrap secret instead — which every poller was before tokens existed,
+    /// and which a co-located poller on an unencrypted internal bus still is.
+    // The token itself is never returned. This is the one fact the UI needs: it is what tells an
+    // operator which sites still share one credential.
+    pub has_token: bool,
+    /// When its token was issued, RFC 3339, or empty if it has none.
+    pub token_issued_at: Option<String>,
 }
 
 /// One `monitoring_gaps` row (API shape). A gap is one core↔poller **visibility outage**: core
@@ -71,15 +79,75 @@ pub struct MonitoringGapRow {
     pub listeners: Vec<String>,
 }
 
+/// What the bus must check a connecting poller's secret against (ADR-065).
+///
+/// Absence of this value — `Option::None` from [`PollerRepo::auth_material`] — is the third answer
+/// and the important one: the id is in no inventory, so it is refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PollerAuth {
+    /// This poller has its own token; only `hex(sha256(token))` matching this admits it.
+    Token(String),
+    /// Registered but with no token yet — the deployment-wide bootstrap secret still admits it.
+    Bootstrap,
+}
+
+/// The heartbeat write when an unknown id may register itself.
+///
+/// A named constant, with its sibling below, so the invariants both must hold —
+/// **`anchor_node_id` and `first_seen` are never touched by a heartbeat** — are assertable against
+/// the statements themselves rather than against a slice of this file's source. The earlier test
+/// did the latter and broke the moment a second statement appeared beside the first, which is
+/// exactly when it most needed to still work.
+const SEEN_UPSERT_SQL: &str =
+    "INSERT INTO pollers (id, pool, last_version, last_incarnation, mgmt_addrs) \
+     VALUES ($1, $2, $3, $4, $5::text[]::inet[]) \
+     ON CONFLICT (id) DO UPDATE SET \
+       last_seen = now(), \
+       pool = EXCLUDED.pool, \
+       last_version = EXCLUDED.last_version, \
+       last_incarnation = EXCLUDED.last_incarnation, \
+       mgmt_addrs = EXCLUDED.mgmt_addrs";
+
+/// The heartbeat write when only an already-registered poller may be refreshed (ADR-065 Inc.3).
+const SEEN_UPDATE_SQL: &str = "UPDATE pollers SET \
+       last_seen = now(), pool = $2, last_version = $3, last_incarnation = $4, \
+       mgmt_addrs = $5::text[]::inet[] \
+     WHERE id = $1";
+
 /// PostgreSQL-backed durable poller inventory (`pollers`).
 pub struct PollerRepo {
     pool: PgPool,
+    /// Whether a heartbeat from an id with no row creates one. See [`Self::with_auto_register`].
+    auto_register: bool,
 }
 
 impl PollerRepo {
     #[must_use]
     pub fn new(pool: PgPool) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            // The historical behaviour, and the right default: on a deployment whose bus does not
+            // gate connections, heartbeating is the only way a poller can appear at all.
+            auto_register: true,
+        }
+    }
+
+    /// Set whether an unknown poller id may create its own inventory row (ADR-065 Inc.3).
+    ///
+    /// Turned **off** on a deployment where the Auth Callout already refuses an unregistered id.
+    /// There, an insert on the heartbeat path is the one thing that puts a row in the inventory
+    /// without anybody deciding to — and it had a concrete consequence: **deleting a poller in the
+    /// WebUI did not remove it**, because the live connection kept heartbeating and the upsert
+    /// recreated the row within ten seconds. NATS does not re-authenticate an established
+    /// connection, so refusing the reconnect is not enough on its own.
+    ///
+    /// A setting on the repo rather than a parameter on the write, because the answer is a property
+    /// of the deployment and is read in one place — the coordinator calling it every ten seconds
+    /// should not have to carry the reason with it.
+    #[must_use]
+    pub fn with_auto_register(mut self, yes: bool) -> Self {
+        self.auto_register = yes;
+        self
     }
 
     /// Record that a poller was seen: insert it (first contact) or refresh `last_seen` and the
@@ -93,6 +161,7 @@ impl PollerRepo {
     /// Addresses travel as text and are cast server-side: `INET` has no `sqlx` codec compiled in
     /// here (the node table reads its address through `host()` for the same reason), and the cast
     /// still makes PostgreSQL reject a malformed address rather than storing it.
+    /// Whether an unknown id creates a row is [`Self::with_auto_register`]'s call, not this one's.
     pub async fn upsert_seen(
         &self,
         id: &str,
@@ -101,23 +170,30 @@ impl PollerRepo {
         incarnation: Uuid,
         mgmt_addrs: &[String],
     ) -> anyhow::Result<()> {
-        sqlx::query(
-            "INSERT INTO pollers (id, pool, last_version, last_incarnation, mgmt_addrs) \
-             VALUES ($1, $2, $3, $4, $5::text[]::inet[]) \
-             ON CONFLICT (id) DO UPDATE SET \
-               last_seen = now(), \
-               pool = EXCLUDED.pool, \
-               last_version = EXCLUDED.last_version, \
-               last_incarnation = EXCLUDED.last_incarnation, \
-               mgmt_addrs = EXCLUDED.mgmt_addrs",
-        )
-        .bind(id)
-        .bind(pool)
-        .bind(version)
-        .bind(incarnation)
-        .bind(mgmt_addrs)
-        .execute(&self.pool)
-        .await?;
+        // Two statements rather than one with a conditional clause: the difference IS whether a row
+        // may be created, and expressing that as `WHERE EXISTS` inside an upsert is the kind of SQL
+        // that reads as equivalent to a future editor and is not.
+        let sql = if self.auto_register {
+            SEEN_UPSERT_SQL
+        } else {
+            SEEN_UPDATE_SQL
+        };
+        let res = sqlx::query(sql)
+            .bind(id)
+            .bind(pool)
+            .bind(version)
+            .bind(incarnation)
+            .bind(mgmt_addrs)
+            .execute(&self.pool)
+            .await?;
+        if !self.auto_register && res.rows_affected() == 0 {
+            // Not an error: the poller was deleted while its connection was still up, which is
+            // exactly what this mode exists to make stick. Logged so it is not a silent no-op.
+            tracing::debug!(
+                poller = id,
+                "heartbeat from a poller that is not in the inventory — not recreating it"
+            );
+        }
         Ok(())
     }
 
@@ -138,8 +214,10 @@ impl PollerRepo {
     /// Every poller in the inventory, ordered by id.
     pub async fn list(&self) -> anyhow::Result<Vec<PollerRow>> {
         let rows = sqlx::query(
+            // `token_hash IS NOT NULL` rather than the column itself: the digest has no use outside
+            // the callout, and a list endpoint is the wrong place to start carrying one around.
             "SELECT id, pool, first_seen, last_seen, last_version, last_incarnation, \
-                    anchor_node_id, \
+                    anchor_node_id, token_issued_at, (token_hash IS NOT NULL) AS has_token, \
                     ARRAY(SELECT host(a) FROM unnest(mgmt_addrs) AS a) AS mgmt_addrs \
              FROM pollers ORDER BY id",
         )
@@ -149,6 +227,7 @@ impl PollerRepo {
             .map(|row| {
                 let first_seen: DateTime<Utc> = row.try_get("first_seen")?;
                 let last_seen: DateTime<Utc> = row.try_get("last_seen")?;
+                let issued: Option<DateTime<Utc>> = row.try_get("token_issued_at")?;
                 Ok(PollerRow {
                     id: row.try_get("id")?,
                     pool: row.try_get("pool")?,
@@ -158,9 +237,88 @@ impl PollerRepo {
                     last_incarnation: row.try_get("last_incarnation")?,
                     mgmt_addrs: row.try_get("mgmt_addrs")?,
                     anchor_node_id: row.try_get("anchor_node_id")?,
+                    has_token: row.try_get("has_token")?,
+                    token_issued_at: issued.map(|t| t.to_rfc3339()),
                 })
             })
             .collect()
+    }
+
+    /// What the Auth Callout must check this poller's presented secret against (ADR-065).
+    ///
+    /// Three answers, and the third is the one that closes the hole: an id with no row is refused
+    /// outright, so a leaked bootstrap secret can only impersonate a poller somebody registered
+    /// rather than any id the holder invents. See `migrations/0090_poller_token.sql` for the whole
+    /// rule and why the middle case still exists.
+    ///
+    /// On a database error this returns `Ok(None)` — *deny*. A callout that cannot reach PostgreSQL
+    /// must not fall open onto the shared secret: that would turn a database blip into the exact
+    /// pre-token behaviour, silently, at the moment nobody is watching.
+    pub async fn auth_material(&self, id: &str) -> Option<PollerAuth> {
+        match sqlx::query("SELECT token_hash FROM pollers WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+        {
+            Ok(Some(row)) => match row.try_get::<Option<String>, _>("token_hash") {
+                Ok(Some(hash)) => Some(PollerAuth::Token(hash)),
+                Ok(None) => Some(PollerAuth::Bootstrap),
+                Err(_) => None,
+            },
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(error = %e, poller = id, "could not read poller auth material — denying");
+                None
+            }
+        }
+    }
+
+    /// Store a token for `id`, creating the inventory row if the poller has not connected yet.
+    ///
+    /// Takes the **digest**, never the token: the caller generates and displays the secret, and this
+    /// module is not a place a plaintext credential should ever be in scope.
+    ///
+    /// Creating the row here is what makes "register a site before it exists" work — the poller is
+    /// refused until a row names it, so issuing the token has to be able to name it first.
+    pub async fn issue_token(
+        &self,
+        id: &str,
+        pool: &str,
+        hash: &str,
+        by: Option<Uuid>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "INSERT INTO pollers (id, pool, token_hash, token_issued_at, token_issued_by) \
+             VALUES ($1, $2, $3, now(), $4) \
+             ON CONFLICT (id) DO UPDATE SET \
+               token_hash = EXCLUDED.token_hash, \
+               token_issued_at = now(), \
+               token_issued_by = EXCLUDED.token_issued_by",
+        )
+        .bind(id)
+        .bind(pool)
+        .bind(hash)
+        .bind(by)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop a poller's token, returning it to the deployment-wide bootstrap secret.
+    ///
+    /// Deliberately **not** the same thing as deleting the poller: an operator revoking a leaked
+    /// token wants the site back on a new one, not the inventory row (and its anchor, and its
+    /// history) gone. Returns whether a row was changed.
+    pub async fn revoke_token(&self, id: &str) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE pollers SET token_hash = NULL, token_issued_at = NULL, \
+                                token_issued_by = NULL \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// Delete a poller by id (operator removing a decommissioned poller). Returns whether a row
@@ -343,24 +501,31 @@ mod tests {
     fn a_heartbeat_upsert_never_writes_the_operator_set_anchor() {
         let src = production_source();
         let col = format!("anchor_node{}", "_id");
-        let update = src
-            .split("ON CONFLICT (id) DO UPDATE SET")
-            .nth(1)
-            .expect("the heartbeat upsert's update clause");
-        let clause = update.split("\",").next().unwrap_or(update);
-        assert!(
-            !clause.contains(&col),
-            "the heartbeat is overwriting the anchor: {clause}"
-        );
-        assert!(
-            !update
-                .split("\",")
-                .next()
-                .unwrap_or(update)
-                .contains("first_seen"),
-            "first_seen must survive an upsert too"
-        );
-        // And the operator's writer exists and touches only that column.
+        // Both heartbeat statements, not just the one that existed first. The second was added with
+        // ADR-065 Inc.3 and is the one a gated deployment actually runs, so a rule checked on only
+        // the upsert would be checked on the path most deployments stop using.
+        for (name, sql) in [
+            ("SEEN_UPSERT_SQL", SEEN_UPSERT_SQL),
+            ("SEEN_UPDATE_SQL", SEEN_UPDATE_SQL),
+        ] {
+            assert!(
+                !sql.contains(&col),
+                "{name} overwrites the anchor, which is the operator's column: {sql}"
+            );
+            assert!(
+                !sql.contains("first_seen"),
+                "{name} rewrites first_seen, so a poller's history restarts on every beat: {sql}"
+            );
+            assert!(
+                !sql.contains("token_hash"),
+                "{name} touches the poller's token; a heartbeat must never be able to change a \
+                 credential: {sql}"
+            );
+        }
+        // The two differ in exactly one way — whether an unknown id gets a row.
+        assert!(SEEN_UPSERT_SQL.starts_with("INSERT INTO pollers"));
+        assert!(SEEN_UPDATE_SQL.starts_with("UPDATE pollers SET"));
+        // And the operator's anchor writer exists and touches only that column.
         assert!(src.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")));
     }
 

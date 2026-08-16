@@ -42,7 +42,8 @@
       "firstSeen": "Registered",
       "lastSeen": "Last seen",
       "anchor": "Anchor node",
-      "actions": "Actions"
+      "actions": "Actions",
+      "token": "Token"
     },
     "empty": {
       "title": "No pollers yet",
@@ -129,6 +130,89 @@
       "statusAria": "Filter by status",
       "allPools": "All pools",
       "poolAria": "Filter by pool"
+    },
+    "bus": {
+      "title": "Remote pollers",
+      "note": "Job messages carry the credentials Yagra uses to reach your devices, so the bus is encrypted and authenticated before a poller at another site may connect to it.",
+      "state": {
+        "internal": "Internal only",
+        "internalNote": "the bus stays on this host; only the poller running here can reach it.",
+        "encrypted": "Encrypted",
+        "encryptedNote": "pollers at other sites can connect over TLS with the certificate below."
+      },
+      "noSwitch": "The component that turns this on is not deployed or is switched off, so the switch is unavailable. The certificate below is still the one a site must pin.",
+      "outage": "The bus, this server and the poller running here are all restarted, so monitoring stops for about a minute. A maintenance window is opened for you, and this page will disconnect while it happens.",
+      "siteHint": "At the site, put the certificate in a file, point <c>YAGRA_BUS_CA_FILE</c> at it, and use the bus URL from the dialog. The address the site dials must be one of the names below.",
+      "names": {
+        "label": "Addresses remote pollers will dial",
+        "hint": "Hostnames or IP addresses, separated by commas. A site cannot connect unless the exact address it dials is listed.",
+        "required": "Give at least one address, or no site will be able to connect."
+      },
+      "cert": {
+        "absent": "No certificate yet. One is generated automatically the next time this deployment starts.",
+        "sans": "Valid for",
+        "internalOnly": "this host only",
+        "expires": "Expires {{when}} ({{days}} days).",
+        "fingerprint": "Fingerprint",
+        "uncovered": "Not covered by this certificate: {{names}}. Reissue it before those sites can connect.",
+        "warn": {
+          "absent": "No certificate yet.",
+          "unreadable": "The private key cannot be read — the encryption key has changed or been lost. Reissue the certificate, then give the new one to every site.",
+          "expired": "This certificate has expired. Remote pollers are already refusing to connect. Reissue it, then give the new one to every site.",
+          "not_materialized": "A newer certificate is stored than the bus is serving. It takes effect the next time the bus restarts.",
+          "expiring": "This certificate expires soon. Reissuing it means giving the new one to every site, so plan for it rather than waiting."
+        }
+      },
+      "reissue": {
+        "action": "Reissue certificate…",
+        "title": "Reissue the bus certificate",
+        "intro": "Generates a new certificate covering the addresses below, plus this host’s internal names.",
+        "submit": "Reissue",
+        "afterward": "The new certificate is stored at once, but the bus keeps serving the old one until it restarts — and every site has to be given the new file before it can reconnect.",
+        "failed": "failed to reissue the bus certificate"
+      },
+      "enable": {
+        "action": "Accept remote pollers",
+        "title": "Accept remote pollers",
+        "intro": "Encrypts the bus, requires a password on it, and publishes its port. A poller at another site can then connect with the certificate and the secret shown afterwards.",
+        "submit": "Turn on"
+      },
+      "disable": {
+        "action": "Stop accepting",
+        "title": "Stop accepting remote pollers",
+        "intro": "Returns the bus to this host only. Every poller at another site stops connecting, and the nodes assigned to it stop being monitored.",
+        "submit": "Turn off"
+      },
+      "handoff": {
+        "title": "Give this to the site",
+        "intro": "The site needs both of these. Copy them now.",
+        "secret": "Poller secret",
+        "onceOnly": "Shown once. It is not stored anywhere it can be read again.",
+        "ca": "Certificate to pin (YAGRA_BUS_CA_FILE)",
+        "done": "Done",
+        "restarting": "The bus is being reconfigured now. This page will reconnect on its own once it comes back."
+      },
+      "switchFailed": "failed to change remote-poller acceptance"
+    },
+    "token": {
+      "title": "Bus token — {{id}}",
+      "own": "Own token",
+      "shared": "Shared secret",
+      "sharedHint": "This poller is admitted by the deployment-wide bootstrap secret, the same one every other poller without its own token uses.",
+      "issuedAt": "Own token, issued {{when}}",
+      "introShared": "Issue this poller a token of its own. It downloads an archive holding the site`s .env, the bus certificate, the composition and a short README — everything the machine at the site needs.",
+      "introOwn": "This poller already has its own token. Issuing a new one downloads a fresh archive and invalidates the current one.",
+      "issue": "Issue token & download",
+      "reissue": "Issue a new token & download",
+      "revoke": "Revoke token",
+      "reissueWarning": "The site stops connecting the moment you do this, and starts again once it is running the new archive.",
+      "downloaded": "Downloaded. The token is only in that file — it cannot be shown again.",
+      "issueFailed": "failed to issue the token",
+      "revokeFailed": "failed to revoke the token",
+      "host": {
+        "label": "Address this site will dial",
+        "hint": "Leave empty to use the address on the bus certificate. It must be one the certificate covers, or the site cannot connect."
+      }
     }
   },
   "health": {

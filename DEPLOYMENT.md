@@ -274,78 +274,120 @@ Run the full stack centrally (as in **A**) and add pollers at remote sites. Each
 
 > **The bus carries plaintext device credentials.** On one host that's fine (internal Docker network, nothing exposed). The moment the bus crosses a trust boundary to a remote site, it **must** be TLS-encrypted and authenticated first. Do **not** publish `:4222` plaintext.
 
-### Step 1 — Turn on NATS TLS + auth on the central stack
+### Step 1 — Accept remote pollers (WebUI)
 
-This is the opt-in block already present (commented) in `docker-compose.deploy.yml` under the `nats` service. All five steps are required:
+Go to **Settings ▸ Pollers ▸ Remote pollers** and press **Accept remote pollers**. Give it the
+hostname or IP address the remote sites will dial — that address goes into the bus certificate, and
+a site whose exact address is not on the certificate cannot connect.
 
-**1a. Generate a server cert** into `./certs`. The SAN **must** include the exact host/IP each poller will dial:
+That is the whole central setup. Yagra:
 
-```bash
-mkdir -p certs
-openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-  -keyout certs/server-key.pem -out certs/server-cert.pem \
-  -subj "/CN=yagra-nats" \
-  -addext "subjectAltName=DNS:nats,DNS:core.example.com,IP:192.168.1.2"
-```
+- reissues the bus certificate covering that address (it was generated on first start; the private
+  key is envelope-encrypted in PostgreSQL like every other secret, and only ever materialized to a
+  volume the bus reads);
+- turns on TLS and password authentication on the bus, publishes its port, and moves the co-located
+  core and poller to `tls://` in the same change;
+- writes the settings into your `.env`, which **is** preserved across upgrades — unlike a hand-edited
+  compose file, which is not (see below).
 
-The cert is self-signed, so it is its own CA. You hand out `server-cert.pem` (the **public cert only — never the key**) in step 5.
+> **Monitoring stops for about a minute.** NATS has no way to serve TLS and plaintext at once, so the
+> bus, core and the poller running beside it are all recreated. Yagra opens a fleet-wide maintenance
+> window first so nothing pages, and this page disconnects while it happens — that is expected, not a
+> failure. Alerts are not backfilled for the window; metrics are.
 
-**1b. Set bus passwords** in `.env` (no defaults on purpose):
+<details>
+<summary>Doing it from a shell instead (no WebUI access)</summary>
+
+Set these in `.env` beside `docker-compose.deploy.yml` and run
+`docker compose -p yagra -f docker-compose.deploy.yml up -d`. They are the same keys the WebUI
+writes — nothing else is needed, and **no compose edit is needed**:
 
 ```ini
+YAGRA_NATS_ARGS=-js -c /etc/nats/nats-server.conf
+YAGRA_NATS_BIND=0.0.0.0
 YAGRA_NATS_CORE_PASSWORD=a-strong-core-bus-password
 YAGRA_NATS_POLLER_PASSWORD=a-strong-poller-bus-password
-YAGRA_NATS_PORT=4222        # host port to publish the bus on
-YAGRA_CERT_DIR=./certs
+YAGRA_CORE_BUS_URL=tls://core:a-strong-core-bus-password@nats:4222
+YAGRA_POLLER_BUS_URL=tls://poller:a-strong-poller-bus-password@nats:4222
+YAGRA_BUS_CA_FILE=/etc/nats/certs/server-cert.pem
+# Extra names for the bus certificate, added to the internal defaults:
+YAGRA_BUS_TLS_SANS=core.example.com,192.168.1.2
 ```
 
-**1c. Load the auth/TLS config.** In `docker-compose.deploy.yml`, comment out `command: ["-js"]` on the `nats` service and uncomment the block below it (which sets `command: ["-js", "-c", "/etc/nats/nats-server.conf"]`, injects the two passwords, mounts `docker/nats/nats-server.conf` + `./certs`, and publishes `${YAGRA_NATS_PORT:-4222}:4222`).
+To turn it back off, delete those lines and bring the stack up again.
+</details>
 
-**1d. Switch the internal clients to TLS** — server-wide TLS leaves no plaintext port, so the co-located core and poller must use `tls://` too. On `core`:
-```yaml
-YAGRA_BUS_URL: tls://core:${YAGRA_NATS_CORE_PASSWORD}@nats:4222
-```
-on the local `poller`:
-```yaml
-YAGRA_BUS_URL: tls://poller:${YAGRA_NATS_POLLER_PASSWORD}@nats:4222
-```
-and on **both** add `YAGRA_BUS_CA_FILE: /etc/nats/certs/server-cert.pem` plus a `- ${YAGRA_CERT_DIR:-./certs}:/etc/nats/certs:ro` volume mount.
+> **Why there is no `openssl` step here any more, and why that matters.** The previous procedure had
+> you generate a certificate by hand and edit two blocks of `docker-compose.deploy.yml`. Both were
+> worse than they looked. Settings ▸ Upgrade **replaces that file with the copy inside the target
+> image**, so the edits were erased by the next upgrade — after which the central stack kept working
+> and every remote poller silently stopped connecting. And the file the procedure told you to mount,
+> `docker/nats/nats-server.conf`, was not inside the published images at all, so a deployment
+> installed with composition [A](#a--single-node-docker-pull) had nothing there and the bus failed to
+> start. Both are fixed: the configuration now ships inside the core image and is placed on a volume
+> automatically, and the switch is expressed as `.env` variables, which upgrades preserve.
 
-**1e.** Hand `certs/server-cert.pem` (public cert only) to each remote poller operator — it becomes their `YAGRA_BUS_CA_FILE`.
+### Step 2 — Issue the site its token and download its bundle
 
-Bring the central stack back up (`docker compose -f docker-compose.deploy.yml up -d`).
+On **Settings ▸ Pollers**, each poller's **Token** column says whether it has one of its own or is
+using the deployment-wide bootstrap secret. Click it and press **Issue token & download**.
 
-The `nats-server.conf` gives `core` full access and the `poller` account least privilege (publish only results/events/heartbeat; subscribe only to its jobs + working-set assignments). Note the limitation of the static accounts: there is **one shared `poller` account**, so any authenticated poller can read any pool's assignments — it is not a tenant boundary. To scope bus credentials per poller, enable the optional **NATS Auth Callout** integration (the `auth_callout` block in `docker/nats/nats-server.conf` plus the `YAGRA_NATS_CALLOUT_*` / `YAGRA_CALLOUT_SEED_DIR` variables in `.env.example`): core then mints each connecting poller a credential scoped to exactly its own pool's subjects.
+You get a `.tar.gz` holding everything the site needs: `.env` (its id, pool and bus token),
+`certs/server-cert.pem` (the certificate it pins), `docker-compose.poller.yml` taken from this core's
+own image, and a README. The poller does not have to exist yet — issuing a token registers it, which
+is how you prepare a site before anything is running there.
 
-### Step 2 — Register the poller in the WebUI
+> **The token is in that file and nowhere else.** Yagra stores only a SHA-256 digest of it. If the
+> archive is lost, issue a new token — the old one stops working the moment you do.
 
-Go to **Settings ▸ Pollers ▸ "Register poller"**. It generates a ready-to-use `.env` (id / pool / bus URL) for the remote host. Assign the pool you want this poller to serve.
+Two things this buys beyond convenience:
+
+- **A poller id nobody registered is refused**, whatever secret it presents. Before this, the id was
+  self-asserted and checked against nothing, so one site's leaked `.env` let the holder claim *any*
+  id — and the working set core then sent it carries the plaintext SNMP communities and API tokens
+  of whatever nodes that id is assigned.
+- **A poller with its own token can no longer be opened by the shared secret**, so issuing tokens
+  narrows the blast radius one site at a time. A poller that has none still uses the shared secret,
+  which is what keeps an existing fleet working across the upgrade — the Token column is how you see
+  which sites are still in that state.
+
+Use **Revoke token** to put a site back on the shared secret (for example after a leak, before
+issuing a replacement). That is different from removing the poller, which also discards its anchor
+and history.
 
 ### Step 3 — Run the remote poller
 
-On the remote-site machine, using `docker-compose.poller.yml` (runs **only** a poller):
+On the remote-site machine:
 
 ```bash
-# put the generated .env next to docker-compose.poller.yml, and the CA cert into ./certs
-mkdir -p certs && cp /path/to/server-cert.pem certs/
-
+tar xzf yagra-poller-edge-tokyo-1.tar.gz
+cd yagra-poller-edge-tokyo-1        # or wherever you unpacked it
 docker compose -f docker-compose.poller.yml up -d
 ```
 
-The three required vars (compose errors out if unset) — supplied by the generated `.env`:
+It appears on the Pollers page within about ten seconds, and core starts assigning that pool's nodes
+to it.
 
-```ini
-YAGRA_BUS_URL=tls://poller:a-strong-poller-bus-password@core.example.com:4222
-YAGRA_POLLER_ID=edge-tokyo-1        # stable, unique per poller
-YAGRA_POLLER_POOL=tokyo             # the pool this poller serves
-YAGRA_BUS_CA_FILE=/etc/yagra/certs/server-cert.pem
-```
+`docker-compose.poller.yml` uses `network_mode: host` (so passive syslog/trap correlation sees the
+real datagram source IP and raw ICMP reaches the host's interfaces) and grants `NET_RAW`.
 
-`docker-compose.poller.yml` uses `network_mode: host` (so passive syslog/trap correlation sees the real datagram source IP and raw ICMP reaches the host's interfaces) and grants `NET_RAW`.
-
-> **Privileged-port caveat.** The remote poller runs **non-root** (file-cap `NET_RAW` only), so it cannot bind `:514`/`:162` (< 1024). Use the default high ports (`1514`/`1162`) and redirect on the host firewall (`iptables … REDIRECT 514→1514`), or point devices straight at the high ports. It will appear on the Pollers page within a few seconds of starting; core begins assigning that pool's nodes to it.
+> **Privileged-port caveat.** The remote poller runs **non-root** (file-cap `NET_RAW` only), so it cannot bind `:514`/`:162` (< 1024). Use the default high ports (`1514`/`1162`) and redirect on the host firewall (`iptables … REDIRECT 514→1514`), or point devices straight at the high ports.
 
 To scale a pool, run more pollers with the same `YAGRA_POLLER_POOL` (and distinct `YAGRA_POLLER_ID`s) — core rebalances the pool across them and fails over on loss. A pool with zero live pollers falls back to legacy per-job publish, so no nodes go dark during a rollout.
+
+### Optional — scope each poller's bus credential (Auth Callout)
+
+The static NATS accounts give `core` full access and `poller` least privilege (publish only
+results/events/heartbeat; subscribe only to its jobs and working-set assignments). There is **one
+shared `poller` account**, though, so any authenticated poller can read any pool's assignments — it
+is not a tenant boundary.
+
+Enabling **NATS Auth Callout** makes core the bus's authorization service: it mints each connecting
+poller a credential scoped to exactly its own subjects, and it is the path that checks the per-poller
+tokens from Step 2. Generate an account nkey pair (`nk -gen account -pubout`), give core the seed
+file via `YAGRA_NATS_CALLOUT_SEED_FILE`, set `YAGRA_NATS_CALLOUT_ISSUER` to the public key, and
+uncomment the `auth_callout` block in the shipped `nats-server.conf`. With it on, core also stops
+recreating a poller row from a heartbeat, so removing a poller in the WebUI sticks.
 
 ---
 

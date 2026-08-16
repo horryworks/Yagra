@@ -1296,6 +1296,18 @@ export const BUNDLE_NOTE_CODES = [
   'schedule_next_run_recomputed',
 ] as const;
 
+// ── Bus certificate + remote-poller acceptance (ADR-065) ────────────────────────────────────────
+
+/** The certificate NATS serves on the core⇄poller bus (`GET /api/v1/settings/bus`). This is the
+ *  file a remote site pins as its `YAGRA_BUS_CA_FILE`; it never carries the key. */
+export type BusTlsView = components['schemas']['BusTlsView'];
+
+/** The response wrapper: the certificate, whether the bus is TLS, and whether the switch works. */
+export type BusStatus = components['schemas']['BusResponse'];
+
+/** What flipping the switch returns. `poller_secret` is shown once and never again. */
+export type BusRemoteAccepted = components['schemas']['BusRemoteAccepted'];
+
 // ── WebUI TLS certificate (ADR-044) ─────────────────────────────────────────────────────────────
 
 /** The certificate the WebUI is serving (`GET /api/v1/settings/tls`). Never carries the key. */

@@ -149,6 +149,20 @@ pub enum Command {
     /// default, and the moment an operator most wants the list is the hour a release is published —
     /// which is exactly when it is guaranteed to be stale.
     Refresh,
+    /// Turn acceptance of remote-site pollers on or off (ADR-065): rewrite the allow-listed bus
+    /// variables in the host's `.env` and recreate `nats`, `core` and `poller` from them.
+    ///
+    /// The only command that installs no image. It is here rather than in a mechanism of its own
+    /// because the capability it needs — write a file in the deployment directory and run
+    /// `docker compose up -d` — is *exactly* what this sidecar already holds and what core
+    /// deliberately does not (ADR-040/ADR-044 both refused core the socket). A second path to the
+    /// same privilege would be a second thing to audit.
+    ///
+    /// ⚠️ It carries extra fields the other commands do not (`bus_mode`, and two passwords when
+    /// enabling), which is why [`UpgradeRepo::request_with`] exists. That is **not** a schema bump:
+    /// an updater too old to know this command refuses it by name before reading anything else, so
+    /// no old updater ever sees the extra lines. See [`REQUEST_SCHEMA`].
+    Bus,
 }
 
 impl Command {
@@ -163,6 +177,7 @@ impl Command {
             Self::Apply => "apply",
             Self::Bundle => "bundle",
             Self::Refresh => "refresh",
+            Self::Bus => "bus",
         }
     }
 
@@ -175,7 +190,10 @@ impl Command {
     pub fn needs_tag(self) -> bool {
         match self {
             Self::Apply | Self::Bundle => true,
-            Self::Refresh => false,
+            // Neither names a release: `refresh` re-reads the registry's tag list, and `bus`
+            // rewrites this deployment's own bus variables and recreates it at the version it is
+            // already running.
+            Self::Refresh | Self::Bus => false,
         }
     }
 }
@@ -640,13 +658,43 @@ impl UpgradeRepo {
         requested_by: &str,
         now: i64,
     ) -> anyhow::Result<()> {
+        self.request_with(command, id, tag, requested_by, now, &[])
+    }
+
+    /// [`Self::request`] plus command-specific fields, appended as further `key=value` lines.
+    ///
+    /// Only [`Command::Bus`] uses this today. Every key and value is checked against a deliberately
+    /// narrow charset **here**, before the file exists, because the file is read as root: the
+    /// sidecar re-checks each field it consumes, and this is the other half of that pair rather
+    /// than a substitute for it. The charsets forbid a newline, which is what stops one field's
+    /// value from forging another field.
+    ///
+    /// # Errors
+    /// A key or value outside the charset, plus everything [`Self::request`] can fail on.
+    pub fn request_with(
+        &self,
+        command: Command,
+        id: &str,
+        tag: Option<&str>,
+        requested_by: &str,
+        now: i64,
+        extra: &[(&str, &str)],
+    ) -> anyhow::Result<()> {
         let dir = self
             .dir
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("the upgrade mechanism is not enabled"))?;
         let tag = checked_tag(command, tag)?;
         anyhow::ensure!(is_run_id(id), "invalid run id");
-        let body = request_body(REQUEST_SCHEMA, id, command.as_str(), tag, requested_by, now);
+        let mut body = request_body(REQUEST_SCHEMA, id, command.as_str(), tag, requested_by, now);
+        for (key, value) in extra {
+            anyhow::ensure!(is_request_key(key), "invalid request field name");
+            anyhow::ensure!(is_request_value(value), "invalid request field value");
+            body.push_str(key);
+            body.push('=');
+            body.push_str(value);
+            body.push('\n');
+        }
         let tmp = dir.join("request.tmp");
         std::fs::write(&tmp, body)?;
         std::fs::rename(&tmp, dir.join("request"))?;
@@ -753,12 +801,7 @@ impl UpgradeRepo {
             ),
         }
 
-        let action = format!(
-            "upgrade {} -> {} ({})",
-            run.state,
-            run.target.as_deref().unwrap_or("?"),
-            run.message.as_deref().unwrap_or("no detail")
-        );
+        let action = audit_action(&run);
         let status = if run.state == "succeeded" { 200 } else { 500 };
         let by = run.requested_by.clone().unwrap_or_else(|| "unknown".into());
         if let Err(e) = audit.record(&by, &action, status).await {
@@ -1081,6 +1124,50 @@ fn claim_run(dir: &Path, id: &str) -> bool {
 /// [`sanitize_actor`], the rest generated — so this cannot emit a line the updater would misread.
 /// Kept separate from the file write so that property is testable without a filesystem.
 #[must_use]
+/// The audit line for a run that has reported an outcome.
+///
+/// Split out and named because not every run installs a release: [`Command::Bus`] names no target,
+/// and the upgrade wording would have written `upgrade succeeded -> ?` into the audit log for a
+/// change that upgraded nothing. The log is what answers "who turned the bus on", so it has to say
+/// which thing happened.
+fn audit_action(run: &RunStatus) -> String {
+    if run.command == Command::Bus.as_str() {
+        format!(
+            "bus {} ({})",
+            run.state,
+            run.message.as_deref().unwrap_or("no detail")
+        )
+    } else {
+        format!(
+            "upgrade {} -> {} ({})",
+            run.state,
+            run.target.as_deref().unwrap_or("?"),
+            run.message.as_deref().unwrap_or("no detail")
+        )
+    }
+}
+
+/// A field name [`UpgradeRepo::request_with`] will write. Lowercase and underscores only.
+fn is_request_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 32
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b == b'_' || b.is_ascii_digit())
+}
+
+/// A field value [`UpgradeRepo::request_with`] will write.
+///
+/// Alphanumerics and a handful of separators — enough for a mode word, a password and a host name,
+/// and short of anything a shell would treat specially. Empty is allowed: "this field is not
+/// applicable to this request" has to be expressible, and the sidecar tests for it.
+fn is_request_value(value: &str) -> bool {
+    value.len() <= 128
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._@:/-".contains(&b))
+}
+
 fn request_body(
     schema: u32,
     id: &str,
@@ -1118,7 +1205,12 @@ mod tests {
 
     /// Every command core can write. Hand-written because Rust cannot enumerate variants; it is
     /// what `every_command_is_accepted_by_the_sidecar` iterates.
-    const COMMANDS: &[Command] = &[Command::Apply, Command::Bundle, Command::Refresh];
+    const COMMANDS: &[Command] = &[
+        Command::Apply,
+        Command::Bundle,
+        Command::Refresh,
+        Command::Bus,
+    ];
 
     fn run_in_state(state: &str) -> RunStatus {
         RunStatus {
@@ -1370,6 +1462,52 @@ mod tests {
                  will refuse"
             );
         }
+    }
+
+    /// The extra fields [`Command::Bus`] carries have to survive the same round trip the standard
+    /// ones do — and, more importantly, a value that could forge another field has to be refused
+    /// *before* the file a root container reads exists.
+    #[test]
+    fn an_extra_request_field_cannot_forge_another_line() {
+        assert!(is_request_key("bus_mode"));
+        assert!(!is_request_key("bus mode"), "a space is not a field name");
+        assert!(!is_request_key("Bus_Mode"), "uppercase is not a field name");
+        assert!(!is_request_key(""), "an empty field name names nothing");
+
+        assert!(is_request_value("on"));
+        assert!(is_request_value(""), "not-applicable must be expressible");
+        assert!(is_request_value("aB9-_.@:/x"));
+        // The one that matters. Without the newline ban, `command=apply` in a password would make
+        // the updater read a different command than the one core asked for.
+        assert!(!is_request_value("on\ncommand=apply"));
+        assert!(!is_request_value("a b"), "a space would end a shell word");
+        assert!(!is_request_value(&"x".repeat(129)), "past the length cap");
+    }
+
+    /// The audit log is what answers "who turned the bus on", so a run that installed no release
+    /// must not be recorded as an upgrade to an unnamed version.
+    #[test]
+    fn a_bus_change_is_audited_as_a_bus_change_not_as_an_upgrade_to_nothing() {
+        let mut run = run_in_state("succeeded");
+        run.command = "bus".to_owned();
+        run.target = None;
+        run.message = Some("remote pollers are now accepted".to_owned());
+        let line = audit_action(&run);
+        assert!(line.starts_with("bus succeeded"), "{line}");
+        assert!(!line.contains("-> ?"), "{line}");
+        // …and an actual upgrade still reads the way it always did.
+        let up = run_in_state("succeeded");
+        assert!(audit_action(&up).starts_with("upgrade succeeded -> v0.2.2"));
+    }
+
+    /// The bus command names no release, so the tag guard must let it through — and `apply` must
+    /// still be refused without one, or the guard has stopped guarding.
+    #[test]
+    fn the_bus_command_needs_no_release_tag_but_apply_still_does() {
+        assert!(!Command::Bus.needs_tag());
+        assert!(Command::Apply.needs_tag());
+        assert!(checked_tag(Command::Bus, None).is_ok());
+        assert!(checked_tag(Command::Apply, None).is_err());
     }
 
     /// The deployment directory must be mounted into the upgrade container at the path the **host**

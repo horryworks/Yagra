@@ -367,6 +367,28 @@ impl std::ops::Deref for WebTls {
     }
 }
 
+/// The bus's TLS certificate store (ADR-065) — absent only in skeleton mode.
+pub struct BusTls(pub Arc<crate::bus_cert::BusTlsRepo>);
+
+#[async_trait]
+impl FromRequestParts<ApiState> for BusTls {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
+        st.bus_tls
+            .as_ref()
+            .map(|t| Self(t.clone()))
+            .ok_or_else(ApiError::admin_unavailable)
+    }
+}
+
+impl std::ops::Deref for BusTls {
+    type Target = crate::bus_cert::BusTlsRepo;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 /// The migration-history reader behind the upgrade view (ADR-050) — absent only in skeleton mode.
 pub struct Upgrade(pub Arc<crate::upgrade::UpgradeRepo>);
 

@@ -29,6 +29,7 @@ mod audit;
 mod auth;
 mod authcallout;
 mod bigquery;
+mod bus_cert;
 mod cadence;
 mod classification;
 mod collection;
@@ -99,6 +100,7 @@ mod topology_mode;
 mod topology_projection;
 // What this deployment is running and how far back it can be taken (ADR-050). Named apart from
 // `repo`, which *applies* migrations; this one reasons about what applying them cost.
+mod poller_bundle;
 mod poller_logs;
 mod poller_upgrade;
 mod upgrade;
@@ -166,6 +168,20 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // `yagra-core bus-cert` establishes the TLS material the NATS bus serves and exits (ADR-065).
+    // Run as a one-shot by the composition BEFORE the bus starts, which is the whole reason it is a
+    // subcommand rather than something core does at startup: core needs the bus, so core cannot be
+    // the thing that prepares it. Same pattern as `kek-init` / `tls-init`, and it reuses this
+    // image so there is no second place the certificate rules live.
+    //
+    // Unlike the two probes above this one is NOT side-effect-free — it writes a database row and
+    // two files. It is still handled here, before telemetry and any wiring, because everything
+    // below it needs a bus.
+    if std::env::args().nth(1).as_deref() == Some("bus-cert") {
+        let _telemetry = yagra_telemetry::init("yagra-bus-cert");
+        return run_bus_cert().await;
+    }
+
     // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
     // spans at shutdown, so keep it alive for the whole process (`main` awaits the run loop below).
     let _telemetry = yagra_telemetry::init("yagra-core");
@@ -225,6 +241,47 @@ fn print_embedded_migrations() {
         "migrations": migrations,
     });
     println!("{doc}");
+}
+
+/// `yagra-core bus-cert` — establish the bus's TLS material, then exit (ADR-065).
+///
+/// Reads `YAGRA_DATABASE_URL`, `YAGRA_KEK_FILE` and `YAGRA_BUS_TLS_DIR`; extra subject alternative
+/// names come from `YAGRA_BUS_TLS_SANS`. Idempotent: with a valid certificate already stored it only
+/// rewrites the files, which is what makes running it on every `up` correct rather than wasteful.
+///
+/// **It applies migrations, and that is deliberate rather than incidental.** The table it needs is
+/// created by a migration, migrations are applied by core, core waits for the bus, and the bus waits
+/// for this — so somebody in that cycle has to be able to bring the schema forward. It is the same
+/// binary and the same embedded set, and sqlx takes an advisory lock, so core applying them a moment
+/// later is a no-op rather than a race. The practical consequence worth knowing: on a fresh
+/// deployment the migrations are applied by *this* container, so a failure here reads as
+/// "bus-cert-init failed" rather than "core failed".
+///
+/// Every failure is fatal. This is a one-shot the composition waits on with
+/// `service_completed_successfully`, so exiting non-zero stops the bus from starting against a
+/// half-written volume — which is the outcome an operator can diagnose, unlike a bus that comes up
+/// serving nothing.
+async fn run_bus_cert() -> anyhow::Result<()> {
+    let db = std::env::var("YAGRA_DATABASE_URL")
+        .map_err(|_| anyhow::anyhow!("YAGRA_BUS_TLS needs YAGRA_DATABASE_URL"))?;
+    let dir = std::env::var("YAGRA_BUS_TLS_DIR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("YAGRA_BUS_TLS_DIR is not set — nowhere to write to"))?;
+
+    let kek = secrets::load_key_provider()?;
+    let repo = repo::NodeRepo::connect(&db).await?;
+    repo.migrate().await?;
+
+    let bus_tls = bus_cert::BusTlsRepo::new(repo.pool(), kek, Some(dir));
+    bus_tls.ensure_ready(&bus_cert::configured_names()).await?;
+    // The configuration travels with the image exactly as the composition does (ADR-050 decision 5),
+    // so this is a copy on every run rather than a create-if-absent: an upgrade that changes the
+    // file must not leave the previous release's copy in place.
+    bus_tls.install_server_conf(std::path::Path::new(bus_cert::CONF_IN_IMAGE))?;
+    tracing::info!("bus TLS material is ready");
+    Ok(())
 }
 
 /// Live mode: PostgreSQL + NATS + VictoriaMetrics, real ICMP polling end to end.
@@ -358,7 +415,13 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // in-memory registry is the source of truth. Constructed before the result consumer so the
     // consumer can attribute results to their poller.
     let volatile = Arc::new(VolatileStore::from_optional_url(cfg.redis_url.as_deref()));
-    let poller_repo = Arc::new(PollerRepo::new(repo.pool()));
+    // Auto-registration is turned OFF exactly when the bus already refuses an unregistered id — i.e.
+    // when Auth Callout is configured (ADR-065 Inc.3). Keeping the two conditions the same one is
+    // deliberate: with the callout off, refusing to create a row would make a poller invisible while
+    // it happily polled, and with it on, creating one is what made "delete this poller" not stick.
+    let poller_registration_gated = cfg.nats_callout_seed_file.is_some();
+    let poller_repo =
+        Arc::new(PollerRepo::new(repo.pool()).with_auto_register(!poller_registration_gated));
     let coordinator = Arc::new(Coordinator::new(
         bus.clone(),
         volatile,
@@ -456,7 +519,15 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
                         );
                         spawn_cancellable(
                             &shutdown,
-                            authcallout::run_auth_callout(bus.client(), Arc::new(signer), secret),
+                            authcallout::run_auth_callout(
+                                bus.client(),
+                                Arc::new(signer),
+                                secret,
+                                // The inventory is now part of the decision (ADR-065 Inc.3): an id
+                                // with no row here is refused, and one with a token of its own is
+                                // no longer opened by the deployment-wide secret.
+                                poller_repo.clone(),
+                            ),
                         );
                     }
                     Err(e) => tracing::error!(
@@ -867,6 +938,19 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
             .filter(|s| !s.trim().is_empty())
             .map(std::path::PathBuf::from),
     ));
+    // The bus's certificate (ADR-065). Written by the `bus-cert` one-shot before this process
+    // starts; core holds the repo so Settings ▸ Pollers can show what remote sites must pin and mint
+    // a replacement covering a new site's address. Core deliberately runs no renewal timer for it —
+    // see `bus_cert`'s module doc: a new bus certificate disconnects every site until each is given
+    // the new one, so it is an operator action rather than a background chore.
+    let bus_tls = Arc::new(bus_cert::BusTlsRepo::new(
+        repo.pool(),
+        kek.clone(),
+        std::env::var("YAGRA_BUS_TLS_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from),
+    ));
 
     // Built before `repo` is erased to `Arc<dyn NodeListing>` below, which moves it. An unset
     // YAGRA_UPGRADE_DIR means the updater sidecar is not deployed, which is the default: the
@@ -990,6 +1074,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         enable_mcp: cfg.enable_mcp,
         rca,
         webtls: Some(webtls.clone()),
+        bus_tls: Some(bus_tls),
         upgrade: Some(upgrade),
         metrics: Some(metrics.clone()),
         started: std::time::SystemTime::now(),
@@ -1524,6 +1609,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         // No metadata store ⇒ nowhere to keep a provider config or a report; the RCA endpoints 503.
         rca: None,
         webtls: None,
+        bus_tls: None,
         upgrade: None,
         metrics: Some(metrics.clone()),
         started: std::time::SystemTime::now(),
@@ -3922,11 +4008,27 @@ async fn load_routing(notifier: &Notifier, notifications: &NotificationRepo) {
 }
 
 /// Connect to NATS with retry so startup ordering doesn't matter.
+///
+/// `YAGRA_BUS_CA_FILE` pins the bus's certificate, and core needs it for the same reason a remote
+/// poller does: once the bus is TLS (ADR-065), the certificate is one Yagra minted and signed
+/// itself, so it is in no container's trust store. Core reads the variable with the same
+/// empty-means-unset rule the poller applies — the compose file always sets it and leaves it blank
+/// on the plaintext single-node bus, so an empty string has to mean "no CA" rather than "a file
+/// called nothing".
+///
+/// ⚠️ Core connected with **no** CA for the whole life of the remote-poller feature, which is why
+/// the documented procedure told operators to add `YAGRA_BUS_CA_FILE` to core and then had core
+/// ignore it. Turning TLS on would have left core unable to reach its own bus.
 async fn connect_bus(url: &str) -> anyhow::Result<NatsBus> {
     const MAX_ATTEMPTS: u32 = 30;
+    let ca = std::env::var("YAGRA_BUS_CA_FILE")
+        .ok()
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from);
     let mut attempt = 0;
     loop {
-        match NatsBus::connect(url).await {
+        match NatsBus::connect_opts(url, ca.as_deref()).await {
             Ok(bus) => return Ok(bus),
             Err(e) if attempt < MAX_ATTEMPTS => {
                 attempt += 1;

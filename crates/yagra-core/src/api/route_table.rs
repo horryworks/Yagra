@@ -1126,6 +1126,11 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("DELETE", "/api/v1/pollers/:id", INFRA, NO_MCP_WRITE),
     ("PUT", "/api/v1/pollers/:id/anchor", INFRA, NO_MCP_WRITE),
+    // A write despite reading like a download: it mints a credential and stores its digest. The
+    // archive is the *response*, not the resource, which is why there is no matching GET — the
+    // token exists only at this instant and nothing can serve it a second time.
+    ("POST", "/api/v1/pollers/:id/token", INFRA, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/pollers/:id/token", INFRA, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/pollers/:id/nodes",
@@ -1342,6 +1347,32 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     (
         "PUT",
         "/api/v1/settings/retention",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "GET",
+        "/api/v1/settings/bus",
+        ADMIN_CFG,
+        // Same argument as `/settings/tls` below, one component over: this is the deployment's own
+        // key material and the state of its bus, not a fact about the monitored fleet. The question
+        // a model would actually ask — "is a poller pool uncovered?" — is answered by the
+        // system-health tool, which is where poller liveness already lives.
+        Exempt(
+            "the deployment's own bus TLS material and whether its bus is exposed. The certificate \
+             is the thing a remote site pins, so publishing it over a tool surface widens who can \
+             ask for it with no monitoring question answered in return",
+        ),
+    ),
+    (
+        "POST",
+        "/api/v1/settings/bus/certificate",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
+    (
+        "PUT",
+        "/api/v1/settings/bus/remote",
         ADMIN_CFG,
         NO_MCP_WRITE,
     ),

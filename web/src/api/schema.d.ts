@@ -2595,6 +2595,37 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/pollers/{id}/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Issue a poller a bus token of its own and return the archive its site needs.
+         * @description The response is the archive, not the token: this is the only moment the token exists in the
+         *     clear — only its digest is stored — and everything else the site needs is derivable here. See
+         *     `poller_bundle.rs`.
+         *
+         *     Creates the inventory row when the poller has not connected yet, which is what lets a site be
+         *     prepared before anything is running there. That is also what makes the callout able to refuse an
+         *     unregistered id: something has to be able to register one first.
+         */
+        post: operations["issue_poller_token"];
+        /**
+         * Revoke a poller's token, returning it to the deployment-wide bootstrap secret.
+         * @description Not the same thing as deleting the poller: an operator revoking a leaked token wants the site
+         *     back on a new one, not its inventory row, anchor and history gone.
+         */
+        delete: operations["revoke_poller_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/pools": {
         parameters: {
             query?: never;
@@ -2935,6 +2966,61 @@ export interface paths {
         put: operations["set_routing_rule_enabled"];
         post?: never;
         delete: operations["delete_routing_rule"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/bus": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The bus certificate and whether this deployment accepts remote-site pollers. */
+        get: operations["get_bus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/bus/certificate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mint a new bus certificate covering the given names. */
+        post: operations["regenerate_bus_cert"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/settings/bus/remote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Turn acceptance of remote-site pollers on or off.
+         * @description The bus, this core and the co-located poller are all recreated, so monitoring stops for as long
+         *     as that takes. A fleet-wide maintenance window is opened first.
+         */
+        put: operations["set_bus_remote"];
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -4301,6 +4387,118 @@ export interface components {
             field?: string | null;
             /** @description The table the note is about. */
             table: string;
+        };
+        /** @description Which names a regenerated bus certificate should cover. */
+        BusCertRegenerate: {
+            /**
+             * @description Hostnames and IP addresses remote pollers will dial, added to the deployment's internal
+             *     defaults. A poller's connection fails unless the exact address it dials is present, so this
+             *     is the field that decides whether a new site can connect.
+             */
+            names?: string[];
+        };
+        /** @description What the switch returns. The poller secret appears **once**. */
+        BusRemoteAccepted: {
+            /**
+             * @description The certificate a remote poller must pin as its `YAGRA_BUS_CA_FILE`, in PEM. `null` when
+             *     disabling.
+             */
+            ca_certificate?: string | null;
+            /** @description Identifier for this change, matching the run reported by the upgrade status endpoint. */
+            id: string;
+            /**
+             * @description The fleet-wide maintenance window opened for the duration, or `null` if one could not be
+             *     opened. Monitoring stops for as long as the bus is being recreated.
+             */
+            maintenance_window_id?: string | null;
+            /**
+             * @description The bootstrap secret a remote poller presents when it connects, shown **once**. Store it
+             *     now — it is written into the deployment's environment and is never returned again.
+             */
+            poller_secret?: string | null;
+        };
+        /** @description Turn acceptance of remote-site pollers on or off. */
+        BusRemoteRequest: {
+            /**
+             * @description `true` encrypts and authenticates the bus and publishes its port; `false` returns it to the
+             *     internal-only plaintext bus and stops every remote poller from connecting.
+             */
+            enabled: boolean;
+            /**
+             * @description Hostnames and IP addresses remote pollers will dial. Used to reissue the certificate before
+             *     the bus restarts, so the names are already right when it comes back. Ignored when disabling.
+             */
+            names?: string[];
+        };
+        /** @description The bus, as Settings ▸ Pollers shows it. */
+        BusResponse: {
+            /**
+             * @description Whether the switch below can be operated. `false` means the updater sidecar that performs it
+             *     is not deployed, is switched off, or has stopped reporting — the certificate is still
+             *     readable, but turning remote acceptance on or off needs a shell on the host.
+             */
+            can_switch: boolean;
+            certificate?: null | components["schemas"]["BusTlsView"];
+            /**
+             * @description Whether this core is talking to the bus over TLS, which is what accepting remote-site
+             *     pollers requires.
+             */
+            remote_enabled: boolean;
+        };
+        /** @description The bus certificate as the settings card shows it. Never includes the private key. */
+        BusTlsView: {
+            /**
+             * @description The certificate in PEM. This is what a remote poller uses as its `YAGRA_BUS_CA_FILE` — a
+             *     self-signed certificate is its own certificate authority. Safe to distribute; the private
+             *     key never leaves the server.
+             */
+            certificate: string;
+            /**
+             * Format: int64
+             * @description Days until expiry; negative once it has passed.
+             */
+            expires_in_days: number;
+            /**
+             * @description Lowercase hex SHA-256 of the certificate. Compare it against the file a site was given to
+             *     confirm the site is holding this certificate and not an older one.
+             */
+            fingerprint_sha256: string;
+            /** @description When this certificate was generated, RFC 3339. */
+            issued_at: string;
+            /**
+             * @description The account that asked for it, if a signed-in user did. Empty for the one generated
+             *     automatically before the bus first started.
+             */
+            issued_by?: string | null;
+            /**
+             * @description Distinguished name of the issuer. Equal to `subject`, because this certificate is
+             *     self-signed.
+             */
+            issuer: string;
+            /** @description Key type and size, for example `ECDSA P-256`. */
+            key_algorithm: string;
+            /**
+             * @description Whether the private key can still be decrypted. `false` means the encryption key has changed
+             *     or been lost, and a new certificate has to be generated — which every remote site must then
+             *     be given.
+             */
+            key_unreadable: boolean;
+            /**
+             * @description Whether the files the bus reads match this certificate. `false` means it is stored but has
+             *     not reached the volume yet — the bus is still serving whatever it started with.
+             */
+            materialized: boolean;
+            /** @description End of the validity window, RFC 3339. */
+            not_after: string;
+            /** @description Start of the validity window, RFC 3339. */
+            not_before: string;
+            /**
+             * @description The hostnames and IP addresses this certificate is valid for. A remote poller's connection
+             *     fails unless the exact address it dials appears here.
+             */
+            sans: string[];
+            /** @description Distinguished name of the certificate's subject. */
+            subject: string;
         };
         /**
          * @description How often a schedule fires.
@@ -7338,6 +7536,12 @@ export interface components {
             disk_used_pct?: number | null;
             /** @description First durably-recorded contact (RFC 3339); `null` if not yet persisted. */
             first_seen?: string | null;
+            /**
+             * @description Whether this poller has a bus token of its own (ADR-065). `false` means it is admitted by
+             *     the deployment-wide bootstrap secret, which every poller was before tokens existed and which
+             *     a co-located poller on an unencrypted internal bus still is.
+             */
+            has_token: boolean;
             /** @description Sanitized poller id (stable across restarts). */
             id: string;
             /**
@@ -7372,6 +7576,8 @@ export interface components {
             results_total: number;
             /** @description `"online"` when it is beating within the offline window, else `"offline"`. */
             status: string;
+            /** @description When its token was issued, RFC 3339. `null` when it has none. */
+            token_issued_at?: string | null;
             /** @description Build version from its latest heartbeat (or the durable row when it is offline). */
             version?: string | null;
             /**
@@ -7413,6 +7619,25 @@ export interface components {
             total: number;
             /** @description Whether `nodes` is a capped page of `total`. */
             truncated: boolean;
+        };
+        /** @description What a new site needs, beyond its own name. */
+        PollerTokenRequest: {
+            /**
+             * @description The hostname or IP address the site will dial. Must be one the bus certificate covers, or
+             *     the site's connection fails with nothing visible centrally. Defaults to the first name on
+             *     the certificate that is not an internal one.
+             */
+            host?: string | null;
+            /**
+             * @description The pool this poller serves. Only used when the poller is not in the inventory yet — an
+             *     existing poller keeps the pool it reported.
+             */
+            pool?: string | null;
+            /**
+             * Format: int32
+             * @description The bus port at that address. Defaults to 4222.
+             */
+            port?: number | null;
         };
         /**
          * @description Who an upgrade carries along, and who it leaves behind.
@@ -19576,6 +19801,126 @@ export interface operations {
             };
         };
     };
+    issue_poller_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Poller id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PollerTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description A gzipped tar archive holding the site's .env, the bus certificate, the composition and a README */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/gzip": unknown;
+                };
+            };
+            /** @description The poller id is not usable as a bus identity, or no address was given and none could be derived */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode, or this deployment has no bus certificate yet */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    revoke_poller_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Poller id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The token was revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such poller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode: no durable poller store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     list_pools: {
         parameters: {
             query?: never;
@@ -21230,6 +21575,182 @@ export interface operations {
                 };
             };
             /** @description This core has no write side (skeleton mode) */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    get_bus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The bus certificate and the remote-acceptance state */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BusResponse"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no bus certificate store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    regenerate_bus_cert: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BusCertRegenerate"];
+            };
+        };
+        responses: {
+            /** @description Generated and written; the body is the new certificate's details */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BusResponse"];
+                };
+            };
+            /** @description A supplied name is not a usable hostname or IP address */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no bus certificate store */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_bus_remote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BusRemoteRequest"];
+            };
+        };
+        responses: {
+            /** @description Accepted; the bus is being recreated and this core will restart */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BusRemoteAccepted"];
+                };
+            };
+            /** @description Enabling without an address remote pollers can dial */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageSystem */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description An upgrade or another bus change is already running */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No updater is deployed, or it is switched off */
             503: {
                 headers: {
                     [name: string]: unknown;

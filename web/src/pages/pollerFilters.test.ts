@@ -28,6 +28,8 @@ const poller = (over: Partial<PollerInfo> = {}): PollerInfo => ({
   mem_used_pct: null,
   disk_used_pct: null,
   anchor_node_id: null,
+  has_token: false,
+  token_issued_at: null,
   ...over,
 });
 

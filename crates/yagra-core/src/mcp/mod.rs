@@ -319,6 +319,7 @@ mod tests {
             enable_mcp: true,
             rca: None,
             webtls: None,
+            bus_tls: None,
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),

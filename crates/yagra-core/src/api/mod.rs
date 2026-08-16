@@ -34,6 +34,7 @@ pub(crate) mod alerts;
 pub(crate) mod analysis;
 mod api_tokens;
 pub(crate) mod audit;
+mod bus;
 pub(crate) mod checks;
 mod classification;
 pub(crate) mod collection;
@@ -307,6 +308,11 @@ pub struct ApiState {
     /// double-do, and a standby that starts first on a fresh database still has to be able to
     /// bootstrap one or the web container waits forever.
     pub webtls: Option<Arc<crate::webtls::WebTlsRepo>>,
+    /// The certificate the core⇄poller bus serves (ADR-065); `None` in skeleton mode. Read-mostly
+    /// here — the `bus-cert` one-shot establishes it before this process starts, and core only shows
+    /// it and mints a replacement on request. Present on every core: reissuing is an operator action
+    /// either way, so there is nothing for a standby to double-do.
+    pub bus_tls: Option<Arc<crate::bus_cert::BusTlsRepo>>,
     /// Migration history and the compatibility floor it implies (ADR-050); `None` in skeleton mode.
     /// Read-only, so every core answers — there is nothing here for a standby to double-do.
     pub upgrade: Option<Arc<crate::upgrade::UpgradeRepo>>,
@@ -387,6 +393,8 @@ pub fn router(state: ApiState) -> Router {
         .merge(session::routes())
         .merge(ldap::routes())
         .merge(webtls::routes())
+        // The bus certificate and the remote-poller switch (ADR-065), in `api/bus.rs`.
+        .merge(bus::routes())
         .merge(upgrade::routes())
         .merge(oidc::routes())
         .merge(system::routes())
@@ -634,6 +642,7 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            bus_tls: None,
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
@@ -672,6 +681,7 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            bus_tls: None,
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),
@@ -708,6 +718,7 @@ mod tests {
             enable_mcp: false,
             rca: None,
             webtls: None,
+            bus_tls: None,
             upgrade: None,
             metrics: None,
             started: std::time::SystemTime::now(),

@@ -10,6 +10,8 @@
 
 import type {
   Alert,
+  BusRemoteAccepted,
+  BusStatus,
   AlertHistoryQuery,
   AlertHistoryRow,
   RankedAlertNodes,
@@ -303,10 +305,17 @@ function arm<T>(p: Promise<unknown>): Promise<T> {
  *  would 401 on any auth-enabled deployment. This is the one implementation of that; the report
  *  export grew its own first and the support bundle would have been the second copy of the same
  *  22 lines, differing in a URL (extensibility §3). */
-async function fetchBlob(url: string, fallbackCode: string): Promise<Download> {
-  const headers: Record<string, string> = {};
+async function fetchBlob(
+  url: string,
+  fallbackCode: string,
+  init?: RequestInit,
+): Promise<Download> {
+  // `init` exists for one caller and the reason is worth stating: issuing a poller token is a POST
+  // whose *response* is the archive, because the token exists only at that instant (ADR-065 Inc.4).
+  // It is not a download of a resource that could be fetched again.
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
   if (authToken) headers.Authorization = `Bearer ${authToken}`;
-  const res = await fetch(`${BASE}${url}`, { headers });
+  const res = await fetch(`${BASE}${url}`, { ...init, headers });
   if (!res.ok) {
     let code = fallbackCode;
     let message = `download failed with status ${res.status}`;
@@ -2044,6 +2053,46 @@ export const api = {
    *  cannot push anyone towards their domain's lockout threshold. */
   testLdapConfig: (username?: string): Promise<LdapTestResult> =>
     apiPost('/api/v1/settings/ldap/test', { body: { username: username ?? null } }),
+
+  // ── Per-poller bus tokens + the site bundle (Settings ▸ Pollers, ManageSystem) — ADR-065 ───
+  /** Issue a poller its own bus token and get back the whole archive its site needs — `.env`, the
+   *  bus certificate, the composition and a README, as `tar.gz` bytes.
+   *
+   *  The response IS the token's only existence: only a digest is stored, so nothing can serve it
+   *  again. Creates the inventory row when the poller has not connected yet, which is how a site is
+   *  prepared before anything runs there. Returns the blob and the filename the server chose. */
+  issuePollerToken: (
+    id: string,
+    body: { pool?: string; host?: string; port?: number },
+  ): Promise<Download> =>
+    fetchBlob(`/api/v1/pollers/${encodeURIComponent(id)}/token`, 'poller_token_failed', {
+      method: 'POST',
+      body: JSON.stringify(body),
+      headers: { 'content-type': 'application/json' },
+    }),
+
+  /** Revoke a poller's token, returning it to the deployment-wide bootstrap secret. Not the same as
+   *  deleting the poller — the inventory row, its anchor and its history stay. */
+  revokePollerToken: (id: string): Promise<void> =>
+    apiDelete('/api/v1/pollers/{id}/token', { path: { id } }),
+
+  // ── The bus (Settings ▸ Pollers, ManageSystem) — ADR-065 ───────────────────────────────────
+  /** The certificate remote pollers must pin, whether the bus is encrypted, and whether the switch
+   *  below can be operated. Carries the certificate — public by construction, and the thing a site
+   *  is handed — and never the private key. */
+  getBus: (): Promise<BusStatus> => apiGet('/api/v1/settings/bus'),
+
+  /** Reissue the bus certificate covering `names` (added to the deployment's internal defaults).
+   *  The stored certificate changes immediately; the bus serves it only after it is restarted. */
+  regenerateBusCert: (names: string[]): Promise<BusStatus> =>
+    apiPost('/api/v1/settings/bus/certificate', { body: { names } }),
+
+  /** Turn acceptance of remote-site pollers on or off. The bus, core and the co-located poller are
+   *  recreated, so monitoring stops for the duration and this core restarts — expect the request to
+   *  return 202 and the connection to drop shortly after. The `poller_secret` in the response is
+   *  shown once. */
+  setBusRemote: (enabled: boolean, names: string[]): Promise<BusRemoteAccepted> =>
+    apiPut('/api/v1/settings/bus/remote', { body: { enabled, names } }),
 
   // ── WebUI TLS certificate (Settings ▸ TLS, ManageConfig) — ADR-044 ─────────────────────────
   /** What the WebUI is serving, or `{ config: null }` before the first certificate exists.

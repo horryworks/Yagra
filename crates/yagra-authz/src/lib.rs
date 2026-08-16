@@ -267,6 +267,14 @@ pub enum DenyReason {
     MissingSecret,
     BadSecret,
     MissingId,
+    /// The connection named a poller id this deployment's inventory has never seen (ADR-065).
+    ///
+    /// Distinct from [`Self::BadSecret`] on purpose, and the distinction is the whole point of
+    /// Increment 3: before it, the *only* check was a secret shared by every site, so a leak at one
+    /// site let the holder claim **any** id — including one whose working set carries another
+    /// site's device credentials. An id nobody registered is now refused before its secret is even
+    /// compared.
+    UnknownPoller,
 }
 
 impl DenyReason {
@@ -276,8 +284,70 @@ impl DenyReason {
             DenyReason::MissingSecret => "missing_secret",
             DenyReason::BadSecret => "bad_secret",
             DenyReason::MissingId => "missing_id",
+            DenyReason::UnknownPoller => "unknown_poller",
         }
     }
+}
+
+/// What the connecting poller's secret must match (ADR-065).
+///
+/// The caller resolves this from the inventory — this crate stays free of a database — but the
+/// **comparison stays here**, so there is exactly one place that decides what "the secret matched"
+/// means and it is constant-time in every branch.
+#[derive(Debug, Clone, Copy)]
+pub enum Expected<'a> {
+    /// This poller has a token of its own: compare `SHA-256(presented)` against this hex digest.
+    TokenHash(&'a str),
+    /// This poller is in the inventory but has no token yet, so the deployment-wide bootstrap
+    /// secret still admits it.
+    ///
+    /// This is the N-1 path and it is deliberately not removed: every poller that connected before
+    /// tokens existed is in this state, and refusing them would take a working fleet down on
+    /// upgrade. Issuing a token is what moves an id out of it — which is why the WebUI shows, per
+    /// poller, whether one has been issued.
+    Shared(&'a str),
+    /// Nothing in the inventory claims this id. Refused without comparing anything.
+    Unknown,
+}
+
+/// A parsed callout request, waiting on the caller's inventory lookup.
+///
+/// Holds everything needed to answer — including the server id and user nkey a reply is addressed
+/// with — so nothing has to be re-parsed after the lookup.
+#[derive(Debug)]
+pub struct PendingRequest {
+    req: AuthRequest,
+}
+
+impl PendingRequest {
+    /// The poller id the connection is claiming, if it presented one.
+    ///
+    /// **Self-asserted.** It is the key the caller looks up, and it is exactly why the lookup
+    /// exists: nothing about the connection proves this id until its secret has been checked
+    /// against the row it names.
+    #[must_use]
+    pub fn poller_id(&self) -> Option<&str> {
+        self.req.connect_user.as_deref()
+    }
+
+    /// The pool the connection is claiming, defaulting the way the scope builder does.
+    #[must_use]
+    pub fn pool(&self) -> &str {
+        self.req.connect_name.as_deref().unwrap_or("default")
+    }
+}
+
+/// `SHA-256` of a presented secret, lowercase hex — the form the inventory stores.
+///
+/// Here rather than in the caller so the hash a token is *checked* against is produced by the same
+/// code that decides the check passed. The issuing side calls this too (through core's
+/// `token::token_hash`, which is byte-identical and asserted to be by a test in this crate).
+#[must_use]
+pub fn secret_hash(secret: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(secret.as_bytes());
+    data_encoding::HEXLOWER.encode(&h.finalize())
 }
 
 /// Outcome of handling one callout request. `response_jwt` is always present (an approval or a signed
@@ -312,16 +382,51 @@ impl AccountSigner {
         &self.issuer
     }
 
-    /// Full flow for one request: parse → check the bootstrap secret → scope → mint + wrap.
-    /// A parse failure is a hard error (we can't even address a reply); an auth failure is a signed
-    /// rejection (`Decision::Denied`) so the client gets a clean refusal instead of a hang.
+    /// Full flow for one request against the deployment-wide bootstrap secret.
+    ///
+    /// The pre-ADR-065 behaviour, kept because it is exactly what a deployment with no inventory
+    /// lookup should do. A caller that *can* consult the inventory uses [`Self::parse`] +
+    /// [`Self::decide`] instead, which is the only way to refuse an id nobody registered.
+    ///
+    /// # Errors
+    /// A parse failure — we cannot even address a reply. An auth failure is not an error: it is a
+    /// signed rejection (`Decision::Denied`) so the client gets a clean refusal instead of a hang.
     pub fn handle_request(
         &self,
         request_jwt: &str,
         bootstrap_secret: &str,
         iat: i64,
     ) -> Result<Handled, AuthzError> {
-        let req = parse_auth_request(request_jwt)?;
+        let pending = Self::parse(request_jwt)?;
+        self.decide(&pending, Expected::Shared(bootstrap_secret), iat)
+    }
+
+    /// Parse a callout request far enough to learn **who is claiming to connect**, without deciding
+    /// anything.
+    ///
+    /// Split from [`Self::decide`] because the answer to "may this connection proceed?" now depends
+    /// on a database row keyed by the id inside the request, and this crate holds no database. The
+    /// caller parses, looks the id up, and hands the answer back as an [`Expected`].
+    ///
+    /// # Errors
+    /// The request is not a callout request this build can read.
+    pub fn parse(request_jwt: &str) -> Result<PendingRequest, AuthzError> {
+        Ok(PendingRequest {
+            req: parse_auth_request(request_jwt)?,
+        })
+    }
+
+    /// Decide a parsed request: check the secret against `expected` → scope → mint + wrap.
+    ///
+    /// # Errors
+    /// Signing or encoding failed. A refusal is a `Decision::Denied`, not an error.
+    pub fn decide(
+        &self,
+        pending: &PendingRequest,
+        expected: Expected<'_>,
+        iat: i64,
+    ) -> Result<Handled, AuthzError> {
+        let req = &pending.req;
 
         let deny = |signer: &Self, reason: DenyReason| -> Result<Handled, AuthzError> {
             let response_jwt = signer.build_response(
@@ -339,7 +444,16 @@ impl AccountSigner {
         let Some(secret) = req.connect_pass.as_deref() else {
             return deny(self, DenyReason::MissingSecret);
         };
-        if !ct_eq(secret.as_bytes(), bootstrap_secret.as_bytes()) {
+        // Before the secret comparison, deliberately. An id nobody registered is refused whatever
+        // it presents, so a leaked bootstrap secret cannot be turned into "any id I like".
+        let ok = match expected {
+            Expected::Unknown => return deny(self, DenyReason::UnknownPoller),
+            Expected::Shared(shared) => ct_eq(secret.as_bytes(), shared.as_bytes()),
+            // Hashed rather than compared raw: the inventory stores only a digest, for the same
+            // reason `api_tokens` does — a database dump must not yield a working credential.
+            Expected::TokenHash(hash) => ct_eq(secret_hash(secret).as_bytes(), hash.as_bytes()),
+        };
+        if !ok {
             return deny(self, DenyReason::BadSecret);
         }
         let Some(id) = req.connect_user.as_deref() else {
@@ -663,6 +777,92 @@ mod tests {
                 reason: DenyReason::MissingId
             }
         );
+    }
+
+    /// The whole point of ADR-065 Increment 3: an id nobody registered is refused **before** its
+    /// secret is compared, so a bootstrap secret leaked at one site cannot be replayed under an
+    /// arbitrary id — including one whose working set carries another site's device credentials.
+    #[test]
+    fn an_unregistered_id_is_refused_even_with_the_right_shared_secret() {
+        let s = signer();
+        let user = nkeys::KeyPair::new_user().public_key();
+        let req = fake_request_jwt("NDX1", &user, Some("nobody"), Some("s3cret"), Some("tokyo"));
+        let pending = AccountSigner::parse(&req).unwrap();
+        assert_eq!(pending.poller_id(), Some("nobody"));
+        assert_eq!(pending.pool(), "tokyo");
+        let out = s.decide(&pending, Expected::Unknown, 1).unwrap();
+        assert_eq!(
+            out.decision,
+            Decision::Denied {
+                reason: DenyReason::UnknownPoller
+            }
+        );
+        // The refusal reads differently from a wrong password in the metrics, which is what lets an
+        // operator tell "somebody is guessing ids" from "one site has a stale .env".
+        assert_eq!(DenyReason::UnknownPoller.as_str(), "unknown_poller");
+        let resp = body(&out.response_jwt);
+        assert!(resp["nats"]["jwt"].is_null());
+    }
+
+    /// A poller that has been issued a token presents that token, and the inventory holds only its
+    /// digest — a database dump must not yield a working credential.
+    #[test]
+    fn a_poller_with_a_token_is_admitted_by_its_hash_and_by_nothing_else() {
+        let s = signer();
+        let user = nkeys::KeyPair::new_user().public_key();
+        let token = "ypt_ThisIsAPollerToken";
+        let hash = secret_hash(token);
+        assert_ne!(hash, token, "the digest must not be the secret");
+
+        let good = fake_request_jwt("NDX1", &user, Some("edge-1"), Some(token), Some("tokyo"));
+        let out = s
+            .decide(
+                &AccountSigner::parse(&good).unwrap(),
+                Expected::TokenHash(&hash),
+                1,
+            )
+            .unwrap();
+        assert_eq!(
+            out.decision,
+            Decision::Issued {
+                poller_id: "edge-1".to_owned(),
+                pool: "tokyo".to_owned()
+            },
+            "a poller presenting its own token must be admitted — a rejection-only test would pass \
+             with everything refused"
+        );
+
+        // The deployment's shared bootstrap secret must NOT open a poller that has its own token.
+        // Otherwise issuing one would be decoration: the weaker credential would still work.
+        let shared = fake_request_jwt("NDX1", &user, Some("edge-1"), Some("s3cret"), Some("tokyo"));
+        assert_eq!(
+            s.decide(
+                &AccountSigner::parse(&shared).unwrap(),
+                Expected::TokenHash(&hash),
+                1
+            )
+            .unwrap()
+            .decision,
+            Decision::Denied {
+                reason: DenyReason::BadSecret
+            }
+        );
+    }
+
+    /// The hash this crate checks against has to be the one core's issuer produced. They are two
+    /// implementations of `hex(sha256(x))` in two crates, and nothing else compares them.
+    #[test]
+    fn the_digest_is_lowercase_hex_sha256_the_way_core_stores_it() {
+        // Known-answer, so a change to either side has something to fail against rather than
+        // agreeing with itself.
+        assert_eq!(
+            secret_hash("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(secret_hash("").len(), 64);
+        assert!(secret_hash("x")
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     }
 
     #[test]
