@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Optical transceiver (DDM/DOM) reading: the vendor dialects and the pure maths (ADR-062).
 //!
 //! Everything here is a pure function over already-walked rows. The SNMP sessions live in

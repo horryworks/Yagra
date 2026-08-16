@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The physical link's negotiated mode: duplex, and the interface types it applies to (ADR-063).
 //!
 //! # Why the OIDs live here and not in a `CollectionItem`

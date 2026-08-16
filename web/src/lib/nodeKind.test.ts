@@ -77,7 +77,7 @@ function rustMetricConstants(): Map<string, string> {
 /** `NodeKind::liveness_metric`'s arms, as the serialized kind token → metric name. */
 function rustLivenessMetrics(): Record<string, string> {
   const src = readFileSync(join(COMMON_SRC, 'node_kind.rs'), 'utf8');
-  const body = /pub const fn liveness_metric\(self\) -> &'static str \{([\s\S]*?)\n    \}/.exec(src);
+  const body = /pub const fn liveness_metric\(self\) -> &'static str \{([\s\S]*?)\n {4}\}/.exec(src);
   expect(body, 'liveness_metric not found — the parser, not the code, is what broke').toBeTruthy();
   const constants = rustMetricConstants();
   const out: Record<string, string> = {};

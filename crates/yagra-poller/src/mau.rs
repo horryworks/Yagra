@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Interface media type: `ifMauTable` and the ENTITY-MIB fallback (ADR-063 Inc.2).
 //!
 //! Pure functions over already-walked rows, the same split `optical.rs` uses — the SNMP sessions

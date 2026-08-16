@@ -10,9 +10,25 @@
 
 ## Unreleased
 
+## v0.2.11 — an interface says what it negotiated, what it is made of, and how much light it sees
+
+> [!IMPORTANT]
+> **Most of the interface work in this release has not been exercised against real hardware.**
+> Duplex, media type, and the optical readings and their power window are all read from MIBs no
+> device in this project's lab implements: the one SNMP device available answers neither
+> EtherLike-MIB nor MAU-MIB, and has no transceiver in it. Every one of those paths is covered by
+> unit tests and by the browser walk against mocked data, and every parser **drops what it cannot
+> recognise rather than guessing** — so the expected failure is an empty column or a missing chart,
+> not a wrong number. That is a design intent, though, not a measurement.
+>
+> **If something looks wrong on your equipment, please open an issue** at
+> https://github.com/horryworks/Yagra/issues — a blank column on a device that should answer, a
+> reading that cannot be right, a chart that never appears. The vendor and model, plus an `snmpwalk`
+> of the table concerned, is what makes it fixable.
+
 ### New Features
 - **The Interfaces tab shows each port's speed and duplex.** A node's **Interfaces** tab gains
-  **Speed** and **Duplex** columns (and a **Media** column, reserved — see below), so a port
+  **Speed** and **Duplex** columns (and a **Media** column — see below), so a port
   negotiated below its rate is visible from the list instead of requiring a device login. Both are
   filterable from the column filter row, which is the point: "show me the 100 Mbps ports" is how the
   mismatch gets found.
@@ -55,36 +71,6 @@
   - **On a phone the three columns are not drawn** — speed and duplex appear in the chart dock
     instead, which is where a narrow screen has room for them.
 
-### Bug Fixes
-- **A 10G interface no longer reports its speed as 4.29 Gbps.** When a device's 32-bit `ifSpeed`
-  saturates (it maxes out at 4,294,967,295) and it publishes no usable `ifHighSpeed`, Yagra was
-  storing the saturation value itself as though it were a measurement. The rate is now recorded as
-  unknown, which also corrects `in_util_pct` / `out_util_pct` — utilisation had been computed
-  against a rate no interface actually has. Affected ports show a blank speed until the device
-  reports one; nothing else changes.
-  - **Ports already recorded that way are corrected on upgrade.** The interface upsert preserves a
-    stored value when a poll reports nothing for it — which is what lets the metadata walk and the
-    optical probe write different columns of one row — so the poller fix alone could not clean up
-    after itself. A one-time migration clears the sentinel. Only the exact saturation value is
-    touched; it is not a rate any interface has.
-
-- **The optical chart shows the transceiver's own acceptable power window.** A dBm figure on its own
-  cannot be judged — -7 dBm is comfortable on one module and failing on another — so the module's
-  published limits are now read alongside the readings and drawn as a shaded lane behind each line,
-  tinted to match it, with the numbers written out beside the current value (`-24.0 dBm … -3.0 dBm`).
-  Nothing alerts on them: these are the module's figures, not a threshold anyone configured, and
-  Yagra only shows them.
-  - Read for **Huawei** (`hwOpticalModuleInfo` thresholds) and **Juniper** (JUNIPER-DOM-MIB alarm
-    thresholds). **Not available for the standards-based dialect**: ENTITY-SENSOR-MIB (RFC 3433)
-    defines no threshold objects at all, so a Cisco or Arista port shows its lines without a lane.
-    H3C is also without one for now. Those ports are unaffected otherwise.
-  - **Limits the module reports implausibly are discarded** — a low bound above the high one, or
-    either end outside a transceiver's physical range, which has been observed in the field. A wrong
-    window would accuse a healthy link, so the lane is simply not drawn.
-  - **`GET /api/v1/nodes/{id}/interfaces` gains `rx_power_low_dbm`, `rx_power_high_dbm`,
-    `tx_power_low_dbm` and `tx_power_high_dbm`**, null for every interface without them.
-  - The chart's Y axis widens to contain the window, so a link with a lot of margin shows a flatter
-    line — that flatness *is* the margin. Use a shorter range to read the trend on its own.
 - **Optical transceivers report their transmit and receive light levels.** A node's **Interfaces**
   tab gains a third chart, **Optical power (Rx / Tx, dBm)**, for any port that has a transceiver in
   it, plus **Rx** and **Tx** figures in the dock header. Fibre degrades gradually — a receive level
@@ -116,6 +102,23 @@
     optical power. Alerting on a per-interface metric is separate work — an alert is currently
     identified by node and metric name with no room for an interface, so a threshold would be shared
     by every port on the device and could not say which one crossed it.
+- **The optical chart shows the transceiver's own acceptable power window.** A dBm figure on its own
+  cannot be judged — -7 dBm is comfortable on one module and failing on another — so the module's
+  published limits are now read alongside the readings and drawn as a shaded lane behind each line,
+  tinted to match it, with the numbers written out beside the current value (`-24.0 dBm … -3.0 dBm`).
+  Nothing alerts on them: these are the module's figures, not a threshold anyone configured, and
+  Yagra only shows them.
+  - Read for **Huawei** (`hwOpticalModuleInfo` thresholds) and **Juniper** (JUNIPER-DOM-MIB alarm
+    thresholds). **Not available for the standards-based dialect**: ENTITY-SENSOR-MIB (RFC 3433)
+    defines no threshold objects at all, so a Cisco or Arista port shows its lines without a lane.
+    H3C is also without one for now. Those ports are unaffected otherwise.
+  - **Limits the module reports implausibly are discarded** — a low bound above the high one, or
+    either end outside a transceiver's physical range, which has been observed in the field. A wrong
+    window would accuse a healthy link, so the lane is simply not drawn.
+  - **`GET /api/v1/nodes/{id}/interfaces` gains `rx_power_low_dbm`, `rx_power_high_dbm`,
+    `tx_power_low_dbm` and `tx_power_high_dbm`**, null for every interface without them.
+  - The chart's Y axis widens to contain the window, so a link with a lot of margin shows a flatter
+    line — that flatness *is* the margin. Use a shorter range to read the trend on its own.
 - **The interface Throughput chart switches between bits/sec and packets/sec.** A device's
   forwarding ceiling is often a packet rate rather than a bit rate, so a link with bandwidth to
   spare can still be saturated — until now there was no way to see that. A **bps / pps** button in
@@ -194,6 +197,17 @@
   timestamps done by eye. Moving the pointer away restores the latest values in both.
 
 ### Bug Fixes
+- **A 10G interface no longer reports its speed as 4.29 Gbps.** When a device's 32-bit `ifSpeed`
+  saturates (it maxes out at 4,294,967,295) and it publishes no usable `ifHighSpeed`, Yagra was
+  storing the saturation value itself as though it were a measurement. The rate is now recorded as
+  unknown, which also corrects `in_util_pct` / `out_util_pct` — utilisation had been computed
+  against a rate no interface actually has. Affected ports show a blank speed until the device
+  reports one; nothing else changes.
+  - **Ports already recorded that way are corrected on upgrade.** The interface upsert preserves a
+    stored value when a poll reports nothing for it — which is what lets the metadata walk and the
+    optical probe write different columns of one row — so the poller fix alone could not clean up
+    after itself. A one-time migration clears the sentinel. Only the exact saturation value is
+    touched; it is not a rate any interface has.
 - **The MCP `query_metrics` tool no longer answers a per-interface or per-component metric with one
   arbitrary series' value.** A node-level query selects every series sharing the metric's name, and
   the store took the first of them — so asking a 16-port firewall for `if_hc_in_octets` returned
