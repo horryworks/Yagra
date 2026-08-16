@@ -431,6 +431,7 @@ function SupportBundleCard() {
         <label className="sb-window">
           <span className="muted">{t('health.bundle.window')}</span>
           <select
+            className="field"
             value={hours}
             onChange={(e) => setHours(Number(e.target.value))}
             disabled={busy}

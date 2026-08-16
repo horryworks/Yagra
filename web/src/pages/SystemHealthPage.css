@@ -209,12 +209,18 @@ html[data-viewport='mobile'] .host-section-toggle {
   flex-direction: column;
   gap: 4px;
   font-size: var(--font-sm);
-  min-width: 220px;
+  min-width: 240px;
 }
 
 .support-bundle-card .sb-node-help {
   font-size: var(--font-sm);
   margin: 8px 0 0;
+}
+
+/* Prose in this card is explanatory rather than tabular, and the card is as wide as the settings
+   grid — without a measure the lines run the full width and stop being readable. */
+.support-bundle-card p {
+  max-width: 78ch;
 }
 
 .support-bundle-card .sb-done {

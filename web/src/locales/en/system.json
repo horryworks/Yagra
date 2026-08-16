@@ -177,7 +177,7 @@
       "windowHours_other": "Last {{count}} hours",
       "node": "About one node",
       "nodeAny": "Whole deployment",
-      "nodeHelp": "Naming a node adds a node/ section: its inventory row and owning poller, its stored interface rows, what it is configured to collect, which of those metrics are actually arriving, and its alerts. Leave it empty when the question is about the deployment rather than one device.",
+      "nodeHelp": "Pick a node to also carry its interfaces, what it collects, which metrics are arriving, and its alerts.",
       "action": "Download bundle",
       "busy": "Collecting…",
       "done": "Downloaded {{file}} ({{size}}).",
