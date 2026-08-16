@@ -93,6 +93,15 @@ pub struct RemoteLogs {
     /// accident**: a site that says nothing has to be named, because "no file from Tokyo" and "no
     /// poller in Tokyo" look identical in an archive (ADR-045 決定 3).
     pub gaps: Vec<RemoteLogGap>,
+    /// How many pollers were asked at all.
+    ///
+    /// Carried so the bundle can say that the fan-out **ran**, which nothing else in the artefact
+    /// reveals. Found by taking a real bundle from a single-node deployment: every poller there is
+    /// co-located, so every reply is deduplicated against its disk copy and the archive comes out
+    /// byte-identical whether the bus path worked perfectly or was dead. That is precisely the
+    /// ambiguity ADR-045 名指しした — **an aggregate of zero means "safe" and "the check never ran"
+    /// at the same time** — and the fix is the same one: publish the reason, not just the number.
+    pub asked: usize,
 }
 
 /// Per-poller reassembly state while a fan-out is in flight.
@@ -204,7 +213,9 @@ impl PollerLogCollector {
         if let Ok(mut m) = self.inflight.lock() {
             m.remove(&request_id);
         }
-        assemble(pending)
+        let mut out = assemble(pending);
+        out.asked = targets.len();
+        out
     }
 }
 

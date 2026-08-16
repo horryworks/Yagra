@@ -691,10 +691,13 @@ fn add_remote_poller_logs(
     remote: RemoteLogs,
     already_on_disk: &std::collections::BTreeSet<String>,
 ) {
+    let asked = remote.asked;
+    let mut said_something = false;
     for f in remote.files {
         if already_on_disk.contains(&f.poller_id) {
             continue;
         }
+        said_something = true;
         b.add_bytes(
             &format!("logs/remote/{}", f.name),
             "One rotated hour of a remote-site poller's structured log (JSON lines), sent over the \
@@ -707,8 +710,35 @@ fn add_remote_poller_logs(
         if already_on_disk.contains(&gap.poller_id) {
             continue;
         }
+        said_something = true;
         b.omit(format!("logs/remote/ ({})", gap.poller_id), gap.why);
     }
+    if said_something {
+        return;
+    }
+    // Nothing under logs/remote/ and nothing to explain — which, on its own, is the one shape in
+    // this artefact that means its own opposite. A single-node deployment produces it because every
+    // reply was deduplicated against a disk copy; a deployment whose bus path is entirely dead
+    // produces exactly the same archive. Found on the first real bundle after Inc.4 shipped. So say
+    // which of the two it was, the same way `secret_literals_skipped_short` disambiguates a zero.
+    b.omit(
+        "logs/remote/",
+        match asked {
+            0 => "no poller was asked for its log over the bus: none that core currently considers \
+                  online advertises the `log-ship` capability. A poller advertises it only when \
+                  YAGRA_LOG_DIR is set, and only a build from v0.2.12 onward knows how to answer at \
+                  all. health/pollers.json lists what each one does advertise."
+                .to_owned(),
+            n => format!(
+                "{n} poller(s) were asked for their logs over the bus and answered, and every one \
+                 of them also shares this host's log volume — so the copies carried above under \
+                 logs/ are their disk copies rather than their replies. The disk copy is preferred \
+                 deliberately: it survives the poller dying, which a reply cannot. This line exists \
+                 because an empty logs/remote/ otherwise reads the same whether the bus path worked \
+                 or was dead."
+            ),
+        },
+    );
 }
 
 /// Map assembly failures onto the API envelope.
@@ -842,6 +872,99 @@ mod tests {
         // rather than when the test runs. Stronger than the assertion above, and the reason the
         // weaker one stays is its message — a `const` failure names no reason.
         const { assert!(super::POLLER_LOG_MAX_BYTES < MAX_LOG_BYTES) };
+    }
+
+    /// 🚨 The shape that reads as its own opposite, and the reason this test exists at all.
+    ///
+    /// On a single-node deployment every poller is co-located, so every bus reply is deduplicated
+    /// against a disk copy and `logs/remote/` comes out empty. A deployment whose bus path is
+    /// **entirely dead** produces the identical archive. Found by taking a real bundle right after
+    /// Inc.4 shipped — the same class of ambiguity ADR-045 paid for once already with
+    /// `secret_literals_enforced: 0`.
+    #[test]
+    fn an_empty_remote_section_says_which_of_its_two_meanings_it_has() {
+        use crate::poller_logs::{RemoteLogFile, RemoteLogs};
+
+        let mut disk = std::collections::BTreeSet::new();
+        disk.insert("edge-1".to_owned());
+
+        // Asked, answered, deduplicated: the fan-out ran and the manifest has to say so.
+        let mut b = BundleBuilder::new(6);
+        add_remote_poller_logs(
+            &mut b,
+            RemoteLogs {
+                files: vec![RemoteLogFile {
+                    poller_id: "edge-1".to_owned(),
+                    name: "yagra-poller-edge-1.2026-08-16-10.log".to_owned(),
+                    bytes: b"{}\n".to_vec(),
+                }],
+                gaps: Vec::new(),
+                asked: 1,
+            },
+            &disk,
+        );
+        assert!(
+            b.paths().is_empty(),
+            "the disk copy already carried it — it survives the poller dying, a reply does not"
+        );
+        let why = b
+            .omissions()
+            .into_iter()
+            .find(|(what, _)| *what == "logs/remote/")
+            .expect("an empty remote section must explain itself")
+            .1
+            .to_owned();
+        assert!(why.contains("1 poller(s) were asked"), "{why}");
+
+        // Nobody asked, because nobody can answer: a different fact, and a different sentence.
+        let mut b = BundleBuilder::new(6);
+        add_remote_poller_logs(&mut b, RemoteLogs::default(), &disk);
+        let why = b
+            .omissions()
+            .into_iter()
+            .find(|(what, _)| *what == "logs/remote/")
+            .expect("an empty remote section must explain itself")
+            .1
+            .to_owned();
+        assert!(why.contains("log-ship"), "{why}");
+        assert!(
+            !why.contains("were asked"),
+            "\"nobody could answer\" must not read as \"everybody answered\": {why}"
+        );
+    }
+
+    /// The accepting half: a genuinely remote poller's log is carried, and then the summary line is
+    /// **absent** because the section speaks for itself. A test suite that only ever exercised the
+    /// empty case would pass just as well if the files were dropped on the floor.
+    #[test]
+    fn a_genuinely_remote_log_is_carried_and_needs_no_explanation() {
+        use crate::poller_logs::{RemoteLogFile, RemoteLogs};
+
+        let mut b = BundleBuilder::new(6);
+        add_remote_poller_logs(
+            &mut b,
+            RemoteLogs {
+                files: vec![RemoteLogFile {
+                    poller_id: "edge-tokyo-1".to_owned(),
+                    name: "yagra-poller-edge-tokyo-1.2026-08-16-10.log".to_owned(),
+                    bytes: b"{\"message\":\"hi\"}\n".to_vec(),
+                }],
+                gaps: Vec::new(),
+                asked: 1,
+            },
+            // Nothing on disk: this site's volume is at its own site.
+            &std::collections::BTreeSet::new(),
+        );
+        assert_eq!(
+            b.paths(),
+            vec!["logs/remote/yagra-poller-edge-tokyo-1.2026-08-16-10.log"]
+        );
+        assert!(
+            !b.omissions()
+                .iter()
+                .any(|(what, _)| *what == "logs/remote/"),
+            "the section carries files, so it does not need a line saying why it is empty"
+        );
     }
 
     async fn send(st: ApiState, token: Option<&str>) -> Response {
