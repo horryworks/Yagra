@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Lazy route group: Settings — fifteen administration screens (Yagra health, pollers, integrations,
-// AI, users/roles/auth/TLS/tokens, audit, monitoring defaults, config bundle, upgrade, preferences,
-// about). Mounted by `routes.tsx` at `settings/*` through `React.lazy`: this is the largest group by
-// far and almost none of it is on an operator's daily path.
+// Lazy route group: Settings — sixteen administration screens (Yagra health, pollers, integrations,
+// AI, users/roles/auth/TLS/tokens, audit, monitoring defaults, config bundle, support bundle,
+// upgrade, preferences, about). Mounted by `routes.tsx` at `settings/*` through `React.lazy`: this
+// is the largest group by far and almost none of it is on an operator's daily path.
 //
 // Two screens left in ADR-055 Inc.2 and their old paths redirect from `routes.tsx`: Forwarding to
 // the Events tab (it relays received passive data, and the rest of that pipeline was already
@@ -29,6 +29,7 @@ import { ApiTokensPage } from '../pages/ApiTokensPage';
 import { AuditPage } from '../pages/AuditPage';
 import { SystemSettingsPage } from '../pages/SystemSettingsPage';
 import { ConfigBundlePage } from '../pages/ConfigBundlePage';
+import { SupportBundlePage } from '../pages/SupportBundlePage';
 import { PreferencesPage } from '../pages/PreferencesPage';
 import { UpgradePage } from '../pages/UpgradePage';
 import { AboutPage } from '../pages/AboutPage';
@@ -51,6 +52,7 @@ export default function SettingsRoutes() {
       <Route path="audit" element={<AuditPage />} />
       <Route path="system" element={<SystemSettingsPage />} />
       <Route path="config-bundle" element={<ConfigBundlePage />} />
+      <Route path="support-bundle" element={<SupportBundlePage />} />
       <Route path="upgrade" element={<UpgradePage />} />
       <Route path="preferences" element={<PreferencesPage />} />
       <Route path="about" element={<AboutPage />} />

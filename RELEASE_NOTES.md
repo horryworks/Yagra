@@ -11,7 +11,7 @@
 ## Unreleased
 
 ### New Features
-- **A support bundle can now be taken *about one node*.** Settings ▸ System health gains an optional
+- **A support bundle can now be taken *about one node*.** Settings ▸ Support bundle gains an optional
   node picker beside the log window, and `GET /api/v1/system/support-bundle` accepts `node_id`.
   Naming a node adds a `node/` section: its inventory row and owning poller, its **stored interface
   rows verbatim** (names, speed, duplex, media, transceiver, optical bounds), the metrics it is
@@ -46,6 +46,14 @@
   - It cannot fail a bundle. A site that is gone costs a 20-second wait once and then an omission.
 
 ### Improvements
+- **The support bundle is now its own screen: Settings ▸ Support bundle.** It used to be the last
+  card on Settings ▸ Yagra health, which is a read-only self-monitoring page anyone with View may
+  open — while taking a bundle is an Admin-only export of the deployment's state. The controls,
+  the log window, the node picker and the API are all unchanged; only where you find it moved. Yagra
+  health now shows exactly the four things its own description names (poll loop, dependencies, data
+  coverage, host resources).
+  - A signed-in user without the privilege now sees the screen and is told which privilege it needs,
+    rather than the card simply not being drawn.
 - `MANIFEST.json`'s omission list is more specific about what a bundle cannot answer — including
   that an empty duplex or media column is consistent with both "the device does not implement that
   MIB" and "the rows did not map to an ifIndex", and that telling them apart needs an `snmpwalk`

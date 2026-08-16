@@ -158,8 +158,7 @@
     "cards": {
       "pollLoop": "Poll-loop health",
       "dependency": "Dependency health",
-      "dataCoverage": "Data coverage",
-      "supportBundle": "Support bundle"
+      "dataCoverage": "Data coverage"
     },
     "metric": {
       "cpu": "CPU",
@@ -168,21 +167,23 @@
       "memory": "Memory",
       "disk": "Disk · {{mount}}",
       "diskShort": "Disk"
-    },
-    "bundle": {
-      "help": "One archive of this deployment's build provenance, health, configuration, database state and core's own logs — for diagnosing a site nobody can open a shell on.",
-      "contents": "Everything inside is JSON or plain text, MANIFEST.json lists what is carried and what is deliberately left out, and a redaction scan aborts the export rather than releasing a secret. Read it before sending it anywhere.",
-      "window": "Log window",
-      "windowHours_one": "Last hour",
-      "windowHours_other": "Last {{count}} hours",
-      "node": "About one node",
-      "nodeAny": "Whole deployment",
-      "nodeHelp": "Pick a node to also carry its interfaces, what it collects, which metrics are arriving, and its alerts.",
-      "action": "Download bundle",
-      "busy": "Collecting…",
-      "done": "Downloaded {{file}} ({{size}}).",
-      "err": "The support bundle could not be produced."
     }
+  },
+  "supportBundle": {
+    "title": "Take a bundle",
+    "help": "One archive of this deployment's build provenance, health, configuration, database state and core's own logs — for diagnosing a site nobody can open a shell on.",
+    "contents": "Everything inside is JSON or plain text, MANIFEST.json lists what is carried and what is deliberately left out, and a redaction scan aborts the export rather than releasing a secret. Read it before sending it anywhere.",
+    "window": "Log window",
+    "windowHours_one": "Last hour",
+    "windowHours_other": "Last {{count}} hours",
+    "node": "About one node",
+    "nodeAny": "Whole deployment",
+    "nodeHelp": "Pick a node to also carry its interfaces, what it collects, which metrics are arriving, and its alerts.",
+    "action": "Download bundle",
+    "busy": "Collecting…",
+    "done": "Downloaded {{file}} ({{size}}).",
+    "err": "The support bundle could not be produced.",
+    "signInHint": "Sign in with a system-management role to take a support bundle."
   },
   "settings": {
     "note": "System-wide monitoring defaults. Per-profile overrides take precedence over these.",

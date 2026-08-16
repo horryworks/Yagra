@@ -60,6 +60,7 @@
     "audit": "監査ログ",
     "system": "監視の既定値",
     "configBundle": "設定バンドル",
+    "supportBundle": "サポートバンドル",
     "upgrade": "アップグレード",
     "preferences": "環境設定",
     "about": "バージョン情報"
@@ -99,6 +100,7 @@
     "settingsApiTokens": "AI/MCP・API クライアント向けの長寿命トークン",
     "settingsAi": "障害の説明文を書かせる言語モデルの設定",
     "settingsConfigBundle": "監視設定を可搬なファイルとして書き出し・取り込み",
+    "settingsSupportBundle": "このデプロイの状態とログを 1 つのアーカイブに — シェルに入れない現場の調査用",
     "settingsUpgrade": "動いているビルドと、どこまで戻せるか",
     "dashboardShared": "全ユーザーが見るボード。何を載せるかは管理者が決めます",
     "dashboardMy": "自分専用のボード。他の人には見えません",

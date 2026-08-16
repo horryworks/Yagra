@@ -177,7 +177,7 @@ services:
       # Core's own log, on disk as well as on stdout (ADR-045). ON by default, and that is the whole
       # point: `docker logs` needs a shell on this host, which is exactly what a locked-down site
       # does not grant — so without this a panic or an OOM leaves nothing anybody can retrieve. The
-      # support bundle at Settings ▸ System Health reads these files back over HTTPS, which means a
+      # support bundle at Settings ▸ Support bundle reads these files back over HTTPS, which means a
       # bundle taken AFTER a recovery still carries the run that died.
       # Hourly files, YAGRA_LOG_RETAIN_HOURS of them (48 ≈ two days), pruned automatically. Set
       # YAGRA_LOG_DIR empty in .env to turn it off.

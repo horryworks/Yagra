@@ -64,7 +64,7 @@ polling**. Users access it through the WebUI.
 > the same walks surface **hosts on your network that nothing is monitoring**. Yagra now also
 > **watches its own coverage**: a poller pool that still has nodes but no live poller raises a
 > critical alert, instead of letting a whole site drift quietly to *unknown* while every dashboard
-> stays calm. For deployments nobody can open a shell on, Settings ▸ Yagra health produces a
+> stays calm. For deployments nobody can open a shell on, Settings ▸ Support bundle produces a
 > **downloadable support bundle** — health sections, applied migrations, the allow-listed
 > environment and core's own rotated logs, scanned for secrets before it is written. And the **LLM
 > root-cause explanation now investigates rather than guesses**, calling the read-only MCP tools

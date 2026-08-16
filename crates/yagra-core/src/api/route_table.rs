@@ -1468,7 +1468,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "GET",
         "/api/v1/system/support-bundle",
         Global(
-            "a diagnostic snapshot of the deployment itself; it demands ManageConfig + \
+            "a diagnostic snapshot of the deployment itself; it demands ManageSystem + \
              ManageCredentials + ViewAudit, and a caller holding all three is unscoped by \
              construction (ADR-014)",
         ),

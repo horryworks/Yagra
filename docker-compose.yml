@@ -123,7 +123,7 @@ services:
       # one. Use docker-compose.deploy.yml, which mounts a persistent KEK, for anything real.
       YAGRA_TLS_DIR: /var/lib/yagra/tls
       # Core's own log, on disk as well as on stdout (ADR-045) — hourly files, 48 of them, pruned
-      # automatically. Read back by the support bundle at Settings ▸ System Health, which is how a
+      # automatically. Read back by the support bundle at Settings ▸ Support bundle, which is how a
       # deployment nobody can open a shell on still hands over a panic from a run that has ended.
       YAGRA_LOG_DIR: /var/log/yagra
     ports:

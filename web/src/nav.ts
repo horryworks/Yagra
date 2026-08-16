@@ -366,6 +366,14 @@ export const NAV: NavSection[] = [
             path: '/settings/config-bundle',
             implemented: true,
           },
+          // Split out of Yagra health by ADR-055 Inc.6: that page is read-only self-monitoring
+          // anyone with View may open, this is an Admin-only write-out of the deployment's state.
+          {
+            labelKey: 'settings.supportBundle',
+            descKey: 'descriptions.settingsSupportBundle',
+            path: '/settings/support-bundle',
+            implemented: true,
+          },
           {
             labelKey: 'settings.upgrade',
             descKey: 'descriptions.settingsUpgrade',
