@@ -691,7 +691,7 @@ fn add_remote_poller_logs(
     remote: RemoteLogs,
     already_on_disk: &std::collections::BTreeSet<String>,
 ) {
-    let asked = remote.asked;
+    let (asked, answered) = (remote.asked, remote.answered);
     let mut said_something = false;
     for f in remote.files {
         if already_on_disk.contains(&f.poller_id) {
@@ -729,11 +729,15 @@ fn add_remote_poller_logs(
                   YAGRA_LOG_DIR is set, and only a build from v0.2.12 onward knows how to answer at \
                   all. health/pollers.json lists what each one does advertise."
                 .to_owned(),
+            // ⚠️ Both numbers, always. `asked` alone cannot tell a deduplicated reply from silence
+            // — a poller that never answered is just as invisible in the file list as one whose
+            // reply was superseded by its disk copy. Saying "and answered" from `asked` was wrong
+            // for exactly one poller-shape, which is the shape this sentence is read in.
             n => format!(
-                "{n} poller(s) were asked for their logs over the bus and answered, and every one \
-                 of them also shares this host's log volume — so the copies carried above under \
-                 logs/ are their disk copies rather than their replies. The disk copy is preferred \
-                 deliberately: it survives the poller dying, which a reply cannot. This line exists \
+                "{n} poller(s) were asked for their logs over the bus; {answered} answered. Every \
+                 one of them also shares this host's log volume, so what is carried above under \
+                 logs/ is their disk copy rather than their reply — the disk copy is preferred \
+                 because it survives the poller dying, which a reply cannot. Both numbers are here \
                  because an empty logs/remote/ otherwise reads the same whether the bus path worked \
                  or was dead."
             ),
@@ -900,6 +904,7 @@ mod tests {
                 }],
                 gaps: Vec::new(),
                 asked: 1,
+                answered: 1,
             },
             &disk,
         );
@@ -915,6 +920,7 @@ mod tests {
             .1
             .to_owned();
         assert!(why.contains("1 poller(s) were asked"), "{why}");
+        assert!(why.contains("1 answered"), "{why}");
 
         // Nobody asked, because nobody can answer: a different fact, and a different sentence.
         let mut b = BundleBuilder::new(6);
@@ -931,6 +937,43 @@ mod tests {
             !why.contains("were asked"),
             "\"nobody could answer\" must not read as \"everybody answered\": {why}"
         );
+    }
+
+    /// 🚨 The wording bug this pins, caught by reading a live bundle rather than by any test: a
+    /// poller that was asked and **said nothing** is as invisible in the file list as one whose
+    /// reply was deduplicated, so a sentence built from `asked` alone claimed "and answered" about
+    /// a site that had not. Both numbers, or the sentence is a guess.
+    #[test]
+    fn a_site_that_was_asked_and_stayed_silent_is_not_reported_as_having_answered() {
+        use crate::poller_logs::{RemoteLogGap, RemoteLogs};
+
+        let mut disk = std::collections::BTreeSet::new();
+        disk.insert("edge-1".to_owned());
+
+        let mut b = BundleBuilder::new(6);
+        add_remote_poller_logs(
+            &mut b,
+            RemoteLogs {
+                files: Vec::new(),
+                // The gap is suppressed because the disk copy covers this poller — which is exactly
+                // why the counts have to carry the fact instead.
+                gaps: vec![RemoteLogGap {
+                    poller_id: "edge-1".to_owned(),
+                    why: "it did not finish answering".to_owned(),
+                }],
+                asked: 1,
+                answered: 0,
+            },
+            &disk,
+        );
+        let why = b
+            .omissions()
+            .into_iter()
+            .find(|(what, _)| *what == "logs/remote/")
+            .expect("an empty remote section must explain itself")
+            .1
+            .to_owned();
+        assert!(why.contains("0 answered"), "{why}");
     }
 
     /// The accepting half: a genuinely remote poller's log is carried, and then the summary line is
@@ -951,6 +994,7 @@ mod tests {
                 }],
                 gaps: Vec::new(),
                 asked: 1,
+                answered: 1,
             },
             // Nothing on disk: this site's volume is at its own site.
             &std::collections::BTreeSet::new(),

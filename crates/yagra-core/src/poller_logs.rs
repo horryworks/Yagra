@@ -102,6 +102,13 @@ pub struct RemoteLogs {
     /// ambiguity ADR-045 名指しした — **an aggregate of zero means "safe" and "the check never ran"
     /// at the same time** — and the fix is the same one: publish the reason, not just the number.
     pub asked: usize,
+    /// How many of them sent at least one chunk back.
+    ///
+    /// ⚠️ **`asked` alone is not enough, and the first draft of this got it wrong.** A poller whose
+    /// reply is deduplicated against its disk copy and a poller that never answered at all are both
+    /// invisible in the file list, so a message built from `asked` claimed "and answered" about a
+    /// site that may have said nothing. Two numbers, or the sentence is a guess.
+    pub answered: usize,
 }
 
 /// Per-poller reassembly state while a fan-out is in flight.
@@ -114,6 +121,9 @@ struct Pending {
     refused: Option<String>,
     gap: Option<String>,
     done: bool,
+    /// Whether this poller sent anything at all. Distinct from `done`, which is also set by a
+    /// publish failure on our side and by a deadline — neither of which is the site answering.
+    answered: bool,
 }
 
 /// Asks pollers for their logs and reassembles the answers (ADR-045 Inc.4).
@@ -242,6 +252,10 @@ async fn gather(
         if p.done {
             continue;
         }
+        // Recorded before any other decision: this site responded, whatever the reply turns out to
+        // say. It is the only number that separates "answered and was deduplicated" from "never
+        // answered", and both look identical in the file list.
+        p.answered = true;
         if let Some(why) = chunk.refused {
             p.refused = Some(why);
             p.done = true;
@@ -290,7 +304,10 @@ fn assemble(pending: HashMap<String, Pending>) -> RemoteLogs {
     let mut ids: Vec<String> = pending.keys().cloned().collect();
     ids.sort_unstable();
 
-    let mut out = RemoteLogs::default();
+    let mut out = RemoteLogs {
+        answered: pending.values().filter(|p| p.answered).count(),
+        ..RemoteLogs::default()
+    };
     let mut total = 0usize;
     for id in ids {
         let Some(p) = pending.get(&id) else { continue };
