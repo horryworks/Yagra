@@ -47,6 +47,18 @@
   what they count so that a future total (adding multicast and broadcast) can arrive as a new field
   rather than silently changing what an existing number means.
 
+### Improvements
+- **Every chart's legend now reads the latest values when nothing is hovering it.** The legend is
+  live — it reports the sample under the cursor — so with no cursor on the plot, which is how a
+  chart spends nearly all of its time, every row read `--`. It now falls back to the most recent
+  sample any of its series has: not simply the last column, because a window that runs to *now*
+  normally ends in a bucket no poll has filled yet. All rows report the same instant, so they stay
+  comparable. Applies to every chart in the WebUI, dashboard widgets included.
+- **The two interface charts share a cursor.** Hovering either the throughput chart or the
+  errors/discards chart moves both crosshairs and both legends to the same moment, so "traffic
+  spiked — did discards spike with it?" is one reading rather than two hovers and a comparison of
+  timestamps done by eye. Moving the pointer away restores the latest values in both.
+
 ### Bug Fixes
 - **Data coverage no longer reports healthy URL, DNS and Meraki monitors as silent.** The gauge on
   `Settings ▸ Yagra health` — and the "Stale data" list beside it — asked every node in the

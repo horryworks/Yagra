@@ -26,6 +26,35 @@ function deviceNode(): Json {
   return body as unknown as Json;
 }
 
+/** A series covering the window the client actually asked for.
+ *
+ *  ⚠️ The generated mock gives every array exactly one element, and numbers come out as `1` — so
+ *  the only sample sits at Unix second 1, an hour of 1970 outside the requested range. uPlot then
+ *  reports no data in range, which makes both the idle legend and any hover unreachable: the
+ *  cursor index is permanently null. Reading `from`/`to` off the request rather than inventing a
+ *  window keeps this honest if `RangeControl`'s default ever changes. */
+function seriesBody(url: URL): Json {
+  const from = Number(url.searchParams.get('from'));
+  const to = Number(url.searchParams.get('to'));
+  const n = 12;
+  const timestamps = Array.from({ length: n }, (_, i) =>
+    Math.round(from + ((to - from) * i) / (n - 1)),
+  );
+  // Strictly increasing per series, so "the legend moved" is provable from the text alone.
+  const ramp = (base: number) => timestamps.map((_, i) => base * (i + 1));
+  return {
+    timestamps,
+    in_bps: ramp(1_000_000),
+    out_bps: ramp(500_000),
+    in_ucast_pps: ramp(100),
+    out_ucast_pps: ramp(50),
+    in_errors: ramp(1),
+    out_errors: ramp(2),
+    in_discards: ramp(3),
+    out_discards: ramp(4),
+  } as unknown as Json;
+}
+
 /** What the charts were before this change — the bar the fill chain must clear. */
 const CHART_HEIGHT_BEFORE = 132;
 
@@ -35,7 +64,11 @@ const CHART_HEIGHT_BEFORE = 132;
 test.use({
   viewport: { width: 1280, height: 1000 },
   mockConfig: {
-    overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/nodes/{node_id}': () => deviceNode() },
+    overrides: {
+      ...BOOTSTRAP_OVERRIDES,
+      '/api/v1/nodes/{node_id}': () => deviceNode(),
+      '/api/v1/nodes/{node_id}/interfaces/{ifindex}/series': (url: URL) => seriesBody(url),
+    },
   },
 });
 
@@ -122,6 +155,96 @@ test('resizing logs nothing — the ResizeObserver chain does not oscillate', as
 
   expect(errors.uncaught).toEqual([]);
   expect(errors.logged).toEqual([]);
+});
+
+// ── What the charts say, as opposed to how big they are ──────────────────────────────────────────
+// Everything above is layout. The three below are about the readout, and they are here for the same
+// structural reason: uPlot draws to a canvas and keeps its legend in real DOM driven by a cursor,
+// so neither the merged chart's key nor the legend's idle state nor cursor sync is reachable from
+// `environment: 'node'`. `legend.test.ts` proves which index the idle legend should read; only this
+// file can prove that index is connected to uPlot at all.
+
+/** The uPlot legend's value cells for one dock chart, top row (time) first. */
+function legendValues(page: import('@playwright/test').Page, chart: number) {
+  return page.locator('.nd-if-chart').nth(chart).locator('.u-legend .u-value');
+}
+
+test('errors and discards share one chart, with a distinct key per line', async ({ page }) => {
+  await openDock(page);
+  await expect(page.locator('.nd-if-chart')).toHaveCount(2);
+
+  const faults = page.locator('.nd-if-chart').nth(1).locator('.nd-if-chart-t');
+  await expect(faults).toContainText('Errors / discards');
+  await expect(faults.locator('.nd-if-legend-k')).toHaveCount(4);
+
+  // Four lines that overlap at zero on every healthy interface: colour is the only thing telling
+  // them apart once one rises, so two sharing a swatch is a legend that lies under load.
+  // `FAULT_SERIES`' unit test pins distinct palette *slots*; this pins that they resolve to
+  // distinct *colours* — the tokens are read from computed style, which no unit test can do.
+  const colors = await faults
+    .locator('.nd-if-legend-sw')
+    .evaluateAll((els) => els.map((e) => getComputedStyle(e).backgroundColor));
+  expect(new Set(colors).size, `swatch colours: ${colors.join(', ')}`).toBe(4);
+});
+
+// ADR-060 shipped with this unverified, on the belief that nothing here opens the dock. It does —
+// `openDock` above has since this file was written — so the four points that were waiting on a
+// person are three points and a language check.
+test('the bps/pps toggle swaps the unit and takes the bandwidth overlay with it', async ({
+  page,
+}) => {
+  await openDock(page);
+  const head = page.locator('.nd-if-chart').first().locator('.nd-if-chart-t');
+
+  await expect(head).toContainText('(In / Out, bps)');
+  await expect(head.getByRole('button', { name: /auto|bandwidth/i })).toBeVisible();
+  await expect(head.locator('.nd-if-legend-bw')).toHaveCount(1);
+
+  await head.getByRole('button', { name: 'bps' }).click();
+
+  await expect(head).toContainText('(In / Out, pps)');
+  // `ifSpeed` is a bit rate, so on a packet axis the reference line would draw a capacity the
+  // operator is nowhere near. `throughputBandwidthOverlay` returns `{}` — which its unit test
+  // proves — but that `{}` reaching the JSX that removes the control and the key is `.tsx`, and
+  // this is the only thing that runs it.
+  await expect(head.getByRole('button', { name: /auto|bandwidth/i })).toHaveCount(0);
+  await expect(head.locator('.nd-if-legend-bw')).toHaveCount(0);
+});
+
+test('both legends report the latest sample with no cursor on the page', async ({ page }) => {
+  await openDock(page);
+  for (const chart of [0, 1]) {
+    const cells = legendValues(page, chart);
+    await expect(cells.first()).not.toHaveText('--');
+    const values = await cells.allTextContents();
+    expect(values.length, `chart ${chart} has no legend rows`).toBeGreaterThan(1);
+    // uPlot's live legend is blank without a cursor, which is the state a chart is in almost all
+    // the time. A single `--` anywhere means the idle index never reached it.
+    expect(values, `chart ${chart} legend is blank while unhovered`).not.toContain('--');
+  }
+});
+
+test('hovering one chart reads the other at the same instant', async ({ page }) => {
+  await openDock(page);
+  const timeOf = (chart: number) => legendValues(page, chart).first();
+
+  const idle = await timeOf(0).innerText();
+  expect(await timeOf(1).innerText(), 'the two charts idle at different samples').toBe(idle);
+
+  // Hover the throughput chart well left of its latest sample, so "the legend moved" is decidable.
+  const box = (await page.locator('.nd-if-chart').nth(0).locator('.u-over').boundingBox())!;
+  await page.mouse.move(box.x + box.width * 0.25, box.y + box.height / 2);
+
+  await expect(timeOf(0), 'hover did not move the hovered chart').not.toHaveText(idle);
+  // The point of the sync: the chart nobody touched follows to the same instant. Without it an
+  // operator comparing a traffic spike against discards is reading two different moments.
+  await expect(timeOf(1)).toHaveText(await timeOf(0).innerText());
+
+  // And back: leaving must restore the latest sample rather than leaving the crosshair's values
+  // frozen on screen, which would read as live data that has stopped updating.
+  await page.mouse.move(box.x + box.width / 2, box.y - 200);
+  await expect(timeOf(0)).toHaveText(idle);
+  await expect(timeOf(1)).toHaveText(idle);
 });
 
 // Not asserted, and worth saying why: **that the list does not scroll during a drag**. The generated

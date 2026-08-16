@@ -10,6 +10,7 @@ import { useEffect, useRef } from 'react';
 import uPlot from 'uplot';
 import 'uplot/dist/uPlot.min.css';
 import { buildChartScales } from './scales';
+import { idleLegendIdx } from './legend';
 import './MetricChart.css';
 
 /** Default series palette (In / Out / aux …), indexed by series position, as theme tokens. In a DOM
@@ -91,6 +92,22 @@ interface Props {
    *  `--status-critical` colour. When the value sits above the visible Y range it is pinned to the
    *  top edge and labelled, so it's always visible and slides into the plot as data nears it. */
   referenceLine?: { value: number; label?: string };
+  /** Share the cursor with every other chart given the same key: hovering one moves the crosshair
+   *  and the live legend of all of them, so charts stacked over the same time window can be read at
+   *  a single instant instead of one at a time. Only the cursor position is shared — series
+   *  toggling and focus stay per chart, because synced charts plot different series and matching
+   *  them by position would toggle an unrelated line. Omit for an independent chart. */
+  syncKey?: string;
+}
+
+/** Pin the live legend to the most recent sample whenever the cursor is away, so an unhovered
+ *  chart reports its current values instead of a column of `--`. Runs after uPlot has set the
+ *  legend itself (the `setCursor` hook fires at the end of `updateCursor`), and only when uPlot has
+ *  no index of its own — a real hover, including one arriving over `syncKey`, always wins. */
+function applyIdleLegend(u: uPlot) {
+  if (u.cursor.idx != null) return;
+  const idx = idleLegendIdx(u.data.slice(1) as (number | null)[][]);
+  if (idx != null) u.setLegend({ idx }, false);
 }
 
 export function MetricChart({
@@ -105,6 +122,7 @@ export function MetricChart({
   xRange,
   legendFormat,
   referenceLine,
+  syncKey,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const plotRef = useRef<uPlot | null>(null);
@@ -120,7 +138,8 @@ export function MetricChart({
   // count/labels/colors) — not when the data values, axis ranges, or formatters change. Those
   // update the existing instance in place (see the data effect below).
   const structKey =
-    `${title}|${height}|` + resolved.map((s) => `${s.label}:${s.color ?? ''}`).join('|');
+    `${title}|${height}|${syncKey ?? ''}|` +
+    resolved.map((s) => `${s.label}:${s.color ?? ''}`).join('|');
   // Content signature of the optional reference line, so a value/label change redraws in place.
   const refKey = referenceLine ? `${referenceLine.value}:${referenceLine.label ?? ''}` : '';
 
@@ -166,6 +185,7 @@ export function MetricChart({
       // Force a fixed Y range (e.g. 0–100% gauges) and/or X window (pin to the requested time
       // range) when asked; otherwise uPlot auto-fits the respective axis to the data.
       scales: buildChartScales(xRange, yRange),
+      ...(syncKey ? { cursor: { sync: { key: syncKey, setSeries: false } } } : {}),
       series: [
         {},
         ...resolved.map((s, i) => ({
@@ -230,11 +250,17 @@ export function MetricChart({
                 ctx.restore();
               },
             ],
-          },
+        // Both hooks exist to put the latest values back after uPlot has blanked the legend:
+        // `setCursor` covers the cursor leaving (and a synced neighbour's leaving), `setData` the
+        // refresh tick. Neither can loop — `setLegend(_, false)` fires no hook.
+        setCursor: [applyIdleLegend],
+        setData: [applyIdleLegend],
+      },
     };
     const data = [timestamps, ...resolved.map((s) => s.values)] as uPlot.AlignedData;
     const plot = new uPlot(opts, data, el);
     plotRef.current = plot;
+    applyIdleLegend(plot);
 
     // Resize the plot to its pane. Width always tracks the container; height tracks too in `fill`
     // mode (a resizable dashboard cell). CRITICAL: in fill mode the plot height must be the pane

@@ -519,6 +519,13 @@ function Sparkline({
   );
 }
 
+/** uPlot cursor-sync group for the dock's two charts: hovering either one reads BOTH at the same
+ *  instant, which is the whole point of stacking them — "traffic spiked, did discards spike too"
+ *  is a question about one moment. A module constant rather than a prop because exactly one dock
+ *  is open at a time, and the two charts already share a timestamp axis and an X range, so the
+ *  cursors land on the same sample. */
+const DOCK_CURSOR_SYNC = 'nd-if-dock';
+
 /** Bottom detail dock for the selected interface: a throughput chart (In/Out, bps or pps) and a
  *  combined errors/discards chart (four lines, pps) over a selectable window, plus inline
  *  In/Out/Err/Disc stat tiles. Fetches the series on a 15s interval (like the rest of the live
@@ -747,6 +754,7 @@ function InterfaceDock({
               xRange={win ?? undefined}
               referenceLine={bw.referenceLine}
               series={throughputSeries}
+              syncKey={DOCK_CURSOR_SYNC}
             />
           ) : (
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
@@ -776,6 +784,7 @@ function InterfaceDock({
               legendFormat={formatPps}
               xRange={win ?? undefined}
               series={faultSeries}
+              syncKey={DOCK_CURSOR_SYNC}
             />
           ) : (
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
