@@ -932,9 +932,11 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         // `query_metrics` stays node-level (`SeriesKey::node`); this is its per-interface twin,
         // deliberately a second tool rather than an `ifindex` param, because the aligned answer
-        // (ten arrays sharing one timestamp axis) is not what an extra parameter on `query_metrics`
+        // (ten series sharing one timestamp axis) is not what an extra parameter on `query_metrics`
         // would produce. Since ADR-042 I4 `query_metrics` refuses a per-interface counter outright
         // and names this tool, rather than answering with one arbitrary interface's series.
+        // ⚠️ That count is prose and has been wrong before; the number the tool must actually keep
+        // up with is pinned by `the_interface_series_description_names_every_series_it_returns`.
         Tool("get_interface_series"),
     ),
     (
@@ -1612,6 +1614,46 @@ pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
         }
     }
     out
+}
+
+/// One MCP tool's `description` string, as the client receives it (ADR-062 Inc.5).
+///
+/// The sibling above throws the attribute away after reading the name; this keeps it. That text is
+/// the **only** artifact an AI client consults before choosing a tool, and nothing else in the
+/// build can see it — the route ledger notices a missing *route*, and the canary notices a
+/// forbidden *key*, but a result that grew a field its description never mentions is invisible to
+/// both. ADR-062 shipped exactly that: two optical arrays returned by `get_interface_series` and
+/// named in no description, with every test green.
+///
+/// Returns `None` for an unknown tool or one declared without a description. Rust's `\`-newline
+/// continuation is undone here so a caller can search for a phrase without caring where the source
+/// happened to wrap; the result is whitespace-normalized for the same reason.
+pub(crate) fn declared_mcp_tool_description(tool: &str) -> Option<String> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools.rs");
+    let src = std::fs::read_to_string(path).expect("read src/mcp/tools.rs");
+    for chunk in src.split("#[tool(").skip(1) {
+        let Some((attr, after)) = chunk.split_once(")]") else {
+            continue;
+        };
+        let Some((_, sig)) = after.split_once("async fn ") else {
+            continue;
+        };
+        if sig.split('(').next().map(str::trim) != Some(tool) {
+            continue;
+        }
+        let Some((_, rest)) = attr.split_once("description = \"") else {
+            continue;
+        };
+        // The closing quote is the last one in the attribute — `rsplit`, not a match on `"\n`, so
+        // an escaped quote inside the prose cannot truncate the text we hand the assertion.
+        let Some((raw, _)) = rest.rsplit_once('"') else {
+            continue;
+        };
+        // A `\` at end of line eats the newline *and* the next line's indentation, so the compiled
+        // string has none of it. Reproduce that by collapsing all runs of whitespace.
+        return Some(raw.split_whitespace().collect::<Vec<_>>().join(" "));
+    }
+    None
 }
 
 #[cfg(test)]

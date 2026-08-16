@@ -1076,21 +1076,9 @@ mod tests {
 
         // ADR-042 I1. The three metric shapes are the REST types served directly (the
         // `TopologyPage` move) — they are already clean, so a parallel DTO would only add drift.
-        let iface_series = crate::api::metrics::InterfaceSeries {
-            timestamps: vec![0],
-            in_bps: vec![Some(1.0)],
-            out_bps: vec![Some(2.0)],
-            in_ucast_pps: vec![Some(3.0)],
-            out_ucast_pps: vec![Some(4.0)],
-            in_errors: vec![None],
-            out_errors: vec![None],
-            in_discards: vec![None],
-            out_discards: vec![None],
-            // Negative on purpose: a real receive level is, and a canary built from positive
-            // placeholders would not exercise the shape any client actually sees (ADR-062).
-            rx_power_dbm: vec![Some(-7.4)],
-            tx_power_dbm: vec![Some(-2.1)],
-        };
+        // The instance lives in `api::metrics` because a second test wants the same "every field
+        // populated" shape — see `canary_interface_series` (ADR-062 Inc.5).
+        let iface_series = crate::api::metrics::canary_interface_series();
         assert_no_forbidden_keys(
             &serde_json::to_value(&iface_series).unwrap(),
             "InterfaceSeries",

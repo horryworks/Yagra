@@ -257,7 +257,14 @@ impl YagraMcp {
                        interfaces. Each interface carries its identity (ifindex, name, alias, \
                        nominal speed), its current operational state (`oper_status`, 1 = up), its \
                        current load in bits/sec each way with utilization against the nominal \
-                       speed, and `stale` when the node has not reported it recently. Use this to \
+                       speed, and `stale` when the node has not reported it recently. An optical \
+                       port additionally carries the transceiver's own acceptable power window — \
+                       `rx_power_low_dbm`/`rx_power_high_dbm` and the transmit pair — which is \
+                       what makes a light level from get_interface_series judgeable at all, since \
+                       -7 dBm is comfortable on one module and failing on another. All four are \
+                       null on a copper port and on optical ports whose vendor publishes no \
+                       thresholds. Nothing alerts on them: they are the module's own published \
+                       figures, not a threshold configured in Yagra. Use this to \
                        find which port is down or busy; use get_interface_series for one port's \
                        history. Requires live mode (returns an availability note in skeleton mode)."
     )]
@@ -525,9 +532,19 @@ impl YagraMcp {
         let agg = read == NodeRead::NodeMax;
         // Said out loud, never inferred: a collapsed answer that reads like a plain one is the same
         // class of wrong as the bug this fixes.
+        //
+        // The second clause names the direction because "maximum" is not self-evidently the
+        // interesting end. An optical receive level (ADR-062) is the case that makes it obvious:
+        // the maximum across a node's ports is its brightest link, so a fleet with one dying fibre
+        // and seven healthy ones reports the healthy figure. The wording stays generic rather than
+        // sniffing the metric name — `node_read` is a mirror of `metricView` in
+        // `web/src/lib/metricInventory.ts` and the *rule* must keep answering what the WebUI's
+        // Collection tab answers; only the sentence describing it is ours to sharpen.
         let note = entry.as_ref().filter(|_| agg).map(|e| {
             format!(
-                "collapsed the node's {} {} series to their maximum",
+                "collapsed the node's {} {} series to their maximum — the highest value, so for a \
+                 metric where low is the fault (an optical receive level) this is the healthiest \
+                 series rather than the worst; use get_interface_series for one interface",
                 e.series_count,
                 dimension_word(e.dimension)
             )
@@ -649,10 +666,13 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "One interface's traffic history: in/out throughput in bits/sec \
+        description = "One interface's history: in/out throughput in bits/sec \
                        (`in_bps`/`out_bps`) and in unicast packets/sec \
-                       (`in_ucast_pps`/`out_ucast_pps`), plus in/out error rates and in/out discard \
-                       rates, all on one shared timestamp axis (nulls mark gaps). Consult both \
+                       (`in_ucast_pps`/`out_ucast_pps`), in/out error rates \
+                       (`in_errors`/`out_errors`) and in/out discard rates \
+                       (`in_discards`/`out_discards`), plus optical transmit and receive power \
+                       (`tx_power_dbm`/`rx_power_dbm`), all on one shared timestamp axis (nulls \
+                       mark gaps). Consult both \
                        units before calling a link healthy: a device's forwarding ceiling is often \
                        a packet rate, so a link well under its bandwidth can still be saturated. \
                        The packet counters are unicast only, so a link carrying heavy broadcast \
@@ -664,7 +684,21 @@ impl YagraMcp {
                        the device dropped although nothing was wrong with it (congestion, queue \
                        overflow, ACL) — do not read one as evidence of the other. Both are counted \
                        in packets; IF-MIB has no byte counter for either, so there is no \
-                       bits/sec form of them. Give `node_id` and `ifindex` (from get_node_status's \
+                       bits/sec form of them. The two optical readings differ from the eight rates \
+                       above in three ways worth knowing. They are gauges reported by the \
+                       transceiver, not counter rates. They are normally NEGATIVE: a healthy \
+                       receive level is roughly -3 to -20 dBm, and 0 dBm means one milliwatt \
+                       rather than nothing. And only optical ports have them, so both arrays being \
+                       entirely null is how a copper port, a virtual interface, or a transceiver \
+                       whose vendor MIB Yagra does not speak is told apart from a fibre link that \
+                       is reading low — it is not a collection fault. A multi-lane module (QSFP) \
+                       reports its first lane rather than an aggregate, and like the packet \
+                       counters these only exist from the deployment's upgrade to the release that \
+                       began collecting them. Judge a level against that module's own acceptable \
+                       window, which get_node_status carries on the same interface \
+                       (`rx_power_low_dbm`/`rx_power_high_dbm` and the transmit pair), rather than \
+                       against a fixed number: -7 dBm is comfortable on one module and failing on \
+                       another. Give `node_id` and `ifindex` (from get_node_status's \
                        interfaces). `from`/`to` are Unix seconds (default: last hour) and `step` is \
                        the sample interval in seconds (clamped; defaults to ~120 points across the \
                        window). This is the per-interface counterpart to query_metrics, which is \
@@ -4072,6 +4106,63 @@ mod tests {
     use crate::store::MetricStore;
     use std::sync::Arc;
 
+    /// **Every series `get_interface_series` returns is named in the description a client reads.**
+    ///
+    /// ADR-062 added `rx_power_dbm`/`tx_power_dbm` to the result and touched no description, and
+    /// nothing in the build could see it. The route ledger only moves when a *route* appears, so
+    /// its fourth column stayed green — the tool existed and still does. The canary only bans
+    /// forbidden *keys*, so a new key passing the ban reads as covered. And the description is the
+    /// one artifact an MCP client actually consults before choosing a tool, which made the failure
+    /// "the data ships and no model asks for it": present, correct, and unreachable in practice.
+    ///
+    /// The rule this pins is narrow on purpose — the description **enumerates** the arrays, so an
+    /// enumeration missing a member is a defect regardless of how well the prose reads.
+    ///
+    /// ⚠️ **This guards one tool, and extending it would make it worse.** `get_node_status`
+    /// describes the same kind of payload in prose ("nominal speed", "current load in bits/sec each
+    /// way"), which is good writing and would fail a field-name scan. Covering it would take an
+    /// exemption list, and an exemption list is the spelling that requires no thought, so it
+    /// becomes the only one anyone writes (`extensibility.md`). One tool, held tightly, beats every
+    /// tool held by a list nobody reads.
+    ///
+    /// `timestamps` is the single exclusion: the description calls it "one shared timestamp axis",
+    /// describing the concept rather than naming a series, and that is the right way to say it.
+    #[test]
+    fn the_interface_series_description_names_every_series_it_returns() {
+        let description =
+            crate::api::route_table::declared_mcp_tool_description("get_interface_series")
+                .expect("get_interface_series declares a description");
+
+        let json = serde_json::to_value(crate::api::metrics::canary_interface_series())
+            .expect("InterfaceSeries serializes");
+        let keys: Vec<String> = json
+            .as_object()
+            .expect("InterfaceSeries serializes to a JSON object")
+            .keys()
+            .filter(|k| k.as_str() != "timestamps")
+            .cloned()
+            .collect();
+
+        // Asserted so "the parser stopped matching" cannot masquerade as "everything is named":
+        // an empty key list would pass the check below without looking at anything.
+        assert!(
+            keys.len() >= 10,
+            "only {} series keys found on InterfaceSeries — the canary instance or the parser \
+             drifted, and a check that inspects nothing passes",
+            keys.len()
+        );
+
+        let missing: Vec<&String> = keys
+            .iter()
+            .filter(|k| !description.contains(k.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "get_interface_series returns series that its description never names, so a client has \
+             no reason to ask for them and no way to read them correctly: {missing:?}"
+        );
+    }
+
     /// Every filter dimension a shared REST/MCP seam declares is actually passed by the tool.
     ///
     /// **This is the half the compiler cannot see.** A seam struct like
@@ -4781,10 +4872,16 @@ mod tests {
         assert!(msg.contains("identity"), "{msg}");
     }
 
-    /// The alignment invariant is what can be silently wrong here: eight series on one axis, so a
-    /// chart — or a model — can read column `j` across all eight without bounds-checking.
+    /// The alignment invariant is what can be silently wrong here: every series on one axis, so a
+    /// chart — or a model — can read column `j` across all of them without bounds-checking.
+    ///
+    /// ⚠️ **The series list is derived, not written out.** It was a hardcoded array of eight names
+    /// until ADR-062 Inc.5, and ADR-062 had already added two more without touching it — so the
+    /// alignment of `rx_power_dbm`/`tx_power_dbm` went unchecked from the day they shipped, in the
+    /// one test whose whole job is alignment. Reading the keys off the canary means the next field
+    /// is covered by existing, rather than by someone remembering.
     #[tokio::test]
-    async fn an_interface_series_returns_eight_arrays_on_one_axis() {
+    async fn an_interface_series_returns_every_array_on_one_axis() {
         let r = mcp()
             .interface_series_in(
                 InterfaceSeriesParams {
@@ -4800,16 +4897,20 @@ mod tests {
             .expect("ok");
         let body = json_of(&r);
         let n = body["timestamps"].as_array().expect("timestamps").len();
-        for k in [
-            "in_bps",
-            "out_bps",
-            "in_ucast_pps",
-            "out_ucast_pps",
-            "in_errors",
-            "out_errors",
-            "in_discards",
-            "out_discards",
-        ] {
+        let shape = serde_json::to_value(crate::api::metrics::canary_interface_series())
+            .expect("InterfaceSeries serializes");
+        let keys: Vec<&String> = shape
+            .as_object()
+            .expect("InterfaceSeries serializes to a JSON object")
+            .keys()
+            .filter(|k| k.as_str() != "timestamps")
+            .collect();
+        assert!(
+            keys.len() >= 10,
+            "only {} series to align — the canary drifted and this test checks nothing",
+            keys.len()
+        );
+        for k in keys {
             assert_eq!(
                 body[k].as_array().unwrap_or(&Vec::new()).len(),
                 n,

@@ -96,6 +96,24 @@
   rather than silently changing what an existing number means.
 
 ### Improvements
+- **The MCP tools now describe the optical readings they were already returning.** An AI client
+  picks a tool by reading its description, and the optical work did not touch one — so
+  `get_interface_series` still announced itself as *traffic* history and listed eight series while
+  returning ten, and `get_node_status` enumerated an interface's fields without the power window it
+  had gained. The data shipped; nothing told a client it was there or how to read it.
+  - `get_interface_series` now names every array it returns, including `rx_power_dbm` and
+    `tx_power_dbm`, and states what is easy to get wrong about them: they are gauges rather than
+    counter rates, they are **normally negative** (a healthy receive level is roughly -3 to -20 dBm
+    and 0 dBm means one milliwatt, not nothing), and both arrays being entirely null is how an
+    optical port is told apart from a copper one rather than a sign of failed collection.
+  - `get_node_status` now describes the acceptable power window on each interface and says that
+    nothing alerts on it — those are the module's published figures, not a threshold configured in
+    Yagra.
+  - `query_metrics` collapses a node's per-interface gauges to their maximum, and now says which
+    direction that is: for a metric where *low* is the fault, such as an optical receive level, the
+    maximum is the healthiest port rather than the worst.
+  - No API, schema or WebUI behaviour changes — these are the descriptions MCP publishes at
+    connection time. **An already-connected client keeps the old text until it reconnects.**
 - **`get_node_status` now reports each interface's state and load, not just its name.** The MCP
   tool listed a node's ports with their ifindex, name, alias and nominal speed — enough to name a
   port, not enough to say anything about it. Each interface now also carries `oper_status`

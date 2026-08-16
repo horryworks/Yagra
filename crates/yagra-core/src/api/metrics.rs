@@ -545,6 +545,15 @@ async fn get_node_metric_range(
 /// collection set in ADR-060 and the optical readings in ADR-062, so on a deployment upgraded from
 /// an earlier version those arrays are empty for every window predating that upgrade while the bps
 /// arrays are populated.
+//
+// ⚠️ The optical paragraph above is said twice. `mcp/tools.rs`'s `get_interface_series`
+// `description` repeats it, because this doc comment reaches OpenAPI readers and that string
+// reaches MCP clients — two audiences, no shared channel. Nothing compares them (they are prose),
+// so change both or neither. ADR-062 Inc.5 names this as a weak mitigation rather than a fix.
+//
+// `//`, not `///`, deliberately: a `ToSchema` doc comment is published verbatim into the OpenAPI
+// document and from there into the public API reference, so a note addressed to whoever edits this
+// file next would ship to every API client. The rule is reasons in `//`, contract in `///`.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceSeries {
     pub timestamps: Vec<i64>,
@@ -558,6 +567,35 @@ pub(crate) struct InterfaceSeries {
     pub out_discards: Vec<Option<f64>>,
     pub rx_power_dbm: Vec<Option<f64>>,
     pub tx_power_dbm: Vec<Option<f64>>,
+}
+
+/// A fully populated [`InterfaceSeries`], for tests that need every field to exist.
+///
+/// Two of them do, for unrelated reasons: `mcp/dto.rs`'s forbidden-key canary (which only sees the
+/// fields an instance actually fills, so a partial one would exempt the rest) and
+/// `mcp/tools.rs`'s check that the tool description names every series it returns. Both want "the
+/// current shape of this struct", and a struct literal written out twice is a struct literal that
+/// will be extended once.
+///
+/// Every array carries a value — no `Vec::new()` — so a field added and left unfilled here shows up
+/// as a test failure rather than as a silently uncovered key. The optical readings are negative on
+/// purpose: a real receive level is (ADR-062), and a canary built from positive placeholders would
+/// not exercise the shape any client actually sees.
+#[cfg(test)]
+pub(crate) fn canary_interface_series() -> InterfaceSeries {
+    InterfaceSeries {
+        timestamps: vec![0],
+        in_bps: vec![Some(1.0)],
+        out_bps: vec![Some(2.0)],
+        in_ucast_pps: vec![Some(3.0)],
+        out_ucast_pps: vec![Some(4.0)],
+        in_errors: vec![Some(5.0)],
+        out_errors: vec![Some(6.0)],
+        in_discards: vec![Some(7.0)],
+        out_discards: vec![Some(8.0)],
+        rx_power_dbm: vec![Some(-7.4)],
+        tx_power_dbm: vec![Some(-2.1)],
+    }
 }
 
 #[utoipa::path(
