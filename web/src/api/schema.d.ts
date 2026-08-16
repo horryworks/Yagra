@@ -6102,12 +6102,24 @@ export interface components {
          *     A pair the module reported implausibly (low above high, or outside a transceiver's physical
          *     range) is dropped by the poller rather than passed on, because a wrong window accuses a healthy
          *     link. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).
+         *
+         *     `if_duplex` and `if_type` describe the physical link (ADR-063 Inc.1). `if_duplex` is `half` or
+         *     `full` as the device negotiated it, and `null` whenever that is not known — which covers a device
+         *     that does not implement EtherLike-MIB, a port that is down and so has negotiated nothing, and a
+         *     device answering `unknown`. ⚠️ Expect `null` on optical ports and do not read it as a fault:
+         *     IEEE 802.3 defines no half duplex above 1 Gbit/s, so there is nothing to negotiate. The field
+         *     earns its place on copper, where a duplex mismatch is a real misconfiguration. `if_type` is the
+         *     IANAifType integer (6 = ethernetCsmacd); it is what distinguishes "duplex does not apply to this
+         *     interface" — a loopback, a tunnel, a dialer — from "we could not read it".
          */
         InterfaceRow: {
             if_alias?: string | null;
+            if_duplex?: string | null;
             if_name?: string | null;
             /** Format: int64 */
             if_speed_bps?: number | null;
+            /** Format: int32 */
+            if_type?: number | null;
             /** Format: int32 */
             ifindex: number;
             /** Format: double */

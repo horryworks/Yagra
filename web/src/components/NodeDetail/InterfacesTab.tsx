@@ -49,6 +49,7 @@ import {
   LIST_MIN_PX,
 } from './interfaceDockHeight';
 import { interfaceColumns } from './tabFilters';
+import { duplexEmptyReason, duplexState } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
@@ -94,6 +95,13 @@ function dockBudget(root: HTMLElement): number {
 function operLabel(oper: number | null, t: TFunction): string {
   if (oper == null) return t('interfaces.operUnknown');
   return oper === 1 ? t('interfaces.operUp') : t('interfaces.operDown');
+}
+
+/** Tooltip for an empty duplex cell — why there is nothing there (ADR-063). `undefined` when the
+ *  cell has a value, so a populated cell carries no `title` at all rather than a redundant one. */
+function duplexTitle(r: InterfaceRow, t: TFunction): string | undefined {
+  const reason = duplexEmptyReason(r.if_duplex, r.if_type);
+  return reason ? t(`interfaces.duplexEmpty.${reason}`) : undefined;
 }
 
 interface Props {
@@ -358,6 +366,11 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
           <div className="nd-if-h" title={t('interfaces.colOperTitle')}>
             {t('interfaces.colOper')}
           </div>
+          <div className="nd-if-h">{t('interfaces.colMedia')}</div>
+          <div className="nd-if-h right">{t('interfaces.colSpeed')}</div>
+          <div className="nd-if-h" title={t('interfaces.duplexHint')}>
+            {t('interfaces.colDuplex')}
+          </div>
           <div className="nd-if-h">{t('interfaces.colThroughput')}</div>
           <div className="nd-if-h right">{t('interfaces.colInOut')}</div>
         </div>
@@ -373,7 +386,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             halfway down the scroller and the interface rows ran through the gap above it. */}
         <ColumnFilterRow
           columns={columns}
-          slots={['if_name', 'if_alias', 'oper', null, null]}
+          slots={['if_name', 'if_alias', 'oper', null, 'speed', 'duplex', null, null]}
           filters={filters}
           onChange={setFilters}
           counts={counts}
@@ -398,6 +411,18 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
               <span className="nd-if-oper">
                 <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
                 {operLabel(r.oper_status ?? null, t)}
+              </span>
+              {/* Media lands in ADR-063 Inc.2 (ifMauType + an ENTITY-MIB fallback); the column is
+                  here now because it is part of the same grid decision, and an em dash is the
+                  honest thing to render for a fact nothing collects yet. */}
+              <span className="nd-if-media">—</span>
+              <span className="nd-if-speed">
+                {r.if_speed_bps && r.if_speed_bps > 0 ? formatBps(r.if_speed_bps) : '—'}
+              </span>
+              <span className="nd-if-duplex" title={duplexTitle(r, t)}>
+                {duplexState(r.if_duplex) === 'unknown'
+                  ? '—'
+                  : t(`interfaces.duplex.${duplexState(r.if_duplex)}`)}
               </span>
               <span className="nd-if-spark">
                 <Sparkline nodeId={nodeId} ifindex={r.ifindex} down={down} />
@@ -727,6 +752,22 @@ function InterfaceDock({
         {row.if_alias && <span className="nd-muted nd-if-dock-alias">{row.if_alias}</span>}
         <div className="nd-if-dock-ctl">
           <span className="nd-if-dock-stats">
+            {/* The physical link, ahead of the load figures: it is what the load is a fraction OF.
+                This is also the phone's only route to these facts — mobile drops the three columns
+                but keeps the dock (ADR-063 decision 9). Each tile is drawn only when there is
+                something to say, so a device reporting neither adds no empty chrome. */}
+            {row.if_speed_bps != null && row.if_speed_bps > 0 && (
+              <span>
+                <span className="nd-muted">{t('interfaces.colSpeed')}</span>{' '}
+                {formatBps(row.if_speed_bps)}
+              </span>
+            )}
+            {duplexState(row.if_duplex) !== 'unknown' && (
+              <span>
+                <span className="nd-muted">{t('interfaces.colDuplex')}</span>{' '}
+                {t(`interfaces.duplex.${duplexState(row.if_duplex)}`)}
+              </span>
+            )}
             <span>
               <span className="nd-muted">{t('interfaces.in')}</span> {formatBps(row.in_bps ?? null)}
             </span>

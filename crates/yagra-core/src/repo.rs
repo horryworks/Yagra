@@ -93,6 +93,12 @@ pub struct InterfaceMeta {
     pub if_name: Option<String>,
     pub if_alias: Option<String>,
     pub if_speed: Option<i64>,
+    /// Negotiated duplex token (`half` / `full`), from EtherLike-MIB (ADR-063 Inc.1). `None` means
+    /// "not known" and covers the MIB being absent, the port being down, and the agent's own
+    /// `unknown(1)` alike — see migration 0085.
+    pub if_duplex: Option<String>,
+    /// `ifType` (IANAifType) as the raw integer, if the device reported one.
+    pub if_type: Option<i32>,
     /// The transceiver's own acceptable power window, dBm (ADR-062 Inc.4). `None` on every
     /// interface that is not optical, and on optical ones whose dialect publishes no thresholds.
     pub rx_power_low_dbm: Option<f64>,
@@ -123,6 +129,8 @@ pub struct InterfaceUpsert {
     pub if_name: Option<String>,
     pub if_alias: Option<String>,
     pub if_speed: Option<i64>,
+    pub if_duplex: Option<String>,
+    pub if_type: Option<i32>,
     pub rx_power_low_dbm: Option<f64>,
     pub rx_power_high_dbm: Option<f64>,
     pub tx_power_low_dbm: Option<f64>,
@@ -616,7 +624,7 @@ impl NodeRepo {
     /// Interfaces discovered on a node (metadata for the interfaces view), ordered by index.
     pub async fn list_interfaces(&self, node_id: Uuid) -> anyhow::Result<Vec<InterfaceMeta>> {
         let rows = sqlx::query(
-            "SELECT ifindex, if_name, if_alias, if_speed, \
+            "SELECT ifindex, if_name, if_alias, if_speed, if_duplex, if_type, \
                     rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
                     extract(epoch FROM last_seen)::bigint AS last_seen_s \
              FROM interfaces WHERE node_id = $1 ORDER BY ifindex",
@@ -631,6 +639,8 @@ impl NodeRepo {
                     if_name: row.try_get("if_name")?,
                     if_alias: row.try_get("if_alias")?,
                     if_speed: row.try_get("if_speed")?,
+                    if_duplex: row.try_get("if_duplex")?,
+                    if_type: row.try_get("if_type")?,
                     rx_power_low_dbm: row.try_get("rx_power_low_dbm")?,
                     rx_power_high_dbm: row.try_get("rx_power_high_dbm")?,
                     tx_power_low_dbm: row.try_get("tx_power_low_dbm")?,
@@ -1247,6 +1257,8 @@ impl NodeRepo {
         let mut names: Vec<Option<String>> = Vec::with_capacity(n);
         let mut aliases: Vec<Option<String>> = Vec::with_capacity(n);
         let mut speeds: Vec<Option<i64>> = Vec::with_capacity(n);
+        let mut duplexes: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut if_types: Vec<Option<i32>> = Vec::with_capacity(n);
         let mut rx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
         let mut rx_highs: Vec<Option<f64>> = Vec::with_capacity(n);
         let mut tx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
@@ -1257,26 +1269,38 @@ impl NodeRepo {
             names.push(iface.if_name);
             aliases.push(iface.if_alias);
             speeds.push(iface.if_speed);
+            duplexes.push(iface.if_duplex);
+            if_types.push(iface.if_type);
             rx_lows.push(iface.rx_power_low_dbm);
             rx_highs.push(iface.rx_power_high_dbm);
             tx_lows.push(iface.tx_power_low_dbm);
             tx_highs.push(iface.tx_power_high_dbm);
         }
+        // ⚠️ Adding a column here means four coordinated edits — the INSERT list, the unnest cast
+        // list, the COALESCE line and the `.bind()` — and only the first two are checked against
+        // each other by Postgres. A `.bind()` in the wrong order is not a compile error and not a
+        // runtime error; it silently writes one column's values into another.
         sqlx::query(
             "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, \
+                 if_duplex, if_type, \
                  rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
                  last_seen) \
              SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, \
+                 t.if_duplex, t.if_type, \
                  t.rx_power_low_dbm, t.rx_power_high_dbm, t.tx_power_low_dbm, \
                  t.tx_power_high_dbm, now() \
              FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[], \
-                         $6::float8[], $7::float8[], $8::float8[], $9::float8[]) \
+                         $6::text[], $7::int[], \
+                         $8::float8[], $9::float8[], $10::float8[], $11::float8[]) \
                   AS t(node_id, ifindex, if_name, if_alias, if_speed, \
+                       if_duplex, if_type, \
                        rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm) \
              ON CONFLICT (node_id, ifindex) DO UPDATE SET \
                 if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
                 if_alias = COALESCE(EXCLUDED.if_alias, interfaces.if_alias), \
                 if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed), \
+                if_duplex = COALESCE(EXCLUDED.if_duplex, interfaces.if_duplex), \
+                if_type = COALESCE(EXCLUDED.if_type, interfaces.if_type), \
                 rx_power_low_dbm = COALESCE(EXCLUDED.rx_power_low_dbm, \
                     interfaces.rx_power_low_dbm), \
                 rx_power_high_dbm = COALESCE(EXCLUDED.rx_power_high_dbm, \
@@ -1292,6 +1316,8 @@ impl NodeRepo {
         .bind(&names)
         .bind(&aliases)
         .bind(&speeds)
+        .bind(&duplexes)
+        .bind(&if_types)
         .bind(&rx_lows)
         .bind(&rx_highs)
         .bind(&tx_lows)

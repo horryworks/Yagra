@@ -16,6 +16,7 @@ pub mod dns_check;
 pub mod host;
 pub mod ids;
 pub mod l3;
+pub mod link_mode;
 pub mod meraki;
 pub mod metric;
 pub mod neighbor;
@@ -57,6 +58,10 @@ pub use l3::{
     builtin_l3_columns, decode_prefix_pointer, inet_address_from_index, prefix_len_from_mask,
     subnet_key, L3AddrType, L3Address, L3Column, L3Snapshot, L3SourceTable, SubnetKey,
     MAX_ADDRESSES_PER_NODE, MAX_L3_WALK_ROWS, METRIC_SNMP_L3_ADDRESS_COUNT,
+};
+pub use link_mode::{
+    duplex_from_dot3, if_type_from_snmp, Duplex, IF_TYPE_ETHERNET_CSMACD, OID_DOT3_DUPLEX_STATUS,
+    OID_IF_TYPE,
 };
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,

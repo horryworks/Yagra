@@ -519,12 +519,24 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 /* ⚠️ ONE declaration, THREE grids — the header, the filter row (ADR-053 Inc.6) and every data row.
    The same rule `DataTable` enforces in TS with a shared template const: if they ever disagree the
-   filter controls sit under the wrong headers, and nothing catches it (`.tsx` tests never run). */
+   filter controls sit under the wrong headers, and nothing catches it (`.tsx` tests never run).
+
+   Eight tracks since ADR-063 (media / speed / duplex). The minimum width went 622px → 874px, so the
+   pane scrolls sideways below roughly 1140px of browser (220px sidebar + chrome) instead of at
+   ~870px. That is deliberate and ADR-054's rule applies: a table wider than its pane scrolls, it
+   does not silently drop columns. DESCRIPTION gives up 20px of floor and a fraction of its share to
+   pay for part of it — an ifAlias is usually short, and it is the one flexible column here whose
+   content the operator wrote rather than the device.
+
+   MEDIA is the only new flexible track: its values ("1000BASE-LX10") are the longest of the three
+   and are device text, where SPEED and DUPLEX render from closed sets we can size exactly. */
 .nd-if-head,
 .nd-if-filters,
 .nd-if-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1.4fr) minmax(140px, 1.6fr) 94px 132px minmax(116px, 1fr);
+  grid-template-columns:
+    minmax(140px, 1.4fr) minmax(120px, 1.4fr) 94px
+    minmax(112px, 1fr) 84px 76px 132px minmax(116px, 1fr);
   align-items: center;
 }
 
@@ -632,6 +644,33 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-if-cell.right {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* Physical-link cells (ADR-063). Speed is right-aligned and tabular so a column of rates lines up
+   on the unit — that alignment is what makes "one of these is 100 Mbps" visible at a glance, which
+   is the whole point of the column. Duplex and media are short enough to read left-aligned. */
+.nd-if-speed {
+  padding: 0 14px;
+  min-width: 0;
+  font-size: var(--font-sm);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Duplex and media are device-reported facts an operator scans past, not values they act on, so
+   they sit a step back in the hierarchy — the same weight `.nd-if-desc` takes. */
+.nd-if-duplex,
+.nd-if-media {
+  padding: 0 14px;
+  min-width: 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* In-row throughput sparkline cell (cheap, no axes/interaction). */
@@ -1378,7 +1417,15 @@ html[data-viewport='mobile'] .nd-if-oper {
   padding: 0;
 }
 
-html[data-viewport='mobile'] .nd-if-desc {
+/* The description and the three physical-link cells are dropped on a phone, not reflowed.
+   The row above is a named 2×2 grid, so an unplaced cell would auto-place itself into a third
+   implicit row and push every row past the touch target. Media / speed / duplex are reference
+   facts rather than triage signals — the phone's job here is "which port is down and how busy is
+   it" — and they stay reachable one tap away in the dock, which mobile keeps (ADR-063 decision 9). */
+html[data-viewport='mobile'] .nd-if-desc,
+html[data-viewport='mobile'] .nd-if-media,
+html[data-viewport='mobile'] .nd-if-speed,
+html[data-viewport='mobile'] .nd-if-duplex {
   display: none;
 }
 

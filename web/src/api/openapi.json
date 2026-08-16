@@ -24543,13 +24543,19 @@
       },
       "InterfaceRow": {
         "type": "object",
-        "description": "One interface row for the node-detail Interfaces tab: stored metadata joined with query-time\n`rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).\n\nThe four `*_power_*_dbm` bounds are the transceiver's **own** acceptable window, as the module\nreports it — not a threshold anyone configured in Yagra, and nothing alerts on them. They exist\nso a client can say whether a light level is healthy, which a bare dBm figure cannot: −7 dBm is\nfine on one module and failing on another. They are `null` for every interface that is not\noptical, and also for optical ones whose vendor dialect publishes no thresholds — ENTITY-SENSOR\n-MIB (RFC 3433) defines none at all, so a standards-based agent reports power without a window.\nA pair the module reported implausibly (low above high, or outside a transceiver's physical\nrange) is dropped by the poller rather than passed on, because a wrong window accuses a healthy\nlink. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).",
+        "description": "One interface row for the node-detail Interfaces tab: stored metadata joined with query-time\n`rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).\n\nThe four `*_power_*_dbm` bounds are the transceiver's **own** acceptable window, as the module\nreports it — not a threshold anyone configured in Yagra, and nothing alerts on them. They exist\nso a client can say whether a light level is healthy, which a bare dBm figure cannot: −7 dBm is\nfine on one module and failing on another. They are `null` for every interface that is not\noptical, and also for optical ones whose vendor dialect publishes no thresholds — ENTITY-SENSOR\n-MIB (RFC 3433) defines none at all, so a standards-based agent reports power without a window.\nA pair the module reported implausibly (low above high, or outside a transceiver's physical\nrange) is dropped by the poller rather than passed on, because a wrong window accuses a healthy\nlink. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).\n\n`if_duplex` and `if_type` describe the physical link (ADR-063 Inc.1). `if_duplex` is `half` or\n`full` as the device negotiated it, and `null` whenever that is not known — which covers a device\nthat does not implement EtherLike-MIB, a port that is down and so has negotiated nothing, and a\ndevice answering `unknown`. ⚠️ Expect `null` on optical ports and do not read it as a fault:\nIEEE 802.3 defines no half duplex above 1 Gbit/s, so there is nothing to negotiate. The field\nearns its place on copper, where a duplex mismatch is a real misconfiguration. `if_type` is the\nIANAifType integer (6 = ethernetCsmacd); it is what distinguishes \"duplex does not apply to this\ninterface\" — a loopback, a tunnel, a dialer — from \"we could not read it\".",
         "required": [
           "ifindex",
           "stale"
         ],
         "properties": {
           "if_alias": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "if_duplex": {
             "type": [
               "string",
               "null"
@@ -24567,6 +24573,13 @@
               "null"
             ],
             "format": "int64"
+          },
+          "if_type": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
           },
           "ifindex": {
             "type": "integer",

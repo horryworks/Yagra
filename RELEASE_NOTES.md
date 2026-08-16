@@ -11,6 +11,41 @@
 ## Unreleased
 
 ### New Features
+- **The Interfaces tab shows each port's speed and duplex.** A node's **Interfaces** tab gains
+  **Speed** and **Duplex** columns (and a **Media** column, reserved — see below), so a port
+  negotiated below its rate is visible from the list instead of requiring a device login. Both are
+  filterable from the column filter row, which is the point: "show me the 100 Mbps ports" is how the
+  mismatch gets found.
+  - **Speed needed no new collection** — Yagra has always stored each interface's nominal rate and
+    used it only to draw the bandwidth line on the throughput chart. It is now also a value you can
+    read and filter on.
+  - **Duplex is new, and it is free**: `dot3StatsDuplexStatus` (EtherLike-MIB) is indexed by
+    ifIndex, so it rides the interface walk the poller already performs. **No extra SNMP session,
+    no change to what core sends a poller** — an older poller keeps working unchanged and simply
+    reports no duplex.
+  - ⚠️ **A blank duplex on a fibre port is correct, not a fault.** IEEE 802.3 defines no half duplex
+    above 1 Gbit/s, so there is nothing to negotiate and agents report "unknown". The column is a
+    copper diagnostic — one end forced to full against an auto-negotiating peer is a classic cause
+    of a link that works but is slow. The filter's hint says so on screen.
+  - **A device that does not implement EtherLike-MIB shows a blank column** and is otherwise
+    unaffected. The same blank covers a port that is down.
+  - **`GET /api/v1/nodes/{id}/interfaces` gains `if_duplex`** (`"half"` / `"full"` / null) **and
+    `if_type`** (the IANAifType integer, 6 = ethernetCsmacd). `if_type` is what distinguishes
+    "duplex does not apply here" — a loopback, a tunnel, a dialer — from "we could not read it";
+    both are also on the MCP `get_node_status` tool's interface entries.
+  - **The Media column is present but empty for now.** Reading the physical media type
+    (1000BASE-T / -SX / -LX) needs a separate MIB walk and lands in a later release.
+  - **On a phone the three columns are not drawn** — speed and duplex appear in the chart dock
+    instead, which is where a narrow screen has room for them.
+
+### Bug Fixes
+- **A 10G interface no longer reports its speed as 4.29 Gbps.** When a device's 32-bit `ifSpeed`
+  saturates (it maxes out at 4,294,967,295) and it publishes no usable `ifHighSpeed`, Yagra was
+  storing the saturation value itself as though it were a measurement. The rate is now recorded as
+  unknown, which also corrects `in_util_pct` / `out_util_pct` — utilisation had been computed
+  against a rate no interface actually has. Affected ports show a blank speed until the device
+  reports one; nothing else changes.
+
 - **The optical chart shows the transceiver's own acceptable power window.** A dBm figure on its own
   cannot be judged — -7 dBm is comfortable on one module and failing on another — so the module's
   published limits are now read alongside the readings and drawn as a shaded lane behind each line,

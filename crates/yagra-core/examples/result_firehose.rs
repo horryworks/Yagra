@@ -81,6 +81,8 @@ fn make_result(node: NodeId, i: u64, down_every: u64, ifaces: usize) -> PollResu
             if_name: Some(format!("eth{k}")),
             if_alias: None,
             if_speed: Some(1_000_000_000),
+            if_duplex: Some(yagra_common::Duplex::Full),
+            if_type: Some(yagra_common::IF_TYPE_ETHERNET_CSMACD),
             rx_power_low_dbm: None,
             rx_power_high_dbm: None,
             tx_power_low_dbm: None,

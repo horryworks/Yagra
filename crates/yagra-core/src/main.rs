@@ -1759,6 +1759,10 @@ fn persist_metrics_and_meta(
             if_name: iface.if_name.clone(),
             if_alias: iface.if_alias.clone(),
             if_speed: iface.if_speed,
+            // The enum crosses the bus; the DB column holds its token. `as_str()` is the one
+            // conversion, and a test pins it to the serde tag so the two cannot drift.
+            if_duplex: iface.if_duplex.map(|d| d.as_str().to_owned()),
+            if_type: iface.if_type,
             rx_power_low_dbm: iface.rx_power_low_dbm,
             rx_power_high_dbm: iface.rx_power_high_dbm,
             tx_power_low_dbm: iface.tx_power_low_dbm,
@@ -4095,6 +4099,8 @@ mod tests {
                 if_name: Some("eth0".into()),
                 if_alias: None,
                 if_speed: None,
+                if_duplex: None,
+                if_type: None,
                 rx_power_low_dbm: None,
                 rx_power_high_dbm: None,
                 tx_power_low_dbm: None,

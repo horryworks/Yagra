@@ -608,12 +608,23 @@ async fn set_profile_templates(
 /// A pair the module reported implausibly (low above high, or outside a transceiver's physical
 /// range) is dropped by the poller rather than passed on, because a wrong window accuses a healthy
 /// link. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).
+///
+/// `if_duplex` and `if_type` describe the physical link (ADR-063 Inc.1). `if_duplex` is `half` or
+/// `full` as the device negotiated it, and `null` whenever that is not known — which covers a device
+/// that does not implement EtherLike-MIB, a port that is down and so has negotiated nothing, and a
+/// device answering `unknown`. ⚠️ Expect `null` on optical ports and do not read it as a fault:
+/// IEEE 802.3 defines no half duplex above 1 Gbit/s, so there is nothing to negotiate. The field
+/// earns its place on copper, where a duplex mismatch is a real misconfiguration. `if_type` is the
+/// IANAifType integer (6 = ethernetCsmacd); it is what distinguishes "duplex does not apply to this
+/// interface" — a loopback, a tunnel, a dialer — from "we could not read it".
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceRow {
     ifindex: u32,
     if_name: Option<String>,
     if_alias: Option<String>,
     if_speed_bps: Option<i64>,
+    if_duplex: Option<String>,
+    if_type: Option<i32>,
     oper_status: Option<f64>,
     in_bps: Option<f64>,
     out_bps: Option<f64>,
@@ -680,6 +691,8 @@ async fn list_node_interfaces(
             if_name: m.if_name,
             if_alias: m.if_alias,
             if_speed_bps: m.if_speed,
+            if_duplex: m.if_duplex,
+            if_type: m.if_type,
             oper_status: l.oper_status,
             in_bps,
             out_bps,

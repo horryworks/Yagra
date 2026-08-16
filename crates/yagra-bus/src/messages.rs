@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, Ipv4Addr};
 use uuid::Uuid;
 use yagra_common::{
-    ArpColumn, ArpSummary, DnsChain, DnsRecordType, ExpectedStatus, HostSample, HttpAuth,
+    ArpColumn, ArpSummary, DnsChain, DnsRecordType, Duplex, ExpectedStatus, HostSample, HttpAuth,
     HttpMethod, IfIndex, InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind,
     NeighborColumn, NeighborSet, NodeId, OpticalFlavor, RoutingColumn, RoutingSnapshot, SeriesKey,
 };
@@ -1739,6 +1739,22 @@ pub struct DiscoveredInterface {
     /// Line rate in bits/sec, if walked.
     #[serde(default)]
     pub if_speed: Option<i64>,
+    /// Negotiated duplex from `dot3StatsDuplexStatus`, if the device implements EtherLike-MIB
+    /// (ADR-063 Inc.1).
+    ///
+    /// `None` covers "MIB absent", "port down so no row" and the agent's own `unknown(1)` alike —
+    /// migration 0085 records why that collapse is deliberate. ⚠️ Expect `None` on optical ports:
+    /// IEEE 802.3 defines no half duplex above 1 Gbit/s, so there is nothing to negotiate and an
+    /// agent answering `unknown(1)` there is being accurate.
+    ///
+    /// Safe on the wire as a bare enum only because the set is closed — see [`Duplex`].
+    #[serde(default)]
+    pub if_duplex: Option<Duplex>,
+    /// `ifType` (IANAifType) as the raw integer, if walked. Lets a reader tell "the question does
+    /// not apply to this interface" from "we could not read it" — see
+    /// [`yagra_common::link_mode::link_mode_applies`].
+    #[serde(default)]
+    pub if_type: Option<i32>,
     /// Lowest receive power the transceiver considers acceptable, dBm (ADR-062 Inc.4).
     ///
     /// These four arrive from the **optical probe**, not the interface-metadata walk, and every
@@ -2994,6 +3010,47 @@ mod tests {
         let spec3 = CheckSpec::SnmpV3Optical(v3);
         let wire3 = serde_json::to_string(&spec3).unwrap();
         assert!(wire3.contains(r#""kind":"snmp_v3_optical""#), "{wire3}");
+    }
+
+    /// `DiscoveredInterface` decodes both N-1 directions (ADR-063 Inc.1).
+    ///
+    /// The producer half is the one that matters here: an **older poller** publishes a record with
+    /// no `if_duplex` / `if_type` at all, and a new core must read it as "not known" rather than
+    /// failing — because a failure would take the whole `PollResult` with it. The `schema_version`
+    /// key is sent on purpose; it is what an N-1 producer actually puts on the wire (the field was
+    /// removed from the structs but old binaries still write it), and ignoring it is the property.
+    #[test]
+    fn a_discovered_interface_tolerates_missing_and_unknown_fields() {
+        let old: DiscoveredInterface =
+            serde_json::from_str(r#"{"ifindex":7,"schema_version":1,"future_field":"x"}"#).unwrap();
+        assert_eq!(old.ifindex, IfIndex(7));
+        assert!(
+            old.if_duplex.is_none(),
+            "absent duplex must read as unknown"
+        );
+        assert!(old.if_type.is_none(), "absent ifType must read as unknown");
+        assert!(old.if_name.is_none() && old.if_speed.is_none());
+
+        // And the populated case round-trips under the tokens the DB column also uses, so a
+        // rename here would be caught rather than silently writing rows core cannot parse back.
+        let full = DiscoveredInterface {
+            ifindex: IfIndex(7),
+            if_name: Some("GE0/0/1".to_owned()),
+            if_alias: Some("Internet".to_owned()),
+            if_speed: Some(100_000_000),
+            if_duplex: Some(Duplex::Full),
+            if_type: Some(yagra_common::IF_TYPE_ETHERNET_CSMACD),
+            rx_power_low_dbm: None,
+            rx_power_high_dbm: None,
+            tx_power_low_dbm: None,
+            tx_power_high_dbm: None,
+        };
+        let wire = serde_json::to_string(&full).unwrap();
+        assert!(wire.contains(r#""if_duplex":"full""#), "{wire}");
+        assert_eq!(
+            serde_json::from_str::<DiscoveredInterface>(&wire).unwrap(),
+            full
+        );
     }
 
     /// Every optical dialect survives the wire under a stable token.

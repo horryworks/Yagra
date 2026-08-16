@@ -22,6 +22,7 @@ import {
   type Neighbor,
   type NodeMetricEntry,
 } from '../../types/api';
+import { DUPLEX_STATES, duplexState, SPEED_TIERS, speedTier } from './linkMode';
 
 // ───────────────────────────────────────────────────────────────── interfaces
 
@@ -46,6 +47,8 @@ export interface FilterableInterface {
   if_name?: string | null;
   if_alias?: string | null;
   oper_status?: number | null;
+  if_speed_bps?: number | null;
+  if_duplex?: string | null;
 }
 
 /**
@@ -88,6 +91,29 @@ export function interfaceFilters(
       readValue: (r) => ifState(r.oper_status),
       allLabel: t('interfaces.allStates'),
       counts: 'client',
+    },
+    // Speed and duplex are why this column set grew (ADR-063): "which port is not running at its
+    // rate" is a question you answer by *narrowing*, which is what makes them columns rather than a
+    // line of text under the name.
+    speed: {
+      kind: 'enum',
+      options: SPEED_TIERS.map((s) => ({ value: s, label: t(`interfaces.speed.${s}`) })),
+      // Through `speedTier`, so the option and the cell agree on what "1 Gbps" is.
+      readValue: (r) => speedTier(r.if_speed_bps),
+      allLabel: t('interfaces.allSpeeds'),
+      counts: 'client',
+    },
+    duplex: {
+      kind: 'enum',
+      options: DUPLEX_STATES.map((s) => ({ value: s, label: t(`interfaces.duplex.${s}`) })),
+      readValue: (r) => duplexState(r.if_duplex),
+      allLabel: t('interfaces.allDuplex'),
+      counts: 'client',
+      // The column's meaning goes on the filter, not under the page title (ADR-055 R4): an empty
+      // duplex column is the first thing an operator asks about, and the answer — it is a copper
+      // diagnostic, and 10G has no half duplex to negotiate — belongs beside the control they open
+      // looking for it.
+      hint: t('interfaces.duplexHint'),
     },
   };
 }

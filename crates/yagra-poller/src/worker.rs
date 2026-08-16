@@ -22,10 +22,11 @@ use yagra_bus::{
     SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck,
 };
 use yagra_common::{
-    DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT,
-    METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP, METRIC_HTTP_BODY_MATCH,
-    METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE,
-    METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_IF_HIGH_SPEED,
+    duplex_from_dot3, if_type_from_snmp, DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId,
+    METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
+    METRIC_HTTP_BODY_MATCH, METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS,
+    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
+    OID_DOT3_DUPLEX_STATUS, OID_IF_HIGH_SPEED, OID_IF_TYPE,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -478,6 +479,9 @@ pub async fn execute_meraki(
                 if_name: Some(u.name),
                 if_alias: None,
                 if_speed: None,
+                // The Meraki API reports no link mode either — these come from EtherLike-MIB.
+                if_duplex: None,
+                if_type: None,
                 // Meraki reports no transceiver diagnostics; the optical probe is SNMP-only.
                 rx_power_low_dbm: None,
                 rx_power_high_dbm: None,
@@ -728,11 +732,20 @@ async fn execute_table_walk(
     numeric_oids.extend(speed_oids.iter().cloned());
     if !speed_oids.is_empty() {
         numeric_oids.push(OID_IF_HIGH_SPEED.to_owned());
+        // The link's negotiated mode rides along for free (ADR-063 Inc.1): both are INTEGER-valued
+        // and indexed by ifIndex alone, so they cost extra GETBULK sequences on a session this poll
+        // was opening anyway — not a session, which is what S5 was about. Gated on the same
+        // condition as ifHighSpeed because it marks "this job is gathering interface metadata".
+        //
+        // ⚠️ They are appended here rather than declared as `InterfaceField` variants on purpose:
+        // a new variant would make every N-1 poller drop the entire SnmpTable spec. The reasoning
+        // is on `yagra_common::link_mode`, next to the constants.
+        numeric_oids.push(OID_DOT3_DUPLEX_STATUS.to_owned());
+        numeric_oids.push(OID_IF_TYPE.to_owned());
     }
 
     let mut samples = Vec::new();
-    let mut raw_speed: HashMap<u32, f64> = HashMap::new();
-    let mut raw_high: HashMap<u32, f64> = HashMap::new();
+    let mut raw = RawInterfaceNumerics::default();
     match walker
         .walk(transport, job.target, &numeric_oids, timeout)
         .await
@@ -747,25 +760,21 @@ async fn execute_table_walk(
                         col.kind,
                     ));
                 } else if row.oid_base == OID_IF_HIGH_SPEED {
-                    raw_high.insert(row.ifindex, row.value);
+                    raw.high.insert(row.ifindex, row.value);
+                } else if row.oid_base == OID_DOT3_DUPLEX_STATUS {
+                    raw.duplex.insert(row.ifindex, row.value);
+                } else if row.oid_base == OID_IF_TYPE {
+                    raw.if_type.insert(row.ifindex, row.value);
                 } else if speed_oids.iter().any(|o| o == &row.oid_base) {
-                    raw_speed.insert(row.ifindex, row.value);
+                    raw.speed.insert(row.ifindex, row.value);
                 }
             }
         }
         Err(err) => tracing::warn!(job_id = %job.job_id, error = %err, "snmp table walk failed"),
     }
 
-    let interfaces = walk_interface_metadata(
-        job,
-        transport,
-        walker,
-        meta_columns,
-        &raw_speed,
-        &raw_high,
-        timeout,
-    )
-    .await;
+    let interfaces =
+        walk_interface_metadata(job, transport, walker, meta_columns, &raw, timeout).await;
 
     // Reachable iff the agent returned at least one value (matches the scalar SNMP arm).
     let outcome = if samples.is_empty() {
@@ -911,10 +920,10 @@ async fn execute_optical(
         // Never a liveness statement — see the doc comment.
         outcome: CheckOutcome::Reachable,
         samples,
-        // ⚠️ These carry the thresholds and NOTHING else — no name, no alias, no speed. Core's
-        // interface upsert COALESCEs every column against its existing value, so the `None`s
-        // preserve whatever the metadata walk stored rather than blanking it. That property is
-        // what makes it safe to write the same row from two different probes, and it has a test.
+        // ⚠️ These carry the thresholds and NOTHING else — no name, no alias, no speed, no link
+        // mode. Core's interface upsert COALESCEs every column against its existing value, so the
+        // `None`s preserve whatever the metadata walk stored rather than blanking it. That property
+        // is what makes it safe to write the same row from two different probes, and it has a test.
         interfaces: windows
             .into_iter()
             .map(|(ifindex, w)| DiscoveredInterface {
@@ -922,6 +931,8 @@ async fn execute_optical(
                 if_name: None,
                 if_alias: None,
                 if_speed: None,
+                if_duplex: None,
+                if_type: None,
                 rx_power_low_dbm: w.rx_low,
                 rx_power_high_dbm: w.rx_high,
                 tx_power_low_dbm: w.tx_low,
@@ -1498,6 +1509,25 @@ async fn execute_snmp_v3_table(
     .await
 }
 
+/// The per-ifIndex numeric readings the caller's single combined walk demuxed out, for the metadata
+/// fold below.
+///
+/// A struct rather than four `&HashMap` parameters: clippy called it at nine arguments, and it was
+/// right for the usual reason — four maps of the same type in a row are four chances to pass duplex
+/// where ifType belongs, with nothing to catch it. Every field is raw as the agent reported it;
+/// interpretation (`resolve_if_speed`, `duplex_from_dot3`, `if_type_from_snmp`) happens in the fold.
+#[derive(Debug, Default)]
+struct RawInterfaceNumerics {
+    /// `ifSpeed` (32-bit, bits/sec) — saturates at ~4.29 Gbps, hence `high`.
+    speed: HashMap<u32, f64>,
+    /// `ifHighSpeed` (units of 1,000,000 bits/sec).
+    high: HashMap<u32, f64>,
+    /// `dot3StatsDuplexStatus` (`unknown(1)` / `halfDuplex(2)` / `fullDuplex(3)`).
+    duplex: HashMap<u32, f64>,
+    /// `ifType` (IANAifType).
+    if_type: HashMap<u32, f64>,
+}
+
 /// Fold interface metadata into [`DiscoveredInterface`]s: walk the `ifName`/`ifAlias` **string**
 /// columns (the poll's second and only other SNMP session), and resolve `if_speed` from the
 /// `ifSpeed`/`ifHighSpeed` values already gathered by the combined numeric walk in the caller (S5).
@@ -1506,10 +1536,15 @@ async fn walk_interface_metadata(
     transport: &dyn Transport,
     walker: &SnmpWalker,
     meta_columns: &[SnmpMetaColumn],
-    raw_speed: &HashMap<u32, f64>,
-    raw_high: &HashMap<u32, f64>,
+    raw: &RawInterfaceNumerics,
     timeout: Duration,
 ) -> Vec<DiscoveredInterface> {
+    let RawInterfaceNumerics {
+        speed: raw_speed,
+        high: raw_high,
+        duplex: raw_duplex,
+        if_type: raw_iftype,
+    } = raw;
     let field_by_base: HashMap<&str, InterfaceField> = meta_columns
         .iter()
         .map(|m| (m.oid.as_str(), m.field))
@@ -1526,6 +1561,8 @@ async fn walk_interface_metadata(
         if_name: None,
         if_alias: None,
         if_speed: None,
+        if_duplex: None,
+        if_type: None,
         // The metadata walk never reads thresholds — they come from the optical probe, and core's
         // upsert COALESCEs, so leaving them None here preserves whatever that probe stored.
         rx_power_low_dbm: None,
@@ -1583,6 +1620,31 @@ async fn walk_interface_metadata(
         }
     }
 
+    // Duplex and ifType, from the same numeric walk (ADR-063 Inc.1). Folded over their own union of
+    // ifindexes rather than the speed one: a device may answer EtherLike-MIB for a port whose
+    // ifSpeed it does not report, and vice versa.
+    for ifindex in raw_duplex
+        .keys()
+        .chain(raw_iftype.keys())
+        .copied()
+        .collect::<BTreeSet<u32>>()
+    {
+        let duplex = raw_duplex.get(&ifindex).copied().and_then(duplex_from_dot3);
+        let if_type = raw_iftype
+            .get(&ifindex)
+            .copied()
+            .and_then(if_type_from_snmp);
+        if duplex.is_none() && if_type.is_none() {
+            // Nothing usable — do not materialise a row for an interface the metric walk never
+            // saw either, or a device answering `unknown(1)` for every port would inflate the
+            // inventory with index-only records.
+            continue;
+        }
+        let rec = ifs.entry(ifindex).or_insert_with(|| blank(ifindex));
+        rec.if_duplex = duplex;
+        rec.if_type = if_type;
+    }
+
     ifs.into_values().collect()
 }
 
@@ -1593,6 +1655,14 @@ async fn walk_interface_metadata(
 /// — it can express sub-Mbps links that `ifHighSpeed` rounds to 0. At/above the cap (or when
 /// `ifSpeed` is missing/0) the 64-bit `ifHighSpeed` is used. Non-finite, negative, or
 /// out-of-`i64`-range values are dropped rather than stored as a bogus saturated speed.
+///
+/// ⚠️ **A saturated `ifSpeed` with no usable `ifHighSpeed` resolves to `None`, not to the sentinel**
+/// (ADR-063 decision 7). `4294967295` is the value the gauge reports when the real rate exceeds what
+/// it can express — it is a "too big to say" marker, not a measurement. This used to fall through to
+/// it, and the lab's down 10G ports are stored that way today: harmless while the only reader was
+/// the chart's bandwidth line, wrong the moment a speed column renders it as "4.29 Gbps". The same
+/// value is also `in_util_pct`'s denominator, so utilisation was being computed against a rate no
+/// interface has.
 fn resolve_if_speed(if_speed: Option<f64>, if_high_speed: Option<f64>) -> Option<i64> {
     let sane = |v: f64| v.is_finite() && (0.0..=i64::MAX as f64).contains(&v);
     let speed = if_speed.filter(|v| sane(*v));
@@ -1606,9 +1676,9 @@ fn resolve_if_speed(if_speed: Option<f64>, if_high_speed: Option<f64>) -> Option
 
     match speed {
         Some(s) if s > 0.0 && s < IF_SPEED_CAP => Some(s as i64),
-        _ => high_bps
-            .map(|bps| bps as i64)
-            .or_else(|| speed.map(|s| s as i64)),
+        // Saturated or absent: only ifHighSpeed can answer. Falling back to `speed` here would
+        // store the sentinel itself — see the ⚠️ on this function.
+        _ => high_bps.map(|bps| bps as i64),
     }
 }
 
@@ -2145,6 +2215,8 @@ mod tests {
                 if_name: Some("WAN1".into()),
                 if_alias: None,
                 if_speed: None,
+                if_duplex: None,
+                if_type: None,
                 // A Meraki uplink is not an SNMP transceiver; the optical window is never filled
                 // from this path, and `None` here leaves anything already stored untouched.
                 rx_power_low_dbm: None,
@@ -3156,10 +3228,29 @@ mod tests {
             resolve_if_speed(Some(f64::NAN), Some(40_000.0)),
             Some(40_000_000_000)
         );
-        // ifSpeed reporting the saturated cap with no ifHighSpeed → best-effort, keep the cap.
+    }
+
+    /// A saturated `ifSpeed` with no usable `ifHighSpeed` is **not** a speed (ADR-063 decision 7).
+    ///
+    /// This assertion is inverted from what it used to be, and the reversal is the point: the old
+    /// behaviour stored `u32::MAX` itself as a "best-effort" rate. `4294967295` is the gauge's way
+    /// of saying *"the real rate is larger than I can express"* — keeping it means a 10 Gbps port
+    /// is recorded as 4.29 Gbps, and `in_util_pct` is then computed against a rate no interface
+    /// has. It was invisible while the only reader was the throughput chart's bandwidth line on a
+    /// hand-selected (therefore up) interface; a speed column renders it for every port.
+    ///
+    /// The lab's down 10G ports store the sentinel today, so this is a live wrong value, not a
+    /// hypothetical one.
+    #[test]
+    fn a_saturated_if_speed_with_no_high_speed_is_unknown_not_the_sentinel() {
+        assert_eq!(resolve_if_speed(Some(u32::MAX as f64), None), None);
+        // Same when the device answers ifHighSpeed but with the "no idea" zero, which is what a
+        // down port typically reports — measured on the lab's 10GE0/0/0.
+        assert_eq!(resolve_if_speed(Some(u32::MAX as f64), Some(0.0)), None);
+        // ⚠️ But one bit below the cap is a real 4.29 Gbps reading and must survive.
         assert_eq!(
-            resolve_if_speed(Some(u32::MAX as f64), None),
-            Some(u32::MAX as i64)
+            resolve_if_speed(Some(u32::MAX as f64 - 1.0), None),
+            Some(u32::MAX as i64 - 1)
         );
     }
 
@@ -3195,5 +3286,103 @@ mod tests {
             .find(|i| i.ifindex == IfIndex(1))
             .expect("ifIndex 1 discovered");
         assert_eq!(iface.if_speed, Some(10_000_000_000));
+    }
+
+    /// Duplex and ifType ride the same numeric walk and land on the right ifIndex (ADR-063 Inc.1).
+    ///
+    /// The accepting case is the load-bearing one: everything about this feature — the OIDs being
+    /// appended, the demux arms, the fold — fails *silently* into "column always empty", which is
+    /// indistinguishable from a device that does not implement EtherLike-MIB. A test that only
+    /// checked the rejecting cases would pass against a poller that walks neither OID.
+    #[tokio::test]
+    async fn snmp_table_walk_carries_duplex_and_if_type() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            // Two interfaces' worth of a metric column, so the poll is reachable and so the
+            // per-ifIndex demux has something to get wrong.
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 1,
+                value: 10.0,
+            },
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 2,
+                value: 20.0,
+            },
+            // ifIndex 1: a copper port, full duplex, ethernetCsmacd.
+            SnmpTableSample {
+                oid_base: OID_DOT3_DUPLEX_STATUS.to_owned(),
+                ifindex: 1,
+                value: 3.0,
+            },
+            SnmpTableSample {
+                oid_base: OID_IF_TYPE.to_owned(),
+                ifindex: 1,
+                value: 6.0,
+            },
+            // ifIndex 2: a loopback answering `unknown(1)` — the shape that must NOT become a
+            // stored duplex. `if_type` still lands, and it is what lets a reader say "does not
+            // apply" rather than "could not read".
+            SnmpTableSample {
+                oid_base: OID_DOT3_DUPLEX_STATUS.to_owned(),
+                ifindex: 2,
+                value: 1.0,
+            },
+            SnmpTableSample {
+                oid_base: OID_IF_TYPE.to_owned(),
+                ifindex: 2,
+                value: 24.0,
+            },
+        ]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        let find = |ix: u32| {
+            r.interfaces
+                .iter()
+                .find(|i| i.ifindex == IfIndex(ix))
+                .unwrap_or_else(|| panic!("ifIndex {ix} discovered"))
+        };
+
+        let copper = find(1);
+        assert_eq!(
+            copper.if_duplex,
+            Some(yagra_common::Duplex::Full),
+            "full duplex on ifIdx 1"
+        );
+        assert_eq!(copper.if_type, Some(6));
+
+        let loopback = find(2);
+        assert_eq!(
+            loopback.if_duplex, None,
+            "`unknown(1)` must store as unknown, not as a duplex"
+        );
+        assert_eq!(loopback.if_type, Some(24));
+    }
+
+    /// A device that implements neither OID still gets its names and speed — the ADR-063 columns
+    /// are additive, and a poller that walks two OIDs the agent ignores must not lose the rest.
+    #[tokio::test]
+    async fn a_device_without_etherlike_mib_still_reports_its_interfaces() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0)
+            .with_snmp_table(vec![SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+                ifindex: 1,
+                value: 10.0,
+            }])
+            .with_snmp_table_strings(vec![SnmpTableString {
+                oid_base: "1.3.6.1.2.1.31.1.1.1.1".to_owned(),
+                ifindex: 1,
+                value: "GE0/0/1".to_owned(),
+            }]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        let iface = r
+            .interfaces
+            .iter()
+            .find(|i| i.ifindex == IfIndex(1))
+            .expect("ifIndex 1 discovered");
+        assert_eq!(iface.if_name.as_deref(), Some("GE0/0/1"));
+        assert_eq!(iface.if_duplex, None);
+        assert_eq!(iface.if_type, None);
     }
 }

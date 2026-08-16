@@ -224,6 +224,21 @@ pub struct InterfaceDto {
     pub alias: Option<String>,
     /// Nominal speed in bits/sec, if known.
     pub speed: Option<i64>,
+    /// Negotiated duplex — `half` or `full` — or `None` when it is not known (ADR-063 Inc.1).
+    ///
+    /// `None` covers three cases that are indistinguishable here: the device does not implement
+    /// EtherLike-MIB, the port is down and has negotiated nothing, and the device answered
+    /// "unknown". ⚠️ **`None` on an optical port is normal, not a fault** — IEEE 802.3 defines no
+    /// half duplex above 1 Gbit/s, so there is nothing to negotiate. The field is diagnostic on
+    /// copper, where one end forced to full against an auto-negotiating peer is a real and common
+    /// cause of a link that works but is slow.
+    pub duplex: Option<String>,
+    /// IANAifType as the raw integer (6 = ethernetCsmacd), if the device reported one.
+    ///
+    /// Use it to tell **"duplex does not apply to this interface"** — a loopback (24), a virtual
+    /// interface (53), a dialer (23), a tunnel (131) — from "we could not read it". Reporting a
+    /// missing duplex as a problem on a loopback would be a false finding.
+    pub if_type: Option<i32>,
     /// Last time this interface was seen, as an RFC 3339 UTC timestamp (if ever).
     pub last_seen: Option<String>,
     /// Latest `ifOperStatus` (1 = up), or `None` when the node has never reported one.
@@ -281,6 +296,8 @@ impl InterfaceDto {
             name: meta.if_name.clone(),
             alias: meta.if_alias.clone(),
             speed: meta.if_speed,
+            duplex: meta.if_duplex.clone(),
+            if_type: meta.if_type,
             last_seen: meta.last_seen_s.map(unix_s_to_rfc3339),
             oper_status: live.oper_status,
             in_bps,
@@ -828,6 +845,8 @@ mod tests {
                 name: Some("Gig0/1".to_owned()),
                 alias: Some("uplink".to_owned()),
                 speed: Some(1_000_000_000),
+                duplex: Some("full".to_owned()),
+                if_type: Some(yagra_common::IF_TYPE_ETHERNET_CSMACD),
                 last_seen: Some(unix_s_to_rfc3339(0)),
                 oper_status: Some(1.0),
                 in_bps: Some(4_000_000.0),
