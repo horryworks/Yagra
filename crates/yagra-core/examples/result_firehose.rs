@@ -81,6 +81,10 @@ fn make_result(node: NodeId, i: u64, down_every: u64, ifaces: usize) -> PollResu
             if_name: Some(format!("eth{k}")),
             if_alias: None,
             if_speed: Some(1_000_000_000),
+            rx_power_low_dbm: None,
+            rx_power_high_dbm: None,
+            tx_power_low_dbm: None,
+            tx_power_high_dbm: None,
         })
         .collect();
     PollResult {

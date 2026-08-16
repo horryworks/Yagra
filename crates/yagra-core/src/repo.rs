@@ -93,13 +93,44 @@ pub struct InterfaceMeta {
     pub if_name: Option<String>,
     pub if_alias: Option<String>,
     pub if_speed: Option<i64>,
+    /// The transceiver's own acceptable power window, dBm (ADR-062 Inc.4). `None` on every
+    /// interface that is not optical, and on optical ones whose dialect publishes no thresholds.
+    pub rx_power_low_dbm: Option<f64>,
+    /// See [`InterfaceMeta::rx_power_low_dbm`].
+    pub rx_power_high_dbm: Option<f64>,
+    /// See [`InterfaceMeta::rx_power_low_dbm`].
+    pub tx_power_low_dbm: Option<f64>,
+    /// See [`InterfaceMeta::rx_power_low_dbm`].
+    pub tx_power_high_dbm: Option<f64>,
     /// `last_seen` as Unix seconds, for staleness checks.
     pub last_seen_s: Option<i64>,
 }
 
-/// One row for [`NodeRepo::upsert_interfaces_batch`]: `(node_id, ifindex, if_name, if_alias,
-/// if_speed)`. A `None` name/alias/speed leaves the stored value untouched (COALESCE).
-pub type InterfaceBatchRow = (Uuid, i32, Option<String>, Option<String>, Option<i64>);
+/// Everything one poll learned about one interface, for [`NodeRepo::upsert_interfaces_batch`].
+///
+/// **Every `None` here means "leave whatever is stored alone"**, not "set it to null" — the upsert
+/// COALESCEs each column. That is what lets two different probes write disjoint columns of the same
+/// row: the interface-metadata walk fills the names and speed and leaves the optical window `None`,
+/// the optical probe does the exact opposite, and neither erases the other's work.
+///
+/// ⚠️ **A struct rather than a tuple, and the four optical bounds are why.** They are four
+/// `Option<f64>` in a row, so a transposed pair would compile silently and paint a receive window
+/// around the transmit line — a band in the wrong place accuses a healthy link, which is worse than
+/// no band at all. Naming them is the only thing that makes the call site checkable.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct InterfaceUpsert {
+    pub ifindex: i32,
+    pub if_name: Option<String>,
+    pub if_alias: Option<String>,
+    pub if_speed: Option<i64>,
+    pub rx_power_low_dbm: Option<f64>,
+    pub rx_power_high_dbm: Option<f64>,
+    pub tx_power_low_dbm: Option<f64>,
+    pub tx_power_high_dbm: Option<f64>,
+}
+
+/// One row for [`NodeRepo::upsert_interfaces_batch`]: which node, and what was learned.
+pub type InterfaceBatchRow = (Uuid, InterfaceUpsert);
 
 /// Interface identity for a fleet Top-N name join (no timestamp — just labels + speed).
 pub struct InterfaceIdent {
@@ -586,6 +617,7 @@ impl NodeRepo {
     pub async fn list_interfaces(&self, node_id: Uuid) -> anyhow::Result<Vec<InterfaceMeta>> {
         let rows = sqlx::query(
             "SELECT ifindex, if_name, if_alias, if_speed, \
+                    rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
                     extract(epoch FROM last_seen)::bigint AS last_seen_s \
              FROM interfaces WHERE node_id = $1 ORDER BY ifindex",
         )
@@ -599,6 +631,10 @@ impl NodeRepo {
                     if_name: row.try_get("if_name")?,
                     if_alias: row.try_get("if_alias")?,
                     if_speed: row.try_get("if_speed")?,
+                    rx_power_low_dbm: row.try_get("rx_power_low_dbm")?,
+                    rx_power_high_dbm: row.try_get("rx_power_high_dbm")?,
+                    tx_power_low_dbm: row.try_get("tx_power_low_dbm")?,
+                    tx_power_high_dbm: row.try_get("tx_power_high_dbm")?,
                     last_seen_s: row.try_get("last_seen_s")?,
                 })
             })
@@ -1201,32 +1237,54 @@ impl NodeRepo {
         if rows.is_empty() {
             return Ok(());
         }
-        type OwnedIfaceMeta = (Option<String>, Option<String>, Option<i64>);
-        let mut by_key: BTreeMap<(Uuid, i32), OwnedIfaceMeta> = BTreeMap::new();
-        for (node, ifindex, name, alias, speed) in rows {
-            by_key.insert((*node, *ifindex), (name.clone(), alias.clone(), *speed));
+        let mut by_key: BTreeMap<(Uuid, i32), InterfaceUpsert> = BTreeMap::new();
+        for (node, iface) in rows {
+            by_key.insert((*node, iface.ifindex), iface.clone());
         }
-        let mut node_ids: Vec<Uuid> = Vec::with_capacity(by_key.len());
-        let mut ifindexes: Vec<i32> = Vec::with_capacity(by_key.len());
-        let mut names: Vec<Option<String>> = Vec::with_capacity(by_key.len());
-        let mut aliases: Vec<Option<String>> = Vec::with_capacity(by_key.len());
-        let mut speeds: Vec<Option<i64>> = Vec::with_capacity(by_key.len());
-        for ((node, ifindex), (name, alias, speed)) in by_key {
+        let n = by_key.len();
+        let mut node_ids: Vec<Uuid> = Vec::with_capacity(n);
+        let mut ifindexes: Vec<i32> = Vec::with_capacity(n);
+        let mut names: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut aliases: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut speeds: Vec<Option<i64>> = Vec::with_capacity(n);
+        let mut rx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
+        let mut rx_highs: Vec<Option<f64>> = Vec::with_capacity(n);
+        let mut tx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
+        let mut tx_highs: Vec<Option<f64>> = Vec::with_capacity(n);
+        for ((node, _), iface) in by_key {
             node_ids.push(node);
-            ifindexes.push(ifindex);
-            names.push(name);
-            aliases.push(alias);
-            speeds.push(speed);
+            ifindexes.push(iface.ifindex);
+            names.push(iface.if_name);
+            aliases.push(iface.if_alias);
+            speeds.push(iface.if_speed);
+            rx_lows.push(iface.rx_power_low_dbm);
+            rx_highs.push(iface.rx_power_high_dbm);
+            tx_lows.push(iface.tx_power_low_dbm);
+            tx_highs.push(iface.tx_power_high_dbm);
         }
         sqlx::query(
-            "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, last_seen) \
-             SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, now() \
-             FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[]) \
-                  AS t(node_id, ifindex, if_name, if_alias, if_speed) \
+            "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, \
+                 rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
+                 last_seen) \
+             SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, \
+                 t.rx_power_low_dbm, t.rx_power_high_dbm, t.tx_power_low_dbm, \
+                 t.tx_power_high_dbm, now() \
+             FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[], \
+                         $6::float8[], $7::float8[], $8::float8[], $9::float8[]) \
+                  AS t(node_id, ifindex, if_name, if_alias, if_speed, \
+                       rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm) \
              ON CONFLICT (node_id, ifindex) DO UPDATE SET \
                 if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
                 if_alias = COALESCE(EXCLUDED.if_alias, interfaces.if_alias), \
                 if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed), \
+                rx_power_low_dbm = COALESCE(EXCLUDED.rx_power_low_dbm, \
+                    interfaces.rx_power_low_dbm), \
+                rx_power_high_dbm = COALESCE(EXCLUDED.rx_power_high_dbm, \
+                    interfaces.rx_power_high_dbm), \
+                tx_power_low_dbm = COALESCE(EXCLUDED.tx_power_low_dbm, \
+                    interfaces.tx_power_low_dbm), \
+                tx_power_high_dbm = COALESCE(EXCLUDED.tx_power_high_dbm, \
+                    interfaces.tx_power_high_dbm), \
                 last_seen = now()",
         )
         .bind(&node_ids)
@@ -1234,6 +1292,10 @@ impl NodeRepo {
         .bind(&names)
         .bind(&aliases)
         .bind(&speeds)
+        .bind(&rx_lows)
+        .bind(&rx_highs)
+        .bind(&tx_lows)
+        .bind(&tx_highs)
         .execute(&self.pool)
         .await?;
         Ok(())

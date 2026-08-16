@@ -1739,6 +1739,24 @@ pub struct DiscoveredInterface {
     /// Line rate in bits/sec, if walked.
     #[serde(default)]
     pub if_speed: Option<i64>,
+    /// Lowest receive power the transceiver considers acceptable, dBm (ADR-062 Inc.4).
+    ///
+    /// These four arrive from the **optical probe**, not the interface-metadata walk, and every
+    /// other field is `None` when they do. That is safe because core's interface upsert COALESCEs
+    /// each column against its existing value, so the two walks fill disjoint columns of the same
+    /// row — a property with a test, because losing it would blank every interface name once a
+    /// poll cycle.
+    #[serde(default)]
+    pub rx_power_low_dbm: Option<f64>,
+    /// Highest acceptable receive power, dBm. See [`DiscoveredInterface::rx_power_low_dbm`].
+    #[serde(default)]
+    pub rx_power_high_dbm: Option<f64>,
+    /// Lowest acceptable transmit power, dBm. See [`DiscoveredInterface::rx_power_low_dbm`].
+    #[serde(default)]
+    pub tx_power_low_dbm: Option<f64>,
+    /// Highest acceptable transmit power, dBm. See [`DiscoveredInterface::rx_power_low_dbm`].
+    #[serde(default)]
+    pub tx_power_high_dbm: Option<f64>,
 }
 
 /// High-level outcome of a check.

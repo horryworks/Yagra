@@ -598,6 +598,16 @@ async fn set_profile_templates(
 
 /// One interface row for the node-detail Interfaces tab: stored metadata joined with query-time
 /// `rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).
+///
+/// The four `*_power_*_dbm` bounds are the transceiver's **own** acceptable window, as the module
+/// reports it — not a threshold anyone configured in Yagra, and nothing alerts on them. They exist
+/// so a client can say whether a light level is healthy, which a bare dBm figure cannot: −7 dBm is
+/// fine on one module and failing on another. They are `null` for every interface that is not
+/// optical, and also for optical ones whose vendor dialect publishes no thresholds — ENTITY-SENSOR
+/// -MIB (RFC 3433) defines none at all, so a standards-based agent reports power without a window.
+/// A pair the module reported implausibly (low above high, or outside a transceiver's physical
+/// range) is dropped by the poller rather than passed on, because a wrong window accuses a healthy
+/// link. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceRow {
     ifindex: u32,
@@ -609,6 +619,10 @@ pub(crate) struct InterfaceRow {
     out_bps: Option<f64>,
     in_util_pct: Option<f64>,
     out_util_pct: Option<f64>,
+    rx_power_low_dbm: Option<f64>,
+    rx_power_high_dbm: Option<f64>,
+    tx_power_low_dbm: Option<f64>,
+    tx_power_high_dbm: Option<f64>,
     last_seen_unix: Option<i64>,
     stale: bool,
 }
@@ -671,6 +685,10 @@ async fn list_node_interfaces(
             out_bps,
             in_util_pct: util(in_bps),
             out_util_pct: util(out_bps),
+            rx_power_low_dbm: m.rx_power_low_dbm,
+            rx_power_high_dbm: m.rx_power_high_dbm,
+            tx_power_low_dbm: m.tx_power_low_dbm,
+            tx_power_high_dbm: m.tx_power_high_dbm,
             last_seen_unix: m.last_seen_s,
             stale,
         });

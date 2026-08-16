@@ -135,17 +135,77 @@ export function hasOpticalData(series: InterfaceSeries | null): boolean {
   return OPTICAL_SERIES.some((spec) => (series[spec.key] ?? []).some((v) => v != null));
 }
 
-/** Y-axis range for the optical chart: the data's own span with 1 dB of headroom either side,
- *  rounded outward to a whole dB, or `undefined` when there is nothing to bound.
+/** One shaded lane on the optical chart: the window the module says this direction should stay in. */
+export interface OpticalBand {
+  key: OpticalSeriesKey;
+  from: number;
+  to: number;
+}
+
+/** The transceiver's own acceptable windows, as bands to shade (ADR-062 Inc.4).
+ *
+ *  A bare dBm figure is unreadable without these — −7 dBm is comfortable on one module and failing
+ *  on another — so the band is what turns the chart from a number into an answer. The bounds come
+ *  from the module itself, not from anything configured in Yagra, and nothing alerts on them.
+ *
+ *  **A direction is skipped unless it has both ends.** A one-sided window would shade from a real
+ *  bound to the edge of the plot, which reads as "everything above here is fine" — a claim the
+ *  module never made. The poller already refuses implausible pairs; this is the second half of the
+ *  same rule, applied where the shape (a rectangle needs two sides) makes it unavoidable. */
+export function opticalBands(row: {
+  rx_power_low_dbm?: number | null;
+  rx_power_high_dbm?: number | null;
+  tx_power_low_dbm?: number | null;
+  tx_power_high_dbm?: number | null;
+}): OpticalBand[] {
+  const pairs: [OpticalSeriesKey, number | null | undefined, number | null | undefined][] = [
+    ['rx_power_dbm', row.rx_power_low_dbm, row.rx_power_high_dbm],
+    ['tx_power_dbm', row.tx_power_low_dbm, row.tx_power_high_dbm],
+  ];
+  const out: OpticalBand[] = [];
+  for (const [key, low, high] of pairs) {
+    if (low == null || high == null) continue;
+    if (!Number.isFinite(low) || !Number.isFinite(high)) continue;
+    if (!(low < high)) continue;
+    out.push({ key, from: low, to: high });
+  }
+  return out;
+}
+
+/** The window for one direction as a compact range, or `null` when the module reports none.
+ *
+ *  The shaded band answers "am I inside", this answers "by how much" — and it is the more precise
+ *  of the two, because a reader can subtract. It also makes the window legible where a band cannot
+ *  be: on a touch device, in a screenshot pasted into a ticket, and to anyone reading the numbers
+ *  rather than the picture. Formatting is the caller's (`formatDbm`) so the unit is written once. */
+export function opticalWindowText(
+  band: OpticalBand | undefined,
+  fmt: (v: number) => string,
+): string | null {
+  if (!band) return null;
+  return `${fmt(band.from)} … ${fmt(band.to)}`;
+}
+
+/** Y-axis range for the optical chart: the data **and its bands**, with 1 dB of headroom either
+ *  side, rounded outward to a whole dB, or `undefined` when there is nothing to bound.
  *
  *  Charts elsewhere let uPlot pick, but dBm needs saying explicitly for two reasons. The values are
  *  **negative**, so an axis anchored at zero would push every real reading into the bottom sliver of
  *  the plot. And the interesting variation is **small** — a link degrading by 3 dB is a link in
  *  trouble — so an auto-range that included zero would flatten exactly the movement worth seeing.
  *
+ *  ⚠️ **The bands must be inside the range or they are not drawn at all** — `MetricChart` clamps a
+ *  band to the plot, and one entirely below the visible minimum clamps to zero height. That is why
+ *  they widen the axis here, and it is a deliberate trade: on a link with 13 dB of margin the line
+ *  flattens, because 13 dB of margin *is* the answer. Reading the trend on its own is what the
+ *  range control's shorter windows are for.
+ *
  *  The floor is not clamped to the plausible window: a reading outside it never reaches the client
  *  (the poller drops it), so anything here is real and should be drawn where it falls. */
-export function opticalYRange(series: InterfaceSeries | null): [number, number] | undefined {
+export function opticalYRange(
+  series: InterfaceSeries | null,
+  bands: OpticalBand[] = [],
+): [number, number] | undefined {
   if (!series) return undefined;
   let lo = Number.POSITIVE_INFINITY;
   let hi = Number.NEGATIVE_INFINITY;
@@ -154,6 +214,14 @@ export function opticalYRange(series: InterfaceSeries | null): [number, number] 
       if (v == null || !Number.isFinite(v)) continue;
       if (v < lo) lo = v;
       if (v > hi) hi = v;
+    }
+  }
+  // Only widen for a band once there is a reading to put beside it: a band alone would draw an
+  // axis for a port that has reported nothing, and the chart is not rendered in that state anyway.
+  if (Number.isFinite(lo)) {
+    for (const b of bands) {
+      if (b.from < lo) lo = b.from;
+      if (b.to > hi) hi = b.to;
     }
   }
   if (!Number.isFinite(lo) || !Number.isFinite(hi)) return undefined;

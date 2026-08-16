@@ -6092,6 +6092,16 @@ export interface components {
         /**
          * @description One interface row for the node-detail Interfaces tab: stored metadata joined with query-time
          *     `rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).
+         *
+         *     The four `*_power_*_dbm` bounds are the transceiver's **own** acceptable window, as the module
+         *     reports it — not a threshold anyone configured in Yagra, and nothing alerts on them. They exist
+         *     so a client can say whether a light level is healthy, which a bare dBm figure cannot: −7 dBm is
+         *     fine on one module and failing on another. They are `null` for every interface that is not
+         *     optical, and also for optical ones whose vendor dialect publishes no thresholds — ENTITY-SENSOR
+         *     -MIB (RFC 3433) defines none at all, so a standards-based agent reports power without a window.
+         *     A pair the module reported implausibly (low above high, or outside a transceiver's physical
+         *     range) is dropped by the poller rather than passed on, because a wrong window accuses a healthy
+         *     link. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).
          */
         InterfaceRow: {
             if_alias?: string | null;
@@ -6112,7 +6122,15 @@ export interface components {
             out_bps?: number | null;
             /** Format: double */
             out_util_pct?: number | null;
+            /** Format: double */
+            rx_power_high_dbm?: number | null;
+            /** Format: double */
+            rx_power_low_dbm?: number | null;
             stale: boolean;
+            /** Format: double */
+            tx_power_high_dbm?: number | null;
+            /** Format: double */
+            tx_power_low_dbm?: number | null;
         };
         /**
          * @description Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per

@@ -81,6 +81,30 @@ pub struct SimpleDialect {
     pub tx_oid: &'static str,
     /// Multiplier taking the raw integer to dBm.
     pub scale: f64,
+    /// The module's own acceptable-power window, when the dialect publishes one.
+    ///
+    /// `None` for a dialect that does not. **The vendor-neutral spelling is the notable absence**:
+    /// RFC 3433 defines no threshold objects at all, and Cisco's are in a separate
+    /// `entSensorThresholdTable` with its own row shape — so the standards-based dialect draws a
+    /// line and no band, which is a degradation the chart handles rather than a gap to work around.
+    pub limits: Option<DialectLimits>,
+}
+
+/// The four threshold columns of a dialect that publishes its module's operating window.
+///
+/// Same `scale` as the readings they bound — every vendor that publishes both puts them in the
+/// same table with the same units, and a mismatch here would draw a band in the wrong place, which
+/// is worse than no band because it accuses a healthy link.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DialectLimits {
+    /// Lowest acceptable receive power.
+    pub rx_low_oid: &'static str,
+    /// Highest acceptable receive power.
+    pub rx_high_oid: &'static str,
+    /// Lowest acceptable transmit power.
+    pub tx_low_oid: &'static str,
+    /// Highest acceptable transmit power.
+    pub tx_high_oid: &'static str,
 }
 
 /// The column layout for a dialect that needs no correlation, or `None` for
@@ -93,22 +117,88 @@ pub struct SimpleDialect {
 pub fn simple_dialect(flavor: OpticalFlavor) -> Option<SimpleDialect> {
     match flavor {
         // Rows are keyed by entPhysicalIndex and need translating; the columns themselves are plain.
+        // Thresholds verified against HUAWEI-ENTITY-EXTENT-MIB itself: same table, same ×100.
         OpticalFlavor::Huawei => Some(SimpleDialect {
             rx_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.8",
             tx_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.9",
             scale: 0.01,
+            limits: Some(DialectLimits {
+                rx_low_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.13",
+                rx_high_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.14",
+                tx_low_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.15",
+                tx_high_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.16",
+            }),
         }),
+        // JUNIPER-DOM-MIB publishes both an alarm and a warning window; the **alarm** one is taken,
+        // because the band is meant to say "outside this, the link is in trouble" rather than
+        // "outside this, the module would like you to know".
         OpticalFlavor::Juniper => Some(SimpleDialect {
             rx_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.5",
             tx_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.7",
             scale: 0.01,
+            limits: Some(DialectLimits {
+                rx_low_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.10",
+                rx_high_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.9",
+                tx_low_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.18",
+                tx_high_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.17",
+            }),
         }),
+        // ⚠️ No band: HH3C-TRANSCEIVER-INFO-MIB was not obtainable to confirm its threshold column
+        // numbers, and a threshold OID pointing at the wrong column draws a window that accuses a
+        // healthy link. The readings themselves are confirmed, so this dialect gets its two lines
+        // and no shading — the degradation the chart is built to handle.
         OpticalFlavor::H3c => Some(SimpleDialect {
             rx_oid: "1.3.6.1.4.1.25506.2.70.1.1.1.12",
             tx_oid: "1.3.6.1.4.1.25506.2.70.1.1.1.11",
             scale: 0.01,
+            limits: None,
         }),
         OpticalFlavor::EntitySensor => None,
+    }
+}
+
+/// The module's acceptable window for one direction, after validation.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct OpticalWindow {
+    /// Lowest acceptable receive power, dBm.
+    pub rx_low: Option<f64>,
+    /// Highest acceptable receive power, dBm.
+    pub rx_high: Option<f64>,
+    /// Lowest acceptable transmit power, dBm.
+    pub tx_low: Option<f64>,
+    /// Highest acceptable transmit power, dBm.
+    pub tx_high: Option<f64>,
+}
+
+impl OpticalWindow {
+    /// Whether anything survived validation and is worth sending.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.rx_low.is_none()
+            && self.rx_high.is_none()
+            && self.tx_low.is_none()
+            && self.tx_high.is_none()
+    }
+}
+
+/// Accept a low/high pair only if it describes a window that could actually be a module's.
+///
+/// 🚨 **Vendors get this wrong in the field.** Huawei and Comware have been reported returning
+/// nonsense limits (LibreNMS #15424), and a bogus window is worse than none: it paints a healthy
+/// link as out of spec, which is the kind of false alarm that teaches an operator to ignore the
+/// chart. Both ends must be plausible dBm *and* the low end must actually be below the high end —
+/// a pair that fails either test is dropped as a pair, never half-kept, since half a window
+/// implies a bound the module never claimed.
+#[must_use]
+pub fn validated_window(low: Option<f64>, high: Option<f64>) -> (Option<f64>, Option<f64>) {
+    match (low, high) {
+        (Some(l), Some(h)) if is_plausible_dbm(l) && is_plausible_dbm(h) && l < h => {
+            (Some(l), Some(h))
+        }
+        // A module that publishes only one end is legitimate; it just has to be a real number.
+        (Some(l), None) if is_plausible_dbm(l) => (Some(l), None),
+        (None, Some(h)) if is_plausible_dbm(h) => (None, Some(h)),
+        _ => (None, None),
     }
 }
 
@@ -320,6 +410,87 @@ mod tests {
                 assert_ne!(d.rx_oid, d.tx_oid, "{f:?} rx and tx are the same column");
             }
         }
+    }
+
+    #[test]
+    fn a_dialects_threshold_columns_sit_under_its_own_root_and_are_all_distinct() {
+        for f in OpticalFlavor::ALL {
+            let Some(d) = simple_dialect(f) else { continue };
+            let Some(l) = d.limits else { continue };
+            let cols = [l.rx_low_oid, l.rx_high_oid, l.tx_low_oid, l.tx_high_oid];
+            for c in cols {
+                assert!(
+                    c.starts_with(f.root_oid()),
+                    "{f:?}: {c} is outside the dialect's root"
+                );
+            }
+            let mut sorted = cols.to_vec();
+            sorted.sort_unstable();
+            let before = sorted.len();
+            sorted.dedup();
+            assert_eq!(before, sorted.len(), "{f:?} reuses a threshold column");
+            // A threshold column must not be one of the reading columns: pointing a bound at the
+            // live value would draw a band that tracks the line and always looks satisfied.
+            assert!(
+                !cols.contains(&d.rx_oid),
+                "{f:?}: a bound points at the rx reading"
+            );
+            assert!(
+                !cols.contains(&d.tx_oid),
+                "{f:?}: a bound points at the tx reading"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plausible_window_survives_validation() {
+        // ⚠️ The accepting case first, and deliberately: a validator that refused everything would
+        // satisfy every rejection test below and ship a feature that never draws a band.
+        assert_eq!(
+            validated_window(Some(-24.0), Some(-3.0)),
+            (Some(-24.0), Some(-3.0))
+        );
+        // A module that publishes only one end is legitimate.
+        assert_eq!(validated_window(Some(-24.0), None), (Some(-24.0), None));
+        assert_eq!(validated_window(None, Some(-3.0)), (None, Some(-3.0)));
+        assert_eq!(validated_window(None, None), (None, None));
+    }
+
+    #[test]
+    fn a_nonsense_window_is_dropped_as_a_pair() {
+        // 🚨 Reported for real on Huawei/Comware (LibreNMS #15424). Half-keeping a bad pair would
+        // imply a bound the module never claimed, so both ends go.
+        assert_eq!(
+            validated_window(Some(-3.0), Some(-24.0)),
+            (None, None),
+            "inverted"
+        );
+        assert_eq!(
+            validated_window(Some(-7.0), Some(-7.0)),
+            (None, None),
+            "zero width"
+        );
+        // A ×100 scale error, which is what forgetting the divisor produces.
+        assert_eq!(
+            validated_window(Some(-2400.0), Some(-300.0)),
+            (None, None),
+            "off scale"
+        );
+        assert_eq!(
+            validated_window(Some(f64::NAN), Some(-3.0)),
+            (None, None),
+            "not a number"
+        );
+    }
+
+    #[test]
+    fn an_empty_window_is_recognised_so_nothing_pointless_is_sent() {
+        assert!(OpticalWindow::default().is_empty());
+        assert!(!OpticalWindow {
+            rx_low: Some(-24.0),
+            ..Default::default()
+        }
+        .is_empty());
     }
 
     #[test]

@@ -37,8 +37,29 @@ function deviceNode(): Json {
 function interfaceRows(): Json {
   const [row] = defaultBodyFor(`/api/v1/nodes/${NODE_ID}/interfaces`) as Record<string, unknown>[];
   return [
-    { ...row, ifindex: OPTICAL_IF, if_name: 'Te1/1/1', if_alias: 'uplink (fibre)' },
-    { ...row, ifindex: COPPER_IF, if_name: 'Gi0/0/2', if_alias: 'LAN (copper)' },
+    {
+      ...row,
+      ifindex: OPTICAL_IF,
+      if_name: 'Te1/1/1',
+      if_alias: 'uplink (fibre)',
+      // The module's own window (ADR-062 Inc.4). Deliberately far below the readings, which is
+      // the realistic case — a healthy link sits well inside its budget — and the case that
+      // catches a chart whose Y range ignores the band: it would clamp to zero height and vanish.
+      rx_power_low_dbm: -24,
+      rx_power_high_dbm: -3,
+      tx_power_low_dbm: -9,
+      tx_power_high_dbm: -1,
+    },
+    {
+      ...row,
+      ifindex: COPPER_IF,
+      if_name: 'Gi0/0/2',
+      if_alias: 'LAN (copper)',
+      rx_power_low_dbm: null,
+      rx_power_high_dbm: null,
+      tx_power_low_dbm: null,
+      tx_power_high_dbm: null,
+    },
   ] as unknown as Json;
 }
 
@@ -132,6 +153,19 @@ test('the optical level is reported as a signed dBm figure, not an SI-scaled one
   const stats = page.locator('.nd-if-dock-stats');
   await expect(stats).toContainText('-8.5 dBm');
   await expect(stats).toContainText('-2.1 dBm');
+});
+
+test("the module's own window is shown beside the reading", async ({ page }) => {
+  await openDock(page, 'Te1/1/1');
+
+  // The band itself is painted on canvas and cannot be asserted as an element — `.u-axis` carries
+  // no text either, because uPlot draws its ticks into the canvas too. The window is therefore
+  // *also* rendered as text, which is both the precise form for a reader and the only form a test
+  // can see. This is what proves the interface row's limits reached the component at all: the
+  // shading and this string are built from the same `opticalBandSpecs`.
+  const stats = page.locator('.nd-if-dock-stats');
+  await expect(stats).toContainText('-24.0 dBm … -3.0 dBm');
+  await expect(stats).toContainText('-9.0 dBm … -1.0 dBm');
 });
 
 test('three charts wrap to a second row instead of overflowing a narrow dock', async ({ page }) => {

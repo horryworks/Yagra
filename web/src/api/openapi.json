@@ -24543,7 +24543,7 @@
       },
       "InterfaceRow": {
         "type": "object",
-        "description": "One interface row for the node-detail Interfaces tab: stored metadata joined with query-time\n`rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).",
+        "description": "One interface row for the node-detail Interfaces tab: stored metadata joined with query-time\n`rate()`/`latest()` metrics. Utilization is derived here and never stored (ADR-012).\n\nThe four `*_power_*_dbm` bounds are the transceiver's **own** acceptable window, as the module\nreports it — not a threshold anyone configured in Yagra, and nothing alerts on them. They exist\nso a client can say whether a light level is healthy, which a bare dBm figure cannot: −7 dBm is\nfine on one module and failing on another. They are `null` for every interface that is not\noptical, and also for optical ones whose vendor dialect publishes no thresholds — ENTITY-SENSOR\n-MIB (RFC 3433) defines none at all, so a standards-based agent reports power without a window.\nA pair the module reported implausibly (low above high, or outside a transceiver's physical\nrange) is dropped by the poller rather than passed on, because a wrong window accuses a healthy\nlink. Same units as the readings: dBm, normally negative (ADR-062 Inc.4).",
         "required": [
           "ifindex",
           "stale"
@@ -24615,8 +24615,36 @@
             ],
             "format": "double"
           },
+          "rx_power_high_dbm": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "rx_power_low_dbm": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
           "stale": {
             "type": "boolean"
+          },
+          "tx_power_high_dbm": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "tx_power_low_dbm": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },

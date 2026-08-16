@@ -1618,7 +1618,12 @@ const VM_WRITE_RETRIES: usize = 2;
 
 /// One interface row for the batched metadata upsert (matcher extracts it from the result so the
 /// writer re-derives nothing): `(ifindex, if_name, if_alias, if_speed)`.
-type OwnedIface = (i32, Option<String>, Option<String>, Option<i64>);
+/// What one poll learned about one interface, before the node id is attached.
+///
+/// The same struct the repo writes (`repo::InterfaceUpsert`) rather than a local tuple: it holds
+/// four `Option<f64>` optical bounds in a row, and a positional form would let a transposed pair
+/// paint a receive window around the transmit line with nothing to catch it.
+type OwnedIface = repo::InterfaceUpsert;
 
 /// One result's metadata for the async PG writer: discovered interfaces to upsert plus an optional
 /// `(vendor, model)` identity classified from `sysDescr`. Shed-able and self-healing — re-emitted on
@@ -1749,13 +1754,15 @@ fn persist_metrics_and_meta(
     let interfaces: Vec<OwnedIface> = result
         .interfaces
         .iter()
-        .map(|iface| {
-            (
-                i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
-                iface.if_name.clone(),
-                iface.if_alias.clone(),
-                iface.if_speed,
-            )
+        .map(|iface| repo::InterfaceUpsert {
+            ifindex: i32::try_from(iface.ifindex.0).unwrap_or(i32::MAX),
+            if_name: iface.if_name.clone(),
+            if_alias: iface.if_alias.clone(),
+            if_speed: iface.if_speed,
+            rx_power_low_dbm: iface.rx_power_low_dbm,
+            rx_power_high_dbm: iface.rx_power_high_dbm,
+            tx_power_low_dbm: iface.tx_power_low_dbm,
+            tx_power_high_dbm: iface.tx_power_high_dbm,
         })
         .collect();
     let identity = result.sys_descr.as_deref().and_then(|descr| {
@@ -2851,8 +2858,8 @@ async fn flush_meta(stores: &MetaStores, buf: &mut Vec<MetaRecord>) {
     let mut arp_rows: Vec<(Uuid, yagra_common::ArpSummary)> = Vec::new();
     let mut routing_rows: Vec<(Uuid, yagra_common::RoutingSnapshot)> = Vec::new();
     for rec in buf.drain(..) {
-        for (ifindex, name, alias, speed) in rec.interfaces {
-            iface_rows.push((rec.node_id, ifindex, name, alias, speed));
+        for iface in rec.interfaces {
+            iface_rows.push((rec.node_id, iface));
         }
         if let Some((vendor, model)) = rec.identity {
             ident_rows.push((rec.node_id, vendor, model));
@@ -4088,6 +4095,10 @@ mod tests {
                 if_name: Some("eth0".into()),
                 if_alias: None,
                 if_speed: None,
+                rx_power_low_dbm: None,
+                rx_power_high_dbm: None,
+                tx_power_low_dbm: None,
+                tx_power_high_dbm: None,
             }],
             sys_descr: None,
             dns_chain: None,

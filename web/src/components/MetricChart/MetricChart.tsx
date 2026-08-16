@@ -92,6 +92,17 @@ interface Props {
    *  `--status-critical` colour. When the value sits above the visible Y range it is pinned to the
    *  top edge and labelled, so it's always visible and slides into the plot as data nears it. */
   referenceLine?: { value: number; label?: string };
+  /** Shaded horizontal ranges drawn UNDER the series — "the values in here are the healthy ones".
+   *
+   *  Distinct from `referenceLine`, which draws one dashed line over the plot. A band answers a
+   *  different question: not "where is the limit" but "am I inside the window", which is what an
+   *  optical link budget is (ADR-062 Inc.4). Several are allowed because a chart can carry more
+   *  than one series with its own window, and each band is tinted with its series' own colour so
+   *  a line and its lane are matched by hue rather than by the reader's memory.
+   *
+   *  Drawn first, so the series stay legible on top. A band whose bounds are not finite, or whose
+   *  `from` is not below its `to`, is skipped rather than drawn inside-out. */
+  referenceBands?: { from: number; to: number; color: string; label?: string }[];
   /** Share the cursor with every other chart given the same key: hovering one moves the crosshair
    *  and the live legend of all of them, so charts stacked over the same time window can be read at
    *  a single instant instead of one at a time. Only the cursor position is shared — series
@@ -122,6 +133,7 @@ export function MetricChart({
   xRange,
   legendFormat,
   referenceLine,
+  referenceBands,
   syncKey,
 }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -129,8 +141,8 @@ export function MetricChart({
   // Latest render-varying props, read by the uPlot option closures at draw time. This is what
   // lets a poll tick refresh data WITHOUT rebuilding the chart: fresh inline formatters / a fresh
   // `referenceLine` object each render don't change the instance, only what its closures read.
-  const live = useRef({ yFormat, legendFormat, referenceLine });
-  live.current = { yFormat, legendFormat, referenceLine };
+  const live = useRef({ yFormat, legendFormat, referenceLine, referenceBands });
+  live.current = { yFormat, legendFormat, referenceLine, referenceBands };
 
   const resolved: ChartSeries[] =
     series ?? (values ? [{ label: title, values, color: PALETTE[0] }] : []);
@@ -141,7 +153,13 @@ export function MetricChart({
     `${title}|${height}|${syncKey ?? ''}|` +
     resolved.map((s) => `${s.label}:${s.color ?? ''}`).join('|');
   // Content signature of the optional reference line, so a value/label change redraws in place.
-  const refKey = referenceLine ? `${referenceLine.value}:${referenceLine.label ?? ''}` : '';
+  // Overlay identity, in the data effect's deps so a changed overlay repaints without rebuilding
+  // the instance. The bands belong here for the same reason the line does: `live.current` makes the
+  // draw hook read the newest value, but nothing would ask it to draw again on its own.
+  const refKey = [
+    referenceLine ? `${referenceLine.value}:${referenceLine.label ?? ''}` : '',
+    ...(referenceBands ?? []).map((b) => `${b.from}:${b.to}:${b.color}`),
+  ].join('|');
 
   // ── Create (or structurally rebuild) the uPlot instance ──────────────────────────────────
   useEffect(() => {
@@ -211,6 +229,33 @@ export function MetricChart({
       hooks: {
         draw: [
           (u: uPlot) => {
+            // Bands first: they are context for the series, so they belong underneath it. The
+            // series are drawn by uPlot before `draw` fires, so "underneath" is achieved with
+            // `destination-over` rather than by ordering — repainting the series here would mean
+            // reimplementing gap handling.
+            const bands = live.current.referenceBands;
+            if (bands?.length) {
+              const { left, top, width, height } = u.bbox;
+              const ctx = u.ctx;
+              ctx.save();
+              ctx.globalCompositeOperation = 'destination-over';
+              for (const band of bands) {
+                if (!Number.isFinite(band.from) || !Number.isFinite(band.to)) continue;
+                if (!(band.from < band.to)) continue;
+                // Clamp to the plot: a window wider than the visible range still shades what of it
+                // is on screen, rather than painting outside the axes.
+                const yTo = Math.min(top + height, Math.max(top, u.valToPos(band.to, 'y', true)));
+                const yFrom = Math.min(
+                  top + height,
+                  Math.max(top, u.valToPos(band.from, 'y', true)),
+                );
+                if (yFrom <= yTo) continue;
+                ctx.fillStyle = band.color;
+                ctx.fillRect(left, yTo, width, yFrom - yTo);
+              }
+              ctx.restore();
+            }
+
             const referenceLine = live.current.referenceLine;
             if (!referenceLine) return;
             const refv = referenceLine.value;

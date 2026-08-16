@@ -11,6 +11,23 @@
 ## Unreleased
 
 ### New Features
+- **The optical chart shows the transceiver's own acceptable power window.** A dBm figure on its own
+  cannot be judged — -7 dBm is comfortable on one module and failing on another — so the module's
+  published limits are now read alongside the readings and drawn as a shaded lane behind each line,
+  tinted to match it, with the numbers written out beside the current value (`-24.0 dBm … -3.0 dBm`).
+  Nothing alerts on them: these are the module's figures, not a threshold anyone configured, and
+  Yagra only shows them.
+  - Read for **Huawei** (`hwOpticalModuleInfo` thresholds) and **Juniper** (JUNIPER-DOM-MIB alarm
+    thresholds). **Not available for the standards-based dialect**: ENTITY-SENSOR-MIB (RFC 3433)
+    defines no threshold objects at all, so a Cisco or Arista port shows its lines without a lane.
+    H3C is also without one for now. Those ports are unaffected otherwise.
+  - **Limits the module reports implausibly are discarded** — a low bound above the high one, or
+    either end outside a transceiver's physical range, which has been observed in the field. A wrong
+    window would accuse a healthy link, so the lane is simply not drawn.
+  - **`GET /api/v1/nodes/{id}/interfaces` gains `rx_power_low_dbm`, `rx_power_high_dbm`,
+    `tx_power_low_dbm` and `tx_power_high_dbm`**, null for every interface without them.
+  - The chart's Y axis widens to contain the window, so a link with a lot of margin shows a flatter
+    line — that flatness *is* the margin. Use a shorter range to read the trend on its own.
 - **Optical transceivers report their transmit and receive light levels.** A node's **Interfaces**
   tab gains a third chart, **Optical power (Rx / Tx, dBm)**, for any port that has a transceiver in
   it, plus **Rx** and **Tx** figures in the dock header. Fibre degrades gradually — a receive level

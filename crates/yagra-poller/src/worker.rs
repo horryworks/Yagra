@@ -478,6 +478,11 @@ pub async fn execute_meraki(
                 if_name: Some(u.name),
                 if_alias: None,
                 if_speed: None,
+                // Meraki reports no transceiver diagnostics; the optical probe is SNMP-only.
+                rx_power_low_dbm: None,
+                rx_power_high_dbm: None,
+                tx_power_low_dbm: None,
+                tx_power_high_dbm: None,
             })
             .collect();
         results.push(PollResult {
@@ -819,6 +824,9 @@ async fn execute_optical(
     walker: &SnmpWalker,
 ) -> PollResult {
     let mut samples = Vec::new();
+    // Keyed by the *resolved* ifIndex, so an interface seen through two dialects merges into one
+    // row rather than giving core two to upsert in an arbitrary order.
+    let mut windows: BTreeMap<u32, optical::OpticalWindow> = BTreeMap::new();
     // Built lazily and at most once per poll: both dialects that need it walk the same two
     // ENTITY-MIB columns, and a node bound to two vendor profiles must not walk them twice.
     let mut entity: Option<optical::EntityIndex> = None;
@@ -827,9 +835,15 @@ async fn execute_optical(
         if probe.rx_metric.is_none() && probe.tx_metric.is_none() {
             continue;
         }
-        let readings = match optical::simple_dialect(probe.flavor) {
+        let (readings, raw_windows) = match optical::simple_dialect(probe.flavor) {
             Some(dialect) => walk_simple_optical(job, transport, walker, timeout, &dialect).await,
-            None => walk_entity_sensor_optical(job, transport, walker, timeout).await,
+            // ENTITY-SENSOR-MIB has no threshold objects at all — RFC 3433 defines none, and
+            // Cisco's live in a separate table with a different row shape. So this dialect draws
+            // its two lines and no band, which is a stated degradation rather than a missing case.
+            None => (
+                walk_entity_sensor_optical(job, transport, walker, timeout).await,
+                HashMap::new(),
+            ),
         };
         if readings.is_empty() {
             continue;
@@ -838,8 +852,10 @@ async fn execute_optical(
         // Translate entPhysicalIndex → ifIndex for the dialects that need it. A row that does not
         // translate is DROPPED: emitting it under its raw entity index would land the series on
         // `MetricDimension::Entity`, which costs storage and appears on no chart (decision 3).
-        let resolved = if probe.flavor.is_ifindex_keyed() {
-            readings
+        // The thresholds travel through exactly the same translation — they are keyed by the same
+        // row, so a window that survives while its reading did not would be a band with no line.
+        let (resolved, resolved_windows) = if probe.flavor.is_ifindex_keyed() {
+            (readings, raw_windows)
         } else {
             let idx = match &entity {
                 Some(idx) => idx,
@@ -864,8 +880,13 @@ async fn execute_optical(
                     "optical rows dropped: no interface maps to their physical entity"
                 );
             }
-            mapped
+            let mapped_windows = raw_windows
+                .into_iter()
+                .filter_map(|(ent, w)| idx.ifindex_for(ent).map(|ifindex| (ifindex, w)))
+                .collect();
+            (mapped, mapped_windows)
         };
+        windows.extend(resolved_windows);
 
         for s in optical::dedupe_readings(resolved) {
             let metric = match s.reading {
@@ -890,7 +911,23 @@ async fn execute_optical(
         // Never a liveness statement — see the doc comment.
         outcome: CheckOutcome::Reachable,
         samples,
-        interfaces: Vec::new(),
+        // ⚠️ These carry the thresholds and NOTHING else — no name, no alias, no speed. Core's
+        // interface upsert COALESCEs every column against its existing value, so the `None`s
+        // preserve whatever the metadata walk stored rather than blanking it. That property is
+        // what makes it safe to write the same row from two different probes, and it has a test.
+        interfaces: windows
+            .into_iter()
+            .map(|(ifindex, w)| DiscoveredInterface {
+                ifindex: IfIndex(ifindex),
+                if_name: None,
+                if_alias: None,
+                if_speed: None,
+                rx_power_low_dbm: w.rx_low,
+                rx_power_high_dbm: w.rx_high,
+                tx_power_low_dbm: w.tx_low,
+                tx_power_high_dbm: w.tx_high,
+            })
+            .collect(),
         sys_descr: None,
         dns_chain: None,
         neighbors: None,
@@ -903,39 +940,87 @@ async fn execute_optical(
     }
 }
 
-/// Walk a two-column optical dialect and scale it to dBm. Indices are whatever the dialect keys
-/// on; the caller translates them if needed.
+/// Walk a two-column optical dialect and scale it to dBm, together with the module's own
+/// acceptable window when the dialect publishes one. Indices are whatever the dialect keys on;
+/// the caller translates them if needed.
+///
+/// One walk for readings and thresholds together: they live in the same table, and the thresholds
+/// are what turn a dBm figure into something an operator can act on, so splitting them would
+/// double the SNMP sessions to draw one chart.
 async fn walk_simple_optical(
     job: &PollJob,
     transport: &dyn Transport,
     walker: &SnmpWalker,
     timeout: Duration,
     dialect: &optical::SimpleDialect,
-) -> Vec<optical::OpticalSample> {
-    let columns = vec![dialect.rx_oid.to_owned(), dialect.tx_oid.to_owned()];
+) -> (
+    Vec<optical::OpticalSample>,
+    HashMap<u32, optical::OpticalWindow>,
+) {
+    let mut columns = vec![dialect.rx_oid.to_owned(), dialect.tx_oid.to_owned()];
+    if let Some(l) = dialect.limits {
+        columns.extend([
+            l.rx_low_oid.to_owned(),
+            l.rx_high_oid.to_owned(),
+            l.tx_low_oid.to_owned(),
+            l.tx_high_oid.to_owned(),
+        ]);
+    }
     let rows = match walker.walk(transport, job.target, &columns, timeout).await {
         Ok(rows) => rows,
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "optical walk failed");
-            return Vec::new();
+            return (Vec::new(), HashMap::new());
         }
     };
-    rows.into_iter()
-        .filter_map(|row| {
-            let reading = if row.oid_base == dialect.rx_oid {
-                optical::OpticalReading::Rx
-            } else if row.oid_base == dialect.tx_oid {
-                optical::OpticalReading::Tx
-            } else {
-                return None;
-            };
-            Some(optical::OpticalSample {
+
+    let mut samples = Vec::new();
+    // Raw, unvalidated bounds per row key; validated in one pass below so a bad pair is refused
+    // as a pair rather than half-kept.
+    let mut raw: HashMap<u32, optical::OpticalWindow> = HashMap::new();
+    for row in rows {
+        let base = row.oid_base.as_str();
+        let scaled = row.value * dialect.scale;
+        if base == dialect.rx_oid || base == dialect.tx_oid {
+            samples.push(optical::OpticalSample {
                 ifindex: row.ifindex,
-                reading,
-                dbm: row.value * dialect.scale,
-            })
+                reading: if base == dialect.rx_oid {
+                    optical::OpticalReading::Rx
+                } else {
+                    optical::OpticalReading::Tx
+                },
+                dbm: scaled,
+            });
+            continue;
+        }
+        let Some(l) = dialect.limits else { continue };
+        let w = raw.entry(row.ifindex).or_default();
+        if base == l.rx_low_oid {
+            w.rx_low = Some(scaled);
+        } else if base == l.rx_high_oid {
+            w.rx_high = Some(scaled);
+        } else if base == l.tx_low_oid {
+            w.tx_low = Some(scaled);
+        } else if base == l.tx_high_oid {
+            w.tx_high = Some(scaled);
+        }
+    }
+
+    let windows = raw
+        .into_iter()
+        .filter_map(|(ifindex, w)| {
+            let (rx_low, rx_high) = optical::validated_window(w.rx_low, w.rx_high);
+            let (tx_low, tx_high) = optical::validated_window(w.tx_low, w.tx_high);
+            let out = optical::OpticalWindow {
+                rx_low,
+                rx_high,
+                tx_low,
+                tx_high,
+            };
+            (!out.is_empty()).then_some((ifindex, out))
         })
-        .collect()
+        .collect();
+    (samples, windows)
 }
 
 /// Walk ENTITY-SENSOR-MIB and correlate its columns into dBm readings keyed by
@@ -1441,6 +1526,12 @@ async fn walk_interface_metadata(
         if_name: None,
         if_alias: None,
         if_speed: None,
+        // The metadata walk never reads thresholds — they come from the optical probe, and core's
+        // upsert COALESCEs, so leaving them None here preserves whatever that probe stored.
+        rx_power_low_dbm: None,
+        rx_power_high_dbm: None,
+        tx_power_low_dbm: None,
+        tx_power_high_dbm: None,
     };
 
     if !string_oids.is_empty() {
@@ -2054,6 +2145,12 @@ mod tests {
                 if_name: Some("WAN1".into()),
                 if_alias: None,
                 if_speed: None,
+                // A Meraki uplink is not an SNMP transceiver; the optical window is never filled
+                // from this path, and `None` here leaves anything already stored untouched.
+                rx_power_low_dbm: None,
+                rx_power_high_dbm: None,
+                tx_power_low_dbm: None,
+                tx_power_high_dbm: None,
             }]
         );
     }

@@ -28,6 +28,8 @@ import {
   faultValues,
   hasOpticalData,
   latestDiscardRate,
+  opticalBands,
+  opticalWindowText,
   latestErrorRate,
   latestRxPower,
   latestTxPower,
@@ -659,10 +661,42 @@ function InterfaceDock({
         : [],
     [series, isOptical, opticalKeys],
   );
-  // Memoized for the same reason as `bw`: MetricChart compares `yRange` by reference.
-  const opticalRange = useMemo(() => (isOptical ? opticalYRange(series) : undefined), [series, isOptical]);
+  // The module's own acceptable window, from the interface row rather than the series — it is an
+  // attribute like `if_speed`, not a measurement, and is what the red bandwidth line's data is to
+  // the throughput chart. Memoized because MetricChart compares both props by reference.
+  const opticalBandSpecs = useMemo(() => (isOptical ? opticalBands(row) : []), [row, isOptical]);
+  const opticalChartBands = useMemo(
+    () =>
+      opticalBandSpecs.map((b) => {
+        const spec = OPTICAL_SERIES.find((o) => o.key === b.key);
+        return {
+          from: b.from,
+          to: b.to,
+          // The lane is tinted with its own line's colour, so which window belongs to which
+          // direction is read by hue instead of remembered. Faint enough that two overlapping
+          // windows stay legible where they cross.
+          color: `${PALETTE[spec ? spec.colorIndex : 0]}22`,
+        };
+      }),
+    [opticalBandSpecs],
+  );
+  const opticalRange = useMemo(
+    () => (isOptical ? opticalYRange(series, opticalBandSpecs) : undefined),
+    [series, isOptical, opticalBandSpecs],
+  );
   const rxPower = latestRxPower(series);
   const txPower = latestTxPower(series);
+  // The same windows the bands shade, written out. Text is the precise form and the one that
+  // survives a screenshot; the band is the glanceable form. Neither is derived from the other —
+  // both read `opticalBandSpecs`, so they cannot disagree.
+  const rxWindow = opticalWindowText(
+    opticalBandSpecs.find((b) => b.key === 'rx_power_dbm'),
+    formatDbm,
+  );
+  const txWindow = opticalWindowText(
+    opticalBandSpecs.find((b) => b.key === 'tx_power_dbm'),
+    formatDbm,
+  );
 
   return (
     <div className="nd-if-dock" style={resize ? { height: `${resize.height}px` } : undefined}>
@@ -721,10 +755,12 @@ function InterfaceDock({
                 <span>
                   <span className="nd-muted">{t('interfaces.opticalRxShort')}</span>{' '}
                   {formatDbm(rxPower)}
+                  {rxWindow && <span className="nd-muted"> ({rxWindow})</span>}
                 </span>
                 <span>
                   <span className="nd-muted">{t('interfaces.opticalTxShort')}</span>{' '}
                   {formatDbm(txPower)}
+                  {txWindow && <span className="nd-muted"> ({txWindow})</span>}
                 </span>
               </>
             )}
@@ -860,6 +896,7 @@ function InterfaceDock({
                 yFormat={formatDbm}
                 legendFormat={formatDbm}
                 yRange={opticalRange}
+                referenceBands={opticalChartBands}
                 xRange={win ?? undefined}
                 series={opticalSeries}
                 syncKey={DOCK_CURSOR_SYNC}

@@ -5,6 +5,8 @@ import {
   faultValues,
   hasOpticalData,
   latestDiscardRate,
+  opticalBands,
+  opticalWindowText,
   latestErrorRate,
   latestRxPower,
   latestTxPower,
@@ -333,5 +335,87 @@ describe('latestRxPower / latestTxPower', () => {
 
   it('report a genuine 0 dBm rather than treating it as absent', () => {
     expect(latestRxPower(series({ rx_power_dbm: [0] }))).toBe(0);
+  });
+});
+
+describe('opticalBands', () => {
+  const full = {
+    rx_power_low_dbm: -24,
+    rx_power_high_dbm: -3,
+    tx_power_low_dbm: -9,
+    tx_power_high_dbm: -1,
+  };
+
+  it('shades one lane per direction, matched to that line', () => {
+    const bands = opticalBands(full);
+    expect(bands).toEqual([
+      { key: 'rx_power_dbm', from: -24, to: -3 },
+      { key: 'tx_power_dbm', from: -9, to: -1 },
+    ]);
+  });
+
+  it('is empty for a port that reports no window at all', () => {
+    expect(opticalBands({})).toEqual([]);
+    expect(opticalBands({ rx_power_low_dbm: null, rx_power_high_dbm: null })).toEqual([]);
+  });
+
+  // A rectangle needs two sides. Shading from a real bound to the edge of the plot would read as
+  // "everything above here is fine", which the module never said.
+  it('skips a direction that has only one end', () => {
+    expect(opticalBands({ rx_power_low_dbm: -24 })).toEqual([]);
+    expect(opticalBands({ tx_power_high_dbm: -1 })).toEqual([]);
+  });
+
+  it('skips an inverted or zero-width window rather than drawing it inside out', () => {
+    expect(opticalBands({ rx_power_low_dbm: -3, rx_power_high_dbm: -24 })).toEqual([]);
+    expect(opticalBands({ rx_power_low_dbm: -7, rx_power_high_dbm: -7 })).toEqual([]);
+  });
+
+  it('keeps the directions independent when only one has a window', () => {
+    expect(opticalBands({ tx_power_low_dbm: -9, tx_power_high_dbm: -1 })).toEqual([
+      { key: 'tx_power_dbm', from: -9, to: -1 },
+    ]);
+  });
+});
+
+describe('opticalYRange with bands', () => {
+  // 🚨 The reason this widens at all: MetricChart clamps a band to the plot, so a window below the
+  // visible minimum would clamp to zero height and never be drawn. A band the operator cannot see
+  // is the same as no band, and the margin to the floor is the whole point of showing one.
+  it('widens the axis so the band is inside it', () => {
+    const s = series({ rx_power_dbm: [-7.4] });
+    const bands = [{ key: 'rx_power_dbm' as const, from: -24, to: -3 }];
+    expect(opticalYRange(s, bands)).toEqual([-25, -2]);
+  });
+
+  it('leaves the tight data range alone when no band is given', () => {
+    const s = series({ rx_power_dbm: [-7.4] });
+    expect(opticalYRange(s)).toEqual([-9, -6]);
+  });
+
+  it('does not widen for a band when the port has reported nothing', () => {
+    const bands = [{ key: 'rx_power_dbm' as const, from: -24, to: -3 }];
+    expect(opticalYRange(series({}), bands)).toBeUndefined();
+  });
+});
+
+describe('opticalWindowText', () => {
+  const fmt = (v: number) => `${v.toFixed(1)} dBm`;
+
+  it('is null when the module reports no window for that direction', () => {
+    expect(opticalWindowText(undefined, fmt)).toBeNull();
+  });
+
+  it('writes the window as a range, formatted by the caller', () => {
+    expect(opticalWindowText({ key: 'rx_power_dbm', from: -24, to: -3 }, fmt)).toBe(
+      '-24.0 dBm … -3.0 dBm',
+    );
+  });
+
+  // The low end reads first, which is the order an operator checks: the floor is the one a
+  // degrading link approaches.
+  it('puts the low bound first', () => {
+    const text = opticalWindowText({ key: 'tx_power_dbm', from: -9, to: -1 }, fmt)!;
+    expect(text.indexOf('-9.0')).toBeLessThan(text.indexOf('-1.0'));
   });
 });
