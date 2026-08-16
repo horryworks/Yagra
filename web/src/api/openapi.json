@@ -11535,7 +11535,7 @@
         ],
         "responses": {
           "200": {
-            "description": "In/out throughput, error rates and discard rates on one shared timestamp axis",
+            "description": "In/out throughput in bits/sec and in unicast packets/sec, plus error and discard rates, all on one shared timestamp axis",
             "content": {
               "application/json": {
                 "schema": {
@@ -24621,11 +24621,13 @@
       },
       "InterfaceSeries": {
         "type": "object",
-        "description": "Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,\nfrom `rate()` of the octet counters), In/Out errors, and In/Out discards (both per second).\n\nErrors and discards are separate because their causes are: an error is a frame that arrived\ndamaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong\nwith it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the\nwrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.\n\nAll six share one `timestamps` axis — the union of returned points, with `null` in the gaps —\nso the chart gets aligned series rather than six independently-indexed ones. Derived at query\ntime (ADR-012); empty when there is no history.",
+        "description": "Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per\nsecond** and in **packets per second**, In/Out errors, and In/Out discards.\n\nOnly the throughput pair has two units, and that is a property of the MIB rather than a\nshortcut: IF-MIB counts errored and discarded frames but never their octets, so\n`in_errors`/`out_errors`/`in_discards`/`out_discards` are packets per second and there is no\nbits-per-second form of them to ask for.\n\n`in_ucast_pps`/`out_ucast_pps` are **unicast only** (`ifHCInUcastPkts`/`ifHCOutUcastPkts`);\nmulticast and broadcast frames are not counted. The name says so rather than the documentation\nalone, so that a future total can be added as a new field instead of silently changing what an\nexisting number means. Two consequences for a client: on a link carrying heavy broadcast the\npacket rate reads low, and dividing bits by packets overstates the average frame size.\n\nErrors and discards are separate because their causes are: an error is a frame that arrived\ndamaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong\nwith it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the\nwrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.\n\nAll eight share one `timestamps` axis — the union of returned points, with `null` in the gaps —\nso the chart gets aligned series rather than eight independently-indexed ones. Derived at query\ntime (ADR-012); empty when there is no history. The packet counters entered the default\ncollection set in ADR-060, so on a deployment upgraded from an earlier version the pps arrays\nare empty for every window predating that upgrade while the bps arrays are populated.",
         "required": [
           "timestamps",
           "in_bps",
           "out_bps",
+          "in_ucast_pps",
+          "out_ucast_pps",
           "in_errors",
           "out_errors",
           "in_discards",
@@ -24662,6 +24664,16 @@
               "format": "double"
             }
           },
+          "in_ucast_pps": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
           "out_bps": {
             "type": "array",
             "items": {
@@ -24683,6 +24695,16 @@
             }
           },
           "out_errors": {
+            "type": "array",
+            "items": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            }
+          },
+          "out_ucast_pps": {
             "type": "array",
             "items": {
               "type": [

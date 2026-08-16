@@ -500,22 +500,37 @@ async fn get_node_metric_range(
 
 // ── One interface's series ───────────────────────────────────────────────────
 
-/// Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,
-/// from `rate()` of the octet counters), In/Out errors, and In/Out discards (both per second).
+/// Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per
+/// second** and in **packets per second**, In/Out errors, and In/Out discards.
+///
+/// Only the throughput pair has two units, and that is a property of the MIB rather than a
+/// shortcut: IF-MIB counts errored and discarded frames but never their octets, so
+/// `in_errors`/`out_errors`/`in_discards`/`out_discards` are packets per second and there is no
+/// bits-per-second form of them to ask for.
+///
+/// `in_ucast_pps`/`out_ucast_pps` are **unicast only** (`ifHCInUcastPkts`/`ifHCOutUcastPkts`);
+/// multicast and broadcast frames are not counted. The name says so rather than the documentation
+/// alone, so that a future total can be added as a new field instead of silently changing what an
+/// existing number means. Two consequences for a client: on a link carrying heavy broadcast the
+/// packet rate reads low, and dividing bits by packets overstates the average frame size.
 ///
 /// Errors and discards are separate because their causes are: an error is a frame that arrived
 /// damaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong
 /// with it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the
 /// wrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.
 ///
-/// All six share one `timestamps` axis — the union of returned points, with `null` in the gaps —
-/// so the chart gets aligned series rather than six independently-indexed ones. Derived at query
-/// time (ADR-012); empty when there is no history.
+/// All eight share one `timestamps` axis — the union of returned points, with `null` in the gaps —
+/// so the chart gets aligned series rather than eight independently-indexed ones. Derived at query
+/// time (ADR-012); empty when there is no history. The packet counters entered the default
+/// collection set in ADR-060, so on a deployment upgraded from an earlier version the pps arrays
+/// are empty for every window predating that upgrade while the bps arrays are populated.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub(crate) struct InterfaceSeries {
     pub timestamps: Vec<i64>,
     pub in_bps: Vec<Option<f64>>,
     pub out_bps: Vec<Option<f64>>,
+    pub in_ucast_pps: Vec<Option<f64>>,
+    pub out_ucast_pps: Vec<Option<f64>>,
     pub in_errors: Vec<Option<f64>>,
     pub out_errors: Vec<Option<f64>>,
     pub in_discards: Vec<Option<f64>>,
@@ -530,7 +545,7 @@ pub(crate) struct InterfaceSeries {
         RangeQuery,
     ),
     responses(
-        (status = 200, description = "In/out throughput, error rates and discard rates on one shared timestamp axis", body = InterfaceSeries),
+        (status = 200, description = "In/out throughput in bits/sec and in unicast packets/sec, plus error and discard rates, all on one shared timestamp axis", body = InterfaceSeries),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the read permission", body = super::error::ErrorBody),
     ),
@@ -568,29 +583,36 @@ pub(crate) fn interface_series_step(from: i64, to: i64, requested: Option<u64>) 
     (step, (step * 4).max(DEFAULT_RATE_LOOKBACK_SECS))
 }
 
-/// One interface's six raw counter-rate series, before alignment onto a shared axis.
+/// One interface's eight raw counter-rate series, before alignment onto a shared axis.
 ///
-/// A struct rather than six positional `&[MetricPoint]` arguments **because they are all the same
+/// A struct rather than eight positional `&[MetricPoint]` arguments **because they are all the same
 /// type**: a transposed pair would compile silently and draw discards on the errors chart. Naming
 /// them is the only thing that makes the call site checkable.
 struct RawInterfaceRates<'a> {
     in_oct: &'a [MetricPoint],
     out_oct: &'a [MetricPoint],
+    in_pkt: &'a [MetricPoint],
+    out_pkt: &'a [MetricPoint],
     in_err: &'a [MetricPoint],
     out_err: &'a [MetricPoint],
     in_disc: &'a [MetricPoint],
     out_disc: &'a [MetricPoint],
 }
 
-/// One interface's six aligned series (ADR-042 I1's `get_interface_series` reads this too).
+/// One interface's eight aligned series (ADR-042 I1's `get_interface_series` reads this too).
 ///
-/// The six metric names, the step/lookback rule and the ×8 bytes→bits scaling live here rather
+/// The eight metric names, the step/lookback rule and the ×8 bytes→bits scaling live here rather
 /// than in the handler because a second surface needs the same answer, and reproducing it there
 /// would mean a model (or a maintainer) having to know all three.
 ///
 /// Discards ride along with errors (ADR-046 Inc.4): `if_in_discards` / `if_out_discards` have been
-/// collected since `7fdf2c8` and had no reader, so this is a read-side change only — nothing about
-/// collection, the bus or the catalog moves.
+/// collected since `7fdf2c8` and had no reader, so that increment was a read-side change only.
+/// The unicast packet counters (ADR-060) are the opposite case — they were added to the default
+/// catalog in the same change that reads them, so on an upgraded deployment their arrays are empty
+/// until the poller has run twice (`rate()` needs two samples) and stay empty for any window before
+/// the upgrade. Every unit is fetched on every call rather than behind a `unit=` parameter: the
+/// eight range queries run concurrently so the wall clock is unchanged, and a parameter would make
+/// "this array is empty" mean either "no data" or "you did not ask for it".
 pub(crate) async fn interface_series(
     st: &ApiState,
     node: NodeId,
@@ -601,20 +623,24 @@ pub(crate) async fn interface_series(
 ) -> InterfaceSeries {
     let key = |metric: &str| SeriesKey::interface(node, ifindex, metric);
     let (step, lookback) = interface_series_step(from, to, step);
-    // The six series are independent range queries — fan them out concurrently (this endpoint
+    // The eight series are independent range queries — fan them out concurrently (this endpoint
     // fires per lazy row-sparkline and on the 15s interface-dock refresh). Bind the keys first so
     // they outlive the joined futures.
-    let (k_in, k_out, k_ierr, k_oerr, k_idisc, k_odisc) = (
+    let (k_in, k_out, k_ipkt, k_opkt, k_ierr, k_oerr, k_idisc, k_odisc) = (
         key("if_hc_in_octets"),
         key("if_hc_out_octets"),
+        key("if_hc_in_ucast_pkts"),
+        key("if_hc_out_ucast_pkts"),
         key("if_in_errors"),
         key("if_out_errors"),
         key("if_in_discards"),
         key("if_out_discards"),
     );
-    let (in_oct, out_oct, in_err, out_err, in_disc, out_disc) = tokio::join!(
+    let (in_oct, out_oct, in_pkt, out_pkt, in_err, out_err, in_disc, out_disc) = tokio::join!(
         st.store.rate_range(&k_in, from, to, step, lookback),
         st.store.rate_range(&k_out, from, to, step, lookback),
+        st.store.rate_range(&k_ipkt, from, to, step, lookback),
+        st.store.rate_range(&k_opkt, from, to, step, lookback),
         st.store.rate_range(&k_ierr, from, to, step, lookback),
         st.store.rate_range(&k_oerr, from, to, step, lookback),
         st.store.rate_range(&k_idisc, from, to, step, lookback),
@@ -623,6 +649,8 @@ pub(crate) async fn interface_series(
     align_interface_series(&RawInterfaceRates {
         in_oct: &in_oct,
         out_oct: &out_oct,
+        in_pkt: &in_pkt,
+        out_pkt: &out_pkt,
         in_err: &in_err,
         out_err: &out_err,
         in_disc: &in_disc,
@@ -630,16 +658,16 @@ pub(crate) async fn interface_series(
     })
 }
 
-/// Align the six counter-derived series onto one shared axis.
+/// Align the eight counter-derived series onto one shared axis.
 ///
 /// Octet rates are scaled ×8 here — the counters are bytes and the chart is bits/sec. Doing it at
 /// the edge rather than in the store keeps the stored series raw (ADR-012), and doing it in one
-/// place keeps the two octet series from drifting apart from the error and discard series, which
-/// are counts and are not scaled.
+/// place keeps the two octet series from drifting apart from the packet, error and discard series,
+/// which are all counts and are not scaled.
 fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
     let mut grid_set: std::collections::BTreeSet<i64> = std::collections::BTreeSet::new();
     for s in [
-        r.in_oct, r.out_oct, r.in_err, r.out_err, r.in_disc, r.out_disc,
+        r.in_oct, r.out_oct, r.in_pkt, r.out_pkt, r.in_err, r.out_err, r.in_disc, r.out_disc,
     ] {
         for p in s {
             grid_set.insert(p.t);
@@ -653,6 +681,8 @@ fn align_interface_series(r: &RawInterfaceRates<'_>) -> InterfaceSeries {
     InterfaceSeries {
         in_bps: align(r.in_oct, 8.0),
         out_bps: align(r.out_oct, 8.0),
+        in_ucast_pps: align(r.in_pkt, 1.0),
+        out_ucast_pps: align(r.out_pkt, 1.0),
         in_errors: align(r.in_err, 1.0),
         out_errors: align(r.out_err, 1.0),
         in_discards: align(r.in_disc, 1.0),

@@ -139,8 +139,9 @@ pub const OID_IF_HIGH_SPEED: &str = "1.3.6.1.2.1.31.1.1.1.15";
 /// The standard scalar + interface-table metrics collected by default.
 ///
 /// Scalar: sysUpTime. Table (per-interface, ifXTable/ifTable columns): 64-bit octet
-/// counters, error counters, oper status, and high-speed. Counters are stored **raw**;
-/// utilization is derived from `rate()` at query time (ADR-012).
+/// counters, 64-bit unicast packet counters, error counters, discard counters, oper status, and
+/// high-speed. Counters are stored **raw**; utilization is derived from `rate()` at query time
+/// (ADR-012).
 #[must_use]
 pub fn builtin_catalog() -> Vec<CollectionItem> {
     let scalar = |metric: &str, oid: &str, mk: MetricKind| CollectionItem {
@@ -166,6 +167,24 @@ pub fn builtin_catalog() -> Vec<CollectionItem> {
         table(
             "if_hc_out_octets",
             "1.3.6.1.2.1.31.1.1.1.10",
+            MetricKind::Counter,
+        ),
+        // ifXTable high-capacity unicast *packet* counters (64-bit), the pps counterpart to the
+        // octet counters above — a device's forwarding ceiling is often a packet rate, not a bit
+        // rate, so a link with bandwidth to spare can still be saturated (ADR-060). Same table as
+        // the octets, so this costs no vendor coverage. Unicast only, deliberately: multicast and
+        // broadcast (.8/.9/.12/.13) would triple the added series for a fraction of the traffic on
+        // a normal link, and cardinality is the single biggest design risk (ADR-011). The API
+        // spells the limitation into the field name (`in_ucast_pps`) rather than hiding it, so a
+        // later total can be *added* instead of silently redefining an existing number.
+        table(
+            "if_hc_in_ucast_pkts",
+            "1.3.6.1.2.1.31.1.1.1.7",
+            MetricKind::Counter,
+        ),
+        table(
+            "if_hc_out_ucast_pkts",
+            "1.3.6.1.2.1.31.1.1.1.11",
             MetricKind::Counter,
         ),
         // ifTable error + discard counters. Discards (congestion/queue drops) complement the
@@ -343,7 +362,8 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         BuiltinTemplate {
             name: TEMPLATE_STANDARD_SNMP,
             description:
-                "System uptime + per-interface traffic, errors, and status (any SNMP agent).",
+                "System uptime + per-interface traffic (bits and packets), errors, discards, \
+                 and status (any SNMP agent).",
             items: builtin_catalog(),
         },
         BuiltinTemplate {
@@ -1100,6 +1120,37 @@ mod tests {
         assert_eq!(cpu.oid, OID_HR_PROCESSOR_LOAD);
         assert_eq!(cpu.kind, CollectionKind::Table);
         assert_eq!(cpu.metric_kind, MetricKind::Gauge);
+    }
+
+    /// The pps counterpart to the octet counters (ADR-060). Pinned on three axes because each one
+    /// is a different silent failure: a `Gauge` kind would make the API draw an odometer as if it
+    /// were a rate, a `Scalar` kind would collect one value per *node* instead of per interface,
+    /// and an OID outside `1.3.6.1.2.1.31.1.1.1` (ifXTable) would be a different table's column —
+    /// none of which fails to compile, and none of which is visible on a lab device that happens
+    /// to answer anyway.
+    #[test]
+    fn builtin_catalog_includes_unicast_packet_counters() {
+        let cat = builtin_catalog();
+        for (metric, oid) in [
+            ("if_hc_in_ucast_pkts", "1.3.6.1.2.1.31.1.1.1.7"),
+            ("if_hc_out_ucast_pkts", "1.3.6.1.2.1.31.1.1.1.11"),
+        ] {
+            let item = cat
+                .iter()
+                .find(|i| i.metric_name == metric)
+                .unwrap_or_else(|| panic!("{metric} present in Standard SNMP"));
+            assert_eq!(item.oid, oid, "{metric} OID");
+            assert_eq!(
+                item.kind,
+                CollectionKind::Table,
+                "{metric} is per-interface"
+            );
+            assert_eq!(
+                item.metric_kind,
+                MetricKind::Counter,
+                "{metric} is a raw counter (rate() at query time, ADR-012)"
+            );
+        }
     }
 
     #[test]

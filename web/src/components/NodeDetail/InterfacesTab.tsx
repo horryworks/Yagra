@@ -11,7 +11,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api } from '../../services/api';
-import { formatBps, formatSi } from '../../lib/format';
+import { formatBps, formatPps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
 import { MetricChart, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
@@ -27,6 +27,7 @@ import {
   latestErrorRate,
   sparklinePath,
   throughputBandwidthOverlay,
+  throughputPair,
 } from './interfaceMetrics';
 import {
   defaultDockHeight,
@@ -535,6 +536,9 @@ function InterfaceDock({
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
   const toggleThroughputScale = usePrefsStore((s) => s.toggleThroughputScale);
+  const rateUnit = usePrefsStore((s) => s.rateUnit);
+  const toggleRateUnit = usePrefsStore((s) => s.toggleRateUnit);
+  const isPps = rateUnit === 'pps';
   // How the charts are sized, as ONE object used by both so the pair cannot drift.
   //
   // Desktop: `fill`, tracking the dock's height via MetricChart's own ResizeObserver. That is not a
@@ -582,21 +586,22 @@ function InterfaceDock({
   // prop by reference (its own doc asks for a stable one). Harmless while the dock only re-rendered
   // on a 15s tick; during a drag it would be a `setData` — a scale reset plus a redraw — per frame.
   const bw = useMemo(
-    () => throughputBandwidthOverlay(row.if_speed_bps, throughputScale),
-    [row.if_speed_bps, throughputScale],
+    () => throughputBandwidthOverlay(row.if_speed_bps, throughputScale, rateUnit),
+    [row.if_speed_bps, throughputScale, rateUnit],
   );
+  // `false` in pps mode by construction (the overlay returns nothing there), which is what removes
+  // the bandwidth line, the fit/capacity toggle and the legend's bandwidth entry in one move —
+  // rather than three call sites each remembering the unit.
   const hasBandwidth = bw.referenceLine != null;
   // Same reason: a fresh array each render is a fresh `series` prop.
-  const throughputSeries = useMemo(
-    () =>
-      series
-        ? [
-            { label: t('interfaces.in'), values: series.in_bps, color: SERIES_IN },
-            { label: t('interfaces.out'), values: series.out_bps, color: SERIES_OUT },
-          ]
-        : [],
-    [series, t],
-  );
+  const throughputSeries = useMemo(() => {
+    if (!series) return [];
+    const [inArr, outArr] = throughputPair(series, rateUnit);
+    return [
+      { label: t('interfaces.in'), values: inArr, color: SERIES_IN },
+      { label: t('interfaces.out'), values: outArr, color: SERIES_OUT },
+    ];
+  }, [series, rateUnit, t]);
   const errorSeries = useMemo(
     () =>
       series
@@ -658,7 +663,7 @@ function InterfaceDock({
             {errRate != null && errRate > 0 && (
               <span>
                 <span className="nd-muted">{t('interfaces.err')}</span>{' '}
-                <span className="nd-if-dock-err">{errRate.toFixed(1)}/s</span>
+                <span className="nd-if-dock-err">{formatPps(errRate)}</span>
               </span>
             )}
             {/* Shown only when non-zero, like the error tile: a permanent `Disc 0.0/s` on every
@@ -666,7 +671,7 @@ function InterfaceDock({
             {discRate != null && discRate > 0 && (
               <span>
                 <span className="nd-muted">{t('interfaces.disc')}</span>{' '}
-                <span className="nd-if-dock-err">{discRate.toFixed(1)}/s</span>
+                <span className="nd-if-dock-err">{formatPps(discRate)}</span>
               </span>
             )}
           </span>
@@ -690,9 +695,26 @@ function InterfaceDock({
           <div className="nd-if-chart-t">
             <span>
               {t('interfaces.throughput')}{' '}
-              <span className="nd-unit">{t('interfaces.throughputUnit')}</span>
+              <span className="nd-unit">
+                {isPps ? t('interfaces.throughputUnitPps') : t('interfaces.throughputUnit')}
+              </span>
             </span>
             <span className="nd-if-chart-ctl">
+              {/* Only this chart carries a unit toggle. Errors and discards below are packets/sec
+                  with no other form (IF-MIB counts errored and discarded frames, never their
+                  octets), so a dock-level control would promise more than it can do — ADR-060. */}
+              <button
+                type="button"
+                className="nd-if-scale-toggle"
+                onClick={toggleRateUnit}
+                title={
+                  isPps
+                    ? t('interfaces.rateUnitToggleTitlePps')
+                    : t('interfaces.rateUnitToggleTitleBps')
+                }
+              >
+                {isPps ? t('interfaces.rateUnitPps') : t('interfaces.rateUnitBps')}
+              </button>
               {hasBandwidth && (
                 <button
                   type="button"
@@ -718,7 +740,7 @@ function InterfaceDock({
               {...chartSizing}
               timestamps={ts}
               yFormat={formatSi}
-              legendFormat={formatBps}
+              legendFormat={isPps ? formatPps : formatBps}
               yRange={bw.yRange}
               xRange={win ?? undefined}
               referenceLine={bw.referenceLine}
@@ -743,7 +765,7 @@ function InterfaceDock({
               {...chartSizing}
               timestamps={ts}
               yFormat={formatSi}
-              legendFormat={(v) => `${formatSi(v)}/s`}
+              legendFormat={formatPps}
               xRange={win ?? undefined}
               series={errorSeries}
             />
@@ -770,7 +792,7 @@ function InterfaceDock({
               {...chartSizing}
               timestamps={ts}
               yFormat={formatSi}
-              legendFormat={(v) => `${formatSi(v)}/s`}
+              legendFormat={formatPps}
               xRange={win ?? undefined}
               series={discardSeries}
             />

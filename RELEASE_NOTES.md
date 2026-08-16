@@ -11,20 +11,39 @@
 ## Unreleased
 
 ### New Features
+- **The interface Throughput chart switches between bits/sec and packets/sec.** A device's
+  forwarding ceiling is often a packet rate rather than a bit rate, so a link with bandwidth to
+  spare can still be saturated — until now there was no way to see that. A **bps / pps** button in
+  the chart header flips the unit; the choice is remembered and applies to every interface.
+  - **Two metrics are now collected by default**: `if_hc_in_ucast_pkts` and
+    `if_hc_out_ucast_pkts` (IF-MIB `ifHCInUcastPkts` / `ifHCOutUcastPkts`,
+    `1.3.6.1.2.1.31.1.1.1.7` and `.11`). They live in the same ifXTable as the octet counters the
+    bits/sec line already uses, so no device loses coverage — but they add two series per
+    interface, and **an upgraded deployment has no packet history before the upgrade**, so the pps
+    view is empty for older windows and fills in from the first two polls onward.
+  - Unicast only: multicast and broadcast frames are not counted, so a link carrying heavy
+    broadcast reads low, and dividing bits by packets overstates the average frame size.
+  - The bandwidth reference line and the fit/capacity axis toggle are hidden in pps mode —
+    `ifSpeed` is a bit rate and would draw a meaningless line on a packet axis.
+  - **The Errors and Discards charts are unaffected and have no bps form.** IF-MIB counts errored
+    and discarded *frames* but never their octets, so those two are packets/sec by nature. Their
+    unit labels now say so (`(In / Out, pps)` rather than the previous `(In / Out, /s)`).
 - **Interface discards are now graphed.** `ifInDiscards` / `ifOutDiscards` (IF-MIB
   `1.3.6.1.2.1.2.2.1.13` and `.19`, standard on essentially every SNMP agent) have been collected
   since v0.1.x but had no reader, so the counters were in the TSDB and invisible everywhere. A node's
-  **Interfaces** tab now shows a third chart, **Discards (In / Out, /s)**, beside Throughput and
+  **Interfaces** tab now shows a third chart, **Discards (In / Out, pps)**, beside Throughput and
   Errors, and the dock header gains a **Disc** figure when the rate is non-zero. Discards get their
   own chart rather than extra lines on the Errors one because the two mean different faults — an
   error is a frame that arrived damaged (cabling, optics, NIC), a discard is a frame the device
   dropped although nothing was wrong with it (congestion, queue overflow, ACL).
 - **New dashboard widget: "Most interface discards".** Ranks the fleet's interfaces by discards/sec
   (in + out), alongside the existing "Most interface errors".
-- **`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series` returns two more arrays**,
-  `in_discards` and `out_discards`, on the same shared timestamp axis as the existing four. This is
-  an additive change — existing clients are unaffected. The MCP `get_interface_series` tool returns
-  them too.
+- **`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series` returns four more arrays**:
+  `in_discards` / `out_discards`, and `in_ucast_pps` / `out_ucast_pps`, all on the same shared
+  timestamp axis as the existing four. This is an additive change — existing clients are
+  unaffected. The MCP `get_interface_series` tool returns them too. The packet arrays are named for
+  what they count so that a future total (adding multicast and broadcast) can arrive as a new field
+  rather than silently changing what an existing number means.
 
 ### Bug Fixes
 - **Data coverage no longer reports healthy URL, DNS and Meraki monitors as silent.** The gauge on

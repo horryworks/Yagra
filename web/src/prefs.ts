@@ -29,6 +29,18 @@ export type UiMode = 'auto' | 'desktop';
  *  global pref so toggling it on one chart applies everywhere and survives reload. */
 export type ThroughputScale = 'fit' | 'capacity';
 
+/** Which unit the interface Throughput chart plots (ADR-060). `bps` is bits per second, derived
+ *  from the octet counters; `pps` is unicast packets per second, from `ifHCIn/OutUcastPkts`.
+ *
+ *  ⚠️ **This applies to the throughput chart alone.** The errors and discards charts beside it are
+ *  packets per second and have no other form — IF-MIB counts errored and discarded frames but never
+ *  their octets — so a dock-wide toggle would appear to govern three charts while changing one.
+ *
+ *  ⚠️ **`pps` also removes the bandwidth reference line and the capacity Y-axis**, because both come
+ *  from `ifSpeed` in bits/sec. That rule lives in `throughputBandwidthOverlay`, not at the call
+ *  site, so it is unit-testable. */
+export type RateUnit = 'bps' | 'pps';
+
 interface PrefsStore {
   theme: Theme;
   /** Active interface language (default English). Applied app-wide via i18next; see App.tsx. */
@@ -40,6 +52,10 @@ interface PrefsStore {
   nodeTreeCollapsed: Record<string, true>;
   /** Global Y-axis mode for interface throughput charts (see [`ThroughputScale`]). */
   throughputScale: ThroughputScale;
+  /** Global unit for interface throughput charts (see [`RateUnit`]). Local-only, like
+   *  `throughputScale` beside it — not synced to the account (ADR-058 carries `interfaceDockHeight`
+   *  alone, and splitting the two chart toggles across two homes would be the surprise). */
+  rateUnit: RateUnit;
   /** Layout-mode override; `auto` follows the viewport (see [`UiMode`] / `lib/viewport.ts`). */
   uiMode: UiMode;
   /** Collapse the Nodes page inventory-tree pane to a slim rail so the node detail uses the full
@@ -72,6 +88,9 @@ interface PrefsStore {
   setThroughputScale: (scale: ThroughputScale) => void;
   /** Flip the throughput Y-axis between fit-to-traffic and scale-to-capacity (global + persisted). */
   toggleThroughputScale: () => void;
+  setRateUnit: (unit: RateUnit) => void;
+  /** Flip the throughput chart between bits/sec and unicast packets/sec (global + persisted). */
+  toggleRateUnit: () => void;
   /** Set the layout-mode override (`auto` follows the viewport; `desktop` pins the desktop shell). */
   setUiMode: (mode: UiMode) => void;
   /** Toggle the Nodes inventory pane between full and a slim rail (persisted). */
@@ -91,6 +110,9 @@ export const usePrefsStore = create<PrefsStore>()(
       sidebarCollapsed: false,
       nodeTreeCollapsed: {},
       throughputScale: 'fit',
+      // Bits/sec is the default because it is what a link is sold and configured in, and it is the
+      // only unit with history on a deployment upgraded to ADR-060.
+      rateUnit: 'bps',
       uiMode: 'auto',
       nodesPaneCollapsed: false,
       // Absent from every `yagra_prefs` written before this shipped. `persist` merges the stored
@@ -113,6 +135,8 @@ export const usePrefsStore = create<PrefsStore>()(
       setThroughputScale: (throughputScale) => set({ throughputScale }),
       toggleThroughputScale: () =>
         set((s) => ({ throughputScale: s.throughputScale === 'fit' ? 'capacity' : 'fit' })),
+      setRateUnit: (rateUnit) => set({ rateUnit }),
+      toggleRateUnit: () => set((s) => ({ rateUnit: s.rateUnit === 'bps' ? 'pps' : 'bps' })),
       setUiMode: (uiMode) => set({ uiMode }),
       toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),

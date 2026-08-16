@@ -556,16 +556,26 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "One interface's traffic history: in/out throughput in bits/sec, in/out error \
-                       rates and in/out discard rates, all on one shared timestamp axis (nulls mark \
-                       gaps). Errors and discards are different faults: an error is a frame that \
-                       arrived damaged (cabling, optics, NIC), a discard is a frame the device \
-                       dropped although nothing was wrong with it (congestion, queue overflow, \
-                       ACL) — do not read one as evidence of the other. Give \
-                       `node_id` and `ifindex` (from get_node_status's interfaces). `from`/`to` are \
-                       Unix seconds (default: last hour) and `step` is the sample interval in \
-                       seconds (clamped; defaults to ~120 points across the window). This is the \
-                       per-interface counterpart to query_metrics, which is node-level only."
+        description = "One interface's traffic history: in/out throughput in bits/sec \
+                       (`in_bps`/`out_bps`) and in unicast packets/sec \
+                       (`in_ucast_pps`/`out_ucast_pps`), plus in/out error rates and in/out discard \
+                       rates, all on one shared timestamp axis (nulls mark gaps). Consult both \
+                       units before calling a link healthy: a device's forwarding ceiling is often \
+                       a packet rate, so a link well under its bandwidth can still be saturated. \
+                       The packet counters are unicast only, so a link carrying heavy broadcast \
+                       reads low and bits divided by packets overstates the average frame size; \
+                       they also only exist from the deployment's upgrade to the release that \
+                       began collecting them, so an empty pps array over an old window is expected \
+                       rather than a fault. Errors and discards are different faults: an error is \
+                       a frame that arrived damaged (cabling, optics, NIC), a discard is a frame \
+                       the device dropped although nothing was wrong with it (congestion, queue \
+                       overflow, ACL) — do not read one as evidence of the other. Both are counted \
+                       in packets; IF-MIB has no byte counter for either, so there is no \
+                       bits/sec form of them. Give `node_id` and `ifindex` (from get_node_status's \
+                       interfaces). `from`/`to` are Unix seconds (default: last hour) and `step` is \
+                       the sample interval in seconds (clamped; defaults to ~120 points across the \
+                       window). This is the per-interface counterpart to query_metrics, which is \
+                       node-level only."
     )]
     async fn get_interface_series(
         &self,
@@ -593,7 +603,7 @@ impl YagraMcp {
         if from >= to {
             return tool_bad_params("get_interface_series", "`from` must be earlier than `to`");
         }
-        // The four metric names, the step/lookback rule and the ×8 bytes→bits scaling all live in
+        // The eight metric names, the step/lookback rule and the ×8 bytes→bits scaling all live in
         // `api::metrics` — reproducing them here would mean this surface silently answering a
         // different question from the one the node-detail chart answers.
         let series = crate::api::metrics::interface_series(
@@ -4536,10 +4546,10 @@ mod tests {
         }
     }
 
-    /// The alignment invariant is what can be silently wrong here: four series on one axis, so a
-    /// chart — or a model — can read column `j` across all four without bounds-checking.
+    /// The alignment invariant is what can be silently wrong here: eight series on one axis, so a
+    /// chart — or a model — can read column `j` across all eight without bounds-checking.
     #[tokio::test]
-    async fn an_interface_series_returns_six_arrays_on_one_axis() {
+    async fn an_interface_series_returns_eight_arrays_on_one_axis() {
         let r = mcp()
             .interface_series_in(
                 InterfaceSeriesParams {
@@ -4558,6 +4568,8 @@ mod tests {
         for k in [
             "in_bps",
             "out_bps",
+            "in_ucast_pps",
+            "out_ucast_pps",
             "in_errors",
             "out_errors",
             "in_discards",

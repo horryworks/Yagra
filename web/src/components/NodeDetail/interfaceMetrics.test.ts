@@ -5,6 +5,7 @@ import {
   latestErrorRate,
   sparklinePath,
   throughputBandwidthOverlay,
+  throughputPair,
 } from './interfaceMetrics';
 import { formatBps } from '../../lib/format';
 import type { InterfaceSeries } from '../../types/api';
@@ -14,6 +15,8 @@ function series(partial: Partial<InterfaceSeries>): InterfaceSeries {
     timestamps: [],
     in_bps: [],
     out_bps: [],
+    in_ucast_pps: [],
+    out_ucast_pps: [],
     in_errors: [],
     out_errors: [],
     in_discards: [],
@@ -116,21 +119,58 @@ describe('sparklinePath', () => {
 
 describe('throughputBandwidthOverlay', () => {
   it('yields no line or range for an absent / non-positive speed', () => {
-    expect(throughputBandwidthOverlay(null, 'fit')).toEqual({});
-    expect(throughputBandwidthOverlay(undefined, 'capacity')).toEqual({});
-    expect(throughputBandwidthOverlay(0, 'fit')).toEqual({});
-    expect(throughputBandwidthOverlay(-1, 'capacity')).toEqual({});
+    expect(throughputBandwidthOverlay(null, 'fit', 'bps')).toEqual({});
+    expect(throughputBandwidthOverlay(undefined, 'capacity', 'bps')).toEqual({});
+    expect(throughputBandwidthOverlay(0, 'fit', 'bps')).toEqual({});
+    expect(throughputBandwidthOverlay(-1, 'capacity', 'bps')).toEqual({});
   });
 
   it('draws the bandwidth line but leaves the axis auto-fit in fit mode', () => {
-    const o = throughputBandwidthOverlay(1_000_000_000, 'fit');
+    const o = throughputBandwidthOverlay(1_000_000_000, 'fit', 'bps');
     expect(o.referenceLine).toEqual({ value: 1_000_000_000, label: formatBps(1_000_000_000) });
     expect(o.yRange).toBeUndefined();
   });
 
   it('pins the axis top to the bandwidth in capacity mode', () => {
-    const o = throughputBandwidthOverlay(1_000_000_000, 'capacity');
+    const o = throughputBandwidthOverlay(1_000_000_000, 'capacity', 'bps');
     expect(o.referenceLine?.value).toBe(1_000_000_000);
     expect(o.yRange).toEqual([0, 1_000_000_000]);
+  });
+
+  // ADR-060. `ifSpeed` is bits/sec, so on a packets/sec axis the line would sit at an arbitrary
+  // height and read as a capacity — a wrong answer is worse than no answer. Both modes are
+  // asserted because `capacity` additionally pins the Y range, and leaking that would squash the
+  // whole packet-rate series into the bottom pixel of the chart.
+  it('yields nothing in pps mode even when the interface has a bandwidth', () => {
+    expect(throughputBandwidthOverlay(1_000_000_000, 'fit', 'pps')).toEqual({});
+    expect(throughputBandwidthOverlay(1_000_000_000, 'capacity', 'pps')).toEqual({});
+  });
+});
+
+describe('throughputPair', () => {
+  const s = series({
+    in_bps: [1000],
+    out_bps: [2000],
+    in_ucast_pps: [3],
+    out_ucast_pps: [4],
+  });
+
+  it('reads the bps arrays in bps mode', () => {
+    expect(throughputPair(s, 'bps')).toEqual([[1000], [2000]]);
+  });
+
+  it('reads the pps arrays in pps mode', () => {
+    expect(throughputPair(s, 'pps')).toEqual([[3], [4]]);
+  });
+
+  // The four arrays are the same type, so a transposed pick compiles and mislabels the axis:
+  // bit rates drawn under a `pps` heading, three orders of magnitude too high, with nothing to
+  // show it is wrong. Assert each mode reads *only* its own pair.
+  it('never mixes the two units', () => {
+    const onlyBps = series({ in_bps: [1000], out_bps: [2000] });
+    expect(throughputPair(onlyBps, 'pps')).toEqual([[], []]);
+
+    const onlyPps = series({ in_ucast_pps: [3], out_ucast_pps: [4] });
+    expect(throughputPair(onlyPps, 'bps')).toEqual([[], []]);
   });
 });

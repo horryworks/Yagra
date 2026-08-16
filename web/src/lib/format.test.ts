@@ -6,6 +6,7 @@ import {
   deriveMem,
   formatAsn,
   formatBps,
+  formatPps,
   formatBytes,
   formatCount,
   formatDaysToExpiry,
@@ -139,6 +140,19 @@ describe('format', () => {
     expect(formatBps(500)).toBe('500 bps');
     expect(formatBps(2_500)).toBe('2.5 kbps');
     expect(formatBps(1_000_000_000)).toBe('1.0 Gbps');
+  });
+
+  it('formats packets-per-second with SI units and a dash when unknown', () => {
+    expect(formatPps(null)).toBe('—');
+    expect(formatPps(12)).toBe('12 pps');
+    expect(formatPps(2_500)).toBe('2.5 kpps');
+    // A whole number keeps no decimal — "1 Mpps", where formatBps would say "1.0 Gbps". The two
+    // deliberately differ: see below and formatPps's own doc.
+    expect(formatPps(1_000_000)).toBe('1 Mpps');
+    // ⚠️ Unlike formatBps, a sub-1 rate keeps its decimal. The dock only shows an error/discard
+    // tile *because* the value is non-zero, so rounding 0.4 to "0 pps" would contradict the
+    // reason it is on screen — and a flat zero reads as "no problem here".
+    expect(formatPps(0.4)).toBe('0.4 pps');
   });
 
   it('formats a count: rounds to whole, groups via the active-language locale, dash when non-finite', () => {

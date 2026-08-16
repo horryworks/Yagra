@@ -6115,25 +6115,40 @@ export interface components {
             stale: boolean;
         };
         /**
-         * @description Per-interface time-series for the node-detail Interfaces pane: In/Out throughput (bits/sec,
-         *     from `rate()` of the octet counters), In/Out errors, and In/Out discards (both per second).
+         * @description Per-interface time-series for the node-detail Interfaces pane: In/Out throughput in **bits per
+         *     second** and in **packets per second**, In/Out errors, and In/Out discards.
+         *
+         *     Only the throughput pair has two units, and that is a property of the MIB rather than a
+         *     shortcut: IF-MIB counts errored and discarded frames but never their octets, so
+         *     `in_errors`/`out_errors`/`in_discards`/`out_discards` are packets per second and there is no
+         *     bits-per-second form of them to ask for.
+         *
+         *     `in_ucast_pps`/`out_ucast_pps` are **unicast only** (`ifHCInUcastPkts`/`ifHCOutUcastPkts`);
+         *     multicast and broadcast frames are not counted. The name says so rather than the documentation
+         *     alone, so that a future total can be added as a new field instead of silently changing what an
+         *     existing number means. Two consequences for a client: on a link carrying heavy broadcast the
+         *     packet rate reads low, and dividing bits by packets overstates the average frame size.
          *
          *     Errors and discards are separate because their causes are: an error is a frame that arrived
          *     damaged (cabling, optics, NIC), a discard is a frame the device chose to drop with nothing wrong
          *     with it (congestion, queue overflow, ACL). Reading one for the other sends an operator to the
          *     wrong place, so the UI draws them as two charts rather than one — ADR-046 Inc.4.
          *
-         *     All six share one `timestamps` axis — the union of returned points, with `null` in the gaps —
-         *     so the chart gets aligned series rather than six independently-indexed ones. Derived at query
-         *     time (ADR-012); empty when there is no history.
+         *     All eight share one `timestamps` axis — the union of returned points, with `null` in the gaps —
+         *     so the chart gets aligned series rather than eight independently-indexed ones. Derived at query
+         *     time (ADR-012); empty when there is no history. The packet counters entered the default
+         *     collection set in ADR-060, so on a deployment upgraded from an earlier version the pps arrays
+         *     are empty for every window predating that upgrade while the bps arrays are populated.
          */
         InterfaceSeries: {
             in_bps: (number | null)[];
             in_discards: (number | null)[];
             in_errors: (number | null)[];
+            in_ucast_pps: (number | null)[];
             out_bps: (number | null)[];
             out_discards: (number | null)[];
             out_errors: (number | null)[];
+            out_ucast_pps: (number | null)[];
             timestamps: number[];
         };
         /** @description One ranked interface in a fleet interface Top-N. */
@@ -17789,7 +17804,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description In/out throughput, error rates and discard rates on one shared timestamp axis */
+            /** @description In/out throughput in bits/sec and in unicast packets/sec, plus error and discard rates, all on one shared timestamp axis */
             200: {
                 headers: {
                     [name: string]: unknown;

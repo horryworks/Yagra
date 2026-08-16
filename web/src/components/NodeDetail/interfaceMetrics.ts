@@ -5,21 +5,49 @@
 
 import { formatBps } from '../../lib/format';
 import type { InterfaceSeries } from '../../types/api';
-import type { ThroughputScale } from '../../prefs';
+import type { RateUnit, ThroughputScale } from '../../prefs';
 
-/** Throughput-chart bandwidth overlay derived from an interface's configured speed and the global
- *  Y-axis mode. Returns the red reference line (configured bandwidth) and, in `capacity` mode, a
- *  fixed `[0, bandwidth]` Y range. A non-positive/absent speed (interfaces with no concept of
- *  bandwidth) yields neither — the caller then shows no line and no toggle. */
+/** Throughput-chart bandwidth overlay derived from an interface's configured speed, the global
+ *  Y-axis mode and the plotted unit. Returns the red reference line (configured bandwidth) and, in
+ *  `capacity` mode, a fixed `[0, bandwidth]` Y range. A non-positive/absent speed (interfaces with
+ *  no concept of bandwidth) yields neither — the caller then shows no line and no toggle.
+ *
+ *  ⚠️ **`unit: 'pps'` also yields neither, and that is the point of taking the unit at all**
+ *  (ADR-060). `ifSpeed` is bits per second, so on a packets-per-second axis the line would land at
+ *  an arbitrary height and read as a capacity the operator is nowhere near — worse than no line,
+ *  because it looks like an answer. The capacity Y-range goes with it for the same reason.
+ *
+ *  This lives here rather than in the JSX because Vitest runs `environment: 'node'` and never
+ *  executes `.tsx`, so a rule written at the call site is a rule no test can reach. */
 export function throughputBandwidthOverlay(
   ifSpeedBps: number | null | undefined,
   mode: ThroughputScale,
+  unit: RateUnit,
 ): { referenceLine?: { value: number; label: string }; yRange?: [number, number] } {
+  if (unit === 'pps') return {};
   if (ifSpeedBps == null || !(ifSpeedBps > 0)) return {};
   return {
     referenceLine: { value: ifSpeedBps, label: formatBps(ifSpeedBps) },
     yRange: mode === 'capacity' ? [0, ifSpeedBps] : undefined,
   };
+}
+
+/** The directional pair of the interface series the throughput chart plots for `unit`
+ *  (ADR-060). Parameterized here rather than branched in the component for the same reason as
+ *  [`throughputBandwidthOverlay`]: these four arrays are the same type, so picking the wrong pair
+ *  is a silent mislabelling — a pps axis drawn from bps values — that nothing would catch.
+ *
+ *  Missing arrays become empty ones. The generated type says they are always present, but that is
+ *  a statement about *this* core: web and core are separate containers, so during a rolling upgrade
+ *  a new WebUI can be talking to a core that predates the pps fields. An empty series draws nothing
+ *  and the chart says "no data"; `undefined` reaching uPlot would throw and take the dock down. */
+export function throughputPair(
+  series: InterfaceSeries,
+  unit: RateUnit,
+): [(number | null)[], (number | null)[]] {
+  return unit === 'pps'
+    ? [series.in_ucast_pps ?? [], series.out_ucast_pps ?? []]
+    : [series.in_bps ?? [], series.out_bps ?? []];
 }
 
 /** Latest combined rate (in + out, per second) across a directional pair of the interface series,

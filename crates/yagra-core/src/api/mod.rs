@@ -1102,11 +1102,14 @@ mod tests {
         let json = body_json(resp).await;
         assert!(json["timestamps"].is_array());
         assert_eq!(json["timestamps"].as_array().unwrap().len(), 0);
-        // Every series the DTO promises is present, discards included — an absent key would
-        // deserialize as `undefined` in the WebUI and draw an empty chart rather than failing.
+        // Every series the DTO promises is present, packets and discards included — an absent key
+        // would deserialize as `undefined` in the WebUI and draw an empty chart rather than
+        // failing, so the unit toggle would look like "no data" instead of a missing field.
         for k in [
             "in_bps",
             "out_bps",
+            "in_ucast_pps",
+            "out_ucast_pps",
             "in_errors",
             "out_errors",
             "in_discards",

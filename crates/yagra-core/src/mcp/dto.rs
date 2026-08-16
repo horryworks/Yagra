@@ -1002,6 +1002,8 @@ mod tests {
             timestamps: vec![0],
             in_bps: vec![Some(1.0)],
             out_bps: vec![Some(2.0)],
+            in_ucast_pps: vec![Some(3.0)],
+            out_ucast_pps: vec![Some(4.0)],
             in_errors: vec![None],
             out_errors: vec![None],
             in_discards: vec![None],

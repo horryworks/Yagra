@@ -187,6 +187,31 @@ export function formatBps(bps: number | null): string {
   return `${v.toFixed(v >= 100 || u === 0 ? 0 : 1)} ${units[u]}`;
 }
 
+/** Format a packets-per-second rate with SI-ish units (k/M/G), or `—` when unknown. The pps
+ *  counterpart to [`formatBps`] (ADR-060), and also the unit of the error and discard charts —
+ *  IF-MIB counts errored and discarded *frames*, never their octets, so those two have no
+ *  bits-per-second form.
+ *
+ *  A packet rate is three to four orders of magnitude below the bit rate of the same traffic
+ *  (a frame is hundreds to ~1500 bytes, so thousands of bits), which is the quickest way to tell
+ *  at a glance that the chart really switched units rather than re-drawing the same series.
+ *
+ *  ⚠️ **Unlike `formatBps` this keeps a decimal in the base unit.** Bit rates are large enough that
+ *  a fraction of a bit/sec is noise, but an error rate of 0.4/s is a real signal that would render
+ *  as a flat `0 pps` under that rule — and the dock only shows those tiles *because* the value is
+ *  non-zero, so rounding it away would contradict the reason it is on screen. */
+export function formatPps(pps: number | null): string {
+  if (pps == null) return '—';
+  const units = ['pps', 'kpps', 'Mpps', 'Gpps', 'Tpps'];
+  let v = pps;
+  let u = 0;
+  while (v >= 1000 && u < units.length - 1) {
+    v /= 1000;
+    u += 1;
+  }
+  return `${v.toFixed(v >= 100 || Number.isInteger(v) ? 0 : 1)} ${units[u]}`;
+}
+
 /** Format a utilization percentage, or `—` when unknown (no speed / no data). Whole numbers
  *  (including 0 and 100) show no decimal ("0%", "75%"); sub-10 fractions keep one place. */
 export function formatUtil(pct: number | null): string {
