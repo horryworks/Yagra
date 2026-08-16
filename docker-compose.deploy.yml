@@ -69,6 +69,28 @@ services:
       - tlsdata:/tls
     restart: "no"
 
+  # Two containers share `logdata`, and they run as different users — so somebody has to arrange the
+  # directory before either starts (ADR-045 Inc.3). Same one-shot pattern, and the same reason, as
+  # tls-init above: the image that creates a path only gets a vote when Docker seeds an *empty*
+  # volume, so neither image can fix an ordering it lost or a volume that already exists. This runs
+  # on every `up`, which is what makes it work on a deployment whose logdata predates the feature.
+  #
+  # The modes are minimal and each bit is doing something:
+  #   /logs         0751  core (10001) owns and writes it; `o=x` lets the poller *traverse* to its
+  #                       own subdirectory without being able to list or write core's log.
+  #   /logs/pollers 0755  owned by the poller (10002) so it can write regardless of which gid Debian
+  #                       handed it — the poller stage pins only the uid, and the gid came out 999.
+  #                       `o=rx` is what lets core read the files back for the support bundle.
+  log-init:
+    image: busybox:stable
+    command:
+      - sh
+      - -c
+      - "mkdir -p /logs/pollers && chown 10001:10001 /logs && chmod 0751 /logs && chown 10002 /logs/pollers && chmod 0755 /logs/pollers"
+    volumes:
+      - logdata:/logs
+    restart: "no"
+
   # ── Yagra-core (crates/core) — orchestration, scheduling, northbound API ──
   core:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-core:${YAGRA_IMAGE_TAG:-latest}
@@ -82,6 +104,7 @@ services:
       clickhouse: { condition: service_started }
       kek-init: { condition: service_completed_successfully }
       tls-init: { condition: service_completed_successfully }
+      log-init: { condition: service_completed_successfully }
     environment:
       YAGRA_DATABASE_URL: postgres://yagra:${POSTGRES_PASSWORD:-yagra}@postgres:5432/yagra
       YAGRA_REDIS_URL: redis://redis:6379
@@ -221,7 +244,10 @@ services:
   poller:
     image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-poller:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
-    depends_on: [nats]
+    depends_on:
+      nats: { condition: service_started }
+      # The shared log volume has to be arranged before this poller tries to write into it.
+      log-init: { condition: service_completed_successfully }
     environment:
       YAGRA_BUS_URL: nats://nats:4222
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/

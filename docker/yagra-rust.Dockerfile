@@ -229,10 +229,14 @@ FROM debian:bookworm-slim AS poller
 # mounted case: Docker seeds an empty named volume from the image path, ownership included, whereas
 # a mount point it has to invent itself is root-owned.
 #
-# /var/log/yagra is the same trick for the on-disk log (ADR-045). No compose file mounts it on the
-# poller today — the support bundle carries core's logs, and a poller's log body would have to cross
-# the bus to reach one — but the directory exists so a site that wants it only has to set
-# YAGRA_LOG_DIR and add a volume, rather than discover a permission error at 3am.
+# /var/log/yagra is the same trick for the on-disk log (ADR-045). ⚠️ Since Inc.3 this path is what a
+# **remote-site** poller uses (docker-compose.poller.yml gives it a volume of its own); the co-located
+# poller writes to a `pollers/` subdirectory of core's shared volume instead, and that directory is
+# arranged by the `log-init` one-shot rather than here — an image's ownership only gets a vote when
+# Docker seeds an *empty* named volume, so it cannot fix an ordering it lost or a volume that already
+# exists. This directory losing that vote is exactly how Inc.3 shipped inert: the poller (uid 10002)
+# could not mkdir inside core's 0750 10001-owned volume, degraded to stdout as designed, and every
+# other signal stayed green.
 RUN useradd -r -u 10002 yagra \
  && apt-get update \
  && apt-get install -y --no-install-recommends libcap2-bin \
