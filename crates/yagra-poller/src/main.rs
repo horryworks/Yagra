@@ -117,9 +117,14 @@ fn machine_hostname() -> Option<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Resolved before telemetry because the id names this poller's **log file** (ADR-045 Inc.3):
+    // a pool sharing one log directory would otherwise have every member appending to the same
+    // hourly file. Nothing here logs, so there is no gap in the trace.
+    let identity = resolve_identity();
+
     // Structured logs + optional OpenTelemetry span export (self-observability). The guard flushes
     // spans at shutdown, so keep it alive for the whole process (`main` blocks on the worker loop).
-    let _telemetry = yagra_telemetry::init("yagra-poller");
+    let _telemetry = yagra_telemetry::init_instance("yagra-poller", Some(&identity.id));
 
     // Self-observability: expose Prometheus metrics on :9100/metrics (monitoring-conventions).
     if let Err(e) = PrometheusBuilder::new()
@@ -129,7 +134,6 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = %e, "failed to start metrics exporter");
     }
 
-    let identity = resolve_identity();
     tracing::info!(
         poller_id = %identity.id,
         pool = %identity.pool,

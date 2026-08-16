@@ -131,6 +131,12 @@ services:
     depends_on: [nats]
     environment:
       YAGRA_BUS_URL: nats://nats:4222
+      # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
+      # SUBDIRECTORY of core's log volume is load-bearing: core collects its own files by filename
+      # prefix, and keeping the two apart on disk means neither collector can ever sweep up the
+      # other's. Each poller's file also carries its YAGRA_POLLER_ID, so a pool sharing this volume
+      # does not have two processes appending to one hourly file.
+      YAGRA_LOG_DIR: /var/log/yagra/pollers
       # Passive-event listeners (syslog / SNMP traps, v1/v2c). The container binds
       # unprivileged ports; compose maps the standard host ports below. Unset = disabled.
       YAGRA_SYSLOG_BIND: 0.0.0.0:1514
@@ -179,6 +185,9 @@ services:
     volumes:
       # Store-and-forward spill (Phase 3) — persists the buffer across poller restarts.
       - pollerbuf:/var/lib/yagra/buffer
+      # Shared with core so the support bundle can carry this poller's log — including the last
+      # hour of a poller that has since died, which is the case no bus request can ever answer.
+      - logdata:/var/log/yagra
     # deploy: { replicas: 1 }  # scale out here when distributing polling
     restart: unless-stopped
 
@@ -341,5 +350,7 @@ volumes:
   chdata:      # ClickHouse flow store (ADR-031)
   pollerbuf:   # store-and-forward result buffer (Phase 3)
   tlsdata:     # WebUI TLS certificate (ADR-044) — core writes it, web reads it; see tls-init
-  logdata:     # core's rotated log files (ADR-045), read back by the support bundle
+  logdata:     # core's rotated log files (ADR-045), read back by the support bundle. Also mounted
+               # by the poller, which writes into the pollers/ subdirectory (Inc.3) — one volume,
+               # two writers, kept apart by path so neither collector sees the other's files.
   # ipasndata: # offline IP→ASN dataset (ADR-031) — uncomment with the ipasn-updater service above

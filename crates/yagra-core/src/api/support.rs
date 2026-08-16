@@ -42,6 +42,7 @@ use axum::{
     Router,
 };
 use serde::Deserialize;
+use yagra_common::NodeId;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
@@ -53,13 +54,20 @@ pub(super) fn routes() -> Router<ApiState> {
     Router::new().route("/api/v1/system/support-bundle", get(support_bundle))
 }
 
-/// How far back to reach for log files.
+/// How far back to reach for log files, and which node the bundle is being taken *about*.
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 #[into_params(parameter_in = Query)]
 pub(crate) struct BundleQuery {
     /// Hours of log history to carry. Clamped to `[1, 168]`; the appender's own retention is
     /// usually the tighter bound.
     since_hours: Option<u32>,
+    /// The node this bundle is about. When set, the archive gains a `node/` section describing
+    /// exactly that node: what it is and which poller holds it, its stored interface rows, the
+    /// metrics it is configured to collect, which of those are actually arriving, and its alerts.
+    ///
+    /// Omitting it is not an error — the rest of the bundle is unchanged, and the manifest names
+    /// this parameter so a reader who needed the section learns it exists.
+    node_id: Option<uuid::Uuid>,
 }
 
 /// A downloadable archive of this deployment's logs and status.
@@ -71,7 +79,7 @@ pub(crate) struct BundleQuery {
     get, path = "/api/v1/system/support-bundle", tag = "system",
     params(BundleQuery),
     responses(
-        (status = 200, description = "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and core's own rotated log files. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections", content_type = "application/gzip"),
+        (status = 200, description = "A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and the rotated log files of core and any co-located poller. With `node_id`, also a `node/` section describing that one node — its inventory row and owning poller, its stored interface rows, the metrics it is configured to collect, which of those are arriving, and its alerts. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections", content_type = "application/gzip"),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks any of ManageSystem, ManageCredentials or ViewAudit", body = super::error::ErrorBody),
         (status = 500, description = "The redaction scan matched, so nothing was released. The rule and the file are named in the log, never the value", body = super::error::ErrorBody),
@@ -91,12 +99,15 @@ async fn support_bundle(
         .unwrap_or(DEFAULT_SINCE_HOURS)
         .clamp(1, MAX_SINCE_HOURS);
     let now = chrono::Utc::now();
-    let archive = build(&st, &admin, hours, now).await.map_err(to_api_error)?;
+    let archive = build(&st, &admin, hours, q.node_id, now)
+        .await
+        .map_err(to_api_error)?;
 
     let stamp = now.format("%Y%m%dT%H%M%SZ");
     tracing::info!(
         bytes = archive.len(),
         window_hours = hours,
+        node_id = ?q.node_id,
         "support bundle exported"
     );
     Ok((
@@ -120,6 +131,7 @@ async fn build(
     st: &ApiState,
     admin: &super::AdminState,
     hours: u32,
+    node_id: Option<uuid::Uuid>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<u8>, BundleError> {
     let mut b = BundleBuilder::new(hours);
@@ -294,6 +306,18 @@ async fn build(
         ),
     }
 
+    // ── The node this bundle is about (ADR-045 Inc.1) ─────────────────────────────────────────
+    match node_id {
+        Some(id) => add_node_section(&mut b, st, admin, id).await?,
+        None => b.omit(
+            "node/",
+            "no node was named. Add `?node_id=<uuid>` to carry one node's interface rows, its \
+             configured collection set, which of those metrics are actually arriving, and its \
+             alerts — the section to ask for when the question is about one device rather than \
+             about the deployment.",
+        ),
+    }
+
     // ── Logs, then assembly ───────────────────────────────────────────────────────────────────
     // Everything from here is synchronous and unbounded-ish: `collect_logs` reads up to
     // MAX_LOG_BYTES (24 MB) of rotated log files off disk, and `finish` then runs the redaction
@@ -317,6 +341,159 @@ async fn build(
 /// How many audit rows to carry. The store's own page maximum — enough to cover the change that
 /// preceded an incident without turning the bundle into an audit export.
 const AUDIT_ROWS: i64 = crate::audit::MAX_LIMIT;
+
+/// How many alert-history transitions to carry for the named node. Bounded per node rather than
+/// per bundle: this is "how has this one device behaved lately", not an incident export.
+const NODE_HISTORY_ROWS: i64 = 200;
+
+/// Add the `node/` section: everything this deployment knows about one node (ADR-045 Inc.1).
+///
+/// Five files, each collected independently. The module's "degrade, never fail" rule applies here
+/// too, and it is what makes an unknown node id produce a bundle carrying five explained omissions
+/// rather than an error in place of the whole archive — a bundle is requested *because* something
+/// is wrong, and "that id does not resolve" is itself an answer worth shipping.
+///
+/// **The pair that earns the section is `collection.json` and `metrics.json`.** One says what the
+/// node is *configured* to collect; the other says which of those are actually arriving. Either
+/// alone is ambiguous in exactly the way ADR-046 named — "no data" reads as "not configured" when
+/// you cannot see the configuration beside it.
+async fn add_node_section(
+    b: &mut BundleBuilder,
+    st: &ApiState,
+    admin: &super::AdminState,
+    node_id: uuid::Uuid,
+) -> Result<(), BundleError> {
+    let node = NodeId::from(node_id);
+
+    // Identity — assembled from the same seams the WebUI and MCP read (`node_kinds`,
+    // `node_assignment_of`, `display_state`) rather than re-derived here. A bundle that described
+    // the node differently from the screens it was taken to explain would be worse than no
+    // section: the reader would have to work out which of the two to believe.
+    match admin.repo.get_node(node_id).await {
+        Ok(Some(row)) => {
+            let kind = super::nodes::node_kinds(admin, &[node_id])
+                .await
+                .remove(&node_id);
+            let assignment = super::pollers::node_assignment_of(st, admin, node_id)
+                .await
+                .ok();
+            let state = super::nodes::display_state(st, node).await;
+            b.add_json(
+                "node/identity.json",
+                "What this node is, where it sits, and which poller currently holds it",
+                &serde_json::json!({
+                    "node": row,
+                    "kind": kind,
+                    "display_state": state,
+                    "assignment": assignment,
+                }),
+            )?;
+        }
+        Ok(None) => b.omit(
+            "node/identity.json",
+            "the requested node_id does not exist in this deployment's inventory. The rest of the \
+             node/ section is absent for the same reason.",
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "support bundle: node identity unavailable");
+            b.omit("node/identity.json", "PostgreSQL was not readable");
+        }
+    }
+
+    // The interface rows exactly as stored. This is the file the section was added for: every
+    // column of `interfaces` is written by a *different* walk under COALESCE, so "what is stored"
+    // and "what the device answers" are separate questions and only the first one is answerable
+    // from core. ⚠️ An empty array means the walk has never stored a row for this node — it does
+    // not mean the device has no ports.
+    match admin.repo.list_interfaces(node_id).await {
+        Ok(rows) => b.add_json(
+            "node/interfaces.json",
+            "The stored `interfaces` rows verbatim — names, speed, duplex, media, transceiver and \
+             optical bounds. `ifAlias` is operator-authored text and is carried as written",
+            &rows,
+        )?,
+        Err(e) => {
+            tracing::warn!(error = %e, "support bundle: interface rows unavailable");
+            b.omit("node/interfaces.json", "PostgreSQL was not readable");
+        }
+    }
+
+    // What the poller is *told* to collect (the resolved set, not the node's own overrides —
+    // resolved is what actually goes on the wire).
+    match super::collection::node_collection(admin, node_id, true).await {
+        Ok(set) => b.add_json(
+            "node/collection.json",
+            "The effective collection set: the OIDs this node is configured to poll, after profile \
+             and group defaults are applied. Read together with node/metrics.json",
+            &set,
+        )?,
+        Err(e) => {
+            tracing::warn!(error = %e.message(), "support bundle: node collection unavailable");
+            b.omit(
+                "node/collection.json",
+                "the collection set could not be resolved for this node; the cause is in the \
+                 bundled core log",
+            );
+        }
+    }
+
+    // …and which of those are actually arriving. The counterpart to the file above.
+    match super::metrics::node_metric_inventory(admin, st.store.as_ref(), node_id, None).await {
+        Ok(entries) => b.add_json(
+            "node/metrics.json",
+            "The metric inventory: per metric, whether data is arriving and how it must be read. A \
+             metric present in node/collection.json but flagged no_data here is the difference \
+             between 'not configured' and 'configured but not arriving'",
+            &entries,
+        )?,
+        Err(e) => {
+            tracing::warn!(error = %e.message(), "support bundle: metric inventory unavailable");
+            b.omit(
+                "node/metrics.json",
+                "the metric inventory could not be built; the TSDB may be unreachable — see \
+                 health/dependencies.json",
+            );
+        }
+    }
+
+    // Current alerts plus recent transitions for this node alone.
+    let active = st.alerts.alerts_for(node);
+    match st.history.as_ref() {
+        Some(store) => {
+            match store
+                .search(&crate::history::HistoryFilter {
+                    node_id: Some(node_id),
+                    limit: NODE_HISTORY_ROWS,
+                    ..crate::history::HistoryFilter::default()
+                })
+                .await
+            {
+                Ok(rows) => b.add_json(
+                    "node/alerts.json",
+                    "This node's currently-active alerts and its most recent alert transitions",
+                    &serde_json::json!({ "active": active, "history": rows }),
+                )?,
+                Err(e) => {
+                    tracing::warn!(error = %e, "support bundle: node alert history unavailable");
+                    b.add_json(
+                        "node/alerts.json",
+                        "This node's currently-active alerts. The transition history was not \
+                         readable — see the bundled core log",
+                        &serde_json::json!({ "active": active, "history": null }),
+                    )?;
+                }
+            }
+        }
+        None => b.add_json(
+            "node/alerts.json",
+            "This node's currently-active alerts. This core keeps no alert history store, so there \
+             are no transitions to carry",
+            &serde_json::json!({ "active": active, "history": null }),
+        )?,
+    }
+
+    Ok(())
+}
 
 /// Add core's rotated log files, or record why there are none.
 ///
@@ -363,6 +540,79 @@ fn collect_logs(b: &mut BundleBuilder, hours: u32) {
             ),
             format!(
                 "outside the requested {hours}-hour window; re-request with a larger since_hours"
+            ),
+        );
+    }
+
+    collect_poller_logs(b, &dir, since);
+}
+
+/// Where a co-located poller writes its own rolling log files: a subdirectory of core's log
+/// directory, so one mounted volume serves both (ADR-045 Inc.3).
+///
+/// A subdirectory rather than the same directory, even though the filename prefixes already
+/// differ. `collect_logs` selects by prefix, and a prefix match is a weaker guarantee than a path:
+/// separating them physically means neither collector can ever pick up the other's files, whatever
+/// a future service ends up being called.
+const POLLER_LOG_SUBDIR: &str = "pollers";
+
+/// The poller share of the bundle's log budget, across **all** pollers.
+///
+/// Deliberately a **separate** budget rather than a larger shared one: core's [`MAX_LOG_BYTES`] is
+/// untouched, so adding this section cannot make a bundle carry less of core's log than the same
+/// bundle carried before. A chatty poller must not be able to push out the file that answers "did
+/// core even start".
+const POLLER_LOG_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Add any co-located poller's rotated log files.
+///
+/// **This reaches only pollers that share a filesystem with core** — the single-node composition,
+/// where they are two containers on one host. A remote-site poller writes its logs at its own site
+/// and nothing here can see them; that is stated in the manifest rather than left as an absence,
+/// because "no poller logs" and "no poller" look identical in an archive.
+///
+/// What it *does* reach, and the bus never will, is a poller that is **no longer running**. That
+/// is the whole reason this exists alongside the bus path: a poller killed by the OOM killer
+/// cannot answer a request, but its last hour is on disk. Same argument ADR-045 決定 2 made for
+/// core, one component over.
+fn collect_poller_logs(
+    b: &mut BundleBuilder,
+    core_dir: &std::path::Path,
+    since: std::time::SystemTime,
+) {
+    let dir = core_dir.join(POLLER_LOG_SUBDIR);
+    if !dir.is_dir() {
+        b.omit(
+            "logs/ (poller)",
+            "no co-located poller log directory. A poller writes here only when it shares core's \
+             log volume and sets YAGRA_LOG_DIR to the pollers/ subdirectory; a remote-site poller \
+             never can, because its disk is at its own site.",
+        );
+        return;
+    }
+    let collected = support_bundle::collect_logs(&dir, "yagra-poller", since, POLLER_LOG_MAX_BYTES);
+    if collected.files.is_empty() && collected.dropped_for_size == 0 {
+        b.omit(
+            "logs/ (poller)",
+            "the poller log directory exists but held nothing inside the window. A poller that has \
+             not run in this window writes nothing — check health/pollers.json for whether one was \
+             expected to be alive.",
+        );
+    }
+    for (name, bytes) in collected.files {
+        b.add_bytes(
+            &format!("logs/{name}"),
+            "One rotated hour of a co-located poller's structured log (JSON lines). The filename \
+             carries the poller id",
+            bytes,
+        );
+    }
+    if collected.dropped_for_size > 0 {
+        b.omit(
+            format!("{} older poller log file(s)", collected.dropped_for_size),
+            format!(
+                "the {POLLER_LOG_MAX_BYTES}-byte poller log cap was reached; the newest hours were \
+                 kept. This budget is separate from core's, so nothing of core's log was displaced."
             ),
         );
     }
@@ -414,6 +664,92 @@ mod tests {
     use yagra_common::{Principal, Role, Scope};
 
     const PATH: &str = "/api/v1/system/support-bundle";
+
+    /// A private directory for one test, named after the test so two cannot collide.
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("yagra-poller-logs-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// No subdirectory ⇒ an omission, **not** silence. "No poller logs" and "no poller" look
+    /// identical in an archive, and the whole point of the manifest is that they must not.
+    #[test]
+    fn a_deployment_with_no_colocated_poller_says_so() {
+        let dir = scratch("absent");
+        let mut b = BundleBuilder::new(6);
+        collect_poller_logs(&mut b, &dir, std::time::UNIX_EPOCH);
+
+        assert!(b.paths().is_empty());
+        let why = b
+            .omissions()
+            .into_iter()
+            .find(|(what, _)| *what == "logs/ (poller)")
+            .expect("the absence is declared")
+            .1
+            .to_owned();
+        assert!(why.contains("remote-site"), "{why}");
+    }
+
+    /// The file is carried under `logs/` with its name intact — the name is what identifies which
+    /// poller wrote it, so a collector that renamed it would throw away the answer to "which one".
+    #[test]
+    fn a_colocated_pollers_log_is_carried_with_its_id_in_the_name() {
+        let dir = scratch("present");
+        let pollers = dir.join(super::POLLER_LOG_SUBDIR);
+        std::fs::create_dir_all(&pollers).unwrap();
+        std::fs::write(
+            pollers.join("yagra-poller-edge-1.2026-08-16-10.log"),
+            b"{\"msg\":\"hi\"}\n",
+        )
+        .unwrap();
+
+        let mut b = BundleBuilder::new(6);
+        collect_poller_logs(&mut b, &dir, std::time::UNIX_EPOCH);
+
+        assert_eq!(
+            b.paths(),
+            vec!["logs/yagra-poller-edge-1.2026-08-16-10.log"]
+        );
+    }
+
+    /// A directory that exists but is empty within the window is its own answer, and a different
+    /// one from "no poller here" — it means a poller was set up and has not written lately.
+    #[test]
+    fn an_empty_poller_directory_is_reported_separately_from_an_absent_one() {
+        let dir = scratch("empty");
+        std::fs::create_dir_all(dir.join(super::POLLER_LOG_SUBDIR)).unwrap();
+
+        let mut b = BundleBuilder::new(6);
+        collect_poller_logs(&mut b, &dir, std::time::UNIX_EPOCH);
+
+        let why = b
+            .omissions()
+            .into_iter()
+            .find(|(what, _)| *what == "logs/ (poller)")
+            .expect("the empty directory is declared")
+            .1
+            .to_owned();
+        assert!(why.contains("health/pollers.json"), "{why}");
+    }
+
+    /// ⚠️ The property that makes this section safe to add at all: **core's budget is untouched.**
+    /// If the two shared one, a chatty poller could displace the file that answers "did core even
+    /// start" — which is the first question a bundle is taken to answer.
+    #[test]
+    fn the_poller_budget_is_separate_from_cores() {
+        assert_ne!(
+            super::POLLER_LOG_MAX_BYTES,
+            MAX_LOG_BYTES,
+            "a shared budget lets poller logs displace core's"
+        );
+        // A const block: both operands are constants, so this is checked when the crate compiles
+        // rather than when the test runs. Stronger than the assertion above, and the reason the
+        // weaker one stays is its message — a `const` failure names no reason.
+        const { assert!(super::POLLER_LOG_MAX_BYTES < MAX_LOG_BYTES) };
+    }
 
     async fn send(st: ApiState, token: Option<&str>) -> Response {
         let mut b = Request::builder().uri(PATH);

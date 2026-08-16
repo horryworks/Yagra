@@ -436,16 +436,32 @@ fn standing_omissions() -> Vec<Omission> {
              rather than their contents; the WebUI answers questions about the contents.",
         ),
         Omission::new(
-            "Poller log files",
-            "Pollers are remote and stateless, and shipping log bodies over the bus would be a new \
-             bus message rather than a read. What they do report — heartbeat counters, poll-loop \
-             statistics and host resources — is carried in health/pollers.json, \
-             health/poller_health.json and health/hosts.json.",
+            "Log files from any poller that does not share this host's filesystem",
+            "A co-located poller's log is carried (look for logs/yagra-poller-*), because it is a \
+             file on a volume core can read. A remote-site poller's log is not: it lives at its \
+             own site, and shipping log bodies over the bus is a different mechanism. What every \
+             poller reports regardless — heartbeat counters, poll-loop statistics and host \
+             resources — is in health/pollers.json, health/poller_health.json and \
+             health/hosts.json. Compare those against the logs actually present here to see which \
+             pollers are unrepresented.",
+        ),
+        Omission::new(
+            "Why an SNMP walk returned no rows",
+            "A poller logs a walk that *failed*, but a walk that succeeded and matched nothing is \
+             recorded at debug level (optical and entity) or not at all (MAU). So an empty duplex \
+             or media column is consistent with both 'the device does not implement that MIB' and \
+             'the rows did not map to an ifIndex', and this bundle cannot tell them apart. \
+             Answering it needs the device's own reply — an snmpwalk of the relevant subtree, run \
+             with the credential this deployment uses and from the poller's own host.",
         ),
         Omission::new(
             "Node addresses, inventory and thresholds beyond the configuration bundle",
             "config/bundle.json already carries the deployment's configuration in the reviewed, \
-             secret-free form ADR-040 defined. Nothing here duplicates it in a less reviewed one.",
+             secret-free form ADR-040 defined. Nothing here duplicates it in a less reviewed one. \
+             The one exception is deliberate: when this bundle was asked for with `?node_id=`, the \
+             node/ section carries that single node's observed state — including its stored \
+             interface rows, which are an observation and not configuration, so ADR-040's form has \
+             no place for them.",
         ),
     ]
 }
@@ -503,6 +519,25 @@ impl BundleBuilder {
     }
 
     /// Record something this run could not collect, or chose not to.
+    /// The paths added so far. Test-only: a collector's job is to decide *what goes in*, and
+    /// asserting that through `finish` would mean gzipping and re-parsing a tar to learn a
+    /// filename.
+    #[cfg(test)]
+    pub(crate) fn paths(&self) -> Vec<&str> {
+        self.files.iter().map(|f| f.path.as_str()).collect()
+    }
+
+    /// What has been declared missing so far, as `(what, why)`. Test-only, and the counterpart to
+    /// [`Self::paths`]: for this bundle an omission is a *result*, not an absence, so a collector
+    /// that records none is as wrong as one that records the wrong file.
+    #[cfg(test)]
+    pub(crate) fn omissions(&self) -> Vec<(&str, &str)> {
+        self.omitted
+            .iter()
+            .map(|o| (o.what.as_str(), o.why.as_str()))
+            .collect()
+    }
+
     pub fn omit(&mut self, what: impl Into<String>, why: impl Into<String>) {
         self.omitted.push(Omission::new(what, why));
     }

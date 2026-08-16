@@ -224,6 +224,12 @@ services:
     depends_on: [nats]
     environment:
       YAGRA_BUS_URL: nats://nats:4222
+      # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
+      # SUBDIRECTORY of core's log volume is load-bearing — core collects by filename prefix, and
+      # keeping the two apart on disk means neither collector can sweep up the other's files. Each
+      # poller's file carries its YAGRA_POLLER_ID, so a pool sharing this volume never has two
+      # processes appending to one hourly file. Set empty in .env to turn it off.
+      YAGRA_LOG_DIR: ${YAGRA_POLLER_LOG_DIR-/var/log/yagra/pollers}
       # Passive-event listeners (syslog / SNMP traps, v1/v2c) — unprivileged container
       # ports, standard host ports mapped below. Set empty in .env to disable.
       YAGRA_SYSLOG_BIND: ${YAGRA_SYSLOG_BIND-0.0.0.0:1514}
@@ -261,6 +267,9 @@ services:
       # outage longer than the in-memory ring drops the oldest results, and a poller restart
       # mid-outage loses everything it was holding.
       - pollerbuf:/var/lib/yagra/buffer
+      # Shared with core so the support bundle can carry this poller's log — including the last
+      # hour of a poller that has since died, which is the case no bus request can ever answer.
+      - logdata:/var/log/yagra
     cap_add:
       - NET_RAW        # required for raw-socket ICMP (surge-ping)
     restart: unless-stopped
@@ -806,6 +815,8 @@ volumes:
              # core rewrites it on the next start.
   logdata:   # core's rotated log files (ADR-045), read back by the support bundle. Bounded by
              # YAGRA_LOG_RETAIN_HOURS hourly files; deleting it costs only the retained history.
+             # Also mounted by the poller, which writes into the pollers/ subdirectory (Inc.3) —
+             # one volume, two writers, kept apart by path so neither collector sees the other's.
   upgradedata: # upgrade request/status hand-off between core and the yagra-updater sidecar
              # (ADR-050). Holds no configuration and no secret — deleting it loses only the record
              # of the last run. It exists even with the sidecar commented out, which costs nothing

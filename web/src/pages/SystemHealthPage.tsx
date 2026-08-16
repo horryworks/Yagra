@@ -24,6 +24,7 @@ import { Button } from '../components/ui/Button';
 import { MetricChart, PALETTE } from '../components/MetricChart/MetricChart';
 import { RangeControl, resolveRange } from '../components/NodeDetail/RangeControl';
 import type { Range } from '../components/NodeDetail/RangeControl';
+import { NodePicker } from '../components/NodePicker/NodePicker';
 import { useCan, useRangeStore } from '../store';
 import { api, errMsg } from '../services/api';
 import { usePolled } from '../dashboard/usePolled';
@@ -397,6 +398,9 @@ function SupportBundleCard() {
   // The bundle endpoint needs ManageSystem (plus two more); ask for a permission, not a role.
   const canSystem = useCan('manage_system');
   const [hours, setHours] = useState<number>(6);
+  // Optional: the node this bundle is *about* (ADR-045 Inc.1). Local state, not the URL — a
+  // support bundle is an action taken once, not a view worth sharing a link to.
+  const [node, setNode] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<{ file: string; size: string } | null>(null);
@@ -408,7 +412,7 @@ function SupportBundleCard() {
     setError(null);
     setDone(null);
     api
-      .downloadSupportBundle(hours)
+      .downloadSupportBundle(hours, node?.id)
       .then(({ blob, filename }) => {
         // The server names the file; the fallback exists only for a proxy that strips the header.
         const file = filename ?? 'yagra-support.tar.gz';
@@ -439,10 +443,20 @@ function SupportBundleCard() {
             ))}
           </select>
         </label>
+        <label className="sb-node">
+          <span className="muted">{t('health.bundle.node')}</span>
+          <NodePicker
+            value={node?.id ?? null}
+            valueLabel={node?.name}
+            onChange={setNode}
+            placeholder={t('health.bundle.nodeAny')}
+          />
+        </label>
         <Button variant="primary" onClick={download} disabled={busy}>
           {busy ? t('health.bundle.busy') : t('health.bundle.action')}
         </Button>
       </div>
+      <p className="muted sb-node-help">{t('health.bundle.nodeHelp')}</p>
       {error && <p className="form-error">{error}</p>}
       {done && <p className="sb-done">{t('health.bundle.done', done)}</p>}
     </Card>

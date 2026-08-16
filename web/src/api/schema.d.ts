@@ -22554,6 +22554,15 @@ export interface operations {
                  *     usually the tighter bound.
                  */
                 since_hours?: number;
+                /**
+                 * @description The node this bundle is about. When set, the archive gains a `node/` section describing
+                 *     exactly that node: what it is and which poller holds it, its stored interface rows, the
+                 *     metrics it is configured to collect, which of those are actually arriving, and its alerts.
+                 *
+                 *     Omitting it is not an error — the rest of the bundle is unchanged, and the manifest names
+                 *     this parameter so a reader who needed the section learns it exists.
+                 */
+                node_id?: string;
             };
             header?: never;
             path?: never;
@@ -22561,7 +22570,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and core's own rotated log files. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections */
+            /** @description A gzipped tar of JSON and text files: build provenance, every system-health section, the environment allow-list, applied migrations, table sizes, active alerts, the audit tail, the Prometheus scrape, and the rotated log files of core and any co-located poller. With `node_id`, also a `node/` section describing that one node — its inventory row and owning poller, its stored interface rows, the metrics it is configured to collect, which of those are arriving, and its alerts. Carries no secrets — see MANIFEST.json's `omitted` and `redaction` sections */
             200: {
                 headers: {
                     [name: string]: unknown;

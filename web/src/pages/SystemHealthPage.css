@@ -202,6 +202,21 @@ html[data-viewport='mobile'] .host-section-toggle {
   font-size: var(--font-sm);
 }
 
+/* Same column shape as .sb-window so the two controls share a baseline; wider because it holds a
+   node name rather than a fixed set of hour labels. */
+.support-bundle-card .sb-node {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--font-sm);
+  min-width: 220px;
+}
+
+.support-bundle-card .sb-node-help {
+  font-size: var(--font-sm);
+  margin: 8px 0 0;
+}
+
 .support-bundle-card .sb-done {
   color: var(--status-ok);
   font-size: var(--font-sm);

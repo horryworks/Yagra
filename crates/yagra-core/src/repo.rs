@@ -87,7 +87,15 @@ pub struct ProfileSummary {
 
 /// One interface's stored metadata (from a table walk). Descriptive attributes only —
 /// joined to per-interface metrics at query time (thin-label model, ADR-011).
-#[derive(Debug, Clone)]
+///
+/// `Serialize` is here so the support bundle can carry these rows **verbatim** (ADR-045 Inc.1)
+/// rather than mirroring them into a second struct. The mirror was the obvious shape and is the
+/// wrong one: a new column on `interfaces` would then have to be added in two places, and the
+/// bundle — the artefact nobody reads until something is already broken — is exactly the copy
+/// that would be forgotten. Serializing the repo type means the field names *are* the column
+/// names, which is what a diagnostic reader wants anyway. It carries no `ToSchema`, so this does
+/// not put the type into the published OpenAPI contract.
+#[derive(Debug, Clone, Serialize)]
 pub struct InterfaceMeta {
     pub ifindex: i32,
     pub if_name: Option<String>,

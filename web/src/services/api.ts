@@ -533,14 +533,23 @@ export const api = {
   getCredentialHealth: (): Promise<CredentialHealth> => apiGet('/api/v1/credentials/health'),
 
   /** A diagnostic archive of this deployment's logs and status (ADR-045), for a site nobody can
-   *  reach a shell on. Needs ManageConfig + ManageCredentials + ViewAudit — i.e. Admin. The server
+   *  reach a shell on. Needs ManageSystem + ManageCredentials + ViewAudit — i.e. Admin. The server
    *  names the file and refuses the whole export if its redaction scan matches, so a failure here
-   *  is worth showing verbatim. */
-  downloadSupportBundle: (sinceHours?: number): Promise<Download> =>
-    fetchBlob(
-      `/api/v1/system/support-bundle${sinceHours ? `?since_hours=${sinceHours}` : ''}`,
+   *  is worth showing verbatim.
+   *
+   *  `nodeId` adds the `node/` section: one node's inventory row and owning poller, its stored
+   *  interface rows, what it is configured to collect and which of those are arriving, and its
+   *  alerts. Omitting it is not an error — the rest of the bundle is identical either way. */
+  downloadSupportBundle: (sinceHours?: number, nodeId?: string | null): Promise<Download> => {
+    const q = new URLSearchParams();
+    if (sinceHours) q.set('since_hours', String(sinceHours));
+    if (nodeId) q.set('node_id', nodeId);
+    const qs = q.toString();
+    return fetchBlob(
+      `/api/v1/system/support-bundle${qs ? `?${qs}` : ''}`,
       'support_bundle_failed',
-    ),
+    );
+  },
 
   /** This deployment's monitoring configuration as a portable bundle (ADR-040). Admin-only, and it
    *  carries no secrets. */

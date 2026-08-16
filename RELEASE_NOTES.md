@@ -10,6 +10,40 @@
 
 ## Unreleased
 
+### New Features
+- **A support bundle can now be taken *about one node*.** Settings ▸ System health gains an optional
+  node picker beside the log window, and `GET /api/v1/system/support-bundle` accepts `node_id`.
+  Naming a node adds a `node/` section: its inventory row and owning poller, its **stored interface
+  rows verbatim** (names, speed, duplex, media, transceiver, optical bounds), the metrics it is
+  configured to collect, which of those are actually arriving, and its alerts. Omitting the
+  parameter changes nothing about the rest of the bundle.
+  - The pair worth knowing about is `node/collection.json` and `node/metrics.json`. One says what
+    the node is configured to collect, the other says which of those are arriving — together they
+    separate "not configured" from "configured but no data", which neither answers alone.
+  - This is the section to include when reporting an interface problem: it says what Yagra has
+    *stored* for that port, which is the half of the question a maintainer cannot otherwise see.
+- **A co-located poller's log files are carried in the support bundle.** Previously only core's own
+  log was — but SNMP is walked by the poller, so the collecting side left no trace. The poller now
+  writes rotated hourly logs into a `pollers/` subdirectory of core's log volume, each file named
+  with the poller's id, and the bundle carries them under `logs/`.
+  - **This reaches only a poller that shares a host with core** (the single-node composition). A
+    remote-site poller writes at its own site and the bundle says so by name rather than leaving an
+    absence. It *does* reach a poller that has since died, which is the case a live request never
+    can.
+  - The poller log budget is separate from core's, so this cannot displace core's own log.
+
+### Improvements
+- `MANIFEST.json`'s omission list is more specific about what a bundle cannot answer — including
+  that an empty duplex or media column is consistent with both "the device does not implement that
+  MIB" and "the rows did not map to an ifIndex", and that telling them apart needs an `snmpwalk`
+  from the poller's own host with the credential this deployment uses.
+
+### Upgrade notes
+- **Existing deployments need a compose change to get the poller logs.** `docker-compose.yml` and
+  `docker-compose.deploy.yml` now mount the shared `logdata` volume into the poller and set
+  `YAGRA_LOG_DIR=/var/log/yagra/pollers`. Without it the poller logs to stdout only, exactly as
+  before, and the bundle records that no co-located poller log directory was found.
+
 ## v0.2.11 — an interface says what it negotiated, what it is made of, and how much light it sees
 
 > [!IMPORTANT]

@@ -93,6 +93,30 @@ fn retain_hours_from(raw: Option<&str>) -> usize {
         .unwrap_or(DEFAULT_LOG_RETAIN_HOURS)
 }
 
+/// The filename prefix for one process's rolling log files.
+///
+/// **Two processes must never share one.** `tracing-appender` names a file from the prefix and the
+/// hour, so two writers with the same prefix in the same directory append to the same file and
+/// interleave each other's lines — the hazard ADR-045 決定 2 named for HA cores, and the reason a
+/// poller pool needs its id here (ADR-045 Inc.3). The instance is sanitized because it becomes a
+/// path component and arrives from `YAGRA_POLLER_ID`, which an operator sets by hand.
+fn file_prefix(service_name: &str, instance: Option<&str>) -> String {
+    let Some(raw) = instance.map(str::trim).filter(|s| !s.is_empty()) else {
+        return service_name.to_owned();
+    };
+    let safe: String = raw
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("{service_name}-{safe}")
+}
+
 /// Build the non-blocking rolling-file writer for `service_name`, or `None` when file logging is
 /// off or the directory cannot be written.
 ///
@@ -100,6 +124,7 @@ fn retain_hours_from(raw: Option<&str>) -> usize {
 /// to live as long as the subscriber does.
 fn file_writer(
     service_name: &str,
+    instance: Option<&str>,
 ) -> Option<(
     tracing_appender::non_blocking::NonBlocking,
     tracing_appender::non_blocking::WorkerGuard,
@@ -107,7 +132,7 @@ fn file_writer(
     let dir = log_dir()?;
     let appender = tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(tracing_appender::rolling::Rotation::HOURLY)
-        .filename_prefix(service_name)
+        .filename_prefix(file_prefix(service_name, instance))
         .filename_suffix("log")
         .max_log_files(log_retain_hours())
         .build(&dir);
@@ -154,6 +179,16 @@ impl Drop for TelemetryGuard {
 /// spans over OTLP/HTTP and registers the W3C trace-context propagator. Call once per process; the
 /// returned [`TelemetryGuard`] must outlive all traced work.
 pub fn init(service_name: &str) -> TelemetryGuard {
+    init_instance(service_name, None)
+}
+
+/// [`init`], but with an **instance id that only affects the log filename** (ADR-045 Inc.3).
+///
+/// A poller pool writes into one shared directory, so each poller's files must be distinguishable
+/// — see [`file_prefix`] for what goes wrong otherwise. The OpenTelemetry `service.name` stays
+/// `service_name` on purpose: traces are aggregated *across* a pool, and folding the instance into
+/// the service name would split every existing dashboard into one series per poller.
+pub fn init_instance(service_name: &str, instance: Option<&str>) -> TelemetryGuard {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let fmt_layer = tracing_subscriber::fmt::layer();
 
@@ -161,7 +196,7 @@ pub fn init(service_name: &str) -> TelemetryGuard {
     // human format: this file is read back by machine — windowed by time in the support bundle,
     // then by whoever is debugging — and JSON is what keeps `tracing`'s structured fields as
     // fields instead of flattening them into a message string.
-    let (file_layer, log_guard) = match file_writer(service_name) {
+    let (file_layer, log_guard) = match file_writer(service_name, instance) {
         Some((writer, guard)) => (
             Some(
                 tracing_subscriber::fmt::layer()
@@ -368,6 +403,45 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The property the whole parameter exists for: **two instances must not name one file.**
+    /// Same prefix in one directory means two processes appending to the same hourly file, which
+    /// is silent corruption rather than an error — nothing fails, the lines just interleave.
+    #[test]
+    fn two_instances_never_share_a_log_filename() {
+        assert_ne!(
+            file_prefix("yagra-poller", Some("edge-1")),
+            file_prefix("yagra-poller", Some("edge-2"))
+        );
+        assert_eq!(
+            file_prefix("yagra-poller", Some("edge-1")),
+            "yagra-poller-edge-1"
+        );
+    }
+
+    /// No instance ⇒ the historical name, unchanged. `yagra-core` has written
+    /// `yagra-core.log.<hour>` since ADR-045 shipped and the support bundle selects by that
+    /// prefix, so a suffix appearing here would make every existing deployment's core log
+    /// invisible to the collector that reads it back.
+    #[test]
+    fn an_absent_or_blank_instance_leaves_the_service_name_alone() {
+        assert_eq!(file_prefix("yagra-core", None), "yagra-core");
+        assert_eq!(file_prefix("yagra-poller", Some("")), "yagra-poller");
+        assert_eq!(file_prefix("yagra-poller", Some("   ")), "yagra-poller");
+    }
+
+    /// The id comes from `YAGRA_POLLER_ID`, which an operator types. It becomes a filename, so a
+    /// separator or a traversal segment in it must not become one on disk.
+    #[test]
+    fn an_instance_id_cannot_escape_the_filename() {
+        let p = file_prefix("yagra-poller", Some("../../etc/passwd"));
+        assert!(!p.contains('/'), "{p}");
+        assert!(!p.contains('.'), "{p}");
+        assert_eq!(
+            file_prefix("yagra-poller", Some("tokyo dc1")),
+            "yagra-poller-tokyo-dc1"
+        );
+    }
 
     /// The shutdown contract: a task wrapped by [`spawn_cancellable`] stops promptly once the token
     /// is cancelled, even when its inner future would otherwise run forever — this is what lets a
