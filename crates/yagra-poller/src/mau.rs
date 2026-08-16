@@ -77,29 +77,55 @@ pub fn media_by_ifindex(rows: &[SnmpInstanceRow]) -> (BTreeMap<u32, MediaRow>, V
     (out, unknown)
 }
 
-/// Longest `entPhysicalName`/`entPhysicalDescr`-style string per entity, decoded lossily.
+/// The best describing string per entity — its model name or description, but **never a restatement
+/// of its own name**.
 ///
-/// Device text is untrusted and not guaranteed UTF-8 (`security.md`), so it is decoded lossily
-/// rather than dropped — a part string with one bad byte is still the answer to "what module is in
+/// `name_oid` is `entPhysicalName`; every other column in `rows` is treated as a candidate
+/// description. Device text is untrusted and not guaranteed UTF-8 (`security.md`), so it is decoded
+/// lossily rather than dropped — a part string with one bad byte still answers "what module is in
 /// there", and it is escaped before rendering like every other device-supplied string.
+///
+/// 🚨 **Dropping a candidate that equals the entity's own name is the load-bearing rule, and it was
+/// found on real hardware after shipping without it.** ENTITY-MIB describes *every* component, and
+/// the entity a port's ifIndex resolves to is usually the **port itself**, not a transceiver inside
+/// it. On the Huawei USG measured here, every port entity's description is simply the port name, so
+/// the first version of this stored `GE0/0/1` as `GE0/0/1`'s transceiver model — rendering
+/// "Transceiver: GE0/0/1" at the operator. A description that repeats the component's own name
+/// carries no information, and presenting it as a part number is precisely the confident lie this
+/// module's header warns about.
+///
+/// Comparison is case- and whitespace-insensitive: a vendor that writes `GE0/0/1` in one column and
+/// `ge0/0/1 ` in the other is saying the same nothing twice.
 #[must_use]
-pub fn entity_text(rows: &[SnmpInstanceRow]) -> BTreeMap<u32, String> {
-    let mut out: BTreeMap<u32, String> = BTreeMap::new();
-    for row in rows {
-        let Some(&ent) = row.instance.first() else {
-            continue;
-        };
+pub fn entity_text(rows: &[SnmpInstanceRow], name_oid: &str) -> BTreeMap<u32, String> {
+    let read = |row: &SnmpInstanceRow| -> Option<(u32, String)> {
+        let &ent = row.instance.first()?;
         let SnmpValue::Bytes(bytes) = &row.value else {
-            continue;
+            return None;
         };
         let text = String::from_utf8_lossy(bytes).trim().to_owned();
-        if text.is_empty() {
+        (!text.is_empty()).then_some((ent, text))
+    };
+    let fold = |s: &str| s.trim().to_ascii_lowercase();
+
+    let mut names: BTreeMap<u32, String> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base == name_oid) {
+        if let Some((ent, text)) = read(row) {
+            names.entry(ent).or_insert(text);
+        }
+    }
+
+    let mut out: BTreeMap<u32, String> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base != name_oid) {
+        let Some((ent, text)) = read(row) else {
+            continue;
+        };
+        if names.get(&ent).is_some_and(|n| fold(n) == fold(&text)) {
             continue;
         }
-        // Keep the longer of the two columns: `entPhysicalModelName` is usually the part number and
+        // Keep the longer candidate: `entPhysicalModelName` is usually the part number and
         // `entPhysicalDescr` the prose, and which one carries a designation varies by vendor. The
-        // longer string is the one more likely to contain it, and the matcher refuses anything it
-        // cannot recognise anyway.
+        // matcher downstream refuses anything it cannot recognise anyway.
         match out.get(&ent) {
             Some(existing) if existing.len() >= text.len() => {}
             _ => {
@@ -162,9 +188,18 @@ mod tests {
         }
     }
 
+    /// `entPhysicalName` — the yardstick column, not a candidate.
+    const NAME_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.7";
+    /// `entPhysicalModelName` — a candidate.
+    const MODEL_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
+
     fn text_row(ent: u32, text: &str) -> SnmpInstanceRow {
+        row_on(MODEL_OID, ent, text)
+    }
+
+    fn row_on(oid: &str, ent: u32, text: &str) -> SnmpInstanceRow {
         SnmpInstanceRow {
-            oid_base: "1.3.6.1.2.1.47.1.1.1.1.13".to_owned(),
+            oid_base: oid.to_owned(),
             instance: vec![ent],
             value: SnmpValue::Bytes(text.as_bytes().to_vec()),
         }
@@ -221,14 +256,52 @@ mod tests {
     }
 
     #[test]
-    fn entity_text_keeps_the_longer_of_the_two_columns() {
-        let got = entity_text(&[
-            text_row(101, "SFP"),
-            text_row(101, "SFP-1000BaseLX transceiver"),
-            text_row(102, "  "),
-        ]);
+    fn entity_text_keeps_the_longer_of_the_candidate_columns() {
+        let got = entity_text(
+            &[
+                text_row(101, "SFP"),
+                text_row(101, "SFP-1000BaseLX transceiver"),
+                text_row(102, "  "),
+            ],
+            NAME_OID,
+        );
         assert_eq!(got[&101], "SFP-1000BaseLX transceiver");
         assert!(!got.contains_key(&102), "blank text is not an answer");
+    }
+
+    /// 🚨 The defect that reached the test server: a description that is just the port's own name.
+    ///
+    /// ENTITY-MIB describes every component, and the entity a port's ifIndex resolves to is usually
+    /// the **port**, not a module inside it. The Huawei USG answers `entPhysicalDescr` with the port
+    /// name, so without this rule every port was reported as its own transceiver and the UI rendered
+    /// "Transceiver: GE0/0/1". Nothing in the unit suite caught it — only reading the real table did.
+    #[test]
+    fn a_description_that_only_restates_the_entity_name_is_not_a_transceiver() {
+        let got = entity_text(
+            &[
+                row_on(NAME_OID, 101, "GE0/0/1"),
+                row_on(MODEL_OID, 101, "GE0/0/1"),
+                // Case and stray whitespace are the same nothing said twice.
+                row_on(NAME_OID, 102, "GE0/0/2"),
+                row_on(MODEL_OID, 102, " ge0/0/2 "),
+                // …but a real part number on a named port survives, which is the half that would be
+                // lost by "just drop everything when a name exists".
+                row_on(NAME_OID, 103, "GE0/0/3"),
+                row_on(MODEL_OID, 103, "SFP-1000BaseLX"),
+            ],
+            NAME_OID,
+        );
+        assert!(!got.contains_key(&101), "port name is not a part number");
+        assert!(!got.contains_key(&102), "case/space folded comparison");
+        assert_eq!(got[&103], "SFP-1000BaseLX");
+    }
+
+    #[test]
+    fn the_name_column_is_never_itself_a_candidate() {
+        // Even with no describing column at all, `entPhysicalName` must not become the answer —
+        // otherwise the rule above is trivially defeated by a device that only implements .7.
+        let got = entity_text(&[row_on(NAME_OID, 101, "GE0/0/1")], NAME_OID);
+        assert!(got.is_empty());
     }
 
     #[test]

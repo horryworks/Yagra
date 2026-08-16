@@ -41,6 +41,9 @@
     module whose medium could not be resolved.
     - ⚠️ **Many devices do not implement MAU-MIB, and then the column stays empty.** That is a gap
       in what the device will tell you, not a fault — the same shape as the duplex column above.
+    - **A component whose only description is its own port name is not treated as a transceiver.**
+      ENTITY-MIB describes every component, and the one a port resolves to is often the port itself,
+      so a device that answers with the port name would otherwise be reported as its own module.
     - **`GET /api/v1/nodes/{id}/interfaces` gains `if_media` and `transceiver_model`.** They are
       deliberately separate: a part number is not a media type, and `if_media` is filled from one
       only when it demonstrably contains a standard designation. Both appear on the MCP

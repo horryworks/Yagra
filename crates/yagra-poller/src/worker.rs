@@ -1285,8 +1285,10 @@ async fn execute_mau(
 
 /// Walk the ENTITY-MIB text columns that can name a pluggable.
 ///
-/// Both columns are asked for because which one carries a designation varies by vendor;
-/// `mau::entity_text` keeps the longer answer per entity.
+/// Two describing columns because which one carries a designation varies by vendor, plus
+/// `entPhysicalName` — which is **not** a candidate but the yardstick: `mau::entity_text` throws
+/// away any description that merely restates the component's own name. Without that third column
+/// this walk reported every port as its own transceiver (see that function's 🚨).
 async fn walk_entity_media_text(
     job: &PollJob,
     transport: &dyn Transport,
@@ -1296,6 +1298,7 @@ async fn walk_entity_media_text(
     let columns = vec![
         ENT_PHYSICAL_MODEL_NAME.to_owned(),
         optical::ENT_PHYSICAL_DESCR.to_owned(),
+        optical::ENT_PHYSICAL_NAME.to_owned(),
     ];
     match walker
         .walk_instances(
@@ -1307,7 +1310,7 @@ async fn walk_entity_media_text(
         )
         .await
     {
-        Ok(rows) => crate::mau::entity_text(&rows),
+        Ok(rows) => crate::mau::entity_text(&rows, optical::ENT_PHYSICAL_NAME),
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity media text walk failed");
             BTreeMap::new()
