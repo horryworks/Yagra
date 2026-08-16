@@ -2,8 +2,9 @@
 // Interfaces tab of the unified node detail — Direction C: keep the interface LIST and the selected
 // interface's CHARTS on screen together. Each row carries a small last-1h throughput sparkline so
 // trends across all interfaces are visible without selecting anything (fast triage of "which port is
-// busy / flapping"); selecting a row opens a pinned detail dock at the bottom (throughput + error
-// charts, range control, stat tiles). The list scrolls above the dock; the dock stays put. The tab
+// busy / flapping"); selecting a row opens a pinned detail dock at the bottom (throughput +
+// errors/discards charts, range control, stat tiles). The list scrolls above the dock; the dock
+// stays put. The tab
 // body is a flex column — toolbar (none) → list (flex:1, scrolls) → dock/hint (none). The list
 // refreshes on an interval (shared with the tab badge); per-interface series are loaded lazily.
 
@@ -14,7 +15,7 @@ import { api } from '../../services/api';
 import { formatBps, formatPps, formatSi } from '../../lib/format';
 import type { InterfaceRow, InterfaceSeries } from '../../types/api';
 import { StatusDot } from '../ui/StatusDot';
-import { MetricChart, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
+import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useRangeStore } from '../../store';
@@ -23,6 +24,8 @@ import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
 import {
+  FAULT_SERIES,
+  faultValues,
   latestDiscardRate,
   latestErrorRate,
   sparklinePath,
@@ -516,9 +519,10 @@ function Sparkline({
   );
 }
 
-/** Bottom detail dock for the selected interface: throughput (In/Out bps) + errors (In/Out per
- *  second) charts over a selectable window, plus inline In/Out/Err stat tiles. Fetches the series on
- *  a 15s interval (like the rest of the live detail); the range persists while switching rows. */
+/** Bottom detail dock for the selected interface: a throughput chart (In/Out, bps or pps) and a
+ *  combined errors/discards chart (four lines, pps) over a selectable window, plus inline
+ *  In/Out/Err/Disc stat tiles. Fetches the series on a 15s interval (like the rest of the live
+ *  detail); the range persists while switching rows. */
 function InterfaceDock({
   nodeId,
   row,
@@ -602,27 +606,25 @@ function InterfaceDock({
       { label: t('interfaces.out'), values: outArr, color: SERIES_OUT },
     ];
   }, [series, rateUnit, t]);
-  const errorSeries = useMemo(
+  // Errors and discards share one chart, so its legend has four keys rather than the In/Out pair.
+  // Built from `FAULT_SERIES` and handed to BOTH the legend and the chart below, so a swatch cannot
+  // name a colour the line does not use — the failure that would look like a working chart.
+  const faultKeys = useMemo(
     () =>
-      series
-        ? [
-            { label: t('interfaces.in'), values: series.in_errors, color: SERIES_IN },
-            { label: t('interfaces.out'), values: series.out_errors, color: SERIES_OUT },
-          ]
-        : [],
-    [series, t],
+      FAULT_SERIES.map((spec) => ({
+        spec,
+        label: t(spec.labelKey),
+        color: PALETTE[spec.colorIndex],
+      })),
+    [t],
   );
-  // Same In/Out colours as the other two charts on purpose: all three read "colour 1 = in,
-  // colour 2 = out", so `ChartLegend` is reused unchanged and no new series colour is introduced.
-  const discardSeries = useMemo(
+  // Same reason as `throughputSeries`: a fresh array each render is a fresh `series` prop.
+  const faultSeries = useMemo(
     () =>
       series
-        ? [
-            { label: t('interfaces.in'), values: series.in_discards, color: SERIES_IN },
-            { label: t('interfaces.out'), values: series.out_discards, color: SERIES_OUT },
-          ]
+        ? faultKeys.map(({ spec, ...key }) => ({ ...key, values: faultValues(series, spec) }))
         : [],
-    [series, t],
+    [series, faultKeys],
   );
 
   return (
@@ -751,13 +753,19 @@ function InterfaceDock({
           )}
         </div>
 
+        {/* Errors and discards on ONE chart (ADR-046 Inc.5). They had a chart each — the two have
+            different causes, damage vs congestion, and can differ by orders of magnitude, so a
+            shared linear axis flattens whichever is smaller. That cost stands; the dock is two
+            charts instead of three because both are zero on a healthy link and the reading an
+            operator wants is "did either of them move". No CSS change is needed — the chart grid
+            is auto-fit, so the remaining two just get wider. */}
         <div className="nd-if-chart">
           <div className="nd-if-chart-t">
             <span>
-              {t('interfaces.errors')}{' '}
-              <span className="nd-unit">{t('interfaces.errorsUnit')}</span>
+              {t('interfaces.faults')}{' '}
+              <span className="nd-unit">{t('interfaces.faultsUnit')}</span>
             </span>
-            <ChartLegend />
+            <ChartLegend entries={faultKeys} />
           </div>
           {hasData ? (
             <MetricChart
@@ -767,34 +775,7 @@ function InterfaceDock({
               yFormat={formatSi}
               legendFormat={formatPps}
               xRange={win ?? undefined}
-              series={errorSeries}
-            />
-          ) : (
-            <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
-          )}
-        </div>
-
-        {/* Discards get their own chart rather than extra series on the errors one (ADR-046
-            Inc.4): the two have different causes — damage vs congestion — and in practice differ
-            by two or three orders of magnitude, so sharing an axis flattens whichever is smaller.
-            No CSS change is needed; `.nd-if-dock-charts` is an auto-fit grid. */}
-        <div className="nd-if-chart">
-          <div className="nd-if-chart-t">
-            <span>
-              {t('interfaces.discards')}{' '}
-              <span className="nd-unit">{t('interfaces.discardsUnit')}</span>
-            </span>
-            <ChartLegend />
-          </div>
-          {hasData ? (
-            <MetricChart
-              title=""
-              {...chartSizing}
-              timestamps={ts}
-              yFormat={formatSi}
-              legendFormat={formatPps}
-              xRange={win ?? undefined}
-              series={discardSeries}
+              series={faultSeries}
             />
           ) : (
             <div className="nd-if-chart-empty">{t('interfaces.noData')}</div>
@@ -805,20 +786,30 @@ function InterfaceDock({
   );
 }
 
-/** In/Out colour key shown beside a dock chart title (matches the chart series colours). With
- *  `bandwidth`, also shows the red configured-bandwidth reference-line key. */
-function ChartLegend({ bandwidth = false }: { bandwidth?: boolean }) {
+/** Colour key shown beside a dock chart title (matches the chart series colours). Defaults to the
+ *  In/Out pair the throughput chart plots; the errors/discards chart passes its four `entries`
+ *  instead, from the same descriptors it builds its series from. With `bandwidth`, also shows the
+ *  red configured-bandwidth reference-line key. */
+function ChartLegend({
+  entries,
+  bandwidth = false,
+}: {
+  entries?: { label: string; color: string }[];
+  bandwidth?: boolean;
+}) {
   const { t } = useTranslation('nodes');
+  const keys = entries ?? [
+    { label: t('interfaces.in'), color: SERIES_IN },
+    { label: t('interfaces.out'), color: SERIES_OUT },
+  ];
   return (
     <span className="nd-if-legend">
-      <span className="nd-if-legend-k">
-        <span className="nd-if-legend-sw" style={{ background: SERIES_IN }} />
-        {t('interfaces.in')}
-      </span>
-      <span className="nd-if-legend-k">
-        <span className="nd-if-legend-sw" style={{ background: SERIES_OUT }} />
-        {t('interfaces.out')}
-      </span>
+      {keys.map((k) => (
+        <span className="nd-if-legend-k" key={k.label}>
+          <span className="nd-if-legend-sw" style={{ background: k.color }} />
+          {k.label}
+        </span>
+      ))}
       {bandwidth && (
         <span className="nd-if-legend-k">
           <span className="nd-if-legend-sw nd-if-legend-bw" />

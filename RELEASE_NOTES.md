@@ -25,17 +25,19 @@
     broadcast reads low, and dividing bits by packets overstates the average frame size.
   - The bandwidth reference line and the fit/capacity axis toggle are hidden in pps mode —
     `ifSpeed` is a bit rate and would draw a meaningless line on a packet axis.
-  - **The Errors and Discards charts are unaffected and have no bps form.** IF-MIB counts errored
-    and discarded *frames* but never their octets, so those two are packets/sec by nature. Their
-    unit labels now say so (`(In / Out, pps)` rather than the previous `(In / Out, /s)`).
-- **Interface discards are now graphed.** `ifInDiscards` / `ifOutDiscards` (IF-MIB
-  `1.3.6.1.2.1.2.2.1.13` and `.19`, standard on essentially every SNMP agent) have been collected
-  since v0.1.x but had no reader, so the counters were in the TSDB and invisible everywhere. A node's
-  **Interfaces** tab now shows a third chart, **Discards (In / Out, pps)**, beside Throughput and
-  Errors, and the dock header gains a **Disc** figure when the rate is non-zero. Discards get their
-  own chart rather than extra lines on the Errors one because the two mean different faults — an
-  error is a frame that arrived damaged (cabling, optics, NIC), a discard is a frame the device
-  dropped although nothing was wrong with it (congestion, queue overflow, ACL).
+  - **The Errors / discards chart is unaffected and has no bps form.** IF-MIB counts errored and
+    discarded *frames* but never their octets, so it is packets/sec by nature. Its unit label now
+    says so (`(pps)` rather than the previous `(In / Out, /s)`).
+- **Interface discards are now graphed, on one chart with errors.** `ifInDiscards` /
+  `ifOutDiscards` (IF-MIB `1.3.6.1.2.1.2.2.1.13` and `.19`, standard on essentially every SNMP
+  agent) have been collected since v0.1.x but had no reader, so the counters were in the TSDB and
+  invisible everywhere. A node's **Interfaces** tab now plots them beside the error counters on a
+  single **Errors / discards (pps)** chart — four lines, in and out of each, one colour apiece —
+  and the dock header gains a **Disc** figure when the rate is non-zero. The two mean different
+  faults: an error is a frame that arrived damaged (cabling, optics, NIC), a discard is a frame the
+  device dropped although nothing was wrong with it (congestion, queue overflow, ACL). Sharing an
+  axis means a much smaller rate can flatten against a much larger one; the header figures give the
+  exact current values for each.
 - **New dashboard widget: "Most interface discards".** Ranks the fleet's interfaces by discards/sec
   (in + out), alongside the existing "Most interface errors".
 - **`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/series` returns four more arrays**:

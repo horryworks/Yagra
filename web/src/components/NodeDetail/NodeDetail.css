@@ -844,6 +844,9 @@ html[data-viewport='mobile'] .nd-extract-row {
 
 .nd-if-legend {
   display: flex;
+  /* The errors/discards chart's key has four entries, which overruns a narrow dock column at the
+     grid's 220px minimum — wrap rather than push the chart title out of the row. */
+  flex-wrap: wrap;
   gap: 14px;
   align-items: center;
   font-size: var(--font-xs);

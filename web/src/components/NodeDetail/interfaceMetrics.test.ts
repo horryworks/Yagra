@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import {
+  FAULT_SERIES,
+  faultValues,
   latestDiscardRate,
   latestErrorRate,
   sparklinePath,
@@ -172,5 +174,50 @@ describe('throughputPair', () => {
 
     const onlyPps = series({ in_ucast_pps: [3], out_ucast_pps: [4] });
     expect(throughputPair(onlyPps, 'bps')).toEqual([[], []]);
+  });
+});
+
+describe('FAULT_SERIES', () => {
+  // The chart merged two charts into one (ADR-046 Inc.5), so the four arrays are no longer split
+  // across two components that could not confuse them. Pin the set: dropping one silently loses a
+  // fault channel from the only place it is charted, and the chart still renders.
+  it('plots exactly the four fault arrays, errors before discards', () => {
+    expect(FAULT_SERIES.map((s) => s.key)).toEqual([
+      'in_errors',
+      'out_errors',
+      'in_discards',
+      'out_discards',
+    ]);
+  });
+
+  // On a healthy link all four lines sit flat at zero and overlap, so hue is the ONLY thing telling
+  // them apart once one of them rises. Two lines sharing a palette slot would be indistinguishable
+  // exactly when the chart matters.
+  it('gives every line its own palette slot', () => {
+    const slots = FAULT_SERIES.map((s) => s.colorIndex);
+    expect(new Set(slots).size).toBe(slots.length);
+  });
+
+  it('gives every line its own label key', () => {
+    const keys = FAULT_SERIES.map((s) => s.labelKey);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+describe('faultValues', () => {
+  // Same hazard as `throughputPair`: four same-typed arrays on one object, so a transposed read is
+  // a wrong line under a right label. Feed one array at a time and assert the other three see none.
+  it('reads only the array its spec names', () => {
+    const only = series({ out_discards: [7] });
+    for (const spec of FAULT_SERIES) {
+      expect(faultValues(only, spec)).toEqual(spec.key === 'out_discards' ? [7] : []);
+    }
+  });
+
+  it('yields an empty array when the core did not send the field', () => {
+    const partial = { timestamps: [1] } as unknown as InterfaceSeries;
+    for (const spec of FAULT_SERIES) {
+      expect(faultValues(partial, spec)).toEqual([]);
+    }
   });
 });

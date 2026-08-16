@@ -50,6 +50,43 @@ export function throughputPair(
     : [series.in_bps ?? [], series.out_bps ?? []];
 }
 
+/** Which of the interface series' fault arrays one line of the errors/discards chart reads. */
+export type FaultSeriesKey = 'in_errors' | 'out_errors' | 'in_discards' | 'out_discards';
+
+export interface FaultSeriesSpec {
+  key: FaultSeriesKey;
+  /** `nodes`-namespace key for the line's label (and its legend key). */
+  labelKey: string;
+  /** Slot in `MetricChart`'s `PALETTE`. Every line gets its own hue: the in/out colour pair the
+   *  throughput chart uses only carries two meanings, and this chart carries four. */
+  colorIndex: number;
+}
+
+/** The four lines of the combined errors/discards chart, in legend order.
+ *
+ *  Errors and discards shared a unit from the start and now share a chart. ⚠️ **They deliberately
+ *  did not** (ADR-046 Inc.4 decision A): the two have different causes — damage vs congestion — and
+ *  in practice differ by orders of magnitude, so one linear axis flattens whichever is smaller.
+ *  That cost is real and unchanged; what changed is the judgement, on the grounds that both are
+ *  zero on a healthy link and a dock of two charts reads better than one of three (ADR-046 Inc.5).
+ *
+ *  The list lives here, rather than inline in the chart, so the mapping from an array to a colour
+ *  and a label is one object that both the uPlot series and the legend swatches are built from —
+ *  a legend that disagrees with its chart is a wrong answer that looks like an answer. */
+export const FAULT_SERIES: readonly FaultSeriesSpec[] = [
+  { key: 'in_errors', labelKey: 'interfaces.errIn', colorIndex: 0 },
+  { key: 'out_errors', labelKey: 'interfaces.errOut', colorIndex: 1 },
+  { key: 'in_discards', labelKey: 'interfaces.discIn', colorIndex: 2 },
+  { key: 'out_discards', labelKey: 'interfaces.discOut', colorIndex: 3 },
+];
+
+/** The values one fault line plots. Missing arrays become empty ones for the same reason as
+ *  [`throughputPair`]: web and core are separate containers, so a new WebUI can be talking to an
+ *  older core, and `undefined` reaching uPlot takes the whole dock down. */
+export function faultValues(series: InterfaceSeries, spec: FaultSeriesSpec): (number | null)[] {
+  return series[spec.key] ?? [];
+}
+
 /** Latest combined rate (in + out, per second) across a directional pair of the interface series,
  *  or `null` when the series is absent or neither direction carries a sample. Parameterized rather
  *  than duplicated per pair: errors and discards differ only in which two arrays they read, and a

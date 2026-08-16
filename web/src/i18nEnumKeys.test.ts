@@ -86,6 +86,7 @@ import { SEVERITY_ORDER } from './lib/nodeState';
 import { KNOWN_SCALARS } from './lib/format';
 import { PROFILE_CATEGORIES } from './lib/profileCategories';
 import { METRIC_CARDS } from './components/NodeDetail/metricCards';
+import { FAULT_SERIES } from './components/NodeDetail/interfaceMetrics';
 import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
 import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
@@ -295,6 +296,14 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // without its strings renders the raw key ("overview.gpuLoad") in both languages.
     const keys = METRIC_CARDS.map((c) => c.labelKey);
     expectKeys('metric card', { en: enNodes, ja: jaNodes }, '', keys);
+  });
+
+  it('every interface fault line has a label (nodes:interfaces.*)', () => {
+    // The errors/discards chart labels its four lines from the registry, so a line added without
+    // its strings renders the raw key ("interfaces.discOut") in the one legend that says which
+    // colour is which — leaving four indistinguishable lines with no key.
+    const keys = FAULT_SERIES.map((s) => s.labelKey);
+    expectKeys('fault series', { en: enNodes, ja: jaNodes }, '', keys);
   });
 
   it('every report run state has a badge label (reports:run.status.*)', () => {
