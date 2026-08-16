@@ -33,7 +33,10 @@ use yagra_common::{
 
 /// An interface whose metadata has not been refreshed within this window is flagged stale. The UI
 /// shows the row either way — a switch that stopped answering SNMP still has ports.
-const INTERFACE_STALE_SECS: i64 = 900;
+///
+/// `pub(crate)` because `get_node_status` reports the same flag over MCP: a second copy of the
+/// window would let the two surfaces disagree about which interfaces are current (ADR-042 I4).
+pub(crate) const INTERFACE_STALE_SECS: i64 = 900;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]

@@ -34,6 +34,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 // The module (not just the trait) — the `JsonSchema` derive expands to `schemars::…` paths, so the
 // `schemars` name must be in scope. rmcp re-exports it, keeping exactly one schemars version.
+use crate::api::metrics::MetricDimension;
 use rmcp::schemars;
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{tool, tool_router, ErrorData as McpError};
@@ -42,7 +43,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 use uuid::Uuid;
-use yagra_common::{NodeId, NodeKind, Permission, SeriesKey, Severity};
+use yagra_common::{MetricKind, NodeId, NodeKind, Permission, SeriesKey, Severity};
 
 use super::{McpIdentity, YagraMcp};
 use crate::ack::AckView;
@@ -252,8 +253,13 @@ impl YagraMcp {
     }
 
     #[tool(
-        description = "Full status for one node: its summary, current active alerts, and interfaces. \
-                       Requires live mode (returns an availability note in skeleton mode)."
+        description = "Full status for one node: its summary, current active alerts, and \
+                       interfaces. Each interface carries its identity (ifindex, name, alias, \
+                       nominal speed), its current operational state (`oper_status`, 1 = up), its \
+                       current load in bits/sec each way with utilization against the nominal \
+                       speed, and `stale` when the node has not reported it recently. Use this to \
+                       find which port is down or busy; use get_interface_series for one port's \
+                       history. Requires live mode (returns an availability note in skeleton mode)."
     )]
     async fn get_node_status(
         &self,
@@ -295,6 +301,16 @@ impl YagraMcp {
             .list_interfaces(p.node_id)
             .await
             .unwrap_or_default();
+        // The same query-time join the Interfaces tab shows: one batched fetch for the whole node
+        // (3 TSDB round-trips regardless of port count), not one per interface. Without it this
+        // tool named a node's ports without being able to say which was down or busy, while the
+        // route ledger claimed it folded `GET /nodes/:id/interfaces` (ADR-042 I4).
+        let live = self
+            .state
+            .store
+            .node_interface_live(p.node_id, crate::api::DEFAULT_RATE_LOOKBACK_SECS)
+            .await;
+        let now_s = crate::api::util::now_unix_s();
         let kind = crate::api::nodes::node_kinds(admin, &[p.node_id])
             .await
             .get(&p.node_id)
@@ -307,7 +323,17 @@ impl YagraMcp {
                 .iter()
                 .map(|a| AlertDto::from_alert(a, Some(node.name.clone())))
                 .collect(),
-            interfaces: interfaces.iter().map(InterfaceDto::from_meta).collect(),
+            interfaces: interfaces
+                .iter()
+                .map(|m| {
+                    InterfaceDto::from_meta_and_live(
+                        m,
+                        live.get(&m.ifindex).copied().unwrap_or_default(),
+                        now_s,
+                        crate::api::collection::INTERFACE_STALE_SECS,
+                    )
+                })
+                .collect(),
         };
         ok_json("get_node_status", &dto)
     }
@@ -430,7 +456,14 @@ impl YagraMcp {
         description = "Query a node's metric time-series from the TSDB. `metric` is a name such as \
                        icmp_rtt_ms, cpu_percent, or mem_percent. `mode` is latest|range|rate \
                        (default latest). For range/rate, `from`/`to` are Unix seconds (default: last \
-                       hour) and `step` is the sample interval in seconds (clamped)."
+                       hour) and `step` is the sample interval in seconds (clamped).\n\n\
+                       This answers at the NODE level, so it depends on the metric's `dimension` \
+                       (call list_node_metrics first). `none` is answered directly. A gauge with \
+                       several series per node (`entity`, `interface`) is collapsed to the node \
+                       maximum and the answer says so. A COUNTER with several series per node is \
+                       refused rather than answered, because no single node-level number exists — \
+                       use get_interface_series for one interface's rates, or top_interfaces to \
+                       rank the fleet."
     )]
     async fn query_metrics(
         &self,
@@ -458,16 +491,73 @@ impl YagraMcp {
         if !scope.allows_node(&self.state, NodeId::from(p.node_id)) {
             return tool_unavailable("query_metrics", "no node with that id");
         }
+        // How many series share this name on this node, and what they are. Without this the node
+        // selector matches every one of them and the store answers with the FIRST — an arbitrary
+        // interface's rate presented as the node's (ADR-042 I4). The inventory is the same seam
+        // `list_node_metrics` reads, so the two tools cannot come to disagree about a metric's
+        // shape. Skeleton mode has no inventory and no multi-series data either, so it reads
+        // directly, exactly as before.
+        let entry = match self.state.admin.as_ref() {
+            Some(admin) => crate::api::metrics::node_metric_inventory(
+                admin,
+                self.state.store.as_ref(),
+                p.node_id,
+                None,
+            )
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|e| e.metric == p.metric),
+            None => None,
+        };
+        let read = entry
+            .as_ref()
+            .map_or(NodeRead::Direct, |e| node_read(e.metric_kind, e.dimension));
+        if read == NodeRead::Refuse {
+            let e = entry
+                .as_ref()
+                .expect("Refuse is only reachable with an entry");
+            return tool_bad_params("query_metrics", &no_node_level_answer(&p.metric, e));
+        }
+
         let key = SeriesKey::node(NodeId::from(p.node_id), p.metric.clone());
         let mode = p.mode.as_deref().unwrap_or("latest");
+        let agg = read == NodeRead::NodeMax;
+        // Said out loud, never inferred: a collapsed answer that reads like a plain one is the same
+        // class of wrong as the bug this fixes.
+        let note = entry.as_ref().filter(|_| agg).map(|e| {
+            format!(
+                "collapsed the node's {} {} series to their maximum",
+                e.series_count,
+                dimension_word(e.dimension)
+            )
+        });
         let dto = match mode {
             "latest" => MetricSeriesDto {
                 node_id: p.node_id,
                 metric: p.metric.clone(),
                 mode: "latest".to_owned(),
-                latest: self.state.store.latest(&key).await,
+                latest: if agg {
+                    self.state.store.aggregate_latest(&key).await
+                } else {
+                    self.state.store.latest(&key).await
+                },
                 points: Vec::new(),
+                note,
             },
+            // A `NodeMax` metric is a gauge by construction (a multi-series counter was refused
+            // above), so `rate` of one is meaningless twice over — and there is no aggregate-rate
+            // query to serve it with. Refusing beats quietly rating one arbitrary series.
+            "rate" if agg => {
+                return tool_bad_params(
+                    "query_metrics",
+                    &format!(
+                        "{} is a gauge with several series on this node; `rate` has no node-level \
+                         meaning here. Use mode=range for the node maximum over time.",
+                        p.metric
+                    ),
+                )
+            }
             "range" | "rate" => {
                 let to = p.to.unwrap_or_else(|| Utc::now().timestamp());
                 let from = p.from.unwrap_or(to - DEFAULT_WINDOW_SECS);
@@ -480,6 +570,8 @@ impl YagraMcp {
                         .store
                         .rate_range(&key, from, to, step, step.max(60))
                         .await
+                } else if agg {
+                    self.state.store.aggregate_range(&key, from, to, step).await
                 } else {
                     self.state.store.range(&key, from, to, step).await
                 };
@@ -492,6 +584,7 @@ impl YagraMcp {
                         .iter()
                         .map(|pt| MetricPointDto { t: pt.t, v: pt.v })
                         .collect(),
+                    note,
                 }
             }
             _ => return tool_bad_params("query_metrics", "`mode` must be latest, range, or rate"),
@@ -3740,6 +3833,73 @@ fn topology_kind(kind: Option<&str>) -> TopologyKind {
 }
 
 /// A bad-parameter error (records `bad_params`). Maps to a JSON-RPC invalid-params error.
+/// What a node-level read of one metric can honestly answer (ADR-042 I4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeRead {
+    /// One series per node: read it as it is stored.
+    Direct,
+    /// Several series share the name on this node and they are gauges — collapse to the node
+    /// maximum, the same reading `?agg=max` gives the WebUI's Device-health cards.
+    NodeMax,
+    /// Several series, and they are counters. There is no node-level number to give: a sum
+    /// double-counts traffic that entered one port and left another, and a maximum invents a
+    /// figure no surface displays. Say so and name where the answer lives.
+    Refuse,
+}
+
+/// The rule, kept pure so it is testable without a store.
+///
+/// ⚠️ **This is a second statement of `metricView` in `web/src/lib/metricInventory.ts`**, and
+/// nothing compares the two — the TS side decides what the Collection tab draws, this one decides
+/// what `/mcp` answers. They agree on the load-bearing half (a multi-series counter has no
+/// node-level read; a multi-series gauge is a node max) and that agreement is the whole point of
+/// ADR-042: the same question must not get two answers. Change one, change both.
+fn node_read(kind: MetricKind, dimension: MetricDimension) -> NodeRead {
+    match dimension {
+        MetricDimension::None => NodeRead::Direct,
+        MetricDimension::Interface | MetricDimension::Entity => match kind {
+            MetricKind::Gauge => NodeRead::NodeMax,
+            MetricKind::Counter => NodeRead::Refuse,
+        },
+    }
+}
+
+/// The word for a dimension in a sentence addressed to a model.
+fn dimension_word(dimension: MetricDimension) -> &'static str {
+    match dimension {
+        MetricDimension::None => "node",
+        MetricDimension::Interface => "interface",
+        MetricDimension::Entity => "table-row",
+    }
+}
+
+/// Why a metric has no node-level answer, and where the answer is instead.
+///
+/// The destination matters more than the refusal: a model told only "no" retries or guesses, while
+/// one handed the next tool name proceeds. An `entity` counter genuinely has nowhere to go — row
+/// identity is discarded at collection time — and saying that plainly is better than inventing a
+/// destination that will not work.
+fn no_node_level_answer(metric: &str, entry: &crate::api::metrics::NodeMetricEntry) -> String {
+    let n = entry.series_count;
+    match entry.dimension {
+        MetricDimension::Interface => format!(
+            "{metric} is a counter with one series per interface on this node ({n} of them), so no \
+             single node-level value exists. Use get_interface_series for one interface's rates \
+             (get_node_status lists the ifindexes), or top_interfaces to rank the fleet."
+        ),
+        MetricDimension::Entity => format!(
+            "{metric} is a counter with one series per table row on this node ({n} of them), and \
+             row identity is not retained at collection time, so neither a per-row nor a \
+             node-level rate is available."
+        ),
+        // Unreachable via `node_read`, and written out rather than `unreachable!()` so a future
+        // dimension cannot turn a wrong answer into a panic on a live deployment.
+        MetricDimension::None => {
+            format!("{metric} has no node-level answer available.")
+        }
+    }
+}
+
 fn tool_bad_params(tool: &str, reason: &str) -> Result<CallToolResult, McpError> {
     record_tool(tool, "bad_params");
     Err(McpError::invalid_params(reason.to_string(), None))
@@ -4544,6 +4704,81 @@ mod tests {
             before_at: None,
             before_id: None,
         }
+    }
+
+    // ── The node-level read rule (ADR-042 I4) ────────────────────────────────────────────────────
+    // A node selector has no `ifindex`, so it matches every series sharing the metric's name and
+    // the store answers with the first. Live proof on 2026-08-16: `if_hc_in_octets` read 0.0 while
+    // the interface actually carried ~3.9 Mbps. Nothing about that is a type error, a panic or an
+    // empty result — it is a plausible number, which is why the rule has to be decided rather than
+    // discovered.
+
+    #[test]
+    fn a_single_series_metric_is_read_directly() {
+        assert_eq!(
+            node_read(MetricKind::Gauge, MetricDimension::None),
+            NodeRead::Direct
+        );
+        assert_eq!(
+            node_read(MetricKind::Counter, MetricDimension::None),
+            NodeRead::Direct
+        );
+    }
+
+    #[test]
+    fn a_multi_series_gauge_collapses_to_the_node_maximum() {
+        // The reading `?agg=max` already gives the WebUI's Device-health cards. Both dimensions,
+        // because `entity` (folded table rows) and `interface` differ in what the rows *are*, not
+        // in whether a node-level number exists.
+        assert_eq!(
+            node_read(MetricKind::Gauge, MetricDimension::Entity),
+            NodeRead::NodeMax
+        );
+        assert_eq!(
+            node_read(MetricKind::Gauge, MetricDimension::Interface),
+            NodeRead::NodeMax
+        );
+    }
+
+    #[test]
+    fn a_multi_series_counter_has_no_node_level_answer() {
+        assert_eq!(
+            node_read(MetricKind::Counter, MetricDimension::Interface),
+            NodeRead::Refuse
+        );
+        assert_eq!(
+            node_read(MetricKind::Counter, MetricDimension::Entity),
+            NodeRead::Refuse
+        );
+    }
+
+    /// A refusal that does not say where to go instead makes a model guess or retry, so the
+    /// destination is part of the contract rather than a nicety. The `entity` case deliberately
+    /// names none — row identity is discarded at collection time and there is nowhere to send it.
+    #[test]
+    fn a_refusal_names_the_tool_that_can_answer() {
+        let iface = crate::api::metrics::NodeMetricEntry {
+            metric: "if_hc_in_octets".to_owned(),
+            metric_kind: MetricKind::Counter,
+            dimension: MetricDimension::Interface,
+            status: crate::api::metrics::MetricStatus::Ok,
+            series_count: 16,
+        };
+        let msg = no_node_level_answer("if_hc_in_octets", &iface);
+        assert!(msg.contains("get_interface_series"), "{msg}");
+        assert!(msg.contains("top_interfaces"), "{msg}");
+        assert!(msg.contains("16"), "the fan-out is the evidence: {msg}");
+
+        let entity = crate::api::metrics::NodeMetricEntry {
+            dimension: MetricDimension::Entity,
+            ..iface
+        };
+        let msg = no_node_level_answer("huawei_bytes", &entity);
+        assert!(
+            !msg.contains("get_interface_series"),
+            "an entity row is not an interface — sending a model there wastes a call: {msg}"
+        );
+        assert!(msg.contains("identity"), "{msg}");
     }
 
     /// The alignment invariant is what can be silently wrong here: eight series on one axis, so a

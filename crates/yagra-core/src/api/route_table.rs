@@ -124,6 +124,13 @@ pub(crate) enum Mcp {
     /// `/nodes/:node_id/interfaces` is part of `get_node_status`. That is what parity means here —
     /// the same questions can be answered, not a 1:1 route map. A tool per endpoint would be ~60
     /// tools, and a model picks worse from a list that long.
+    ///
+    /// ⚠️ **What this variant does NOT assert: that the tool gives the same answer.** It is checked
+    /// against the tool's existence and (for a folded read) its permission and response schema —
+    /// never against the value. ADR-042 I4 found both failures behind a green column: a folded DTO
+    /// that had dropped every field except identity, and `query_metrics` returning one arbitrary
+    /// series out of sixteen as if it were the node's. Both were found by asking a live deployment
+    /// the same question twice, which is the only thing that finds them.
     Tool(&'static str),
     /// Deliberately **no** tool, with the reason recorded: session plumbing, the contract document,
     /// the probes, machine-to-machine ingest, the caller's own UI layout, secret material, or a
@@ -910,6 +917,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         NodeScoped,
         // Folded: `NodeStatusDto` carries the interface list. Parity is about which questions can
         // be answered, so a route answered inside a larger tool is answered.
+        //
+        // ⚠️ This line was true of the route and false of the questions for as long as it existed.
+        // `InterfaceDto` carried identity only — ifindex, name, alias, speed, last_seen — while the
+        // REST row carries `oper_status`, both rates, both utilizations and `stale`. So "which port
+        // on this node is down?" and "which one is busy?", the two questions the Interfaces tab
+        // exists for, had no MCP answer while this column read green. Fixed in ADR-042 I4; the
+        // lesson is that `Tool(…)` asserts a tool exists, never that it answers the same thing.
         Tool("get_node_status"),
     ),
     (
@@ -917,8 +931,10 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
         NodeScoped,
         // `query_metrics` stays node-level (`SeriesKey::node`); this is its per-interface twin,
-        // deliberately a second tool rather than an `ifindex` param, because the aligned four-series
-        // answer is not what an extra parameter on `query_metrics` would produce.
+        // deliberately a second tool rather than an `ifindex` param, because the aligned answer
+        // (ten arrays sharing one timestamp axis) is not what an extra parameter on `query_metrics`
+        // would produce. Since ADR-042 I4 `query_metrics` refuses a per-interface counter outright
+        // and names this tool, rather than answering with one arbitrary interface's series.
         Tool("get_interface_series"),
     ),
     (

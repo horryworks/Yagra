@@ -211,7 +211,12 @@ impl AlertHistoryDto {
     }
 }
 
-/// One interface's identity + link metadata (no counters, no secrets).
+/// One interface's identity, link metadata and current load (no secrets).
+///
+/// Mirrors what `GET /api/v1/nodes/{id}/interfaces` gives the WebUI's Interfaces tab. It used to
+/// carry identity only, which made the route ledger's claim that `get_node_status` folds that
+/// endpoint half true: an MCP client could name a node's ports but could not tell which one was
+/// **down** or which one was **busy** — the two questions the tab exists to answer (ADR-042 I4).
 #[derive(Debug, Clone, Serialize)]
 pub struct InterfaceDto {
     pub ifindex: i32,
@@ -221,18 +226,54 @@ pub struct InterfaceDto {
     pub speed: Option<i64>,
     /// Last time this interface was seen, as an RFC 3339 UTC timestamp (if ever).
     pub last_seen: Option<String>,
+    /// Latest `ifOperStatus` (1 = up), or `None` when the node has never reported one.
+    pub oper_status: Option<f64>,
+    /// Current inbound rate in **bits**/sec over the standard lookback.
+    pub in_bps: Option<f64>,
+    /// Current outbound rate in **bits**/sec.
+    pub out_bps: Option<f64>,
+    /// Inbound rate as a percentage of `speed`; `None` when the speed is unknown or zero.
+    pub in_util_pct: Option<f64>,
+    /// Outbound rate as a percentage of `speed`.
+    pub out_util_pct: Option<f64>,
+    /// The node has not reported this interface recently — treat its numbers as history.
+    pub stale: bool,
 }
 
 impl InterfaceDto {
-    /// Build from an interface-metadata row.
+    /// Build from an interface-metadata row plus its query-time rates.
+    ///
+    /// ⚠️ **`InterfaceLive`'s octet rates are BYTES per second** — the name says `bps` and the
+    /// contents do not, which is why the ×8 lives at every call site rather than in the store. Drop
+    /// it and every interface reads one eighth of its real load, with nothing to show it is wrong.
     #[must_use]
-    pub fn from_meta(meta: &InterfaceMeta) -> Self {
+    pub fn from_meta_and_live(
+        meta: &InterfaceMeta,
+        live: crate::store::InterfaceLive,
+        now_s: i64,
+        stale_after_s: i64,
+    ) -> Self {
+        let in_bps = live.in_bps.map(|r| r * 8.0);
+        let out_bps = live.out_bps.map(|r| r * 8.0);
+        // A zero or absent speed means "unknown", not "0 bps": dividing by it would report an
+        // infinite utilization for an interface that never advertised its rate.
+        let speed = meta.if_speed.filter(|s| *s > 0);
+        let util = |bps: Option<f64>| match (bps, speed) {
+            (Some(b), Some(s)) => Some(b / s as f64 * 100.0),
+            _ => None,
+        };
         Self {
             ifindex: meta.ifindex,
             name: meta.if_name.clone(),
             alias: meta.if_alias.clone(),
             speed: meta.if_speed,
             last_seen: meta.last_seen_s.map(unix_s_to_rfc3339),
+            oper_status: live.oper_status,
+            in_bps,
+            out_bps,
+            in_util_pct: util(in_bps),
+            out_util_pct: util(out_bps),
+            stale: meta.last_seen_s.is_none_or(|s| now_s - s > stale_after_s),
         }
     }
 }
@@ -270,6 +311,11 @@ pub struct MetricSeriesDto {
     pub latest: Option<f64>,
     /// The sampled points (modes `range`/`rate`), oldest first.
     pub points: Vec<MetricPointDto>,
+    /// How the answer was reached, when that is not simply "the series". Present when the node
+    /// carries several series under this name and they were collapsed to their maximum — a
+    /// collapsed number that reads like a plain one is a wrong answer wearing the right shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 /// Fleet health summary: inventory size and rolled-up state counts + which optional stores are on.
@@ -765,6 +811,12 @@ mod tests {
                 alias: Some("uplink".to_owned()),
                 speed: Some(1_000_000_000),
                 last_seen: Some(unix_s_to_rfc3339(0)),
+                oper_status: Some(1.0),
+                in_bps: Some(4_000_000.0),
+                out_bps: Some(500_000.0),
+                in_util_pct: Some(0.4),
+                out_util_pct: Some(0.05),
+                stale: false,
             }],
         };
         assert_inventory_dto_is_clean(&serde_json::to_value(&status).unwrap(), "NodeStatus");
@@ -907,6 +959,7 @@ mod tests {
             mode: "range".to_owned(),
             latest: None,
             points: vec![MetricPointDto { t: 0, v: 42.0 }],
+            note: Some("collapsed the node's 15 table-row series to their maximum".to_owned()),
         };
         assert_no_forbidden_keys(&serde_json::to_value(&series).unwrap(), "MetricSeries");
 

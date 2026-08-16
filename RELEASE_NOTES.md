@@ -79,6 +79,12 @@
   rather than silently changing what an existing number means.
 
 ### Improvements
+- **`get_node_status` now reports each interface's state and load, not just its name.** The MCP
+  tool listed a node's ports with their ifindex, name, alias and nominal speed — enough to name a
+  port, not enough to say anything about it. Each interface now also carries `oper_status`
+  (1 = up), `in_bps` / `out_bps`, `in_util_pct` / `out_util_pct` and `stale`, which is what the
+  WebUI's Interfaces tab has always shown. "Which port on this node is down?" and "which one is
+  busy?" now have an answer over MCP.
 - **The interface charts wrap to a second row instead of being squeezed.** The dock lays its charts
   out on the available width, and the minimum readable width per chart has been raised from 220px to
   320px — so three charts sit side by side on a wide pane and drop to two-plus-one on a narrower
@@ -96,6 +102,19 @@
   timestamps done by eye. Moving the pointer away restores the latest values in both.
 
 ### Bug Fixes
+- **The MCP `query_metrics` tool no longer answers a per-interface or per-component metric with one
+  arbitrary series' value.** A node-level query selects every series sharing the metric's name, and
+  the store took the first of them — so asking a 16-port firewall for `if_hc_in_octets` returned
+  the rate of whichever port the TSDB happened to list first, commonly an idle one reading `0`.
+  There was no error and no empty result, just a plausible wrong number. The same applied to
+  per-component gauges: `huawei_cpu_usage` on a 15-entity device read `0` while the WebUI's
+  Device-health card showed the maximum across all fifteen. The tool now consults the metric's
+  dimension first (the same inventory `list_node_metrics` reports) and either **collapses gauges to
+  the node maximum**, saying so in a `note` on the response, or **refuses counters** with a message
+  naming the tool that can answer — `get_interface_series` for one interface, `top_interfaces` for
+  the fleet. Single-series metrics (`icmp_rtt_ms`, `http_up`, …) are unaffected. **This changes the
+  answers an AI client gets**: a call that previously returned a number may now return an error
+  that says where the number lives.
 - **Data coverage no longer reports healthy URL, DNS and Meraki monitors as silent.** The gauge on
   `Settings ▸ Yagra health` — and the "Stale data" list beside it — asked every node in the
   inventory for a recent **ICMP round-trip sample**. A URL monitor, a DNS monitor and a Meraki
