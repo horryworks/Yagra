@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.2.11 — an interface says what it negotiated, what it is made of, and how much light it sees.**
+> Status: **v0.2.12 — the support bundle reaches the poller that did the polling, wherever that poller runs.**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
@@ -66,7 +66,10 @@ polling**. Users access it through the WebUI.
 > critical alert, instead of letting a whole site drift quietly to *unknown* while every dashboard
 > stays calm. For deployments nobody can open a shell on, Settings ▸ Support bundle produces a
 > **downloadable support bundle** — health sections, applied migrations, the allow-listed
-> environment and core's own rotated logs, scanned for secrets before it is written. And the **LLM
+> environment, and the rotated logs of core **and of the pollers**, including a poller at a remote
+> site that ships a window of its own log over the bus on request; name a node and the archive also
+> carries that one node's stored state. All of it scanned for secrets before it is written, on the
+> side that holds them. And the **LLM
 > root-cause explanation now investigates rather than guesses**, calling the read-only MCP tools
 > under the caller's own visibility scope and storing what it looked up beside its answer.
 > **Every metric a device reports is now visible and chartable** rather than only the ones the UI was

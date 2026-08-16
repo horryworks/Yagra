@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.12 — the support bundle reaches the poller that did the polling, wherever that poller runs
+
 ### New Features
 - **A support bundle can now be taken *about one node*.** Settings ▸ Support bundle gains an optional
   node picker beside the log window, and `GET /api/v1/system/support-bundle` accepts `node_id`.
@@ -62,8 +64,14 @@
 ### Upgrade notes
 - **Existing deployments need a compose change to get the poller logs.** `docker-compose.yml` and
   `docker-compose.deploy.yml` now mount the shared `logdata` volume into the poller and set
-  `YAGRA_LOG_DIR=/var/log/yagra/pollers`. Without it the poller logs to stdout only, exactly as
-  before, and the bundle records that no co-located poller log directory was found.
+  `YAGRA_LOG_DIR=/var/log/yagra/pollers` (override with `YAGRA_POLLER_LOG_DIR`). Without it the
+  poller logs to stdout only, exactly as before, and the bundle records that no co-located poller
+  log directory was found.
+  - Both compositions also gain a **one-shot `log-init` container** that makes the shared volume
+    writable by core and the poller alike — they run as different uids, and an image's ownership
+    only gets a vote the first time Docker seeds an *empty* named volume, so an existing deployment
+    could not have fixed this by pulling a new image. Expect it at `Exited (0)` beside `kek-init`
+    after startup; that is success.
 - **A remote-site poller must have `YAGRA_LOG_DIR` set to take part in the bus path**, and be
   upgraded to a build that understands the request. `docker-compose.poller.yml` already sets it.
   A poller without it does not advertise `log-ship`, core does not ask, and the bundle names the

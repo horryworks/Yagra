@@ -105,7 +105,7 @@ Yagra is two long-running binaries plus a static WebUI, backed by five stores pl
 
 ## A — Single node, Docker (pre-built images)<a id="a--single-node-docker-pull"></a>
 
-**The recommended deployment, and the one the rest of this guide assumes.** `docker-compose.deploy.yml` **pulls** the published images from GHCR (no local build), is fully env-parameterized via `.env`, adds a one-shot `kek-init` that writes a persistent key-encryption key so stored monitoring credentials survive redeploys, and ships the `yagra-updater` sidecar that makes **Settings ▸ Upgrade** work.
+**The recommended deployment, and the one the rest of this guide assumes.** `docker-compose.deploy.yml` **pulls** the published images from GHCR (no local build), is fully env-parameterized via `.env`, adds a one-shot `kek-init` that writes a persistent key-encryption key so stored monitoring credentials survive redeploys, adds a one-shot `log-init` that makes the shared log volume writable by both core and the poller (they run as different uids, and an image's ownership only gets a vote the first time Docker seeds an empty volume), and ships the `yagra-updater` sidecar that makes **Settings ▸ Upgrade** work. The two `*-init` containers are expected to sit at `Exited (0)` after startup — that is success, not a failure.
 
 It needs no repository checkout — the composition is a single self-contained file, with a default for every variable it interpolates and no bind mounts outside `/var/run/docker.sock`:
 
@@ -480,6 +480,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | **Observability** | | |
 | `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for trace export (same collector as core) |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | Trace sampler; sample (`parentbased_traceidratio`) at scale |
+| `YAGRA_LOG_DIR` | unset ⇒ stdout only | Directory for the poller's own hourly-rotated log files, and **the switch that decides whether this poller can appear in a support bundle at all**. The bundled compose files set it two different ways on purpose: a **co-located** poller gets `/var/log/yagra/pollers`, a subdirectory of core's shared log volume that core reads back off disk, while a **remote-site** poller (`docker-compose.poller.yml`) gets `/var/log/yagra` on a volume of its own and ships a window of it over the bus on request. Unset, the poller logs to stdout only, does not advertise the `log-ship` capability, and the bundle records it as unrepresented rather than waiting on it |
+| `YAGRA_LOG_RETAIN_HOURS` | `48` | Hourly log files kept in `YAGRA_LOG_DIR`, pruned automatically. Budgeted separately from core's, so a poller's log cannot displace core's own |
 | `RUST_LOG` | `info` | Log level |
 
 > **Compose-only vars** are consumed by Docker Compose / the NATS config, never by the Rust binaries — the binaries only ever see the final assembled `YAGRA_BUS_URL` etc. See `.env.example`:
@@ -489,6 +491,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 > - WebUI TLS: `YAGRA_WEB_TLS` (compose), `YAGRA_TLS_DIR` (core — where the certificate is materialized)
 > - Bus TLS + auth (D): `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD` (also read by core as the Auth Callout bootstrap secret), `YAGRA_NATS_CALLOUT_ISSUER` (account public key the NATS server verifies core's callout JWTs against)
 > - Mounted key directories: `YAGRA_SESSION_KEY_DIR` (holds `session.key` for `YAGRA_SESSION_KEY_FILE`), `YAGRA_CALLOUT_SEED_DIR` (holds `account.seed` for `YAGRA_NATS_CALLOUT_SEED_FILE`)
+> - Poller log directory: `YAGRA_POLLER_LOG_DIR` (default `/var/log/yagra/pollers`) — what `docker-compose.deploy.yml` passes to the co-located poller as its `YAGRA_LOG_DIR`. Set it empty to keep that poller on stdout only
 > - IP→ASN updater sidecar: `YAGRA_IPASN_URL` (dataset URL), `YAGRA_IPASN_REFRESH_SECS` (fetch cadence; default `604800` = weekly)
 
 ---

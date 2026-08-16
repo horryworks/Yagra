@@ -96,7 +96,7 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 5 つのスト�
 
 ## A — 単一ノード, Docker（ビルド済みイメージ）<a id="a--単一ノード-docker-pull"></a>
 
-**推奨するデプロイ構成であり、本ガイドの残りが前提とする構成です。** `docker-compose.deploy.yml` は GHCR から公開イメージを**取得**し（ローカルビルドなし）、`.env` で完全にパラメータ化され、保存済み監視資格情報が再デプロイを越えて維持されるよう永続 KEK を書き込む one-shot の `kek-init` を追加し、さらに **Settings ▸ Upgrade** を成立させる `yagra-updater` サイドカーを同梱します。
+**推奨するデプロイ構成であり、本ガイドの残りが前提とする構成です。** `docker-compose.deploy.yml` は GHCR から公開イメージを**取得**し（ローカルビルドなし）、`.env` で完全にパラメータ化され、保存済み監視資格情報が再デプロイを越えて維持されるよう永続 KEK を書き込む one-shot の `kek-init` を追加し、共有ログボリュームを core とポーラの**両方**が書ける状態にする one-shot の `log-init` を追加し（両者は別 uid で動き、イメージ側の所有者設定は Docker が空のボリュームを初めて用意するときしか効かない）、さらに **Settings ▸ Upgrade** を成立させる `yagra-updater` サイドカーを同梱します。2 つの `*-init` コンテナは起動後 `Exited (0)` で止まっているのが正常で、失敗ではありません。
 
 リポジトリのチェックアウトは不要です — この compose ファイルは自己完結しており、参照する変数はすべて既定値を持ち、`/var/run/docker.sock` 以外のバインドマウントもありません:
 
@@ -471,6 +471,8 @@ export RUST_LOG=info
 | **可観測性** | | |
 | `YAGRA_OTEL_ENDPOINT` | 未設定 ⇒ ログのみ | トレース送出先の OTLP/HTTP エンドポイント（core と同じコレクタ） |
 | `OTEL_TRACES_SAMPLER` / `_ARG` | `parentbased_always_on` | トレースサンプラ。大規模時はサンプリング（`parentbased_traceidratio`） |
+| `YAGRA_LOG_DIR` | 未設定 ⇒ stdout のみ | ポーラ自身の 1 時間ローテートログの出力先であり、**このポーラがサポートバンドルに載るかどうかを決めるスイッチ**でもある。同梱の compose は意図的に 2 通りに設定している。**同居**ポーラには `/var/log/yagra/pollers`（core の共有ログボリュームのサブディレクトリ。core がディスクから読み戻す）、**リモート拠点**のポーラ（`docker-compose.poller.yml`）には自分専用ボリューム上の `/var/log/yagra`（要求に応じて一定期間分をバス経由で送る）。未設定なら stdout のみに出力し、`log-ship` 能力を宣言しないので、バンドルは待たずに「未収録」と記録する |
+| `YAGRA_LOG_RETAIN_HOURS` | `48` | `YAGRA_LOG_DIR` に保持する時間別ログファイル数。自動で刈られる。core とは**別枠**なので、ポーラのログが core 自身のログを押し出すことはない |
 | `RUST_LOG` | `info` | ログレベル |
 
 > **compose 専用の変数**は Docker Compose / NATS 設定が消費するもので、Rust バイナリは読みません — バイナリが見るのは最終的に組み立てられた `YAGRA_BUS_URL` などだけです。`.env.example` を参照:
@@ -480,6 +482,7 @@ export RUST_LOG=info
 > - WebUI の TLS: `YAGRA_WEB_TLS`（compose）、`YAGRA_TLS_DIR`（core — 証明書の材料化先）
 > - バスの TLS + auth（D）: `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`（core も Auth Callout のブートストラップシークレットとして読む）, `YAGRA_NATS_CALLOUT_ISSUER`（NATS サーバが core の callout JWT を検証するアカウント公開鍵）
 > - マウントする鍵ディレクトリ: `YAGRA_SESSION_KEY_DIR`（`YAGRA_SESSION_KEY_FILE` 用の `session.key` を置く）, `YAGRA_CALLOUT_SEED_DIR`（`YAGRA_NATS_CALLOUT_SEED_FILE` 用の `account.seed` を置く）
+> - ポーラのログ出力先: `YAGRA_POLLER_LOG_DIR`（既定 `/var/log/yagra/pollers`）— `docker-compose.deploy.yml` が同居ポーラの `YAGRA_LOG_DIR` として渡す値。空にすればそのポーラは stdout のみになる
 > - IP→ASN 更新サイドカー: `YAGRA_IPASN_URL`（データセット URL）, `YAGRA_IPASN_REFRESH_SECS`（取得周期。既定 `604800` = 週次）
 
 ---
