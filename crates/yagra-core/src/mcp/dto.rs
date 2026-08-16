@@ -236,6 +236,20 @@ pub struct InterfaceDto {
     pub in_util_pct: Option<f64>,
     /// Outbound rate as a percentage of `speed`.
     pub out_util_pct: Option<f64>,
+    /// The transceiver's own acceptable receive-power window, dBm — the module's published floor.
+    ///
+    /// `None` for any interface that is not optical, and for optical ones whose vendor MIB
+    /// publishes no thresholds. Present so a reader can judge `rx_power_dbm` at all: −7 dBm is
+    /// comfortable on one module and failing on another, and without the window a light level is a
+    /// number with no scale. **Nothing alerts on these** — they are the module's figures, not a
+    /// threshold configured in Yagra (ADR-062 Inc.4).
+    pub rx_power_low_dbm: Option<f64>,
+    /// Ceiling of the receive window. See [`InterfaceDto::rx_power_low_dbm`].
+    pub rx_power_high_dbm: Option<f64>,
+    /// Floor of the transmit window. See [`InterfaceDto::rx_power_low_dbm`].
+    pub tx_power_low_dbm: Option<f64>,
+    /// Ceiling of the transmit window. See [`InterfaceDto::rx_power_low_dbm`].
+    pub tx_power_high_dbm: Option<f64>,
     /// The node has not reported this interface recently — treat its numbers as history.
     pub stale: bool,
 }
@@ -273,6 +287,10 @@ impl InterfaceDto {
             out_bps,
             in_util_pct: util(in_bps),
             out_util_pct: util(out_bps),
+            rx_power_low_dbm: meta.rx_power_low_dbm,
+            rx_power_high_dbm: meta.rx_power_high_dbm,
+            tx_power_low_dbm: meta.tx_power_low_dbm,
+            tx_power_high_dbm: meta.tx_power_high_dbm,
             stale: meta.last_seen_s.is_none_or(|s| now_s - s > stale_after_s),
         }
     }
@@ -816,6 +834,13 @@ mod tests {
                 out_bps: Some(500_000.0),
                 in_util_pct: Some(0.4),
                 out_util_pct: Some(0.05),
+                // A populated optical window, not `None`: the canary only sees the fields an
+                // instance actually fills, so leaving these empty would exempt them from the
+                // forbidden-key scan they exist to be covered by.
+                rx_power_low_dbm: Some(-24.0),
+                rx_power_high_dbm: Some(-3.0),
+                tx_power_low_dbm: Some(-9.0),
+                tx_power_high_dbm: Some(-1.0),
                 stale: false,
             }],
         };
