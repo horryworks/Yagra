@@ -330,6 +330,10 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'unknown',
       'notApplicable',
     ]);
+    expectKeys('media empty reason', locales, 'interfaces.mediaEmpty.', [
+      'unknown',
+      'notApplicable',
+    ]);
   });
 
   it('every report run state has a badge label (reports:run.status.*)', () => {

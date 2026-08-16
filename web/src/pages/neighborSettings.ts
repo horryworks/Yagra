@@ -25,7 +25,7 @@ export const MAX_NEIGHBOR_INTERVAL_SECS = 86400;
  *
  *  `as const` because the UI iterates it at runtime to build `t()` keys (extensibility §4) —
  *  `i18nEnumKeys.test.ts` is what proves every member has strings in both locales. */
-export const DISCOVERY_WALKS = ['neighbors', 'l3', 'arp', 'routing'] as const;
+export const DISCOVERY_WALKS = ['neighbors', 'l3', 'arp', 'routing', 'media'] as const;
 export type DiscoveryWalk = (typeof DISCOVERY_WALKS)[number];
 
 /** Which pair of `NeighborConfig` fields each walk reads and writes.
@@ -39,6 +39,7 @@ const FIELDS: Record<DiscoveryWalk, { enabled: keyof NeighborConfig; interval: k
     l3: { enabled: 'l3_enabled', interval: 'l3_interval_secs' },
     arp: { enabled: 'arp_enabled', interval: 'arp_interval_secs' },
     routing: { enabled: 'routing_enabled', interval: 'routing_interval_secs' },
+    media: { enabled: 'media_enabled', interval: 'media_interval_secs' },
   };
 
 /** One walk's editable state. The cadence is a string because that is what an input holds — a number
@@ -63,6 +64,8 @@ export interface DiscoverySettingsBody {
   arp_interval_secs: number;
   routing_enabled: boolean;
   routing_interval_secs: number;
+  media_enabled: boolean;
+  media_interval_secs: number;
 }
 
 export type DiscoveryParse =
@@ -87,6 +90,7 @@ export function discoveryFormFrom(cfg: NeighborConfig): DiscoveryForm {
     l3: savedWalk(cfg, 'l3'),
     arp: savedWalk(cfg, 'arp'),
     routing: savedWalk(cfg, 'routing'),
+    media: savedWalk(cfg, 'media'),
   };
 }
 
@@ -122,6 +126,8 @@ export function parseDiscoveryForm(
       arp_interval_secs: secs.arp as number,
       routing_enabled: form.routing.enabled,
       routing_interval_secs: secs.routing as number,
+      media_enabled: form.media.enabled,
+      media_interval_secs: secs.media as number,
     },
   };
 }

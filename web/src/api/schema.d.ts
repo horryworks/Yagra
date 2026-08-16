@@ -6115,6 +6115,7 @@ export interface components {
         InterfaceRow: {
             if_alias?: string | null;
             if_duplex?: string | null;
+            if_media?: string | null;
             if_name?: string | null;
             /** Format: int64 */
             if_speed_bps?: number | null;
@@ -6139,6 +6140,7 @@ export interface components {
             /** Format: double */
             rx_power_low_dbm?: number | null;
             stale: boolean;
+            transceiver_model?: string | null;
             /** Format: double */
             tx_power_high_dbm?: number | null;
             /** Format: double */
@@ -6801,6 +6803,21 @@ export interface components {
              * @description Largest cadence this deployment accepts, in seconds.
              */
             max_interval_secs?: number;
+            /**
+             * @description Whether media-type collection is issued at all. Omitted on update leaves it unchanged.
+             *
+             *     On unless an operator turns it off. It reads `ifMauTable` — one row per Ethernet port on the
+             *     device itself, once an hour — which is what fills the Interfaces tab's Media column.
+             *     ⚠️ Many devices do not implement MAU-MIB at all; on those the walk costs one query and
+             *     returns nothing, and the column stays empty. Turning this off changes nothing for them.
+             */
+            media_enabled?: boolean | null;
+            /**
+             * Format: int32
+             * @description How often each SNMP node's media type is collected, in seconds. Omitted on update leaves it
+             *     unchanged.
+             */
+            media_interval_secs?: number | null;
             /**
              * Format: int32
              * @description Smallest cadence this deployment accepts, in seconds.

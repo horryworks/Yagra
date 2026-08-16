@@ -102,12 +102,32 @@ export function duplexApplies(ifType: number | null | undefined): boolean {
  *  `ethernetCsmacd`, so the question applies, we simply have no answer. The reason a 10G port
  *  usually has none is that IEEE 802.3 defines no half duplex above 1 Gbit/s, leaving nothing to
  *  negotiate. That belongs in the column's filter `hint`, said once, rather than in a per-row
- *  tooltip — nothing here knows an interface's medium until ADR-063 Inc.2 lands, so a row claiming
- *  "optical" would be guessing. */
+ *  tooltip — a row claiming "optical" would be guessing, since the medium is itself often unknown. */
 export function duplexEmptyReason(
   duplex: string | null | undefined,
   ifType: number | null | undefined,
 ): 'notApplicable' | 'unknown' | null {
   if (duplexState(duplex) !== 'unknown') return null;
   return duplexApplies(ifType) ? 'unknown' : 'notApplicable';
+}
+
+/** Whether a media cell means anything for this interface.
+ *
+ *  The same rule as [`duplexApplies`] and deliberately a separate function rather than an alias:
+ *  they agree today because both questions are about Ethernet ports, and if either ever needs to
+ *  change (a tunnel has no medium but might one day report a duplex, say) the other should not move
+ *  with it silently. */
+export function mediaApplies(ifType: number | null | undefined): boolean {
+  return ifType == null || ifType === IF_TYPE_ETHERNET_CSMACD;
+}
+
+/** An interface's media designation for filtering, bucketed to `unknown` when absent.
+ *
+ *  ⚠️ Unlike speed and duplex there is **no closed set** — `dot3MauType` is an IANA registry of
+ *  250-and-growing designations, so the filter's options cannot be a fixed list and its values are
+ *  the designations themselves. That is why the media column filters as free **text** while its two
+ *  neighbours are enums. */
+export function mediaText(media: string | null | undefined): string | null {
+  const trimmed = media?.trim();
+  return trimmed ? trimmed : null;
 }

@@ -22,7 +22,7 @@ import {
   type Neighbor,
   type NodeMetricEntry,
 } from '../../types/api';
-import { DUPLEX_STATES, duplexState, SPEED_TIERS, speedTier } from './linkMode';
+import { DUPLEX_STATES, duplexState, mediaText, SPEED_TIERS, speedTier } from './linkMode';
 
 // ───────────────────────────────────────────────────────────────── interfaces
 
@@ -47,6 +47,8 @@ export interface FilterableInterface {
   if_name?: string | null;
   if_alias?: string | null;
   oper_status?: number | null;
+  if_media?: string | null;
+  transceiver_model?: string | null;
   if_speed_bps?: number | null;
   if_duplex?: string | null;
 }
@@ -91,6 +93,19 @@ export function interfaceFilters(
       readValue: (r) => ifState(r.oper_status),
       allLabel: t('interfaces.allStates'),
       counts: 'client',
+    },
+    // ⚠️ Text, where its two neighbours are enums, and the asymmetry is forced rather than chosen:
+    // `dot3MauType` is an IANA registry of 250-and-growing designations, so there is no closed
+    // option list to offer. `contains` is the useful mode anyway — "BASE-T" finds every copper
+    // port and "SX" every short-reach optic, which is how the question actually gets asked.
+    media: {
+      kind: 'text',
+      modes: ['contains', 'regex'],
+      not: true,
+      readText: (r) => [mediaText(r.if_media), r.transceiver_model],
+      containsSemantics: 'substring',
+      placeholder: t('interfaces.colMedia'),
+      hint: t('interfaces.mediaHint'),
     },
     // Speed and duplex are why this column set grew (ADR-063): "which port is not running at its
     // rate" is a question you answer by *narrowing*, which is what makes them columns rather than a

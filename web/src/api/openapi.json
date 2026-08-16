@@ -24561,6 +24561,12 @@
               "null"
             ]
           },
+          "if_media": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "if_name": {
             "type": [
               "string",
@@ -24644,6 +24650,12 @@
           },
           "stale": {
             "type": "boolean"
+          },
+          "transceiver_model": {
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "tx_power_high_dbm": {
             "type": [
@@ -26274,6 +26286,22 @@
             "type": "integer",
             "format": "int32",
             "description": "Largest cadence this deployment accepts, in seconds.",
+            "minimum": 0
+          },
+          "media_enabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether media-type collection is issued at all. Omitted on update leaves it unchanged.\n\nOn unless an operator turns it off. It reads `ifMauTable` — one row per Ethernet port on the\ndevice itself, once an hour — which is what fills the Interfaces tab's Media column.\n⚠️ Many devices do not implement MAU-MIB at all; on those the walk costs one query and\nreturns nothing, and the column stays empty. Turning this off changes nothing for them."
+          },
+          "media_interval_secs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "How often each SNMP node's media type is collected, in seconds. Omitted on update leaves it\nunchanged.",
             "minimum": 0
           },
           "min_interval_secs": {

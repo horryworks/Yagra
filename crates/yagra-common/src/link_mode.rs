@@ -136,6 +136,244 @@ pub fn if_type_from_snmp(value: f64) -> Option<i32> {
 /// computed on their behalf.
 pub const IF_TYPE_ETHERNET_CSMACD: i32 = 6;
 
+// ── Media type, from MAU-MIB (ADR-063 Inc.2) ────────────────────────────────────────────────
+
+/// `ifMauType` — MAU-MIB (RFC 3636), the media attachment unit a port is running.
+///
+/// ⚠️ **Indexed by `(ifMauIfIndex, ifMauIndex)` — two sub-identifiers.** That is why media cannot
+/// ride the ordinary interface walk the way duplex does: `yagra_transport`'s `ifindex_from_tail`
+/// folds any multi-subid tail into a hash, destroying the ifIndex before the poller sees it. The
+/// MAU walk must go through the instance walker, which preserves the whole index.
+///
+/// Its value is an **OBJECT IDENTIFIER**, not an integer — it points into [`DOT3_MAU_TYPE_ROOT`].
+pub const OID_IF_MAU_TYPE: &str = "1.3.6.1.2.1.26.2.1.1.3";
+
+/// `ifMauIfIndex` — the same table's own copy of the ifIndex. INTEGER-valued.
+///
+/// Worth knowing about even though the instance walker does not need it: it is the one column of
+/// `ifMauTable` that a plain numeric probe can read, which makes it the way to ask a device
+/// "do you implement MAU-MIB at all?" without being able to read `ifMauType` itself.
+pub const OID_IF_MAU_IFINDEX: &str = "1.3.6.1.2.1.26.2.1.1.1";
+
+/// The `dot3MauType` registration arc. An `ifMauType` value is this plus one sub-identifier.
+pub const DOT3_MAU_TYPE_ROOT: &str = "1.3.6.1.2.1.26.4";
+
+/// `dot3MauType` registrations: sub-identifier → canonical IEEE designation → the duplex the
+/// registration itself encodes.
+///
+/// **Transcribed by hand from RFC 3636 §5 (1–40), RFC 4836 §5 (41–53) and the IANA-MAU-MIB
+/// additions (54–78), on 2026-08-16.** There is nothing automatic that can check this table: it
+/// mirrors a document that lives on a remote registry, so the "generate one side from the other"
+/// escape hatch `extensibility.md` §2 prefers does not apply. The date is here so the next person
+/// knows what it was checked against.
+///
+/// **The cut at 78 is deliberate and is about accuracy, not effort.** 78 is the end of the block
+/// this transcription is confident in (…100GBASE-ER4). IANA has continued past it — 2.5GBASE-T,
+/// 5GBASE-T, 25G and the 200/400G forms all live above — and **a wrong designation is far worse
+/// than a missing one**: a missing one renders an em dash and logs the number, while a wrong one
+/// tells an operator their fibre port is copper. Extend it from the registry when a device needs
+/// it; do not extend it from memory.
+///
+/// The duplex column is a **pure transcription** of what each registration states. Registrations
+/// from `10GigBaseX(31)` up carry no HD/FD suffix, because IEEE 802.3 defines no half duplex above
+/// 1 Gbit/s — they are `None` here rather than inferred to `Full`, so that this table stays a thing
+/// a reviewer can check line-by-line against the RFC. Anything that wants that inference should do
+/// it separately, where it can be named and tested.
+///
+/// Several registrations share one media name and differ only in duplex (`1000BaseTHD(29)` /
+/// `1000BaseTFD(30)` are both `1000BASE-T`). That is the point of splitting media and duplex into
+/// two columns rather than showing the raw registration name.
+const MAU_TYPES: &[(u32, &str, Option<Duplex>)] = &[
+    // RFC 3636 §5 — the original MAU-MIB registrations.
+    (1, "AUI", None),
+    (2, "10BASE5", None),
+    (3, "FOIRL", None),
+    (4, "10BASE2", None),
+    (5, "10BASE-T", None),
+    (6, "10BASE-FP", None),
+    (7, "10BASE-FB", None),
+    (8, "10BASE-FL", None),
+    (9, "10BROAD36", None),
+    (10, "10BASE-T", Some(Duplex::Half)),
+    (11, "10BASE-T", Some(Duplex::Full)),
+    (12, "10BASE-FL", Some(Duplex::Half)),
+    (13, "10BASE-FL", Some(Duplex::Full)),
+    (14, "100BASE-T4", None),
+    (15, "100BASE-TX", Some(Duplex::Half)),
+    (16, "100BASE-TX", Some(Duplex::Full)),
+    (17, "100BASE-FX", Some(Duplex::Half)),
+    (18, "100BASE-FX", Some(Duplex::Full)),
+    (19, "100BASE-T2", Some(Duplex::Half)),
+    (20, "100BASE-T2", Some(Duplex::Full)),
+    (21, "1000BASE-X", Some(Duplex::Half)),
+    (22, "1000BASE-X", Some(Duplex::Full)),
+    (23, "1000BASE-LX", Some(Duplex::Half)),
+    (24, "1000BASE-LX", Some(Duplex::Full)),
+    (25, "1000BASE-SX", Some(Duplex::Half)),
+    (26, "1000BASE-SX", Some(Duplex::Full)),
+    (27, "1000BASE-CX", Some(Duplex::Half)),
+    (28, "1000BASE-CX", Some(Duplex::Full)),
+    (29, "1000BASE-T", Some(Duplex::Half)),
+    (30, "1000BASE-T", Some(Duplex::Full)),
+    // From here up there is no HD/FD suffix to transcribe — 802.3 defines no half duplex ≥ 10G.
+    (31, "10GBASE-X", None),
+    (32, "10GBASE-LX4", None),
+    (33, "10GBASE-R", None),
+    (34, "10GBASE-ER", None),
+    (35, "10GBASE-LR", None),
+    (36, "10GBASE-SR", None),
+    (37, "10GBASE-W", None),
+    (38, "10GBASE-EW", None),
+    (39, "10GBASE-LW", None),
+    (40, "10GBASE-SW", None),
+    // RFC 4836 §5 — EFM (802.3ah) and backplane additions.
+    (41, "10GBASE-CX4", None),
+    (42, "2BASE-TL", None),
+    (43, "10PASS-TS", None),
+    (44, "100BASE-BX10-D", None),
+    (45, "100BASE-BX10-U", None),
+    (46, "100BASE-LX10", None),
+    (47, "1000BASE-BX10-D", None),
+    (48, "1000BASE-BX10-U", None),
+    (49, "1000BASE-LX10", None),
+    (50, "1000BASE-PX10-D", None),
+    (51, "1000BASE-PX10-U", None),
+    (52, "1000BASE-PX20-D", None),
+    (53, "1000BASE-PX20-U", None),
+    // IANA-MAU-MIB additions.
+    (54, "10GBASE-T", None),
+    (55, "10GBASE-LRM", None),
+    (56, "1000BASE-KX", None),
+    (57, "10GBASE-KX4", None),
+    (58, "10GBASE-KR", None),
+    (59, "10/1GBASE-PRX-D1", None),
+    (60, "10/1GBASE-PRX-D2", None),
+    (61, "10/1GBASE-PRX-D3", None),
+    (62, "10/1GBASE-PRX-U1", None),
+    (63, "10/1GBASE-PRX-U2", None),
+    (64, "10/1GBASE-PRX-U3", None),
+    (65, "10GBASE-PR-D1", None),
+    (66, "10GBASE-PR-D2", None),
+    (67, "10GBASE-PR-D3", None),
+    (68, "10GBASE-PR-U1", None),
+    (69, "10GBASE-PR-U3", None),
+    (70, "40GBASE-KR4", None),
+    (71, "40GBASE-CR4", None),
+    (72, "40GBASE-SR4", None),
+    (73, "40GBASE-FR", None),
+    (74, "40GBASE-LR4", None),
+    (75, "100GBASE-CR10", None),
+    (76, "100GBASE-SR10", None),
+    (77, "100GBASE-LR4", None),
+    (78, "100GBASE-ER4", None),
+];
+
+/// What one `ifMauType` value says about a port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MauMedia {
+    /// The canonical IEEE designation, e.g. `1000BASE-T`.
+    pub media: &'static str,
+    /// The duplex the registration itself encodes, where it encodes one.
+    ///
+    /// A **secondary** source for duplex: `dot3StatsDuplexStatus` is read on the fast path and is
+    /// the primary. This fills in only where that answered nothing, which on a device that
+    /// implements MAU-MIB but not EtherLike-MIB is every port.
+    pub duplex: Option<Duplex>,
+}
+
+/// Resolve an `ifMauType` OID value to a media type.
+///
+/// The value arrives as dotted decimal (`1.3.6.1.2.1.26.4.30`); the meaningful part is the final
+/// sub-identifier under [`DOT3_MAU_TYPE_ROOT`]. Reading a sub-identifier out of an OID-valued column
+/// is an established shape here — `optical::EntityIndex` does the same with
+/// `entAliasMappingIdentifier`.
+///
+/// A value outside the arc, or a registration this table does not carry, is `None`. **Never a
+/// guess**: the caller logs the sub-identifier at debug so a real gap is discoverable from a running
+/// deployment rather than showing an operator the wrong medium.
+#[must_use]
+pub fn media_from_mau_oid(value: &str) -> Option<MauMedia> {
+    let tail = value
+        .trim()
+        .strip_prefix(DOT3_MAU_TYPE_ROOT)?
+        .strip_prefix('.')?;
+    // Exactly one sub-identifier below the arc — `…26.4.30.1` is not a registration.
+    let subid: u32 = tail.parse().ok()?;
+    MAU_TYPES
+        .iter()
+        .find(|(id, _, _)| *id == subid)
+        .map(|(_, media, duplex)| MauMedia {
+            media,
+            duplex: *duplex,
+        })
+}
+
+/// Shortest designation this module will accept from free vendor text.
+///
+/// The registry's early entries are short enough to appear inside unrelated words — `AUI` (3) would
+/// match a part number containing those letters, `10BASET` (7) sits inside `100BASET4`. Nothing that
+/// ships in a pluggable reports one of them anyway, so the floor costs nothing real and removes the
+/// whole class of accident.
+const MIN_TEXT_MATCH_LEN: usize = 8;
+
+/// Uppercase and drop everything that is not a letter or digit.
+///
+/// `SFP-1000BaseLX` and `1000BASE-LX` both become `…1000BASELX`, which is what lets a vendor part
+/// string be compared to a registration at all — hyphenation and case are exactly what vendors vary.
+fn normalize_designation(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_uppercase())
+        .collect()
+}
+
+/// Find a canonical media designation inside a vendor's free-text transceiver string.
+///
+/// For the ENTITY-MIB fallback: `entPhysicalModelName` answers with a part number
+/// (`SFP-1000BaseLX`, `OMXD30000`, `Finisar FTLX8571D3BCL`), which is **not** a media type. This
+/// recovers one only when the string genuinely contains a designation, and returns `None` for
+/// everything else — the part string then stays in `transceiver_model` alone, still useful, not
+/// pretending to be something it is not.
+///
+/// **Deliberately strict, and expected to refuse most inputs.** Two rules do the work:
+/// - the match is taken **longest-first**, so `1000BASE-LX10` wins over the `1000BASE-LX` inside it;
+/// - designations shorter than [`MIN_TEXT_MATCH_LEN`] are never matched from text.
+///
+/// This is the same shape as `optical::reading_from_text`: refuse when ambiguous, because a wrong
+/// medium shown confidently is worse than an empty cell.
+#[must_use]
+pub fn media_from_transceiver_text(text: &str) -> Option<&'static str> {
+    let haystack = normalize_designation(text);
+    if haystack.is_empty() {
+        return None;
+    }
+    MAU_TYPES
+        .iter()
+        .map(|(_, media, _)| *media)
+        .filter_map(|media| {
+            let needle = normalize_designation(media);
+            (needle.len() >= MIN_TEXT_MATCH_LEN && haystack.contains(&needle))
+                .then_some((needle.len(), media))
+        })
+        .max_by_key(|(len, _)| *len)
+        .map(|(_, media)| media)
+}
+
+/// The final sub-identifier of an `ifMauType` value, for the debug log when it is unrecognised.
+///
+/// Separate from [`media_from_mau_oid`] so an unknown registration can be reported as a *number*
+/// ("this device answered 103, which we do not carry") rather than as a whole OID string — that
+/// number is what someone extending [`MAU_TYPES`] needs.
+#[must_use]
+pub fn mau_subid(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .strip_prefix(DOT3_MAU_TYPE_ROOT)?
+        .strip_prefix('.')?
+        .parse()
+        .ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +437,131 @@ mod tests {
         for v in [0.0, -3.0, 70000.0, 6.4, f64::NAN] {
             assert_eq!(if_type_from_snmp(v), None, "value {v}");
         }
+    }
+
+    /// The four designations this feature was asked for, by sub-identifier.
+    ///
+    /// ⚠️ **The accepting cases are the load-bearing half of this module's tests.** Every path here
+    /// fails into `None`, which renders as an em dash — indistinguishable from a device that does
+    /// not implement MAU-MIB. A lookup that returned `None` for everything would satisfy every
+    /// rejection test below and ship a column that is empty forever, on every vendor.
+    #[test]
+    fn the_media_this_feature_was_built_for_map_correctly() {
+        let cases = [
+            (30, "1000BASE-T", Some(Duplex::Full)),
+            (26, "1000BASE-SX", Some(Duplex::Full)),
+            (24, "1000BASE-LX", Some(Duplex::Full)),
+            (36, "10GBASE-SR", None),
+        ];
+        for (subid, media, duplex) in cases {
+            let got = media_from_mau_oid(&format!("{DOT3_MAU_TYPE_ROOT}.{subid}"))
+                .unwrap_or_else(|| panic!("sub-id {subid} must resolve"));
+            assert_eq!(got.media, media, "sub-id {subid}");
+            assert_eq!(got.duplex, duplex, "sub-id {subid} duplex");
+        }
+    }
+
+    #[test]
+    fn a_half_and_full_pair_share_one_media_name() {
+        // This is what makes splitting media and duplex into two columns correct rather than
+        // decorative: the registry encodes both in one value, and we take them apart.
+        let hd = media_from_mau_oid("1.3.6.1.2.1.26.4.29").expect("1000BaseTHD");
+        let fd = media_from_mau_oid("1.3.6.1.2.1.26.4.30").expect("1000BaseTFD");
+        assert_eq!(hd.media, fd.media);
+        assert_eq!(hd.duplex, Some(Duplex::Half));
+        assert_eq!(fd.duplex, Some(Duplex::Full));
+    }
+
+    #[test]
+    fn registrations_above_1g_carry_no_duplex() {
+        // A pure transcription, not an inference. 802.3 defines no half duplex above 1 Gbit/s, so
+        // "Full" would be *correct* here — and is deliberately not encoded, because a table with an
+        // inference mixed in is not one a reviewer can check against the RFC line by line.
+        for subid in [31, 36, 54, 72, 77] {
+            let got = media_from_mau_oid(&format!("{DOT3_MAU_TYPE_ROOT}.{subid}")).unwrap();
+            assert_eq!(got.duplex, None, "sub-id {subid}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_or_malformed_mau_value_is_none_not_a_guess() {
+        for v in [
+            "1.3.6.1.2.1.26.4.79",   // past the transcribed block — the discoverable gap
+            "1.3.6.1.2.1.26.4.999",  // no such registration
+            "1.3.6.1.2.1.26.4.30.1", // two sub-ids below the arc is not a registration
+            "1.3.6.1.2.1.26.4",      // the arc itself
+            "1.3.6.1.2.1.2.2.1.3",   // a different OID entirely
+            "",
+            "not-an-oid",
+        ] {
+            assert!(media_from_mau_oid(v).is_none(), "value {v:?}");
+        }
+    }
+
+    #[test]
+    fn the_table_is_sorted_dense_and_free_of_duplicates() {
+        // Makes a mis-paste loud. Dense-from-1 is what lets the cut be stated as a single number
+        // ("transcribed through 78") rather than as a set of holes nobody can audit.
+        for (i, (subid, media, _)) in MAU_TYPES.iter().enumerate() {
+            assert_eq!(
+                *subid,
+                i as u32 + 1,
+                "MAU_TYPES must be sorted and dense from 1; entry {i} is {subid}"
+            );
+            assert!(!media.is_empty(), "sub-id {subid} has no designation");
+        }
+        assert_eq!(MAU_TYPES.len(), 78, "the transcribed block ends at 78");
+    }
+
+    #[test]
+    fn a_vendor_part_string_yields_its_designation_when_it_really_contains_one() {
+        // The accepting half again. These are real-shaped `entPhysicalModelName` values.
+        assert_eq!(
+            media_from_transceiver_text("SFP-1000BaseLX"),
+            Some("1000BASE-LX")
+        );
+        assert_eq!(
+            media_from_transceiver_text("1000Base-SX SFP transceiver"),
+            Some("1000BASE-SX")
+        );
+        assert_eq!(
+            media_from_transceiver_text("10GBASE-SR"),
+            Some("10GBASE-SR")
+        );
+    }
+
+    #[test]
+    fn the_longest_designation_wins_so_lx10_is_not_read_as_lx() {
+        // `1000BASE-LX10` contains `1000BASE-LX`. Taking the longest is what stops a 10 km EFM optic
+        // being reported as plain LX — different reach, different part, and an operator chasing a
+        // link-budget problem would be misled by the shorter answer.
+        assert_eq!(
+            media_from_transceiver_text("SFP-1000BaseLX10"),
+            Some("1000BASE-LX10")
+        );
+    }
+
+    #[test]
+    fn a_part_number_with_no_designation_in_it_is_refused() {
+        // Refusing is the correct outcome, not a gap: these strings still reach the operator through
+        // `transceiver_model`. Guessing a medium from them is what this function exists to avoid.
+        for text in [
+            "OMXD30000",
+            "Finisar FTLX8571D3BCL",
+            "QSFP-40G-SR4", // no "BASE" — close, and still not a designation
+            "",
+            "   ",
+            "AUI",     // below the length floor
+            "10BaseT", // likewise
+        ] {
+            assert_eq!(media_from_transceiver_text(text), None, "text {text:?}");
+        }
+    }
+
+    #[test]
+    fn mau_subid_extracts_the_number_for_the_gap_log() {
+        assert_eq!(mau_subid("1.3.6.1.2.1.26.4.103"), Some(103));
+        assert_eq!(mau_subid("1.3.6.1.2.1.26.4.30"), Some(30));
+        assert_eq!(mau_subid("1.3.6.1.2.1.2.2.1.3"), None);
     }
 }

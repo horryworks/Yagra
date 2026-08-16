@@ -219,6 +219,10 @@
         "routing": {
           "name": "Routing adjacency (OSPF / BGP / routes)",
           "help": "Which devices are peered or directly routed to each other — the links that share no subnet, such as a point-to-point /32, an unnumbered OSPF link, or an eBGP session. The routing table is never walked: it is asked about one destination at a time."
+        },
+        "media": {
+          "name": "Interface media type",
+          "help": "Which physical medium each Ethernet port runs — 1000BASE-T for copper, 1000BASE-SX or -LX for fibre — shown in the Media column of a node's Interfaces tab. Read once an hour from the device's MAU table, falling back to the transceiver's own part number. Many devices do not report it at all; on those the column stays empty whether this is on or off."
         }
       },
       "cadence": {

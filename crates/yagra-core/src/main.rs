@@ -1763,6 +1763,8 @@ fn persist_metrics_and_meta(
             // conversion, and a test pins it to the serde tag so the two cannot drift.
             if_duplex: iface.if_duplex.map(|d| d.as_str().to_owned()),
             if_type: iface.if_type,
+            if_media: iface.if_media.clone(),
+            transceiver_model: iface.transceiver_model.clone(),
             rx_power_low_dbm: iface.rx_power_low_dbm,
             rx_power_high_dbm: iface.rx_power_high_dbm,
             tx_power_low_dbm: iface.tx_power_low_dbm,
@@ -4101,6 +4103,8 @@ mod tests {
                 if_speed: None,
                 if_duplex: None,
                 if_type: None,
+                if_media: None,
+                transceiver_model: None,
                 rx_power_low_dbm: None,
                 rx_power_high_dbm: None,
                 tx_power_low_dbm: None,

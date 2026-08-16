@@ -1010,6 +1010,10 @@ fn spec_required_caps(spec: &JobSpec) -> Vec<&'static str> {
         // way for it to answer confidently and wrongly, which is the test this list applies.
         | CheckSpec::SnmpOptical(_)
         | CheckSpec::SnmpV3Optical(_)
+        // Media likewise: an older poller skips the spec, and a newer one either reads a
+        // registration or reads nothing. No way to answer confidently and wrongly.
+        | CheckSpec::SnmpMau(_)
+        | CheckSpec::SnmpV3Mau(_)
         | CheckSpec::SnmpNeighbors(_)
         | CheckSpec::SnmpV3Neighbors(_)
         | CheckSpec::SnmpL3(_)

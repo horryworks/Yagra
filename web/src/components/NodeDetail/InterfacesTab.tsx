@@ -49,7 +49,7 @@ import {
   LIST_MIN_PX,
 } from './interfaceDockHeight';
 import { interfaceColumns } from './tabFilters';
-import { duplexEmptyReason, duplexState } from './linkMode';
+import { duplexEmptyReason, duplexState, mediaApplies } from './linkMode';
 import { ColumnFilterRow } from '../ui/ColumnFilterRow';
 import { ClearFilters } from '../ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../ui/MobileFilterSheet';
@@ -102,6 +102,19 @@ function operLabel(oper: number | null, t: TFunction): string {
 function duplexTitle(r: InterfaceRow, t: TFunction): string | undefined {
   const reason = duplexEmptyReason(r.if_duplex, r.if_type);
   return reason ? t(`interfaces.duplexEmpty.${reason}`) : undefined;
+}
+
+/** Tooltip for the media cell: the transceiver's part string when there is one, otherwise why the
+ *  cell is empty. Both are worth saying and they never collide — a port with a resolved medium and
+ *  a known module shows the module, which is the extra fact. */
+function mediaTitle(r: InterfaceRow, t: TFunction): string | undefined {
+  if (r.transceiver_model) {
+    return t('interfaces.transceiver', { model: r.transceiver_model });
+  }
+  if (r.if_media) return undefined;
+  return mediaApplies(r.if_type)
+    ? t('interfaces.mediaEmpty.unknown')
+    : t('interfaces.mediaEmpty.notApplicable');
 }
 
 interface Props {
@@ -386,7 +399,7 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
             halfway down the scroller and the interface rows ran through the gap above it. */}
         <ColumnFilterRow
           columns={columns}
-          slots={['if_name', 'if_alias', 'oper', null, 'speed', 'duplex', null, null]}
+          slots={['if_name', 'if_alias', 'oper', 'media', 'speed', 'duplex', null, null]}
           filters={filters}
           onChange={setFilters}
           counts={counts}
@@ -412,10 +425,13 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
                 <StatusDot state={operState(r.oper_status ?? null)} withLabel={false} />
                 {operLabel(r.oper_status ?? null, t)}
               </span>
-              {/* Media lands in ADR-063 Inc.2 (ifMauType + an ENTITY-MIB fallback); the column is
-                  here now because it is part of the same grid decision, and an em dash is the
-                  honest thing to render for a fact nothing collects yet. */}
-              <span className="nd-if-media">—</span>
+              {/* The transceiver's part string is the tooltip, not the cell: it is a different
+                  fact (a vendor part number, not a medium), and it is present on plenty of ports
+                  whose medium could not be resolved — showing it in the cell would read as a
+                  media type. Device-supplied, so it is rendered as text and never as markup. */}
+              <span className="nd-if-media" title={mediaTitle(r, t)}>
+                {r.if_media ?? '—'}
+              </span>
               <span className="nd-if-speed">
                 {r.if_speed_bps && r.if_speed_bps > 0 ? formatBps(r.if_speed_bps) : '—'}
               </span>
@@ -766,6 +782,14 @@ function InterfaceDock({
               <span>
                 <span className="nd-muted">{t('interfaces.colDuplex')}</span>{' '}
                 {t(`interfaces.duplex.${duplexState(row.if_duplex)}`)}
+              </span>
+            )}
+            {/* The module's part string gets room here that the table row could not give it —
+                this is the one place an operator is looking at a single port. */}
+            {(row.if_media || row.transceiver_model) && (
+              <span title={row.transceiver_model ?? undefined}>
+                <span className="nd-muted">{t('interfaces.colMedia')}</span>{' '}
+                {row.if_media ?? row.transceiver_model}
               </span>
             )}
             <span>

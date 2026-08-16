@@ -20,11 +20,11 @@ pub use messages::{
     FlowBatch, FlowRecord, HeartbeatMsg, HttpCheck, IcmpCheck, JobSpec, MerakiCollectCheck,
     MerakiDeviceRef, NodeJobs, OpticalProbe, PollJob, PollResult, PollerUpgradeMsg,
     RawFlowDatagram, RawFlowProto, Sample, SnmpArpCheck, SnmpArpColumn, SnmpCheck, SnmpColumn,
-    SnmpL3Check, SnmpL3Column, SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn,
+    SnmpL3Check, SnmpL3Column, SnmpMauCheck, SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn,
     SnmpOpticalCheck, SnmpRouteProbe, SnmpRoutingCheck, SnmpRoutingColumn, SnmpTableCheck,
-    SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3NeighborCheck, SnmpV3OpticalCheck,
-    SnmpV3RoutingCheck, SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext, UpgradeStep,
-    WorkingSetDelta, WorkingSetSnapshot, CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_HTTP_BODY,
+    SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3MauCheck, SnmpV3NeighborCheck,
+    SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext,
+    UpgradeStep, WorkingSetDelta, WorkingSetSnapshot, CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_HTTP_BODY,
     CAP_RAW_CAPTURE, CAP_SELF_UPGRADE, HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]

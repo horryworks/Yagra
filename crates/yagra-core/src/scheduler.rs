@@ -18,9 +18,9 @@ use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
     DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, OpticalProbe, PollJob, SnmpArpCheck,
-    SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMetaColumn,
+    SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMauCheck, SnmpMetaColumn,
     SnmpNeighborCheck, SnmpNeighborColumn, SnmpOpticalCheck, SnmpRouteProbe, SnmpRoutingCheck,
-    SnmpRoutingColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check,
+    SnmpRoutingColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3MauCheck,
     SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
@@ -351,6 +351,36 @@ pub fn build_snmp_v3_optical_check(
     })
 }
 
+/// Build the SNMP v2c media-type check for a node (ADR-063 Inc.2).
+///
+/// Takes no items and no columns, for the same reason [`build_snmp_neighbor_check`] does not: the
+/// OID set is a fixed standard, so there is nothing per-device to configure — only whether to
+/// collect and how often, which is a deployment-wide setting. And it *could* not be a collection
+/// template, because a `CollectionItem` declares a TSDB series and a media type is a string.
+#[must_use]
+pub fn build_snmp_mau_check(community: &str, timeout_ms: u32) -> SnmpMauCheck {
+    SnmpMauCheck {
+        community: community.to_owned(),
+        entity_fallback: true,
+        timeout_ms,
+    }
+}
+
+/// Build the SNMP v3 (USM) media-type check — the v3 analogue of [`build_snmp_mau_check`].
+#[must_use]
+pub fn build_snmp_v3_mau_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3MauCheck {
+    SnmpV3MauCheck {
+        user: secret.user.clone(),
+        security_level: secret.security_level.clone(),
+        auth_protocol: secret.auth_protocol.clone(),
+        auth_key: secret.auth_key.clone(),
+        priv_protocol: secret.priv_protocol.clone(),
+        priv_key: secret.priv_key.clone(),
+        entity_fallback: true,
+        timeout_ms,
+    }
+}
+
 /// Build the SNMP v2c CDP/LLDP neighbour check for a node (ADR-038).
 ///
 /// The column list is the fixed LLDP-MIB / CISCO-CDP-MIB set — there is nothing for an operator to
@@ -576,6 +606,11 @@ pub struct AdjacencyPolicy {
     pub routing_enabled: bool,
     /// Routing-adjacency cadence in seconds.
     pub routing_interval_secs: u32,
+    /// Whether media-type jobs are issued (ADR-063 Inc.2).
+    pub media_enabled: bool,
+    /// Media cadence in seconds. Same reasoning as the neighbour cadence: a port's medium changes
+    /// when someone swaps a module.
+    pub media_interval_secs: u32,
     /// Which host addresses each node is asked to probe for, resolved once per sweep alongside the
     /// settings. Shared rather than cloned per node — it is the same fleet-wide fact for all of
     /// them, and nearly every node's entry is empty.
@@ -598,6 +633,8 @@ impl From<AdjacencySettings> for AdjacencyPolicy {
             arp_interval_secs: s.arp_interval_secs,
             routing_enabled: s.routing_enabled,
             routing_interval_secs: s.routing_interval_secs,
+            media_enabled: s.media_enabled,
+            media_interval_secs: s.media_interval_secs,
             routing_plan: Arc::new(RoutingPlan::default()),
         }
     }
@@ -794,6 +831,18 @@ pub fn assemble_node_jobs(
                 );
                 jobs.push((job, "snmp_neighbors"));
             }
+            // Media rides the slow cadence, unlike optical above: a port's medium changes when
+            // someone swaps a module, not continuously (ADR-063 Inc.2).
+            if neighbors.media_enabled {
+                let job = PollJob::snmp_mau(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_mau_check(community, SNMP_TIMEOUT_MS),
+                    neighbors.media_interval_secs,
+                );
+                jobs.push((job, "snmp_mau"));
+            }
             if neighbors.l3_enabled {
                 let job = PollJob::snmp_l3(
                     Uuid::new_v4(),
@@ -859,6 +908,17 @@ pub fn assemble_node_jobs(
                     neighbors.neighbors_interval_secs,
                 );
                 jobs.push((job, "snmp_v3_neighbors"));
+            }
+            // See the v2c arm: media rides the slow cadence, not the metric interval.
+            if neighbors.media_enabled {
+                let job = PollJob::snmp_v3_mau(
+                    Uuid::new_v4(),
+                    node.id,
+                    node.address,
+                    build_snmp_v3_mau_check(secret, SNMP_TIMEOUT_MS),
+                    neighbors.media_interval_secs,
+                );
+                jobs.push((job, "snmp_v3_mau"));
             }
             if neighbors.l3_enabled {
                 let job = PollJob::snmp_v3_l3(
@@ -1999,6 +2059,7 @@ mod tests {
                 "snmp",
                 "snmp_table",
                 "snmp_neighbors",
+                "snmp_mau",
                 "snmp_l3",
                 "snmp_routing",
                 "icmp"
@@ -2065,6 +2126,7 @@ mod tests {
                 "snmp_v3",
                 "snmp_v3_table",
                 "snmp_v3_neighbors",
+                "snmp_v3_mau",
                 "snmp_v3_l3",
                 "snmp_v3_routing",
                 "icmp"
@@ -2106,6 +2168,7 @@ mod tests {
             vec![
                 "snmp_v3",
                 "snmp_v3_neighbors",
+                "snmp_v3_mau",
                 "snmp_v3_l3",
                 "snmp_v3_routing",
                 "icmp"
@@ -2127,12 +2190,15 @@ mod tests {
         let policy = AdjacencyPolicy::default();
         let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &policy);
         for (job, kind) in &jobs {
-            let expected =
-                if kind.contains("neighbors") || kind.contains("l3") || kind.contains("routing") {
-                    3600
-                } else {
-                    30
-                };
+            let expected = if kind.contains("neighbors")
+                || kind.contains("l3")
+                || kind.contains("routing")
+                || kind.contains("mau")
+            {
+                3600
+            } else {
+                30
+            };
             assert_eq!(job.interval_secs, expected, "{kind} cadence");
         }
         // The legacy publish path keys its extra due-check off exactly this inequality.
@@ -2152,6 +2218,7 @@ mod tests {
         let off = AdjacencyPolicy {
             neighbors_enabled: false,
             l3_enabled: false,
+            media_enabled: false,
             ..AdjacencyPolicy::default()
         };
         let items = [item(
@@ -2193,6 +2260,7 @@ mod tests {
 
         let l3_only = AdjacencyPolicy {
             neighbors_enabled: false,
+            media_enabled: false,
             ..AdjacencyPolicy::default()
         };
         let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &l3_only);
@@ -2203,6 +2271,7 @@ mod tests {
 
         let neighbors_only = AdjacencyPolicy {
             l3_enabled: false,
+            media_enabled: false,
             ..AdjacencyPolicy::default()
         };
         let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &neighbors_only);
@@ -2210,6 +2279,65 @@ mod tests {
             kinds(&jobs),
             vec!["snmp_table", "snmp_neighbors", "snmp_routing", "icmp"]
         );
+    }
+
+    /// The media walk is on by default, has its own switch, and rides the slow tier (ADR-063 Inc.2).
+    ///
+    /// Three properties in one test because they are the three ways this increment could be wrong in
+    /// production and in no local test: **shipped off** would leave the Media column empty on every
+    /// fleet with nobody knowing there was a switch; **not independently switchable** would make an
+    /// operator disable neighbour discovery to stop it; and **riding `interval_secs`** would walk
+    /// `ifMauTable` on every 48-port switch every 30 seconds to learn a fact that changes when
+    /// someone unplugs a cable.
+    #[test]
+    fn the_media_walk_is_on_by_default_switchable_and_slow() {
+        let items = [item(
+            "if_hc_in_octets",
+            "1.3.6.1.2.1.31.1.1.1.6",
+            CollectionKind::Table,
+        )];
+        assert!(
+            AdjacencyPolicy::default().media_enabled,
+            "shipped on by default (ADR-063 decision 6)"
+        );
+
+        for (auth, kind) in [
+            (SnmpAuth::V2c("public".to_owned()), "snmp_mau"),
+            (SnmpAuth::V3(v3_secret()), "snmp_v3_mau"),
+        ] {
+            let on = assemble_node_jobs(
+                &node("sw"),
+                Some(&auth),
+                &items,
+                None,
+                30,
+                &AdjacencyPolicy::default(),
+            );
+            let job = on
+                .iter()
+                .find(|(_, k)| *k == kind)
+                .unwrap_or_else(|| panic!("{kind} must be built by default"));
+            assert!(
+                matches!(job.0.check, CheckSpec::SnmpMau(_) | CheckSpec::SnmpV3Mau(_)),
+                "{kind} carries a media spec"
+            );
+            assert_eq!(job.0.interval_secs, 3600, "{kind} rides the slow tier");
+            assert!(job.0.interval_secs > 30, "{kind} is slower than the node");
+
+            // Off must mean no job at all, not a job the poller declines — the same safety valve
+            // the neighbour toggle test pins.
+            let off = AdjacencyPolicy {
+                media_enabled: false,
+                ..AdjacencyPolicy::default()
+            };
+            let jobs = assemble_node_jobs(&node("sw"), Some(&auth), &items, None, 30, &off);
+            assert!(
+                !kinds(&jobs).contains(&kind),
+                "{kind} must not be built when the toggle is off"
+            );
+            // …and turning it off leaves the neighbour walk alone: separate switches, one struct.
+            assert!(kinds(&jobs).iter().any(|k| k.contains("neighbors")));
+        }
     }
 
     /// ARP discovery is off in the default policy, and that default is what every node gets until an

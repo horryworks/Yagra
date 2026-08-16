@@ -33,8 +33,22 @@
     `if_type`** (the IANAifType integer, 6 = ethernetCsmacd). `if_type` is what distinguishes
     "duplex does not apply here" — a loopback, a tunnel, a dialer — from "we could not read it";
     both are also on the MCP `get_node_status` tool's interface entries.
-  - **The Media column is present but empty for now.** Reading the physical media type
-    (1000BASE-T / -SX / -LX) needs a separate MIB walk and lands in a later release.
+  - **The Media column shows the port's physical medium** — 1000BASE-T for copper, 1000BASE-SX or
+    -LX for fibre — read from the device's MAU table (`ifMauTable`) once an hour, since a medium
+    changes only when someone swaps a module. Where that table says nothing, Yagra falls back to the
+    transceiver's own part number from ENTITY-MIB, which covers pluggables but not fixed copper
+    ports. Filtering the column also searches the part number, so a search for `SX` still finds a
+    module whose medium could not be resolved.
+    - ⚠️ **Many devices do not implement MAU-MIB, and then the column stays empty.** That is a gap
+      in what the device will tell you, not a fault — the same shape as the duplex column above.
+    - **`GET /api/v1/nodes/{id}/interfaces` gains `if_media` and `transceiver_model`.** They are
+      deliberately separate: a part number is not a media type, and `if_media` is filled from one
+      only when it demonstrably contains a standard designation. Both appear on the MCP
+      `get_node_status` tool's interface entries.
+    - Media designations are recognised from the IEEE/IANA registry up to 100GBASE-ER4. A device
+      reporting something outside that range shows an empty cell rather than a guess.
+    - **Settings ▸ System settings ▸ Discovery walks gains a fifth walk, on by default**, to turn
+      the collection off or change its interval.
   - **On a phone the three columns are not drawn** — speed and duplex appear in the chart dock
     instead, which is where a narrow screen has room for them.
 

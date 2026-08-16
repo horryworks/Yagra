@@ -8,6 +8,8 @@ import {
   IF_TYPE_ETHERNET_CSMACD,
   SPEED_TIERS,
   speedTier,
+  mediaApplies,
+  mediaText,
   type SpeedTier,
 } from './linkMode';
 
@@ -92,6 +94,34 @@ describe('duplexApplies', () => {
     // other(1) = NULL0, ppp(23) = Dialer1, softwareLoopback(24) = InLoopBack0,
     // propVirtual(53) = Virtual-if0 — 4 of that device's 16 interfaces.
     for (const t of [1, 23, 24, 53, 131, 161]) expect(duplexApplies(t)).toBe(false);
+  });
+});
+
+describe('mediaText', () => {
+  it('passes a designation through and treats blank as absent', () => {
+    expect(mediaText('1000BASE-T')).toBe('1000BASE-T');
+    // Trimmed, because it is device text and reaches the filter's substring match.
+    expect(mediaText('  10GBASE-SR  ')).toBe('10GBASE-SR');
+    for (const v of [null, undefined, '', '   ']) expect(mediaText(v)).toBeNull();
+  });
+});
+
+describe('mediaApplies', () => {
+  it('applies to Ethernet and to an unread interface type', () => {
+    expect(mediaApplies(IF_TYPE_ETHERNET_CSMACD)).toBe(true);
+    expect(mediaApplies(null)).toBe(true);
+  });
+
+  it('does not apply to virtual interface types', () => {
+    for (const t of [1, 23, 24, 53, 131]) expect(mediaApplies(t)).toBe(false);
+  });
+
+  it('agrees with duplexApplies today, and is still its own function', () => {
+    // Pinned so a future divergence is a deliberate edit rather than a surprise: the two answer
+    // different questions that happen to have the same answer for every code that exists now.
+    for (const t of [null, 1, 6, 23, 24, 53, 131, 161]) {
+      expect(mediaApplies(t)).toBe(duplexApplies(t));
+    }
   });
 });
 

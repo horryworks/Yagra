@@ -99,6 +99,10 @@ pub struct InterfaceMeta {
     pub if_duplex: Option<String>,
     /// `ifType` (IANAifType) as the raw integer, if the device reported one.
     pub if_type: Option<i32>,
+    /// Canonical IEEE media designation (`1000BASE-T`), from the MAU walk (ADR-063 Inc.2).
+    pub if_media: Option<String>,
+    /// The pluggable's vendor part string, verbatim. **Not a media type** — see migration 0087.
+    pub transceiver_model: Option<String>,
     /// The transceiver's own acceptable power window, dBm (ADR-062 Inc.4). `None` on every
     /// interface that is not optical, and on optical ones whose dialect publishes no thresholds.
     pub rx_power_low_dbm: Option<f64>,
@@ -131,6 +135,8 @@ pub struct InterfaceUpsert {
     pub if_speed: Option<i64>,
     pub if_duplex: Option<String>,
     pub if_type: Option<i32>,
+    pub if_media: Option<String>,
+    pub transceiver_model: Option<String>,
     pub rx_power_low_dbm: Option<f64>,
     pub rx_power_high_dbm: Option<f64>,
     pub tx_power_low_dbm: Option<f64>,
@@ -625,6 +631,7 @@ impl NodeRepo {
     pub async fn list_interfaces(&self, node_id: Uuid) -> anyhow::Result<Vec<InterfaceMeta>> {
         let rows = sqlx::query(
             "SELECT ifindex, if_name, if_alias, if_speed, if_duplex, if_type, \
+                    if_media, transceiver_model, \
                     rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
                     extract(epoch FROM last_seen)::bigint AS last_seen_s \
              FROM interfaces WHERE node_id = $1 ORDER BY ifindex",
@@ -641,6 +648,8 @@ impl NodeRepo {
                     if_speed: row.try_get("if_speed")?,
                     if_duplex: row.try_get("if_duplex")?,
                     if_type: row.try_get("if_type")?,
+                    if_media: row.try_get("if_media")?,
+                    transceiver_model: row.try_get("transceiver_model")?,
                     rx_power_low_dbm: row.try_get("rx_power_low_dbm")?,
                     rx_power_high_dbm: row.try_get("rx_power_high_dbm")?,
                     tx_power_low_dbm: row.try_get("tx_power_low_dbm")?,
@@ -1259,6 +1268,8 @@ impl NodeRepo {
         let mut speeds: Vec<Option<i64>> = Vec::with_capacity(n);
         let mut duplexes: Vec<Option<String>> = Vec::with_capacity(n);
         let mut if_types: Vec<Option<i32>> = Vec::with_capacity(n);
+        let mut medias: Vec<Option<String>> = Vec::with_capacity(n);
+        let mut models: Vec<Option<String>> = Vec::with_capacity(n);
         let mut rx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
         let mut rx_highs: Vec<Option<f64>> = Vec::with_capacity(n);
         let mut tx_lows: Vec<Option<f64>> = Vec::with_capacity(n);
@@ -1271,6 +1282,8 @@ impl NodeRepo {
             speeds.push(iface.if_speed);
             duplexes.push(iface.if_duplex);
             if_types.push(iface.if_type);
+            medias.push(iface.if_media);
+            models.push(iface.transceiver_model);
             rx_lows.push(iface.rx_power_low_dbm);
             rx_highs.push(iface.rx_power_high_dbm);
             tx_lows.push(iface.tx_power_low_dbm);
@@ -1282,18 +1295,18 @@ impl NodeRepo {
         // runtime error; it silently writes one column's values into another.
         sqlx::query(
             "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, \
-                 if_duplex, if_type, \
+                 if_duplex, if_type, if_media, transceiver_model, \
                  rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
                  last_seen) \
              SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, \
-                 t.if_duplex, t.if_type, \
+                 t.if_duplex, t.if_type, t.if_media, t.transceiver_model, \
                  t.rx_power_low_dbm, t.rx_power_high_dbm, t.tx_power_low_dbm, \
                  t.tx_power_high_dbm, now() \
              FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[], \
-                         $6::text[], $7::int[], \
-                         $8::float8[], $9::float8[], $10::float8[], $11::float8[]) \
+                         $6::text[], $7::int[], $8::text[], $9::text[], \
+                         $10::float8[], $11::float8[], $12::float8[], $13::float8[]) \
                   AS t(node_id, ifindex, if_name, if_alias, if_speed, \
-                       if_duplex, if_type, \
+                       if_duplex, if_type, if_media, transceiver_model, \
                        rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm) \
              ON CONFLICT (node_id, ifindex) DO UPDATE SET \
                 if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
@@ -1301,6 +1314,9 @@ impl NodeRepo {
                 if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed), \
                 if_duplex = COALESCE(EXCLUDED.if_duplex, interfaces.if_duplex), \
                 if_type = COALESCE(EXCLUDED.if_type, interfaces.if_type), \
+                if_media = COALESCE(EXCLUDED.if_media, interfaces.if_media), \
+                transceiver_model = COALESCE(EXCLUDED.transceiver_model, \
+                    interfaces.transceiver_model), \
                 rx_power_low_dbm = COALESCE(EXCLUDED.rx_power_low_dbm, \
                     interfaces.rx_power_low_dbm), \
                 rx_power_high_dbm = COALESCE(EXCLUDED.rx_power_high_dbm, \
@@ -1318,6 +1334,8 @@ impl NodeRepo {
         .bind(&speeds)
         .bind(&duplexes)
         .bind(&if_types)
+        .bind(&medias)
+        .bind(&models)
         .bind(&rx_lows)
         .bind(&rx_highs)
         .bind(&tx_lows)
@@ -1595,6 +1613,16 @@ impl NodeRepo {
                 .ok()
                 .and_then(|v| u32::try_from(v).ok())
                 .unwrap_or(fallback.routing_interval_secs),
+            // Falls back to `true` mid-upgrade, before migration 0087 has run — the "keep
+            // collecting" direction, like the three cheap walks above and not the ARP one.
+            media_enabled: row
+                .try_get::<bool, _>("media_discovery_enabled")
+                .unwrap_or(fallback.media_enabled),
+            media_interval_secs: row
+                .try_get::<i32, _>("media_interval_secs")
+                .ok()
+                .and_then(|v| u32::try_from(v).ok())
+                .unwrap_or(fallback.media_interval_secs),
         }
     }
 
@@ -1606,13 +1634,15 @@ impl NodeRepo {
                  (id, neighbor_discovery_enabled, neighbor_interval_secs, \
                   l3_discovery_enabled, l3_interval_secs, \
                   arp_discovery_enabled, arp_interval_secs, \
-                  routing_discovery_enabled, routing_interval_secs, updated_at) \
-             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, now()) \
+                  routing_discovery_enabled, routing_interval_secs, \
+                  media_discovery_enabled, media_interval_secs, updated_at) \
+             VALUES (TRUE, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now()) \
              ON CONFLICT (id) DO UPDATE SET neighbor_discovery_enabled = $1, \
                  neighbor_interval_secs = $2, l3_discovery_enabled = $3, \
                  l3_interval_secs = $4, arp_discovery_enabled = $5, \
                  arp_interval_secs = $6, routing_discovery_enabled = $7, \
-                 routing_interval_secs = $8, updated_at = now()",
+                 routing_interval_secs = $8, media_discovery_enabled = $9, \
+                 media_interval_secs = $10, updated_at = now()",
         )
         .bind(s.neighbors_enabled)
         .bind(i32::try_from(s.neighbors_interval_secs).unwrap_or(i32::MAX))
@@ -1622,6 +1652,8 @@ impl NodeRepo {
         .bind(i32::try_from(s.arp_interval_secs).unwrap_or(i32::MAX))
         .bind(s.routing_enabled)
         .bind(i32::try_from(s.routing_interval_secs).unwrap_or(i32::MAX))
+        .bind(s.media_enabled)
+        .bind(i32::try_from(s.media_interval_secs).unwrap_or(i32::MAX))
         .execute(&self.pool)
         .await?;
         Ok(())

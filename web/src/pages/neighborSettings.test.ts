@@ -66,6 +66,8 @@ describe('parseDiscoveryForm', () => {
         arp_interval_secs: 21600,
         routing_enabled: true,
         routing_interval_secs: 3600,
+        media_enabled: false,
+        media_interval_secs: 300,
       },
     });
   });
@@ -112,6 +114,7 @@ describe('parseDiscoveryForm', () => {
       l3: { enabled: true, intervalSecs: secs },
       arp: { enabled: false, intervalSecs: secs },
       routing: { enabled: true, intervalSecs: secs },
+      media: { enabled: true, intervalSecs: secs },
     };
   }
 

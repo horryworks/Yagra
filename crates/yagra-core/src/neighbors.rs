@@ -78,6 +78,14 @@ pub struct AdjacencySettings {
     /// How often each SNMP node's `bgpPeerTable`/`ospfNbrTable` are walked and its route probes
     /// issued.
     pub routing_interval_secs: u32,
+    /// Whether media-type walks are issued at all (ADR-063 Inc.2).
+    ///
+    /// **Defaults on**, like the neighbour, interface-address and routing walks and unlike the ARP
+    /// one. It reads one row per Ethernet port on the device itself, once an hour — a table sized by
+    /// the device, not by the network, which is the line the ARP walk fell the wrong side of.
+    pub media_enabled: bool,
+    /// How often each SNMP node's `ifMauTable` (and the ENTITY-MIB fallback) is walked.
+    pub media_interval_secs: u32,
 }
 
 impl Default for AdjacencySettings {
@@ -91,6 +99,8 @@ impl Default for AdjacencySettings {
             arp_interval_secs: crate::arp::DEFAULT_ARP_INTERVAL_SECS,
             routing_enabled: true,
             routing_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
+            media_enabled: true,
+            media_interval_secs: DEFAULT_NEIGHBOR_INTERVAL_SECS,
         }
     }
 }
@@ -103,6 +113,7 @@ impl AdjacencySettings {
             && interval_in_bounds(self.l3_interval_secs)
             && interval_in_bounds(self.arp_interval_secs)
             && interval_in_bounds(self.routing_interval_secs)
+            && interval_in_bounds(self.media_interval_secs)
     }
 }
 

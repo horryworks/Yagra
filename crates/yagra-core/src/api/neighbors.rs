@@ -319,6 +319,18 @@ pub(crate) struct NeighborConfig {
     /// leaves it unchanged.
     #[serde(default)]
     pub routing_interval_secs: Option<u32>,
+    /// Whether media-type collection is issued at all. Omitted on update leaves it unchanged.
+    ///
+    /// On unless an operator turns it off. It reads `ifMauTable` — one row per Ethernet port on the
+    /// device itself, once an hour — which is what fills the Interfaces tab's Media column.
+    /// ⚠️ Many devices do not implement MAU-MIB at all; on those the walk costs one query and
+    /// returns nothing, and the column stays empty. Turning this off changes nothing for them.
+    #[serde(default)]
+    pub media_enabled: Option<bool>,
+    /// How often each SNMP node's media type is collected, in seconds. Omitted on update leaves it
+    /// unchanged.
+    #[serde(default)]
+    pub media_interval_secs: Option<u32>,
     /// Smallest cadence this deployment accepts, in seconds.
     #[serde(default)]
     pub min_interval_secs: u32,
@@ -359,6 +371,8 @@ pub(crate) async fn adjacency_config(admin: &super::AdminState) -> NeighborConfi
         arp_interval_secs: Some(s.arp_interval_secs),
         routing_enabled: Some(s.routing_enabled),
         routing_interval_secs: Some(s.routing_interval_secs),
+        media_enabled: Some(s.media_enabled),
+        media_interval_secs: Some(s.media_interval_secs),
         min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
         max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
     }
@@ -401,6 +415,10 @@ async fn update_neighbor_settings(
         routing_interval_secs: body
             .routing_interval_secs
             .unwrap_or(current.routing_interval_secs),
+        media_enabled: body.media_enabled.unwrap_or(current.media_enabled),
+        media_interval_secs: body
+            .media_interval_secs
+            .unwrap_or(current.media_interval_secs),
     };
     if !next.in_bounds() {
         return Err(ApiError::bad_request(
@@ -581,6 +599,8 @@ mod tests {
             arp_interval_secs: Some(21_600),
             routing_enabled: Some(true),
             routing_interval_secs: Some(3600),
+            media_enabled: Some(true),
+            media_interval_secs: Some(3600),
             min_interval_secs: neighbors::MIN_NEIGHBOR_INTERVAL_SECS,
             max_interval_secs: neighbors::MAX_NEIGHBOR_INTERVAL_SECS,
         };

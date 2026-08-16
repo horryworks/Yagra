@@ -239,6 +239,19 @@ pub struct InterfaceDto {
     /// interface (53), a dialer (23), a tunnel (131) — from "we could not read it". Reporting a
     /// missing duplex as a problem on a loopback would be a false finding.
     pub if_type: Option<i32>,
+    /// Canonical IEEE media designation — `1000BASE-T`, `1000BASE-SX`, `10GBASE-SR` — or `None`
+    /// when it is not known (ADR-063 Inc.2).
+    ///
+    /// ⚠️ `None` is the common case, and does **not** mean the port has no medium. Most devices do
+    /// not implement MAU-MIB; on those, only ports with a pluggable whose ENTITY-MIB part string
+    /// names a designation get a value, and fixed copper ports get nothing at all.
+    pub media: Option<String>,
+    /// The pluggable transceiver's vendor part string, verbatim — `SFP-1000BaseLX`.
+    ///
+    /// ⚠️ **A part number, not a media type.** It is reported separately from `media` precisely so
+    /// nothing has to pretend one is the other; `media` is filled from it only when it demonstrably
+    /// contains a canonical designation. `None` for a fixed copper port, which has no pluggable.
+    pub transceiver_model: Option<String>,
     /// Last time this interface was seen, as an RFC 3339 UTC timestamp (if ever).
     pub last_seen: Option<String>,
     /// Latest `ifOperStatus` (1 = up), or `None` when the node has never reported one.
@@ -298,6 +311,8 @@ impl InterfaceDto {
             speed: meta.if_speed,
             duplex: meta.if_duplex.clone(),
             if_type: meta.if_type,
+            media: meta.if_media.clone(),
+            transceiver_model: meta.transceiver_model.clone(),
             last_seen: meta.last_seen_s.map(unix_s_to_rfc3339),
             oper_status: live.oper_status,
             in_bps,
@@ -847,6 +862,8 @@ mod tests {
                 speed: Some(1_000_000_000),
                 duplex: Some("full".to_owned()),
                 if_type: Some(yagra_common::IF_TYPE_ETHERNET_CSMACD),
+                media: Some("1000BASE-T".to_owned()),
+                transceiver_model: None,
                 last_seen: Some(unix_s_to_rfc3339(0)),
                 oper_status: Some(1.0),
                 in_bps: Some(4_000_000.0),

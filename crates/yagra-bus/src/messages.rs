@@ -340,6 +340,48 @@ impl PollJob {
         }
     }
 
+    /// Build an SNMP v2c media-type walk job (ADR-063 Inc.2).
+    #[must_use]
+    pub fn snmp_mau(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpMauCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpMau(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
+    /// Build an SNMP v3 (USM) media-type walk job (ADR-063 Inc.2).
+    #[must_use]
+    pub fn snmp_v3_mau(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: SnmpV3MauCheck,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check: CheckSpec::SnmpV3Mau(check),
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
+
     /// Build an SNMP v3 (USM) CDP/LLDP neighbour-walk job (ADR-038).
     #[must_use]
     pub fn snmp_v3_neighbors(
@@ -911,6 +953,21 @@ pub enum CheckSpec {
     /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpOptical`], following the same v2c/v3 pairing as
     /// every other SNMP check here (split by credential shape, not by walk logic).
     SnmpV3Optical(SnmpV3OpticalCheck),
+    /// Read each Ethernet port's media type — `ifMauTable`, falling back to ENTITY-MIB's
+    /// transceiver strings (ADR-063 Inc.2).
+    ///
+    /// Kept out of [`CheckSpec::SnmpTable`] for a hard technical reason, not for tidiness:
+    /// `ifMauTable` is indexed by `(ifMauIfIndex, ifMauIndex)`, and the ordinary walkers fold any
+    /// multi-subid tail into a hash — so the ifIndex is destroyed before the poller sees it. This
+    /// check goes through the instance walker instead, the same path ADR-038's neighbour walk uses.
+    ///
+    /// Runs on the **slow cadence** like [`CheckSpec::SnmpNeighbors`] and unlike
+    /// [`CheckSpec::SnmpOptical`]: a port's medium changes when someone swaps a module, not
+    /// continuously. The result is **observational** ([`PollResult::observational`]) — a device that
+    /// does not implement MAU-MIB is not unreachable, and most do not.
+    SnmpMau(SnmpMauCheck),
+    /// SNMP v3 (USM) analogue of [`CheckSpec::SnmpMau`].
+    SnmpV3Mau(SnmpV3MauCheck),
     /// HTTP/HTTPS URL-endpoint check (status/up + TLS cert expiry). Like the variants above,
     /// an older poller that doesn't know this tag simply skips the job (N-1 compatible).
     Http(HttpCheck),
@@ -1283,6 +1340,63 @@ pub struct SnmpV3OpticalCheck {
     /// Dialects to read.
     #[serde(default)]
     pub probes: Vec<OpticalProbe>,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v2c media-type walk parameters (ADR-063 Inc.2).
+///
+/// Carries no column list, unlike [`SnmpTableCheck`]: the OID set is a fixed standard
+/// (`ifMauTable`, plus ENTITY-MIB as the fallback) with nothing for an operator to tune, exactly as
+/// [`SnmpNeighborCheck`] argued for the LLDP/CDP set. It could not be a collection template either —
+/// a `CollectionItem` declares a TSDB series, and a media type is a string attribute.
+///
+/// **Its own `CheckSpec` variant rather than a field on the table check, and that is the N-1 safe
+/// direction.** `de_lenient_specs` decodes per `JobSpec` element, so a poller that has never heard
+/// of this variant drops exactly this one spec and keeps collecting everything else. Widening an
+/// existing spec would instead have taken the whole `SnmpTable` down with it — the trap ADR-063
+/// Inc.1 documents on `InterfaceField`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpMauCheck {
+    /// SNMP v2c community string (resolved/decrypted by core).
+    pub community: String,
+    /// Whether to fall back to ENTITY-MIB's transceiver strings when `ifMauTable` answers nothing.
+    ///
+    /// Defaults **on**. It costs nothing when MAU answered (the fallback is not attempted) and it is
+    /// the only source that reaches a device with no MAU-MIB at all — which, measured, includes the
+    /// one SNMP device in this project's lab.
+    #[serde(default = "default_true")]
+    pub entity_fallback: bool,
+    /// Per-request timeout, in milliseconds.
+    #[serde(default = "default_snmp_timeout_ms")]
+    pub timeout_ms: u32,
+}
+
+/// SNMP v3 (USM) media-type walk parameters — the v3 analogue of [`SnmpMauCheck`]. Auth/priv keys
+/// are resolved/decrypted by core and inlined here (ADR-018/020); the poller never reads the secret
+/// store.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SnmpV3MauCheck {
+    /// USM user name.
+    pub user: String,
+    /// `noauth` | `auth` | `authpriv`.
+    pub security_level: String,
+    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
+    #[serde(default)]
+    pub auth_protocol: Option<String>,
+    /// Auth passphrase.
+    #[serde(default)]
+    pub auth_key: Option<String>,
+    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
+    #[serde(default)]
+    pub priv_protocol: Option<String>,
+    /// Privacy passphrase.
+    #[serde(default)]
+    pub priv_key: Option<String>,
+    /// See [`SnmpMauCheck::entity_fallback`].
+    #[serde(default = "default_true")]
+    pub entity_fallback: bool,
     /// Per-request timeout, in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
@@ -1751,10 +1865,24 @@ pub struct DiscoveredInterface {
     #[serde(default)]
     pub if_duplex: Option<Duplex>,
     /// `ifType` (IANAifType) as the raw integer, if walked. Lets a reader tell "the question does
-    /// not apply to this interface" from "we could not read it" — see
-    /// [`yagra_common::link_mode::link_mode_applies`].
+    /// not apply to this interface" from "we could not read it".
     #[serde(default)]
     pub if_type: Option<i32>,
+    /// Canonical IEEE media designation — `1000BASE-T`, `10GBASE-SR` — from the MAU walk
+    /// (ADR-063 Inc.2).
+    ///
+    /// A `String` rather than an enum: `dot3MauType` is an IANA registry of 250-and-growing
+    /// designations that are byte-identical in every language. `None` for a registration the
+    /// poller's table does not carry, which it logs rather than guessing at.
+    #[serde(default)]
+    pub if_media: Option<String>,
+    /// The pluggable's vendor part string from ENTITY-MIB, verbatim — `SFP-1000BaseLX`.
+    ///
+    /// ⚠️ **Not a media type and never coerced into one.** It is kept as its own fact; it may
+    /// *populate* `if_media` when it contains a canonical designation as a whole token, and
+    /// otherwise stands alone. `None` for every fixed copper port, which has no pluggable.
+    #[serde(default)]
+    pub transceiver_model: Option<String>,
     /// Lowest receive power the transceiver considers acceptable, dBm (ADR-062 Inc.4).
     ///
     /// These four arrive from the **optical probe**, not the interface-metadata walk, and every
@@ -3040,6 +3168,8 @@ mod tests {
             if_speed: Some(100_000_000),
             if_duplex: Some(Duplex::Full),
             if_type: Some(yagra_common::IF_TYPE_ETHERNET_CSMACD),
+            if_media: Some("1000BASE-T".to_owned()),
+            transceiver_model: None,
             rx_power_low_dbm: None,
             rx_power_high_dbm: None,
             tx_power_low_dbm: None,

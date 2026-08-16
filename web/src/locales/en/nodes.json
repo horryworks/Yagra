@@ -321,6 +321,12 @@
       "unknown": "This device did not report a duplex mode for this port. Normal on fibre — 802.3 defines no half duplex above 1 Gbps — and on ports that are down.",
       "notApplicable": "Not an Ethernet port, so duplex does not apply."
     },
+    "mediaHint": "The physical medium the port runs — 1000BASE-T for copper, 1000BASE-SX or -LX for fibre. Read from the device's MAU table, falling back to the transceiver's own part number. Many devices do not report it at all, and then this column stays empty: it is a gap in what the device will say, not a fault. Matching also searches the transceiver part number, so a search for SX still finds a module whose medium could not be resolved.",
+    "transceiver": "Transceiver: {{model}}",
+    "mediaEmpty": {
+      "unknown": "This device did not report a medium for this port, and no transceiver part number was readable. Common — the MAU table is widely unimplemented.",
+      "notApplicable": "Not an Ethernet port, so it has no physical medium."
+    },
     "noMatch": "No interfaces match “{{filter}}”.",
     "dockHint": "Select an interface to dock its charts.",
     "in": "In",

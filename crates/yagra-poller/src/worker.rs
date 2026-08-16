@@ -123,6 +123,39 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
             });
             execute_optical(job, transport, at_unix_ms, &check.probes, timeout, &walker).await
         }
+        CheckSpec::SnmpMau(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V2c(check.community.clone());
+            execute_mau(
+                job,
+                transport,
+                at_unix_ms,
+                check.entity_fallback,
+                timeout,
+                &walker,
+            )
+            .await
+        }
+        CheckSpec::SnmpV3Mau(check) => {
+            let timeout = Duration::from_millis(u64::from(check.timeout_ms));
+            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
+                user: check.user.clone(),
+                security_level: check.security_level.clone(),
+                auth_protocol: check.auth_protocol.clone(),
+                auth_key: check.auth_key.clone(),
+                priv_protocol: check.priv_protocol.clone(),
+                priv_key: check.priv_key.clone(),
+            });
+            execute_mau(
+                job,
+                transport,
+                at_unix_ms,
+                check.entity_fallback,
+                timeout,
+                &walker,
+            )
+            .await
+        }
         CheckSpec::SnmpNeighbors(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
             let walker = SnmpWalker::V2c(check.community.clone());
@@ -482,6 +515,8 @@ pub async fn execute_meraki(
                 // The Meraki API reports no link mode either — these come from EtherLike-MIB.
                 if_duplex: None,
                 if_type: None,
+                if_media: None,
+                transceiver_model: None,
                 // Meraki reports no transceiver diagnostics; the optical probe is SNMP-only.
                 rx_power_low_dbm: None,
                 rx_power_high_dbm: None,
@@ -933,6 +968,8 @@ async fn execute_optical(
                 if_speed: None,
                 if_duplex: None,
                 if_type: None,
+                if_media: None,
+                transceiver_model: None,
                 rx_power_low_dbm: w.rx_low,
                 rx_power_high_dbm: w.rx_high,
                 tx_power_low_dbm: w.tx_low,
@@ -1141,6 +1178,146 @@ async fn walk_entity_text(
     }
     out
 }
+
+/// Row budget for the MAU walk. `ifMauTable` holds roughly one row per Ethernet port, so a few
+/// thousand is generous for any single device; the bound exists so a pathological agent cannot turn
+/// an hourly attribute read into an unbounded one. Stated rather than defaulted, like every other
+/// `walk_instances` caller.
+const MAU_MAX_ROWS: usize = 4096;
+
+/// Execute a media-type walk (v2c or v3, selected by `walker`) — ADR-063 Inc.2.
+///
+/// Two sources, tried in order, and the order is the point:
+///
+/// 1. **`ifMauTable`**, which answers with a registry designation covering copper *and* optics. Its
+///    `(ifIndex, ifMauIndex)` index is why this cannot ride the interface walk — the ordinary
+///    walkers fold a multi-subid tail into a hash. The instance walker preserves it.
+/// 2. **ENTITY-MIB**, only for ports MAU did not answer and only when `entity_fallback` is on. It
+///    returns a vendor part string, which is a *different fact*: it is stored as
+///    `transceiver_model` and only promotes to `if_media` when it demonstrably contains a
+///    designation. It reaches pluggables alone — a fixed copper port has no entity to describe, so
+///    a device with no MAU-MIB gets nothing for its RJ45 ports and that is honest.
+///
+/// The result is **observational**, like the optical and neighbour walks: most devices do not
+/// implement MAU-MIB, and a silent one is not an unreachable one. Reporting otherwise would page
+/// someone about a healthy box.
+///
+/// Every field except the media pair is `None` on the way out. Core's interface upsert COALESCEs
+/// each column, so these rows fill their own columns and leave the name, alias, speed, duplex and
+/// optical window exactly as the other probes wrote them.
+async fn execute_mau(
+    job: &PollJob,
+    transport: &dyn Transport,
+    at_unix_ms: i64,
+    entity_fallback: bool,
+    timeout: Duration,
+    walker: &SnmpWalker,
+) -> PollResult {
+    let columns = vec![yagra_common::OID_IF_MAU_TYPE.to_owned()];
+    let (mut media, unknown) = match walker
+        .walk_instances(transport, job.target, &columns, timeout, MAU_MAX_ROWS)
+        .await
+    {
+        Ok(rows) => crate::mau::media_by_ifindex(&rows),
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "ifMauTable walk failed");
+            (BTreeMap::new(), Vec::new())
+        }
+    };
+    if !unknown.is_empty() {
+        // A *number*, not an OID string — it is what someone extending `MAU_TYPES` needs, and the
+        // only way a gap in a hand-transcribed registry becomes visible from a running deployment.
+        tracing::debug!(
+            job_id = %job.job_id,
+            subids = ?unknown,
+            "ifMauType registrations not in the transcribed table; media left unknown",
+        );
+    }
+
+    if entity_fallback {
+        let text = walk_entity_media_text(job, transport, walker, timeout).await;
+        if !text.is_empty() {
+            let index = walk_entity_index(job, transport, walker, timeout).await;
+            crate::mau::merge_entity_fallback(&mut media, &text, |ent| index.ifindex_for(ent));
+        }
+    }
+
+    let interfaces = media
+        .into_iter()
+        .map(|(ifindex, row)| DiscoveredInterface {
+            ifindex: IfIndex(ifindex),
+            if_name: None,
+            if_alias: None,
+            if_speed: None,
+            // MAU's duplex is secondary: `dot3StatsDuplexStatus` runs on the fast path and wins by
+            // arriving first, because the upsert COALESCEs rather than overwrites. This fills the
+            // column only on a device that implements MAU-MIB but not EtherLike-MIB.
+            if_duplex: row.duplex,
+            if_type: None,
+            if_media: row.media,
+            transceiver_model: row.transceiver_model,
+            rx_power_low_dbm: None,
+            rx_power_high_dbm: None,
+            tx_power_low_dbm: None,
+            tx_power_high_dbm: None,
+        })
+        .collect();
+
+    PollResult {
+        job_id: job.job_id,
+        node_id: job.node_id,
+        at_unix_ms,
+        outcome: CheckOutcome::Reachable,
+        samples: Vec::new(),
+        interfaces,
+        sys_descr: None,
+        dns_chain: None,
+        neighbors: None,
+        l3: None,
+        arp: None,
+        routing: None,
+        poller_id: None,
+        // Never a liveness statement — see the doc comment.
+        observational: true,
+        trace_context: Default::default(),
+    }
+}
+
+/// Walk the ENTITY-MIB text columns that can name a pluggable.
+///
+/// Both columns are asked for because which one carries a designation varies by vendor;
+/// `mau::entity_text` keeps the longer answer per entity.
+async fn walk_entity_media_text(
+    job: &PollJob,
+    transport: &dyn Transport,
+    walker: &SnmpWalker,
+    timeout: Duration,
+) -> BTreeMap<u32, String> {
+    let columns = vec![
+        ENT_PHYSICAL_MODEL_NAME.to_owned(),
+        optical::ENT_PHYSICAL_DESCR.to_owned(),
+    ];
+    match walker
+        .walk_instances(
+            transport,
+            job.target,
+            &columns,
+            timeout,
+            OPTICAL_ENTITY_MAX_ROWS,
+        )
+        .await
+    {
+        Ok(rows) => crate::mau::entity_text(&rows),
+        Err(err) => {
+            tracing::debug!(job_id = %job.job_id, error = %err, "entity media text walk failed");
+            BTreeMap::new()
+        }
+    }
+}
+
+/// `entPhysicalModelName` — ENTITY-MIB's vendor part number for a physical component. The column
+/// `optical.rs` had no use for, since a part number says nothing about a light level.
+const ENT_PHYSICAL_MODEL_NAME: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
 
 /// Walk the two ENTITY-MIB relations that attach a physical entity to an interface.
 async fn walk_entity_index(
@@ -1563,6 +1740,8 @@ async fn walk_interface_metadata(
         if_speed: None,
         if_duplex: None,
         if_type: None,
+        if_media: None,
+        transceiver_model: None,
         // The metadata walk never reads thresholds — they come from the optical probe, and core's
         // upsert COALESCEs, so leaving them None here preserves whatever that probe stored.
         rx_power_low_dbm: None,
@@ -2217,6 +2396,8 @@ mod tests {
                 if_speed: None,
                 if_duplex: None,
                 if_type: None,
+                if_media: None,
+                transceiver_model: None,
                 // A Meraki uplink is not an SNMP transceiver; the optical window is never filled
                 // from this path, and `None` here leaves anything already stored untouched.
                 rx_power_low_dbm: None,
