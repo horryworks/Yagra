@@ -497,6 +497,20 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         ADMIN_CFG,
         Tool("get_config"),
     ),
+    (
+        "GET",
+        "/api/v1/discovery/scans",
+        ADMIN_CFG,
+        // Folded rather than its own tool: `kind=discovery_scans` is the same question as
+        // `kind=discovery_scan` without an id, which is the fold criterion.
+        Tool("get_config"),
+    ),
+    (
+        "POST",
+        "/api/v1/discovery/scan/:id/cancel",
+        ADMIN_CFG,
+        NO_MCP_WRITE,
+    ),
     ("POST", "/api/v1/dns-monitors", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",

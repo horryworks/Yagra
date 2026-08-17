@@ -231,11 +231,31 @@ async fn main() -> anyhow::Result<()> {
                 .await?,
         );
         let merged = Box::pin(futures::stream::select(legacy, pooled));
+        // Stop commands (ADR-068 Inc.2), on the two routes a sweep can arrive by and mirroring the
+        // job subscriptions above. **No queue group**, unlike those: core cannot know which poller
+        // took a queue-delivered job, so a stop goes to everyone and the `scan_id` decides.
+        //
+        // Consumed by a task of its own, which is what makes the stop arrive at all: the sweep loop
+        // is strictly sequential, so a cancel riding the same stream would queue behind the very
+        // sweep it is meant to interrupt.
+        let cancels = Arc::new(discovery::CancelSet::new());
+        let cancel_global = Box::pin(bus.subscribe_discovery_cancels(None).await?);
+        let cancel_pooled = Box::pin(
+            bus.subscribe_discovery_cancels(Some(&identity.pool))
+                .await?,
+        );
+        spawn_cancellable(
+            &shutdown,
+            discovery::run_cancel_stream(
+                Box::pin(futures::stream::select(cancel_global, cancel_pooled)),
+                cancels.clone(),
+            ),
+        );
         let bus = bus.clone();
         let transport = transport.clone();
         spawn_cancellable(
             &shutdown,
-            discovery::run_discovery_stream(merged, bus, transport),
+            discovery::run_discovery_stream(merged, bus, transport, cancels),
         );
     }
 
@@ -695,6 +715,14 @@ async fn run_heartbeat_loop<B>(
                 // Without the claim core withholds every content-checked monitor rather than let
                 // this poller report `http_up = 1` for a page it never looked at.
                 yagra_bus::CAP_HTTP_BODY.to_owned(),
+                // This build honours a `DiscoveryCancel` (ADR-068 Inc.2). Unconditional, like the
+                // four above, because the subscription is unconditional.
+                //
+                // ⚠️ Core cannot use this to withhold anything — a sweep is queue-delivered, so it
+                // does not know which poller will run one. The claim only lets the UI tell the
+                // operator, before they press Stop, whether every poller that might be running the
+                // sweep understands the command.
+                yagra_bus::CAP_DISCOVERY_CANCEL.to_owned(),
             ]
             .into_iter()
             // Unlike the four above, this one is conditional: it says a site updater is deployed

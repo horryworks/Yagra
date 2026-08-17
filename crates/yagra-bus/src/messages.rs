@@ -93,6 +93,22 @@ pub const CAP_SELF_UPGRADE: &str = "self-upgrade";
 /// between "this site sent nothing" and "there was nothing to send".
 pub const CAP_LOG_SHIP: &str = "log-ship";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it honours a
+/// [`DiscoveryCancel`] (ADR-068 Increment 2).
+///
+/// Unlike every other capability here, core **cannot use this to withhold anything** — a sweep is
+/// queue-delivered, so core does not know which poller will run it and cannot check that one's
+/// claim before publishing. The token buys exactly one thing: telling the operator, *before* they
+/// press stop, whether every poller that might be running the sweep understands the command. So it
+/// answers "will this work?" and never "should I send it?".
+///
+/// ⚠️ **It is an approximation and the API field is named for that** (`poller_supports_cancel`, not
+/// `will_stop`). For a sweep on the global subject it is the answer across every live poller, and
+/// even for a pool-scoped one it says the pool can stop sweeps — not that the poller holding *this*
+/// sweep will. The unambiguous signal is the poller's own terminal result carrying
+/// [`DiscoveryResult::cancelled`].
+pub const CAP_DISCOVERY_CANCEL: &str = "discovery-cancel";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -2231,10 +2247,38 @@ pub struct DiscoveryResult {
     /// result message still completes the scan (ADR-017).
     #[serde(default = "default_true")]
     pub done: bool,
+    /// Whether this sweep stopped because it was cancelled rather than because it finished
+    /// (ADR-068 Increment 2). Only meaningful together with `done`.
+    ///
+    /// **The N-1 default is right by argument, not by luck.** A poller that predates cancellation
+    /// never sends this, so it decodes as `false` — and that is exactly true of such a poller: it
+    /// never received the stop, so it really did run to completion. Core therefore reads a
+    /// `done` without `cancelled` as "the sweep finished before the stop could take effect", which
+    /// is the honest report rather than a guess.
+    ///
+    /// Core could instead infer cancellation from `probed < total`, and deliberately does not: a
+    /// stop landing during the final chunk produces a full count, so the inference would report a
+    /// cancelled sweep as completed. One bool is cheaper than a wrong answer.
+    #[serde(default)]
+    pub cancelled: bool,
 }
 
 const fn default_true() -> bool {
     true
+}
+
+/// Core → pollers: stop sweeping `scan_id` (ADR-068 Increment 2).
+///
+/// Carries nothing but the id on purpose. It is broadcast to every poller (see
+/// [`crate::subjects::discovery_cancel`]) because core does not know which one took the job, so the
+/// id is both the address and the whole instruction. Adding a `poller_id` would suggest a targeting
+/// this design does not have.
+///
+/// Publishing is **core-only**: the poller allow-lists grant subscribe and not publish, or one
+/// site's poller could stop another site's sweep.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiscoveryCancel {
+    pub scan_id: Uuid,
 }
 
 // ── Passive events (Phase 2) — edge-received syslog / SNMP traps / webhooks ─────────
@@ -3298,6 +3342,49 @@ mod tests {
     /// failing — because a failure would take the whole `PollResult` with it. The `schema_version`
     /// key is sent on purpose; it is what an N-1 producer actually puts on the wire (the field was
     /// removed from the structs but old binaries still write it), and ignoring it is the property.
+    #[test]
+    fn a_discovery_result_tolerates_missing_and_unknown_fields() {
+        // The N-1 producer: a poller that predates ADR-068 Inc.2 sends no `cancelled`. The default
+        // must be `false`, and that is not merely a safe default — it is *true* of such a poller.
+        // It never received the stop, so it really did run to completion, and core reading
+        // "finished, not cancelled" reports what happened rather than guessing.
+        let old: DiscoveryResult =
+            serde_json::from_str(r#"{"scan_id":"00000000-0000-0000-0000-000000000001","found":[],"schema_version":1,"future_field":"x"}"#)
+                .unwrap();
+        assert!(old.done, "an old poller's single message still completes");
+        assert!(
+            !old.cancelled,
+            "absent `cancelled` must read as 'it finished', which is what an old poller did"
+        );
+        assert_eq!((old.probed, old.total), (0, 0));
+
+        let stopped = DiscoveryResult {
+            scan_id: Uuid::from_u128(1),
+            found: Vec::new(),
+            probed: 96,
+            total: 254,
+            done: true,
+            cancelled: true,
+        };
+        let wire = serde_json::to_string(&stopped).unwrap();
+        assert!(wire.contains(r#""cancelled":true"#), "{wire}");
+        assert_eq!(
+            serde_json::from_str::<DiscoveryResult>(&wire).unwrap(),
+            stopped
+        );
+    }
+
+    #[test]
+    fn a_discovery_cancel_tolerates_unknown_fields() {
+        // A newer core may add fields; an older poller must still act on the id rather than drop
+        // the message — dropping it would leave the sweep running with the UI saying "stopping…".
+        let c: DiscoveryCancel = serde_json::from_str(
+            r#"{"scan_id":"00000000-0000-0000-0000-000000000009","reason":"operator","schema_version":1}"#,
+        )
+        .unwrap();
+        assert_eq!(c.scan_id, Uuid::from_u128(9));
+    }
+
     #[test]
     fn a_discovered_interface_tolerates_missing_and_unknown_fields() {
         let old: DiscoveredInterface =

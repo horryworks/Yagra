@@ -236,6 +236,39 @@
   },
   "discovery": {
     "note": "Sweep a subnet for live + SNMP devices, then import the ones you want.",
+    "scans": {
+      "title": "Recent sweeps",
+      "note": "Sweeps this core is holding. Pick one to see its progress or its results.",
+      "empty": "No sweeps yet.",
+      "resumed": "Showing a sweep that was already running.",
+      "resumedDone": "Showing the most recent sweep.",
+      "unknownScan": "This core does not know that sweep — it restarted, or the sweep aged out. A poller may still be running it.",
+      "progress": "{{probed}}/{{total}} probed",
+      "candidates_one": "{{count}} device",
+      "candidates_other": "{{count}} devices",
+      "pollFailed": "Stopped checking this sweep after repeated errors. Reload to try again.",
+      "state": {
+        "running": "Running",
+        "cancelling": "Stopping…",
+        "cancelled": "Stopped",
+        "done": "Finished",
+        "unknown": "Unknown"
+      },
+      "stop": "Stop sweep",
+      "stopping": "Stopping the sweep…",
+      "stopRequested": "Stop requested. The poller finishes what it is already probing, so this takes a few seconds.",
+      "stopUnsupported": "Stop requested, but a poller that could be running this sweep is too old to act on it — the sweep may run to completion.",
+      "stoppedNote": "Sweep stopped. The devices found before it stopped are below and can be imported.",
+      "finishedAnyway": "The sweep finished before the stop reached the poller.",
+      "stopErr": "Failed to request the stop"
+    },
+    "pool": {
+      "label": "Sweep from",
+      "any": "Any poller",
+      "anyHint": "With no site chosen the sweep goes to whichever poller answers first — which may be one that cannot reach these addresses.",
+      "deadHint": "No live poller serves this site, so the sweep will go to whichever poller answers first instead.",
+      "oneOf": "One live poller in this site will run it."
+    },
     "seen": {
       "title": "Seen on the network",
       "note": "Addresses your monitored routers have actually spoken to that Yagra is not monitoring. Nothing here needs a scan — it comes from the ARP and IPv6 neighbor caches of the devices you already have.",

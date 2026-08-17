@@ -10,6 +10,60 @@
 
 ## Unreleased
 
+### New Features
+- **A discovery sweep survives leaving the page.** Nodes ▸ Discovery lists the sweeps the core is
+  holding and reattaches to one when you come back, so navigating away no longer loses a sweep the
+  poller is still running. The scan id is in the URL, so a reload or a shared link lands on the same
+  sweep.
+- **You can choose which site a sweep runs from.** The scan form grew a poller-pool picker. Without
+  it the sweep went to whichever poller answered first, so on a multi-site deployment a remote
+  poller could end up sweeping head office — reaching nothing and reporting a successful, empty
+  scan. Leaving it unset keeps the old behaviour, and the screen now says what that means. A pool
+  with no live poller is still offered but marked, because the server falls back to "any poller"
+  for it.
+- **A running sweep can be stopped.** The poller stops probing, so the ICMP and SNMP traffic
+  actually ceases rather than the screen merely looking stopped. Devices found before the stop stay
+  on screen and can still be imported.
+  - The stop takes a few seconds: a probe already in flight is left to time out rather than having
+    its connection dropped.
+  - **The screen distinguishes "asked" from "stopped".** Yagra broadcasts the stop and cannot know
+    which poller was running the sweep, so the sweep stays *Stopping…* until the poller confirms.
+    A sweep that finishes first is reported as finished, not as stopped.
+  - **A poller older than this release does not understand the command** and runs the sweep to
+    completion. When one of those could be holding the sweep, the screen says so as you press stop
+    rather than leaving you waiting.
+
+### Improvements
+- **A sweep the core no longer knows about is now reported as such.** Previously the page kept
+  polling a 404 every two seconds with its progress line frozen mid-sentence. It now says the core
+  does not know that sweep — which is the honest reading, since a poller may still be running it —
+  and stops asking after repeated failures.
+- **Finished sweeps are now discarded after six hours (at most twenty are kept).** They were held
+  for the life of the core process. Note the side effect: the dashboard's *Discovery queue* widget
+  reads those same sweeps, so it now shows recent finds rather than everything since the last
+  restart.
+
+### API
+- `GET /api/v1/discovery/scans` lists the retained sweeps (ManageConfig). Also reachable over MCP as
+  `get_config(kind="discovery_scans")`.
+- `POST /api/v1/discovery/scan/{id}/cancel` asks the poller running a sweep to stop (ManageConfig).
+  - **200 means the stop was published, not that the sweep stopped.** Watch the scan's `state` for
+    that: `cancelled` is a confirmed stop, `done` means it finished first.
+  - `poller_supports_cancel` in the response is an advance warning about older pollers, not a
+    verdict — for a sweep on the global route it is the answer across every live poller.
+  - Unlike `POST /analysis/jobs/{id}/cancel`, this answers 200 for a scan the core has no record
+    of. Scan state is in memory, so requiring one would make a sweep orphaned by a core restart
+    impossible to stop.
+- A scan's status carries three new fields: `state` (`running` / `cancelling` / `cancelled` /
+  `done`), `started_at` / `updated_at` (RFC 3339), and `pool` — the route the job was actually
+  published on, which is not necessarily the pool that was requested. `done` is unchanged and still
+  means "terminal".
+  - `cancelling` and `cancelled` are declared but never emitted yet; cancelling a sweep is the next
+    increment.
+- `POST /api/v1/discovery/scan` accepts `pool`, and now answers `503` on a standby core in an HA
+  pair. Only the leader consumes discovery results, so a standby would have published a sweep whose
+  every result was discarded.
+
 ## v0.2.13 — a remote site's poller is stood up from the WebUI, and a poller id is no longer taken on trust
 
 ### New Features

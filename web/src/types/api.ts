@@ -59,6 +59,7 @@ const schemaEnumPins: {
   Cadence: AssertEqual<Cadence, components['schemas']['Cadence']>;
   AnalysisScheduleStatus: AssertEqual<AnalysisScheduleStatus, components['schemas']['AnalysisScheduleStatus']>;
   AnalysisJobState: AssertEqual<AnalysisJobState, components['schemas']['AnalysisJobState']>;
+  DiscoveryScanState: AssertEqual<DiscoveryScanState, components['schemas']['DiscoveryScanState']>;
   EventKind: AssertEqual<EventKind, components['schemas']['EventKind']>;
   EventAction: AssertEqual<EventAction, components['schemas']['EventAction']>;
   EventMatchKind: AssertEqual<EventMatchKind, components['schemas']['EventMatchKind']>;
@@ -80,6 +81,7 @@ const schemaEnumPins: {
   Cadence: true,
   AnalysisScheduleStatus: true,
   AnalysisJobState: true,
+  DiscoveryScanState: true,
   EventKind: true,
   EventAction: true,
   EventMatchKind: true,
@@ -1182,6 +1184,26 @@ export const ANALYSIS_JOB_STATES = [
   'unknown',
 ] as const;
 export type AnalysisJobState = (typeof ANALYSIS_JOB_STATES)[number];
+
+/** Where a discovery sweep is in its life (ADR-068).
+ *
+ *  ⚠️ **No `unknown` member, unlike the report/analysis unions above.** Those carry one because the
+ *  backend degrades a storage token a newer core wrote; a scan's state is held in memory and only
+ *  ever travels outward, so the backend has no such value to emit. The defensiveness that belongs
+ *  on this side lives in `pages/discoveryScans.ts::scanState`, which narrows the wire value and
+ *  hands anything unrecognised to a neutral label rather than a red one.
+ *
+ *  `cancelling`/`cancelled` are declared ahead of the cancel path (ADR-068 Increment 2) so the
+ *  exhaustive label map and both locales exist before the state can occur — the same reason
+ *  `ANALYSIS_JOB_STATES` carries `queued`. Until then they are never rendered. */
+export const DISCOVERY_SCAN_STATES = ['running', 'cancelling', 'cancelled', 'done'] as const;
+export type DiscoveryScanState = (typeof DISCOVERY_SCAN_STATES)[number];
+
+/** One row of the discovery scan list. */
+export type DiscoveryScanSummary = components['schemas']['ScanSummary'];
+
+/** What asking a sweep to stop returned. Named for what it is: a request, not a confirmation. */
+export type CancelRequested = components['schemas']['CancelRequested'];
 
 /** What kind of passive event a source produces. */
 export const EVENT_KINDS = ['syslog', 'trap', 'webhook'] as const;

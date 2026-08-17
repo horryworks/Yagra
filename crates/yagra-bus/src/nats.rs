@@ -12,9 +12,9 @@
 
 use crate::bus::{Bus, BusError, DiscoveryBus, LogBus, PeerBus, SyncBus, UpgradeBus};
 use crate::messages::{
-    AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram, SyncMsg,
-    SyncRequest,
+    AuthRevoke, DiscoveryCancel, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg,
+    PollJob, PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram,
+    SyncMsg, SyncRequest,
 };
 use crate::subjects;
 use async_nats::Client;
@@ -386,6 +386,37 @@ impl NatsBus {
         }))
     }
 
+    /// Subscribe to stop-this-sweep commands — poller side (ADR-068 Inc.2).
+    ///
+    /// **No queue group, unlike the jobs subscriptions above.** A job must go to exactly one poller;
+    /// a stop must reach whichever poller took that job, and core does not know which one that was.
+    /// So every poller hears every stop and the `scan_id` decides who acts.
+    ///
+    /// `pool` subscribes the pool-scoped subject; the caller pairs this with a second subscription
+    /// on the global one, because a sweep is cancelled on whichever route it was published on.
+    pub async fn subscribe_discovery_cancels(
+        &self,
+        pool: Option<&str>,
+    ) -> Result<impl Stream<Item = DiscoveryCancel>, BusError> {
+        let subject = pool.map_or_else(subjects::discovery_cancel, |p| {
+            subjects::discovery_cancel_for_pool(p)
+        });
+        let sub = self
+            .client
+            .subscribe(subject)
+            .await
+            .map_err(|e| BusError::Publish(format!("subscribe discovery cancels: {e}")))?;
+        Ok(sub.filter_map(|msg| async move {
+            match serde_json::from_slice::<DiscoveryCancel>(&msg.payload) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping malformed DiscoveryCancel from bus");
+                    None
+                }
+            }
+        }))
+    }
+
     /// Subscribe to discovery results — core side. Malformed messages skipped.
     pub async fn subscribe_discovery_results(
         &self,
@@ -704,6 +735,24 @@ impl DiscoveryBus for NatsBus {
             .publish(subjects::discovery_results(), payload.into())
             .await
             .map_err(|e| BusError::Publish(format!("publish discovery result: {e}")))
+    }
+
+    async fn publish_discovery_cancel(
+        &self,
+        pool: Option<&str>,
+        msg: DiscoveryCancel,
+    ) -> Result<(), BusError> {
+        let payload = serde_json::to_vec(&msg)
+            .map_err(|e| BusError::Publish(format!("encode discovery cancel: {e}")))?;
+        // The route the sweep was published on, so a job that fell back to the global subject is
+        // cancelled there — see `subjects::discovery_cancel_for_pool`.
+        let subject = pool.map_or_else(subjects::discovery_cancel, |p| {
+            subjects::discovery_cancel_for_pool(p)
+        });
+        self.client
+            .publish(subject, payload.into())
+            .await
+            .map_err(|e| BusError::Publish(format!("publish discovery cancel: {e}")))
     }
 }
 

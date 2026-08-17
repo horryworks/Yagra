@@ -80,6 +80,39 @@ pub fn discovery_results() -> String {
     format!("{ROOT}.discovery.results")
 }
 
+/// Subject core publishes a **stop this sweep** command on; pollers subscribe (ADR-068 Inc.2).
+///
+/// **Broadcast, not a queue group, and that is forced rather than chosen.** A sweep job is
+/// queue-delivered, so exactly one poller runs it and *core never learns which* — the result
+/// carries no poller id. There is therefore no address to send a stop to. Every poller receives the
+/// command and the `scan_id` decides who acts on it; to everyone else it is a message about a sweep
+/// they are not running.
+///
+/// **Its own token, not a variant on [`discovery_jobs`], for the reason [`upgrade_for`] spells
+/// out**: a poller build that predates cancellation never subscribes here, so the stop reaches
+/// nobody and the sweep runs to completion — an N-1 outcome obtained structurally. Riding on the
+/// jobs subject would instead hand an old poller a message it would try to parse as a sweep.
+///
+/// ⚠️ `yagra.discovery.jobs.>` does **not** cover this. Both allow-lists need their own entry —
+/// `yagra-authz`'s per-poller grant and the static account in `docker/nats/nats-server.conf` — and
+/// missing either is a runtime denial with no compile error. ⚠️ **Subscribe only.** A poller that
+/// could publish here could stop another site's sweep.
+#[must_use]
+pub fn discovery_cancel() -> String {
+    format!("{ROOT}.discovery.cancel")
+}
+
+/// Pool-scoped stop command, the analogue of [`discovery_jobs_for_pool`], e.g.
+/// `yagra.discovery.cancel.tokyo` (ADR-068 Inc.2).
+///
+/// A sweep is cancelled on **the route it was published on**, which is not necessarily the pool that
+/// was requested: `api::discovery` falls back to the global subject when the named pool has no live
+/// poller, so a cancel addressed at the request would reach a pool that never received the job.
+#[must_use]
+pub fn discovery_cancel_for_pool(pool: &str) -> String {
+    format!("{ROOT}.discovery.cancel.{pool}")
+}
+
 // ── Distributed poller pool (ADR-009/020) — control plane subjects ──────────────────
 
 /// Subject pollers publish liveness/telemetry heartbeats on; core consumes (ADR-009). A single
@@ -213,6 +246,28 @@ mod tests {
     #[test]
     fn results_subject_is_stable() {
         assert_eq!(results(), "yagra.results");
+    }
+
+    #[test]
+    fn the_cancel_subject_is_not_reachable_from_the_jobs_wildcard() {
+        // The N-1 gate is structural: a poller that predates cancellation subscribes
+        // `yagra.discovery.jobs` and `yagra.discovery.jobs.{pool}` and therefore never hears a stop
+        // — the sweep completes instead of being mis-parsed. That only holds while the two families
+        // stay disjoint, and nothing but this test says so.
+        assert_eq!(discovery_cancel(), "yagra.discovery.cancel");
+        assert_eq!(
+            discovery_cancel_for_pool("tokyo"),
+            "yagra.discovery.cancel.tokyo"
+        );
+        assert!(!discovery_cancel().starts_with("yagra.discovery.jobs"));
+        assert!(!discovery_cancel_for_pool("tokyo").starts_with("yagra.discovery.jobs"));
+        // And the reverse: a `yagra.discovery.cancel.>` grant must not hand a poller the jobs feed.
+        assert!(!discovery_jobs().starts_with("yagra.discovery.cancel"));
+        assert!(!discovery_jobs_for_pool("tokyo").starts_with("yagra.discovery.cancel"));
+        // The pool form sits under the wildcard the allow-lists grant, and the global form does not
+        // (which is why both entries are needed, in both allow-lists).
+        assert!(discovery_cancel_for_pool("tokyo").starts_with("yagra.discovery.cancel."));
+        assert!(!discovery_cancel().starts_with("yagra.discovery.cancel."));
     }
 
     #[test]

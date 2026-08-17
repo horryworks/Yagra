@@ -7,9 +7,9 @@
 //! implementation (the production path) slots in behind the same trait later.
 
 use crate::messages::{
-    AuthRevoke, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg, PollJob,
-    PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram, SyncMsg,
-    SyncRequest,
+    AuthRevoke, DiscoveryCancel, DiscoveryJob, DiscoveryResult, EventMsg, FlowBatch, HeartbeatMsg,
+    PollJob, PollResult, PollerLogChunk, PollerLogRequest, PollerUpgradeMsg, RawFlowDatagram,
+    SyncMsg, SyncRequest,
 };
 use async_trait::async_trait;
 use thiserror::Error;
@@ -155,6 +155,20 @@ pub trait DiscoveryBus: Send + Sync {
     ) -> Result<(), BusError>;
     /// Publish a (cumulative, possibly partial) sweep result — poller side.
     async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError>;
+    /// Publish a stop command for one sweep — core side (ADR-068 Inc.2).
+    ///
+    /// `pool` must be **the route the job was published on**, not the pool that was requested: a
+    /// sweep that fell back to the global subject is only reachable there. `None` therefore means
+    /// the global subject in both directions, which keeps the two calls symmetrical.
+    ///
+    /// Fire-and-forget, like every core→poller command: the publish succeeding says the broker took
+    /// it, never that a poller acted. What a stop actually did is reported by
+    /// [`DiscoveryResult::cancelled`].
+    async fn publish_discovery_cancel(
+        &self,
+        pool: Option<&str>,
+        msg: DiscoveryCancel,
+    ) -> Result<(), BusError>;
 }
 
 /// The core⇄core fan-out (Core HA active/active, ADR-016 Increment 2a).
@@ -201,6 +215,9 @@ pub struct InMemoryBus {
     discovery_jobs: broadcast::Sender<DiscoveryJob>,
     pool_discovery_jobs: broadcast::Sender<(String, DiscoveryJob)>,
     discovery_results: broadcast::Sender<DiscoveryResult>,
+    // Stop-this-sweep commands (ADR-068 Inc.2). Carries its route alongside the message the way
+    // `pool_discovery_jobs` does, except the route is optional: `None` is the global subject.
+    discovery_cancels: broadcast::Sender<(Option<String>, DiscoveryCancel)>,
     // Core⇄core session revocation (ADR-016 Increment 2a).
     auth_revokes: broadcast::Sender<AuthRevoke>,
     // Per-poller upgrade commands (ADR-051), carrying their routing key like `sync` does.
@@ -228,6 +245,7 @@ impl InMemoryBus {
         let (discovery_jobs, _) = broadcast::channel(capacity);
         let (pool_discovery_jobs, _) = broadcast::channel(capacity);
         let (discovery_results, _) = broadcast::channel(capacity);
+        let (discovery_cancels, _) = broadcast::channel(capacity);
         let (auth_revokes, _) = broadcast::channel(capacity);
         let (poller_upgrades, _) = broadcast::channel(capacity);
         let (poller_log_requests, _) = broadcast::channel(capacity);
@@ -246,6 +264,7 @@ impl InMemoryBus {
             discovery_jobs,
             pool_discovery_jobs,
             discovery_results,
+            discovery_cancels,
             auth_revokes,
             poller_upgrades,
             poller_log_requests,
@@ -329,6 +348,16 @@ impl InMemoryBus {
     #[must_use]
     pub fn subscribe_pool_discovery_jobs(&self) -> broadcast::Receiver<(String, DiscoveryJob)> {
         self.pool_discovery_jobs.subscribe()
+    }
+
+    /// Subscribe to stop-this-sweep commands (poller side). Yields `(route, msg)`, where the
+    /// route is `None` for the global subject — the NATS transport splits these into two
+    /// subscriptions, so a test that wants only one route filters on this key.
+    #[must_use]
+    pub fn subscribe_discovery_cancels(
+        &self,
+    ) -> broadcast::Receiver<(Option<String>, DiscoveryCancel)> {
+        self.discovery_cancels.subscribe()
     }
 
     /// Subscribe to discovery sweep results (core side).
@@ -452,6 +481,15 @@ impl DiscoveryBus for InMemoryBus {
 
     async fn publish_discovery_result(&self, result: DiscoveryResult) -> Result<(), BusError> {
         let _ = self.discovery_results.send(result);
+        Ok(())
+    }
+
+    async fn publish_discovery_cancel(
+        &self,
+        pool: Option<&str>,
+        msg: DiscoveryCancel,
+    ) -> Result<(), BusError> {
+        let _ = self.discovery_cancels.send((pool.map(str::to_owned), msg));
         Ok(())
     }
 }
@@ -823,12 +861,46 @@ mod tests {
             probed: 1,
             total: 1,
             done: true,
+            cancelled: false,
         };
         DiscoveryBus::publish_discovery_result(&bus, result.clone())
             .await
             .unwrap();
 
         assert_eq!(rx.recv().await.unwrap(), result);
+    }
+
+    /// A stop reaches the poller on the route it is published on, and only that route.
+    ///
+    /// The routing is the whole risk: a sweep that fell back to the global subject is only
+    /// reachable there, so cancelling it on the pool it *asked* for would reach nobody — the
+    /// operator would see "stopping…" while the sweep ran happily to completion.
+    #[tokio::test]
+    async fn a_stop_travels_on_the_route_its_sweep_took() {
+        use crate::messages::DiscoveryCancel;
+
+        let bus = InMemoryBus::new(8);
+        let mut rx = bus.subscribe_discovery_cancels();
+        let msg = DiscoveryCancel {
+            scan_id: Uuid::from_u128(7),
+        };
+
+        DiscoveryBus::publish_discovery_cancel(&bus, Some("tokyo"), msg.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            (Some("tokyo".to_owned()), msg.clone())
+        );
+
+        DiscoveryBus::publish_discovery_cancel(&bus, None, msg.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            rx.recv().await.unwrap(),
+            (None, msg),
+            "a pool-less sweep is cancelled on the global subject, not on some default pool"
+        );
     }
 
     #[tokio::test]

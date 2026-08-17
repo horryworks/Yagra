@@ -540,11 +540,28 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     },
     FoldedRead {
         tool: "get_config",
+        arg: "discovery_scans",
+        method: "GET",
+        path: "/api/v1/discovery/scans",
+        perm: Some(Permission::ManageConfig),
+        // The shared sentence fits exactly: a scan row's `pool` is the route the sweep was
+        // published on, so "which poller ran this sweep" *is* the question — and ADR-068 exists
+        // because that answer was previously nobody's to give. Stripping it would leave a caller
+        // unable to tell a sweep that ran at the remote site from one that ran at head office.
+        inventory_ids_ok: POOL_IS_THE_ANSWER,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
         arg: "discovery_scan",
         method: "GET",
         path: "/api/v1/discovery/scan/:id",
         perm: Some(Permission::ManageConfig),
-        inventory_ids_ok: None,
+        // Same sentence, same reason as `discovery_scans`: ADR-068 gave a scan the route it was
+        // published on, and that route is the answer to "where did this sweep run from" — the
+        // question the whole increment exists to make answerable.
+        inventory_ids_ok: POOL_IS_THE_ANSWER,
         opaque_ok: None,
         lowered_to: None,
     },

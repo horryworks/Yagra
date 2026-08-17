@@ -7,24 +7,69 @@
 //! — authoritative `sysObjectID` rules; vendor/model are pre-filled from `yagra_discovery::identify`).
 //! The poller
 //! publishes **cumulative** partial results as it sweeps, so a scan's status carries live
-//! progress (probed/total + the address currently being probed). Scan state is held **in
-//! memory** — scans are short-lived and core is single-instance today (Redis-backed state is
-//! a future scale-out concern). The operator reviews candidates and imports the ones they
-//! want as real nodes (reusing the create-node path); nothing is added automatically.
+//! progress (probed/total + the address currently being probed). The operator reviews candidates
+//! and imports the ones they want as real nodes (reusing the create-node path); nothing is added
+//! automatically.
+//!
+//! ## Scan state is in memory, and that is a decision with a price (ADR-068)
+//!
+//! Scans are short-lived — the sweep is capped at 1024 targets, so the longest legitimate one runs
+//! for minutes, not days — and their candidates are not an asset until they are imported. That is
+//! why this is a `HashMap` and not a table: the threshold for persistence is *how long the work
+//! lives*, not *whether a list of it is wanted*.
+//!
+//! Two consequences follow, and both are load-bearing rather than incidental:
+//!
+//! 1. **The map must be evicted** ([`evict`]). Until ADR-068 it never was, because nothing listed
+//!    it — a scan registered here stayed for the life of the process.
+//! 2. **A core restart orphans a running sweep.** The poller keeps sweeping, its results arrive for
+//!    a `scan_id` this process has never heard of, and [`DiscoveryRunner::run_consumer`] drops them.
+//!    The API answers 404, which the WebUI must render as *"this core does not know that scan"* —
+//!    never as an empty page. Do not paper over this by inventing a scan record on an unknown
+//!    result: that would report progress for a sweep whose targets and credentials are unknown.
+//!
+//! ⚠️ **`run_consumer` runs on the leader only** (`main.rs`'s `LeaderWork`), while every core serves
+//! the API. So a standby that accepted `POST /discovery/scan` would put real traffic on the wire and
+//! never see a single result — which is why that route takes the `Leader` guard.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use futures::stream::{Stream, StreamExt};
 use serde::Serialize;
 use uuid::Uuid;
-use yagra_bus::{DiscoveryBus, DiscoveryCredential, DiscoveryJob, DiscoveryResult};
+use yagra_bus::{
+    DiscoveryBus, DiscoveryCancel, DiscoveryCredential, DiscoveryJob, DiscoveryResult,
+};
 
 use crate::classification::Classifier;
 
 /// Per-probe timeout pushed to the poller (ms).
 const SCAN_TIMEOUT_MS: u32 = 2000;
+
+/// How long a finished scan stays listable.
+///
+/// ⚠️ **This is also the Discovery-queue widget's window.** [`DiscoveryRunner::recent_candidates`]
+/// reads the candidates of *every* retained scan, so whatever is evicted here leaves that widget
+/// too. The value is therefore chosen for the widget, not for memory — 20 scans of at most 1024
+/// candidates is not a memory problem, and picking a shorter window to "tidy up" would silently
+/// empty a dashboard panel.
+const FINISHED_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Hard cap on retained scans. Only **finished** ones are dropped to honour it — evicting a running
+/// scan would lose the operator's only handle on a sweep that is still putting traffic on the wire.
+/// A deployment that somehow accumulates this many concurrently-running scans keeps them all until
+/// [`RUNNING_MAX_AGE`] retires them.
+const MAX_SCANS: usize = 20;
+
+/// A scan still marked running after this is dropped: its poller died, or its final result was
+/// lost. Comfortably longer than the slowest legitimate sweep (1024 targets, ~22s per target in the
+/// worst credential-probe case, 16 at a time ⇒ well under an hour), so this can only catch a sweep
+/// that is genuinely never going to report.
+const RUNNING_MAX_AGE: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// One device a scan found, with a suggested profile for the operator to confirm on import.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -49,33 +94,118 @@ pub struct Candidate {
     pub matched_credential_id: Option<Uuid>,
 }
 
+/// Where a scan is in its life (ADR-068).
+///
+/// Deliberately has **no `Unknown` variant**, unlike the enums built by `stored_enum::token_enum!`:
+/// those degrade a token a *newer writer* put in a database column, and this value is never read
+/// back from storage — it only ever travels outward. The corresponding defensiveness lives on the
+/// TypeScript side, which narrows the wire value and renders anything it does not recognise
+/// neutrally. ⚠️ Rendering an unrecognised state as a failure is a real bug this codebase has
+/// already shipped once (report runs, painted red by a `switch` with a `default:` arm).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum DiscoveryScanState {
+    /// Sweeping; the poller is reporting progress.
+    Running,
+    /// A stop was requested and published; the poller has not confirmed yet.
+    ///
+    /// **Not the same thing as stopped, and the distinction is the honest one.** Core publishes the
+    /// stop and cannot know it arrived: the sweep may be held by a poller too old to subscribe, or
+    /// the message may simply be late. A scan sits here until its poller reports — which is either
+    /// `cancelled: true` (it stopped) or a plain terminal result (it finished first). ⚠️ **Nothing
+    /// times this out into [`Self::Cancelled`].** That would be inventing the confirmation the state
+    /// exists to wait for; a stop that is never confirmed stays visible as unconfirmed until
+    /// [`evict`] retires it.
+    Cancelling,
+    /// The poller confirmed it stopped early. `probed < total` is the evidence.
+    Cancelled,
+    /// The sweep ran to completion.
+    Done,
+}
+
+impl DiscoveryScanState {
+    /// Whether the scan will produce no further results.
+    ///
+    /// `Cancelling` is **not** terminal: the poller may still report, and that report is what
+    /// distinguishes "stopped" from "finished before the stop arrived".
+    #[must_use]
+    pub fn is_terminal(self) -> bool {
+        match self {
+            Self::Cancelled | Self::Done => true,
+            Self::Running | Self::Cancelling => false,
+        }
+    }
+}
+
 /// A scan's current status returned by the API.
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ScanStatus {
     pub scan_id: Uuid,
+    /// Terminal or not. Kept alongside `state` because it is part of the published contract (the
+    /// MCP `get_config(kind="discovery_scan")` tool serves this type straight through), and derived
+    /// from `state` rather than stored, so the two cannot disagree.
     pub done: bool,
+    pub state: DiscoveryScanState,
     /// Targets probed so far / total targets in the sweep.
     pub probed: u32,
     pub total: u32,
     /// The address the sweep is currently at (the next unprobed target), while running.
     pub scanning: Option<String>,
+    /// When the sweep was accepted (RFC 3339) — RFC 3339 rather than epoch millis to match the
+    /// discovered-endpoint rows this API already serves.
+    pub started_at: String,
+    /// When a result last moved this scan forward (RFC 3339).
+    pub updated_at: String,
+    /// The pool the job was **actually published to**; `null` for the global subject.
+    pub pool: Option<String>,
     pub candidates: Vec<Candidate>,
+}
+
+/// One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.
+///
+/// The omission is the point: 20 retained scans of up to 1024 candidates each would make listing
+/// them far more expensive than the question deserves. A caller that wants a scan's candidates asks
+/// for that scan.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ScanSummary {
+    pub scan_id: Uuid,
+    pub state: DiscoveryScanState,
+    pub probed: u32,
+    pub total: u32,
+    /// How many devices answered so far.
+    pub candidate_count: u32,
+    pub started_at: String,
+    pub updated_at: String,
+    /// The pool the job was **actually published to**; `null` for the global subject.
+    pub pool: Option<String>,
 }
 
 struct ScanState {
     targets: Vec<IpAddr>,
-    done: bool,
+    state: DiscoveryScanState,
     probed: u32,
     candidates: Vec<Candidate>,
+    started_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    /// The route [`DiscoveryRunner::start`] actually published on — **not** the pool the caller
+    /// asked for.
+    ///
+    /// ⚠️ The two differ: `api::discovery` falls back to the global subject when the requested pool
+    /// has no live poller, so storing the request would make Increment 2 address a cancel at a pool
+    /// that never received the job.
+    pool: Option<String>,
 }
 
 impl ScanState {
-    fn new(targets: Vec<IpAddr>) -> Self {
+    fn new(targets: Vec<IpAddr>, pool: Option<String>, now: DateTime<Utc>) -> Self {
         Self {
             targets,
-            done: false,
+            state: DiscoveryScanState::Running,
             probed: 0,
             candidates: Vec::new(),
+            started_at: now,
+            updated_at: now,
+            pool,
         }
     }
 
@@ -83,10 +213,11 @@ impl ScanState {
     /// found list, so candidates are replaced, not appended. Progress never regresses
     /// (guards against out-of-order delivery). The classifier resolves each device's
     /// suggested profile server-side from its sysObjectID / sysDescr.
-    fn apply(&mut self, result: DiscoveryResult, classifier: &Classifier) {
+    fn apply(&mut self, result: DiscoveryResult, classifier: &Classifier, now: DateTime<Utc>) {
         if result.probed < self.probed && !result.done {
             return;
         }
+        self.updated_at = now;
         self.candidates = result
             .found
             .into_iter()
@@ -123,12 +254,35 @@ impl ScanState {
             })
             .collect();
         self.probed = self.probed.max(result.probed);
-        self.done = self.done || result.done;
+        if result.done {
+            // **The poller's report decides, not what core last recorded.** Reading `Cancelling` as
+            // "therefore cancelled" would report a sweep that finished before the stop landed —
+            // the N-1 case, where the poller never subscribed to the cancel subject at all — as
+            // having been stopped. `DiscoveryResult::cancelled` exists precisely so this does not
+            // have to be guessed.
+            //
+            // Exhaustive over the state rather than `_ =>`: a future variant must be decided here,
+            // not defaulted into `Done` (extensibility.md §1).
+            self.state = match (self.state, result.cancelled) {
+                (DiscoveryScanState::Running | DiscoveryScanState::Cancelling, true) => {
+                    DiscoveryScanState::Cancelled
+                }
+                (DiscoveryScanState::Running | DiscoveryScanState::Cancelling, false) => {
+                    DiscoveryScanState::Done
+                }
+                // Already settled — a duplicate or late terminal result must not move it.
+                (s @ (DiscoveryScanState::Cancelled | DiscoveryScanState::Done), _) => s,
+            };
+        }
+    }
+
+    fn total(&self) -> u32 {
+        u32::try_from(self.targets.len()).unwrap_or(u32::MAX)
     }
 
     fn status(&self, scan_id: Uuid) -> ScanStatus {
-        let total = u32::try_from(self.targets.len()).unwrap_or(u32::MAX);
-        let scanning = (!self.done)
+        let total = self.total();
+        let scanning = (!self.state.is_terminal())
             .then(|| {
                 self.targets
                     .get(self.probed as usize)
@@ -137,12 +291,72 @@ impl ScanState {
             .flatten();
         ScanStatus {
             scan_id,
-            done: self.done,
+            done: self.state.is_terminal(),
+            state: self.state,
             probed: self.probed.min(total),
             total,
             scanning,
+            started_at: self.started_at.to_rfc3339(),
+            updated_at: self.updated_at.to_rfc3339(),
+            pool: self.pool.clone(),
             candidates: self.candidates.clone(),
         }
+    }
+
+    fn summary(&self, scan_id: Uuid) -> ScanSummary {
+        let total = self.total();
+        ScanSummary {
+            scan_id,
+            state: self.state,
+            probed: self.probed.min(total),
+            total,
+            candidate_count: u32::try_from(self.candidates.len()).unwrap_or(u32::MAX),
+            started_at: self.started_at.to_rfc3339(),
+            updated_at: self.updated_at.to_rfc3339(),
+            pool: self.pool.clone(),
+        }
+    }
+}
+
+/// Drop scans nobody can act on any more, in place.
+///
+/// Three rules, in this order — the order matters, because the age rules are what stop a
+/// never-reporting sweep from consuming the cap forever:
+///
+/// 1. a **running** scan older than [`RUNNING_MAX_AGE`] is gone (its poller is never going to
+///    report),
+/// 2. a **terminal** scan whose last update is older than [`FINISHED_TTL`] is gone,
+/// 3. if more than [`MAX_SCANS`] remain, the **oldest terminal** ones go until the cap holds.
+///
+/// ⚠️ Rule 3 never touches a running scan. Evicting one would take away the operator's only handle
+/// on a sweep that is still probing their network — the opposite of what a cap is for.
+///
+/// Takes `now` rather than reading the clock so the rules are testable without sleeping, the shape
+/// `OidcFlight` established.
+fn evict(scans: &mut HashMap<Uuid, ScanState>, now: DateTime<Utc>) {
+    let older_than = |t: DateTime<Utc>, d: Duration| {
+        now.signed_duration_since(t)
+            .to_std()
+            .is_ok_and(|age| age > d)
+    };
+    scans.retain(|_, s| {
+        if s.state.is_terminal() {
+            !older_than(s.updated_at, FINISHED_TTL)
+        } else {
+            !older_than(s.started_at, RUNNING_MAX_AGE)
+        }
+    });
+    if scans.len() <= MAX_SCANS {
+        return;
+    }
+    let mut finished: Vec<(Uuid, DateTime<Utc>)> = scans
+        .iter()
+        .filter(|(_, s)| s.state.is_terminal())
+        .map(|(id, s)| (*id, s.updated_at))
+        .collect();
+    finished.sort_by_key(|(_, at)| *at);
+    for (id, _) in finished.into_iter().take(scans.len() - MAX_SCANS) {
+        scans.remove(&id);
     }
 }
 
@@ -182,8 +396,17 @@ impl DiscoveryRunner {
     ) -> anyhow::Result<Uuid> {
         let scan_id = Uuid::new_v4();
         {
+            let now = Utc::now();
             let mut g = self.scans.lock().expect("scans mutex poisoned");
-            g.insert(scan_id, ScanState::new(targets.clone()));
+            // The route actually taken is stored, not the pool the caller asked for — see
+            // `ScanState::pool`.
+            g.insert(
+                scan_id,
+                ScanState::new(targets.clone(), pool.map(str::to_owned), now),
+            );
+            // Evicting *after* the insert is deliberate: the new scan is `Running`, which rule 3
+            // never touches, so it cannot evict the very scan it was called for.
+            evict(&mut g, now);
         }
         let job = DiscoveryJob {
             scan_id,
@@ -206,9 +429,80 @@ impl DiscoveryRunner {
         g.get(&scan_id).map(|s| s.status(scan_id))
     }
 
+    /// Ask whoever is sweeping `scan_id` to stop (ADR-068 Inc.2).
+    ///
+    /// Returns the route the stop was published on, so the caller can report which pool was asked.
+    ///
+    /// **Publishes even for a scan this core has never heard of, and that is the point.** Scan
+    /// state is in memory, so a restarted core forgets a sweep its pollers are still running — and
+    /// if a stop required a local record, that sweep could never be stopped by anything short of
+    /// restarting the poller. The id is an unguessable UUID and the caller already holds
+    /// `ManageConfig`, so the only thing a made-up id achieves is a message nobody acts on.
+    ///
+    /// ⚠️ This differs deliberately from `analysis`'s cancel, which 404s an unknown run. There the
+    /// 200/404 split is a read oracle for "is that job running"; here the equivalent split would
+    /// only reveal whether *this core* remembers a sweep the caller must already have the id for.
+    ///
+    /// Fire-and-forget: `Ok` means the broker accepted the message, never that a sweep stopped.
+    /// The poller's terminal result is what settles that — see [`ScanState::apply`].
+    pub async fn cancel(&self, scan_id: Uuid) -> anyhow::Result<Option<String>> {
+        let route = {
+            let mut g = self.scans.lock().expect("scans mutex poisoned");
+            match g.get_mut(&scan_id) {
+                // Only a running sweep moves. A finished one stays finished — re-cancelling it
+                // would rewrite history, and a `Cancelling` one is already asked.
+                Some(s) => {
+                    if s.state == DiscoveryScanState::Running {
+                        s.state = DiscoveryScanState::Cancelling;
+                        s.updated_at = Utc::now();
+                    }
+                    s.pool.clone()
+                }
+                // Unknown here means "this core restarted", not "no such sweep". The stop still
+                // goes out — on the global subject, because the route it took is unknowable now.
+                None => None,
+            }
+        };
+        self.bus
+            .publish_discovery_cancel(route.as_deref(), DiscoveryCancel { scan_id })
+            .await?;
+        Ok(route)
+    }
+
+    /// Every retained scan's summary, newest first, capped at `limit`.
+    ///
+    /// This is what makes a sweep survivable in the UI: the scan id used to live only in the
+    /// browser tab that started it, so navigating away lost the sweep even though the poller kept
+    /// probing. What bounds this list is [`evict`], not a query parameter — see [`FINISHED_TTL`].
+    #[must_use]
+    pub fn list(&self, limit: usize) -> Vec<ScanSummary> {
+        let g = self.scans.lock().expect("scans mutex poisoned");
+        let mut ordered: Vec<(&Uuid, &ScanState)> = g.iter().collect();
+        // Newest first — the scan an operator is coming back to is the one they just started.
+        // Ordered on the `DateTime`, never on the rendered RFC 3339 string: they happen to sort
+        // alike today only because every value is UTC with the same precision.
+        ordered.sort_by(|a, b| {
+            b.1.started_at
+                .cmp(&a.1.started_at)
+                // Two scans can share a timestamp; without this their order would vary per call
+                // and the list would appear to shuffle on refresh.
+                .then_with(|| b.0.cmp(a.0))
+        });
+        ordered
+            .into_iter()
+            .take(limit)
+            .map(|(id, s)| s.summary(*id))
+            .collect()
+    }
+
     /// Recent discovered candidates across all in-memory scans, deduped by address (first seen
     /// wins), capped at `limit`. Backs the dashboard "discovery queue" widget — a standing view of
-    /// unclassified finds without needing a scan id. In-memory only (scans are short-lived).
+    /// unclassified finds without needing a scan id.
+    ///
+    /// ⚠️ **[`FINISHED_TTL`] is this widget's window too.** This reads whatever [`evict`] has left,
+    /// so shortening that constant empties this panel — the two are the same number wearing two
+    /// hats. Before ADR-068 nothing was ever evicted, so this accumulated for the life of the
+    /// process and the widget only ever grew.
     #[must_use]
     pub fn recent_candidates(&self, limit: usize) -> Vec<Candidate> {
         let g = self.scans.lock().expect("scans mutex poisoned");
@@ -243,8 +537,11 @@ impl DiscoveryRunner {
             );
             let mut g = self.scans.lock().expect("scans mutex poisoned");
             if let Some(s) = g.get_mut(&r.scan_id) {
-                s.apply(r, &self.classifier);
+                s.apply(r, &self.classifier, Utc::now());
             }
+            // An unknown scan_id is dropped on purpose: this core restarted (or was never the
+            // leader) while a poller kept sweeping. Registering a scan here would report progress
+            // for a sweep whose targets and credentials this process never knew.
         }
         tracing::warn!("discovery result stream ended");
     }
@@ -283,6 +580,11 @@ mod tests {
             .collect()
     }
 
+    /// A scan of `n` targets starting now, on the global route.
+    fn scan(n: u8) -> ScanState {
+        ScanState::new(targets(n), None, Utc::now())
+    }
+
     fn partial(probed: u32, done: bool, found: Vec<DiscoveredDevice>) -> DiscoveryResult {
         DiscoveryResult {
             scan_id: Uuid::nil(),
@@ -290,6 +592,7 @@ mod tests {
             probed,
             total: 4,
             done,
+            cancelled: false,
         }
     }
 
@@ -307,19 +610,23 @@ mod tests {
     #[test]
     fn progress_advances_and_reports_current_address() {
         let c = classifier();
-        let mut s = ScanState::new(targets(4));
+        let mut s = scan(4);
         let st = s.status(Uuid::nil());
         assert_eq!((st.probed, st.total), (0, 4));
         assert_eq!(st.scanning.as_deref(), Some("10.0.0.1"));
 
-        s.apply(partial(2, false, vec![device(1, None)]), &c);
+        s.apply(partial(2, false, vec![device(1, None)]), &c, Utc::now());
         let st = s.status(Uuid::nil());
         assert!(!st.done);
         assert_eq!(st.probed, 2);
         assert_eq!(st.scanning.as_deref(), Some("10.0.0.3"));
         assert_eq!(st.candidates.len(), 1);
 
-        s.apply(partial(4, true, vec![device(1, None), device(3, None)]), &c);
+        s.apply(
+            partial(4, true, vec![device(1, None), device(3, None)]),
+            &c,
+            Utc::now(),
+        );
         let st = s.status(Uuid::nil());
         assert!(st.done);
         assert_eq!(st.probed, 4);
@@ -330,8 +637,12 @@ mod tests {
     #[test]
     fn matched_credential_is_carried_into_the_candidate() {
         let cred = Uuid::from_u128(42);
-        let mut s = ScanState::new(targets(1));
-        s.apply(partial(1, true, vec![device(1, Some(cred))]), &classifier());
+        let mut s = scan(1);
+        s.apply(
+            partial(1, true, vec![device(1, Some(cred))]),
+            &classifier(),
+            Utc::now(),
+        );
         let st = s.status(Uuid::nil());
         assert_eq!(st.candidates[0].matched_credential_id, Some(cred));
         // The device's sysObjectID resolves (server-side) to the Huawei profile by id, and the
@@ -351,7 +662,7 @@ mod tests {
     #[test]
     fn snmp_device_with_no_rule_match_falls_back_to_generic_profile() {
         // No sysObjectID, sysDescr matches no rule → the Generic-SNMP fallback id (by id).
-        let mut s = ScanState::new(targets(1));
+        let mut s = scan(1);
         let dev = DiscoveredDevice {
             address: IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             reachable: true,
@@ -360,7 +671,7 @@ mod tests {
             sysobjectid: None,
             matched_credential: None,
         };
-        s.apply(partial(1, true, vec![dev]), &classifier());
+        s.apply(partial(1, true, vec![dev]), &classifier(), Utc::now());
         let st = s.status(Uuid::nil());
         assert_eq!(
             st.candidates[0].suggested_profile_id,
@@ -371,13 +682,14 @@ mod tests {
     #[test]
     fn stale_or_reordered_partials_never_regress_progress() {
         let c = classifier();
-        let mut s = ScanState::new(targets(4));
+        let mut s = scan(4);
         s.apply(
             partial(4, false, vec![device(1, None), device(2, None)]),
             &c,
+            Utc::now(),
         );
         // A late, out-of-order partial with lower progress must be ignored.
-        s.apply(partial(2, false, vec![device(1, None)]), &c);
+        s.apply(partial(2, false, vec![device(1, None)]), &c, Utc::now());
         let st = s.status(Uuid::nil());
         assert_eq!(st.probed, 4);
         assert_eq!(st.candidates.len(), 2);
@@ -388,7 +700,7 @@ mod tests {
         // N-1 (ADR-017): an older poller sends one final message with default progress
         // fields (probed 0, done true) and no sysObjectID — the scan must still complete and
         // classify via the sysDescr fallback.
-        let mut s = ScanState::new(targets(2));
+        let mut s = scan(2);
         s.apply(
             DiscoveryResult {
                 scan_id: Uuid::nil(),
@@ -403,8 +715,10 @@ mod tests {
                 probed: 0,
                 total: 0,
                 done: true,
+                cancelled: false,
             },
             &classifier(),
+            Utc::now(),
         );
         let st = s.status(Uuid::nil());
         assert!(st.done);
@@ -490,5 +804,383 @@ mod tests {
         let job = global.recv().await.expect("job published");
         assert_eq!(job.credentials.len(), 1);
         assert_eq!(job.credentials[0].cred_ref, cred_ref);
+    }
+
+    // ── Scan lifetime, listing and state (ADR-068 Inc.1) ─────────────────────
+
+    /// Build a scan in a chosen state, started `age` ago and last updated `since` ago.
+    fn aged(
+        state: DiscoveryScanState,
+        started_ago: chrono::Duration,
+        updated_ago: chrono::Duration,
+        now: DateTime<Utc>,
+    ) -> ScanState {
+        let mut s = ScanState::new(targets(1), None, now - started_ago);
+        s.state = state;
+        s.updated_at = now - updated_ago;
+        s
+    }
+
+    #[test]
+    fn a_finished_scan_outlives_its_window_and_then_goes() {
+        let now = Utc::now();
+        let mut scans = HashMap::new();
+        let fresh = Uuid::from_u128(1);
+        let stale = Uuid::from_u128(2);
+        scans.insert(
+            fresh,
+            aged(
+                DiscoveryScanState::Done,
+                chrono::Duration::hours(7),
+                chrono::Duration::hours(1),
+                now,
+            ),
+        );
+        scans.insert(
+            stale,
+            aged(
+                DiscoveryScanState::Done,
+                chrono::Duration::hours(9),
+                chrono::Duration::hours(7),
+                now,
+            ),
+        );
+        evict(&mut scans, now);
+        // The window is measured from the last update, not from the start: a long sweep that
+        // finished recently is recent.
+        assert!(scans.contains_key(&fresh));
+        assert!(!scans.contains_key(&stale));
+    }
+
+    #[test]
+    fn a_running_scan_is_kept_until_it_is_hopeless() {
+        let now = Utc::now();
+        let mut scans = HashMap::new();
+        let live = Uuid::from_u128(1);
+        let abandoned = Uuid::from_u128(2);
+        // Well past FINISHED_TTL, but running — the finished window must not apply to it, or a
+        // sweep still probing the network would vanish from the operator's list.
+        scans.insert(
+            live,
+            aged(
+                DiscoveryScanState::Running,
+                chrono::Duration::hours(1),
+                chrono::Duration::hours(1),
+                now,
+            ),
+        );
+        scans.insert(
+            abandoned,
+            aged(
+                DiscoveryScanState::Running,
+                chrono::Duration::hours(3),
+                chrono::Duration::hours(3),
+                now,
+            ),
+        );
+        evict(&mut scans, now);
+        assert!(scans.contains_key(&live));
+        assert!(
+            !scans.contains_key(&abandoned),
+            "a scan whose poller will never report must not pin memory for the process's life"
+        );
+    }
+
+    #[test]
+    fn the_cap_drops_the_oldest_finished_and_never_a_running_one() {
+        let now = Utc::now();
+        let mut scans = HashMap::new();
+        // MAX_SCANS finished scans, newest first by construction, plus one running scan that is
+        // older than all of them. The running one must survive even though it is the oldest.
+        for i in 0..MAX_SCANS {
+            scans.insert(
+                Uuid::from_u128(100 + i as u128),
+                aged(
+                    DiscoveryScanState::Done,
+                    chrono::Duration::minutes(i as i64),
+                    chrono::Duration::minutes(i as i64),
+                    now,
+                ),
+            );
+        }
+        let running = Uuid::from_u128(1);
+        scans.insert(
+            running,
+            aged(
+                DiscoveryScanState::Running,
+                chrono::Duration::minutes(90),
+                chrono::Duration::minutes(90),
+                now,
+            ),
+        );
+        evict(&mut scans, now);
+        assert_eq!(scans.len(), MAX_SCANS);
+        assert!(
+            scans.contains_key(&running),
+            "a running scan is never capped away"
+        );
+        // The oldest *finished* one went instead.
+        assert!(!scans.contains_key(&Uuid::from_u128(100 + (MAX_SCANS - 1) as u128)));
+        assert!(scans.contains_key(&Uuid::from_u128(100)));
+    }
+
+    #[tokio::test]
+    async fn starting_a_scan_never_evicts_the_scan_it_just_registered() {
+        // Eviction runs on every start, and the cap is exactly the kind of rule that would bite the
+        // newest row if it ran before the insert.
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(64));
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+        let mut ids = Vec::new();
+        for _ in 0..(MAX_SCANS + 5) {
+            ids.push(
+                runner
+                    .start(targets(1), Vec::new(), Vec::new(), None)
+                    .await
+                    .expect("publish succeeds"),
+            );
+        }
+        // Every one of them was running when the next started, so none may have been dropped.
+        for id in &ids {
+            assert!(runner.get(*id).is_some(), "running scan {id} was evicted");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_list_is_newest_first_and_carries_the_route_actually_used() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+        let first = runner
+            .start(targets(2), Vec::new(), Vec::new(), None)
+            .await
+            .expect("publish succeeds");
+        let second = runner
+            .start(targets(3), Vec::new(), Vec::new(), Some("tokyo"))
+            .await
+            .expect("publish succeeds");
+
+        let rows = runner.list(10);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].scan_id, second, "newest first");
+        assert_eq!(rows[1].scan_id, first);
+        // The pool is what the job was published on, which is what Increment 2 must address a
+        // cancel to.
+        assert_eq!(rows[0].pool.as_deref(), Some("tokyo"));
+        assert_eq!(rows[1].pool, None);
+        assert_eq!(rows[0].total, 3);
+        assert_eq!(rows[0].state, DiscoveryScanState::Running);
+        assert_eq!(rows[0].candidate_count, 0);
+
+        assert_eq!(runner.list(1).len(), 1, "limit applies");
+    }
+
+    #[test]
+    fn a_terminal_result_settles_the_state_and_a_late_one_cannot_unsettle_it() {
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = scan(4);
+        assert_eq!(s.state, DiscoveryScanState::Running);
+        s.apply(partial(4, true, vec![device(1, None)]), &c, now);
+        assert_eq!(s.state, DiscoveryScanState::Done);
+        assert!(s.status(Uuid::nil()).done, "`done` is derived from `state`");
+
+        // A duplicate terminal result must not move a settled scan.
+        s.apply(partial(4, true, vec![device(1, None)]), &c, now);
+        assert_eq!(s.state, DiscoveryScanState::Done);
+    }
+
+    #[test]
+    fn a_stop_becomes_a_fact_only_when_the_poller_reports() {
+        // Increment 2's transition, pinned now because Increment 1 ships the states. `Cancelling`
+        // is not terminal — the difference between "we asked" and "it stopped" is the whole point
+        // of having two states rather than one.
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = scan(4);
+        s.state = DiscoveryScanState::Cancelling;
+        assert!(!s.state.is_terminal());
+        assert!(!s.status(Uuid::nil()).done);
+        assert!(
+            s.status(Uuid::nil()).scanning.is_some(),
+            "a scan being cancelled is still sweeping until the poller says otherwise"
+        );
+
+        // ⚠️ `cancelled: true` is what settles it, **not** the fact that core asked. Written as
+        // `partial(…)` (which sends `cancelled: false`) this test passed while `apply` ignored the
+        // flag entirely — and the behaviour it was asserting was wrong: a sweep that finished
+        // before the stop arrived would have been recorded as stopped.
+        s.apply(
+            DiscoveryResult {
+                scan_id: Uuid::nil(),
+                found: vec![device(1, None)],
+                probed: 2,
+                total: 4,
+                done: true,
+                cancelled: true,
+            },
+            &c,
+            now,
+        );
+        assert_eq!(s.state, DiscoveryScanState::Cancelled);
+        let st = s.status(Uuid::nil());
+        assert!(st.done);
+        // `probed < total` is the evidence that it really stopped early.
+        assert!(st.probed < st.total);
+    }
+
+    // ── Cancelling (ADR-068 Inc.2) ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn a_stop_follows_the_route_the_sweep_actually_took() {
+        // The trap this guards: `api::discovery` falls back to the global subject when the
+        // requested pool has no live poller, so a stop addressed at the *request* would go to a
+        // pool that never received the job — the operator would watch "stopping…" forever while
+        // the sweep ran on.
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
+        let mut rx = bus.subscribe_discovery_cancels();
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+
+        let pooled = runner
+            .start(targets(2), Vec::new(), Vec::new(), Some("tokyo"))
+            .await
+            .expect("publish succeeds");
+        assert_eq!(
+            runner.cancel(pooled).await.unwrap().as_deref(),
+            Some("tokyo")
+        );
+        assert_eq!(rx.recv().await.unwrap().0.as_deref(), Some("tokyo"));
+
+        let global = runner
+            .start(targets(2), Vec::new(), Vec::new(), None)
+            .await
+            .expect("publish succeeds");
+        assert_eq!(runner.cancel(global).await.unwrap(), None);
+        assert_eq!(rx.recv().await.unwrap().0, None);
+    }
+
+    #[tokio::test]
+    async fn a_stop_is_published_even_for_a_scan_this_core_has_forgotten() {
+        // The core-restart case, and the reason this endpoint does not 404 like `analysis`'s does.
+        // Scan state is in memory, so a restarted core has no record of sweeps its pollers are
+        // still running — requiring one here would make exactly those sweeps unstoppable.
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let mut rx = bus.subscribe_discovery_cancels();
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+
+        let forgotten = Uuid::from_u128(0xDEAD);
+        assert_eq!(runner.cancel(forgotten).await.unwrap(), None);
+        let (route, msg) = rx.recv().await.expect("the stop still goes out");
+        assert_eq!(msg.scan_id, forgotten);
+        assert_eq!(
+            route, None,
+            "with no record, the route is unknowable — global"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelling_moves_a_running_scan_and_leaves_a_settled_one_alone() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+        let scan = runner
+            .start(targets(4), Vec::new(), Vec::new(), None)
+            .await
+            .expect("publish succeeds");
+
+        runner.cancel(scan).await.unwrap();
+        let st = runner.get(scan).expect("still listed");
+        assert_eq!(st.state, DiscoveryScanState::Cancelling);
+        assert!(
+            !st.done,
+            "asking is not stopping — the scan is not terminal until its poller reports"
+        );
+
+        // The poller confirms.
+        {
+            let mut g = runner.scans.lock().unwrap();
+            let s = g.get_mut(&scan).unwrap();
+            s.apply(
+                DiscoveryResult {
+                    scan_id: scan,
+                    found: Vec::new(),
+                    probed: 2,
+                    total: 4,
+                    done: true,
+                    cancelled: true,
+                },
+                &classifier(),
+                Utc::now(),
+            );
+        }
+        assert_eq!(
+            runner.get(scan).unwrap().state,
+            DiscoveryScanState::Cancelled
+        );
+
+        // Cancelling again must not rewrite that.
+        runner.cancel(scan).await.unwrap();
+        assert_eq!(
+            runner.get(scan).unwrap().state,
+            DiscoveryScanState::Cancelled,
+            "a settled scan stays settled"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sweep_that_finished_before_the_stop_arrived_says_so() {
+        // The N-1 outcome, and the one the UI has to be able to tell apart from success. An old
+        // poller never subscribes to the cancel subject, runs to completion, and reports `done`
+        // without `cancelled` — which is exactly true of it.
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+        let scan = runner
+            .start(targets(4), Vec::new(), Vec::new(), None)
+            .await
+            .expect("publish succeeds");
+        runner.cancel(scan).await.unwrap();
+
+        {
+            let mut g = runner.scans.lock().unwrap();
+            g.get_mut(&scan).unwrap().apply(
+                DiscoveryResult {
+                    scan_id: scan,
+                    found: Vec::new(),
+                    probed: 4,
+                    total: 4,
+                    done: true,
+                    cancelled: false,
+                },
+                &classifier(),
+                Utc::now(),
+            );
+        }
+        let st = runner.get(scan).unwrap();
+        assert_eq!(
+            st.state,
+            DiscoveryScanState::Done,
+            "it finished; reporting it as cancelled would be inventing a stop that never landed"
+        );
+        assert_eq!(st.probed, st.total);
+    }
+
+    #[test]
+    fn status_and_summary_agree_about_the_same_scan() {
+        // Two shapes of one fact; they are built separately, so nothing but a test stops them
+        // drifting.
+        let c = classifier();
+        let now = Utc::now();
+        let mut s = scan(4);
+        s.apply(partial(2, false, vec![device(1, None)]), &c, now);
+        let id = Uuid::from_u128(7);
+        let st = s.status(id);
+        let sum = s.summary(id);
+        assert_eq!(
+            (st.scan_id, st.state, st.probed, st.total),
+            (sum.scan_id, sum.state, sum.probed, sum.total)
+        );
+        assert_eq!(st.started_at, sum.started_at);
+        assert_eq!(st.updated_at, sum.updated_at);
+        assert_eq!(
+            u32::try_from(st.candidates.len()).unwrap(),
+            sum.candidate_count
+        );
     }
 }

@@ -517,6 +517,32 @@ impl Coordinator {
             .collect()
     }
 
+    /// Whether **every** live poller that could be running work on `pool` advertises `cap`.
+    ///
+    /// `pool: None` asks about the whole live fleet, which is what a sweep published on the global
+    /// subject needs: it is queue-delivered, so any live poller might hold it.
+    ///
+    /// ⚠️ **This answers "would it work", never "should I send it".** Unlike
+    /// [`spec_required_caps`], which withholds a check from a poller that cannot run it, there is
+    /// nothing to withhold here — core does not know which poller took a queue-delivered job. The
+    /// caller uses this to *tell the operator* what to expect, and the authoritative answer still
+    /// comes later from whatever the poller reports.
+    ///
+    /// **No live poller ⇒ `false`.** Vacuous truth would be the wrong reading: "every poller
+    /// supports this" said of an empty set would tell an operator their stop will land when nothing
+    /// is listening at all.
+    #[must_use]
+    pub fn pollers_support(&self, pool: Option<&str>, cap: &str, now: Instant) -> bool {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        let mut live = st
+            .pollers
+            .values()
+            .filter(|e| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
+            .filter(|e| pool.is_none_or(|p| e.pool == p))
+            .peekable();
+        live.peek().is_some() && live.all(|e| e.caps.iter().any(|c| c == cap))
+    }
+
     /// Reconcile one pool's desired working set to its live pollers (ADR-009/020).
     ///
     /// Builds the pool's consistent-hash ring from its (sorted, for determinism) live members,

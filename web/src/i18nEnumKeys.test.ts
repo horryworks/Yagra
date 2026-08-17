@@ -92,6 +92,7 @@ import { MONITOR_KINDS } from './pages/monitorKinds';
 import { ADD_MENU_LABEL_KEYS } from './pages/nodesAddMenu';
 import { CAUSE_LABEL_KEYS, PANEL_LABEL_KEYS } from './lib/suppression';
 import { RUN_STATUS } from './reports/runStatus';
+import { SCAN_STATE_SPECS } from './pages/discoveryScans';
 import { CADENCE, SELECTABLE_CADENCES } from './lib/cadence';
 import { FORWARD_FILTER_FIELDS, opsForField } from './pages/forwardingOptions';
 import { TERMINAL_JOB_STATES, TOOL_GROUPS } from './troubleshoot/data';
@@ -334,6 +335,17 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
       'unknown',
       'notApplicable',
     ]);
+  });
+
+  it('every discovery scan state has a badge label (monitoring:discovery.scans.state.*)', () => {
+    // `t(spec.labelKey)` is built at runtime from the registry, so neither tsc nor the EN⟷JA parity
+    // gate can see a missing string: a state absent from *both* locales renders as its raw key.
+    // Covers `unknown` too — that one is this side's invention and has no backend variant to
+    // remind anyone it exists.
+    const keys = (['running', 'cancelling', 'cancelled', 'done', 'unknown'] as const).map(
+      (s) => SCAN_STATE_SPECS[s].labelKey,
+    );
+    expectKeys('discovery scan state', { en: enMonitoring, ja: jaMonitoring }, '', keys);
   });
 
   it('every report run state has a badge label (reports:run.status.*)', () => {

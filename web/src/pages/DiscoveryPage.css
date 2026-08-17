@@ -245,3 +245,59 @@ html[data-viewport='mobile'] .disco-seen-row {
   white-space: nowrap;
   cursor: pointer;
 }
+
+/* ── Sweep routing + the scan list (ADR-068 Increment 1) ───────────────────────────────────────
+   Same tone as `.disco-seen-warn` and for the same kind of reason: the sentence is a caveat about
+   what the screen is about to do, not ordinary help text. It marks the two cases where the site a
+   sweep runs from is undecided — no pool chosen, or a pool with no live poller — because the server
+   resolves both to "whichever poller answers first". */
+.disco-pool-warn {
+  color: var(--status-warning);
+  font-size: var(--font-sm);
+}
+
+.disco-scans {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* A row is a button because selecting a sweep is the only thing it does — which also makes the
+   list keyboard-reachable without any extra handling. */
+.disco-scan {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+}
+
+.disco-scan:hover {
+  background: var(--bg-tertiary);
+}
+
+.disco-scan:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+.disco-scan.selected {
+  border-color: var(--accent-color);
+  background: var(--bg-tertiary);
+}
+
+html[data-viewport='mobile'] .disco-scan {
+  min-height: var(--touch-target);
+  flex-wrap: wrap;
+}

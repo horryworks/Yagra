@@ -2500,7 +2500,9 @@ impl YagraMcp {
                        actually uses), classification_rules, mib_catalog (`search` filters, \
                        `limit` 1–2000, default 100); **per-node checks** — url_check, dns_check \
                        (both need `node_id`); **discovery** — discovery_candidates (`limit` 1–50, \
-                       default 10), discovery_scan (needs `scan_id`); **Meraki** — meraki_orgs, \
+                       default 10), discovery_scan (needs `scan_id`), discovery_scans (the sweeps \
+                       this core is holding, newest first, `limit` 1–50, default 20 — this is how \
+                       to find a `scan_id`); **Meraki** — meraki_orgs, \
                        meraki_networks (needs `org_id`), meraki_polling; **forwarding** — \
                        forward_destinations; **reports** — report_definitions, report_schedules; \
                        **deployment settings** — retention, adjacency_settings, llm, roles, oidc, \
@@ -2693,6 +2695,10 @@ impl YagraMcp {
                 Some(status) => ok_json(TOOL, &status),
                 None => tool_unavailable(TOOL, "no scan with that id"),
             },
+            ConfigKind::DiscoveryScans => {
+                let limit = p.limit.and_then(|n| usize::try_from(n).ok());
+                ok_json(TOOL, &a.discovery.list(limit.unwrap_or(20).clamp(1, 50)))
+            }
             // ── Meraki ───────────────────────────────────────────────────────
             ConfigKind::MerakiOrgs => match crate::api::meraki::org_views(a).await {
                 Ok(list) => ok_json(TOOL, &list),
@@ -3161,6 +3167,7 @@ enum ConfigKind {
     DnsCheck,
     DiscoveryCandidates,
     DiscoveryScan,
+    DiscoveryScans,
     MerakiOrgs,
     MerakiNetworks,
     MerakiPolling,
@@ -3201,6 +3208,7 @@ impl ConfigKind {
         "dns_check",
         "discovery_candidates",
         "discovery_scan",
+        "discovery_scans",
         "meraki_orgs",
         "meraki_networks",
         "meraki_polling",
@@ -3236,6 +3244,7 @@ impl ConfigKind {
             "dns_check" => Self::DnsCheck,
             "discovery_candidates" => Self::DiscoveryCandidates,
             "discovery_scan" => Self::DiscoveryScan,
+            "discovery_scans" => Self::DiscoveryScans,
             "meraki_orgs" => Self::MerakiOrgs,
             "meraki_networks" => Self::MerakiNetworks,
             "meraki_polling" => Self::MerakiPolling,
@@ -3274,6 +3283,7 @@ impl ConfigKind {
             | Self::ClassificationRules
             | Self::MibCatalog
             | Self::DiscoveryCandidates
+            | Self::DiscoveryScans
             | Self::MerakiOrgs
             | Self::MerakiPolling
             | Self::ForwardDestinations
@@ -3307,6 +3317,7 @@ impl ConfigKind {
             Self::DnsCheck => "dns_check",
             Self::DiscoveryCandidates => "discovery_candidates",
             Self::DiscoveryScan => "discovery_scan",
+            Self::DiscoveryScans => "discovery_scans",
             Self::MerakiOrgs => "meraki_orgs",
             Self::MerakiNetworks => "meraki_networks",
             Self::MerakiPolling => "meraki_polling",
@@ -5356,7 +5367,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            28,
+            29,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

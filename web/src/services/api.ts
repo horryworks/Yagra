@@ -36,6 +36,8 @@ import type {
   Direction,
   DiscoveryCandidate,
   DiscoveryScan,
+  DiscoveryScanSummary,
+  CancelRequested,
   EventRow,
   EventRule,
   EventRuleInput,
@@ -1279,16 +1281,40 @@ export const api = {
 
   /** Start a discovery sweep over explicit target IPs (the UI expands a CIDR). Stored
    *  credentials go by id (resolved server-side). The WebUI scans with stored credentials
-   *  only; `communities` remains an optional ad-hoc extra for external automation. */
+   *  only; `communities` remains an optional ad-hoc extra for external automation.
+   *
+   *  `pool` decides **which site the sweep runs from** (ADR-068). Omitted, the job goes to the
+   *  global subject where every poller competes for it, so a remote-site poller can end up
+   *  sweeping head office — reaching nothing and reporting a successful, empty scan. The server
+   *  also falls back to that global route when the named pool has no live poller, which is why the
+   *  scan's own `pool` field (the route actually taken) is the one to trust afterwards. */
   startDiscoveryScan: (body: {
     targets: string[];
     communities?: string[];
     credential_ids: string[];
+    pool?: string;
   }): Promise<{ scan_id: string }> => apiPost('/api/v1/discovery/scan', { body }),
 
   /** Poll a discovery scan's status + candidates. */
   getDiscoveryScan: (id: string): Promise<DiscoveryScan> =>
     apiGet('/api/v1/discovery/scan/{id}', { path: { id } }),
+
+  /** The sweeps this core is holding, newest first — what lets the Discovery page reattach to a
+   *  scan after the operator navigated away.
+   *
+   *  ⚠️ In-memory on the server: a restarted core answers `[]` while a poller may still be
+   *  sweeping. "Empty" therefore means "this core knows of none", never "none ran". */
+  listDiscoveryScans: (limit?: number): Promise<DiscoveryScanSummary[]> =>
+    apiGet('/api/v1/discovery/scans', { query: { limit } }),
+
+  /** Ask the poller running a sweep to stop (ADR-068 Increment 2).
+   *
+   *  ⚠️ **A 200 means the stop was published, not that the sweep stopped.** Core broadcasts it and
+   *  cannot know who acted; the scan's own `state` going to `cancelled` is the confirmation, and a
+   *  sweep that reaches `done` instead finished before the stop landed. `poller_supports_cancel`
+   *  is an advance warning, not a verdict — see the field's own note. */
+  cancelDiscoveryScan: (id: string): Promise<CancelRequested> =>
+    apiPost('/api/v1/discovery/scan/{id}/cancel', { path: { id } }),
 
   /** Recent discovered (unclassified) devices across scans — the dashboard discovery queue. */
   getDiscoveryCandidates: (limit?: number): Promise<DiscoveryCandidate[]> =>

@@ -3791,7 +3791,7 @@
             }
           },
           "503": {
-            "description": "Skeleton mode has no write side",
+            "description": "Skeleton mode has no write side, or this core is not the HA leader",
             "content": {
               "application/json": {
                 "schema": {
@@ -3864,6 +3864,136 @@
           },
           "503": {
             "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/scan/{id}/cancel": {
+      "post": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "Ask the poller running a sweep to stop (ADR-068 Increment 2).",
+        "description": "`ManageConfig`, the same as starting one: stopping a sweep is the same authority as causing it.\n\n**Answers 200 for a scan this core has no record of, unlike `analysis`'s cancel.** That\nasymmetry is deliberate. Scan state is in memory, so a restarted core forgets sweeps its pollers\nare still running, and requiring a local record would make exactly those sweeps — the ones an\noperator most wants to stop — unstoppable. The `analysis` endpoint 404s because there the\n200/404 split answers \"is that job running\" for any id a caller cares to try; here the id is an\nunguessable UUID and the caller already holds `ManageConfig`, so the split would only reveal\nwhether this process remembers something.",
+        "operationId": "cancel_discovery_scan",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Scan id returned when the sweep was accepted",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stop was published. Not a promise that the sweep stopped — watch the scan's state for that",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelRequested"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side, or this core is not the HA leader",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/discovery/scans": {
+      "get": {
+        "tags": [
+          "discovery"
+        ],
+        "summary": "The scans this core is holding, newest first.",
+        "description": "Exists so a sweep survives leaving the page: the scan id used to live only in the browser tab\nthat started it, so navigating away lost a sweep the poller was still running. What bounds this\nlist is the runner's retention (finished scans age out, running ones are never capped away),\nnot the caller's `limit`.\n\n**A restarted core answers an empty list even while a poller is still sweeping** — scan state is\nin memory by decision (ADR-068). That is why the WebUI must render \"this core does not know that\nscan\" for a 404 on a remembered id, rather than an empty page.\n\n`ManageConfig` and `503` in skeleton mode, matching `GET /discovery/scan/{id}` rather than the\ncandidates queue: this list is the Discovery screen's own state, and a screen that cannot scan\nhas no scans to list. (The candidates queue answers `200 []` instead because it backs a\ndashboard widget, where an error would break a page that otherwise works.)",
+        "operationId": "list_discovery_scans",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Retained scans, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ScanSummary"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no discovery runner",
             "content": {
               "application/json": {
                 "schema": {
@@ -20743,6 +20873,31 @@
           }
         }
       },
+      "CancelRequested": {
+        "type": "object",
+        "description": "The outcome of asking a sweep to stop.\n\n⚠️ **Deliberately does not claim the sweep stopped**, and the field names carry that. Core\nbroadcasts the stop and cannot know who — or whether anyone — acted on it, so the honest report\nis \"requested, and here is whether the pollers that might be running it understand the command\".\nThe confirmation arrives later, as the scan's own state going to `cancelled`.",
+        "required": [
+          "requested",
+          "poller_supports_cancel"
+        ],
+        "properties": {
+          "poller_supports_cancel": {
+            "type": "boolean",
+            "description": "Whether every live poller that could be running this sweep advertises cancellation support.\n\n⚠️ An **approximation**, which is why it is not called `will_stop`. A sweep on the global\nroute could be held by any live poller, so this is the answer across all of them; even for a\npool-scoped sweep it says the pool can stop sweeps, not that the poller holding this one\nwill. `false` means at least one poller predates the feature and the sweep may run to\ncompletion."
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool the stop was published to; `null` for the global subject."
+          },
+          "requested": {
+            "type": "boolean",
+            "description": "The stop was published. Always true on a 200 — a publish failure is a 500."
+          }
+        }
+      },
       "Cancelled": {
         "type": "object",
         "description": "What cancelling a run reports.",
@@ -22563,6 +22718,16 @@
             "description": "How many of those hit a cap, making their contribution a sample rather than a total."
           }
         }
+      },
+      "DiscoveryScanState": {
+        "type": "string",
+        "description": "Where a scan is in its life (ADR-068).\n\nDeliberately has **no `Unknown` variant**, unlike the enums built by `stored_enum::token_enum!`:\nthose degrade a token a *newer writer* put in a database column, and this value is never read\nback from storage — it only ever travels outward. The corresponding defensiveness lives on the\nTypeScript side, which narrows the wire value and renders anything it does not recognise\nneutrally. ⚠️ Rendering an unrecognised state as a failure is a real bug this codebase has\nalready shipped once (report runs, painted red by a `switch` with a `default:` arm).",
+        "enum": [
+          "running",
+          "cancelling",
+          "cancelled",
+          "done"
+        ]
       },
       "DiskUsage": {
         "type": "object",
@@ -29767,8 +29932,11 @@
         "required": [
           "scan_id",
           "done",
+          "state",
           "probed",
           "total",
+          "started_at",
+          "updated_at",
           "candidates"
         ],
         "properties": {
@@ -29779,7 +29947,15 @@
             }
           },
           "done": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Terminal or not. Kept alongside `state` because it is part of the published contract (the\nMCP `get_config(kind=\"discovery_scan\")` tool serves this type straight through), and derived\nfrom `state` rather than stored, so the two cannot disagree."
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool the job was **actually published to**; `null` for the global subject."
           },
           "probed": {
             "type": "integer",
@@ -29798,10 +29974,72 @@
             ],
             "description": "The address the sweep is currently at (the next unprobed target), while running."
           },
+          "started_at": {
+            "type": "string",
+            "description": "When the sweep was accepted (RFC 3339) — RFC 3339 rather than epoch millis to match the\ndiscovered-endpoint rows this API already serves."
+          },
+          "state": {
+            "$ref": "#/components/schemas/DiscoveryScanState"
+          },
           "total": {
             "type": "integer",
             "format": "int32",
             "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "description": "When a result last moved this scan forward (RFC 3339)."
+          }
+        }
+      },
+      "ScanSummary": {
+        "type": "object",
+        "description": "One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.\n\nThe omission is the point: 20 retained scans of up to 1024 candidates each would make listing\nthem far more expensive than the question deserves. A caller that wants a scan's candidates asks\nfor that scan.",
+        "required": [
+          "scan_id",
+          "state",
+          "probed",
+          "total",
+          "candidate_count",
+          "started_at",
+          "updated_at"
+        ],
+        "properties": {
+          "candidate_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "How many devices answered so far.",
+            "minimum": 0
+          },
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool the job was **actually published to**; `null` for the global subject."
+          },
+          "probed": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "scan_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DiscoveryScanState"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string"
           }
         }
       },

@@ -25,7 +25,7 @@
 //! there being two ways to create a node.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig, RequireView, Scoped};
+use super::extract::{Admin, Leader, RequireManageConfig, RequireView, Scoped};
 use super::ApiState;
 use crate::secrets::CredentialStore;
 use axum::{
@@ -53,6 +53,8 @@ const ENDPOINT_MAX_LIMIT: i64 = 500;
 #[openapi(paths(
     start_discovery_scan,
     get_discovery_scan,
+    list_discovery_scans,
+    cancel_discovery_scan,
     import_discovered,
     discovery_candidates,
     list_discovered_endpoints,
@@ -60,11 +62,22 @@ const ENDPOINT_MAX_LIMIT: i64 = 500;
 ))]
 pub(super) struct Doc;
 
+/// Default number of scans the list returns.
+const SCANS_DEFAULT_LIMIT: usize = 20;
+/// Hard cap on the scan list. Above `DiscoveryRunner`'s own retention cap it would be meaningless,
+/// but a clamp is still the rule for every list (api-conventions).
+const SCANS_MAX_LIMIT: usize = 50;
+
 /// The discovery routes, merged into `/api/v1` by [`super::router`].
 pub(super) fn routes() -> Router<ApiState> {
     Router::new()
         .route("/api/v1/discovery/scan", post(start_discovery_scan))
         .route("/api/v1/discovery/scan/:id", get(get_discovery_scan))
+        .route("/api/v1/discovery/scans", get(list_discovery_scans))
+        .route(
+            "/api/v1/discovery/scan/:id/cancel",
+            post(cancel_discovery_scan),
+        )
         .route("/api/v1/discovery/import", post(import_discovered))
         .route("/api/v1/discovery/candidates", get(discovery_candidates))
         .route(
@@ -180,12 +193,17 @@ async fn resolve_scan_credentials(
         (status = 400, description = "No targets or more than the cap, an unparseable address, or a named credential that is missing or unusable", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side, or this core is not the HA leader", body = super::error::ErrorBody),
     ),
 )]
 async fn start_discovery_scan(
     _guard: RequireManageConfig,
     admin: Admin,
+    // ⚠️ Leader-gated, and the reason is not efficiency. Only the leader runs the discovery result
+    // consumer (`main.rs`'s `LeaderWork`), so a standby accepting this would publish a job — real
+    // ICMP and SNMP at the operator's network — whose every result lands on a core that has no
+    // record of the scan and drops it. The sweep would happen and be invisible.
+    _leader: Leader,
     Json(body): Json<StartScan>,
 ) -> ApiResult<(StatusCode, Json<StartedScan>)> {
     if body.targets.is_empty() || body.targets.len() > MAX_SCAN_TARGETS {
@@ -254,6 +272,121 @@ async fn get_discovery_scan(
         .get(id)
         .map(Json)
         .ok_or_else(|| ApiError::not_found("scan_not_found", format!("no scan {id}")))
+}
+
+/// Query for the scan list.
+#[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
+pub(super) struct ScansQuery {
+    limit: Option<usize>,
+}
+
+/// The scans this core is holding, newest first.
+///
+/// Exists so a sweep survives leaving the page: the scan id used to live only in the browser tab
+/// that started it, so navigating away lost a sweep the poller was still running. What bounds this
+/// list is the runner's retention (finished scans age out, running ones are never capped away),
+/// not the caller's `limit`.
+///
+/// **A restarted core answers an empty list even while a poller is still sweeping** — scan state is
+/// in memory by decision (ADR-068). That is why the WebUI must render "this core does not know that
+/// scan" for a 404 on a remembered id, rather than an empty page.
+///
+/// `ManageConfig` and `503` in skeleton mode, matching `GET /discovery/scan/{id}` rather than the
+/// candidates queue: this list is the Discovery screen's own state, and a screen that cannot scan
+/// has no scans to list. (The candidates queue answers `200 []` instead because it backs a
+/// dashboard widget, where an error would break a page that otherwise works.)
+#[utoipa::path(
+    get, path = "/api/v1/discovery/scans", tag = "discovery",
+    params(ScansQuery),
+    responses(
+        (status = 200, description = "Retained scans, newest first", body = Vec<crate::discovery::ScanSummary>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no discovery runner", body = super::error::ErrorBody),
+    ),
+)]
+async fn list_discovery_scans(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Query(q): Query<ScansQuery>,
+) -> ApiResult<Json<Vec<crate::discovery::ScanSummary>>> {
+    Ok(Json(
+        admin.discovery.list(
+            q.limit
+                .unwrap_or(SCANS_DEFAULT_LIMIT)
+                .clamp(1, SCANS_MAX_LIMIT),
+        ),
+    ))
+}
+
+/// The outcome of asking a sweep to stop.
+///
+/// ⚠️ **Deliberately does not claim the sweep stopped**, and the field names carry that. Core
+/// broadcasts the stop and cannot know who — or whether anyone — acted on it, so the honest report
+/// is "requested, and here is whether the pollers that might be running it understand the command".
+/// The confirmation arrives later, as the scan's own state going to `cancelled`.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct CancelRequested {
+    /// The stop was published. Always true on a 200 — a publish failure is a 500.
+    requested: bool,
+    /// Whether every live poller that could be running this sweep advertises cancellation support.
+    ///
+    /// ⚠️ An **approximation**, which is why it is not called `will_stop`. A sweep on the global
+    /// route could be held by any live poller, so this is the answer across all of them; even for a
+    /// pool-scoped sweep it says the pool can stop sweeps, not that the poller holding this one
+    /// will. `false` means at least one poller predates the feature and the sweep may run to
+    /// completion.
+    poller_supports_cancel: bool,
+    /// The pool the stop was published to; `null` for the global subject.
+    pool: Option<String>,
+}
+
+/// Ask the poller running a sweep to stop (ADR-068 Increment 2).
+///
+/// `ManageConfig`, the same as starting one: stopping a sweep is the same authority as causing it.
+///
+/// **Answers 200 for a scan this core has no record of, unlike `analysis`'s cancel.** That
+/// asymmetry is deliberate. Scan state is in memory, so a restarted core forgets sweeps its pollers
+/// are still running, and requiring a local record would make exactly those sweeps — the ones an
+/// operator most wants to stop — unstoppable. The `analysis` endpoint 404s because there the
+/// 200/404 split answers "is that job running" for any id a caller cares to try; here the id is an
+/// unguessable UUID and the caller already holds `ManageConfig`, so the split would only reveal
+/// whether this process remembers something.
+#[utoipa::path(
+    post, path = "/api/v1/discovery/scan/{id}/cancel", tag = "discovery",
+    params(("id" = Uuid, Path, description = "Scan id returned when the sweep was accepted")),
+    responses(
+        (status = 200, description = "The stop was published. Not a promise that the sweep stopped — watch the scan's state for that", body = CancelRequested),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side, or this core is not the HA leader", body = super::error::ErrorBody),
+    ),
+)]
+async fn cancel_discovery_scan(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    // Leader-gated for the same reason the start is: only the leader consumes discovery results, so
+    // only it holds the scan record whose route the stop must follow.
+    _leader: Leader,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<CancelRequested>> {
+    let pool = admin.discovery.cancel(id).await.map_err(|e| {
+        ApiError::from_internal(
+            e.as_ref(),
+            "cancel discovery scan",
+            "failed to request the sweep stop",
+        )
+    })?;
+    Ok(Json(CancelRequested {
+        requested: true,
+        poller_supports_cancel: admin.coordinator.pollers_support(
+            pool.as_deref(),
+            yagra_bus::CAP_DISCOVERY_CANCEL,
+            Instant::now(),
+        ),
+        pool,
+    }))
 }
 
 /// One discovered device the operator chose to add.
@@ -721,6 +854,12 @@ mod tests {
         vec![
             ("POST", "/api/v1/discovery/scan".to_owned()),
             ("GET", format!("/api/v1/discovery/scan/{ID}")),
+            // The scan list is the Discovery screen's own state, so it is gated exactly as the
+            // single-scan read is — and answers 503 in skeleton mode rather than an empty 200,
+            // which would read as "no sweeps have run" on a deployment that cannot sweep at all.
+            ("GET", "/api/v1/discovery/scans".to_owned()),
+            // Stopping a sweep is the same authority as causing one (ADR-068 Inc.2).
+            ("POST", format!("/api/v1/discovery/scan/{ID}/cancel")),
             ("POST", "/api/v1/discovery/import".to_owned()),
         ]
     }

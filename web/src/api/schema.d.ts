@@ -807,6 +807,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/discovery/scan/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Ask the poller running a sweep to stop (ADR-068 Increment 2).
+         * @description `ManageConfig`, the same as starting one: stopping a sweep is the same authority as causing it.
+         *
+         *     **Answers 200 for a scan this core has no record of, unlike `analysis`'s cancel.** That
+         *     asymmetry is deliberate. Scan state is in memory, so a restarted core forgets sweeps its pollers
+         *     are still running, and requiring a local record would make exactly those sweeps — the ones an
+         *     operator most wants to stop — unstoppable. The `analysis` endpoint 404s because there the
+         *     200/404 split answers "is that job running" for any id a caller cares to try; here the id is an
+         *     unguessable UUID and the caller already holds `ManageConfig`, so the split would only reveal
+         *     whether this process remembers something.
+         */
+        post: operations["cancel_discovery_scan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/discovery/scans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The scans this core is holding, newest first.
+         * @description Exists so a sweep survives leaving the page: the scan id used to live only in the browser tab
+         *     that started it, so navigating away lost a sweep the poller was still running. What bounds this
+         *     list is the runner's retention (finished scans age out, running ones are never capped away),
+         *     not the caller's `limit`.
+         *
+         *     **A restarted core answers an empty list even while a poller is still sweeping** — scan state is
+         *     in memory by decision (ADR-068). That is why the WebUI must render "this core does not know that
+         *     scan" for a 404 on a remembered id, rather than an empty page.
+         *
+         *     `ManageConfig` and `503` in skeleton mode, matching `GET /discovery/scan/{id}` rather than the
+         *     candidates queue: this list is the Discovery screen's own state, and a screen that cannot scan
+         *     has no scans to list. (The candidates queue answers `200 []` instead because it backs a
+         *     dashboard widget, where an error would break a page that otherwise works.)
+         */
+        get: operations["list_discovery_scans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dns-monitors": {
         parameters: {
             query?: never;
@@ -4520,6 +4580,30 @@ export interface components {
              */
             hour: number;
         };
+        /**
+         * @description The outcome of asking a sweep to stop.
+         *
+         *     ⚠️ **Deliberately does not claim the sweep stopped**, and the field names carry that. Core
+         *     broadcasts the stop and cannot know who — or whether anyone — acted on it, so the honest report
+         *     is "requested, and here is whether the pollers that might be running it understand the command".
+         *     The confirmation arrives later, as the scan's own state going to `cancelled`.
+         */
+        CancelRequested: {
+            /**
+             * @description Whether every live poller that could be running this sweep advertises cancellation support.
+             *
+             *     ⚠️ An **approximation**, which is why it is not called `will_stop`. A sweep on the global
+             *     route could be held by any live poller, so this is the answer across all of them; even for a
+             *     pool-scoped sweep it says the pool can stop sweeps, not that the poller holding this one
+             *     will. `false` means at least one poller predates the feature and the sweep may run to
+             *     completion.
+             */
+            poller_supports_cancel: boolean;
+            /** @description The pool the stop was published to; `null` for the global subject. */
+            pool?: string | null;
+            /** @description The stop was published. Always true on a 200 — a publish failure is a 500. */
+            requested: boolean;
+        };
         /** @description What cancelling a run reports. */
         Cancelled: {
             cancelled: boolean;
@@ -5223,6 +5307,18 @@ export interface components {
              */
             truncated_nodes: number;
         };
+        /**
+         * @description Where a scan is in its life (ADR-068).
+         *
+         *     Deliberately has **no `Unknown` variant**, unlike the enums built by `stored_enum::token_enum!`:
+         *     those degrade a token a *newer writer* put in a database column, and this value is never read
+         *     back from storage — it only ever travels outward. The corresponding defensiveness lives on the
+         *     TypeScript side, which narrows the wire value and renders anything it does not recognise
+         *     neutrally. ⚠️ Rendering an unrecognised state as a failure is a real bug this codebase has
+         *     already shipped once (report runs, painted red by a `switch` with a `default:` arm).
+         * @enum {string}
+         */
+        DiscoveryScanState: "running" | "cancelling" | "cancelled" | "done";
         /**
          * @description Usage of one watched filesystem (or a store-size proxy, e.g. the PostgreSQL database size which
          *     core cannot `statvfs`). `size_bytes == 0` means "total capacity unknown" — the value is a bare
@@ -8324,7 +8420,14 @@ export interface components {
         /** @description A scan's current status returned by the API. */
         ScanStatus: {
             candidates: components["schemas"]["Candidate"][];
+            /**
+             * @description Terminal or not. Kept alongside `state` because it is part of the published contract (the
+             *     MCP `get_config(kind="discovery_scan")` tool serves this type straight through), and derived
+             *     from `state` rather than stored, so the two cannot disagree.
+             */
             done: boolean;
+            /** @description The pool the job was **actually published to**; `null` for the global subject. */
+            pool?: string | null;
             /**
              * Format: int32
              * @description Targets probed so far / total targets in the sweep.
@@ -8334,8 +8437,41 @@ export interface components {
             scan_id: string;
             /** @description The address the sweep is currently at (the next unprobed target), while running. */
             scanning?: string | null;
+            /**
+             * @description When the sweep was accepted (RFC 3339) — RFC 3339 rather than epoch millis to match the
+             *     discovered-endpoint rows this API already serves.
+             */
+            started_at: string;
+            state: components["schemas"]["DiscoveryScanState"];
             /** Format: int32 */
             total: number;
+            /** @description When a result last moved this scan forward (RFC 3339). */
+            updated_at: string;
+        };
+        /**
+         * @description One row of the scan list — everything [`ScanStatus`] has except the candidates themselves.
+         *
+         *     The omission is the point: 20 retained scans of up to 1024 candidates each would make listing
+         *     them far more expensive than the question deserves. A caller that wants a scan's candidates asks
+         *     for that scan.
+         */
+        ScanSummary: {
+            /**
+             * Format: int32
+             * @description How many devices answered so far.
+             */
+            candidate_count: number;
+            /** @description The pool the job was **actually published to**; `null` for the global subject. */
+            pool?: string | null;
+            /** Format: int32 */
+            probed: number;
+            /** Format: uuid */
+            scan_id: string;
+            started_at: string;
+            state: components["schemas"]["DiscoveryScanState"];
+            /** Format: int32 */
+            total: number;
+            updated_at: string;
         };
         /** @description A point-in-time view of [`SchedulerStats`] for the API. */
         SchedulerStatsSnapshot: {
@@ -12334,7 +12470,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description Skeleton mode has no write side */
+            /** @description Skeleton mode has no write side, or this core is not the HA leader */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -12394,6 +12530,105 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    cancel_discovery_scan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Scan id returned when the sweep was accepted */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The stop was published. Not a promise that the sweep stopped — watch the scan's state for that */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelRequested"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side, or this core is not the HA leader */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_discovery_scans: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Retained scans, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScanSummary"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no discovery runner */
             503: {
                 headers: {
                     [name: string]: unknown;

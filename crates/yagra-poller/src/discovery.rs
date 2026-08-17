@@ -6,14 +6,37 @@
 //! v2c/v3, resolved by core) and ad-hoc communities. Runs on the poller because ICMP needs
 //! the raw socket. Progress is published as **cumulative** partial results after each chunk
 //! of targets, so core can show the sweep advancing; the final message carries `done: true`.
+//!
+//! ## Stopping a sweep (ADR-068 Increment 2)
+//!
+//! A stop arrives as a [`yagra_bus::DiscoveryCancel`] **broadcast to every poller** — core cannot
+//! address it, because sweep jobs are queue-delivered and the result carries no poller id. Each
+//! poller keeps the ids it has been told to stop in a [`CancelSet`] and checks it in three places:
+//!
+//! 1. when a job is taken off the bus — a sweep cancelled while it queued must not start;
+//! 2. at each chunk boundary — the coarse-grained stop;
+//! 3. before each credential attempt on a target — the fine-grained one.
+//!
+//! **The third is not belt-and-braces.** A target costs one ICMP timeout plus a rate-limited
+//! attempt per credential (2s apart, `security.md`), so with five credentials a single target can
+//! take ~22s and a 32-target chunk two waves of that. Stopping only at chunk boundaries would leave
+//! the operator watching an unresponsive button for the better part of a minute. What is *not*
+//! interrupted is a probe already in flight: dropping a raw socket or an SNMP session mid-exchange
+//! has consequences that are not worth discovering here, so the worst-case delay is one probe
+//! timeout.
+//!
+//! ⚠️ A stopped sweep still publishes a terminal result, with `cancelled: true` and the count of
+//! targets it **actually** probed. Both matter: without the message core waits forever, and without
+//! the honest count `probed == total` would claim the sweep finished the work it just abandoned.
 
+use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
-use yagra_bus::{DiscoveredDevice, DiscoveryBus, DiscoveryJob, DiscoveryResult};
+use yagra_bus::{DiscoveredDevice, DiscoveryBus, DiscoveryCancel, DiscoveryJob, DiscoveryResult};
 use yagra_discovery::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
 use yagra_transport::{SnmpV3Params, Transport};
 
@@ -34,6 +57,72 @@ const SWEEP_CONCURRENCY: usize = 16;
 /// Targets per progress chunk: a cumulative partial result is published after each chunk
 /// so the operator sees the sweep advance instead of one long silence.
 const PROGRESS_CHUNK: usize = 32;
+
+/// How long a cancelled scan id is remembered.
+///
+/// It exists for the race, not for the running sweep: a stop can arrive before the job does (both
+/// travel over NATS, and a reconnect reorders nothing but delivers on its own schedule), so the id
+/// must outlive the gap between the two. Ten minutes is far more than that gap and far less than a
+/// leak.
+const CANCEL_TTL: Duration = Duration::from_secs(600);
+
+/// Upper bound on remembered ids, in case something publishes stops in a loop.
+///
+/// ⚠️ Both this and [`CANCEL_TTL`] exist because core's own scan map shipped with **neither** and
+/// grew for the life of the process (ADR-068 Increment 1 fixed that). Repeating the mistake on the
+/// poller — where nobody is watching a list — would be worse.
+const MAX_CANCELS: usize = 1024;
+
+/// The scan ids this poller has been told to stop.
+///
+/// Shared between the cancel-consuming task and the sweeping task, which is why it is a plain
+/// `Mutex<…>` rather than a channel: the sweep must be able to *ask* at three different depths of
+/// its loop, not be woken.
+#[derive(Default)]
+pub struct CancelSet {
+    inner: Mutex<HashMap<Uuid, Instant>>,
+}
+
+impl CancelSet {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a stop, evicting anything expired (and, if it comes to it, the oldest).
+    pub fn insert(&self, scan_id: Uuid, now: Instant) {
+        let mut g = self.inner.lock().expect("cancel set mutex poisoned");
+        g.retain(|_, at| now.duration_since(*at) < CANCEL_TTL);
+        if g.len() >= MAX_CANCELS {
+            if let Some((&oldest, _)) = g.iter().min_by_key(|(_, at)| **at) {
+                g.remove(&oldest);
+            }
+        }
+        g.insert(scan_id, now);
+    }
+
+    /// Whether this sweep has been cancelled.
+    #[must_use]
+    pub fn is_cancelled(&self, scan_id: Uuid, now: Instant) -> bool {
+        let g = self.inner.lock().expect("cancel set mutex poisoned");
+        g.get(&scan_id)
+            .is_some_and(|at| now.duration_since(*at) < CANCEL_TTL)
+    }
+}
+
+/// Drain stop commands into `cancels`. Runs until the stream ends.
+pub async fn run_cancel_stream<S>(mut cancels: S, set: Arc<CancelSet>)
+where
+    S: Stream<Item = DiscoveryCancel> + Unpin,
+{
+    while let Some(c) = cancels.next().await {
+        tracing::info!(scan = %c.scan_id, "discovery cancel received");
+        // Recorded whether or not this poller is running that sweep. It costs one map entry, and it
+        // is what makes the stop work when it overtakes the job it refers to.
+        set.insert(c.scan_id, Instant::now());
+    }
+    tracing::warn!("discovery cancel stream ended");
+}
 
 /// One SNMP credential to try on each target, in order. Stored credentials carry their
 /// store id so a match is reported **by reference** (never the value — security.md);
@@ -97,10 +186,31 @@ pub async fn run_discovery_stream<S>(
     mut jobs: S,
     bus: Arc<dyn DiscoveryBus>,
     transport: Arc<dyn Transport>,
+    cancels: Arc<CancelSet>,
 ) where
     S: Stream<Item = DiscoveryJob> + Unpin,
 {
     while let Some(job) = jobs.next().await {
+        let total = u32::try_from(job.targets.len()).unwrap_or(u32::MAX);
+        // Layer 1: a sweep cancelled while it waited its turn must not start. This loop is strictly
+        // sequential, so a job can sit on the subscription for the length of the sweep ahead of it —
+        // long enough for the operator to give up on it before it has probed anything.
+        if cancels.is_cancelled(job.scan_id, Instant::now()) {
+            tracing::info!(scan = %job.scan_id, "discovery sweep cancelled before it started");
+            publish(
+                bus.as_ref(),
+                DiscoveryResult {
+                    scan_id: job.scan_id,
+                    found: Vec::new(),
+                    probed: 0,
+                    total,
+                    done: true,
+                    cancelled: true,
+                },
+            )
+            .await;
+            continue;
+        }
         tracing::info!(scan = %job.scan_id, targets = job.targets.len(), "discovery sweep starting");
         let candidates = Arc::new(candidates_of(&job));
         let timeout = Duration::from_millis(u64::from(job.timeout_ms));
@@ -108,14 +218,36 @@ pub async fn run_discovery_stream<S>(
         // repeated failures so the sweep can never trip a device's account lockout. Conservative
         // defaults; tunable here as SSH/CLI credential probing (which actually locks out) lands.
         let rate = LimiterConfig::default();
-        let total = u32::try_from(job.targets.len()).unwrap_or(u32::MAX);
         let mut found: Vec<DiscoveredDevice> = Vec::new();
         let mut probed: u32 = 0;
+        let mut cancelled = false;
 
         let chunk_count = job.targets.chunks(PROGRESS_CHUNK).count();
         for (i, chunk) in job.targets.chunks(PROGRESS_CHUNK).enumerate() {
-            found.extend(sweep_chunk(chunk, &candidates, timeout, transport.clone(), rate).await);
-            probed = probed.saturating_add(u32::try_from(chunk.len()).unwrap_or(u32::MAX));
+            // Layer 2: skip whole chunks not yet started.
+            if cancels.is_cancelled(job.scan_id, Instant::now()) {
+                cancelled = true;
+                break;
+            }
+            let (devices, swept) = sweep_chunk(
+                chunk,
+                &candidates,
+                timeout,
+                transport.clone(),
+                rate,
+                job.scan_id,
+                &cancels,
+            )
+            .await;
+            found.extend(devices);
+            // The number actually swept, never the chunk length: a chunk abandoned partway must not
+            // claim credit for the targets it skipped. `probed` is how core (and the operator)
+            // tells a sweep that stopped early from one that finished.
+            probed = probed.saturating_add(swept);
+            // A short chunk means the fine-grained check fired inside it.
+            if swept < u32::try_from(chunk.len()).unwrap_or(u32::MAX) {
+                cancelled = true;
+            }
             publish(
                 bus.as_ref(),
                 DiscoveryResult {
@@ -123,10 +255,21 @@ pub async fn run_discovery_stream<S>(
                     found: found.clone(),
                     probed,
                     total,
-                    done: i + 1 == chunk_count,
+                    done: cancelled || i + 1 == chunk_count,
+                    cancelled,
                 },
             )
             .await;
+            if cancelled {
+                break;
+            }
+        }
+        if cancelled {
+            tracing::info!(
+                scan = %job.scan_id, probed, total, found = found.len(),
+                "discovery sweep cancelled"
+            );
+            continue;
         }
         if job.targets.is_empty() {
             // Degenerate sweep: still complete the scan so core doesn't wait forever.
@@ -138,6 +281,7 @@ pub async fn run_discovery_stream<S>(
                     probed: 0,
                     total: 0,
                     done: true,
+                    cancelled: false,
                 },
             )
             .await;
@@ -154,24 +298,53 @@ async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
     }
 }
 
-/// Probe one chunk of targets with bounded concurrency; keep the devices that responded.
+/// Probe one chunk of targets with bounded concurrency.
+///
+/// Returns the devices that responded **and how many targets were actually probed** — the second
+/// value is what keeps `probed` honest when a stop lands mid-chunk. A target skipped because the
+/// sweep was cancelled counts as neither probed nor absent; it simply was not looked at.
 async fn sweep_chunk(
     targets: &[IpAddr],
     candidates: &Arc<Vec<SnmpCandidate>>,
     timeout: Duration,
     transport: Arc<dyn Transport>,
     rate: LimiterConfig,
-) -> Vec<DiscoveredDevice> {
-    futures::stream::iter(targets.iter().copied())
-        .map(|target| {
-            let transport = transport.clone();
-            let candidates = candidates.clone();
-            async move { probe_one(target, &candidates, timeout, transport.as_ref(), rate).await }
-        })
-        .buffer_unordered(SWEEP_CONCURRENCY)
-        .filter_map(|d| async move { d })
-        .collect()
-        .await
+    scan_id: Uuid,
+    cancels: &Arc<CancelSet>,
+) -> (Vec<DiscoveredDevice>, u32) {
+    let results: Vec<Option<Option<DiscoveredDevice>>> =
+        futures::stream::iter(targets.iter().copied())
+            .map(|target| {
+                let transport = transport.clone();
+                let candidates = candidates.clone();
+                let cancels = cancels.clone();
+                async move {
+                    // Layer 3, part one: a target this wave has not reached yet is dropped whole.
+                    // `buffer_unordered` starts at most SWEEP_CONCURRENCY at a time, so with a big
+                    // chunk most of these futures have not begun when a stop arrives.
+                    if cancels.is_cancelled(scan_id, Instant::now()) {
+                        return None;
+                    }
+                    Some(
+                        probe_one(
+                            target,
+                            &candidates,
+                            timeout,
+                            transport.as_ref(),
+                            rate,
+                            scan_id,
+                            &cancels,
+                        )
+                        .await,
+                    )
+                }
+            })
+            .buffer_unordered(SWEEP_CONCURRENCY)
+            .collect()
+            .await;
+    let swept = u32::try_from(results.iter().filter(|r| r.is_some()).count()).unwrap_or(u32::MAX);
+    let devices = results.into_iter().flatten().flatten().collect();
+    (devices, swept)
 }
 
 /// Current Unix time in milliseconds (clock for the per-device probe limiter).
@@ -194,6 +367,8 @@ async fn probe_one(
     timeout: Duration,
     transport: &dyn Transport,
     rate: LimiterConfig,
+    scan_id: Uuid,
+    cancels: &Arc<CancelSet>,
 ) -> Option<DiscoveredDevice> {
     let reachable = (transport.probe_icmp(target, 1, timeout).await)
         .map(|p| p.reachable)
@@ -206,6 +381,17 @@ async fn probe_one(
     let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
     'candidates: for cand in candidates {
+        // Layer 3, part two — the fine-grained stop, and the one that decides how long the button
+        // appears to do nothing. The rate limiter spaces attempts 2s apart, so a target with five
+        // credentials occupies this loop for ~20s; without a check here a stop would wait out every
+        // in-progress target before the chunk boundary could see it.
+        //
+        // ⚠️ The ICMP probe above is *not* interrupted — it has already been awaited by the time
+        // this runs. That is deliberate (a probe in flight is left to time out rather than having
+        // its socket dropped), and it is why the worst case is one probe timeout rather than zero.
+        if cancels.is_cancelled(scan_id, Instant::now()) {
+            break 'candidates;
+        }
         // Honour per-device spacing before each attempt; stop the device entirely on cooldown.
         loop {
             match limiter.begin_attempt(target, now_ms()) {
@@ -551,6 +737,18 @@ mod tests {
         }
     }
 
+    /// An empty cancel set — what every test that is not about stopping wants.
+    fn no_cancels() -> Arc<CancelSet> {
+        Arc::new(CancelSet::new())
+    }
+
+    /// A cancel set already holding `scan_id`, as if the stop had arrived first.
+    fn cancelled(scan_id: Uuid) -> Arc<CancelSet> {
+        let set = Arc::new(CancelSet::new());
+        set.insert(scan_id, Instant::now());
+        set
+    }
+
     fn job(credentials: Vec<DiscoveryCredential>, communities: Vec<String>) -> DiscoveryJob {
         DiscoveryJob {
             scan_id: Uuid::nil(),
@@ -576,6 +774,8 @@ mod tests {
             Duration::from_millis(100),
             &fake,
             no_rate(),
+            Uuid::nil(),
+            &no_cancels(),
         )
         .await
         .expect("device answers");
@@ -606,6 +806,8 @@ mod tests {
             Duration::from_millis(100),
             &fake,
             no_rate(),
+            Uuid::nil(),
+            &no_cancels(),
         )
         .await
         .expect("device answers v3");
@@ -629,6 +831,8 @@ mod tests {
             Duration::from_millis(100),
             &fake,
             no_rate(),
+            Uuid::nil(),
+            &no_cancels(),
         )
         .await
         .expect("device answers");
@@ -656,6 +860,8 @@ mod tests {
             Duration::from_millis(100),
             &fake,
             no_rate(),
+            Uuid::nil(),
+            &no_cancels(),
         )
         .await
         .expect("device answers");
@@ -675,7 +881,9 @@ mod tests {
             &cands,
             Duration::from_millis(100),
             &fake,
-            no_rate()
+            no_rate(),
+            Uuid::nil(),
+            &no_cancels()
         )
         .await
         .is_none());
@@ -840,7 +1048,16 @@ mod tests {
             max_consecutive_failures: 2,
             cooldown_ms: 60_000,
         };
-        let d = probe_one(target(), &cands, Duration::from_millis(100), &fake, rate).await;
+        let d = probe_one(
+            target(),
+            &cands,
+            Duration::from_millis(100),
+            &fake,
+            rate,
+            Uuid::nil(),
+            &no_cancels(),
+        )
+        .await;
         assert!(d.is_none(), "no device answered");
         assert_eq!(
             attempts.load(Ordering::SeqCst),
@@ -882,6 +1099,7 @@ mod tests {
             futures::stream::iter(vec![job]),
             bus.clone() as Arc<dyn DiscoveryBus>,
             transport,
+            no_cancels(),
         )
         .await;
 
@@ -925,6 +1143,7 @@ mod tests {
             futures::stream::iter(vec![job]),
             bus.clone() as Arc<dyn DiscoveryBus>,
             transport,
+            no_cancels(),
         )
         .await;
 
@@ -932,5 +1151,141 @@ mod tests {
         assert!(r.done);
         assert_eq!((r.probed, r.total), (0, 0));
         assert!(rx.try_recv().is_err(), "exactly one message");
+    }
+
+    // ── Stopping a sweep (ADR-068 Increment 2) ───────────────────────────────
+
+    #[test]
+    fn the_cancel_set_forgets_and_is_bounded() {
+        // Core's scan map shipped with neither a TTL nor a cap and grew for the life of the
+        // process. This is the same structure on the poller, where nobody would ever look.
+        let set = CancelSet::new();
+        let now = Instant::now();
+        let old = Uuid::from_u128(1);
+        set.insert(old, now - CANCEL_TTL - Duration::from_secs(1));
+        assert!(
+            !set.is_cancelled(old, now),
+            "an id past its TTL must not keep cancelling sweeps that reuse nothing"
+        );
+
+        let fresh = Uuid::from_u128(2);
+        set.insert(fresh, now);
+        assert!(set.is_cancelled(fresh, now));
+
+        for i in 0..(MAX_CANCELS + 10) {
+            set.insert(Uuid::from_u128(1000 + i as u128), now);
+        }
+        assert!(
+            set.inner.lock().unwrap().len() <= MAX_CANCELS,
+            "the set must stay bounded even if stops arrive in a loop"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sweep_cancelled_before_it_starts_probes_nothing_and_still_reports() {
+        // The queue case. This loop is sequential, so a job can wait behind the sweep ahead of it
+        // for minutes — long enough for the operator to give up before it has touched the network.
+        // The terminal message is not optional: without it core waits for a sweep that will never
+        // speak, and the UI sits on "stopping…" forever.
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
+        let mut rx = bus.subscribe_discovery_results();
+        let scan = Uuid::from_u128(42);
+        let mut job = job(vec![], vec!["public".to_owned()]);
+        job.scan_id = scan;
+        job.targets = (1..=64)
+            .map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, i)))
+            .collect();
+        // Answers every target, so a single probe would show up as a candidate.
+        let transport = Arc::new(SelectiveFake {
+            ping: true,
+            good_community: Some("public".to_owned()),
+            good_v3_user: None,
+        });
+
+        run_discovery_stream(
+            futures::stream::iter(vec![job]),
+            bus.clone() as Arc<dyn DiscoveryBus>,
+            transport,
+            cancelled(scan),
+        )
+        .await;
+
+        let r = rx.try_recv().expect("a cancelled sweep still reports");
+        assert!(r.done);
+        assert!(
+            r.cancelled,
+            "and says it was cancelled rather than finished"
+        );
+        assert_eq!(r.probed, 0);
+        assert_eq!(r.total, 64, "the total is still what was asked for");
+        assert!(rx.try_recv().is_err(), "exactly one message");
+        assert!(
+            r.found.is_empty(),
+            "this fake answers every target, so a single candidate would mean a packet went to the \
+             network for a sweep that was already stopped"
+        );
+    }
+
+    /// The honest-count property, at the level where it is decided.
+    ///
+    /// `probed < total` on a cancelled sweep is the **only** evidence an operator has that the stop
+    /// took effect: a sweep that abandoned 200 addresses while claiming to have probed them is
+    /// indistinguishable from one that finished. So the count has to come from what was actually
+    /// swept, not from the chunk's length.
+    ///
+    /// ⚠️ Tested here rather than through `run_discovery_stream`, and the reason is worth keeping:
+    /// a test that cancels *while* the loop runs has to win a race against it, and against a fake
+    /// transport that answers instantly there is no window to win. Such a test passes or fails on
+    /// scheduling rather than on behaviour, which is worse than no test. **What this leaves
+    /// unproven is the wiring** — that the loop propagates a short chunk into `cancelled` and stops.
+    /// That is read, not tested, and it is the thing to watch on the real deployment.
+    #[tokio::test]
+    async fn a_chunk_counts_what_it_probed_not_what_it_was_given() {
+        let scan = Uuid::from_u128(11);
+        let cands = Arc::new(candidates_of(&job(vec![], vec!["public".to_owned()])));
+        let transport: Arc<dyn Transport> = Arc::new(SelectiveFake {
+            ping: true,
+            good_community: Some("public".to_owned()),
+            good_v3_user: None,
+        });
+        let targets: Vec<IpAddr> = (1..=8)
+            .map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, i)))
+            .collect();
+
+        let (devices, swept) = sweep_chunk(
+            &targets,
+            &cands,
+            Duration::from_millis(10),
+            transport.clone(),
+            no_rate(),
+            scan,
+            &no_cancels(),
+        )
+        .await;
+        assert_eq!(
+            swept, 8,
+            "an uninterrupted chunk probes everything it was given"
+        );
+        assert_eq!(devices.len(), 8);
+
+        let (devices, swept) = sweep_chunk(
+            &targets,
+            &cands,
+            Duration::from_millis(10),
+            transport,
+            no_rate(),
+            scan,
+            &cancelled(scan),
+        )
+        .await;
+        assert_eq!(
+            swept, 0,
+            "a cancelled chunk counts nothing — the caller adds this to `probed`, so counting \
+             skipped targets here is exactly how a stopped sweep would claim to have finished"
+        );
+        assert!(
+            devices.is_empty(),
+            "and this fake answers every target, so a single device would mean one was probed"
+        );
     }
 }

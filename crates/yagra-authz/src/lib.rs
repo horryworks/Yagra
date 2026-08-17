@@ -111,6 +111,21 @@ pub(crate) fn allow_list(scope: &PollerScope) -> Permissions {
             // body, so the mis-delivery would be a disclosure rather than a routing annoyance.
             // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
             subjects::poller_logs_for(&scope.id),
+            // Stop-this-sweep, on both routes a sweep can arrive by (ADR-068 Inc.2) — mirroring the
+            // two job subscriptions above, because a stop must reach the poller on whichever route
+            // it took the job.
+            //
+            // ⚠️ Not covered by any grant already here: `yagra.discovery.jobs.>` does not match
+            // `yagra.discovery.cancel`. Missing this is a **silent** runtime denial — and only on
+            // deployments running Auth Callout, so a deployment with it switched off proves nothing
+            // about this line (the mirror of it lives in `docker/nats/nats-server.conf`).
+            //
+            // Note where these are **not**: nowhere in `publish`. Broadcast delivery means a poller
+            // with publish rights here could stop another site's sweep, and unlike the upgrade
+            // command there is not even a poller id in the message to check.
+            // Appended rather than inserted because the JWT-shape test names `sub.allow[0]`.
+            subjects::discovery_cancel(),
+            subjects::discovery_cancel_for_pool(&scope.pool),
             "_INBOX.>".to_owned(),
         ],
     }
@@ -674,6 +689,62 @@ mod tests {
         for s in &perms.subscribe {
             assert_ne!(s, "yagra.poller.logs.>");
             assert_ne!(s, "yagra.poller.logs.*");
+        }
+    }
+
+    /// The cancel family (ADR-068 Inc.2). Same asymmetry as the log family and a sharper reason: a
+    /// stop is **broadcast**, so it carries no poller id to check a publisher against. A poller with
+    /// publish rights here could stop any site's sweep and nothing downstream could tell.
+    #[test]
+    fn a_poller_may_be_told_to_stop_but_may_never_tell_another_to() {
+        let perms = allow_list(&PollerScope::new("edge-1", "tokyo"));
+        // Both routes a sweep can arrive by, mirroring the two job grants.
+        assert!(perms
+            .subscribe
+            .contains(&"yagra.discovery.cancel".to_owned()));
+        assert!(perms
+            .subscribe
+            .contains(&"yagra.discovery.cancel.tokyo".to_owned()));
+        assert!(
+            !perms
+                .publish
+                .iter()
+                .any(|s| s.starts_with("yagra.discovery.cancel")),
+            "publishing a stop would let this site halt another site's sweep"
+        );
+        // No wildcard over the family: a pool-scoped grant must not become a fleet-wide one.
+        for s in &perms.subscribe {
+            assert_ne!(s, "yagra.discovery.cancel.>");
+            assert_ne!(s, "yagra.discovery.cancel.*");
+        }
+    }
+
+    /// The two grants are not covered by anything already in the list — the property that makes
+    /// them a *separate* entry rather than an oversight. Written as a test because the failure it
+    /// guards against is silent: the broker denies, core logs a successful publish, and the sweep
+    /// simply keeps running.
+    #[test]
+    fn no_existing_grant_would_have_covered_the_cancel_subjects() {
+        let perms = allow_list(&PollerScope::new("edge-1", "tokyo"));
+        let covers = |grant: &str, subject: &str| {
+            if let Some(prefix) = grant.strip_suffix(".>") {
+                subject.starts_with(prefix) && subject.len() > prefix.len()
+            } else {
+                grant == subject
+            }
+        };
+        for subject in ["yagra.discovery.cancel", "yagra.discovery.cancel.tokyo"] {
+            let others: Vec<&String> = perms
+                .subscribe
+                .iter()
+                .filter(|g| !g.starts_with("yagra.discovery.cancel"))
+                .filter(|g| covers(g, subject))
+                .collect();
+            assert!(
+                others.is_empty(),
+                "{subject} would have been covered by {others:?} — the dedicated grant is then \
+                 redundant and this test is wrong, or the other grant is too broad"
+            );
         }
     }
 

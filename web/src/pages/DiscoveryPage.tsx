@@ -6,17 +6,30 @@
 // preselected on the row so import binds it automatically.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg } from '../services/api';
+import { api, ApiError, errMsg } from '../services/api';
 import { useCan } from '../store';
 import type {
   CredentialSummary,
   DiscoveredEndpoint,
   DiscoveredEndpointPage,
   DiscoveryCandidate,
+  DiscoveryScan,
+  DiscoveryScanSummary,
+  PoolOption,
   ProfileSummary,
 } from '../types/api';
+import {
+  canRequestStop,
+  isScanInFlight,
+  pickDefaultPool,
+  poolIsUnrouted,
+  SCAN_STATE_SPECS,
+  scanState,
+  selectInitialScan,
+  shouldPollScan,
+} from './discoveryScans';
 import { expandTargets } from '../lib/cidr';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
@@ -56,10 +69,25 @@ interface RowState {
 export function DiscoveryPage() {
   const { t } = useTranslation('monitoring');
   const canConfig = useCan('manage_config');
+  const [searchParams, setSearchParams] = useSearchParams();
   const [targetSpec, setTargetSpec] = useState('192.168.1.0/24');
   const [selectedCredIds, setSelectedCredIds] = useState<string[]>([]);
   const [scanId, setScanId] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const [status, setStatus] = useState<DiscoveryScan | null>(null);
+  const [scans, setScans] = useState<DiscoveryScanSummary[]>([]);
+  const [pools, setPools] = useState<PoolOption[]>([]);
+  const [pool, setPool] = useState<string | null>(null);
+  /** The operator pressed Scan and the first status has not landed. Drives polling on its own —
+   *  see `shouldPollScan` for why this cannot be derived from what the server currently says. */
+  const [justStarted, setJustStarted] = useState(false);
+  const [failures, setFailures] = useState(0);
+  /** The selected scan is one this core has no record of (restarted, or it aged out). */
+  const [unknownScan, setUnknownScan] = useState(false);
+  /** Whether the shown scan was picked up on arrival rather than started here. */
+  const [reattached, setReattached] = useState(false);
+  /** What the last stop request was told about this fleet's ability to honour it. */
+  const [stopOutcome, setStopOutcome] = useState<'requested' | 'unsupported' | null>(null);
+  const [stopError, setStopError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<DiscoveryCandidate[]>([]);
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
   const [imported, setImported] = useState<Record<string, boolean>>({});
@@ -74,7 +102,9 @@ export function DiscoveryPage() {
   const candLabels = useMemo(() => candidateLabels(t), [t]);
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(candCols));
   const [candSheet, setCandSheet] = useState(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** The `?scan=` present when the page was opened. Held in a ref because the URL is rewritten from
+   *  `scanId` below, so reading the live value during the reattach would race with our own write. */
+  const arrivedWith = useRef(searchParams.get('scan'));
 
   useEffect(() => {
     api.listProfiles().then(setProfiles).catch(() => undefined);
@@ -86,10 +116,43 @@ export function DiscoveryPage() {
         setSelectedCredIds(list.filter((c) => isSnmpCredentialKind(c.kind)).map((c) => c.id));
       })
       .catch(() => undefined);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    // Which site sweeps from here. A read failure degrades to "no sites offered", never to a
+    // blocked page — the sweep still works, it just goes wherever it used to go.
+    api
+      .listPools()
+      .then((r) => {
+        setPools(r.pools);
+        setPool(pickDefaultPool(r.pools));
+      })
+      .catch(() => undefined);
   }, []);
+
+  // Reattach on arrival (ADR-068). This is the whole point of the increment: the scan id used to
+  // live only in this component's state, so leaving the page abandoned a sweep the poller was still
+  // running. ⚠️ Nothing automated covers this effect — Vitest executes no `.tsx` and the browser
+  // walk opens each screen once, so "navigate away and come back" is checked by hand.
+  useEffect(() => {
+    api
+      .listDiscoveryScans()
+      .then((rows) => {
+        setScans(rows);
+        const pick = selectInitialScan(rows, arrivedWith.current);
+        if (!pick) return;
+        setScanId(pick);
+        setReattached(true);
+      })
+      .catch(() => undefined);
+  }, []);
+
+  // The one place the URL is written. Two handlers each calling `setSearchParams` would have the
+  // second silently undo the first, because both act on the params they captured at render.
+  useEffect(() => {
+    if ((searchParams.get('scan') ?? null) === scanId) return;
+    const next = new URLSearchParams(searchParams);
+    if (scanId) next.set('scan', scanId);
+    else next.delete('scan');
+    setSearchParams(next, { replace: true });
+  }, [scanId, searchParams, setSearchParams]);
 
   const snmpCreds = creds.filter((c) => isSnmpCredentialKind(c.kind));
 
@@ -128,38 +191,95 @@ export function DiscoveryPage() {
     setCandidates([]);
     setRowState({});
     setImported({});
-    setDone(false);
+    setStatus(null);
+    setUnknownScan(false);
+    setReattached(false);
+    setFailures(0);
+    setStopOutcome(null);
+    setStopError(null);
+    // Set before the request: polling is driven by the act of starting, so that a slow or
+    // momentarily unanswerable server cannot leave the page silent (`shouldPollScan`).
+    setJustStarted(true);
     api
-      .startDiscoveryScan({ targets, credential_ids: selectedCredIds })
+      // `pool` decides which site sweeps. Omitted means "any poller", which is what this screen
+      // always did and is still a legitimate choice — just no longer an invisible one.
+      .startDiscoveryScan({
+        targets,
+        credential_ids: selectedCredIds,
+        ...(pool ? { pool } : {}),
+      })
       .then(({ scan_id }) => {
         setScanId(scan_id);
         setNote(t('discovery.msg.scanningCount', { count: targets.length }));
-        if (pollRef.current) clearInterval(pollRef.current);
-        pollRef.current = setInterval(() => poll(scan_id), 2000);
-        poll(scan_id);
+        api.listDiscoveryScans().then(setScans).catch(() => undefined);
       })
-      .catch((e: unknown) => setError(errMsg(e, t('discovery.err.startScan'))));
+      .catch((e: unknown) => {
+        setJustStarted(false);
+        setError(errMsg(e, t('discovery.err.startScan')));
+      });
   };
 
-  const poll = (id: string) => {
-    api
-      .getDiscoveryScan(id)
-      .then((s) => {
-        setCandidates(s.candidates);
-        seedRows(s.candidates);
-        if (s.done) {
-          setDone(true);
-          setNote(t('discovery.msg.scanComplete', { count: s.candidates.length }));
-          if (pollRef.current) {
-            clearInterval(pollRef.current);
-            pollRef.current = null;
+  const poll = useCallback(
+    (id: string) => {
+      api
+        .getDiscoveryScan(id)
+        .then((s) => {
+          setStatus(s);
+          setUnknownScan(false);
+          setFailures(0);
+          setJustStarted(false);
+          setCandidates(s.candidates);
+          seedRows(s.candidates);
+          if (!isScanInFlight(s.state)) {
+            setNote(t('discovery.msg.scanComplete', { count: s.candidates.length }));
+          } else {
+            const at = s.scanning ? t('discovery.msg.nowAt', { addr: s.scanning }) : '';
+            setNote(t('discovery.msg.scanningProgress', { probed: s.probed, total: s.total }) + at);
           }
-        } else {
-          const at = s.scanning ? t('discovery.msg.nowAt', { addr: s.scanning }) : '';
-          setNote(t('discovery.msg.scanningProgress', { probed: s.probed, total: s.total }) + at);
-        }
+        })
+        .catch((e: unknown) => {
+          setFailures((n) => n + 1);
+          // A 404 is the specific, expected failure: this core restarted (or the scan aged out)
+          // while a poller may still be sweeping. It gets its own message rather than being
+          // swallowed — the page used to eat it and sit on a frozen progress line forever.
+          if (e instanceof ApiError && e.status === 404) {
+            setUnknownScan(true);
+            setJustStarted(false);
+            setNote(null);
+          }
+        });
+    },
+    [seedRows, t],
+  );
+
+  const polling = shouldPollScan({ status, justStarted, failures });
+
+  useEffect(() => {
+    if (!scanId || !polling) return;
+    poll(scanId);
+    const timer = setInterval(() => poll(scanId), 2000);
+    return () => clearInterval(timer);
+    // ⚠️ `status` is deliberately not a dependency: it changes on every tick, and re-running this
+    // would tear down and rebuild the interval each time, so the 2s cadence would restart forever.
+    // `polling` is the boolean distillation of it, and only flips when the answer changes.
+  }, [scanId, polling, poll]);
+
+  /** The scan on screen is still producing results. */
+  const inFlight = status ? isScanInFlight(status.state) : justStarted;
+  const unroutedPool = poolIsUnrouted(pools, pool);
+
+  const requestStop = () => {
+    if (!scanId) return;
+    setStopError(null);
+    api
+      .cancelDiscoveryScan(scanId)
+      .then((r) => {
+        // Optimistic, and only as far as the truth goes: the request is a fact, the stop is not.
+        // The authoritative answer arrives on the next poll as the scan's own state.
+        setStatus((cur) => (cur ? { ...cur, state: 'cancelling' } : cur));
+        setStopOutcome(r.poller_supports_cancel ? 'requested' : 'unsupported');
       })
-      .catch(() => undefined);
+      .catch((e: unknown) => setStopError(errMsg(e, t('discovery.scans.stopErr'))));
   };
 
   const shownCandidates = candidates.filter(buildPredicate(candCols, filters, Date.now()));
@@ -237,12 +357,45 @@ export function DiscoveryPage() {
                 options={snmpCreds}
                 selected={selectedCredIds}
                 onChange={setSelectedCredIds}
-                disabled={!!scanId && !done}
+                disabled={inFlight}
               />
-              <Button variant="primary" onClick={startScan} disabled={!!scanId && !done}>
-                {scanId && !done ? t('discovery.scanning') : t('discovery.scan')}
+              {/* Which site the sweep runs from (ADR-068). Before this, the job went to a subject
+                  every poller competes for, so a remote-site poller could sweep head office —
+                  reaching nothing and reporting a successful, empty scan. */}
+              <Select
+                aria-label={t('discovery.pool.label')}
+                value={pool ?? ''}
+                disabled={inFlight}
+                onChange={(e) => setPool(e.target.value || null)}
+              >
+                <option value="">{t('discovery.pool.any')}</option>
+                {pools.map((p) => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                  </option>
+                ))}
+              </Select>
+              <Button variant="primary" onClick={startScan} disabled={inFlight}>
+                {inFlight ? t('discovery.scanning') : t('discovery.scan')}
               </Button>
+              {/* Drawn only while there is something to stop, never disabled: a disabled button
+                  explains itself on hover alone, which is nothing on a touch device
+                  (ui-conventions R4 / ADR-056). Once asked, the button goes and the sentence below
+                  takes over. */}
+              {canRequestStop(status?.state) && (
+                <Button onClick={requestStop}>{t('discovery.scans.stop')}</Button>
+              )}
             </div>
+            {/* Says what the choice means rather than removing it: a pool that is briefly down is
+                still the pool the operator means, and hiding it would take away the reason to come
+                back to it. */}
+            <p className={unroutedPool ? 'disco-pool-warn' : 'muted'}>
+              {!pool
+                ? t('discovery.pool.anyHint')
+                : unroutedPool
+                  ? t('discovery.pool.deadHint')
+                  : t('discovery.pool.oneOf')}
+            </p>
             <p className="disco-target-hint">
               <Trans
                 t={t}
@@ -262,8 +415,81 @@ export function DiscoveryPage() {
           <PermissionHint permission="manage_config" signInHint={t('discovery.signIn')} />
         )}
         {error && <p className="form-error">{error}</p>}
+        {/* The 404 case gets its own line, above the progress note. A core that restarted mid-sweep
+            answers "no such scan" while a poller may well still be probing, so "nothing here" would
+            be the one reading that is definitely wrong. */}
+        {unknownScan && <p className="disco-pool-warn">{t('discovery.scans.unknownScan')}</p>}
+        {failures >= 5 && !unknownScan && (
+          <p className="disco-pool-warn">{t('discovery.scans.pollFailed')}</p>
+        )}
+        {reattached && !unknownScan && note && (
+          <p className="muted">{inFlight ? t('discovery.scans.resumed') : t('discovery.scans.resumedDone')}</p>
+        )}
+        {stopError && <p className="form-error">{stopError}</p>}
+        {/* The four honest readings of a stop, in the order they occur. Note what is missing: any
+            claim that the sweep *has* stopped while it is still `cancelling`. Core broadcasts the
+            request and cannot know who acted, so until the poller reports, "requested" is the whole
+            truth — and `finishedAnyway` is the case where the answer turned out to be "it did not
+            stop, it completed". */}
+        {stopOutcome === 'unsupported' && status?.state === 'cancelling' && (
+          <p className="disco-pool-warn">{t('discovery.scans.stopUnsupported')}</p>
+        )}
+        {stopOutcome === 'requested' && status?.state === 'cancelling' && (
+          <p className="muted">{t('discovery.scans.stopRequested')}</p>
+        )}
+        {status?.state === 'cancelled' && (
+          <p className="muted">{t('discovery.scans.stoppedNote')}</p>
+        )}
+        {stopOutcome !== null && status?.state === 'done' && (
+          <p className="muted">{t('discovery.scans.finishedAnyway')}</p>
+        )}
         {note && <p className="muted">{note}</p>}
       </Card>
+
+      {scans.length > 0 && (
+        <Card title={t('discovery.scans.title')}>
+          <p className="sys-setting-help muted">{t('discovery.scans.note')}</p>
+          {/* Deliberately not a table. This screen already carries two, and `MUST_FILTER` treats
+              that count as the thing to protect; a third grid would also need a filter row it has
+              no use for. The list is capped server-side, so it cannot grow into one. */}
+          <ul className="disco-scans">
+            {scans.map((s) => {
+              const spec = SCAN_STATE_SPECS[scanState(s.state)];
+              return (
+                <li key={s.scan_id}>
+                  <button
+                    type="button"
+                    className={`disco-scan${s.scan_id === scanId ? ' selected' : ''}`}
+                    onClick={() => {
+                      setScanId(s.scan_id);
+                      setReattached(true);
+                      setUnknownScan(false);
+                      setFailures(0);
+                      setStopOutcome(null);
+                      setStopError(null);
+                      setStatus(null);
+                      setCandidates([]);
+                      setRowState({});
+                      setImported({});
+                    }}
+                  >
+                    <Badge tone={spec.tone}>{t(spec.labelKey)}</Badge>
+                    <span className="muted">
+                      {t('discovery.scans.progress', { probed: s.probed, total: s.total })}
+                    </span>
+                    <span className="muted">
+                      {t('discovery.scans.candidates', { count: s.candidate_count })}
+                    </span>
+                    {/* The route the sweep actually took, not the one that was asked for — the
+                        server falls back to "any poller" when a named site has none live. */}
+                    <span className="muted">{s.pool ?? t('discovery.pool.any')}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
 
       {candidates.length > 0 && (
         <Card title={t('discovery.resultsTitle')} className="disco-results-card">
