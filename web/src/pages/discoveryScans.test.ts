@@ -54,6 +54,10 @@ function status(over: Partial<DiscoveryScan> = {}): DiscoveryScan {
 
 const pool = (name: string, live: boolean): PoolOption => ({ name, live });
 
+/** The id both fixtures carry — i.e. "the page is looking at the scan it selected", which is
+ *  what every test that is not about identity means. */
+const SEL = '00000000-0000-0000-0000-000000000001';
+
 describe('scan state', () => {
   it('gives every wire state a spec', () => {
     // The `Record` makes this a compile error too; asserting it keeps the guarantee if the type
@@ -119,7 +123,7 @@ describe('shouldPollScan', () => {
   it('polls from the act of starting, before the server can describe the scan', () => {
     // The inversion `upgradeStatus.ts` documents: deriving this from what the server currently says
     // means concluding there is nothing to watch during the window in which it cannot answer yet.
-    expect(shouldPollScan({ status: null, justStarted: true, failures: 0 })).toBe(true);
+    expect(shouldPollScan({ scanId: SEL, status: null, justStarted: true, failures: 0 })).toBe(true);
   });
 
   it('polls a scan picked up on arrival, which has no status yet and was not started here', () => {
@@ -131,13 +135,48 @@ describe('shouldPollScan', () => {
     //
     // Both of the original tests passed throughout. Neither covered this combination, because the
     // start path always sets `justStarted` and every other case supplies a status.
-    expect(shouldPollScan({ status: null, justStarted: false, failures: 0 })).toBe(true);
+    expect(shouldPollScan({ scanId: SEL, status: null, justStarted: false, failures: 0 })).toBe(true);
+  });
+
+  it('polls when the status it holds is about some other scan', () => {
+    // 🚨 The second real deployment bug, and the subtler face of the one above. Pressing Scan
+    // while a finished sweep is on screen starts a poll straight away on `justStarted` — but the id
+    // it polls is still the *previous* scan, because the new one does not exist until the server
+    // answers. That reply lands first, clears `justStarted` and installs a `done` status, so the new
+    // scan id arrives at a page that has already decided there is nothing to watch. The sweep ran to
+    // completion with its row frozen at `0/254`; only a reload revealed it had finished.
+    //
+    // Reattach is what made this the normal path: arriving now selects the newest sweep, so there is
+    // almost always a finished scan on screen when Scan is pressed.
+    expect(
+      shouldPollScan({
+        scanId: 'the-new-scan',
+        status: status({ scan_id: 'the-previous-scan', state: 'done', done: true }),
+        justStarted: false,
+        failures: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it('still stops on a terminal status that IS about the selected scan', () => {
+    // The other half: the identity check must not turn every terminal state into "keep asking",
+    // which would poll every finished sweep forever. A guard that only ever answers `true` is
+    // indistinguishable from no guard.
+    expect(
+      shouldPollScan({
+        scanId: 'the-scan',
+        status: status({ scan_id: 'the-scan', state: 'done', done: true }),
+        justStarted: false,
+        failures: 0,
+      }),
+    ).toBe(false);
   });
 
   it('keeps polling a scan that has not been declared over', () => {
-    expect(shouldPollScan({ status: status(), justStarted: false, failures: 0 })).toBe(true);
+    expect(shouldPollScan({ scanId: SEL, status: status(), justStarted: false, failures: 0 })).toBe(true);
     expect(
       shouldPollScan({
+        scanId: SEL,
         status: status({ state: 'cancelling' }),
         justStarted: false,
         failures: 0,
@@ -148,7 +187,7 @@ describe('shouldPollScan', () => {
   it('stops once the scan is terminal', () => {
     for (const state of ['done', 'cancelled'] as const) {
       expect(
-        shouldPollScan({ status: status({ state, done: true }), justStarted: false, failures: 0 }),
+        shouldPollScan({ scanId: SEL, status: status({ state, done: true }), justStarted: false, failures: 0 }),
       ).toBe(false);
     }
   });
@@ -159,20 +198,20 @@ describe('shouldPollScan', () => {
     // going" — polls until the tab closes, because a build that cannot read a state today will
     // never learn it. The backend picks the same side (`AnalysisJobState::Unknown` is terminal).
     const unknown = { ...status(), state: 'teleported' } as unknown as DiscoveryScan;
-    expect(shouldPollScan({ status: unknown, justStarted: false, failures: 0 })).toBe(false);
+    expect(shouldPollScan({ scanId: SEL, status: unknown, justStarted: false, failures: 0 })).toBe(false);
     // …but pressing Scan still starts a poll: that is the operator's own action, not a reading of
     // a state.
-    expect(shouldPollScan({ status: unknown, justStarted: true, failures: 0 })).toBe(true);
+    expect(shouldPollScan({ scanId: SEL, status: unknown, justStarted: true, failures: 0 })).toBe(true);
   });
 
   it('gives up after repeated failures instead of hammering a 404 forever', () => {
     // The pre-ADR-068 behaviour: a scan the core had forgotten left the page polling every two
     // seconds for the life of the tab, with the progress note frozen mid-sentence.
     expect(
-      shouldPollScan({ status: status(), justStarted: true, failures: MAX_POLL_FAILURES }),
+      shouldPollScan({ scanId: SEL, status: status(), justStarted: true, failures: MAX_POLL_FAILURES }),
     ).toBe(false);
     expect(
-      shouldPollScan({ status: status(), justStarted: false, failures: MAX_POLL_FAILURES - 1 }),
+      shouldPollScan({ scanId: SEL, status: status(), justStarted: false, failures: MAX_POLL_FAILURES - 1 }),
     ).toBe(true);
   });
 });

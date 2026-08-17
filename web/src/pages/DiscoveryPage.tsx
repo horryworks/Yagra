@@ -226,11 +226,23 @@ export function DiscoveryPage() {
       });
   };
 
+  // Which scan the page is showing, readable from inside an in-flight `poll`. A ref and not the
+  // state value because `poll` is a `useCallback` and would otherwise capture whichever id was
+  // selected when it was created.
+  const selectedScan = useRef<string | null>(null);
+  useEffect(() => {
+    selectedScan.current = scanId;
+  }, [scanId]);
+
   const poll = useCallback(
     (id: string) => {
       api
         .getDiscoveryScan(id)
         .then((s) => {
+          // ⚠️ Drop a reply about a scan the page has moved on from. Pressing Scan fires one
+          // last poll of the *previous* scan before the new id exists, and letting that reply land
+          // installs a finished status over a sweep that has just begun.
+          if (selectedScan.current !== null && selectedScan.current !== id) return;
           setStatus(s);
           setUnknownScan(false);
           setFailures(0);
@@ -249,6 +261,7 @@ export function DiscoveryPage() {
           }
         })
         .catch((e: unknown) => {
+          if (selectedScan.current !== null && selectedScan.current !== id) return;
           setFailures((n) => n + 1);
           // A 404 is the specific, expected failure: this core restarted (or the scan aged out)
           // while a poller may still be sweeping. It gets its own message rather than being
@@ -263,7 +276,7 @@ export function DiscoveryPage() {
     [seedRows, t],
   );
 
-  const polling = shouldPollScan({ status, justStarted, failures });
+  const polling = shouldPollScan({ scanId, status, justStarted, failures });
 
   useEffect(() => {
     if (!scanId || !polling) return;

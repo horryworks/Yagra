@@ -78,7 +78,10 @@ export function selectInitialScan(
 
 /** Inputs to the polling decision, named so the call site cannot transpose two booleans. */
 export interface PollInputs {
-  /** The scan currently on screen, or `null` while its first fetch is in flight. */
+  /** The scan the page is showing. */
+  scanId: string | null;
+  /** The last status fetched, or `null` when none has been. ⚠️ Not necessarily about `scanId` —
+   *  see the identity check in `shouldPollScan`. */
   status: DiscoveryScan | null;
   /** The operator pressed Scan in this session and the server has not answered yet. */
   justStarted: boolean;
@@ -104,7 +107,7 @@ export const MAX_POLL_FAILURES = 5;
  *  failure stops it; nothing selected stops it; and a state this build cannot read stops it too —
  *  see `SCAN_STATE_SPECS.unknown`, where waiting for a word that will never arrive is the worse of
  *  the two mistakes. */
-export function shouldPollScan({ status, justStarted, failures }: PollInputs): boolean {
+export function shouldPollScan({ scanId, status, justStarted, failures }: PollInputs): boolean {
   if (failures >= MAX_POLL_FAILURES) return false;
   if (justStarted) return true;
   // 🚨 `null` means "we have not asked yet", **not** "there is nothing to watch". Reading it as the
@@ -118,6 +121,17 @@ export function shouldPollScan({ status, justStarted, failures }: PollInputs): b
   // Whether a scan is *selected* is the caller's question, not this one's — the effect that polls
   // is already guarded on having a scan id.
   if (!status) return true;
+  // 🚨 …and neither does a status about a **different** scan, which is the same mistake one
+  // level subtler. Pressing Scan while a finished sweep is on screen starts a poll immediately (on
+  // `justStarted`), and the id it polls is still the *old* one, because the new id only exists once
+  // the server answers. That old poll lands first, clears `justStarted` and installs a `done`
+  // status — so by the time the new scan id arrives, this function has already concluded there is
+  // nothing to watch. The sweep then ran to completion with the row frozen at `0/254` and the
+  // progress line stuck, and only a reload showed it had finished.
+  //
+  // Reattach made this the *normal* path rather than an edge case: arriving at the page now selects
+  // the newest sweep, so there is almost always a finished scan on screen when Scan is pressed.
+  if (scanId && status.scan_id !== scanId) return true;
   return isScanInFlight(status.state);
 }
 
