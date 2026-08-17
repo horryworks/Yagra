@@ -52,6 +52,8 @@ import { DependencyWidget } from './widgets/topology';
 import {
   AggregateThroughputWidget,
   InterfaceHeatmapWidget,
+  InterfaceTrafficActions,
+  InterfaceTrafficWidget,
   TrafficDropsWidget,
   TrafficSpikesWidget,
 } from './widgets/capacity';
@@ -346,6 +348,19 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
     Component: InterfaceHeatmapWidget,
+  },
+  {
+    // Never renumber: the type is what a saved board stores.
+    type: 'interface-traffic',
+    title: 'registry.widgets.interface-traffic.title',
+    section: SECTION.capacity,
+    blurb: 'registry.widgets.interface-traffic.blurb',
+    backing: 'live',
+    defaultSpan: 8,
+    allowedSpans: [6, 8, 12],
+    allowedRowSpans: [1, 2, 3],
+    Component: InterfaceTrafficWidget,
+    Actions: InterfaceTrafficActions,
   },
   {
     type: 'traffic-spikes',

@@ -164,6 +164,10 @@
         "title": "Interface utilization heatmap",
         "blurb": "Busiest links × time, shaded by throughput."
       },
+      "interface-traffic": {
+        "title": "Interface traffic",
+        "blurb": "Up to six interfaces you pick, across nodes. In above the line, out below."
+      },
       "traffic-spikes": {
         "title": "Traffic spikes",
         "blurb": "Interfaces whose throughput jumped most vs 5m ago."
@@ -343,6 +347,25 @@
     },
     "interfaceTraffic": {
       "empty": "No interface traffic yet…"
+    },
+    "ifTraffic": {
+      "pickAria": "Choose which interfaces to plot",
+      "pickCount": "Interfaces ({{n}}/{{max}})",
+      "pickSome": "Pick one or more interfaces to plot.",
+      "noneYet": "Nothing plotted yet. Choose a node, then one of its interfaces.",
+      "removeAria": "Stop plotting this interface",
+      "full": "{{max}} is the maximum — the chart has {{max}} colours, and a seventh line would reuse one.",
+      "pickNodePlaceholder": "Node…",
+      "pickIfaceAria": "Interface",
+      "pickIfacePlaceholder": "Interface…",
+      "allPicked": "Every interface on this node is already plotted",
+      "rosterFailed": "Couldn’t read this node’s interfaces",
+      "unavailable": "No longer reported by the node: {{links}}",
+      "unitAria": "Unit",
+      "unitTitle": "Bits per second, or unicast packets per second (multicast and broadcast are not counted)",
+      "unitBps": "bps",
+      "unitPps": "pps",
+      "rangeAria": "Time window"
     },
     "mostErrors": {
       "empty": "No interface errors. 🎉"

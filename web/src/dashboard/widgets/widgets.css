@@ -219,3 +219,158 @@ html[data-viewport='mobile'] .metrictop-actions {
 html[data-viewport='mobile'] .metrictop-actions .metrictop-metric {
   max-width: none;
 }
+
+/* Interface traffic (ADR-069) — the card header holds three controls: which links (a popover, so
+   the list of six can be read and edited without stealing the chart's height), then the unit and
+   the window. The two selects are capped so the link trigger keeps the elastic width; under the
+   mobile shell the row wraps instead of shrinking each control to a few characters. */
+.iftraffic-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.iftraffic-trigger-wrap {
+  display: flex;
+  min-width: 0;
+}
+
+.iftraffic-trigger {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  background: var(--bg-primary);
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--font-xs);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.iftraffic-trigger:hover {
+  border-color: var(--text-tertiary);
+}
+
+.iftraffic-trigger:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+.iftraffic-caret {
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+.iftraffic-actions select {
+  max-width: 110px;
+}
+
+html[data-viewport='mobile'] .iftraffic-actions {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .iftraffic-actions select {
+  max-width: none;
+}
+
+/* The popover surface: `.apop` supplies the chrome, this supplies the width and padding. */
+.iftraffic-pop {
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  padding: var(--space-2);
+}
+
+.iftraffic-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.iftraffic-note {
+  margin: 0;
+  font-size: var(--font-xs);
+}
+
+.iftraffic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.iftraffic-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+/* Same palette index the chart strokes use, so the list and the lines cannot disagree on colour. */
+.iftraffic-sw {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.iftraffic-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iftraffic-rm {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  cursor: pointer;
+}
+
+.iftraffic-rm:hover {
+  color: var(--status-critical);
+}
+
+.iftraffic-add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-top: var(--space-2);
+  border-top: var(--border-width) solid var(--border-color);
+}
+
+.iftraffic-add .iftraffic-node {
+  flex: 1;
+  min-width: 0;
+}
+
+.iftraffic-add select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Touch targets stay at the 40px floor for in-row controls under the mobile shell. */
+html[data-viewport='mobile'] .iftraffic-rm {
+  width: 40px;
+  height: 40px;
+}
+
+html[data-viewport='mobile'] .iftraffic-add {
+  flex-wrap: wrap;
+}
