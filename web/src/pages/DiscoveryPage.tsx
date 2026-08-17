@@ -23,6 +23,7 @@ import type {
 import {
   canRequestStop,
   isScanInFlight,
+  mergeScanIntoList,
   pickDefaultPool,
   poolIsUnrouted,
   SCAN_STATE_SPECS,
@@ -236,6 +237,10 @@ export function DiscoveryPage() {
           setJustStarted(false);
           setCandidates(s.candidates);
           seedRows(s.candidates);
+          // Keep the row in Recent sweeps in step with the progress line. Only the status is
+          // polled, so without this the row froze at whatever the one-off list fetch returned —
+          // "Running · 0/254 probed · 0 devices" above a table listing the devices it had found.
+          setScans((prev) => mergeScanIntoList(prev, s));
           if (!isScanInFlight(s.state)) {
             setNote(t('discovery.msg.scanComplete', { count: s.candidates.length }));
           } else {
@@ -427,18 +432,21 @@ export function DiscoveryPage() {
                 only control here whose cost the operator should read before pressing Scan.
                 The input stays enabled mid-sweep (the value is worth reading) — only the button
                 that acts on it goes away (ui-conventions). */}
-            <label className="disco-opt">
-              <input
-                type="checkbox"
-                checked={snmpWhenUnreachable}
-                disabled={inFlight}
-                onChange={(e) => setSnmpWhenUnreachable(e.target.checked)}
-              />
-              <span>
+            <div className="disco-opt">
+              {/* ⚠️ The hint is a *sibling* of the label, not a child of it. Inside, the whole
+                  two-line explanation becomes part of the checkbox's hit area — so selecting the
+                  text to read it flips the setting instead. */}
+              <label className="form-label form-check">
+                <input
+                  type="checkbox"
+                  checked={snmpWhenUnreachable}
+                  disabled={inFlight}
+                  onChange={(e) => setSnmpWhenUnreachable(e.target.checked)}
+                />
                 {t('discovery.icmpGate.label')}
-                <FieldHint>{t('discovery.icmpGate.hint')}</FieldHint>
-              </span>
-            </label>
+              </label>
+              <FieldHint>{t('discovery.icmpGate.hint')}</FieldHint>
+            </div>
 
             {/* Below the row rather than in it. Each field is now three bands tall (label, input,
                 hint), and a hint that wraps makes its column taller than the others — so a button

@@ -121,6 +121,41 @@ export function shouldPollScan({ status, justStarted, failures }: PollInputs): b
   return isScanInFlight(status.state);
 }
 
+/** Fold a freshly-polled scan back into the list of sweeps.
+ *
+ *  🚨 **The list is fetched, the selected scan is polled, and only the second of those repeats.**
+ *  So the row in *Recent sweeps* froze at whatever the list said when it was last fetched: a sweep
+ *  the operator was watching sat at `Running · 0/254 probed · 0 devices` while the progress line and
+ *  the candidate table directly below it filled in. Two surfaces showing one fact, fetched
+ *  separately, and the one that updated less often was the one wearing the word "Running".
+ *
+ *  Refreshing the list on every tick would fix the symptom and keep the cause — two fetches that can
+ *  disagree, at twice the request rate. Deriving the row from the status the page already has cannot
+ *  disagree, because there is only one answer.
+ *
+ *  A scan with no row yet is **prepended**: the list arrives newest-first, and the only way to be
+ *  polling a scan the list has never mentioned is to have just started it. */
+export function mergeScanIntoList(
+  scans: readonly DiscoveryScanSummary[],
+  status: DiscoveryScan,
+): DiscoveryScanSummary[] {
+  const row: DiscoveryScanSummary = {
+    scan_id: status.scan_id,
+    state: status.state,
+    probed: status.probed,
+    total: status.total,
+    candidate_count: status.candidates.length,
+    started_at: status.started_at,
+    updated_at: status.updated_at,
+    pool: status.pool,
+  };
+  const at = scans.findIndex((s) => s.scan_id === status.scan_id);
+  if (at < 0) return [row, ...scans];
+  // Rebuilt in place: the list's order is the server's (newest first) and moving a row because it
+  // reported progress would shuffle the list under the operator's cursor.
+  return scans.map((s, i) => (i === at ? row : s));
+}
+
 /** The pool a fresh visit should preselect.
  *
  *  One live pool ⇒ that one: a single-site deployment should not have to answer a question with

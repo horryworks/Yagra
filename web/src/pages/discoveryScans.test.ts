@@ -13,6 +13,7 @@ import {
   canRequestStop,
   isScanInFlight,
   MAX_POLL_FAILURES,
+  mergeScanIntoList,
   pickDefaultPool,
   poolIsUnrouted,
   SCAN_STATE_SPECS,
@@ -173,6 +174,55 @@ describe('shouldPollScan', () => {
     expect(
       shouldPollScan({ status: status(), justStarted: false, failures: MAX_POLL_FAILURES - 1 }),
     ).toBe(true);
+  });
+});
+
+describe('mergeScanIntoList', () => {
+  it('brings the watched row up to what the poll just returned', () => {
+    // 🚨 The defect this exists for, seen on a real deployment: the list is fetched once and only
+    // the selected scan is polled, so the row read `Running · 0/254 probed · 0 devices` while the
+    // table right below it listed the two devices that sweep had already found.
+    const stale = summary({ scan_id: 'a', state: 'running', probed: 0, candidate_count: 0 });
+    const fresh = status({
+      scan_id: 'a',
+      state: 'running',
+      probed: 96,
+      candidates: [{}, {}] as never,
+    });
+    const [row] = mergeScanIntoList([stale], fresh);
+    expect(row.probed).toBe(96);
+    expect(row.candidate_count).toBe(2);
+  });
+
+  it('leaves the other rows alone and does not reorder them', () => {
+    // The list is newest-first from the server. Moving a row because it reported progress would
+    // shuffle the list under the operator while they are reaching for it.
+    const rows = [
+      summary({ scan_id: 'newest' }),
+      summary({ scan_id: 'middle' }),
+      summary({ scan_id: 'oldest' }),
+    ];
+    const merged = mergeScanIntoList(rows, status({ scan_id: 'middle', probed: 7 }));
+    expect(merged.map((s) => s.scan_id)).toEqual(['newest', 'middle', 'oldest']);
+    expect(merged[1].probed).toBe(7);
+    expect(merged[0]).toBe(rows[0]);
+    expect(merged[2]).toBe(rows[2]);
+  });
+
+  it('prepends a scan the list has never mentioned', () => {
+    // The window between pressing Scan and the list fetch landing: the only way to be polling a
+    // scan that is not in the list is to have just started it, and the list is newest-first.
+    const merged = mergeScanIntoList([summary({ scan_id: 'older' })], status({ scan_id: 'brand-new' }));
+    expect(merged.map((s) => s.scan_id)).toEqual(['brand-new', 'older']);
+  });
+
+  it('carries a terminal state across, so a finished sweep stops saying Running', () => {
+    const merged = mergeScanIntoList(
+      [summary({ scan_id: 'a', state: 'running' })],
+      status({ scan_id: 'a', state: 'done', done: true, probed: 254 }),
+    );
+    expect(merged[0].state).toBe('done');
+    expect(merged[0].probed).toBe(254);
   });
 });
 
