@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.13 — a remote site's poller is stood up from the WebUI, and a poller id is no longer taken on trust
+
 ### New Features
 - **Standing up a poller at a remote site is now done from the WebUI.** Settings ▸ Pollers grew a
   **Remote pollers** panel and a **Token** column. Previously this meant generating a certificate
@@ -29,20 +31,6 @@
     taken from this core's image, and a README. The site's whole procedure is unpack and
     `docker compose up -d`. The token is stored only as a SHA-256 digest, so it is shown once and
     cannot be recovered — issue a new one if the archive is lost.
-
-### Security
-- **A poller id that is not in the inventory is now refused, whatever secret it presents.** The
-  connection's poller id was self-asserted and checked against nothing, so a `.env` leaked at one
-  site let the holder claim *any* id — and the working set core then sent it carries the plaintext
-  SNMP communities, SNMPv3 credentials and API tokens of whatever nodes that id is assigned. This is
-  closed without issuing any tokens at all.
-- **A poller that has its own token can no longer be admitted by the deployment-wide bootstrap
-  secret**, so issuing tokens narrows the blast radius one site at a time. A poller with no token
-  still uses the shared secret, which is what keeps an existing fleet connected across this upgrade;
-  the Token column on Settings ▸ Pollers shows which pollers are still in that state.
-- **Removing a poller now sticks** on a deployment using NATS Auth Callout. NATS does not
-  re-authenticate an established connection, so a deleted poller's live heartbeat used to recreate
-  its inventory row within ten seconds — refusing its next connection was not enough on its own.
 
 ### Bug Fixes
 - **A fresh install could stop partway through, with no error message.** The published instructions
@@ -68,6 +56,20 @@
   core connected to NATS with no root certificate regardless — so turning the bus TLS would have
   left core unable to reach its own bus. It is now read, with the same empty-means-unset rule the
   poller applies.
+
+### Security
+- **A poller id that is not in the inventory is now refused, whatever secret it presents.** The
+  connection's poller id was self-asserted and checked against nothing, so a `.env` leaked at one
+  site let the holder claim *any* id — and the working set core then sent it carries the plaintext
+  SNMP communities, SNMPv3 credentials and API tokens of whatever nodes that id is assigned. This is
+  closed without issuing any tokens at all.
+- **A poller that has its own token can no longer be admitted by the deployment-wide bootstrap
+  secret**, so issuing tokens narrows the blast radius one site at a time. A poller with no token
+  still uses the shared secret, which is what keeps an existing fleet connected across this upgrade;
+  the Token column on Settings ▸ Pollers shows which pollers are still in that state.
+- **Removing a poller now sticks** on a deployment using NATS Auth Callout. NATS does not
+  re-authenticate an established connection, so a deleted poller's live heartbeat used to recreate
+  its inventory row within ten seconds — refusing its next connection was not enough on its own.
 
 ## v0.2.12 — the support bundle reaches the poller that did the polling, wherever that poller runs
 

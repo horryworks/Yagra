@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.2.12 — the support bundle reaches the poller that did the polling, wherever that poller runs.**
+> Status: **v0.2.13 — a remote site's poller is stood up from the WebUI, and a poller id is no longer taken on trust.**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
