@@ -29,6 +29,14 @@
 //! targets it **actually** probed. Both matter: without the message core waits forever, and without
 //! the honest count `probed == total` would claim the sweep finished the work it just abandoned.
 //!
+//! 🚨 **"Forever" is literal, and it shipped.** Core has no timeout on a sweep — a scan sits in
+//! `cancelling` until the process restarts — and the chunk-boundary stop (2) used to `break` out of
+//! the loop *before* the publish inside it, so a stop that landed between chunks ended the sweep in
+//! silence and left the operator watching "stopping…" indefinitely. Layers 1 and 3 each published
+//! from their own exit and were fine, which is exactly why nothing looked wrong. The publish is now
+//! **one statement after the loop**, guarded by whether a `done: true` has already gone out, so
+//! closing the scan is a property of the function rather than something each exit must remember.
+//!
 //! ## The ICMP gate (ADR-068 Increment 3)
 //!
 //! By default a target that does not answer ICMP is **not** tried with SNMP. That is where a sweep's
@@ -278,6 +286,12 @@ pub async fn run_discovery_stream<S>(
         let mut cancelled = false;
 
         let chunk_count = job.targets.chunks(PROGRESS_CHUNK).count();
+        // Whether a message carrying `done: true` has gone out. 🚨 This is not bookkeeping: core
+        // has no timeout, so a sweep that ends without one leaves the scan `cancelling` for the
+        // life of the process and the operator watching "stopping…" forever. It shipped that way —
+        // the chunk-boundary stop below breaks out *before* the publish, which is the one exit from
+        // this loop that used to reach neither the publish inside it nor the one after it.
+        let mut terminal_sent = false;
         for (i, chunk) in job.targets.chunks(PROGRESS_CHUNK).enumerate() {
             // Layer 2: skip whole chunks not yet started.
             if ctx.stopping() {
@@ -294,6 +308,7 @@ pub async fn run_discovery_stream<S>(
             if swept < u32::try_from(chunk.len()).unwrap_or(u32::MAX) {
                 cancelled = true;
             }
+            let done = cancelled || i + 1 == chunk_count;
             publish(
                 bus.as_ref(),
                 DiscoveryResult {
@@ -301,14 +316,35 @@ pub async fn run_discovery_stream<S>(
                     found: found.clone(),
                     probed,
                     total,
-                    done: cancelled || i + 1 == chunk_count,
+                    done,
                     cancelled,
                 },
             )
             .await;
+            terminal_sent = done;
             if cancelled {
                 break;
             }
+        }
+        // The single exit that closes the scan, whichever way the loop ended. Three paths arrive
+        // here without having said anything terminal, and they used to be handled by two ad-hoc
+        // branches and one oversight: a stop caught at a chunk boundary (the oversight), a sweep
+        // with no targets at all, and — in principle — a loop that ran no iterations for any other
+        // reason. One statement is what makes "the poller always closes the scan" a property of the
+        // function rather than of remembering to repeat it at each way out.
+        if !terminal_sent {
+            publish(
+                bus.as_ref(),
+                DiscoveryResult {
+                    scan_id: job.scan_id,
+                    found: found.clone(),
+                    probed,
+                    total,
+                    done: true,
+                    cancelled,
+                },
+            )
+            .await;
         }
         if cancelled {
             tracing::info!(
@@ -316,21 +352,6 @@ pub async fn run_discovery_stream<S>(
                 "discovery sweep cancelled"
             );
             continue;
-        }
-        if job.targets.is_empty() {
-            // Degenerate sweep: still complete the scan so core doesn't wait forever.
-            publish(
-                bus.as_ref(),
-                DiscoveryResult {
-                    scan_id: job.scan_id,
-                    found: Vec::new(),
-                    probed: 0,
-                    total: 0,
-                    done: true,
-                    cancelled: false,
-                },
-            )
-            .await;
         }
         tracing::info!(scan = %job.scan_id, found = found.len(), "discovery sweep done");
     }
@@ -1303,6 +1324,216 @@ mod tests {
             r.found.is_empty(),
             "this fake answers every target, so a single candidate would mean a packet went to the \
              network for a sweep that was already stopped"
+        );
+    }
+
+    /// Deterministically records a stop on the Nth ICMP probe, so a cancel can be made to land
+    /// exactly at a chunk boundary. Everything else is delegated: this exists to control *when* the
+    /// stop arrives, not to model a device.
+    ///
+    /// WHY `at = PROGRESS_CHUNK`: that probe is the last one `buffer_unordered` starts in the first
+    /// chunk, so the chunk still completes whole (`swept == chunk.len()`, no short-chunk signal) and
+    /// the next iteration's layer-2 check is the first thing to see the stop. Let the cancel land
+    /// earlier and it takes the layer-3 exit, which was never broken -- so the test would pass
+    /// against the bug it exists to catch.
+    struct CancelAtProbe {
+        inner: SelectiveFake,
+        at: usize,
+        seen: std::sync::atomic::AtomicUsize,
+        set: Arc<CancelSet>,
+        scan: Uuid,
+    }
+
+    #[async_trait]
+    impl Transport for CancelAtProbe {
+        async fn probe_icmp(
+            &self,
+            target: IpAddr,
+            count: u8,
+            timeout: Duration,
+        ) -> Result<IcmpProbe, TransportError> {
+            let n = self.seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == self.at {
+                self.set.insert(self.scan, Instant::now());
+            }
+            self.inner.probe_icmp(target, count, timeout).await
+        }
+        async fn snmp_get(
+            &self,
+            t: IpAddr,
+            c: &str,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpSample>, TransportError> {
+            self.inner.snmp_get(t, c, o, to).await
+        }
+        async fn snmp_v3_get(
+            &self,
+            t: IpAddr,
+            p: &SnmpV3Params,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpSample>, TransportError> {
+            self.inner.snmp_v3_get(t, p, o, to).await
+        }
+        async fn snmp_v3_get_strings(
+            &self,
+            t: IpAddr,
+            p: &SnmpV3Params,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpStringSample>, TransportError> {
+            self.inner.snmp_v3_get_strings(t, p, o, to).await
+        }
+        async fn snmp_walk(
+            &self,
+            t: IpAddr,
+            c: &str,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpTableSample>, TransportError> {
+            self.inner.snmp_walk(t, c, o, to).await
+        }
+        async fn snmp_walk_strings(
+            &self,
+            t: IpAddr,
+            c: &str,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpTableString>, TransportError> {
+            self.inner.snmp_walk_strings(t, c, o, to).await
+        }
+        async fn snmp_v3_walk(
+            &self,
+            t: IpAddr,
+            p: &SnmpV3Params,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpTableSample>, TransportError> {
+            self.inner.snmp_v3_walk(t, p, o, to).await
+        }
+        async fn snmp_v3_walk_strings(
+            &self,
+            t: IpAddr,
+            p: &SnmpV3Params,
+            o: &[String],
+            to: Duration,
+        ) -> Result<Vec<SnmpTableString>, TransportError> {
+            self.inner.snmp_v3_walk_strings(t, p, o, to).await
+        }
+        async fn snmp_walk_instances(
+            &self,
+            t: IpAddr,
+            c: &str,
+            o: &[String],
+            to: Duration,
+            m: usize,
+        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+            self.inner.snmp_walk_instances(t, c, o, to, m).await
+        }
+        async fn snmp_v3_walk_instances(
+            &self,
+            t: IpAddr,
+            p: &SnmpV3Params,
+            o: &[String],
+            to: Duration,
+            m: usize,
+        ) -> Result<Vec<yagra_transport::SnmpInstanceRow>, TransportError> {
+            self.inner.snmp_v3_walk_instances(t, p, o, to, m).await
+        }
+        async fn probe_http(
+            &self,
+            spec: &HttpProbeSpec,
+            to: Duration,
+        ) -> Result<HttpProbe, TransportError> {
+            self.inner.probe_http(spec, to).await
+        }
+        async fn resolve_dns(
+            &self,
+            spec: &DnsProbeSpec,
+            to: Duration,
+        ) -> Result<DnsChain, TransportError> {
+            self.inner.resolve_dns(spec, to).await
+        }
+        async fn collect_meraki(
+            &self,
+            spec: &yagra_transport::MerakiCollectSpec,
+            to: Duration,
+        ) -> Result<Vec<yagra_transport::MerakiObservation>, TransportError> {
+            self.inner.collect_meraki(spec, to).await
+        }
+    }
+
+    /// The bug this file's own doc warned about and did not test, found on a real deployment: press
+    /// Stop, the poller logs `discovery sweep cancelled probed=32 total=254`, and the screen sits on
+    /// "stopping..." until the core process is restarted. The sweep stopped correctly and never said
+    /// so -- the chunk-boundary exit broke out before the publish.
+    ///
+    /// What the neighbouring test pins is that a short chunk *counts* honestly. What it left
+    /// unproven, in writing, was "the wiring -- that the loop propagates a short chunk into
+    /// `cancelled` and stops". This is that wiring, and the answer was no.
+    #[tokio::test]
+    async fn a_stop_caught_between_chunks_still_closes_the_scan() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
+        let mut rx = bus.subscribe_discovery_results();
+        let scan = Uuid::from_u128(77);
+        let cancels = Arc::new(CancelSet::new());
+
+        // Two chunks: the first full, the second holding the remainder.
+        let count = u8::try_from(PROGRESS_CHUNK).unwrap() + 8;
+        let mut job = job(vec![], vec!["public".to_owned()]);
+        job.scan_id = scan;
+        job.targets = (1..=count)
+            .map(|i| IpAddr::V4(Ipv4Addr::new(10, 0, 0, i)))
+            .collect();
+
+        let transport = Arc::new(CancelAtProbe {
+            inner: SelectiveFake {
+                ping: true,
+                good_community: Some("public".to_owned()),
+                good_v3_user: None,
+            },
+            at: PROGRESS_CHUNK,
+            seen: std::sync::atomic::AtomicUsize::new(0),
+            set: cancels.clone(),
+            scan,
+        });
+
+        run_discovery_stream(
+            futures::stream::iter(vec![job]),
+            bus.clone() as Arc<dyn DiscoveryBus>,
+            transport,
+            cancels,
+        )
+        .await;
+
+        let mut results = Vec::new();
+        while let Ok(r) = rx.try_recv() {
+            results.push(r);
+        }
+        let last = results.last().expect("the sweep said something");
+        assert!(
+            last.done,
+            "core has no timeout: a sweep that ends without `done` leaves the scan `cancelling` for \
+             the life of the process, which is exactly what the operator saw"
+        );
+        assert!(
+            last.cancelled,
+            "and it must say it was cancelled, or the scan resolves to `done` and the screen claims \
+             a stopped sweep finished"
+        );
+        assert_eq!(
+            last.probed,
+            u32::try_from(PROGRESS_CHUNK).unwrap(),
+            "one whole chunk was probed and the second never started -- `probed < total` is the \
+             operator's only evidence that the stop took effect"
+        );
+        assert!(last.probed < last.total);
+        assert_eq!(
+            results.iter().filter(|r| r.done).count(),
+            1,
+            "exactly one terminal message: the guard must not let the post-loop publish duplicate a \
+             `done` the loop already sent"
         );
     }
 

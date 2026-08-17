@@ -10,8 +10,15 @@
  * Top-alignment anchors what the eye actually reads across — the three labels, and the tops of the
  * three inputs under them — and lets the hints hang to whatever length they need.
  * (An earlier comment here said not to override this. That was wrong; it was written before the
- * fields had labels and hints, when the columns really were the same height.) */
-.disco-form {
+ * fields had labels and hints, when the columns really were the same height.)
+ *
+ * 🚨 **The compound selector is the fix, not decoration.** `.disco-form` alone is the same
+ * specificity as `.form-row`, so which one wins is decided by source order -- and Vite emits the
+ * page's CSS *before* `index.css`, so `.form-row`'s `flex-end` came later and won. The override was
+ * in the shipped stylesheet, verifiably, and did nothing. Naming both classes (0,2,0 beats 0,1,0)
+ * settles it without depending on bundler ordering, which no test watches and which a chunking
+ * change could flip back. Same trap for any page rule that overrides a shared one by name only. */
+.disco-form.form-row {
   flex-wrap: wrap;
   align-items: flex-start;
   gap: 12px 16px;
