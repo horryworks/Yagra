@@ -102,10 +102,17 @@ Yagra は 2 つの常駐バイナリと静的 WebUI、そして 5 つのスト�
 
 ```bash
 mkdir yagra && cd yagra
-curl -fsSLO https://raw.githubusercontent.com/horryworks/Yagra/main/docker-compose.deploy.yml
+curl -fsSL -o docker-compose.deploy.yml \
+  https://github.com/horryworks/Yagra/releases/latest/download/docker-compose.deploy.yml
 printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > .env
 docker compose -f docker-compose.deploy.yml up -d
 ```
+
+**compose ファイルは `main` からではなくリリースから取ってください。** このファイルと、これが取得する
+イメージは一体の成果物です。compose 側が、まだ公開されていないイメージにしか無いコマンド・環境変数・
+初期化コンテナを要求することがあります。`releases/latest/download/` は最新の**安定リリース**に解決され、
+これは `:latest` イメージタグの意味と同じなので、両者は必ず一致します。`main` にあるのは*次の*リリースの
+compose であり、誰も取得できないイメージを指している場合があります。
 
 `up -d` だけで取得も走ります — イメージに `pull_policy: always` が付いているため、別途 `pull` する必要はありません。起動したら **https://\<host\>/** を開きます（API は `:8080`）。証明書は Settings ▸ TLS で自分のものを取り込むまで自己署名です。
 

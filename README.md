@@ -300,7 +300,8 @@ composition, and start it:
 
 ```bash
 mkdir yagra && cd yagra
-curl -fsSLO https://raw.githubusercontent.com/horryworks/Yagra/main/docker-compose.deploy.yml
+curl -fsSL -o docker-compose.deploy.yml \
+  https://github.com/horryworks/Yagra/releases/latest/download/docker-compose.deploy.yml
 printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > .env
 docker compose -f docker-compose.deploy.yml up -d
 ```

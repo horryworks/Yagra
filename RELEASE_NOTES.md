@@ -45,6 +45,15 @@
   its inventory row within ten seconds — refusing its next connection was not enough on its own.
 
 ### Bug Fixes
+- **A fresh install could stop partway through, with no error message.** The published instructions
+  fetched `docker-compose.deploy.yml` from `main`, while the images that composition pulls are
+  `:latest` — the latest *stable* release. The moment a composition on `main` required something only
+  an unreleased image provides, a new deployment stalled: the one-shot `bus-cert-init` sat at
+  `Up (healthy)` instead of exiting, and `nats`, `core`, `poller` and `web` never left `Created`.
+  **The composition is now attached to each release**, and the instructions fetch it from
+  `https://github.com/horryworks/Yagra/releases/latest/download/docker-compose.deploy.yml`, which
+  resolves to the same release the `:latest` images come from. Existing deployments are unaffected —
+  an in-place upgrade already installs the composition carried inside the image it is installing.
 - **The compose edits that enabled the TLS bus were erased by every upgrade, and only remote sites
   noticed.** Settings ▸ Upgrade reinstalls `docker-compose.deploy.yml` from the target image, so the
   bus reverted to plaintext and core to `nats://` while the central stack kept working perfectly —

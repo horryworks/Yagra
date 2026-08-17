@@ -43,6 +43,15 @@
   次の接続を拒否するだけでは足りません。
 
 ### バグ修正
+- **新規インストールが、エラーを 1 行も出さずに途中で止まることがありました。** 公開している手順は
+  `docker-compose.deploy.yml` を `main` から取得していましたが、その compose が pull するイメージは
+  `:latest`＝最新の**安定リリース**です。`main` の compose が未リリースのイメージにしか無いものを
+  要求した瞬間、新規デプロイは止まります。一発コンテナのはずの `bus-cert-init` が終了せずに
+  `Up (healthy)` のまま居座り、`nats` / `core` / `poller` / `web` が `Created` から動かなくなります。
+  **compose ファイルは各リリースに添付されるようになりました。** 手順の取得先は
+  `https://github.com/horryworks/Yagra/releases/latest/download/docker-compose.deploy.yml` になり、
+  `:latest` イメージと同じリリースに解決されます。既存のデプロイに影響はありません — 無停止
+  アップグレードは元から、入れようとしているイメージの中にある compose を使います。
 - **TLS バスを有効化する compose の編集は、アップグレードのたびに消えていました。しかも気づくのは
   リモート拠点だけです。** 設定 ▸ アップグレードは `docker-compose.deploy.yml` を対象イメージのもので
   入れ直すため、バスは平文に、core は `nats://` に戻り、**中央スタックは正常に動き続けます** — 最も

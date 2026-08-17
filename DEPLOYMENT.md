@@ -111,10 +111,17 @@ It needs no repository checkout — the composition is a single self-contained f
 
 ```bash
 mkdir yagra && cd yagra
-curl -fsSLO https://raw.githubusercontent.com/horryworks/Yagra/main/docker-compose.deploy.yml
+curl -fsSL -o docker-compose.deploy.yml \
+  https://github.com/horryworks/Yagra/releases/latest/download/docker-compose.deploy.yml
 printf 'POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 16)" > .env
 docker compose -f docker-compose.deploy.yml up -d
 ```
+
+**Take the composition from the release, not from `main`.** The file and the images it pulls are one
+artifact: a composition can require a container command, an environment variable or an init step that
+only exists in an image that has not been published yet. `releases/latest/download/` resolves to the
+latest **stable** release — the same thing the `:latest` image tag means — so the two always match.
+The `main` copy is the *next* release's composition and may reference images nobody can pull.
 
 `up -d` pulls on its own — the images carry `pull_policy: always`, so there is no separate `pull` step. Open **https://\<host\>/** once it is up (API on `:8080`). The certificate is self-signed until you import your own at Settings ▸ TLS.
 
