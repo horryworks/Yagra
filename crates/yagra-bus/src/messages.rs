@@ -2169,6 +2169,16 @@ pub struct DiscoveryJob {
     /// Per-probe timeout in milliseconds.
     #[serde(default = "default_snmp_timeout_ms")]
     pub timeout_ms: u32,
+    /// Whether to try SNMP on a target that did not answer ICMP (ADR-068 Increment 3).
+    ///
+    /// ⚠️ **The default is `true` — today's behaviour — and it is a decision about the wire, not
+    /// about what an operator wants.** This field is absent only from a job published by an N-1
+    /// core, and that core meant "probe everything"; defaulting to `false` here would silently
+    /// change what an older core's sweeps do at the moment a poller is upgraded. The
+    /// operator-facing default is the opposite one and lives at the API edge (`StartScan`), where
+    /// "unspecified" means a fresh request that should take the fast path.
+    #[serde(default = "default_true")]
+    pub snmp_when_unreachable: bool,
 }
 
 /// One candidate credential for a discovery sweep. Exactly one of `community` / `v3` is
@@ -2792,6 +2802,7 @@ mod tests {
                 },
             ],
             timeout_ms: 2000,
+            snmp_when_unreachable: false,
         };
         let json = serde_json::to_string(&job).unwrap();
         let back: DiscoveryJob = serde_json::from_str(&json).unwrap();
@@ -2811,6 +2822,13 @@ mod tests {
         )
         .unwrap();
         assert!(job.credentials.is_empty());
+        // ADR-068 Inc.3. The one field whose default is *not* the new behaviour: an N-1 core asked
+        // for a sweep that probes SNMP everywhere, and an upgraded poller must keep doing that for
+        // it rather than quietly narrowing what an older deployment discovers.
+        assert!(
+            job.snmp_when_unreachable,
+            "a job from a core that predates the ICMP gate must still probe silent addresses"
+        );
 
         let result: DiscoveryResult = serde_json::from_str(
             r#"{

@@ -1293,6 +1293,9 @@ export const api = {
     communities?: string[];
     credential_ids: string[];
     pool?: string;
+    /** Try SNMP on addresses that do not answer ICMP (ADR-068 Inc.3). Omitted means no — the fast
+     *  path, and a deliberate change from what every earlier release did. */
+    snmp_when_unreachable?: boolean;
   }): Promise<{ scan_id: string }> => apiPost('/api/v1/discovery/scan', { body }),
 
   /** Poll a discovery scan's status + candidates. */

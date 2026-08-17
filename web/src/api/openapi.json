@@ -30429,6 +30429,10 @@
             ],
             "description": "Poll-pool to run the sweep in (ADR-009/020). Absent/empty = legacy global discovery."
           },
+          "snmp_when_unreachable": {
+            "type": "boolean",
+            "description": "Try SNMP on addresses that do not answer ICMP.\n\nAbsent means **no**. Earlier releases had no such option and tried every address in the\nrange with every candidate credential, which is why sweeping a /24 took minutes; set this to\nget that behaviour back, and with it a device that filters ICMP but answers SNMP."
+          },
           "targets": {
             "type": "array",
             "items": {

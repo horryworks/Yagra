@@ -300,6 +300,12 @@
       }
     },
     "scanTitle": "Scan a subnet",
+    "targetsLabel": "Addresses",
+    "credsLabel": "Credentials to try",
+    "icmpGate": {
+      "label": "Also try SNMP where ping is blocked",
+      "hint": "Off: an address that does not answer ping is skipped instead of being tried with every credential, which is what keeps a large range quick. Turn it on to find devices that block ICMP but answer SNMP."
+    },
     "resultsTitle": "Discovered devices",
     "signIn": "Sign in as an admin to run discovery.",
     "targetPlaceholder": "CIDR, range or list (e.g. 192.168.1.0/24, 10.0.0.5, 192.168.1.10-20)",

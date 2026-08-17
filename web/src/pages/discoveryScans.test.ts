@@ -121,6 +121,18 @@ describe('shouldPollScan', () => {
     expect(shouldPollScan({ status: null, justStarted: true, failures: 0 })).toBe(true);
   });
 
+  it('polls a scan picked up on arrival, which has no status yet and was not started here', () => {
+    // 🚨 The regression this file exists for, found on a real deployment rather than here. The
+    // reattach path selects a scan id from the list and has never fetched it, so it arrives with
+    // `justStarted: false` and `status: null`. Reading that as "nothing to watch" meant a running
+    // sweep was never polled: Recent sweeps showed it as `Running` while the progress line, the
+    // Stop button and the disabled Scan button — all derived from `status` — never appeared.
+    //
+    // Both of the original tests passed throughout. Neither covered this combination, because the
+    // start path always sets `justStarted` and every other case supplies a status.
+    expect(shouldPollScan({ status: null, justStarted: false, failures: 0 })).toBe(true);
+  });
+
   it('keeps polling a scan that has not been declared over', () => {
     expect(shouldPollScan({ status: status(), justStarted: false, failures: 0 })).toBe(true);
     expect(

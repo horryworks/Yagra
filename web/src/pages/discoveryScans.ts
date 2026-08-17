@@ -107,7 +107,17 @@ export const MAX_POLL_FAILURES = 5;
 export function shouldPollScan({ status, justStarted, failures }: PollInputs): boolean {
   if (failures >= MAX_POLL_FAILURES) return false;
   if (justStarted) return true;
-  if (!status) return false;
+  // 🚨 `null` means "we have not asked yet", **not** "there is nothing to watch". Reading it as the
+  // latter is the exact inversion this function's doc warns about, and it shipped anyway: the
+  // reattach path selects a scan id from the list and has never fetched it, so it arrives here with
+  // `justStarted: false` and `status: null` — and a running sweep was never polled at all. On a
+  // real deployment that looked like the whole feature half-working: the sweep listed as `Running`
+  // in Recent sweeps, while the progress line, the Stop button and the disabled Scan button (all
+  // derived from `status`) were simply absent.
+  //
+  // Whether a scan is *selected* is the caller's question, not this one's — the effect that polls
+  // is already guarded on having a scan id.
+  if (!status) return true;
   return isScanInFlight(status.state);
 }
 

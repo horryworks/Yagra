@@ -810,6 +810,7 @@ mod tests {
             communities: vec!["public".into()],
             credentials: Vec::new(),
             timeout_ms: 500,
+            snmp_when_unreachable: false,
         }
     }
 

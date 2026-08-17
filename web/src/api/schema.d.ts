@@ -8647,6 +8647,14 @@ export interface components {
             credential_ids?: string[];
             /** @description Poll-pool to run the sweep in (ADR-009/020). Absent/empty = legacy global discovery. */
             pool?: string | null;
+            /**
+             * @description Try SNMP on addresses that do not answer ICMP.
+             *
+             *     Absent means **no**. Earlier releases had no such option and tried every address in the
+             *     range with every candidate credential, which is why sweeping a /24 took minutes; set this to
+             *     get that behaviour back, and with it a device that filters ICMP but answers SNMP.
+             */
+            snmp_when_unreachable?: boolean;
             targets: string[];
         };
         /** @description The accepted scan's id, for polling its status. */

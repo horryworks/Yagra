@@ -50,6 +50,23 @@ use crate::classification::Classifier;
 /// Per-probe timeout pushed to the poller (ms).
 const SCAN_TIMEOUT_MS: u32 = 2000;
 
+/// What a sweep does with an address that does not answer ICMP (ADR-068 Increment 3).
+///
+/// A named pair rather than a `bool` parameter because [`DiscoveryRunner::start`] is called from
+/// eleven places and `start(targets, communities, creds, pool, false)` says nothing at any of them
+/// — `coding-conventions.md`'s "types over strings" applied to the case where the string is a
+/// boolean.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SilentTargets {
+    /// Stop at the ICMP timeout. The default, and what makes a /24 sweep quick: the addresses that
+    /// answer nothing are the overwhelming majority, and each one used to cost several rate-limited
+    /// SNMP attempts as well.
+    Skip,
+    /// Try every credential anyway — the escape hatch for a device that filters ICMP and answers
+    /// SNMP. Slow in proportion to the size of the range, which is why it is a choice.
+    ProbeSnmp,
+}
+
 /// How long a finished scan stays listable.
 ///
 /// ⚠️ **This is also the Discovery-queue widget's window.** [`DiscoveryRunner::recent_candidates`]
@@ -393,6 +410,7 @@ impl DiscoveryRunner {
         communities: Vec<String>,
         credentials: Vec<DiscoveryCredential>,
         pool: Option<&str>,
+        silent: SilentTargets,
     ) -> anyhow::Result<Uuid> {
         let scan_id = Uuid::new_v4();
         {
@@ -414,6 +432,7 @@ impl DiscoveryRunner {
             communities,
             credentials,
             timeout_ms: SCAN_TIMEOUT_MS,
+            snmp_when_unreachable: silent == SilentTargets::ProbeSnmp,
         };
         match pool {
             Some(p) => self.bus.publish_discovery_job_for_pool(p, job).await?,
@@ -748,6 +767,7 @@ mod tests {
                 vec!["public".to_owned()],
                 Vec::new(),
                 Some("tokyo"),
+                SilentTargets::Skip,
             )
             .await
             .expect("publish succeeds");
@@ -769,7 +789,13 @@ mod tests {
         let runner = DiscoveryRunner::new(bus.clone(), Arc::new(classifier()));
 
         let scan = runner
-            .start(targets(1), Vec::new(), Vec::new(), None)
+            .start(
+                targets(1),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
 
@@ -797,6 +823,7 @@ mod tests {
                     v3: None,
                 }],
                 None,
+                SilentTargets::Skip,
             )
             .await
             .expect("publish succeeds");
@@ -804,6 +831,56 @@ mod tests {
         let job = global.recv().await.expect("job published");
         assert_eq!(job.credentials.len(), 1);
         assert_eq!(job.credentials[0].cred_ref, cred_ref);
+    }
+
+    /// The ICMP gate crosses two defaults pointing in opposite directions (ADR-068 Inc.3): the API
+    /// reads an absent field as `Skip`, while the bus reads an absent field as "probe everything"
+    /// so an N-1 core's sweeps do not change under an upgraded poller. Nothing else compares the
+    /// two, so this pins the one place they meet — a polarity slip here would either make the
+    /// checkbox do nothing or make it do the opposite, and both look fine at every other layer.
+    #[tokio::test]
+    async fn the_icmp_gate_choice_reaches_the_job_the_right_way_round() {
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let mut global = bus.subscribe_discovery_jobs();
+        let runner = DiscoveryRunner::new(bus.clone(), Arc::new(classifier()));
+
+        runner
+            .start(
+                targets(1),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
+            .await
+            .expect("publish succeeds");
+        assert!(
+            !global
+                .recv()
+                .await
+                .expect("job published")
+                .snmp_when_unreachable,
+            "Skip must reach the poller as 'do not probe silent addresses'"
+        );
+
+        runner
+            .start(
+                targets(1),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::ProbeSnmp,
+            )
+            .await
+            .expect("publish succeeds");
+        assert!(
+            global
+                .recv()
+                .await
+                .expect("job published")
+                .snmp_when_unreachable,
+            "ProbeSnmp must reach the poller as 'probe them anyway'"
+        );
     }
 
     // ── Scan lifetime, listing and state (ADR-068 Inc.1) ─────────────────────
@@ -934,7 +1011,13 @@ mod tests {
         for _ in 0..(MAX_SCANS + 5) {
             ids.push(
                 runner
-                    .start(targets(1), Vec::new(), Vec::new(), None)
+                    .start(
+                        targets(1),
+                        Vec::new(),
+                        Vec::new(),
+                        None,
+                        SilentTargets::Skip,
+                    )
                     .await
                     .expect("publish succeeds"),
             );
@@ -950,11 +1033,23 @@ mod tests {
         let bus = Arc::new(yagra_bus::InMemoryBus::new(16));
         let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
         let first = runner
-            .start(targets(2), Vec::new(), Vec::new(), None)
+            .start(
+                targets(2),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
         let second = runner
-            .start(targets(3), Vec::new(), Vec::new(), Some("tokyo"))
+            .start(
+                targets(3),
+                Vec::new(),
+                Vec::new(),
+                Some("tokyo"),
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
 
@@ -1040,7 +1135,13 @@ mod tests {
         let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
 
         let pooled = runner
-            .start(targets(2), Vec::new(), Vec::new(), Some("tokyo"))
+            .start(
+                targets(2),
+                Vec::new(),
+                Vec::new(),
+                Some("tokyo"),
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
         assert_eq!(
@@ -1050,7 +1151,13 @@ mod tests {
         assert_eq!(rx.recv().await.unwrap().0.as_deref(), Some("tokyo"));
 
         let global = runner
-            .start(targets(2), Vec::new(), Vec::new(), None)
+            .start(
+                targets(2),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
         assert_eq!(runner.cancel(global).await.unwrap(), None);
@@ -1081,7 +1188,13 @@ mod tests {
         let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
         let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
         let scan = runner
-            .start(targets(4), Vec::new(), Vec::new(), None)
+            .start(
+                targets(4),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
 
@@ -1132,7 +1245,13 @@ mod tests {
         let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
         let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
         let scan = runner
-            .start(targets(4), Vec::new(), Vec::new(), None)
+            .start(
+                targets(4),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
             .await
             .expect("publish succeeds");
         runner.cancel(scan).await.unwrap();

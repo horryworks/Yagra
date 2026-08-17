@@ -35,7 +35,7 @@ import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { PermissionHint } from '../components/ui/PermissionHint';
 import { Button } from '../components/ui/Button';
-import { TextInput, Select } from '../components/ui/Field';
+import { TextInput, Select, FieldHint } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { CredentialPicker } from '../components/ui/CredentialPicker';
 import { EntityName } from '../components/ui/EntityName';
@@ -77,6 +77,11 @@ export function DiscoveryPage() {
   const [scans, setScans] = useState<DiscoveryScanSummary[]>([]);
   const [pools, setPools] = useState<PoolOption[]>([]);
   const [pool, setPool] = useState<string | null>(null);
+  /** Try SNMP on addresses that did not answer ping (ADR-068 Inc.3). Off by default: on a /24 the
+   *  unassigned addresses are the overwhelming majority, and asking each of them for its identity
+   *  is where a sweep's minutes went. Kept as a choice because a firewall that filters ICMP and
+   *  answers SNMP is a real device this would otherwise never find. */
+  const [snmpWhenUnreachable, setSnmpWhenUnreachable] = useState(false);
   /** The operator pressed Scan and the first status has not landed. Drives polling on its own —
    *  see `shouldPollScan` for why this cannot be derived from what the server currently says. */
   const [justStarted, setJustStarted] = useState(false);
@@ -207,6 +212,7 @@ export function DiscoveryPage() {
         targets,
         credential_ids: selectedCredIds,
         ...(pool ? { pool } : {}),
+        snmp_when_unreachable: snmpWhenUnreachable,
       })
       .then(({ scan_id }) => {
         setScanId(scan_id);
@@ -346,35 +352,99 @@ export function DiscoveryPage() {
       <Card title={t('discovery.scanTitle')}>
         {canConfig ? (
           <>
+            {/* Three inputs, each named and each carrying its own hint directly underneath
+                (ADR-055 R1/R2). They were an unlabelled row with all three explanations stacked
+                below it, so nothing on screen said which sentence belonged to which control — and
+                the pool select in particular read as an unexplained dropdown. */}
             <div className="disco-form form-row">
-              <TextInput
-                className="mono"
-                placeholder={t('discovery.targetPlaceholder')}
-                value={targetSpec}
-                onChange={(e) => setTargetSpec(e.target.value)}
-              />
-              <CredentialPicker
-                options={snmpCreds}
-                selected={selectedCredIds}
-                onChange={setSelectedCredIds}
-                disabled={inFlight}
-              />
+              <label className="form-label disco-f-targets">
+                {t('discovery.targetsLabel')}
+                <TextInput
+                  className="mono"
+                  placeholder={t('discovery.targetPlaceholder')}
+                  value={targetSpec}
+                  onChange={(e) => setTargetSpec(e.target.value)}
+                />
+                <FieldHint>
+                  <Trans
+                    t={t}
+                    i18nKey="discovery.examplesHint"
+                    components={{ c: <span className="mono" /> }}
+                  />
+                </FieldHint>
+              </label>
+
+              <label className="form-label disco-f-creds">
+                {t('discovery.credsLabel')}
+                <CredentialPicker
+                  options={snmpCreds}
+                  selected={selectedCredIds}
+                  onChange={setSelectedCredIds}
+                  disabled={inFlight}
+                />
+                <FieldHint>
+                  <Trans
+                    t={t}
+                    i18nKey="discovery.credsLink"
+                    components={{ lnk: <Link to="/nodes/credentials" /> }}
+                  />
+                </FieldHint>
+              </label>
+
               {/* Which site the sweep runs from (ADR-068). Before this, the job went to a subject
                   every poller competes for, so a remote-site poller could sweep head office —
                   reaching nothing and reporting a successful, empty scan. */}
-              <Select
-                aria-label={t('discovery.pool.label')}
-                value={pool ?? ''}
+              <label className="form-label disco-f-pool">
+                {t('discovery.pool.label')}
+                <Select
+                  value={pool ?? ''}
+                  disabled={inFlight}
+                  onChange={(e) => setPool(e.target.value || null)}
+                >
+                  <option value="">{t('discovery.pool.any')}</option>
+                  {pools.map((p) => (
+                    <option key={p.name} value={p.name}>
+                      {p.name}
+                    </option>
+                  ))}
+                </Select>
+                {/* Says what the choice means rather than removing the option: a pool that is
+                    briefly down is still the pool the operator means, and hiding it would take
+                    away the reason to come back to it. */}
+                <FieldHint error={unroutedPool}>
+                  {!pool
+                    ? t('discovery.pool.anyHint')
+                    : unroutedPool
+                      ? t('discovery.pool.deadHint')
+                      : t('discovery.pool.oneOf')}
+                </FieldHint>
+              </label>
+
+            </div>
+
+            {/* The ICMP gate (ADR-068 Inc.3). Below the row rather than inside it: it modifies how
+                the whole sweep runs rather than describing one of the three inputs, and it is the
+                only control here whose cost the operator should read before pressing Scan.
+                The input stays enabled mid-sweep (the value is worth reading) — only the button
+                that acts on it goes away (ui-conventions). */}
+            <label className="disco-opt">
+              <input
+                type="checkbox"
+                checked={snmpWhenUnreachable}
                 disabled={inFlight}
-                onChange={(e) => setPool(e.target.value || null)}
-              >
-                <option value="">{t('discovery.pool.any')}</option>
-                {pools.map((p) => (
-                  <option key={p.name} value={p.name}>
-                    {p.name}
-                  </option>
-                ))}
-              </Select>
+                onChange={(e) => setSnmpWhenUnreachable(e.target.checked)}
+              />
+              <span>
+                {t('discovery.icmpGate.label')}
+                <FieldHint>{t('discovery.icmpGate.hint')}</FieldHint>
+              </span>
+            </label>
+
+            {/* Below the row rather than in it. Each field is now three bands tall (label, input,
+                hint), and a hint that wraps makes its column taller than the others — so a button
+                sharing the row would drift away from the control it acts on, by an amount that
+                depends on the text. */}
+            <div className="disco-actions">
               <Button variant="primary" onClick={startScan} disabled={inFlight}>
                 {inFlight ? t('discovery.scanning') : t('discovery.scan')}
               </Button>
@@ -386,30 +456,6 @@ export function DiscoveryPage() {
                 <Button onClick={requestStop}>{t('discovery.scans.stop')}</Button>
               )}
             </div>
-            {/* Says what the choice means rather than removing it: a pool that is briefly down is
-                still the pool the operator means, and hiding it would take away the reason to come
-                back to it. */}
-            <p className={unroutedPool ? 'disco-pool-warn' : 'muted'}>
-              {!pool
-                ? t('discovery.pool.anyHint')
-                : unroutedPool
-                  ? t('discovery.pool.deadHint')
-                  : t('discovery.pool.oneOf')}
-            </p>
-            <p className="disco-target-hint">
-              <Trans
-                t={t}
-                i18nKey="discovery.examplesHint"
-                components={{ c: <span className="mono" /> }}
-              />
-            </p>
-            <p className="disco-creds-link">
-              <Trans
-                t={t}
-                i18nKey="discovery.credsLink"
-                components={{ lnk: <Link to="/nodes/credentials" /> }}
-              />
-            </p>
           </>
         ) : (
           <PermissionHint permission="manage_config" signInHint={t('discovery.signIn')} />

@@ -10,7 +10,26 @@
 
 ## Unreleased
 
+### Breaking changes
+- **A discovery sweep no longer tries SNMP on an address that does not answer ping.**
+  `POST /api/v1/discovery/scan` takes a new `snmp_when_unreachable`, and **omitting it means no** —
+  so a caller sending the body it sent before will now miss a device that filters ICMP and answers
+  SNMP. Send `"snmp_when_unreachable": true` for the previous behaviour. In the WebUI it is a
+  checkbox on the scan form, off by default.
+
 ### New Features
+- **A dashboard widget for the specific links you watch.** Capacity ▸ *Interface traffic* plots up
+  to six interfaces you name, and they may live on different nodes — so an uplink and its backup
+  can be compared on one chart instead of in two browser tabs. Receive is drawn above the zero line
+  and transmit below it, which gives each link a single colour and makes an unbalanced link visible
+  at a glance.
+  - The unit switches between bits/sec and unicast packets/sec, and the window between 1h, 6h, 24h
+    and 7d. Both are per widget, so a board can carry a bits view and a packets view side by side.
+  - Six is the maximum, because the chart has six colours and a seventh line would reuse one.
+  - The dashboard's other interface widgets rank whatever is busiest right now; this one plots what
+    *you* chose and keeps plotting it.
+  - Packets/sec only has history from v0.2.11 onward, when those counters were first collected, so
+    a 7d packets window on an older deployment is mostly empty. That is expected, not a fault.
 - **A discovery sweep survives leaving the page.** Nodes ▸ Discovery lists the sweeps the core is
   holding and reattaches to one when you come back, so navigating away no longer loses a sweep the
   poller is still running. The scan id is in the URL, so a reload or a shared link lands on the same
@@ -34,6 +53,13 @@
     rather than leaving you waiting.
 
 ### Improvements
+- **Sweeping a subnet is much faster.** Every address in the range used to be asked for its identity
+  with every candidate credential, spaced two seconds apart to protect devices from lockout — so on
+  the test network a /24 carrying eight devices took **5m21s**, almost all of it spent on the 246
+  addresses with nothing at them. Those are now skipped at the ping.
+  - ⚠️ The trade is under *Breaking changes* above. Note also that discovery sends a **single** echo
+    request, so one lost packet is indistinguishable from an empty address — unlike liveness
+    monitoring, which waits for three consecutive failures before believing a node is down.
 - **A sweep the core no longer knows about is now reported as such.** Previously the page kept
   polling a 404 every two seconds with its progress line frozen mid-sentence. It now says the core
   does not know that sweep — which is the honest reading, since a poller may still be running it —

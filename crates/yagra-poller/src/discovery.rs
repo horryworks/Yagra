@@ -28,6 +28,23 @@
 //! ⚠️ A stopped sweep still publishes a terminal result, with `cancelled: true` and the count of
 //! targets it **actually** probed. Both matter: without the message core waits forever, and without
 //! the honest count `probed == total` would claim the sweep finished the work it just abandoned.
+//!
+//! ## The ICMP gate (ADR-068 Increment 3)
+//!
+//! By default a target that does not answer ICMP is **not** tried with SNMP. That is where a sweep's
+//! time goes: on a /24 the overwhelming majority of addresses are unassigned, and each one used to
+//! cost one ICMP timeout *plus* up to [`LimiterConfig::max_consecutive_failures`] SNMP attempts
+//! spaced [`LimiterConfig::min_interval_ms`] apart before the limiter backed the device off. Measured
+//! on the test network: 254 addresses, 8 devices, **5m21s**, essentially all of it spent asking
+//! empty addresses for their `sysDescr`.
+//!
+//! ⚠️ **What this gives up is real and is why it is a choice, not a rule.** A device that filters
+//! ICMP and answers SNMP — a firewall, a hardened host — is now found only when the operator ticks
+//! the box (`DiscoveryJob::snmp_when_unreachable`). Worse, the ICMP probe is a *single* echo capped
+//! at one timeout (`yagra-transport`'s S4 deadline breaks out of the loop as soon as a host has been
+//! silent for one full timeout, so raising `count` buys nothing), which means one lost packet is
+//! indistinguishable here from a silent address. Discovery has no dwell window to absorb that the
+//! way liveness does.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -180,6 +197,33 @@ fn candidates_of(job: &DiscoveryJob) -> Vec<SnmpCandidate> {
     out
 }
 
+/// Everything one sweep holds constant across its targets.
+///
+/// A struct rather than a parameter list because the list had reached seven and the ICMP gate made
+/// it eight — which is clippy's `too_many_arguments` threshold and, per `coding-conventions.md`, the
+/// signal that the parameters want to be a type rather than an `#[allow]`. It also removes a real
+/// hazard: `sweep_chunk` and `probe_one` took the same seven values in the same order, so a
+/// transposed pair would have compiled.
+struct SweepCtx {
+    /// Credentials to try on each target, in order; the first that answers wins.
+    candidates: Arc<Vec<SnmpCandidate>>,
+    /// Per-probe timeout (ICMP and SNMP alike).
+    timeout: Duration,
+    /// Per-device credential-probe rate limit (security.md).
+    rate: LimiterConfig,
+    scan_id: Uuid,
+    cancels: Arc<CancelSet>,
+    /// Whether a target that did not answer ICMP is still tried with SNMP (ADR-068 Increment 3).
+    snmp_when_unreachable: bool,
+}
+
+impl SweepCtx {
+    /// Whether this sweep has been told to stop, as of now.
+    fn stopping(&self) -> bool {
+        self.cancels.is_cancelled(self.scan_id, Instant::now())
+    }
+}
+
 /// Drain discovery jobs off the bus, sweeping each and publishing cumulative progress
 /// results. Returns when the stream ends.
 pub async fn run_discovery_stream<S>(
@@ -211,13 +255,24 @@ pub async fn run_discovery_stream<S>(
             .await;
             continue;
         }
-        tracing::info!(scan = %job.scan_id, targets = job.targets.len(), "discovery sweep starting");
-        let candidates = Arc::new(candidates_of(&job));
-        let timeout = Duration::from_millis(u64::from(job.timeout_ms));
-        // Per-device credential-probe rate limit (security.md): space attempts and back off after
-        // repeated failures so the sweep can never trip a device's account lockout. Conservative
-        // defaults; tunable here as SSH/CLI credential probing (which actually locks out) lands.
-        let rate = LimiterConfig::default();
+        tracing::info!(
+            scan = %job.scan_id,
+            targets = job.targets.len(),
+            snmp_when_unreachable = job.snmp_when_unreachable,
+            "discovery sweep starting"
+        );
+        let ctx = SweepCtx {
+            candidates: Arc::new(candidates_of(&job)),
+            timeout: Duration::from_millis(u64::from(job.timeout_ms)),
+            // Per-device credential-probe rate limit (security.md): space attempts and back off
+            // after repeated failures so the sweep can never trip a device's account lockout.
+            // Conservative defaults; tunable here as SSH/CLI credential probing (which actually
+            // locks out) lands.
+            rate: LimiterConfig::default(),
+            scan_id: job.scan_id,
+            cancels: cancels.clone(),
+            snmp_when_unreachable: job.snmp_when_unreachable,
+        };
         let mut found: Vec<DiscoveredDevice> = Vec::new();
         let mut probed: u32 = 0;
         let mut cancelled = false;
@@ -225,20 +280,11 @@ pub async fn run_discovery_stream<S>(
         let chunk_count = job.targets.chunks(PROGRESS_CHUNK).count();
         for (i, chunk) in job.targets.chunks(PROGRESS_CHUNK).enumerate() {
             // Layer 2: skip whole chunks not yet started.
-            if cancels.is_cancelled(job.scan_id, Instant::now()) {
+            if ctx.stopping() {
                 cancelled = true;
                 break;
             }
-            let (devices, swept) = sweep_chunk(
-                chunk,
-                &candidates,
-                timeout,
-                transport.clone(),
-                rate,
-                job.scan_id,
-                &cancels,
-            )
-            .await;
+            let (devices, swept) = sweep_chunk(chunk, &ctx, transport.clone()).await;
             found.extend(devices);
             // The number actually swept, never the chunk length: a chunk abandoned partway must not
             // claim credit for the targets it skipped. `probed` is how core (and the operator)
@@ -305,38 +351,21 @@ async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
 /// sweep was cancelled counts as neither probed nor absent; it simply was not looked at.
 async fn sweep_chunk(
     targets: &[IpAddr],
-    candidates: &Arc<Vec<SnmpCandidate>>,
-    timeout: Duration,
+    ctx: &SweepCtx,
     transport: Arc<dyn Transport>,
-    rate: LimiterConfig,
-    scan_id: Uuid,
-    cancels: &Arc<CancelSet>,
 ) -> (Vec<DiscoveredDevice>, u32) {
     let results: Vec<Option<Option<DiscoveredDevice>>> =
         futures::stream::iter(targets.iter().copied())
             .map(|target| {
                 let transport = transport.clone();
-                let candidates = candidates.clone();
-                let cancels = cancels.clone();
                 async move {
                     // Layer 3, part one: a target this wave has not reached yet is dropped whole.
                     // `buffer_unordered` starts at most SWEEP_CONCURRENCY at a time, so with a big
                     // chunk most of these futures have not begun when a stop arrives.
-                    if cancels.is_cancelled(scan_id, Instant::now()) {
+                    if ctx.stopping() {
                         return None;
                     }
-                    Some(
-                        probe_one(
-                            target,
-                            &candidates,
-                            timeout,
-                            transport.as_ref(),
-                            rate,
-                            scan_id,
-                            &cancels,
-                        )
-                        .await,
-                    )
+                    Some(probe_one(target, ctx, transport.as_ref()).await)
                 }
             })
             .buffer_unordered(SWEEP_CONCURRENCY)
@@ -357,30 +386,42 @@ fn now_ms() -> i64 {
 
 /// Probe one target: ICMP liveness + SNMP identity, trying each candidate in order
 /// (first that answers wins). Candidate probes run **sequentially per device** and are gated
-/// by a per-device [`CredentialProbeLimiter`] (`rate`): attempts are spaced apart and, after
-/// repeated failures, the device is backed off for the rest of the sweep so probing can never
+/// by a per-device [`CredentialProbeLimiter`] ([`SweepCtx::rate`]): attempts are spaced apart and,
+/// after repeated failures, the device is backed off for the rest of the sweep so probing can never
 /// trip an account lockout (security.md). Attempted credentials are never logged. Returns a
 /// device iff it answered ICMP or SNMP.
+///
+/// Unless [`SweepCtx::snmp_when_unreachable`] is set, a target that did not answer ICMP returns
+/// here without a single SNMP packet — see the module doc for what that buys and what it costs.
 async fn probe_one(
     target: IpAddr,
-    candidates: &[SnmpCandidate],
-    timeout: Duration,
+    ctx: &SweepCtx,
     transport: &dyn Transport,
-    rate: LimiterConfig,
-    scan_id: Uuid,
-    cancels: &Arc<CancelSet>,
 ) -> Option<DiscoveredDevice> {
-    let reachable = (transport.probe_icmp(target, 1, timeout).await)
+    let reachable = (transport.probe_icmp(target, 1, ctx.timeout).await)
         .map(|p| p.reachable)
         .unwrap_or(false);
+
+    // The ICMP gate (ADR-068 Inc.3). `None` and not a partial device: a silent address that was
+    // never asked for its identity is not a candidate, and reporting it as one — `reachable: false`
+    // with no identity — would fill the import table with every unassigned address in the subnet.
+    //
+    // ⚠️ Note what is *not* here: a distinction between "did not answer" and "the probe errored".
+    // `probe_icmp` failing (no IPv6 socket, say) already collapses to `reachable == false` above,
+    // so a poller that cannot send ICMP at all would, with this gate on, sweep an entire subnet
+    // without probing anything and report it as empty. That is the one failure mode worth watching
+    // on a deployment whose pollers are not both address families.
+    if !reachable && !ctx.snmp_when_unreachable {
+        return None;
+    }
 
     // Keyed by target IP — the device has no NodeId during discovery. One limiter per probe is
     // enough: each target appears once per sweep, and spacing/cooldown only span this target's
     // sequential candidate attempts.
-    let mut limiter = CredentialProbeLimiter::<IpAddr>::new(rate);
+    let mut limiter = CredentialProbeLimiter::<IpAddr>::new(ctx.rate);
     let mut identity = SnmpIdentity::default();
     let mut matched_credential = None;
-    'candidates: for cand in candidates {
+    'candidates: for cand in ctx.candidates.iter() {
         // Layer 3, part two — the fine-grained stop, and the one that decides how long the button
         // appears to do nothing. The rate limiter spaces attempts 2s apart, so a target with five
         // credentials occupies this loop for ~20s; without a check here a stop would wait out every
@@ -389,7 +430,7 @@ async fn probe_one(
         // ⚠️ The ICMP probe above is *not* interrupted — it has already been awaited by the time
         // this runs. That is deliberate (a probe in flight is left to time out rather than having
         // its socket dropped), and it is why the worst case is one probe timeout rather than zero.
-        if cancels.is_cancelled(scan_id, Instant::now()) {
+        if ctx.stopping() {
             break 'candidates;
         }
         // Honour per-device spacing before each attempt; stop the device entirely on cooldown.
@@ -404,7 +445,7 @@ async fn probe_one(
                 AttemptDecision::CoolingDown { .. } => break 'candidates,
             }
         }
-        if let Some(id) = try_candidate(target, cand, timeout, transport).await {
+        if let Some(id) = try_candidate(target, cand, ctx.timeout, transport).await {
             limiter.record_success(target);
             identity = id;
             matched_credential = cand.cred_ref();
@@ -749,6 +790,21 @@ mod tests {
         set
     }
 
+    /// A sweep context for the probe tests: nothing sleeps, nothing is stopping, and SNMP is tried
+    /// everywhere — the last of which is what every test written before the ICMP gate assumed, so
+    /// keeping it the helper's default is what stops the gate from quietly rewriting their subject.
+    /// Tests that are *about* the gate set the field themselves.
+    fn ctx(candidates: Vec<SnmpCandidate>) -> SweepCtx {
+        SweepCtx {
+            candidates: Arc::new(candidates),
+            timeout: Duration::from_millis(100),
+            rate: no_rate(),
+            scan_id: Uuid::nil(),
+            cancels: no_cancels(),
+            snmp_when_unreachable: true,
+        }
+    }
+
     fn job(credentials: Vec<DiscoveryCredential>, communities: Vec<String>) -> DiscoveryJob {
         DiscoveryJob {
             scan_id: Uuid::nil(),
@@ -756,6 +812,7 @@ mod tests {
             communities,
             credentials,
             timeout_ms: 100,
+            snmp_when_unreachable: true,
         }
     }
 
@@ -768,17 +825,9 @@ mod tests {
             good_community: Some("secret".to_owned()),
             good_v3_user: None,
         };
-        let d = probe_one(
-            target(),
-            &cands,
-            Duration::from_millis(100),
-            &fake,
-            no_rate(),
-            Uuid::nil(),
-            &no_cancels(),
-        )
-        .await
-        .expect("device answers");
+        let d = probe_one(target(), &ctx(cands), &fake)
+            .await
+            .expect("device answers");
         assert_eq!(d.matched_credential, Some(id));
         assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
         assert_eq!(d.sysname.as_deref(), Some("sw01"));
@@ -800,17 +849,9 @@ mod tests {
             good_community: None,
             good_v3_user: Some("monitor".to_owned()),
         };
-        let d = probe_one(
-            target(),
-            &cands,
-            Duration::from_millis(100),
-            &fake,
-            no_rate(),
-            Uuid::nil(),
-            &no_cancels(),
-        )
-        .await
-        .expect("device answers v3");
+        let d = probe_one(target(), &ctx(cands), &fake)
+            .await
+            .expect("device answers v3");
         assert_eq!(d.matched_credential, Some(v3));
         assert_eq!(d.sysdescr.as_deref(), Some("Huawei USG6000"));
         assert_eq!(d.sysobjectid.as_deref(), Some("1.3.6.1.4.1.2011.2.1"));
@@ -825,17 +866,9 @@ mod tests {
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         };
-        let d = probe_one(
-            target(),
-            &cands,
-            Duration::from_millis(100),
-            &fake,
-            no_rate(),
-            Uuid::nil(),
-            &no_cancels(),
-        )
-        .await
-        .expect("device answers");
+        let d = probe_one(target(), &ctx(cands), &fake)
+            .await
+            .expect("device answers");
         assert_eq!(d.matched_credential, None);
         assert!(d.sysdescr.is_some());
     }
@@ -854,17 +887,9 @@ mod tests {
             good_community: Some("shared".to_owned()),
             good_v3_user: None,
         };
-        let d = probe_one(
-            target(),
-            &cands,
-            Duration::from_millis(100),
-            &fake,
-            no_rate(),
-            Uuid::nil(),
-            &no_cancels(),
-        )
-        .await
-        .expect("device answers");
+        let d = probe_one(target(), &ctx(cands), &fake)
+            .await
+            .expect("device answers");
         assert_eq!(d.matched_credential, Some(id));
     }
 
@@ -876,17 +901,78 @@ mod tests {
             good_community: None,
             good_v3_user: None,
         };
-        assert!(probe_one(
-            target(),
-            &cands,
-            Duration::from_millis(100),
-            &fake,
-            no_rate(),
-            Uuid::nil(),
-            &no_cancels()
-        )
-        .await
-        .is_none());
+        assert!(probe_one(target(), &ctx(cands), &fake).await.is_none());
+    }
+
+    // ── The ICMP gate (ADR-068 Increment 3) ──────────────────────────────────
+    //
+    // Both directions, deliberately. A suite that only shows the gate refusing would pass just as
+    // happily if the gate refused *everything* — the failure mode this repo has already shipped
+    // once — so the accepting cases below are not padding.
+
+    #[tokio::test]
+    async fn a_silent_address_is_never_asked_for_snmp() {
+        // The whole point: 246 of a /24's 254 addresses answer nothing, and each one used to cost
+        // three rate-limited SNMP attempts on top of its ICMP timeout.
+        //
+        // The fake answers `public` on SNMP, so `None` here is not "SNMP was tried and failed" —
+        // it is the only outcome consistent with SNMP never having been attempted at all.
+        let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
+        let fake = SelectiveFake {
+            ping: false,
+            good_community: Some("public".to_owned()),
+            good_v3_user: None,
+        };
+        let mut c = ctx(cands);
+        c.snmp_when_unreachable = false;
+        assert!(
+            probe_one(target(), &c, &fake).await.is_none(),
+            "a target that did not answer ping must not be probed, and must not be reported as a \
+             candidate either — every unassigned address in the subnet would otherwise land in the \
+             import table"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_gate_only_looks_at_silence() {
+        // An address that answers ping is swept exactly as before. Stated separately from the
+        // refusal above because "the gate is on" and "discovery still works" have to both be true
+        // in one run for the default to be shippable.
+        let id = Uuid::from_u128(3);
+        let cands = candidates_of(&job(vec![v2c_cred(id, "secret")], vec![]));
+        let fake = SelectiveFake {
+            ping: true,
+            good_community: Some("secret".to_owned()),
+            good_v3_user: None,
+        };
+        let mut c = ctx(cands);
+        c.snmp_when_unreachable = false;
+        let d = probe_one(target(), &c, &fake)
+            .await
+            .expect("a reachable device is still identified with the gate on");
+        assert_eq!(d.matched_credential, Some(id));
+        assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
+    }
+
+    #[tokio::test]
+    async fn opting_in_still_finds_a_device_that_blocks_icmp() {
+        // The capability the gate would otherwise delete, and the reason it is a switch rather than
+        // a rule: a firewall that drops echo requests and answers SNMP is a real device on a real
+        // network, and this is the only way discovery reaches it.
+        let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
+        let fake = SelectiveFake {
+            ping: false,
+            good_community: Some("public".to_owned()),
+            good_v3_user: None,
+        };
+        let d = probe_one(target(), &ctx(cands), &fake)
+            .await
+            .expect("with the box ticked, an ICMP-blocked device is still discovered");
+        assert!(
+            !d.reachable,
+            "and is reported honestly as not answering ping"
+        );
+        assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
     }
 
     /// Wiring check: once a device hits the consecutive-failure limit it is backed off, so the
@@ -1043,21 +1129,13 @@ mod tests {
                 "e".to_owned(),
             ],
         ));
-        let rate = LimiterConfig {
+        let mut c = ctx(cands);
+        c.rate = LimiterConfig {
             min_interval_ms: 0,
             max_consecutive_failures: 2,
             cooldown_ms: 60_000,
         };
-        let d = probe_one(
-            target(),
-            &cands,
-            Duration::from_millis(100),
-            &fake,
-            rate,
-            Uuid::nil(),
-            &no_cancels(),
-        )
-        .await;
+        let d = probe_one(target(), &c, &fake).await;
         assert!(d.is_none(), "no device answered");
         assert_eq!(
             attempts.load(Ordering::SeqCst),
@@ -1088,6 +1166,7 @@ mod tests {
             communities: vec!["public".to_owned()],
             credentials: Vec::new(),
             timeout_ms: 100,
+            snmp_when_unreachable: true,
         };
         let transport = Arc::new(SelectiveFake {
             ping: true,
@@ -1132,6 +1211,7 @@ mod tests {
             communities: Vec::new(),
             credentials: Vec::new(),
             timeout_ms: 100,
+            snmp_when_unreachable: true,
         };
         let transport = Arc::new(SelectiveFake {
             ping: false,
@@ -1242,7 +1322,6 @@ mod tests {
     #[tokio::test]
     async fn a_chunk_counts_what_it_probed_not_what_it_was_given() {
         let scan = Uuid::from_u128(11);
-        let cands = Arc::new(candidates_of(&job(vec![], vec!["public".to_owned()])));
         let transport: Arc<dyn Transport> = Arc::new(SelectiveFake {
             ping: true,
             good_community: Some("public".to_owned()),
@@ -1252,32 +1331,17 @@ mod tests {
             .map(|i| IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, i)))
             .collect();
 
-        let (devices, swept) = sweep_chunk(
-            &targets,
-            &cands,
-            Duration::from_millis(10),
-            transport.clone(),
-            no_rate(),
-            scan,
-            &no_cancels(),
-        )
-        .await;
+        let mut c = ctx(candidates_of(&job(vec![], vec!["public".to_owned()])));
+        c.scan_id = scan;
+        let (devices, swept) = sweep_chunk(&targets, &c, transport.clone()).await;
         assert_eq!(
             swept, 8,
             "an uninterrupted chunk probes everything it was given"
         );
         assert_eq!(devices.len(), 8);
 
-        let (devices, swept) = sweep_chunk(
-            &targets,
-            &cands,
-            Duration::from_millis(10),
-            transport,
-            no_rate(),
-            scan,
-            &cancelled(scan),
-        )
-        .await;
+        c.cancels = cancelled(scan);
+        let (devices, swept) = sweep_chunk(&targets, &c, transport).await;
         assert_eq!(
             swept, 0,
             "a cancelled chunk counts nothing — the caller adds this to `probed`, so counting \

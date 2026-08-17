@@ -102,6 +102,15 @@ pub(super) struct StartScan {
     /// Poll-pool to run the sweep in (ADR-009/020). Absent/empty = legacy global discovery.
     #[serde(default)]
     pool: Option<String>,
+    /// Try SNMP on addresses that do not answer ICMP.
+    ///
+    /// Absent means **no**. Earlier releases had no such option and tried every address in the
+    /// range with every candidate credential, which is why sweeping a /24 took minutes; set this to
+    /// get that behaviour back, and with it a device that filters ICMP but answers SNMP.
+    // ADR-068 Increment 3. ⚠️ The `///` above is published verbatim to API clients through the
+    // OpenAPI document, so it names neither the ADR nor a version that does not exist yet.
+    #[serde(default)]
+    snmp_when_unreachable: bool,
 }
 
 /// The accepted scan's id, for polling its status.
@@ -237,9 +246,18 @@ async fn start_discovery_scan(
         Some(p) if admin.coordinator.live_pools(Instant::now()).contains(p) => Some(p),
         _ => None,
     };
+    // Note the two defaults point opposite ways on purpose, and each is right for its own question.
+    // Here, "the caller did not say" is a fresh request that should take the fast path. On the bus
+    // (`DiscoveryJob::snmp_when_unreachable`) an absent field means the job came from a core that
+    // predates this option, and that core meant "probe everything".
+    let silent = if body.snmp_when_unreachable {
+        crate::discovery::SilentTargets::ProbeSnmp
+    } else {
+        crate::discovery::SilentTargets::Skip
+    };
     let scan_id = admin
         .discovery
-        .start(targets, body.communities, credentials, pool_route)
+        .start(targets, body.communities, credentials, pool_route, silent)
         .await
         .map_err(|e| {
             ApiError::from_internal(
