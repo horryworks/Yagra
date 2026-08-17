@@ -734,6 +734,95 @@ docker compose -p yagra -f docker-compose.deploy.yml up -d victoriametrics
 
 ---
 
+## アンインストール<a id="アンインストール"></a>
+
+Yagra はホストに何もインストールしません — パッケージも、システムサービスも、デプロイ用ディレクトリと
+Docker 自身の保存領域の外にあるファイルも作りません。アンインストールは、インストールを逆にたどるだけです。
+
+**以下はすべて `docker-compose.deploy.yml` を置いたディレクトリで実行し、毎回 `-p yagra` を付けて
+ください。** 付け忘れると compose はプロジェクト名をディレクトリ名から作り、**別の空のプロジェクト**に
+対して動きます。`down` は「成功」と表示しますが何も消えず、本物のスタックは動き続けます。
+
+### 止めるだけ（データは残す）
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml down
+```
+
+コンテナとネットワークは消え、名前付きボリュームはすべて残ります。`up -d` すれば、設定・アラート
+履歴・メトリクスをそのまま持った同じデプロイが戻ります。
+
+### 完全に消す
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml down -v --remove-orphans
+```
+
+`-v` は名前付きボリューム 11 個を破棄します。これは元に戻せません。
+
+| ボリューム | 失われるもの |
+|---|---|
+| `pgdata` | ノード・ユーザ・閾値・アラート履歴・確認応答・すべての設定 |
+| `vmdata` | メトリクスの全履歴 |
+| `vldata` | 受動イベント（syslog / トラップ / Webhook）の全件 |
+| `chdata` | トラフィックフローの全レコード |
+| `kekdata` | **鍵暗号化鍵（KEK）** — 下記参照 |
+| `tlsdata` / `buscerts` | 書き出された証明書（どちらも PostgreSQL の行の写し） |
+| `logdata` / `pollerbuf` / `upgradedata` / `ipasndata` | ローテートしたログ・store-and-forward バッファ・アップグレードの受け渡し・IP→ASN データセット |
+
+**バックアップから戻せないのは `kekdata` だけです。** 保存済みの監視資格情報 — SNMP コミュニティ、
+SNMPv3 認証情報、API トークン、バスの秘密鍵 — はすべてこの鍵で封筒暗号化されており、鍵は再生成
+できません。KEK なしで取ったデータベースのダンプは、**完璧に復元できるのに何もポーリングできません。**
+
+戻ってくる可能性が少しでもあるなら、`-v` で消える前に KEK を取り出してください。
+
+```bash
+docker run --rm -v yagra_kekdata:/kek busybox cat /kek/key > yagra-kek.bin   # 32 バイト
+```
+
+⚠️ **[設定バンドル](#設定バンドル)は代わりになりません。** バンドルは資格情報を一切運ばず、id だけを
+運びます。しかも移行先が既にその id を持っている場合にしか参照を保ちません。新しい KEK で作り直した
+デプロイにその id は存在しないので、参照は落ちます。階層ごとの一覧は[バックアップと復元](#バックアップと復元)を参照。
+
+### イメージとディレクトリも消す
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml down -v --rmi all --remove-orphans
+cd .. && rm -rf yagra          # compose ファイルと、POSTGRES_PASSWORD が入った .env
+```
+
+`--rmi all` は全サービスのイメージを消します。バックエンドのストア（`postgres` / `redis` / `nats` /
+`victoria-metrics` / `victoria-logs` / `clickhouse` / `busybox` / `alpine` / `docker:28-cli`）も
+対象です。他のプロジェクトがまだ使っているものは Docker が自動的に飛ばします。
+
+### リモートポーラは別のスタックです
+
+リモート拠点に置いたポーラ（構成 **D**）は、そのホスト上の独立した Compose プロジェクトです。上の
+操作では一切消えず、中央スタックが無くなったあともバスへの再接続を延々と試み続けます。**各ホストで
+個別に**消してください。
+
+```bash
+docker compose -f docker-compose.poller.yml down -v
+```
+
+### 消し残りの確認
+
+compose ファイルを失くした場合や、何も残っていないことを確認したい場合は、Compose が付けたラベルで
+引けます。
+
+```bash
+docker ps -a     --filter label=com.docker.compose.project=yagra
+docker volume ls --filter label=com.docker.compose.project=yagra
+docker network ls --filter label=com.docker.compose.project=yagra
+```
+
+出てきたものは `docker rm -f` / `docker volume rm` / `docker network rm` で消せます。
+
+WebUI にアンインストール操作はありません。**設定 ▸ アップグレード**はリリース間の移動だけを行います。
+アンインストールは意図的にホスト側の作業にしてあります。
+
+---
+
 ## ディレクトリでのサインイン（LDAP / Active Directory）
 
 **設定 ▸ 認証 ▸ ディレクトリ (LDAP/AD)** で設定します（ADR-041）。有効化する環境変数はありません —

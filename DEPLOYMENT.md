@@ -754,6 +754,98 @@ boot the Settings value is authoritative, and the change is applied to ClickHous
 
 ---
 
+## Uninstalling<a id="uninstalling"></a>
+
+Yagra installs nothing on the host: no packages, no system services, no files outside the
+deployment directory and Docker's own storage. Removing it is the install run backwards.
+
+**Everything below must be run from the directory holding `docker-compose.deploy.yml`, and every
+invocation must pass `-p yagra`.** Compose otherwise derives the project name from the directory
+name and operates on a *different, empty* project — `down` then reports success having removed
+nothing, while the real stack keeps running.
+
+### Stop it, keep the data
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml down
+```
+
+Containers and the network go; every named volume stays. `up -d` brings the same deployment back
+with its configuration, alert history and metrics intact.
+
+### Remove it completely
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml down -v --remove-orphans
+```
+
+`-v` destroys the eleven named volumes, and that is not recoverable:
+
+| Volume | What is lost |
+|---|---|
+| `pgdata` | Nodes, users, thresholds, alert history, acknowledgements, every setting |
+| `vmdata` | All metric history |
+| `vldata` | All passive events (syslog / traps / webhooks) |
+| `chdata` | All traffic-flow records |
+| `kekdata` | **The key-encryption key** — see below |
+| `tlsdata`, `buscerts` | Materialized certificates (both are copies of PostgreSQL rows) |
+| `logdata`, `pollerbuf`, `upgradedata`, `ipasndata` | Rotated logs, the store-and-forward buffer, the upgrade hand-off, the IP→ASN dataset |
+
+**Losing `kekdata` is the one that cannot be undone by restoring a backup.** Every stored monitoring
+credential — SNMP communities, SNMPv3 credentials, API tokens, the bus private key — is envelope-
+encrypted with that key, and it cannot be regenerated. A database dump taken without it restores
+perfectly and yet cannot poll anything.
+
+If there is any chance of coming back, take the KEK out before `-v` removes it:
+
+```bash
+docker run --rm -v yagra_kekdata:/kek busybox cat /kek/key > yagra-kek.bin   # 32 bytes
+```
+
+⚠️ **A [configuration bundle](#config-bundle) is not a substitute** — it deliberately carries no
+credentials at all, only their ids, and the importer keeps a reference only if the target already
+holds that id. On a deployment rebuilt with a new KEK, those ids do not exist and the references are
+dropped. See [Backup & restore](#backup--restore) for the full tier list.
+
+### Also remove the images and the directory
+
+```bash
+docker compose -p yagra -f docker-compose.deploy.yml down -v --rmi all --remove-orphans
+cd .. && rm -rf yagra          # the compose file and .env, which holds POSTGRES_PASSWORD
+```
+
+`--rmi all` removes the images used by every service, including the backing stores (`postgres`,
+`redis`, `nats`, `victoria-metrics`, `victoria-logs`, `clickhouse`, `busybox`, `alpine`,
+`docker:28-cli`). Docker skips any that another project is still using.
+
+### Remote pollers are separate stacks
+
+A poller deployed at a remote site (deployment **D**) is its own Compose project on its own host.
+Nothing above touches it, and after the central stack is gone it will retry the bus forever. Remove
+each one on its own host:
+
+```bash
+docker compose -f docker-compose.poller.yml down -v
+```
+
+### Checking for leftovers
+
+If the compose file has been lost, or you just want to confirm nothing remains, Compose labels
+everything it created:
+
+```bash
+docker ps -a     --filter label=com.docker.compose.project=yagra
+docker volume ls --filter label=com.docker.compose.project=yagra
+docker network ls --filter label=com.docker.compose.project=yagra
+```
+
+Anything listed can be removed with `docker rm -f`, `docker volume rm` and `docker network rm`.
+
+There is no uninstall action in the WebUI — **Settings ▸ Upgrade** only moves a deployment between
+releases. Uninstalling is deliberately a host-side act.
+
+---
+
 ## Directory sign-in (LDAP / Active Directory)
 
 Configured at **Settings ▸ Auth ▸ Directory (LDAP/AD)** (ADR-041). No environment variable turns it
