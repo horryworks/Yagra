@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.15 — Cisco devices answer about their own health, and a port stops inventing its speed, media and light
+
 ### New Features
 
 - **Cisco Catalyst and Nexus switches now report optical power.** They never did: the built-in
@@ -95,7 +97,10 @@
   `10000Mb/s-…-Copper Pigtail` all still show, and a Nexus that reported `Linecard-Port` on 54
   ports now reports its nine actual optics. A **sensor** is excluded outright — an IOS-XR router
   attaches `Transceiver Voltage Sensor - 3.3V` to thirteen of its ports, which reads convincingly
-  and is not a module.
+  and is not a module. **The wrong values already stored are cleared on upgrade** — an
+  interface row keeps whatever a walk last wrote, so the poller fix alone could not remove them.
+  The clearing rule is the coarser half of the new one, so it also drops the few genuine part
+  numbers that carry no digit; the hourly media walk reads those back within the hour.
 
 - **Optical: a port with no transceiver no longer charts a reading.** Huawei reports `-1` on every
   column of an empty port and the poller scaled that to a flat **-0.01 dBm** line; the vendor-neutral
@@ -110,6 +115,14 @@
   recorded nothing for an hour while the check ahead of it recorded every sample. A check now waits
   for the device to free up (bounded by its own interval, capped at 60s) instead of being thrown away.
   A device that stays busy past that deadline still sheds the poll, so backpressure is unchanged.
+
+### Security
+
+- **`h2` updated to 0.4.16 (RUSTSEC-2026-0258).** The HTTP/2 implementation underneath the API
+  and the Prometheus endpoint accepted and queued empty DATA frames without limit, so a stream
+  that was not actively drained could grow memory without bound, or panic if the length
+  overflowed. Low severity, and there is nothing to configure — the fix ships inside the release
+  images.
 
 ## v0.2.14 — a sweep can be left, returned to and stopped, and a dashboard card plots the links you name
 
