@@ -101,13 +101,16 @@ pub struct InterfaceMeta {
     pub if_name: Option<String>,
     pub if_alias: Option<String>,
     pub if_speed: Option<i64>,
-    /// Negotiated duplex token (`half` / `full`), from EtherLike-MIB (ADR-063 Inc.1). `None` means
-    /// "not known" and covers the MIB being absent, the port being down, and the agent's own
-    /// `unknown(1)` alike — see migration 0085.
+    /// Negotiated duplex token (`half` / `full`), from EtherLike-MIB, Huawei's `hwEthernetDuplex`
+    /// or MAU-MIB, in that precedence (ADR-063 Inc.1/Inc.3). `None` means "not known" and covers
+    /// all three being absent, the port being down, and the agent's own `unknown(1)` alike — see
+    /// migration 0085.
     pub if_duplex: Option<String>,
     /// `ifType` (IANAifType) as the raw integer, if the device reported one.
     pub if_type: Option<i32>,
-    /// Canonical IEEE media designation (`1000BASE-T`), from the MAU walk (ADR-063 Inc.2).
+    /// Canonical IEEE media designation (`1000BASE-T`), from the MAU walk — `ifMauType`,
+    /// CISCO-STACK-MIB `portType`, Huawei `hwEthernetPortType` (copper only) or a pluggable's
+    /// part string, in that precedence (ADR-063 Inc.2/Inc.4/Inc.7).
     pub if_media: Option<String>,
     /// The pluggable's vendor part string, verbatim. **Not a media type** — see migration 0087.
     pub transceiver_model: Option<String>,

@@ -42,10 +42,11 @@ pub use classification::{
 };
 pub use collection::{
     builtin_catalog, builtin_interface_meta_columns, builtin_metric_kind, builtin_profiles,
-    builtin_templates, is_plausible_dbm, resolve_collection_set, BuiltinProfile, BuiltinTemplate,
-    CollectionItem, CollectionKind, InterfaceField, OpticalFlavor, ScopedCollectionItem,
-    METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM, OID_IF_HIGH_SPEED,
-    OPTICAL_DBM_MAX, OPTICAL_DBM_MIN, TEMPLATE_STANDARD_SNMP,
+    builtin_templates, is_plausible_dbm, item_publishes_per_interface, resolve_collection_set,
+    table_rows_are_interfaces, BuiltinProfile, BuiltinTemplate, CollectionItem, CollectionKind,
+    InterfaceField, OpticalFlavor, ScopedCollectionItem, METRIC_CISCO_TEMP_C,
+    METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM, OID_IF_HIGH_SPEED, OPTICAL_DBM_MAX,
+    OPTICAL_DBM_MIN, TEMPLATE_STANDARD_SNMP,
 };
 pub use dns_check::{
     is_resolver_blocked, normalize_dns_name, validate_dns_name, DnsAnswer, DnsChain,

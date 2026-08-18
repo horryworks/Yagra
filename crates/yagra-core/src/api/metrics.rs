@@ -168,9 +168,9 @@ fn resolve_metric_kind(metric: &str, configured: &[CollectionItem]) -> MetricKin
 /// while every decision worth getting right — the three statuses, the interface/entity split, the
 /// metric-kind fallback — is in here.
 ///
-/// `interfaces` is the node's known ifindexes. A metric whose ifindexes all resolve to real
-/// interfaces is [`MetricDimension::Interface`]; one that carries ifindexes which do not is
-/// [`MetricDimension::Entity`], the folded multi-index case whose rows cannot be named.
+/// A **configured** metric's dimension comes from its collection item (`dimension_of_item`), never
+/// from the row keys its series happen to carry. `interfaces` — the node's known ifindexes — is
+/// therefore only consulted for the `Unconfigured` rows, where there is no item to ask.
 fn join_inventory(
     configured: &[CollectionItem],
     series: &[NodeSeries],
@@ -191,22 +191,10 @@ fn join_inventory(
             NodeMetricEntry {
                 metric: item.metric_name.clone(),
                 metric_kind: item.metric_kind,
-                dimension: found.map_or(
-                    // No data yet, so the TSDB cannot say. The collection kind is the only
-                    // evidence there is: a table walk yields one series per row.
-                    match item.kind {
-                        yagra_common::CollectionKind::Scalar => MetricDimension::None,
-                        yagra_common::CollectionKind::Table => MetricDimension::Entity,
-                        // An optical probe only ever publishes under a resolved ifIndex — a row
-                        // it could not attach to an interface is dropped poller-side rather than
-                        // stored (ADR-062 decision 3), so `Interface` is the honest guess for a
-                        // configured-but-silent optical metric. It is also the actionable one:
-                        // `Entity` would tell the reader to go looking for a node aggregate that
-                        // will never exist.
-                        yagra_common::CollectionKind::Optical => MetricDimension::Interface,
-                    },
-                    |s| dimension_of(s, &known),
-                ),
+                // The item decides, whether or not data has arrived — see `dimension_of_item`.
+                // This used to consult the series' row keys the moment there was data, which is
+                // how a chassis CPU came to be announced as a per-interface metric.
+                dimension: dimension_of_item(item),
                 status: if found.is_some() {
                     MetricStatus::Ok
                 } else {
@@ -229,7 +217,35 @@ fn join_inventory(
     out.into_values().collect()
 }
 
-/// A series' dimension, given the node's known interfaces.
+/// The dimension a **configured** metric's series carry, decided from its collection item.
+///
+/// 🚨 **Not decided from the series' row keys, and that distinction is the whole function.** The
+/// obvious rule — "if every `ifindex` label names a real interface, it is per-interface" — reads as
+/// a measurement and is a coincidence: a table walk labels its rows with whatever the last OID
+/// sub-identifier was, so `cpmCPUTotalIndex` 17 on a switch that happens to have an interface 17
+/// satisfies it. Measured on the test fleet before this was written: **30 of the 108** vendor
+/// (node, metric) pairs carrying a row key were being reported as per-interface — chassis CPU,
+/// memory pools, fan and PSU state, the PoE budget, UPS output load, disk usage. Each of those is a
+/// number about the chassis being announced as a number about a port.
+///
+/// The item knows, so ask it. See [`yagra_common::table_rows_are_interfaces`].
+fn dimension_of_item(item: &CollectionItem) -> MetricDimension {
+    if item.kind == yagra_common::CollectionKind::Scalar {
+        return MetricDimension::None;
+    }
+    if yagra_common::item_publishes_per_interface(item) {
+        MetricDimension::Interface
+    } else {
+        MetricDimension::Entity
+    }
+}
+
+/// A series' dimension guessed from the node's known interfaces — for `Unconfigured` rows only.
+///
+/// ⚠️ **A guess, and an unsound one for any table that is not `INDEX { ifIndex }`** — see
+/// `dimension_of_item`, which is what every configured metric uses instead. It survives here
+/// because an unconfigured series has no collection item behind it (its item was removed, or it
+/// never had one), so the row keys are the only evidence there is.
 fn dimension_of(s: &NodeSeries, known: &std::collections::BTreeSet<i32>) -> MetricDimension {
     if !s.has_ifindex {
         return MetricDimension::None;
@@ -1423,6 +1439,90 @@ mod tests {
         assert_eq!(
             join_inventory(&[], &[unparseable], &[1])[0].dimension,
             MetricDimension::Entity
+        );
+    }
+
+    /// The bug this rule exists for, in the shape it actually shipped in.
+    ///
+    /// A Catalyst 9500X has 204 interfaces and answers `cpmCPUTotalIndex` 17 and 18. Both of those
+    /// name a real interface on that switch, so the "do the row keys look like ifIndexes" rule said
+    /// per-interface and the surfaces believed it: MCP's `list_node_metrics` told a model to fetch
+    /// the chassis CPU through `get_interface_series`, and the dashboard's metric-chart picker
+    /// dropped the metric entirely (`chartableMetrics` excludes interface-dimensioned rows). The
+    /// collision is not exotic — it was 30 of the 108 vendor (node, metric) pairs on the test fleet.
+    ///
+    /// ⚠️ The interface assertion is the half that makes this test mean anything. A rule that
+    /// answered `Entity` for *everything* would satisfy the first assertion alone.
+    #[test]
+    fn a_vendor_tables_row_keys_never_promote_it_to_per_interface_however_well_they_collide() {
+        let cpu = CollectionItem {
+            metric_name: "cisco_cpu_5min".to_owned(),
+            // cpmCPUTotalTable — INDEX { cpmCPUTotalIndex }, which is not an ifIndex.
+            oid: "1.3.6.1.4.1.9.9.109.1.1.1.1.8".to_owned(),
+            kind: yagra_common::CollectionKind::Table,
+            metric_kind: MetricKind::Gauge,
+        };
+        let octets = CollectionItem {
+            metric_name: "if_hc_in_octets".to_owned(),
+            oid: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+            kind: yagra_common::CollectionKind::Table,
+            metric_kind: MetricKind::Counter,
+        };
+        let known = [17, 18];
+        let series = [
+            have("cisco_cpu_5min", &known, 2),
+            have("if_hc_in_octets", &known, 2),
+        ];
+        let rows = join_inventory(&[cpu, octets], &series, &known);
+        assert_eq!(
+            by_name(&rows, "cisco_cpu_5min").dimension,
+            MetricDimension::Entity,
+            "a CPU-table row key that collides with an ifIndex is still not an interface"
+        );
+        assert_eq!(
+            by_name(&rows, "if_hc_in_octets").dimension,
+            MetricDimension::Interface,
+            "ifXTable is genuinely INDEX {{ ifIndex }} — the rule must still say so"
+        );
+    }
+
+    /// Every built-in metric that claims to be per-interface, listed by hand.
+    ///
+    /// A golden list rather than a predicate over the same OIDs the code reads: restating the rule
+    /// would pass whatever the rule became. Adding a table item to the catalog fails this until
+    /// someone writes down which side it is on.
+    #[test]
+    fn the_builtin_catalog_calls_exactly_the_if_mib_columns_per_interface() {
+        let per_interface: Vec<String> = yagra_common::builtin_catalog()
+            .iter()
+            .chain(
+                yagra_common::builtin_templates()
+                    .iter()
+                    .flat_map(|t| t.items.iter()),
+            )
+            .filter(|i| dimension_of_item(i) == MetricDimension::Interface)
+            .map(|i| i.metric_name.clone())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        assert_eq!(
+            per_interface,
+            vec![
+                "if_admin_status",
+                "if_hc_in_octets",
+                "if_hc_in_ucast_pkts",
+                "if_hc_out_octets",
+                "if_hc_out_ucast_pkts",
+                "if_high_speed",
+                "if_in_discards",
+                "if_in_errors",
+                "if_oper_status",
+                "if_out_discards",
+                "if_out_errors",
+                "if_rx_power_dbm",
+                "if_tx_power_dbm",
+            ],
+            "a metric joined or left this list — say which side it belongs on and why"
         );
     }
 

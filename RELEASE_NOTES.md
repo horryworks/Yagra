@@ -58,7 +58,24 @@
   registrations are deliberately still absent — where the generator could not derive a name it is
   confident in, the cell stays empty rather than showing something close.
 
+- **The MCP `get_node_status` tool now describes an interface's physical link.** The media, duplex,
+  interface type and transceiver part number have been in its reply for some time, but its
+  description never mentioned them, so a client had no way to know they were there or what an empty
+  one means. It now says what each field is, why null is the ordinary answer for all of them, and
+  which interface types have no physical link to describe at all.
+
 ### Bug Fixes
+
+- **Chassis metrics are no longer described as per-interface values.** A device's CPU, memory pools,
+  fan and power-supply state, PoE budget, UPS output load and disk usage are read from tables whose
+  rows are not interfaces — but each row was labelled with the number the table indexes by, and when
+  that number happened to fall inside a switch's interface range the metric was reported as one
+  series per port. On the test fleet 30 of the 108 vendor readings were affected. Three surfaces
+  believed it: these metrics were missing from the dashboard chart widget's picker, the node's
+  Collection tab offered to break them out per port, and the MCP `list_node_metrics` tool told
+  clients to fetch them through `get_interface_series`. A metric's shape now comes from what
+  collects it rather than from what its row numbers look like. Genuine per-interface metrics are
+  unaffected.
 
 - **Interface speed was missing on most ports.** `ifHighSpeed` — the 64-bit reading every port
   above 4.29 Gbit/s depends on, and the only one many switches answer at all — was being charted as

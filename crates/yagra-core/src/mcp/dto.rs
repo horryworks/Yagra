@@ -226,9 +226,12 @@ pub struct InterfaceDto {
     pub speed: Option<i64>,
     /// Negotiated duplex — `half` or `full` — or `None` when it is not known (ADR-063 Inc.1).
     ///
-    /// `None` covers three cases that are indistinguishable here: the device does not implement
-    /// EtherLike-MIB, the port is down and has negotiated nothing, and the device answered
-    /// "unknown". ⚠️ **`None` on an optical port is normal, not a fault** — IEEE 802.3 defines no
+    /// `None` covers three cases that are indistinguishable here: the device implements none of
+    /// the three columns Yagra reads (EtherLike-MIB's `dot3StatsDuplexStatus`, Huawei's
+    /// `hwEthernetDuplex`, MAU-MIB's `ifMauType`), the port is down and has negotiated nothing,
+    /// and the device answered "unknown".
+    ///
+    /// ⚠️ **`None` on an optical port is normal, not a fault** — IEEE 802.3 defines no
     /// half duplex above 1 Gbit/s, so there is nothing to negotiate. The field is diagnostic on
     /// copper, where one end forced to full against an auto-negotiating peer is a real and common
     /// cause of a link that works but is slow.
@@ -242,9 +245,15 @@ pub struct InterfaceDto {
     /// Canonical IEEE media designation — `1000BASE-T`, `1000BASE-SX`, `10GBASE-SR` — or `None`
     /// when it is not known (ADR-063 Inc.2).
     ///
-    /// ⚠️ `None` is the common case, and does **not** mean the port has no medium. Most devices do
-    /// not implement MAU-MIB; on those, only ports with a pluggable whose ENTITY-MIB part string
-    /// names a designation get a value, and fixed copper ports get nothing at all.
+    /// ⚠️ `None` is the common case, and does **not** mean the port has no medium — it means no
+    /// source Yagra reads named one. There are four, in precedence order: MAU-MIB's `ifMauType`
+    /// (canonical, and rarely implemented); CISCO-STACK-MIB's `portType`, which names medium and
+    /// reach together; Huawei's `hwEthernetPortType`, from which a **copper** port's designation
+    /// follows from its speed (802.3 registers one twisted-pair standard per rate) while a fibre
+    /// one deliberately does not, since "1000BASE-X" would fight the MAU spelling on the same
+    /// cell; and an ENTITY-MIB pluggable part string that happens to contain a designation. A
+    /// fixed copper port therefore fills on Huawei and on Cisco stack platforms, and stays empty
+    /// elsewhere.
     pub media: Option<String>,
     /// The pluggable transceiver's vendor part string, verbatim — `SFP-1000BaseLX`.
     ///

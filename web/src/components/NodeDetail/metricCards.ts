@@ -109,8 +109,10 @@ export interface ResolvedMetric {
  * The source is the metric **inventory** (`listNodeMetrics`), not the collection set. Two things
  * change with that: the inventory needs only read permission, so a viewer sees these cards at all —
  * they were admin-only by accident, since the collection endpoint requires ManageConfig — and its
- * `dimension` is measured from the series that arrived rather than inferred from the collection
- * kind, so a card is offered when there is something to draw.
+ * `status` is measured from the series that arrived rather than inferred from the collection set,
+ * so a card is offered only when there is something to draw. (`dimension` comes from the
+ * collection item and not from the series' row keys — a chassis CPU whose table index happens to
+ * collide with an ifIndex is still not a per-interface metric.)
  */
 export function resolveCard(
   items: readonly NodeMetricEntry[],

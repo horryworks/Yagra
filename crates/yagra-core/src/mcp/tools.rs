@@ -255,10 +255,29 @@ impl YagraMcp {
     #[tool(
         description = "Full status for one node: its summary, current active alerts, and \
                        interfaces. Each interface carries its identity (ifindex, name, alias, \
-                       nominal speed), its current operational state (`oper_status`, 1 = up), its \
-                       current load in bits/sec each way with utilization against the nominal \
-                       speed, and `stale` when the node has not reported it recently. An optical \
-                       port additionally carries the transceiver's own acceptable power window — \
+                       nominal `speed` in bits/sec), its current operational state \
+                       (`oper_status`, 1 = up), its current load in bits/sec each way with \
+                       utilization against the nominal speed, and `stale` when the node has not \
+                       reported it recently. Three fields describe the physical link. `duplex` is \
+                       the negotiated mode, `half` or `full`; on copper it is diagnostic, because \
+                       one end forced to full against an auto-negotiating peer is a common cause \
+                       of a link that works but is slow. `media` is the canonical IEEE \
+                       designation the port is running as — `1000BASE-T`, `10GBASE-SR`. \
+                       `transceiver_model` is the pluggable's vendor part string verbatim \
+                       (`SFP-1000BaseLX`) — a PART NUMBER, not a media type, and reported \
+                       separately so neither has to pretend to be the other. Null is the ordinary \
+                       answer for all three and is NOT a fault to report: the device has to \
+                       implement one of a handful of optional MIBs before any of them can be \
+                       filled, most do not, and a port that is administratively down has \
+                       negotiated nothing to describe. IEEE also defines no half duplex above \
+                       1 Gbit/s, so a null `duplex` on a 10G or faster port is what correct looks \
+                       like, and a fixed copper port has no pluggable so its `transceiver_model` \
+                       is always null. Use `if_type` — the raw IANAifType integer — to tell \
+                       \\\"this does not apply\\\" from \\\"we could not read it\\\": 6 is \
+                       ethernetCsmacd, while 24 (loopback), 53 (virtual), 23 (dialer) and 131 \
+                       (tunnel) have no physical link at all, and calling their nulls a problem \
+                       would be a false finding. An optical port additionally carries the \
+                       transceiver's own acceptable power window — \
                        `rx_power_low_dbm`/`rx_power_high_dbm` and the transmit pair — which is \
                        what makes a light level from get_interface_series judgeable at all, since \
                        -7 dBm is comfortable on one module and failing on another. All four are \

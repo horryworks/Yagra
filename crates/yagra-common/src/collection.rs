@@ -325,6 +325,69 @@ const OID_HR_PROCESSOR_LOAD: &str = "1.3.6.1.2.1.25.3.3.1.2";
 /// stored in `interfaces.if_speed` (see [`InterfaceField::Speed`]).
 pub const OID_IF_HIGH_SPEED: &str = "1.3.6.1.2.1.31.1.1.1.15";
 
+/// Table column roots whose rows are indexed by `ifIndex`, so a sample's row key names a real
+/// interface.
+///
+/// **This list is the fact; a row key that looks like an ifIndex is not.** A table walk stores its
+/// last OID sub-identifier as the sample's `ifindex` label whatever that sub-identifier actually
+/// means (a CPU number, an `entPhysicalIndex`, a storage index), because that label is the only row
+/// key the TSDB schema has. On a chassis with hundreds of ports those foreign keys *collide* with
+/// real ifIndexes — a Catalyst 9500X reports `cpmCPUTotalIndex` 17 and 18, and that switch has an
+/// interface 17 and an interface 18 — so "every row key names an interface" is satisfied by tables
+/// that have nothing to do with interfaces. Deciding from the key range therefore promotes chassis
+/// CPU, PoE budget and PSU state to per-interface values, which is a claim about a port that was
+/// never measured.
+///
+/// Nothing outside IF-MIB is on this list today, and that is not an oversight: every vendor table
+/// in [`builtin_templates`] is keyed by an entity, a pool, a peer address or a sensor. A table that
+/// genuinely is `INDEX { ifIndex }` belongs here — add it deliberately, with the MIB's `INDEX`
+/// clause as the reason.
+const IFINDEX_INDEXED_TABLE_ROOTS: &[&str] = &[
+    // IF-MIB ifTable — INDEX { ifIndex }
+    "1.3.6.1.2.1.2.2.1",
+    // IF-MIB ifXTable — INDEX { ifIndex } (an augment of ifTable)
+    "1.3.6.1.2.1.31.1.1.1",
+];
+
+/// Whether a [`CollectionKind::Table`] column's rows are interfaces, from its OID.
+///
+/// Takes the column base as stored on the item (`1.3.6.1.2.1.2.2.1.14`) and also accepts a bare
+/// table root. Anything not under [`IFINDEX_INDEXED_TABLE_ROOTS`] is not an interface table — see
+/// that constant for why the alternative (inspecting the row keys) is unsound.
+#[must_use]
+pub fn table_rows_are_interfaces(oid: &str) -> bool {
+    IFINDEX_INDEXED_TABLE_ROOTS.iter().any(|root| {
+        oid.strip_prefix(root)
+            .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
+}
+
+/// Whether one collection item's samples name an **interface**, so a reader may break them out per
+/// port rather than only aggregating them node-wide.
+///
+/// The three kinds answer differently, and only one of them answers from its OID:
+///
+/// * `Scalar` — one value for the node. Never per-interface.
+/// * `Table` — [`table_rows_are_interfaces`] on the column base. Read that constant's note before
+///   assuming the row keys could have answered this instead; they cannot.
+/// * `Optical` — the *kind* cannot decide, because since ADR-070 the Cisco sensor walk publishes
+///   two different shapes from one entry OID: the two power metrics, which the poller attaches to a
+///   resolved ifIndex (ADR-062 decision 3), and `cisco_temp_c`, which is deliberately the sensors
+///   in that table that reach **no** port and stays keyed by `entPhysicalIndex`. So the metric name
+///   decides. ⚠️ A new per-interface optical metric must be named here; the failure is silent
+///   (an interface metric that only ever aggregates), which is why the core-side golden list
+///   `the_builtin_catalog_calls_exactly_the_if_mib_columns_per_interface` enumerates the answer.
+#[must_use]
+pub fn item_publishes_per_interface(item: &CollectionItem) -> bool {
+    match item.kind {
+        CollectionKind::Scalar => false,
+        CollectionKind::Table => table_rows_are_interfaces(&item.oid),
+        CollectionKind::Optical => {
+            item.metric_name == METRIC_IF_RX_POWER_DBM || item.metric_name == METRIC_IF_TX_POWER_DBM
+        }
+    }
+}
+
 /// The standard scalar + interface-table metrics collected by default.
 ///
 /// Scalar: sysUpTime. Table (per-interface, ifXTable/ifTable columns): 64-bit octet
@@ -1566,6 +1629,91 @@ mod tests {
     #[test]
     fn empty_resolves_to_empty() {
         assert!(resolve_collection_set(&[]).is_empty());
+    }
+
+    /// The two IF-MIB tables answer yes and every other table in the catalog answers no.
+    ///
+    /// The negatives are not invented: each one is a table that was actually being reported as
+    /// per-interface on the test fleet, because its row keys — a storage index, a device index, a
+    /// PoE group, an `entPhysicalIndex`, a UPS line, a `cpmCPUTotalIndex` — landed inside the
+    /// ifIndex range of a chassis with a few hundred ports.
+    #[test]
+    fn only_the_if_mib_tables_are_indexed_by_ifindex() {
+        for yes in [
+            "1.3.6.1.2.1.2.2.1.14",    // ifInErrors
+            "1.3.6.1.2.1.2.2.1",       // a bare ifEntry root
+            "1.3.6.1.2.1.31.1.1.1.6",  // ifHCInOctets
+            "1.3.6.1.2.1.31.1.1.1.15", // ifHighSpeed
+        ] {
+            assert!(
+                table_rows_are_interfaces(yes),
+                "{yes} is INDEX {{ ifIndex }}"
+            );
+        }
+        for no in [
+            "1.3.6.1.2.1.25.2.3.1.5",        // hrStorageSize        — hrStorageIndex
+            "1.3.6.1.2.1.25.3.3.1.2",        // hrProcessorLoad      — hrDeviceIndex
+            "1.3.6.1.2.1.105.1.3.1.1.2",     // pethMainPsePower     — PSE group
+            "1.3.6.1.2.1.99.1.1.1.4",        // entPhySensorValue    — entPhysicalIndex
+            "1.3.6.1.2.1.33.1.4.4.1.5",      // upsOutputPercentLoad — upsOutputLineIndex
+            "1.3.6.1.2.1.15.3.1.2",          // bgpPeerState         — peer address
+            "1.3.6.1.4.1.9.9.109.1.1.1.1.8", // cpmCPUTotal5minRev   — cpmCPUTotalIndex
+            "1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5", // hwEntityCpuUsage — entPhysicalIndex
+            // 🚨 The boundary a plain `starts_with` gets wrong: a sibling of ifEntry shares its
+            // text prefix and is a different table. Nothing in the catalog uses this OID; it is
+            // here because the day one does, the bug is invisible.
+            "1.3.6.1.2.1.2.2.15.1",
+        ] {
+            assert!(
+                !table_rows_are_interfaces(no),
+                "{no} is not INDEX {{ ifIndex }}"
+            );
+        }
+    }
+
+    /// One entry OID, two shapes — the split ADR-070 created and the reason the kind cannot decide.
+    ///
+    /// Built from the real catalog rather than hand-made items, so it cannot drift from what ships.
+    #[test]
+    fn the_cisco_sensor_walks_temperature_is_not_a_per_interface_metric() {
+        let sensor_items: Vec<CollectionItem> = builtin_templates()
+            .iter()
+            .flat_map(|t| t.items.iter())
+            .filter(|i| i.oid == OpticalFlavor::CiscoEntitySensor.root_oid())
+            .cloned()
+            .collect();
+        assert_eq!(
+            sensor_items.len(),
+            3,
+            "the Cisco sensor entry OID should carry rx, tx and the chassis temperature"
+        );
+        for i in &sensor_items {
+            let per_if = item_publishes_per_interface(i);
+            if i.metric_name == METRIC_CISCO_TEMP_C {
+                assert!(
+                    !per_if,
+                    "chassis temperature is keyed by entPhysicalIndex and reaches no port"
+                );
+            } else {
+                assert!(
+                    per_if,
+                    "{} is attached to a resolved ifIndex",
+                    i.metric_name
+                );
+            }
+        }
+    }
+
+    /// A scalar has no rows at all, whatever its OID looks like.
+    #[test]
+    fn a_scalar_never_publishes_per_interface() {
+        assert!(!item_publishes_per_interface(&CollectionItem {
+            metric_name: "snmp_sys_uptime_ticks".to_owned(),
+            // Deliberately an ifXTable-shaped OID: the kind decides first.
+            oid: "1.3.6.1.2.1.31.1.1.1.6.0".to_owned(),
+            kind: CollectionKind::Scalar,
+            metric_kind: MetricKind::Gauge,
+        }));
     }
 
     #[test]
