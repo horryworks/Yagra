@@ -956,7 +956,13 @@ mod tests {
     /// was edited, and nothing else would notice.
     #[test]
     fn every_cisco_port_type_designation_is_a_real_registration() {
-        assert!(!CISCO_PORT_MEDIA.is_empty());
+        // A count rather than a non-empty check: it catches a truncated paste, which "not empty"
+        // cannot, and it is not a tautology the compiler can fold away.
+        assert_eq!(
+            CISCO_PORT_MEDIA.len(),
+            24,
+            "the portType translation lost or gained entries",
+        );
         for (code, media) in CISCO_PORT_MEDIA {
             assert!(
                 MAU_TYPES.iter().any(|(_, m, _)| m == media),
