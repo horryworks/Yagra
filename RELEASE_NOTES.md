@@ -55,6 +55,13 @@
   either surface is read.
 
 ### Bug Fixes
+- **A dashboard widget at the bottom of a board can be made taller again.** The corner grip
+  resizes by being dragged downwards, and the board ended flush with its last card — so once
+  scrolled to the end there was nowhere left to drag: the grip sat two pixels above the edge of the
+  scrolling area with a whole row of travel needed to reach the next size, and a pointer cannot
+  leave the window. Customize mode now keeps a row of empty board below the last card, and holding
+  the pointer at the top or bottom edge during a resize scrolls the board under it. (The keyboard
+  route was never affected: focus the grip and press ↑ / ↓.)
 - **A node picker low on the screen no longer opens its list off the bottom of the window.** It
   dropped downwards unconditionally, so near the foot of a page it showed a row and a half of an
   otherwise 240px list — and neither surface can be scrolled to, because the list is positioned

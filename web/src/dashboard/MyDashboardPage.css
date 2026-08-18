@@ -15,6 +15,16 @@
 
 /* Turn dense packing off while a reorder drag is in flight so the dnd-kit sort animation stays
    linear (a back-filled hole makes the animation jump); packing re-tightens on drop. */
+/* Customize mode keeps one row of empty board below the last card.
+   The bottom-right grip grows a widget by being dragged DOWN, and the grid used to end flush with
+   its last row — so at maximum scroll the grip sat two pixels above the scroller's edge with a
+   whole row of travel needed to reach the next size, and the gesture was simply unavailable there.
+   The hook scrolls the board during a drag, but it can only scroll into space that exists.
+   Edit-mode only: outside Customize this is dead space at the foot of every board. */
+.mydash-grid.is-editing {
+  padding-bottom: calc(var(--mydash-row) + var(--mydash-gap));
+}
+
 .mydash-grid.is-reordering {
   grid-auto-flow: row;
 }

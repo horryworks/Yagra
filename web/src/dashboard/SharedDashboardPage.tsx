@@ -179,7 +179,11 @@ export function SharedDashboardPage() {
               items={widgets.map((w) => w.instanceId)}
               strategy={rectSortingStrategy}
             >
-              <div className={`mydash-grid${reordering ? ' is-reordering' : ''}`}>
+              <div
+                className={`mydash-grid${editing ? ' is-editing' : ''}${
+                  reordering ? ' is-reordering' : ''
+                }`}
+              >
                 {widgets.map((w) => (
                   <WidgetFrame key={w.instanceId} instance={w} editing={editing} />
                 ))}

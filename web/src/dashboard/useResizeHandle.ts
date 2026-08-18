@@ -4,7 +4,10 @@
 // unmount mid-drag auto-cleans), measures the grid once on pointer-down, and on each frame snaps
 // the pixel delta to the widget's allowed {span, rowSpan} steps (via the pure `snapSize`). The live
 // result is exposed as `preview` so the frame can reflow in real time; the final size commits on
-// pointer-up. Arrow keys give the same resize for keyboard users (the dropdowns it replaces were
+// pointer-up. While the pointer is held at the top or bottom edge of the board's scroller it also
+// scrolls the board, and measures the drag against the board rather than the window so that motion
+// counts — without which a card at the end of the board has nowhere to drag to and can only
+// shrink. Arrow keys give the same resize for keyboard users (the dropdowns it replaces were
 // keyboard-operable). The math lives in resize.ts; this file is the DOM/React glue.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -14,6 +17,11 @@ import type { RowSpan, Span, WidgetDefinition, WidgetInstance } from './types';
 const DEFAULT_ROW_PX = 240; // fallback if --mydash-row can't be read
 const NO_ROWS: RowSpan[] = []; // stable empty ref for fixed-height widgets (keeps callback deps stable)
 
+/** How close to the scroller's edge the pointer has to be for the board to start moving, in px. */
+const EDGE_PX = 48;
+/** How far the board moves per frame while the pointer is held in that zone, in px. */
+const SCROLL_PX = 12;
+
 interface DragState {
   startX: number;
   startY: number;
@@ -22,6 +30,21 @@ interface DragState {
   colPx: number;
   rowPx: number;
   gapPx: number;
+  /** The element that scrolls the board, if any. */
+  scroller: HTMLElement | null;
+  /** Its scroll offset at pointer-down — the drag is measured against the board, not the window. */
+  startScrollTop: number;
+}
+
+/** The nearest ancestor that scrolls. On this shell that is `main.shell-content`, not the window:
+ *  the document itself never scrolls, so reading `window.scrollY` would always answer 0. Found by
+ *  asking the computed style rather than by naming the class, so a future shell keeps working. */
+function scrollParent(el: HTMLElement | null): HTMLElement | null {
+  for (let n = el?.parentElement ?? null; n; n = n.parentElement) {
+    const oy = getComputedStyle(n).overflowY;
+    if (oy === 'auto' || oy === 'scroll') return n;
+  }
+  return null;
 }
 
 export interface ResizeHandle {
@@ -57,11 +80,15 @@ export function useResizeHandle(
   const snapFromLatest = useCallback((): { span: Span; rowSpan: RowSpan } | null => {
     const d = drag.current;
     if (!d) return null;
+    // The vertical delta is measured against the BOARD, not the window: while the pointer sits at
+    // the scroller's edge the board moves under it, and a delta in window coordinates would sit
+    // still (or, if the card is what moved, count the same travel twice).
+    const scrolled = (d.scroller?.scrollTop ?? 0) - d.startScrollTop;
     return snapSize({
       startSpan: d.startSpan,
       startRow: d.startRow,
       dxPx: latest.current.x - d.startX,
-      dyPx: latest.current.y - d.startY,
+      dyPx: latest.current.y - d.startY + scrolled,
       colPx: d.colPx,
       rowPx: d.rowPx,
       gapPx: d.gapPx,
@@ -85,6 +112,7 @@ export function useResizeHandle(
       const rowPx =
         parseFloat(cs.getPropertyValue('--mydash-row')) || parseFloat(cs.gridAutoRows) || DEFAULT_ROW_PX;
 
+      const scroller = scrollParent(grip);
       drag.current = {
         startX: e.clientX,
         startY: e.clientY,
@@ -93,6 +121,8 @@ export function useResizeHandle(
         colPx,
         rowPx,
         gapPx,
+        scroller,
+        startScrollTop: scroller?.scrollTop ?? 0,
       };
       latest.current = { x: e.clientX, y: e.clientY };
       try {
@@ -105,18 +135,44 @@ export function useResizeHandle(
     [instance.span, instance.rowSpan],
   );
 
+  /** One frame of the drag: nudge the board if the pointer is parked at an edge, then re-snap.
+   *
+   *  🚨 The nudge is what makes the bottom of a board resizable at all. `onPointerDown` captures
+   *  the pointer and calls `preventDefault` — deliberately, or the board would scroll instead of
+   *  resizing — so nothing else can bring the room into reach, and a pointer cannot leave the
+   *  window. Without this, the last card on a board could only ever be made shorter.
+   *
+   *  It re-arms itself while the pointer stays in the zone, because a held-still pointer produces
+   *  no more events and the scroll has to keep going. The loop ends with the drag. */
+  const tick = useCallback(() => {
+    raf.current = null;
+    const d = drag.current;
+    if (!d) return;
+    let inZone = false;
+    if (d.scroller) {
+      const r = d.scroller.getBoundingClientRect();
+      const max = d.scroller.scrollHeight - d.scroller.clientHeight;
+      if (latest.current.y > r.bottom - EDGE_PX) {
+        inZone = true;
+        d.scroller.scrollTop = Math.min(max, d.scroller.scrollTop + SCROLL_PX);
+      } else if (latest.current.y < r.top + EDGE_PX) {
+        inZone = true;
+        d.scroller.scrollTop = Math.max(0, d.scroller.scrollTop - SCROLL_PX);
+      }
+    }
+    const next = snapFromLatest();
+    if (next) setPreview(next);
+    if (inZone) raf.current = requestAnimationFrame(tick);
+  }, [snapFromLatest]);
+
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLElement>) => {
       if (!drag.current) return;
       latest.current = { x: e.clientX, y: e.clientY };
       if (raf.current != null) return; // coalesce to one update per frame
-      raf.current = requestAnimationFrame(() => {
-        raf.current = null;
-        const next = snapFromLatest();
-        if (next) setPreview(next);
-      });
+      raf.current = requestAnimationFrame(tick);
     },
-    [snapFromLatest],
+    [tick],
   );
 
   const endDrag = useCallback(
