@@ -61,8 +61,9 @@ pub use l3::{
 };
 pub use link_mode::{
     copper_designation, duplex_from_dot3, duplex_from_huawei, if_type_from_snmp, mau_subid,
-    media_from_mau_oid, media_from_transceiver_text, medium_from_huawei, Duplex, MauMedia, Medium,
-    DOT3_MAU_TYPE_ROOT, IF_TYPE_ETHERNET_CSMACD, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
+    media_from_cisco_port_type, media_from_mau_oid, media_from_transceiver_text,
+    medium_from_huawei, Duplex, MauMedia, Medium, DOT3_MAU_TYPE_ROOT, IF_TYPE_ETHERNET_CSMACD,
+    OID_CISCO_PORT_IFINDEX, OID_CISCO_PORT_TYPE, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
     OID_HW_ETHERNET_PORT_TYPE, OID_IF_MAU_IFINDEX, OID_IF_MAU_TYPE, OID_IF_TYPE,
 };
 pub use meraki::{

@@ -18,6 +18,64 @@
 
 use std::collections::BTreeMap;
 
+/// Media rows recovered from CISCO-STACK-MIB, keyed by ifIndex (ADR-063 Inc.7).
+///
+/// Separate from [`media_by_ifindex`] because the index is different in kind, not just in shape:
+/// `portTable` is keyed by `(portModuleIndex, portIndex)` — a physical slot/port coordinate that
+/// has no arithmetic relationship to ifIndex — and carries its own translation column. Folding the
+/// two walks into one function would mean one of them silently reading the other's index.
+///
+/// `speed_oid` is `ifHighSpeed`, walked here rather than borrowed from the interface job: three of
+/// the `portType` values state a port's *capability* (a 10/100/1000 socket) rather than its
+/// negotiated rate, and BASE-T's designation is a function of the rate. Fibre readings answer
+/// without it, so a port whose speed the device never reported still gets a medium.
+#[must_use]
+pub fn cisco_media_by_ifindex(
+    rows: &[SnmpInstanceRow],
+    type_oid: &str,
+    ifindex_oid: &str,
+    speed_oid: &str,
+) -> BTreeMap<u32, String> {
+    let int_of = |row: &SnmpInstanceRow| match &row.value {
+        SnmpValue::Int(v) => Some(*v),
+        _ => None,
+    };
+    // (module, port) -> ifIndex. The instance is the port's coordinate; the *value* is the ifIndex.
+    let mut by_port: BTreeMap<Vec<u32>, u32> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base == ifindex_oid) {
+        if let Some(v) = int_of(row) {
+            if let Ok(ifindex) = u32::try_from(v) {
+                by_port.insert(row.instance.clone(), ifindex);
+            }
+        }
+    }
+    // ifIndex -> bits/sec, from ifHighSpeed's megabits.
+    let mut speed: BTreeMap<u32, i64> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base == speed_oid) {
+        if let (Some(&ifindex), Some(mbps)) = (row.instance.first(), int_of(row)) {
+            if mbps > 0 {
+                speed.insert(ifindex, mbps.saturating_mul(1_000_000));
+            }
+        }
+    }
+
+    let mut out = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base == type_oid) {
+        let (Some(&ifindex), Some(code)) = (by_port.get(&row.instance), int_of(row)) else {
+            // No translation for this coordinate — a port the device lists in portTable but not in
+            // ifTable. There is no interface to attach it to.
+            continue;
+        };
+        #[allow(clippy::cast_precision_loss)]
+        if let Some(media) =
+            yagra_common::media_from_cisco_port_type(code as f64, speed.get(&ifindex).copied())
+        {
+            out.insert(ifindex, media.to_owned());
+        }
+    }
+    out
+}
+
 /// `entPhysicalClass` value for `sensor(8)` — the one class that can never be a transceiver, and
 /// the one that produced a convincing-looking wrong answer on real hardware.
 const ENT_CLASS_SENSOR: i64 = 8;
@@ -312,12 +370,116 @@ mod tests {
 
     #[test]
     fn an_unrecognised_registration_is_reported_as_a_number_not_stored() {
-        // 103 is past the transcribed block. The port gets no media, and the number surfaces so a
-        // real gap is discoverable from a running deployment.
-        let (got, unknown) = media_by_ifindex(&[mau_row(7, 1, 103), mau_row(8, 1, 30)]);
+        // 154 is an IEEE 802.3ca EPON registration the table deliberately omits rather than render
+        // with a rule that could not be trusted for it. ⚠️ This test used to name 103, which meant
+        // "past the transcribed block" until the table was generated from the registry — 103 is
+        // 2.5GBASE-T and is now perfectly well known. The example has to be a **deliberate** gap,
+        // not merely a high number, or the test decays into "some number we have not reached yet".
+        let (got, unknown) = media_by_ifindex(&[mau_row(7, 1, 154), mau_row(8, 1, 30)]);
         assert!(!got.contains_key(&7), "must not guess a medium");
-        assert_eq!(unknown, vec![103]);
+        assert_eq!(unknown, vec![154]);
         assert_eq!(got[&8].media.as_deref(), Some("1000BASE-T"));
+    }
+
+    const CISCO_TYPE: &str = "1.3.6.1.4.1.9.5.1.4.1.1.5";
+    const CISCO_IFX: &str = "1.3.6.1.4.1.9.5.1.4.1.1.11";
+    const HIGH_SPEED: &str = "1.3.6.1.2.1.31.1.1.1.15";
+
+    fn port_row(oid: &str, module: u32, port: u32, v: i64) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: oid.to_owned(),
+            instance: vec![module, port],
+            value: SnmpValue::Int(v),
+        }
+    }
+    fn speed_row(ifindex: u32, mbps: i64) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: HIGH_SPEED.to_owned(),
+            instance: vec![ifindex],
+            value: SnmpValue::Int(mbps),
+        }
+    }
+
+    /// 🚨 The index is a slot/port coordinate, not an ifIndex, and the table carries the map.
+    ///
+    /// Reading `portType`'s instance as an ifIndex would attach every answer to the wrong
+    /// interface — on the lab 2960X, port `(1,1)` is ifIndex **10101**, so the mistake would be
+    /// silent and total rather than obviously broken.
+    #[test]
+    fn a_cisco_port_type_reaches_its_interface_through_the_tables_own_map() {
+        let got = cisco_media_by_ifindex(
+            &[
+                // (module 1, port 1) is ifIndex 10101 — a 10/100/1000 copper socket at 1 Gbit/s.
+                port_row(CISCO_IFX, 1, 1, 10101),
+                port_row(CISCO_TYPE, 1, 1, 61),
+                speed_row(10101, 1000),
+                // (1,52) is ifIndex 10152 — a 1000BASE-SX optic. Fibre answers without a speed.
+                port_row(CISCO_IFX, 1, 52, 10152),
+                port_row(CISCO_TYPE, 1, 52, 28),
+            ],
+            CISCO_TYPE,
+            CISCO_IFX,
+            HIGH_SPEED,
+        );
+        assert_eq!(got[&10101], "1000BASE-T");
+        assert_eq!(got[&10152], "1000BASE-SX");
+        assert!(
+            !got.contains_key(&1),
+            "the raw port coordinate is never an ifIndex"
+        );
+        assert_eq!(got.len(), 2);
+    }
+
+    /// The same copper socket, two rates, two correct answers — and no rate, no answer.
+    #[test]
+    fn a_copper_capability_follows_the_ports_actual_rate() {
+        let rows = |mbps: Option<i64>| {
+            let mut v = vec![
+                port_row(CISCO_IFX, 1, 1, 10101),
+                port_row(CISCO_TYPE, 1, 1, 18),
+            ];
+            if let Some(m) = mbps {
+                v.push(speed_row(10101, m));
+            }
+            v
+        };
+        let at = |mbps| {
+            cisco_media_by_ifindex(&rows(mbps), CISCO_TYPE, CISCO_IFX, HIGH_SPEED)
+                .get(&10101)
+                .cloned()
+        };
+        assert_eq!(at(Some(100)).as_deref(), Some("100BASE-TX"));
+        assert_eq!(at(Some(1000)).as_deref(), Some("1000BASE-T"));
+        assert_eq!(
+            at(None),
+            None,
+            "a capability with no rate is half an answer"
+        );
+        assert_eq!(
+            at(Some(0)),
+            None,
+            "a zero rate is 'never advertised', not 0 bps"
+        );
+    }
+
+    #[test]
+    fn a_port_with_no_ifindex_translation_or_no_medium_is_dropped() {
+        let got = cisco_media_by_ifindex(
+            &[
+                // portType with no matching portIfIndex row — nothing to attach it to.
+                port_row(CISCO_TYPE, 9, 9, 28),
+                // An empty cage: e1000Empty(31) is "no GBIC installed", not a medium.
+                port_row(CISCO_IFX, 1, 2, 10102),
+                port_row(CISCO_TYPE, 1, 2, 31),
+                // Not Ethernet at all.
+                port_row(CISCO_IFX, 1, 3, 10103),
+                port_row(CISCO_TYPE, 1, 3, 22),
+            ],
+            CISCO_TYPE,
+            CISCO_IFX,
+            HIGH_SPEED,
+        );
+        assert!(got.is_empty(), "nothing here names a medium: {got:?}");
     }
 
     #[test]

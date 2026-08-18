@@ -1379,6 +1379,44 @@ async fn execute_mau(
         );
     }
 
+    // Second source: CISCO-STACK-MIB's `portType` (ADR-063 Inc.7), for the ports `ifMauType` did
+    // not answer. Between MAU and the ENTITY text on purpose — it is the device *stating* the
+    // medium, where the ENTITY string is a part number this code pattern-matches — and skipped
+    // entirely when MAU already covered everything, so a device that answers the standard MIB pays
+    // nothing for it.
+    if media.is_empty() || media.len() < MAU_MAX_ROWS {
+        let columns = vec![
+            yagra_common::OID_CISCO_PORT_TYPE.to_owned(),
+            yagra_common::OID_CISCO_PORT_IFINDEX.to_owned(),
+            // Three `portType` values name a capability rather than a rate; see `cisco_media_by_ifindex`.
+            yagra_common::OID_IF_HIGH_SPEED.to_owned(),
+        ];
+        match walker
+            .walk_instances(transport, job.target, &columns, timeout, MAU_MAX_ROWS)
+            .await
+        {
+            Ok(rows) => {
+                let cisco = crate::mau::cisco_media_by_ifindex(
+                    &rows,
+                    yagra_common::OID_CISCO_PORT_TYPE,
+                    yagra_common::OID_CISCO_PORT_IFINDEX,
+                    yagra_common::OID_IF_HIGH_SPEED,
+                );
+                for (ifindex, m) in cisco {
+                    // MAU wins: a registry designation is never replaced by a translated one.
+                    media.entry(ifindex).or_insert(crate::mau::MediaRow {
+                        media: Some(m),
+                        duplex: None,
+                        transceiver_model: None,
+                    });
+                }
+            }
+            Err(err) => {
+                tracing::debug!(job_id = %job.job_id, error = %err, "cisco portTable walk failed");
+            }
+        }
+    }
+
     if entity_fallback {
         let text = walk_entity_media_text(job, transport, walker, timeout).await;
         if !text.is_empty() {

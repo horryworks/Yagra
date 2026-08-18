@@ -242,6 +242,105 @@ pub fn copper_designation(bps: i64) -> Option<&'static str> {
     }
 }
 
+// ── Media, from CISCO-STACK-MIB (ADR-063 Inc.7) ──────────────────────────────────────────────
+
+/// `portType` — CISCO-STACK-MIB, what a Cisco port physically is.
+///
+/// `portTable` is indexed by `(portModuleIndex, portIndex)` — the chassis/slot model, **not**
+/// ifIndex — so this cannot ride the interface walk. The table carries its own translation in
+/// [`OID_CISCO_PORT_IFINDEX`], which is why the pair is usable at all.
+///
+/// # Why this is worth reading when `ifMauType` exists
+///
+/// It is the only medium source found for Cisco after a search that is worth recording, because the
+/// obvious move is to repeat it. Comparing **every ifIndex-keyed column** in the 2960X capture
+/// between its two known fibre ports and its 131 copper ports separates them nowhere; the same held
+/// for the c9500X, Arista, Comware and Juniper EX captures, and `entPhysicalVendorType` carries one
+/// identical value across all 120 of the 2960X's port entities. Reading vendor **MIB files** rather
+/// than walks is what found both this and [`OID_HW_ETHERNET_PORT_TYPE`] — a capture proves only
+/// what its author chose to poll.
+///
+/// ⚠️ **Unverified against a device, and the lab cannot decide it.** The 2960X and the 6500 both
+/// answer this table's [`OID_CISCO_PORT_IFINDEX`] column — 132 and 205 rows — so they implement
+/// the table; whether they answer *this* column is unknown, because the public walks are what
+/// LibreNMS chose to poll and it polls only the ifIndex column. Absent, it costs one walk that
+/// returns nothing.
+pub const OID_CISCO_PORT_TYPE: &str = "1.3.6.1.4.1.9.5.1.4.1.1.5";
+
+/// `portIfIndex` — the same table's own translation to ifIndex, without which `portType` could
+/// not be attached to an interface.
+pub const OID_CISCO_PORT_IFINDEX: &str = "1.3.6.1.4.1.9.5.1.4.1.1.11";
+
+/// `portType` values that name a medium this crate can state, and nothing else.
+///
+/// The enumeration has ~200 members; this carries the ~30 that map onto a **registration
+/// [`MAU_TYPES`] already holds**, which is the same promise [`copper_designation`] makes.
+/// Everything omitted — ATM, POS, FDDI, token ring, the DWDM/CWDM wavelength grid, service modules,
+/// the `…Empty` and `…Unknown` markers — is either not Ethernet or not a designation.
+///
+/// 🚨 **The `…Empty` values are omitted on purpose and are not an oversight.** `e1000Empty(31)`
+/// means "no GBIC installed"; rendering it as a medium would put a designation on an empty cage.
+/// It reads as "unknown", which is what it is.
+///
+/// ⚠️ Three values state a *capability* rather than a negotiated medium — `e10a100BaseTX(18)`,
+/// `e10a100a1000BaseT(61)`, `e1000BaseT(33)` on a multi-rate port — so they resolve through
+/// [`copper_designation`] with the port's actual speed rather than being pinned to one rate. That
+/// is handled by [`CISCO_PORT_COPPER`], not here.
+const CISCO_PORT_MEDIA: &[(i64, &str)] = &[
+    (8, "10BASE-T"),
+    (9, "10BASE-FL"),
+    (11, "100BASE-TX"),
+    (12, "100BASE-T4"),
+    (13, "100BASE-FX"),
+    (27, "1000BASE-LX"),
+    (28, "1000BASE-SX"),
+    (29, "1000BASE-CX"),
+    (57, "10GBASE-LX4"),
+    (65, "10GBASE-LR"),
+    (71, "10GBASE-ER"),
+    (92, "100BASE-LX10"),
+    (93, "10GBASE-SR"),
+    (94, "10GBASE-CX4"),
+    (97, "10GBASE-SW"),
+    (98, "10GBASE-LW"),
+    (99, "10GBASE-EW"),
+    (1069, "1000BASE-BX10-D"),
+    (1070, "1000BASE-BX10-U"),
+    (1074, "100BASE-BX10-D"),
+    (1075, "100BASE-BX10-U"),
+    (1080, "10GBASE-LRM"),
+    (1100, "40GBASE-LR4"),
+    (1101, "40GBASE-SR4"),
+];
+
+/// `portType` values that say "this port is twisted pair" without pinning the rate.
+///
+/// A 10/100 or 10/100/1000 port reports its *capability*, so the medium is certain and the rate is
+/// not — exactly the shape [`copper_designation`] takes. `e1000BaseT(33)` is here rather than in
+/// [`CISCO_PORT_MEDIA`] for the same reason: a gigabit copper port that has negotiated down to
+/// 100 Mbit/s is `100BASE-TX` at that moment, and the speed says so.
+const CISCO_PORT_COPPER: &[i64] = &[18, 33, 61, 1116];
+
+/// Resolve a `portType` reading, using the port's speed only where the reading needs it.
+///
+/// Returns a designation [`MAU_TYPES`] carries, or `None` — never a guess. `speed_bps` is
+/// consulted only for the capability values; a fibre reading answers without it, which is what lets
+/// this fill a port whose speed the device never reported.
+#[must_use]
+pub fn media_from_cisco_port_type(value: f64, speed_bps: Option<i64>) -> Option<&'static str> {
+    if !value.is_finite() || (value - value.round()).abs() > 1e-6 {
+        return None;
+    }
+    let code = value.round() as i64;
+    if CISCO_PORT_COPPER.contains(&code) {
+        return speed_bps.and_then(copper_designation);
+    }
+    CISCO_PORT_MEDIA
+        .iter()
+        .find(|(v, _)| *v == code)
+        .map(|(_, media)| *media)
+}
+
 /// Coerce an SNMP numeric reading to an `ifType` code, or `None` if it is not a plausible one.
 ///
 /// IANAifType codes are positive and small; the upper bound is a sanity check on a garbage reading,
@@ -297,12 +396,25 @@ pub const DOT3_MAU_TYPE_ROOT: &str = "1.3.6.1.2.1.26.4";
 /// escape hatch `extensibility.md` §2 prefers does not apply. The date is here so the next person
 /// knows what it was checked against.
 ///
-/// **The cut at 78 is deliberate and is about accuracy, not effort.** 78 is the end of the block
-/// this transcription is confident in (…100GBASE-ER4). IANA has continued past it — 2.5GBASE-T,
-/// 5GBASE-T, 25G and the 200/400G forms all live above — and **a wrong designation is far worse
-/// than a missing one**: a missing one renders an em dash and logs the number, while a wrong one
-/// tells an operator their fibre port is copper. Extend it from the registry when a device needs
-/// it; do not extend it from memory.
+/// **Entries 1–78 are that hand transcription and are frozen byte-for-byte.** They are already
+/// stored in deployments' `interfaces.if_media` columns, so changing one would silently rewrite
+/// history; `the_hand_transcribed_block_is_frozen` pins all 78.
+///
+/// **Entries 79–250 were generated from IANA-MAU-MIB itself on 2026-08-18**, not written out by
+/// hand — the earlier note said "extend it from the registry when a device needs it; do not extend
+/// it from memory", and this is that. The registry is dense to 250; the generator derives the
+/// designation from each registration's own identity name (`dot3MauType25GbaseCR` → `25GBASE-CR`,
+/// `dot3MauType2p5GigT` → `2.5GBASE-T`).
+///
+/// ⚠️ **44 registrations are deliberately absent, and the gaps are the point.** Where the mechanical
+/// rule could not render a name with confidence it emits nothing rather than something close:
+/// the 40-member IEEE 802.3ca EPON `PQ` family (the FEC letter and the direction are not
+/// separable from the identity name), `10GPASS-XR` (not a BASE designation at all), and three
+/// registrations whose real name hyphenates a trailing reach digit — `400GBASE-LR4-6`,
+/// `400GBASE-DR4-2`, `800GBASE-DR8-2` — which cannot be told apart from a single token like
+/// `400GBASE-SR16`. **A wrong designation is far worse than a missing one**: a missing one renders
+/// an em dash and logs the number, while a wrong one tells an operator something untrue about their
+/// hardware. So the table is sorted and unique but **not dense above 78**, on purpose.
 ///
 /// The duplex column is a **pure transcription** of what each registration states. Registrations
 /// from `10GigBaseX(31)` up carry no HD/FD suffix, because IEEE 802.3 defines no half duplex above
@@ -396,6 +508,138 @@ const MAU_TYPES: &[(u32, &str, Option<Duplex>)] = &[
     (76, "100GBASE-SR10", None),
     (77, "100GBASE-LR4", None),
     (78, "100GBASE-ER4", None),
+    // ── generated from IANA-MAU-MIB, 2026-08-18 ────────────────────────────────────────────────
+    // Every entry below is 802.3 at 1 Gbit/s or faster, where no half duplex is defined, so the
+    // duplex column is uniformly None — the same "pure transcription, no inference" rule the block
+    // above follows. Gaps are deliberate; see the ⚠️ in the doc comment.
+    (79, "1000BASE-T1", None),
+    (80, "1000BASE-PX30-D", None),
+    (81, "1000BASE-PX30-U", None),
+    (82, "1000BASE-PX40-D", None),
+    (83, "1000BASE-PX40-U", None),
+    (84, "10/1GBASE-PRX-D4", None),
+    (85, "10/1GBASE-PRX-U4", None),
+    (86, "10GBASE-PR-D4", None),
+    (87, "10GBASE-PR-U4", None),
+    (88, "25GBASE-CR", None),
+    (89, "25GBASE-CRS", None),
+    (90, "25GBASE-KR", None),
+    (91, "25GBASE-KRS", None),
+    (92, "25GBASE-R", None),
+    (93, "25GBASE-SR", None),
+    (94, "25GBASE-T", None),
+    (95, "40GBASE-ER4", None),
+    (96, "40GBASE-R", None),
+    (97, "40GBASE-T", None),
+    (98, "100GBASE-CR4", None),
+    (99, "100GBASE-KR4", None),
+    (100, "100GBASE-KP4", None),
+    (101, "100GBASE-R", None),
+    (102, "100GBASE-SR4", None),
+    (103, "2.5GBASE-T", None),
+    (104, "5GBASE-T", None),
+    (105, "100BASE-T1", None),
+    (106, "1000BASE-RHA", None),
+    (107, "1000BASE-RHB", None),
+    (108, "1000BASE-RHC", None),
+    (109, "2.5GBASE-KX", None),
+    (110, "2.5GBASE-X", None),
+    (111, "5GBASE-KR", None),
+    (112, "5GBASE-R", None),
+    (114, "25GBASE-LR", None),
+    (115, "25GBASE-ER", None),
+    (116, "50GBASE-R", None),
+    (117, "50GBASE-CR", None),
+    (118, "50GBASE-KR", None),
+    (119, "50GBASE-SR", None),
+    (120, "50GBASE-FR", None),
+    (121, "50GBASE-LR", None),
+    (122, "50GBASE-ER", None),
+    (123, "100GBASE-CR2", None),
+    (124, "100GBASE-KR2", None),
+    (125, "100GBASE-SR2", None),
+    (126, "100GBASE-DR", None),
+    (127, "200GBASE-R", None),
+    (128, "200GBASE-DR4", None),
+    (129, "200GBASE-FR4", None),
+    (130, "200GBASE-LR4", None),
+    (131, "200GBASE-CR4", None),
+    (132, "200GBASE-KR4", None),
+    (133, "200GBASE-SR4", None),
+    (134, "200GBASE-ER4", None),
+    (135, "400GBASE-R", None),
+    (136, "400GBASE-SR16", None),
+    (137, "400GBASE-DR4", None),
+    (138, "400GBASE-FR8", None),
+    (139, "400GBASE-LR8", None),
+    (140, "400GBASE-ER8", None),
+    (141, "10BASE-T1L", None),
+    (142, "10BASE-T1SHD", None),
+    (143, "10BASE-T1SMD", None),
+    (144, "10BASE-T1SFD", None),
+    (145, "100GBASE-FR1", None),
+    (146, "100GBASE-LR1", None),
+    (147, "400GBASE-FR4", None),
+    (149, "400GBASE-SR8", None),
+    (150, "400GBASE-SR4.2", None),
+    (151, "2.5GBASE-T1", None),
+    (152, "5GBASE-T1", None),
+    (153, "10GBASE-T1", None),
+    (194, "100GBASE-ZR", None),
+    (195, "10GBASE-BR10-D", None),
+    (196, "10GBASE-BR10-U", None),
+    (197, "10GBASE-BR20-D", None),
+    (198, "10GBASE-BR20-U", None),
+    (199, "10GBASE-BR40-D", None),
+    (200, "10GBASE-BR40-U", None),
+    (201, "25GBASE-BR10-D", None),
+    (202, "25GBASE-BR10-U", None),
+    (203, "25GBASE-BR20-D", None),
+    (204, "25GBASE-BR20-U", None),
+    (205, "25GBASE-BR40-D", None),
+    (206, "25GBASE-BR40-U", None),
+    (207, "50GBASE-BR10-D", None),
+    (208, "50GBASE-BR10-U", None),
+    (209, "50GBASE-BR20-D", None),
+    (210, "50GBASE-BR20-U", None),
+    (211, "50GBASE-BR40-D", None),
+    (212, "50GBASE-BR40-U", None),
+    (213, "2.5GBASE-AU", None),
+    (214, "5GBASE-AU", None),
+    (215, "10GBASE-AU", None),
+    (216, "25GBASE-AU", None),
+    (217, "50GBASE-AU", None),
+    (218, "25GBASE-T1", None),
+    (220, "800GBASE-CR8", None),
+    (221, "800GBASE-DR8", None),
+    (223, "800GBASE-KR8", None),
+    (224, "800GBASE-R", None),
+    (225, "800GBASE-SR8", None),
+    (226, "800GBASE-VR8", None),
+    (227, "10GBASE-SP1D", None),
+    (228, "10GBASE-SP1U", None),
+    (229, "10/2.5GBASE-SP1D", None),
+    (230, "10/2.5GBASE-SP1U", None),
+    (231, "100GBASE-SR1", None),
+    (232, "100GBASE-VR1", None),
+    (233, "200GBASE-SR2", None),
+    (234, "200GBASE-VR2", None),
+    (235, "400GBASE-SR4", None),
+    (236, "400GBASE-VR4", None),
+    (237, "100GBASE-CR1", None),
+    (238, "100GBASE-KR1", None),
+    (239, "200GBASE-CR2", None),
+    (240, "200GBASE-KR2", None),
+    (241, "400GBASE-CR4", None),
+    (242, "400GBASE-KR4", None),
+    (243, "10BASE-T1M", None),
+    (244, "100GBASE-BR10-D", None),
+    (245, "100GBASE-BR10-U", None),
+    (246, "100GBASE-BR20-D", None),
+    (247, "100GBASE-BR20-U", None),
+    (248, "100GBASE-BR40-D", None),
+    (249, "100GBASE-BR40-U", None),
+    (250, "100BASE-T1L", None),
 ];
 
 /// What one `ifMauType` value says about a port.
@@ -704,6 +948,132 @@ mod tests {
         }
     }
 
+    /// 🚨 Every designation this mapping can emit must be one `MAU_TYPES` carries.
+    ///
+    /// That is what makes it a translation rather than an opinion: a device that implements *both*
+    /// MAU-MIB and CISCO-STACK-MIB cannot be made to disagree with itself, and `if_media`'s two
+    /// writers cannot alternate. Without this the two sources would drift the moment either table
+    /// was edited, and nothing else would notice.
+    #[test]
+    fn every_cisco_port_type_designation_is_a_real_registration() {
+        assert!(!CISCO_PORT_MEDIA.is_empty());
+        for (code, media) in CISCO_PORT_MEDIA {
+            assert!(
+                MAU_TYPES.iter().any(|(_, m, _)| m == media),
+                "portType {code} maps to {media}, which is not a dot3MauType registration",
+            );
+        }
+        // …and the capability values route through the same guarantee.
+        for code in CISCO_PORT_COPPER {
+            let got = media_from_cisco_port_type(*code as f64, Some(1_000_000_000))
+                .unwrap_or_else(|| panic!("portType {code} at 1 Gbit/s must resolve"));
+            assert_eq!(got, "1000BASE-T", "portType {code}");
+        }
+    }
+
+    #[test]
+    fn the_two_cisco_port_type_tables_do_not_overlap() {
+        // A code in both would make the answer depend on which branch runs first — and the two
+        // branches disagree by construction (one is fixed, one follows the speed).
+        for (code, _) in CISCO_PORT_MEDIA {
+            assert!(
+                !CISCO_PORT_COPPER.contains(code),
+                "portType {code} is in both tables",
+            );
+        }
+        let mut prev = 0i64;
+        for (code, _) in CISCO_PORT_MEDIA {
+            assert!(
+                *code > prev,
+                "CISCO_PORT_MEDIA must be sorted: {code} after {prev}"
+            );
+            prev = *code;
+        }
+    }
+
+    #[test]
+    fn a_cisco_port_type_names_the_medium_and_the_reach() {
+        // Fibre answers without a speed at all — the half that makes this worth having on a port
+        // whose rate the device never reported.
+        assert_eq!(
+            media_from_cisco_port_type(28.0, None),
+            Some("1000BASE-SX"),
+            "e1000BaseSX",
+        );
+        assert_eq!(media_from_cisco_port_type(93.0, None), Some("10GBASE-SR"));
+        assert_eq!(media_from_cisco_port_type(11.0, None), Some("100BASE-TX"));
+        // A multi-rate copper port takes its rate from the speed, so the same reading gives two
+        // different — and both correct — answers.
+        assert_eq!(
+            media_from_cisco_port_type(61.0, Some(100_000_000)),
+            Some("100BASE-TX"),
+            "e10a100a1000BaseT negotiated at 100 Mbit/s",
+        );
+        assert_eq!(
+            media_from_cisco_port_type(61.0, Some(1_000_000_000)),
+            Some("1000BASE-T"),
+            "…and at 1 Gbit/s",
+        );
+    }
+
+    /// ⚠️ An empty cage is not a medium, and neither is a value this mapping does not carry.
+    #[test]
+    fn an_empty_cage_or_an_unmapped_port_type_is_none() {
+        for code in [
+            31.0,   // e1000Empty — "no GBIC installed"
+            60.0,   // e10GEmpty
+            103.0,  // e100BaseEmpty
+            113.0,  // e40GBaseEmpty
+            1000.0, // e1000BaseUnknown
+            1002.0, // e10GBaseUnapproved
+            1082.0, // e10GBaseCU1M — twinax, no dot3MauType registration exists for it
+            14.0,   // atmOc3mmf — not Ethernet
+            22.0,   // tokenring
+            1.0,    // other
+            0.0,
+            -1.0,
+            2.5,
+            f64::NAN,
+            f64::INFINITY,
+        ] {
+            assert_eq!(
+                media_from_cisco_port_type(code, Some(1_000_000_000)),
+                None,
+                "portType {code}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_copper_capability_with_no_speed_answers_nothing() {
+        // Half the input is not an answer: the medium is known, the rate is not, and BASE-T's
+        // designation is a function of the rate.
+        for code in CISCO_PORT_COPPER {
+            assert_eq!(media_from_cisco_port_type(*code as f64, None), None);
+        }
+        // …nor at a rate with no transcribed twisted-pair standard.
+        assert_eq!(media_from_cisco_port_type(61.0, Some(40_000_000_000)), None);
+    }
+
+    #[test]
+    fn the_cisco_port_columns_are_distinct_from_every_other_walked_oid() {
+        let oids = [
+            OID_CISCO_PORT_TYPE,
+            OID_CISCO_PORT_IFINDEX,
+            OID_HW_ETHERNET_PORT_TYPE,
+            OID_HW_ETHERNET_DUPLEX,
+            OID_DOT3_DUPLEX_STATUS,
+            OID_IF_TYPE,
+        ];
+        for (i, a) in oids.iter().enumerate() {
+            for b in oids.iter().skip(i + 1) {
+                assert_ne!(a, b);
+                assert!(!a.starts_with(b), "{a} must not sit under {b}");
+                assert!(!b.starts_with(a), "{b} must not sit under {a}");
+            }
+        }
+    }
+
     #[test]
     fn if_type_rejects_implausible_readings_and_keeps_real_ones() {
         assert_eq!(if_type_from_snmp(6.0), Some(IF_TYPE_ETHERNET_CSMACD));
@@ -763,11 +1133,16 @@ mod tests {
     #[test]
     fn an_unknown_or_malformed_mau_value_is_none_not_a_guess() {
         for v in [
-            "1.3.6.1.2.1.26.4.79",   // past the transcribed block — the discoverable gap
-            "1.3.6.1.2.1.26.4.999",  // no such registration
+            // A registration the generator deliberately skipped rather than guess at — the EPON PQ
+            // family. This is what "the discoverable gap" means now that the table reaches 250:
+            // not "past the end", but "inside the range and knowingly absent".
+            "1.3.6.1.2.1.26.4.154",
+            "1.3.6.1.2.1.26.4.113", // 10GPASS-XR — in the registry, not a BASE designation
+            "1.3.6.1.2.1.26.4.251", // past the registry's last entry
+            "1.3.6.1.2.1.26.4.999", // no such registration
             "1.3.6.1.2.1.26.4.30.1", // two sub-ids below the arc is not a registration
-            "1.3.6.1.2.1.26.4",      // the arc itself
-            "1.3.6.1.2.1.2.2.1.3",   // a different OID entirely
+            "1.3.6.1.2.1.26.4",     // the arc itself
+            "1.3.6.1.2.1.2.2.1.3",  // a different OID entirely
             "",
             "not-an-oid",
         ] {
@@ -776,18 +1151,90 @@ mod tests {
     }
 
     #[test]
-    fn the_table_is_sorted_dense_and_free_of_duplicates() {
-        // Makes a mis-paste loud. Dense-from-1 is what lets the cut be stated as a single number
-        // ("transcribed through 78") rather than as a set of holes nobody can audit.
-        for (i, (subid, media, _)) in MAU_TYPES.iter().enumerate() {
-            assert_eq!(
-                *subid,
-                i as u32 + 1,
-                "MAU_TYPES must be sorted and dense from 1; entry {i} is {subid}"
+    fn the_table_is_sorted_unique_and_dense_where_it_claims_to_be() {
+        // Sorted and unique everywhere — a mis-paste is loud. Dense only through 78, because the
+        // generated range deliberately omits the registrations the rule could not render (see the
+        // ⚠️ on MAU_TYPES). Asserting density over the whole table would force those to be guessed.
+        let mut prev = 0u32;
+        for (subid, media, _) in MAU_TYPES {
+            assert!(
+                *subid > prev,
+                "MAU_TYPES must be sorted and free of duplicates; {subid} follows {prev}",
             );
             assert!(!media.is_empty(), "sub-id {subid} has no designation");
+            if *subid > 78 {
+                // Only the generated range is guaranteed to be a `…BASE-…` designation: the hand block
+                // carries pre-802.3 media names like `AUI` and `FOIRL` that have no such form.
+                assert!(
+                    media.contains("BASE-"),
+                    "generated sub-id {subid} is not a designation: {media}",
+                );
+            }
+            if *subid <= 78 {
+                assert_eq!(
+                    *subid,
+                    prev + 1,
+                    "the hand-transcribed block must stay dense"
+                );
+            }
+            prev = *subid;
         }
-        assert_eq!(MAU_TYPES.len(), 78, "the transcribed block ends at 78");
+        assert!(
+            prev <= 250,
+            "no registration above the registry's last entry"
+        );
+        assert_eq!(
+            MAU_TYPES.iter().filter(|(id, _, _)| *id <= 78).count(),
+            78,
+            "the hand-transcribed block is all 78",
+        );
+    }
+
+    /// 🚨 Entries 1–78 are already stored in operators' `interfaces.if_media` columns.
+    ///
+    /// Regenerating this table from the registry must never rewrite them: the identity names would
+    /// render `10/1GBASE-PRX-D1` (59) as `10/1GBASE-PRX-D1` but `10GBASE-PR-D1` (65) differently,
+    /// and a changed string would silently relabel history on every deployment that already polled
+    /// that port. Spot-pinned at the boundaries and at the entries that differ from the mechanical
+    /// form, which are exactly the ones a regeneration would move.
+    #[test]
+    fn the_hand_transcribed_block_is_frozen() {
+        let at = |subid: u32| {
+            MAU_TYPES
+                .iter()
+                .find(|(id, _, _)| *id == subid)
+                .unwrap_or_else(|| panic!("sub-id {subid} must exist"))
+        };
+        assert_eq!(at(1).1, "AUI");
+        assert_eq!(at(30).1, "1000BASE-T");
+        assert_eq!(at(54).1, "10GBASE-T");
+        assert_eq!(at(59).1, "10/1GBASE-PRX-D1");
+        assert_eq!(at(65).1, "10GBASE-PR-D1");
+        assert_eq!(at(78).1, "100GBASE-ER4");
+        // …and the first generated entry, so the seam itself is pinned.
+        assert_eq!(at(79).1, "1000BASE-T1");
+    }
+
+    /// The registrations this feature was extended for: the copper rates `copper_designation`
+    /// could not name before, and the modern optics an operator is most likely to meet.
+    #[test]
+    fn the_registry_extension_covers_the_rates_that_were_missing() {
+        let has = |name: &str| MAU_TYPES.iter().any(|(_, m, _)| *m == name);
+        for name in [
+            "2.5GBASE-T",
+            "5GBASE-T",
+            "25GBASE-T",
+            "25GBASE-SR",
+            "25GBASE-CR",
+            "40GBASE-T",
+            "100GBASE-SR4",
+            "100GBASE-LR1",
+            "200GBASE-FR4",
+            "400GBASE-DR4",
+            "800GBASE-DR8",
+        ] {
+            assert!(has(name), "{name} must be in the table after the extension");
+        }
     }
 
     #[test]

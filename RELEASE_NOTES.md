@@ -47,6 +47,16 @@
   Huawei reports copper-or-fibre directly, and a copper port's IEEE designation follows from its
   speed — so a 1 Gbit/s metal port now reads `1000BASE-T`. Optical ports are deliberately left to
   the transceiver reading, which names the actual reach rather than guessing at it.
+- **Cisco switches can now report their port media too.** Cisco publishes the medium *and* the reach
+  in its own `portType` table — `1000BASE-SX`, `10GBASE-LR`, and for a 10/100/1000 socket the
+  designation that matches the rate it actually negotiated. It is read on the hourly media walk,
+  after the standard MIB and before the transceiver part number, and costs nothing on a device that
+  does not publish it.
+- **The media registry now covers modern rates.** The IEEE designation table was a hand
+  transcription that stopped at 100GBASE-ER4, so a 2.5 Gbit/s or 5 Gbit/s copper port, or anything
+  from 25G up, had no name to show. It is now generated from IANA's registry and reaches 800G. 44
+  registrations are deliberately still absent — where the generator could not derive a name it is
+  confident in, the cell stays empty rather than showing something close.
 
 ### Bug Fixes
 
