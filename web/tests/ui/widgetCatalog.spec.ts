@@ -370,3 +370,24 @@ test('a placed card can be given its own name beside the type', async ({ page, e
 
   expect(errors.uncaught).toEqual([]);
 });
+
+// The rename box must fit what is typed into it (ADR-071). It sits in `.card-title`, which is
+// shrink-to-fit by default — so the box was sized to its own content and clipped a name of any
+// length while several hundred pixels of the card header sat empty beside it.
+test('the rename box is wide enough for a long name', async ({ page }) => {
+  await openCatalog(page);
+  await card(page, 'Interface traffic').click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+
+  const name = page.locator('.mydash-cell').first().locator('.widgetframe-name');
+  await expect(name).toBeVisible();
+  await name.fill('Home Matsuyama Aggregation uplink');
+
+  // The direct statement of "all of it is visible": the content is not wider than the box. Reading
+  // the geometry rather than the text matters — the value is in the DOM either way, so an
+  // assertion on `inputValue()` passes while the operator can only see half of it.
+  const fits = await name.evaluate(
+    (el: HTMLInputElement) => el.scrollWidth <= el.clientWidth + 1,
+  );
+  expect(fits, 'the typed name is clipped by the box').toBe(true);
+});

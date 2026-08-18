@@ -277,3 +277,15 @@
   border-color: var(--accent-color);
   outline: none;
 }
+
+/* Let the heading take the width the header is not using.
+   `.card-title` is shrink-to-fit by default, which is right for a card whose title is a fixed
+   label — but this one contains a text box, and a box sized to its content clips the name being
+   typed while 400px of the header sits empty beside it. `.card-actions` keeps its `margin-left:
+   auto`, so the controls stay hard right either way.
+   Scoped to the dashboard cell rather than changed in `Card.css`: 27 other screens use that class
+   and none of them asked for this. */
+.mydash-cell .card-head > .card-title {
+  flex: 1;
+  min-width: 0;
+}
