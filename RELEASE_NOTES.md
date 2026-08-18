@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.14 — a sweep can be left, returned to and stopped, and a dashboard card plots the links you name
+
 ### Breaking changes
 - **A discovery sweep no longer tries SNMP on an address that does not answer ping.**
   `POST /api/v1/discovery/scan` takes a new `snmp_when_unreachable`, and **omitting it means no** —
@@ -17,7 +19,76 @@
   SNMP. Send `"snmp_when_unreachable": true` for the previous behaviour. In the WebUI it is a
   checkbox on the scan form, off by default.
 
+### New Features
+- **Every dashboard card can be given a name of your own.** Customize the board and the card's
+  heading gains a text box: type "HQ uplink" and the card reads *Interface traffic · HQ uplink*.
+  The widget type stays put beside it, so a card still says what kind of thing it is — which is the
+  word it shares with the widget catalogue. Clearing the box removes the name again.
+  - It applies to all forty-eight widgets. None of them limits how many copies you may place, so
+    two cards of the same type on one board were previously indistinguishable — most visibly for
+    the ones whose contents you choose (Metric chart, Top nodes by metric, Latest events,
+    Interface traffic).
+  - The remove, drag and resize controls announce the full heading, so a screen reader can tell six
+    cards of one type apart.
+- **A dashboard widget for the specific links you watch.** Capacity ▸ *Interface traffic* plots up
+  to six interfaces you name, and they may live on different nodes — so an uplink and its backup
+  can be compared on one chart instead of in two browser tabs. Receive is drawn above the zero line
+  and transmit below it, which gives each link a single colour and makes an unbalanced link visible
+  at a glance.
+  - The unit switches between bits/sec and unicast packets/sec, and the window between 1h, 6h, 24h
+    and 7d. Both are per widget, so a board can carry a bits view and a packets view side by side.
+  - Six is the maximum, because the chart has six colours and a seventh line would reuse one.
+  - The dashboard's other interface widgets rank whatever is busiest right now; this one plots what
+    *you* chose and keeps plotting it.
+  - Packets/sec only has history from v0.2.11 onward, when those counters were first collected, so
+    a 7d packets window on an older deployment is mostly empty. That is expected, not a fault.
+- **A discovery sweep survives leaving the page.** Nodes ▸ Discovery lists the sweeps the core is
+  holding and reattaches to one when you come back, so navigating away no longer loses a sweep the
+  poller is still running. The scan id is in the URL, so a reload or a shared link lands on the same
+  sweep.
+  - **API:** `GET /api/v1/discovery/scans` lists the retained sweeps (ManageConfig). Also reachable
+    over MCP as `get_config(kind="discovery_scans")`.
+  - **API:** a scan's status carries three new fields — `state` (`queued` / `running` /
+    `cancelling` / `cancelled` / `done`), `started_at` / `updated_at` (RFC 3339), and `pool`, the
+    route the job was actually published on, which is not necessarily the pool that was requested.
+    `done` is unchanged and still means "terminal".
+- **You can choose which site a sweep runs from.** The scan form grew a poller-pool picker. Without
+  it the sweep went to whichever poller answered first, so on a multi-site deployment a remote
+  poller could end up sweeping head office — reaching nothing and reporting a successful, empty
+  scan. Leaving it unset keeps the old behaviour, and the screen now says what that means. A pool
+  with no live poller is still offered but marked, because the server falls back to "any poller"
+  for it.
+  - **API:** `POST /api/v1/discovery/scan` accepts `pool`, and now answers `503` on a standby core
+    in an HA pair. Only the leader consumes discovery results, so a standby would have published a
+    sweep whose every result was discarded.
+- **A running sweep can be stopped.** The poller stops probing, so the ICMP and SNMP traffic
+  actually ceases rather than the screen merely looking stopped. Devices found before the stop stay
+  on screen and can still be imported.
+  - The stop takes a few seconds: a probe already in flight is left to time out rather than having
+    its connection dropped.
+  - **The screen distinguishes "asked" from "stopped".** Yagra broadcasts the stop and cannot know
+    which poller was running the sweep, so the sweep stays *Stopping…* until the poller confirms.
+    A sweep that finishes first is reported as finished, not as stopped.
+  - **A poller older than this release does not understand the command** and runs the sweep to
+    completion. When one of those could be holding the sweep, the screen says so as you press stop
+    rather than leaving you waiting.
+  - **API:** `POST /api/v1/discovery/scan/{id}/cancel` asks the poller running a sweep to stop
+    (ManageConfig). **200 means the stop was published, not that the sweep stopped** — watch the
+    scan's `state` for that: `cancelled` is a confirmed stop, `done` means it finished first.
+    `poller_supports_cancel` in the response is an advance warning about older pollers, not a
+    verdict; for a sweep on the global route it is the answer across every live poller. Unlike
+    `POST /analysis/jobs/{id}/cancel`, this answers 200 for a scan the core has no record of — scan
+    state is in memory, so requiring one would make a sweep orphaned by a core restart impossible
+    to stop.
+
 ### Improvements
+- **Sweeping a subnet is much faster.** Every address in the range used to be asked for its identity
+  with every candidate credential, spaced two seconds apart to protect devices from lockout — so on
+  the test network a /24 carrying eight devices took **5m21s**, almost all of it spent on the 246
+  addresses with nothing at them. Those are now skipped at the ping.
+  - ⚠️ The trade is under *Breaking changes* above. Note also that discovery sends a **single** echo
+    request, so one lost packet is indistinguishable from an empty address — unlike liveness
+    monitoring, which waits for three consecutive failures before believing a node is down.
 - **A dashboard widget's subject can now only be changed while the board is being customized.**
   Choosing what a card is *about* — which node and metric a Metric chart draws, the metric a Top
   nodes by metric ranks, the interfaces an Interface traffic chart plots — moved out of the card
@@ -49,10 +120,16 @@
   broken ICMP swept a whole range without sending one SNMP packet and finished successfully with no
   devices and no error. A failed probe now bypasses the gate, and the sweep logs one line naming how
   many targets it could not reach that way.
-- **Finished sweeps now actually age out.** The six-hour retention window was only applied when a
-  new sweep was started, so on a deployment where nobody swept again, old scans stayed in *Recent
-  sweeps* and kept feeding the dashboard's discovery queue indefinitely. They are now pruned when
-  either surface is read.
+- **A sweep the core no longer knows about is now reported as such.** Previously the page kept
+  polling a 404 every two seconds with its progress line frozen mid-sentence. It now says the core
+  does not know that sweep — which is the honest reading, since a poller may still be running it —
+  and stops asking after repeated failures.
+- **Finished sweeps are now discarded after six hours (at most twenty are kept).** They were held
+  for the life of the core process. The window is applied whenever either surface is read, so old
+  scans age out on a deployment where nobody sweeps again — previously it was only applied when a
+  new sweep was started, and they stayed in *Recent sweeps* indefinitely. Note the side effect: the
+  dashboard's *Discovery queue* widget reads those same sweeps, so it now shows recent finds rather
+  than everything since the last restart.
 
 ### Bug Fixes
 - **A dashboard widget at the bottom of a board can be made taller again.** The corner grip
@@ -77,89 +154,6 @@
   every two seconds regardless of whether the previous request had come back, so on a slow
   connection replies could arrive out of order and an older one would win. It now waits for each
   reply before scheduling the next.
-
-### New Features
-- **Every dashboard card can be given a name of your own.** Customize the board and the card's
-  heading gains a text box: type "HQ uplink" and the card reads *Interface traffic · HQ uplink*.
-  The widget type stays put beside it, so a card still says what kind of thing it is — which is the
-  word it shares with the widget catalogue. Clearing the box removes the name again.
-  - It applies to all forty-eight widgets. None of them limits how many copies you may place, so
-    two cards of the same type on one board were previously indistinguishable — most visibly for
-    the ones whose contents you choose (Metric chart, Top nodes by metric, Latest events,
-    Interface traffic).
-  - The remove, drag and resize controls announce the full heading, so a screen reader can tell six
-    cards of one type apart.
-- **A dashboard widget for the specific links you watch.** Capacity ▸ *Interface traffic* plots up
-  to six interfaces you name, and they may live on different nodes — so an uplink and its backup
-  can be compared on one chart instead of in two browser tabs. Receive is drawn above the zero line
-  and transmit below it, which gives each link a single colour and makes an unbalanced link visible
-  at a glance.
-  - The unit switches between bits/sec and unicast packets/sec, and the window between 1h, 6h, 24h
-    and 7d. Both are per widget, so a board can carry a bits view and a packets view side by side.
-  - Six is the maximum, because the chart has six colours and a seventh line would reuse one.
-  - The dashboard's other interface widgets rank whatever is busiest right now; this one plots what
-    *you* chose and keeps plotting it.
-  - Packets/sec only has history from v0.2.11 onward, when those counters were first collected, so
-    a 7d packets window on an older deployment is mostly empty. That is expected, not a fault.
-- **A discovery sweep survives leaving the page.** Nodes ▸ Discovery lists the sweeps the core is
-  holding and reattaches to one when you come back, so navigating away no longer loses a sweep the
-  poller is still running. The scan id is in the URL, so a reload or a shared link lands on the same
-  sweep.
-- **You can choose which site a sweep runs from.** The scan form grew a poller-pool picker. Without
-  it the sweep went to whichever poller answered first, so on a multi-site deployment a remote
-  poller could end up sweeping head office — reaching nothing and reporting a successful, empty
-  scan. Leaving it unset keeps the old behaviour, and the screen now says what that means. A pool
-  with no live poller is still offered but marked, because the server falls back to "any poller"
-  for it.
-- **A running sweep can be stopped.** The poller stops probing, so the ICMP and SNMP traffic
-  actually ceases rather than the screen merely looking stopped. Devices found before the stop stay
-  on screen and can still be imported.
-  - The stop takes a few seconds: a probe already in flight is left to time out rather than having
-    its connection dropped.
-  - **The screen distinguishes "asked" from "stopped".** Yagra broadcasts the stop and cannot know
-    which poller was running the sweep, so the sweep stays *Stopping…* until the poller confirms.
-    A sweep that finishes first is reported as finished, not as stopped.
-  - **A poller older than this release does not understand the command** and runs the sweep to
-    completion. When one of those could be holding the sweep, the screen says so as you press stop
-    rather than leaving you waiting.
-
-### Improvements
-- **Sweeping a subnet is much faster.** Every address in the range used to be asked for its identity
-  with every candidate credential, spaced two seconds apart to protect devices from lockout — so on
-  the test network a /24 carrying eight devices took **5m21s**, almost all of it spent on the 246
-  addresses with nothing at them. Those are now skipped at the ping.
-  - ⚠️ The trade is under *Breaking changes* above. Note also that discovery sends a **single** echo
-    request, so one lost packet is indistinguishable from an empty address — unlike liveness
-    monitoring, which waits for three consecutive failures before believing a node is down.
-- **A sweep the core no longer knows about is now reported as such.** Previously the page kept
-  polling a 404 every two seconds with its progress line frozen mid-sentence. It now says the core
-  does not know that sweep — which is the honest reading, since a poller may still be running it —
-  and stops asking after repeated failures.
-- **Finished sweeps are now discarded after six hours (at most twenty are kept).** They were held
-  for the life of the core process. Note the side effect: the dashboard's *Discovery queue* widget
-  reads those same sweeps, so it now shows recent finds rather than everything since the last
-  restart.
-
-### API
-- `GET /api/v1/discovery/scans` lists the retained sweeps (ManageConfig). Also reachable over MCP as
-  `get_config(kind="discovery_scans")`.
-- `POST /api/v1/discovery/scan/{id}/cancel` asks the poller running a sweep to stop (ManageConfig).
-  - **200 means the stop was published, not that the sweep stopped.** Watch the scan's `state` for
-    that: `cancelled` is a confirmed stop, `done` means it finished first.
-  - `poller_supports_cancel` in the response is an advance warning about older pollers, not a
-    verdict — for a sweep on the global route it is the answer across every live poller.
-  - Unlike `POST /analysis/jobs/{id}/cancel`, this answers 200 for a scan the core has no record
-    of. Scan state is in memory, so requiring one would make a sweep orphaned by a core restart
-    impossible to stop.
-- A scan's status carries three new fields: `state` (`running` / `cancelling` / `cancelled` /
-  `done`), `started_at` / `updated_at` (RFC 3339), and `pool` — the route the job was actually
-  published on, which is not necessarily the pool that was requested. `done` is unchanged and still
-  means "terminal".
-  - `cancelling` and `cancelled` are declared but never emitted yet; cancelling a sweep is the next
-    increment.
-- `POST /api/v1/discovery/scan` accepts `pool`, and now answers `503` on a standby core in an HA
-  pair. Only the leader consumes discovery results, so a standby would have published a sweep whose
-  every result was discarded.
 
 ## v0.2.13 — a remote site's poller is stood up from the WebUI, and a poller id is no longer taken on trust
 

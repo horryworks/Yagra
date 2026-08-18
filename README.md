@@ -28,7 +28,7 @@ polling**. Users access it through the WebUI.
 > smaller the deployment the worse it is, so a first installation is hit hardest. v0.2.6 fixed it;
 > see [RELEASE_NOTES.md](RELEASE_NOTES.md) for the full explanation.
 
-> Status: **v0.2.13 — a remote site's poller is stood up from the WebUI, and a poller id is no longer taken on trust.**
+> Status: **v0.2.14 — a sweep can be left, returned to and stopped, and a dashboard card plots the links you name.**
 > A functional stack (ICMP / SNMP v2c+v3 / URL monitoring / DNS monitoring / Cisco Meraki via
 > the read-only Dashboard API, passive event monitoring, discovery & classification, alerting,
 > dashboards, and reports) over PostgreSQL, Redis, NATS, and VictoriaMetrics via Docker Compose.
@@ -88,7 +88,13 @@ polling**. Users access it through the WebUI.
 > reachable. That upgrade now **reaches the pollers at monitored sites as well** (opt-in per site):
 > core hands each one the release it just installed, **one poller at a time per pool**, so a pool
 > with two or more pollers keeps monitoring throughout, and the page names any poller that will stay
-> behind before you press the button. HA stores remain a configuration step away, not a rewrite.
+> behind before you press the button. A **discovery sweep is now something you can steer**: it is
+> listed and reattached to when you come back, sent to the site you choose rather than whichever
+> poller answers first, stopped mid-run, and it skips the addresses that do not answer ping — which
+> took a /24 on the test network from 5m21s to a fraction of it. And a dashboard card can now
+> **carry the name and the links you gave it**, plotting up to six interfaces from any nodes on one
+> chart with receive above the line and transmit below.
+> HA stores remain a configuration step away, not a rewrite.
 
 ## Components
 
