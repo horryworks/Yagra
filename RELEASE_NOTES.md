@@ -55,6 +55,14 @@
   either surface is read.
 
 ### Bug Fixes
+- **A node picker low on the screen no longer opens its list off the bottom of the window.** It
+  dropped downwards unconditionally, so near the foot of a page it showed a row and a half of an
+  otherwise 240px list — and neither surface can be scrolled to, because the list is positioned
+  against its trigger rather than the document. It now opens upwards when it does not fit below and
+  there is more room above, the same rule the app's shared popover already applied to itself. Most
+  visible on a dashboard widget placed at the bottom of a board, but it affects every picker: node
+  search on Events, Pollers, Support bundle, and the Add node / Set parent / Add mute / Add
+  maintenance dialogs.
 - **The Discovery progress line no longer describes the wrong sweep.** Choosing another sweep from
   *Recent sweeps* left the previous one's "Scan complete: 8 devices" on screen, along with any error
   or import message, because the two places that reset the page had drifted apart.

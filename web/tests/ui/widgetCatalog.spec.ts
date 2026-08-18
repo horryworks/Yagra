@@ -421,6 +421,67 @@ test('the picker controls do not overlap each other', async ({ page }) => {
   }
 });
 
+// 🚨 A card near the bottom of the board. Reported from the running deployment: the ⚙ panel opens,
+// and the node list inside it runs off the bottom of the window showing two rows.
+//
+// Neither of the two surfaces can be scrolled to. The ⚙ panel is `position: fixed` (the shared
+// popover, so a virtualized row's transform cannot re-anchor it) and the node list inside it is
+// `position: absolute` against that panel — so the page scrollbar moves neither, and whatever falls
+// past the fold is simply unreachable. `AnchoredPopover` flips its own panel when it does not fit;
+// the list it contains had no such rule and always dropped downwards.
+//
+// The short viewport is the reproduction, not a shortcut: it is the same geometry as a tall board
+// scrolled to its end, and it is deterministic.
+test.describe('with the card near the bottom of the window', () => {
+  // A fleet, not a node. The generated mock answers the picker's search with one row, and a
+  // one-row list fits anywhere — the bug needs the list at its 240px cap, which is what an
+  // operator with a real inventory always has.
+  const FLEET = Array.from({ length: 20 }, (_, i) => ({
+    id: `00000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`,
+    name: `node-${i}`,
+    address: `10.0.0.${i + 1}`,
+  })) as unknown as Json;
+
+  test.use({
+    viewport: { width: 1440, height: 560 },
+    mockConfig: {
+      overrides: {
+        ...BOOTSTRAP_OVERRIDES,
+        '/api/v1/dashboard': () => EMPTY_BOARD,
+        '/api/v1/nodes/search': () => FLEET,
+        '/api/v1/nodes/{node_id}/interfaces': () => ROSTER,
+        '/api/v1/nodes/{node_id}/interfaces/{ifindex}/series': (url: URL) => seriesBody(url),
+      },
+    },
+  });
+
+  test('the node list inside the ⚙ panel stays on screen', async ({ page }) => {
+    const pop = await openTrafficSettings(page);
+    await pop.locator('.nodepick-trigger').click();
+
+    const list = await pop.locator('.nodepick-pop').boundingBox();
+    expect(list, 'the node list did not open').not.toBeNull();
+    const vh = page.viewportSize()!.height;
+
+    // Both edges, because a flip that trades the bottom for the top fixes nothing.
+    expect(list!.y, 'the node list opened above the top of the window').toBeGreaterThanOrEqual(0);
+    expect(
+      list!.y + list!.height,
+      'the node list runs off the bottom of the window',
+    ).toBeLessThanOrEqual(vh);
+
+    // And enough of it is on screen to choose from: a list clipped to a row and a half is
+    // technically "within the viewport" the moment it is short enough.
+    const rows = pop.locator('.nodepick-option');
+    await expect(rows.first()).toBeVisible();
+    const first = (await rows.first().boundingBox())!;
+    const last = (await rows.last().boundingBox())!;
+    expect(last.y + last.height - first.y, 'barely any of the node list is usable').toBeGreaterThan(
+      60,
+    );
+  });
+});
+
 // Per-card names (ADR-071). The decisive assertion is that the widget TYPE survives: the name is
 // drawn beside it, never instead of it, and a test that only looked for the operator's words would
 // pass just as well against the replace-the-heading design this ADR started as and abandoned.

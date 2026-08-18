@@ -5,7 +5,7 @@
 // the troubleshoot ScopePicker (which also offers All/Group modes) because the events API filters by
 // node_id only. Reuses the popover/roving-key pattern and SearchInput.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchInput } from '../ui/SearchInput';
 import { useNodeSearch } from '../../lib/useNodeSearch';
@@ -13,6 +13,10 @@ import './NodePicker.css';
 
 /** Server search cap: request (and show) at most this many hits — keep typing to narrow. */
 const MAX_RESULTS = 50;
+
+/** Gap between the trigger and the list, in px. Mirrors the `4px` in `NodePicker.css` — the
+ *  measurement below has to account for the same offset the stylesheet applies. */
+const GAP = 4;
 
 interface Props {
   /** Selected node id (the URL/parent is the source of truth), or null for "no filter". */
@@ -43,6 +47,9 @@ export function NodePicker({
   const [active, setActive] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+  /** Open upwards: there is no room below the trigger and there is more above it. */
+  const [dropUp, setDropUp] = useState(false);
 
   // Click-outside + Escape close.
   useEffect(() => {
@@ -74,6 +81,45 @@ export function NodePicker({
     () => (exclude && exclude.size ? results.filter((node) => !exclude.has(node.id)) : results),
     [results, exclude],
   );
+
+  /** Decide which way the list opens.
+   *
+   *  It is `position: absolute` and stays that way deliberately: portalling it the way
+   *  `AnchoredPopover` does would take it out of the subtree its callers' outside-click tests ask
+   *  about, and clicking a node inside a picker that sits in a popover (the dashboard's ⚙ panel)
+   *  would close that popover instead of choosing. The cost of staying absolute is that nothing
+   *  clamps it to the viewport, so this does — with the same rule the shared popover applies to
+   *  itself.
+   *
+   *  ⚠️ It runs in a layout effect so the first painted frame is already on the right side; a
+   *  `useEffect` here paints downwards once and then jumps. And it re-measures on capture-phase
+   *  scroll, because scroll does not bubble and the trigger moves with its container.
+   *
+   *  Only flips when the list genuinely does not fit below **and** there is more room above —
+   *  trading a clipped bottom edge for a clipped top edge is not a fix. */
+  useLayoutEffect(() => {
+    if (!open) {
+      setDropUp(false);
+      return;
+    }
+    const place = () => {
+      const trigger = ref.current?.getBoundingClientRect();
+      const panel = popRef.current?.getBoundingClientRect();
+      if (!trigger || !panel) return;
+      const below = window.innerHeight - trigger.bottom;
+      const above = trigger.top;
+      setDropUp(panel.height + GAP > below && above > below);
+    };
+    place();
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+    // `shown.length` is in here because the panel's height is its rows: measuring once on open
+    // would decide from the empty list and never revisit it.
+  }, [open, shown.length, loading]);
 
   const openPopover = () => {
     // The hook re-queries on open (the empty term is a real query), so there is nothing to clear
@@ -135,7 +181,7 @@ export function NodePicker({
       </div>
 
       {open && (
-        <div className="nodepick-pop">
+        <div ref={popRef} className={dropUp ? 'nodepick-pop drop-up' : 'nodepick-pop'}>
           <div ref={boxRef} onKeyDown={onKeyDown}>
             <div className="nodepick-search">
               <SearchInput

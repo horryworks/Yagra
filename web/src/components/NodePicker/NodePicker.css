@@ -79,6 +79,13 @@
   box-shadow: 0 8px 24px var(--overlay);
 }
 
+/* Opened upwards, when the trigger sits too low for the list to fit under it. The class is set
+   from a measurement in the component — CSS cannot ask how much viewport is left. */
+.nodepick-pop.drop-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
 .nodepick-search {
   margin-bottom: 6px;
 }
