@@ -166,105 +166,45 @@
   box-shadow: 0 0 0 1px var(--border-color);
 }
 
-/* Metric chart — the two pickers in the card header (node, then one of its metrics). The card
-   header is narrow, so both are capped and the metric name truncates rather than pushing the
-   edit controls off the row. Under the mobile shell they stack instead of shrinking further. */
-.metricchart-actions {
+/* Metric chart — the two pickers (node, then one of its metrics), now inside the frame's ⚙ panel
+   rather than the card header (ADR-072). Stacked: the panel's width is its own, so there is no
+   narrow row to cap against and no reason to truncate a metric name the operator is choosing.
+   `min-width: 0` on the picker undoes `NodePicker`'s 180px page-toolbar floor, which would
+   otherwise push the panel wider than its max. */
+.metricchart-settings {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
 }
 
-.metricchart-actions .metricchart-node .nodepick-control {
+.metricchart-settings .metricchart-node,
+.metricchart-settings .metricchart-node .nodepick-control {
   min-width: 0;
 }
 
-.metricchart-actions .metricchart-node {
-  max-width: 150px;
-}
-
-.metricchart-actions select {
-  max-width: 160px;
-}
-
-html[data-viewport='mobile'] .metricchart-actions {
-  flex-wrap: wrap;
-}
-
-html[data-viewport='mobile'] .metricchart-actions .metricchart-node,
-html[data-viewport='mobile'] .metricchart-actions select {
-  max-width: none;
-}
-
-/* Metric Top-N — the typed metric name and the now/1h window in the card header. The field is the
-   widest thing in a 4-span card's header, so it is capped and truncates; under the mobile shell it
-   takes the full row instead of shrinking to a few characters. */
-.metrictop-actions {
+/* Metric Top-N — the typed metric name, inside the ⚙ panel (ADR-072; the now/1h window stayed in
+   the card header). A metric name is long and the operator is typing it, so it gets the panel's
+   full width rather than the header cap it used to carry. */
+.metrictop-settings {
   display: flex;
-  align-items: center;
-  gap: var(--space-1);
+  flex-direction: column;
   min-width: 0;
 }
 
-.metrictop-actions .metrictop-metric {
+.metrictop-settings .metrictop-metric {
   min-width: 0;
-  max-width: 160px;
 }
 
-html[data-viewport='mobile'] .metrictop-actions {
-  flex-wrap: wrap;
-}
-
-html[data-viewport='mobile'] .metrictop-actions .metrictop-metric {
-  max-width: none;
-}
-
-/* Interface traffic (ADR-069) — the card header holds three controls: which links (a popover, so
-   the list of six can be read and edited without stealing the chart's height), then the unit and
-   the window. The two selects are capped so the link trigger keeps the elastic width; under the
-   mobile shell the row wraps instead of shrinking each control to a few characters. */
+/* Interface traffic (ADR-069) — the card header holds the two view controls, the unit and the
+   window. Which links are plotted moved behind the frame's ⚙ (ADR-072), so the trigger and popover
+   this file used to own are gone; the panel body below is unchanged and is now rendered by the
+   frame. Under the mobile shell the row wraps instead of shrinking each control. */
 .iftraffic-actions {
   display: flex;
   align-items: center;
   gap: var(--space-1);
   min-width: 0;
-}
-
-.iftraffic-trigger-wrap {
-  display: flex;
-  min-width: 0;
-}
-
-.iftraffic-trigger {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  height: 28px;
-  padding: 0 8px;
-  background: var(--bg-primary);
-  border: var(--border-width) solid var(--border-color);
-  border-radius: var(--radius-sm);
-  color: var(--text-secondary);
-  font-family: inherit;
-  font-size: var(--font-xs);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.iftraffic-trigger:hover {
-  border-color: var(--text-tertiary);
-}
-
-.iftraffic-trigger:focus-visible {
-  border-color: var(--accent-color);
-  outline: none;
-}
-
-.iftraffic-caret {
-  color: var(--text-tertiary);
-  font-size: var(--font-xs);
 }
 
 .iftraffic-actions select {
@@ -279,17 +219,22 @@ html[data-viewport='mobile'] .iftraffic-actions select {
   max-width: none;
 }
 
-/* The popover surface: `.apop` supplies the chrome, this supplies the width and padding. */
-.iftraffic-pop {
-  width: 320px;
-  max-width: calc(100vw - 32px);
-  padding: var(--space-2);
-}
-
+/* The panel body. The surface (chrome, padding, viewport clamp) is the frame's
+   `.widgetframe-settings-pop` now, so only the width this list wants lives here — six rows of
+   "node · interface ×" need more room than the frame's shrink-to-fit default would give them. */
 .iftraffic-body {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
+  width: 300px;
+  max-width: 100%;
+}
+
+.iftraffic-count {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-xs);
+  font-weight: 600;
 }
 
 .iftraffic-note {
@@ -361,7 +306,7 @@ html[data-viewport='mobile'] .iftraffic-actions select {
 /* ⚠️ `NodePicker` puts `min-width: 180px` on its own control — a floor sized for a page toolbar,
    not for a popover. Without this override it spills out of the track it is given here and covers
    whatever sits to its right, which is how the interface name became unreadable. The identical
-   override exists on `.metricchart-actions`; a third call site will need it too. */
+   override exists on `.metricchart-settings`; a third call site will need it too. */
 .iftraffic-add .iftraffic-node,
 .iftraffic-add .iftraffic-node .nodepick-control {
   min-width: 0;

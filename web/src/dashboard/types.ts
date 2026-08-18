@@ -30,12 +30,53 @@ export type Backing = (typeof BACKINGS)[number];
 export type WidgetSettings = Record<string, unknown>;
 
 /** Props every widget component receives. The frame owns the Card chrome (title + edit
- *  controls); the widget renders only its body and, optionally, view-mode header actions. */
+ *  controls); the widget renders only its body and, optionally, its settings panel. */
 export interface WidgetProps {
   /** This placed widget's instance (id, span, settings). */
   instance: WidgetInstance;
   /** Merge a patch into this instance's settings (persisted). */
   setSettings: (patch: WidgetSettings) => void;
+}
+
+/** The settings a **view-mode** control is allowed to write: how the already-chosen subject is
+ *  displayed, never which subject it is (ADR-072).
+ *
+ *  This is a closed set on purpose. `WidgetDefinition.Actions` receives only this, so a control that
+ *  picks a node, types a metric name or adds an interface **cannot compile** in the view-mode slot —
+ *  excess-property checking rejects the object literal. That turns "don't put configuration in the
+ *  header" from a note somebody has to remember into something the compiler asks for.
+ *
+ *  Adding a key here is therefore a decision: it says the thing it names is a lens on the data, not
+ *  a choice of subject. The line is "does this change what the widget is about?"
+ *
+ *  ⚠️ It only catches literals — `setSettings(someVariable)` type-checks structurally and slips
+ *  through. Every call site passes a literal today; the rendered surface is pinned by Tier1
+ *  (`tests/ui/widgetCatalog.spec.ts`), which is what actually looks at the header.
+ *
+ *  ⚠️ A `type` alias rather than an `interface`, and that is load-bearing: only aliases get an
+ *  implicit index signature, so only an alias is assignable to `WidgetSettings`
+ *  (`Record<string, unknown>`). As an interface, the frame could not hand its own `setSettings` to
+ *  an `Actions` component at all. Excess-property checking on literals works the same either way. */
+export type ViewSettings = {
+  /** Top-N window: `now` | `max_1h`. */
+  agg?: string;
+  /** Interface traffic: `bps` | `pps`. */
+  unit?: string;
+  /** Interface traffic: trailing window, in seconds. */
+  rangeSecs?: number;
+  /** Flow top-AS: `src` | `dst`. */
+  dir?: string;
+  /** Event feed: `syslog` | `trap` | `webhook`; absent means every kind. */
+  kind?: string;
+};
+
+/** Props a view-mode header action receives. Same shape as {@link WidgetProps}, with the write
+ *  narrowed to {@link ViewSettings} — the narrowing *is* the rule. */
+export interface ViewActionProps {
+  instance: WidgetInstance;
+  /** Merge a view-scope patch into this instance's settings (persisted, like any other setting —
+   *  ADR-072 decision 6 deliberately did not change how saving works). */
+  setSettings: (patch: ViewSettings) => void;
 }
 
 /** A kind of widget available in the catalog. */
@@ -60,8 +101,15 @@ export interface WidgetDefinition {
   defaultRowSpan?: RowSpan;
   /** The body renderer. */
   Component: FC<WidgetProps>;
-  /** Optional view-mode header actions (e.g. a node selector or a "View all" link). */
-  Actions?: FC<WidgetProps>;
+  /** Optional **view-mode** header actions: a time window, a display lens, a "View all" link.
+   *
+   *  Not a place for configuration — the narrowed `setSettings` above says so to the compiler
+   *  (ADR-072). Anything that chooses what the widget is *about* goes in {@link Settings}. */
+  Actions?: FC<ViewActionProps>;
+  /** Optional **Customize-mode** settings panel: what this widget is about (which node, which
+   *  metric, which interfaces). The frame draws a ⚙ in the card header while the board is being
+   *  edited and renders this inside its popover; a widget without one shows no ⚙. */
+  Settings?: FC<WidgetProps>;
   /** Cap on how many instances may be added (omit = unlimited). */
   maxInstances?: number;
 }

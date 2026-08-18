@@ -35,7 +35,6 @@ import type { WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 import { chartableMetrics, metricChartPlan, readSelection } from './metricChart';
 import { metricSuggestions, metricTopPlan, readTopSelection } from './metricTop';
-import { TopAggActions } from './performance';
 import { trailingSecs } from './util';
 
 /** Trailing window for the chart (last 6 hours).
@@ -72,15 +71,19 @@ function useNodeInventory(nodeId: string | null): NodeMetricEntry[] | null {
   return entries;
 }
 
-/** Header actions: which node, and which of its metrics. */
-export function MetricChartActions({ instance, setSettings }: WidgetProps) {
+/** Customize-mode settings: which node, and which of its metrics.
+ *
+ *  Both controls choose the *subject*, so neither belongs in the view-mode header (ADR-072). This
+ *  widget is the one that ends up with no view-mode actions at all — it has no window and no lens,
+ *  only a subject. */
+export function MetricChartSettings({ instance, setSettings }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   const sel = readSelection(instance.settings);
   const entries = useNodeInventory(sel.nodeId);
   const options = entries ? chartableMetrics(entries) : [];
 
   return (
-    <span className="metricchart-actions">
+    <span className="metricchart-settings">
       <NodePicker
         value={sel.nodeId}
         valueLabel={sel.nodeName ?? undefined}
@@ -167,8 +170,12 @@ function useKnownMetricKinds() {
   return useSyncExternalStore(subscribeMetricKinds, metricKindsSnapshot);
 }
 
-/** Header actions: which metric to rank by, and over which window. */
-export function MetricTopActions({ instance, setSettings }: WidgetProps) {
+/** Customize-mode settings: which metric to rank by.
+ *
+ *  The now/1h window that used to sit beside this field is a view control and stays in the card
+ *  header — the registry points this widget's `Actions` straight at the shared `TopAggActions`
+ *  (ADR-072). */
+export function MetricTopSettings({ instance, setSettings }: WidgetProps) {
   const { t } = useTranslation('dashboard');
   const known = useKnownMetricKinds();
   const sel = readTopSelection(instance.settings);
@@ -186,7 +193,7 @@ export function MetricTopActions({ instance, setSettings }: WidgetProps) {
   const listId = `metrictop-names-${instance.instanceId}`;
 
   return (
-    <span className="metrictop-actions">
+    <span className="metrictop-settings">
       <TextInput
         className="mono metrictop-metric"
         list={listId}
@@ -208,7 +215,6 @@ export function MetricTopActions({ instance, setSettings }: WidgetProps) {
           <option key={m} value={m} />
         ))}
       </datalist>
-      <TopAggActions instance={instance} setSettings={setSettings} />
     </span>
   );
 }

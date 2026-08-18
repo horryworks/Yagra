@@ -6,10 +6,11 @@
 // the instance (or, mid-drag, the live `preview`) and maps to `.mydash-span-N` / `.mydash-rowspan-N`
 // classes on the cell.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from 'react-i18next';
+import { AnchoredPopover, focusPopoverTrigger } from '../components/ui/AnchoredPopover';
 import { Card } from '../components/ui/Card';
 import { useLayoutStoreContext } from './LayoutStoreContext';
 import { widgetHeading, widgetLabel, WIDGET_TITLE_MAX } from './layout';
@@ -34,6 +35,15 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
     disabled: !editing,
   });
   const [gripFocused, setGripFocused] = useState(false);
+  // The ⚙ settings panel (ADR-072). Declared here with the other hooks, before the unknown-type
+  // bail below, so hook order stays stable.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const gearRef = useRef<HTMLSpanElement>(null);
+  // Leaving Customize takes the panel with it. Without this the flag survives, and the next
+  // Customize opens a popover nobody asked for.
+  useEffect(() => {
+    if (!editing) setSettingsOpen(false);
+  }, [editing]);
 
   const def = getDefinition(instance.type);
   // Hooks must run unconditionally, so resolve the resize hook before the (rare) unknown-type bail.
@@ -42,6 +52,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
 
   const Body = def.Component;
   const Actions = def.Actions;
+  const Settings = def.Settings;
   const setSettings = (patch: WidgetSettings) => setSettingsAction(instance.instanceId, patch);
 
   // Effective size = live drag preview if any, else the persisted instance.
@@ -56,6 +67,40 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
 
   const actions = editing ? (
     <span className="widgetframe-edit">
+      {/* Configuration lives here and only here (ADR-072): what this card is *about* is chosen in
+          Customize, while the header outside Customize carries the time window and the display
+          lens. A widget with nothing to configure shows no ⚙ at all. */}
+      {Settings && (
+        <span ref={gearRef} className="widgetframe-gear-wrap">
+          <button
+            type="button"
+            className="widgetframe-gear"
+            aria-haspopup="dialog"
+            aria-expanded={settingsOpen}
+            aria-label={t('widgetFrame.settings', { name })}
+            title={t('widgetFrame.settings', { name })}
+            onClick={() => setSettingsOpen((v) => !v)}
+          >
+            ⚙
+          </button>
+          <AnchoredPopover
+            open={settingsOpen}
+            anchorRef={gearRef}
+            role="dialog"
+            label={t('widgetFrame.settings', { name })}
+            align="end"
+            className="widgetframe-settings-pop"
+            onDismiss={(restoreFocus) => {
+              setSettingsOpen(false);
+              if (restoreFocus) focusPopoverTrigger(gearRef.current, 'dialog');
+            }}
+          >
+            {/* Focus stays on the trigger. Every panel here is a set of choices — a node, a metric,
+                an interface — and moving the caret into one picks a subject for the operator. */}
+            <Settings instance={instance} setSettings={setSettings} />
+          </AnchoredPopover>
+        </span>
+      )}
       <button
         type="button"
         className="widgetframe-remove"

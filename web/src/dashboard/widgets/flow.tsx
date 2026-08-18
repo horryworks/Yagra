@@ -12,7 +12,7 @@ import { MetricChart, PALETTE } from '../../components/MetricChart/MetricChart';
 import { formatAsn, formatBytes, formatSi } from '../../lib/format';
 import { portLabel, protoName } from '../../lib/flowLabels';
 import { api } from '../../services/api';
-import type { WidgetProps, WidgetSettings } from '../types';
+import type { ViewActionProps, WidgetProps, WidgetSettings } from '../types';
 import { Donut, type DonutSegment } from '../primitives/Donut';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
 import { usePolled } from '../usePolled';
@@ -48,8 +48,10 @@ function dirOf(settings: WidgetSettings | undefined): 'src' | 'dst' {
   return settings?.dir === 'src' ? 'src' : 'dst';
 }
 
-/** Header action for the top-AS widget: source ↔ destination AS. */
-export function FlowAsDirActions({ instance, setSettings }: WidgetProps) {
+/** View-mode header action for the top-AS widget: source ↔ destination AS.
+ *
+ *  Same ranking seen from the other end — a lens, not a subject (ADR-072 decision 1). */
+export function FlowAsDirActions({ instance, setSettings }: ViewActionProps) {
   const { t } = useTranslation('dashboard');
   return (
     <Select

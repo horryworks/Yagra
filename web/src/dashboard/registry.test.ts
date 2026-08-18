@@ -74,6 +74,39 @@ describe('widget registry', () => {
     }
   });
 
+  // ── The Customize / view split (ADR-072) ────────────────────────────────────────────────
+  // A control that chooses what a card is *about* belongs behind the ⚙ the frame draws while the
+  // board is being customized; a time window or a display lens stays in the header. The type
+  // system enforces the write (`Actions` receives `ViewSettings`, so a subject key does not
+  // compile) — what it cannot say is *which* widgets ended up on which side, so that is pinned
+  // here by name. A new widget with a subject picker fails this test until someone decides.
+
+  /** Every widget whose settings choose a subject. Deliberately spelled out, not counted. */
+  const WITH_SETTINGS = ['metric-chart', 'metric-top', 'interface-traffic'];
+
+  it('gives a ⚙ panel to exactly the widgets that choose a subject', () => {
+    const withSettings = REGISTRY.filter((d) => d.Settings).map((d) => d.type);
+    expect(withSettings.slice().sort()).toEqual(WITH_SETTINGS.slice().sort());
+  });
+
+  it('leaves the metric chart no view-mode actions at all', () => {
+    // Both of its controls pick the subject (which node, which metric); it has no window and no
+    // lens, so its header outside Customize is just the title.
+    expect(getDefinition('metric-chart')!.Actions).toBeUndefined();
+  });
+
+  it('keeps the view-mode actions the split was supposed to leave behind', () => {
+    // The accepting half. Without it, "every Actions was deleted" passes the two tests above —
+    // an absence-only check cannot tell a correct split from a demolition.
+    expect(getDefinition('metric-top')!.Actions).toBeDefined(); // now / 1h-max window
+    expect(getDefinition('interface-traffic')!.Actions).toBeDefined(); // unit + time window
+    expect(getDefinition('top-cpu')!.Actions).toBeDefined(); // a plain Top-N still has its window
+    // …and a widget with no settings of any kind gets no ⚙.
+    expect(getDefinition('top-cpu')!.Settings).toBeUndefined();
+    expect(getDefinition('status-summary')!.Actions).toBeUndefined();
+    expect(getDefinition('status-summary')!.Settings).toBeUndefined();
+  });
+
   it('groups the catalog by section covering every widget exactly once', () => {
     const grouped = catalogBySection();
     const flat = grouped.flatMap((g) => g.widgets);

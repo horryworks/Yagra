@@ -3,11 +3,10 @@
 // throughput moved vs ~5 min ago (signed delta, bits/sec), rendered with DeltaBars. Delta is a
 // series channel (not a node status): spikes use series-4 (amber-brown), drops series-5 (crimson).
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../../components/MetricChart/MetricChart';
 import { NodePicker } from '../../components/NodePicker/NodePicker';
-import { AnchoredPopover, focusPopoverTrigger } from '../../components/ui/AnchoredPopover';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Field';
 import { formatBps, formatPps, formatSi } from '../../lib/format';
@@ -15,7 +14,7 @@ import { api } from '../../services/api';
 import type { InterfaceRow, InterfaceTopEntry, RankedInterfaces } from '../../types/api';
 import { DeltaBars, type DeltaRow } from '../primitives/DeltaBars';
 import { Heatmap } from '../primitives/Heatmap';
-import type { WidgetProps } from '../types';
+import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 import {
   MAX_LINKS,
@@ -189,95 +188,22 @@ function useInterfaceRosters(nodeIds: readonly string[]): Record<string, RosterS
   return rosters;
 }
 
-/** The popover that adds and removes links, plus the unit and window selectors. */
-export function InterfaceTrafficActions({ instance, setSettings }: WidgetProps) {
+/** View-mode header: how the chosen links are shown — the unit and the time window.
+ *
+ *  Which links those are is not decided here (ADR-072): adding and removing an interface changes
+ *  what the card is about, so it lives in {@link InterfaceTrafficSettings}, behind the ⚙ that the
+ *  frame draws while the board is being customized. This was the widget that prompted the rule —
+ *  its picker sat in the view-mode header, which on the shared board meant editing the layout
+ *  everyone sees without pressing Customize.
+ *
+ *  `ViewActionProps` rather than `WidgetProps`: the narrowed write is what stops a subject control
+ *  from being added back here without the compiler objecting. */
+export function InterfaceTrafficActions({ instance, setSettings }: ViewActionProps) {
   const { t } = useTranslation('dashboard');
   const sel = readTrafficSettings(instance.settings);
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLSpanElement>(null);
-
-  /** The node currently chosen in the picker. Transient UI, so it is component state rather than
-   *  part of the persisted settings bag — nothing about it is worth restoring on reload. */
-  const [pickNode, setPickNode] = useState<{ id: string; name: string } | null>(null);
-  const [pickIfindex, setPickIfindex] = useState('');
-  const rosters = useInterfaceRosters(pickNode ? [pickNode.id] : []);
-  const rows: RosterState = pickNode ? (rosters[pickNode.id] ?? null) : null;
-
-  const dismiss = useCallback((restoreFocus: boolean) => {
-    setOpen(false);
-    if (restoreFocus) focusPopoverTrigger(wrapRef.current, 'dialog');
-  }, []);
-
-  const full = sel.links.length >= MAX_LINKS;
-
-  const add = () => {
-    const ifindex = Number(pickIfindex);
-    if (!pickNode || !Number.isInteger(ifindex) || ifindex <= 0 || full) return;
-    const row = Array.isArray(rows) ? rows.find((r) => r.ifindex === ifindex) : undefined;
-    setSettings({
-      links: [
-        ...sel.links,
-        {
-          nodeId: pickNode.id,
-          nodeName: pickNode.name,
-          ifindex,
-          // A snapshot for the trigger and the list; the body relabels from the live roster.
-          ifName: row ? interfaceLabel(row.ifindex, row.if_name, row.if_alias) : null,
-        } satisfies LinkRef,
-      ],
-    });
-    setPickIfindex('');
-  };
-
-  const remove = (l: LinkRef) =>
-    setSettings({ links: sel.links.filter((x) => linkId(x) !== linkId(l)) });
 
   return (
     <span className="iftraffic-actions">
-      <span ref={wrapRef} className="iftraffic-trigger-wrap">
-        <button
-          type="button"
-          className="iftraffic-trigger"
-          aria-haspopup="dialog"
-          aria-expanded={open}
-          title={t('widgets.ifTraffic.pickAria')}
-          aria-label={t('widgets.ifTraffic.pickAria')}
-          onClick={() => setOpen((v) => !v)}
-        >
-          {t('widgets.ifTraffic.pickCount', { n: sel.links.length, max: MAX_LINKS })}
-          <span className="iftraffic-caret" aria-hidden="true">
-            ▾
-          </span>
-        </button>
-        <AnchoredPopover
-          open={open}
-          anchorRef={wrapRef}
-          role="dialog"
-          label={t('widgets.ifTraffic.pickAria')}
-          align="end"
-          className="iftraffic-pop"
-          onDismiss={dismiss}
-        >
-          {/* Focus stays on the trigger: this panel is a set of choices with no text entry, and
-              moving the caret onto one would pick a node for the operator. */}
-          <LinkEditor
-            links={sel.links}
-            rows={rows}
-            full={full}
-            pickNode={pickNode}
-            pickIfindex={pickIfindex}
-            onPickNode={(n) => {
-              setPickNode(n);
-              // The ifindex belongs to the previous node; keeping it would add a link naming one
-              // node's id and another's port.
-              setPickIfindex('');
-            }}
-            onPickIfindex={setPickIfindex}
-            onAdd={add}
-            onRemove={remove}
-          />
-        </AnchoredPopover>
-      </span>
       <Select
         value={sel.unit}
         onChange={(e) => setSettings({ unit: e.target.value })}
@@ -303,7 +229,63 @@ export function InterfaceTrafficActions({ instance, setSettings }: WidgetProps) 
   );
 }
 
-/** The popover body: what is plotted, and how to add one more. */
+/** Customize-mode settings: which interfaces this card plots.
+ *
+ *  Rendered inside the frame's ⚙ popover, so it owns no trigger and no popover of its own — it is
+ *  the panel body. The transient node/ifindex choices stay component state: nothing about a
+ *  half-finished pick is worth persisting, and the panel is unmounted the moment Customize ends. */
+export function InterfaceTrafficSettings({ instance, setSettings }: WidgetProps) {
+  const sel = readTrafficSettings(instance.settings);
+  const [pickNode, setPickNode] = useState<{ id: string; name: string } | null>(null);
+  const [pickIfindex, setPickIfindex] = useState('');
+  const rosters = useInterfaceRosters(pickNode ? [pickNode.id] : []);
+  const rows: RosterState = pickNode ? (rosters[pickNode.id] ?? null) : null;
+
+  const full = sel.links.length >= MAX_LINKS;
+
+  const add = () => {
+    const ifindex = Number(pickIfindex);
+    if (!pickNode || !Number.isInteger(ifindex) || ifindex <= 0 || full) return;
+    const row = Array.isArray(rows) ? rows.find((r) => r.ifindex === ifindex) : undefined;
+    setSettings({
+      links: [
+        ...sel.links,
+        {
+          nodeId: pickNode.id,
+          nodeName: pickNode.name,
+          ifindex,
+          // A snapshot for the list; the body relabels from the live roster.
+          ifName: row ? interfaceLabel(row.ifindex, row.if_name, row.if_alias) : null,
+        } satisfies LinkRef,
+      ],
+    });
+    setPickIfindex('');
+  };
+
+  const remove = (l: LinkRef) =>
+    setSettings({ links: sel.links.filter((x) => linkId(x) !== linkId(l)) });
+
+  return (
+    <LinkEditor
+      links={sel.links}
+      rows={rows}
+      full={full}
+      pickNode={pickNode}
+      pickIfindex={pickIfindex}
+      onPickNode={(n) => {
+        setPickNode(n);
+        // The ifindex belongs to the previous node; keeping it would add a link naming one node's
+        // id and another's port.
+        setPickIfindex('');
+      }}
+      onPickIfindex={setPickIfindex}
+      onAdd={add}
+      onRemove={remove}
+    />
+  );
+}
+
+/** The settings panel body: what is plotted, and how to add one more. */
 function LinkEditor({
   links,
   rows,
@@ -343,6 +325,11 @@ function LinkEditor({
 
   return (
     <div className="iftraffic-body">
+      {/* How many of the six are in use. The card header carried this before ADR-072 moved the
+          picker behind the ⚙; without it the cap is invisible until you hit it. */}
+      <p className="iftraffic-count">
+        {t('widgets.ifTraffic.pickCount', { n: links.length, max: MAX_LINKS })}
+      </p>
       {links.length === 0 ? (
         <p className="muted iftraffic-note">{t('widgets.ifTraffic.noneYet')}</p>
       ) : (

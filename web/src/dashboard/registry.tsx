@@ -42,9 +42,9 @@ import {
   TopTalkersWidget,
 } from './widgets/performance';
 import {
-  MetricChartActions,
+  MetricChartSettings,
   MetricChartWidget,
-  MetricTopActions,
+  MetricTopSettings,
   MetricTopWidget,
 } from './widgets/metrics';
 import { GeoMapWidget, RegionRollupWidget, SiteHealthMatrixWidget } from './widgets/sites';
@@ -53,6 +53,7 @@ import {
   AggregateThroughputWidget,
   InterfaceHeatmapWidget,
   InterfaceTrafficActions,
+  InterfaceTrafficSettings,
   InterfaceTrafficWidget,
   TrafficDropsWidget,
   TrafficSpikesWidget,
@@ -262,7 +263,9 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6, 8, 12],
     allowedRowSpans: [1, 2, 3],
     Component: MetricChartWidget,
-    Actions: MetricChartActions,
+    // No view-mode actions at all: both of this widget's controls choose its subject, so both sit
+    // behind the ⚙ (ADR-072). It has no window and no lens to leave in the header.
+    Settings: MetricChartSettings,
   },
   {
     // Its fleet-wide twin (ADR-046 Inc.3): the same "any metric" question asked of every node at
@@ -277,7 +280,9 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [4, 6],
     allowedRowSpans: [1, 2, 3],
     Component: MetricTopWidget,
-    Actions: MetricTopActions,
+    // The window is a view control and stays in the header; the metric name is the subject.
+    Actions: TopAggActions,
+    Settings: MetricTopSettings,
   },
   {
     type: 'busiest-interfaces',
@@ -360,7 +365,9 @@ export const REGISTRY: WidgetDefinition[] = [
     allowedSpans: [6, 8, 12],
     allowedRowSpans: [1, 2, 3],
     Component: InterfaceTrafficWidget,
+    // Unit and window in the header; which interfaces are plotted behind the ⚙ (ADR-072).
     Actions: InterfaceTrafficActions,
+    Settings: InterfaceTrafficSettings,
   },
   {
     type: 'traffic-spikes',

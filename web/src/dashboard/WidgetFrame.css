@@ -58,8 +58,14 @@
   gap: 6px;
 }
 
+/* Wrapper the settings popover measures from (it looks for the [aria-haspopup] inside this). */
+.widgetframe-gear-wrap {
+  display: inline-flex;
+}
+
 /* Match the shared IconButton chrome (borderless, transparent until hover) so edit-mode controls
    read as the same "icon button" as the rest of the app; kept at a dense 24px for the card header. */
+.widgetframe-gear,
 .widgetframe-remove,
 .widgetframe-handle {
   display: inline-flex;
@@ -80,6 +86,7 @@
 
 /* Keyboard focus: the app-standard accent border, same as `.icon-btn:focus-visible` and the
    sibling resize grip. Without it these two fall back to the UA focus ring. */
+.widgetframe-gear:focus-visible,
 .widgetframe-remove:focus-visible,
 .widgetframe-handle:focus-visible {
   outline: none;
@@ -90,6 +97,11 @@
 .widgetframe-remove:hover {
   background: var(--status-critical);
   color: var(--on-status);
+}
+
+.widgetframe-gear:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
 }
 
 .widgetframe-handle {
@@ -195,6 +207,7 @@
    small for a finger, so grow them to the touch-target floor. Scoped to coarse pointers, so mouse
    users keep the compact chrome. */
 @media (hover: none) {
+  .widgetframe-gear,
   .widgetframe-remove,
   .widgetframe-handle,
   .widgetframe-resize {
@@ -288,4 +301,14 @@
 .mydash-cell .card-head > .card-title {
   flex: 1;
   min-width: 0;
+}
+
+/* The ⚙ panel (ADR-072). Only the surface belongs here — each widget's settings component brings
+   its own layout, exactly as the popover's other callers do. The width is a max rather than a fixed
+   size so a one-field panel stays small, and it is clamped to the viewport because these open on a
+   phone too, where the board is one full-width column. */
+.widgetframe-settings-pop {
+  padding: 10px;
+  width: max-content;
+  max-width: min(340px, calc(100vw - 16px));
 }

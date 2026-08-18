@@ -60,7 +60,8 @@
     "sizeReadout": "{{w}} × {{h}}",
     "sizeAnnounce": "Width {{w}} of 12 columns, height {{h}} rows",
     "nameAria": "Rename this {{name}} card",
-    "namePlaceholder": "Name this card…"
+    "namePlaceholder": "Name this card…",
+    "settings": "{{name}} settings"
   },
   "catalog": {
     "title": "Add a widget",
@@ -351,9 +352,8 @@
       "empty": "No interface traffic yet…"
     },
     "ifTraffic": {
-      "pickAria": "Choose which interfaces to plot",
       "pickCount": "Interfaces ({{n}}/{{max}})",
-      "pickSome": "Pick one or more interfaces to plot.",
+      "pickSome": "Pick one or more interfaces to plot — press Customize, then the ⚙ on this card.",
       "noneYet": "Nothing plotted yet. Choose a node, then one of its interfaces.",
       "removeAria": "Stop plotting this interface",
       "full": "{{max}} is the maximum — the chart has {{max}} colours, and a seventh line would reuse one.",
@@ -494,16 +494,16 @@
       "src": "Source"
     },
     "metricChart": {
-      "pickNode": "Pick a node, then one of its metrics.",
+      "pickNode": "Pick a node and one of its metrics — press Customize, then the ⚙ on this card.",
       "pickNodePlaceholder": "Node…",
-      "pickMetric": "Pick a metric to chart.",
+      "pickMetric": "Pick a metric to chart — press Customize, then the ⚙ on this card.",
       "metricAria": "Metric to chart",
       "metricPlaceholder": "Metric…",
       "unavailable": "{{metric}} is not available on this node.",
       "empty": "No data in the last 6 hours…"
     },
     "metricTop": {
-      "pickMetric": "Type a metric name to rank the fleet by.",
+      "pickMetric": "Type a metric name to rank the fleet by — press Customize, then the ⚙ on this card.",
       "metricAria": "Metric to rank by",
       "metricPlaceholder": "Metric…",
       "counter": "{{metric}} is a counter. Ranking its stored value would rank how long each node has been up, not how busy it is.",

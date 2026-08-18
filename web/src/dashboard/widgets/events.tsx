@@ -17,7 +17,7 @@ import { EVENT_KINDS, type EventKind } from '../../types/api';
 import { Donut, type DonutSegment } from '../primitives/Donut';
 import { KpiTile } from '../primitives/KpiTile';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
-import type { WidgetProps, WidgetSettings } from '../types';
+import type { ViewActionProps, WidgetProps, WidgetSettings } from '../types';
 import { usePolled } from '../usePolled';
 import { densifyTimeBuckets, trailingIso } from './util';
 
@@ -93,8 +93,11 @@ export function EventFeedWidget({ instance }: WidgetProps) {
   );
 }
 
-/** Header actions for the event feed: kind filter + a jump to the full Events screen. */
-export function EventFeedActions({ instance, setSettings }: WidgetProps) {
+/** View-mode header actions for the event feed: kind filter + a jump to the full Events screen.
+ *
+ *  The kind is a lens on the same feed rather than a different subject, so it stays out of
+ *  Customize (ADR-072 decision 1). */
+export function EventFeedActions({ instance, setSettings }: ViewActionProps) {
   const { t } = useTranslation('dashboard');
   const navigate = useNavigate();
   return (

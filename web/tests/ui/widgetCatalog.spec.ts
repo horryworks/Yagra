@@ -11,6 +11,10 @@
 // So the assertions here are deliberately about the seam those two cannot reach:
 //   1. the catalogue *renders* the entry (registry → CatalogModal → translated card), and
 //   2. clicking it puts a widget on the board whose body and header actions actually mount.
+//
+// Since ADR-072 it also carries the other half of that seam: *which* controls a card offers depends
+// on whether the board is being customized, and the type system can only police what a control is
+// allowed to write, never where it is drawn. So the assertions about the ⚙ split live here.
 // A widget whose component throws blanks the screen with no HTTP error at all — the `pageerror`
 // channel in `support/app.ts` is the only place that surfaces, and it fails the test.
 
@@ -124,8 +128,8 @@ async function openCatalog(page: import('@playwright/test').Page) {
 // mounts into a state it can reach without real hardware. The rest of each item's homework (a USG's
 // `huawei_*` metrics appearing, a counter being refused a ranking) still needs a device.
 const PRIOR_WIDGETS = [
-  { title: 'Metric chart', section: /performance/i, placed: 'Pick a node, then one of its metrics.' },
-  { title: 'Top nodes by metric', section: /performance/i, placed: 'Type a metric name to rank the fleet by.' },
+  { title: 'Metric chart', section: /performance/i, placed: 'press Customize, then the ⚙ on this card' },
+  { title: 'Top nodes by metric', section: /performance/i, placed: 'press Customize, then the ⚙ on this card' },
   { title: 'Most interface discards', section: /performance/i, placed: null },
 ];
 
@@ -177,33 +181,123 @@ test('placing it mounts a widget that says what it needs', async ({ page, errors
   await expect(cell).toBeVisible({ timeout: 15_000 });
 
   // The body mounted and is in its no-selection state. Asserting the prompt rather than merely
-  // "a card exists" is what separates a mounted widget from an empty box.
-  await expect(cell).toContainText('Pick one or more interfaces to plot.');
+  // "a card exists" is what separates a mounted widget from an empty box — and since ADR-072 the
+  // prompt has to name where the control it asks for actually lives, because it is not on this
+  // screen (ADR-055 R6).
+  await expect(cell).toContainText('Pick one or more interfaces to plot');
+  await expect(cell).toContainText('press Customize, then the ⚙ on this card');
 
-  // Header actions only render in view mode, so leave customize first. All three must be there:
-  // the link picker's trigger, the unit select and the window select.
+  // Header actions only render in view mode, so leave customize first. Exactly the two view
+  // controls must be there — the unit and the window.
   await page.getByRole('button', { name: 'Done' }).click();
-  await expect(cell.locator('.iftraffic-trigger')).toContainText('Interfaces (0/6)');
   await expect(cell.locator('.iftraffic-actions select')).toHaveCount(2);
 
   expect(errors.uncaught, 'the widget threw while rendering').toEqual([]);
 });
 
-test('the link picker opens and offers a node', async ({ page }) => {
+// 🚨 The rule ADR-072 exists for, stated as what an operator can and cannot reach.
+//
+// The type system stops a subject control from *writing* through the view-mode slot; it says
+// nothing about whether one is drawn. Only a browser can answer that, and only by looking at both
+// modes of the same card — an absence on its own is equally consistent with the widget being
+// broken, which is why every assertion below has its presence counterpart further down.
+test('a card outside Customize offers no way to choose its subject', async ({ page }) => {
   await openCatalog(page);
   await card(page, 'Interface traffic').click();
   await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
   await page.getByRole('button', { name: 'Done' }).click();
 
-  await page.locator('.iftraffic-trigger').first().click();
+  const cell = page.locator('.mydash-cell').first();
+  await expect(cell.locator('.iftraffic-actions select')).toHaveCount(2); // unit + window survive
+  await expect(cell.locator('[aria-haspopup="dialog"]')).toHaveCount(0); // …the picker does not
+  await expect(cell.locator('.widgetframe-gear')).toHaveCount(0); // and the ⚙ is Customize-only
+});
 
+test('the metric chart, whose every control is a subject, has an empty header outside Customize', async ({
+  page,
+}) => {
+  await openCatalog(page);
+  await card(page, 'Metric chart').click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+
+  const cell = page.locator('.mydash-cell').first();
+  // Node picker and metric select both gone: this widget has no window and no lens, so it is the
+  // one that ends up with nothing at all in its view-mode header.
+  await expect(cell.locator('.nodepick-control')).toHaveCount(0);
+  await expect(cell.locator('.card-actions select')).toHaveCount(0);
+});
+
+test('Customize puts a ⚙ on the cards that have a subject, and only those', async ({ page }) => {
+  await openCatalog(page);
+  await card(page, 'Interface traffic').click();
+  await card(page, 'Top CPU').click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+
+  // Still in Customize. The traffic card chooses interfaces; a plain Top-N chooses nothing, and a
+  // ⚙ on all 48 would read as "every card is configurable" while configuring nothing.
+  const cells = page.locator('.mydash-cell');
+  await expect(cells.nth(0).locator('.widgetframe-gear')).toHaveCount(1);
+  await expect(cells.nth(1).locator('.widgetframe-gear')).toHaveCount(0);
+  // Remove stays on both — the ⚙ is an addition, not a replacement.
+  await expect(cells.nth(1).locator('.widgetframe-remove')).toHaveCount(1);
+});
+
+/** Place the traffic widget and open its ⚙ panel, staying in Customize. Returns the panel. */
+async function openTrafficSettings(page: import('@playwright/test').Page) {
+  await openCatalog(page);
+  await card(page, 'Interface traffic').click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+  await page.locator('.widgetframe-gear').first().click();
   // The popover is portalled to the body — asserting it from inside the cell would pass for the
   // wrong reason if someone "simplified" it back to an in-place absolute panel.
-  const pop = page.locator('.apop.iftraffic-pop');
+  const pop = page.locator('.apop.widgetframe-settings-pop');
   await expect(pop).toBeVisible({ timeout: 15_000 });
+  return pop;
+}
+
+test('the link picker opens from the ⚙ and offers a node', async ({ page }) => {
+  const pop = await openTrafficSettings(page);
   await expect(pop).toContainText('Nothing plotted yet.');
   // The interface select is present and refuses to be used before a node is chosen.
   await expect(pop.locator('select')).toBeDisabled();
+});
+
+// The receiving side of the three absence assertions above. Without this, "the picker is gone from
+// both modes" satisfies every one of them — a split and a demolition look identical from the
+// outside, and this repo has shipped a green suite over exactly that shape before.
+test('an interface picked through the ⚙ is actually plotted', async ({ page, errors }) => {
+  const pop = await openTrafficSettings(page);
+
+  await pop.locator('.nodepick-trigger').click();
+
+  // ⚠️ A popover inside a popover, and the inner one does NOT portal — `.nodepick-pop` is
+  // `position: absolute` inside the panel the frame drew. That is what keeps the outer popover
+  // open (its outside-click test asks whether the click landed inside its own subtree, and this
+  // one does), but it also means the list is laid out against a 340px-max surface instead of the
+  // page. Check it landed somewhere a person can use rather than off the right edge.
+  const list = await pop.locator('.nodepick-pop').boundingBox();
+  expect(list, 'the node list did not open').not.toBeNull();
+  const vw = page.viewportSize()!.width;
+  expect(list!.x, 'the node list opened off the left edge').toBeGreaterThanOrEqual(0);
+  expect(list!.x + list!.width, 'the node list opened off the right edge').toBeLessThanOrEqual(vw);
+  expect(list!.width, 'the node list is too narrow to read a node name').toBeGreaterThan(140);
+
+  await pop.locator('.nodepick-option').first().click();
+  // The roster arrives before the select can offer anything.
+  await expect(pop.locator('select')).toBeEnabled({ timeout: 15_000 });
+  await pop.locator('select').selectOption({ index: 1 });
+  await pop.getByRole('button', { name: 'Add' }).click();
+
+  // Chosen, and said so in the panel's own list.
+  await expect(pop.locator('.iftraffic-item')).toHaveCount(1);
+
+  // …and on the chart, once Customize is left: one link ⇒ receive + transmit + uPlot's x row.
+  await page.getByRole('button', { name: 'Done' }).click();
+  const cell = page.locator('.mydash-cell').first();
+  await expect(cell.locator('.metricchart-fill')).toBeVisible({ timeout: 15_000 });
+  await expect(cell.locator('.u-legend .u-series')).toHaveCount(3);
+  expect(errors.uncaught).toEqual([]);
 });
 
 test.describe('with a link already plotted', () => {
@@ -286,14 +380,7 @@ test.describe('with a link already plotted', () => {
 // element that overflows is a check that cannot fail. Assert what the operator actually lost —
 // the select being covered — and assert the parent/child relation directly.
 test('the picker controls do not overlap each other', async ({ page }) => {
-  await openCatalog(page);
-  await card(page, 'Interface traffic').click();
-  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
-  await page.getByRole('button', { name: 'Done' }).click();
-  await page.locator('.iftraffic-trigger').first().click();
-
-  const pop = page.locator('.apop.iftraffic-pop');
-  await expect(pop).toBeVisible({ timeout: 15_000 });
+  const pop = await openTrafficSettings(page);
   const box = async (sel: string) => {
     const b = await pop.locator(sel).first().boundingBox();
     expect(b, `${sel} has no box`).not.toBeNull();

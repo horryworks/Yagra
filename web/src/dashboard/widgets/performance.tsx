@@ -10,14 +10,17 @@ import { formatBps, formatRtt } from '../../lib/format';
 import { api } from '../../services/api';
 import type { InterfaceTopEntry, InterfaceTopMetric, MetricTopAgg } from '../../types/api';
 import { RankedBars, type RankedRow } from '../primitives/RankedBars';
-import type { WidgetProps } from '../types';
+import type { ViewActionProps, WidgetProps } from '../types';
 import { usePolled } from '../usePolled';
 // The now/1h window reader lives in `util.ts` — the metric Top-N widget plans its query from the
 // same settings key in a file tests can reach, and one default is the point of sharing it.
 import { topAggOf as aggOf } from './util';
 
-/** Shared header action for every Top-N widget: the now / 1h-max window selector. */
-export function TopAggActions({ instance, setSettings }: WidgetProps) {
+/** Shared **view-mode** header action for every Top-N widget: the now / 1h-max window selector.
+ *
+ *  A time window is a view control, so it stays reachable without entering Customize (ADR-072) —
+ *  and `ViewActionProps` is what keeps a subject picker from being added beside it later. */
+export function TopAggActions({ instance, setSettings }: ViewActionProps) {
   const { t } = useTranslation('dashboard');
   const agg = aggOf(instance.settings);
   return (

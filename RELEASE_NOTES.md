@@ -18,6 +18,20 @@
   checkbox on the scan form, off by default.
 
 ### Improvements
+- **A dashboard widget's subject can now only be changed while the board is being customized.**
+  Choosing what a card is *about* — which node and metric a Metric chart draws, the metric a Top
+  nodes by metric ranks, the interfaces an Interface traffic chart plots — moved out of the card
+  header and behind a ⚙ that appears on that card in Customize mode. What stays in the header
+  outside Customize is how the chosen subject is shown: the now/1h-peak window, the bps↔pps toggle,
+  the interface chart's time window, the event feed's kind filter, the top-AS direction, and the
+  "View all" links.
+  - This matters most on the **Shared dashboard**, the one board everyone sees. Editing it requires
+    the *Manage configuration* privilege and a confirmation that the change applies to every user —
+    but the header controls sat outside that gate, so an interface could be added to everyone's
+    chart without pressing Customize and without the confirmation ever appearing.
+  - **Saved boards are unchanged**: no stored setting changed shape or meaning, and nothing needs
+    migrating. A card whose subject is not yet chosen now says where to choose it.
+  - Widgets with nothing to configure — 45 of the 48 — show no ⚙ at all.
 - **A sweep that no poller has picked up now says so, instead of claiming to be running.** A
   discovery scan starts in a new state, *Waiting for a poller*, and only becomes *Running* once a
   poller reports. This matters most when a scan is sent to a poller pool with nothing alive in it:
