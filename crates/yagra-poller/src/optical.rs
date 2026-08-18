@@ -89,6 +89,24 @@ pub struct SimpleDialect {
     /// `entSensorThresholdTable` with its own row shape — so the standards-based dialect draws a
     /// line and no band, which is a degradation the chart handles rather than a gap to work around.
     pub limits: Option<DialectLimits>,
+    /// The **raw** value this vendor reports for a port with no transceiver fitted, if it has one.
+    ///
+    /// Compared before [`SimpleDialect::scale`] is applied, because that is the number the MIB
+    /// documents; scaling first turns a recognisable marker into an ordinary-looking reading.
+    /// That is exactly how this was missed: Huawei's `-1` becomes **−0.01 dBm**, which sits in
+    /// the middle of [`is_plausible_dbm`]'s window — a window built to catch a *scale* applied
+    /// wrongly (a 100×-off number lands far outside a transceiver's operating range), not a
+    /// vendor placeholder that is already inside it.
+    ///
+    /// ⚠️ The thresholds escaped by accident, not by design: [`validated_window`] requires
+    /// `low < high`, and a row whose four bound columns all read the sentinel has `low == high`.
+    /// **A pair can be caught by its own inconsistency; a lone reading has nothing to disagree
+    /// with.** So the guard has to know the marker.
+    ///
+    /// `None` means "this dialect's marker is unknown" — not "it has none". Juniper is `None`
+    /// because no capture in reach carries `jnxDomCurrentTable`, so inventing a value would be a
+    /// guess that silently drops real readings.
+    pub no_module: Option<f64>,
 }
 
 /// The four threshold columns of a dialect that publishes its module's operating window.
@@ -129,6 +147,10 @@ pub fn simple_dialect(flavor: OpticalFlavor) -> Option<SimpleDialect> {
                 tx_low_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.15",
                 tx_high_oid: "1.3.6.1.4.1.2011.5.25.31.1.1.3.1.16",
             }),
+            // HUAWEI-ENTITY-EXTENT-MIB reports -1 on every column of a port with no module —
+            // confirmed on the lab USG6530F-D, whose two dark ports read -1 for rx, tx and all
+            // four bounds. Before this was recognised those two ports charted a flat -0.01 dBm.
+            no_module: Some(-1.0),
         }),
         // JUNIPER-DOM-MIB publishes both an alarm and a warning window; the **alarm** one is taken,
         // because the band is meant to say "outside this, the link is in trouble" rather than
@@ -143,6 +165,9 @@ pub fn simple_dialect(flavor: OpticalFlavor) -> Option<SimpleDialect> {
                 tx_low_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.18",
                 tx_high_oid: "1.3.6.1.4.1.2636.3.18.1.1.1.17",
             }),
+            // ⚠️ Unknown, deliberately: no walk in reach carries `jnxDomCurrentTable`, so there is
+            // nothing to read a marker off. Guessing one would drop real readings silently.
+            no_module: None,
         }),
         // ⚠️ No band: HH3C-TRANSCEIVER-INFO-MIB was not obtainable to confirm its threshold column
         // numbers, and a threshold OID pointing at the wrong column draws a window that accuses a
@@ -153,6 +178,10 @@ pub fn simple_dialect(flavor: OpticalFlavor) -> Option<SimpleDialect> {
             tx_oid: "1.3.6.1.4.1.25506.2.70.1.1.1.11",
             scale: 0.01,
             limits: None,
+            // i32::MAX, seen on the Comware 5700 walk. This one was already refused — scaled it
+            // is 2.1e7 dBm, far outside the plausible window — but that was luck, not intent:
+            // the same class of marker passes for Huawei because it happens to be small.
+            no_module: Some(2_147_483_647.0),
         }),
         OpticalFlavor::EntitySensor => None,
     }
@@ -223,7 +252,17 @@ pub fn entity_sensor_dbm(value: i64, sensor_type: i64, scale: i64, precision: i6
     let magnitude = powi10(exponent)?;
     let scaled = value as f64 * magnitude;
     match sensor_type {
-        SENSOR_TYPE_DBM => Some(scaled),
+        // Zero is this dialect's "no light / not measurable" marker, not a measurement: 0 dBm is
+        // 1 mW, which on the same Nexus that reports it is *stronger than any working port*
+        // (-13.19 dBm = 0.048 mW). A dark receiver charting the highest value on the switch is
+        // the worst possible failure mode, because it reads as the healthiest port rather than a
+        // fault. Measured: an N9K reports 0 on all 14 of its dBm sensors, an N3K on 6 of 16 — and
+        // on the N3K it is the *receive* rows that are 0 while their transmit rows read normally,
+        // which is what "the fibre is dark" looks like. The watts arm below already refuses zero
+        // for the same reason ("no light is a gap in the chart"); this arm simply never did.
+        // ⚠️ A real reading of exactly 0.000 dBm is conceivable, so this trades a vanishingly
+        // rare true zero for the far commoner marker. A gap is honest; 1 mW on a dark port is not.
+        SENSOR_TYPE_DBM if scaled != 0.0 => Some(scaled),
         // 10·log₁₀(P in milliwatts). A non-positive reading carries no logarithm.
         SENSOR_TYPE_WATTS if scaled > 0.0 => Some(10.0 * (scaled * 1000.0).log10()),
         _ => None,
@@ -392,6 +431,76 @@ pub fn dedupe_readings(candidates: impl IntoIterator<Item = OpticalSample>) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The vendor-neutral dialect must refuse its own "no light" marker — and must still accept
+    /// ordinary readings, including negative ones near zero. A guard tested only on the values it
+    /// rejects passes just as well when it rejects everything, so both directions are asserted.
+    #[test]
+    fn a_zero_dbm_sensor_is_no_light_not_a_reading() {
+        // Refused: the marker, at either scale a real device uses.
+        assert_eq!(entity_sensor_dbm(0, 14, 9, 0), None, "0 at units scale");
+        assert_eq!(
+            entity_sensor_dbm(0, 14, 8, 0),
+            None,
+            "0 at milli scale (Cisco)"
+        );
+        // Accepted: the real rows measured on the same devices that report the marker.
+        assert_eq!(
+            entity_sensor_dbm(-13187, 14, 8, 0),
+            Some(-13.187),
+            "N3K Ethernet1/1 receive"
+        );
+        assert_eq!(
+            entity_sensor_dbm(-5883, 14, 8, 0),
+            Some(-5.883),
+            "its transmit"
+        );
+        // And a value that scales *close* to zero is still a reading — only exact zero is the
+        // marker, so the guard cannot quietly swallow a dim-but-live link.
+        assert_eq!(
+            entity_sensor_dbm(-1, 14, 8, 0),
+            Some(-0.001),
+            "-0.001 dBm is a reading"
+        );
+    }
+
+    /// Every dialect either names the raw value its vendor reports for an empty port, or says
+    /// outright that it is unknown. The point of the test is the *pairing*: a dialect that grew a
+    /// sentinel must not scale it into the plausible window, which is what made Huawei's `-1`
+    /// indistinguishable from a −0.01 dBm measurement for the whole life of the feature.
+    #[test]
+    fn a_dialects_no_module_marker_is_never_a_plausible_reading() {
+        for flavor in OpticalFlavor::ALL {
+            let Some(d) = simple_dialect(flavor) else {
+                continue;
+            };
+            let Some(marker) = d.no_module else { continue };
+            let scaled = marker * d.scale;
+            assert!(
+                !is_plausible_dbm(scaled) || marker == -1.0,
+                "{flavor:?}: marker {marker} scales to {scaled} dBm — inside the plausible window, so nothing downstream can tell it from a measurement"
+            );
+        }
+        // Huawei is the case the window cannot catch, which is why the marker exists at all.
+        let huawei = simple_dialect(OpticalFlavor::Huawei).expect("huawei is a simple dialect");
+        let marker = huawei.no_module.expect("huawei declares its marker");
+        assert!(
+            (marker - -1.0).abs() < f64::EPSILON,
+            "marker is -1, got {marker}"
+        );
+        assert!(
+            is_plausible_dbm(marker * huawei.scale),
+            "the whole reason this field exists: -0.01 dBm looks like a real reading"
+        );
+        // Juniper stays unknown on purpose — asserting it pins the decision, not an oversight.
+        assert_eq!(
+            simple_dialect(OpticalFlavor::Juniper)
+                .expect("juniper")
+                .no_module,
+            None,
+            "no capture in reach carries jnxDomCurrentTable, so a marker would be a guess"
+        );
+    }
 
     #[test]
     fn every_flavor_has_a_root_and_only_entity_sensor_needs_correlation() {

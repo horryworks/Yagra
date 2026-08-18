@@ -10,6 +10,22 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **Optical: a port with no transceiver no longer charts a reading.** Huawei reports `-1` on every
+  column of an empty port and the poller scaled that to a flat **-0.01 dBm** line; the vendor-neutral
+  dialect (Cisco, Arista) reports `0`, which was stored as **0.00 dBm** — 1 mW, stronger than any
+  working port on the same switch, so a dark port read as the healthiest one. Both are now recognised
+  as "no module" and dropped, leaving a gap. **Existing series stop rather than change**: the false
+  points already written stay in the TSDB until they age out of retention.
+- **A device's later checks are no longer dropped every cycle.** A node's checks start about a second
+  apart, but a table walk against a switch with many interfaces takes 1–6 seconds, so each check after
+  the first arrived while the previous one was still running and was discarded — every cycle, for the
+  same check. On the test deployment 37% of all polls were being dropped, and the optical check
+  recorded nothing for an hour while the check ahead of it recorded every sample. A check now waits
+  for the device to free up (bounded by its own interval, capped at 60s) instead of being thrown away.
+  A device that stays busy past that deadline still sheds the poll, so backpressure is unchanged.
+
 ## v0.2.14 — a sweep can be left, returned to and stopped, and a dashboard card plots the links you name
 
 ### Breaking changes

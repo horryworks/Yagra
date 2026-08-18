@@ -34,6 +34,12 @@ use yagra_transport::{
 };
 
 /// sysDescr.0 — system description scalar (the v3 GET form).
+/// Ceiling on how long one job waits for another probe against the same device (see
+/// `single_flight_wait`). A device's specs are serialised, so this bounds the tail of that chain;
+/// 60s comfortably covers the slowest walk measured (6.0s against a 232-interface switch) while
+/// keeping a long-interval check from parking for hours behind a wedged device.
+const MAX_SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(60);
+
 const SYSDESCR_OID: &str = "1.3.6.1.2.1.1.1.0";
 /// sysDescr column base — walking it yields the `.0` instance (the v2c path).
 const SYSDESCR_BASE: &str = "1.3.6.1.2.1.1.1";
@@ -1028,6 +1034,14 @@ async fn walk_simple_optical(
     let mut raw: HashMap<u32, optical::OpticalWindow> = HashMap::new();
     for row in rows {
         let base = row.oid_base.as_str();
+        // A port with no transceiver still answers, with the vendor's placeholder. Drop the row
+        // here — before the scale turns the marker into an ordinary number — so a dark port is a
+        // gap in the chart rather than a flat line at whatever the marker happens to scale to.
+        // Applied to the bound columns too: they only escaped before because all four carrying
+        // the same marker made `low == high`, which is an accident of the pair, not a guard.
+        if dialect.no_module == Some(row.value) {
+            continue;
+        }
         let scaled = row.value * dialect.scale;
         if base == dialect.rx_oid || base == dialect.tx_oid {
             samples.push(optical::OpticalSample {
@@ -1978,6 +1992,22 @@ pub async fn run_stream<S>(
             continue;
         }
 
+        // How long a job may wait for another probe against the same device to finish.
+        //
+        // Bounded by the job's own interval: a poll still waiting when its successor is due has
+        // stopped being late and started being a queue, and shedding it is the honest answer.
+        // Capped at [`MAX_SINGLE_FLIGHT_WAIT`] so a daily check does not sit for hours.
+        //
+        // Zero-interval jobs (an operator's "poll now") get the cap rather than no wait at all —
+        // an on-demand poll landing while the scheduled one is mid-walk should queue behind it,
+        // not report a skip to the person who pressed the button.
+        fn single_flight_wait(job: &PollJob) -> Duration {
+            match job.interval_secs {
+                0 => MAX_SINGLE_FLIGHT_WAIT,
+                secs => Duration::from_secs(u64::from(secs)).min(MAX_SINGLE_FLIGHT_WAIT),
+            }
+        }
+
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
@@ -1986,11 +2016,13 @@ pub async fn run_stream<S>(
         let guard = if matches!(job.check, CheckSpec::Dns(_)) {
             limiter.begin_global().await
         } else {
-            limiter.try_begin(job.target).await
+            limiter
+                .begin_for(job.target, single_flight_wait(&job))
+                .await
         };
         let Some(guard) = guard else {
             metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
-            tracing::debug!(target = %job.target, "skipping poll: previous still in flight");
+            tracing::debug!(target = %job.target, "skipping poll: device busy past the deadline");
             continue;
         };
         let sink = sink.clone();
@@ -2034,6 +2066,62 @@ mod tests {
     use yagra_bus::{Bus, IcmpCheck, InMemoryBus, SnmpCheck};
     use yagra_common::NodeId;
     use yagra_transport::{FakeTransport, SnmpSample};
+
+    /// A dark port answers the walk with the vendor's placeholder on every column. It must produce
+    /// no reading and no band — while a real row on the same walk still comes through, which is the
+    /// half that stops "skip everything" from passing as a fix.
+    #[tokio::test]
+    async fn a_no_module_row_yields_neither_a_reading_nor_a_band() {
+        let d = optical::simple_dialect(yagra_common::OpticalFlavor::Huawei).expect("huawei");
+        let row = |oid: &str, ifindex: u32, value: f64| yagra_transport::SnmpTableSample {
+            oid_base: oid.to_owned(),
+            ifindex,
+            value,
+        };
+        let limits = d.limits.expect("huawei publishes a window");
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_table = vec![
+            // ifIndex 1 — no transceiver: every column reads the marker, as the lab USG does.
+            row(d.rx_oid, 1, -1.0),
+            row(d.tx_oid, 1, -1.0),
+            row(limits.rx_low_oid, 1, -1.0),
+            row(limits.rx_high_oid, 1, -1.0),
+            // ifIndex 2 — a live module, with a window that is a genuine pair.
+            row(d.rx_oid, 2, -1005.0),
+            row(d.tx_oid, 2, -950.0),
+            row(limits.rx_low_oid, 2, -1410.0),
+            row(limits.rx_high_oid, 2, 200.0),
+        ];
+        let job = PollJob::snmp_optical(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpOpticalCheck {
+                community: "public".to_owned(),
+                probes: Vec::new(),
+                timeout_ms: 1_000,
+            },
+            30,
+        );
+        let walker = SnmpWalker::V2c("public".to_owned());
+        let (readings, windows) =
+            walk_simple_optical(&job, &fake, &walker, Duration::from_secs(1), &d).await;
+
+        assert!(
+            readings.iter().all(|r| r.ifindex == 2),
+            "the dark port must contribute no reading, got {readings:?}"
+        );
+        assert_eq!(readings.len(), 2, "the live port still reports rx and tx");
+        assert!(
+            readings.iter().any(|r| (r.dbm - -10.05).abs() < 1e-9),
+            "the live receive level survives unchanged, got {readings:?}"
+        );
+        assert!(
+            !windows.contains_key(&1),
+            "a marker row must not become a band either"
+        );
+        assert!(windows.contains_key(&2), "the live port keeps its band");
+    }
 
     fn icmp_job() -> PollJob {
         PollJob::icmp(
