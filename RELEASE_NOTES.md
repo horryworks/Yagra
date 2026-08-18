@@ -42,8 +42,21 @@
   two standard MIBs Yagra reads for it, so the Duplex column was permanently blank on those
   devices. It now falls back to Huawei's own reading. Devices that answer the standard MIB are
   unaffected — that reading still wins.
+- **Huawei ports now show their media.** A fixed copper socket has no transceiver to describe and
+  Huawei answers none of the standard media MIB, so the Media column could never be filled for one.
+  Huawei reports copper-or-fibre directly, and a copper port's IEEE designation follows from its
+  speed — so a 1 Gbit/s metal port now reads `1000BASE-T`. Optical ports are deliberately left to
+  the transceiver reading, which names the actual reach rather than guessing at it.
 
 ### Bug Fixes
+
+- **Interface speed was missing on most ports.** `ifHighSpeed` — the 64-bit reading every port
+  above 4.29 Gbit/s depends on, and the only one many switches answer at all — was being charted as
+  a metric and then discarded before the speed column could use it. Any port whose device does not
+  serve the older 32-bit reading had an empty Speed cell, and so did every 10 Gbit/s or faster port,
+  because the 32-bit gauge saturates there and is refused. Measured across 22 lab devices, 8 of 231
+  live ports had a speed; the rest were blank for this reason. Utilization percentages that depend
+  on the speed return with it.
 
 - **Optical: a port with no transceiver no longer charts a reading.** Huawei reports `-1` on every
   column of an empty port and the poller scaled that to a flat **-0.01 dBm** line; the vendor-neutral

@@ -158,6 +158,90 @@ pub fn duplex_from_huawei(value: f64) -> Option<Duplex> {
     }
 }
 
+/// `hwEthernetPortType` — HUAWEI-PORT-MIB, whether a port is metal or optical (ADR-063 Inc.4).
+///
+/// `INTEGER {other(1), copper(2), fiber(3)}`, indexed by `hwEthernetIfIndex` — the *same* row as
+/// [`OID_HW_ETHERNET_DUPLEX`], two columns away. It therefore rides the numeric interface walk that
+/// already reads that column: no new session, no new `InterfaceField`, no bus change.
+///
+/// # Why a vendor column answers a question the standard MIB was supposed to
+///
+/// The standard answer is `ifMauType` ([`OID_IF_MAU_TYPE`]), and it is **not available here**:
+/// Huawei's YunShan OS returns `No Such Object` for the whole of `1.3.6.1.2.1.26` (walked on the lab
+/// USG). The other implemented source, ENTITY-MIB transceiver text, **structurally cannot answer for a
+/// metal port** — a fixed RJ45 socket has no pluggable entity to describe, so it only ever names optics.
+///
+/// A search for a cross-vendor substitute came up empty and the search is worth recording, because the
+/// obvious next move is to repeat it. Every ifIndex-keyed column in the Cisco 2960X capture was compared
+/// between its two known fibre ports and its 131 copper ports: **no column separates them.** The same
+/// held for the c9500X, Arista EOS, Comware and Juniper EX captures. Cisco's
+/// `entPhysicalVendorType` looked promising and is not — all 120 of the 2960X's port entities carry
+/// one identical value.
+pub const OID_HW_ETHERNET_PORT_TYPE: &str = "1.3.6.1.4.1.2011.5.25.157.1.1.1.1.12";
+
+/// What a port is physically made of.
+///
+/// Deliberately **not** on the bus and **not** stored: it exists only long enough to pick a designation
+/// for [`Duplex`]'s neighbouring column. Storing it would be a third spelling of the media fact, and
+/// [`copper_designation`]'s output already implies it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Medium {
+    /// Twisted pair. The one case with a unique designation per speed — see [`copper_designation`].
+    Copper,
+    /// Optical. Read, and deliberately **not** turned into a designation.
+    Fiber,
+}
+
+/// Map a `hwEthernetPortType` reading to a [`Medium`].
+///
+/// `other(1)` is `None`: it is the value the agent gives for a port whose type it cannot state, which
+/// is "not known", not a third medium.
+#[must_use]
+pub fn medium_from_huawei(value: f64) -> Option<Medium> {
+    if !value.is_finite() || (value - value.round()).abs() > 1e-6 {
+        return None;
+    }
+    match value.round() as i64 {
+        2 => Some(Medium::Copper),
+        3 => Some(Medium::Fiber),
+        _ => None,
+    }
+}
+
+/// The IEEE designation of a **copper** Ethernet port running at `bps`.
+///
+/// # This is a definition, not an inference
+///
+/// IEEE 802.3 registers exactly one twisted-pair standard per speed, so "copper at 1 Gbit/s" and
+/// "1000BASE-T" are two spellings of one fact. Every string returned here is a registration already
+/// present in [`MAU_TYPES`] — `every_derived_designation_is_a_real_registration` asserts it — so this
+/// produces nothing a device implementing MAU-MIB could contradict.
+///
+/// 🚨 **That identity is the whole reason fibre is excluded.** `interfaces.if_media` has two writers
+/// (this walk and the hourly MAU/ENTITY walk) and core's upsert is `COALESCE(EXCLUDED, existing)`,
+/// i.e. **last non-NULL wins** — there is no way to express "only fill what the other left empty". For
+/// copper that does not matter, because both writers produce the identical string. For fibre it would:
+/// MAU-MIB would say `1000BASE-SX` where the most this function could honestly say is
+/// `1000BASE-X`, and the cell would alternate between them on every poll. A column that changes its
+/// answer twice a minute is worse than an empty one, so [`Medium::Fiber`] is read and dropped.
+///
+/// ⚠️ 2.5GBASE-T and 5GBASE-T return `None`. They are real and they are **above [`MAU_TYPES`]'s
+/// transcribed block**, and that table's rule is to be extended from the IANA registry rather than from
+/// memory. Returning `None` keeps this function's promise — that everything it emits is a checked
+/// registration — instead of quietly making it a claim about a document nobody read.
+#[must_use]
+pub fn copper_designation(bps: i64) -> Option<&'static str> {
+    match bps {
+        10_000_000 => Some("10BASE-T"),
+        100_000_000 => Some("100BASE-TX"),
+        1_000_000_000 => Some("1000BASE-T"),
+        // Above 10 Gbit/s, "copper" means twinax (`…BASE-CR`), which a fixed RJ45 port is not, so a
+        // higher reading is a device saying something this mapping has no business interpreting.
+        10_000_000_000 => Some("10GBASE-T"),
+        _ => None,
+    }
+}
+
 /// Coerce an SNMP numeric reading to an `ifType` code, or `None` if it is not a plausible one.
 ///
 /// IANAifType codes are positive and small; the upper bound is a sanity check on a garbage reading,
@@ -516,6 +600,110 @@ mod tests {
         assert!(!OID_HW_ETHERNET_DUPLEX.starts_with(OID_DOT3_DUPLEX_STATUS));
         assert!(!OID_DOT3_DUPLEX_STATUS.starts_with(OID_HW_ETHERNET_DUPLEX));
     }
+    #[test]
+    fn huawei_port_type_readings_map_to_the_two_real_media() {
+        // Accepting cases first — the same reason as every other mapper here: a function that
+        // returned None for everything would satisfy each rejection test below and leave the media
+        // column exactly as blank as it is today, which is indistinguishable from "never shipped".
+        assert_eq!(medium_from_huawei(2.0), Some(Medium::Copper));
+        assert_eq!(medium_from_huawei(3.0), Some(Medium::Fiber));
+    }
+
+    #[test]
+    fn other_and_out_of_range_port_types_are_none() {
+        // `other(1)` is the agent saying it cannot state the type. That is "not known", not a third
+        // medium, and must not become one.
+        assert_eq!(medium_from_huawei(1.0), None);
+        for v in [0.0, 4.0, -1.0, 2.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(medium_from_huawei(v), None, "value {v}");
+        }
+    }
+
+    /// 🚨 The two Huawei columns share a table and must not share a mapper.
+    ///
+    /// `hwEthernetDuplex` is `full(1)/half(2)`; `hwEthernetPortType` is
+    /// `other(1)/copper(2)/fiber(3)`. They overlap on every value and agree on none of them, so a
+    /// copy-paste between the two would silently report every copper port as half duplex, or every
+    /// full-duplex port as copper. Both are wrong *values*, which is worse than the empty cells this
+    /// increment removes.
+    #[test]
+    fn the_duplex_and_port_type_enumerations_are_not_interchangeable() {
+        assert_eq!(duplex_from_huawei(1.0), Some(Duplex::Full));
+        assert_eq!(medium_from_huawei(1.0), None);
+        assert_eq!(duplex_from_huawei(2.0), Some(Duplex::Half));
+        assert_eq!(medium_from_huawei(2.0), Some(Medium::Copper));
+        assert_eq!(duplex_from_huawei(3.0), None);
+        assert_eq!(medium_from_huawei(3.0), Some(Medium::Fiber));
+    }
+
+    #[test]
+    fn the_three_huawei_columns_are_distinct_oids() {
+        // The poller demuxes this walk by `oid_base`. Two columns sharing a prefix would fold one
+        // map into the other and read it with the wrong enumeration.
+        let oids = [
+            OID_HW_ETHERNET_DUPLEX,
+            OID_HW_ETHERNET_PORT_TYPE,
+            OID_DOT3_DUPLEX_STATUS,
+        ];
+        for (i, a) in oids.iter().enumerate() {
+            for b in oids.iter().skip(i + 1) {
+                assert_ne!(a, b);
+                assert!(!a.starts_with(b), "{a} must not sit under {b}");
+                assert!(!b.starts_with(a), "{b} must not sit under {a}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_copper_port_gets_the_designation_its_speed_defines() {
+        // The four twisted-pair standards this feature can name. These are the speeds the lab's real
+        // device actually reports: its two up ports run at 100 Mbit/s and 1 Gbit/s.
+        assert_eq!(copper_designation(10_000_000), Some("10BASE-T"));
+        assert_eq!(copper_designation(100_000_000), Some("100BASE-TX"));
+        assert_eq!(copper_designation(1_000_000_000), Some("1000BASE-T"));
+        assert_eq!(copper_designation(10_000_000_000), Some("10GBASE-T"));
+    }
+
+    /// The promise this function makes to its caller, asserted rather than described.
+    ///
+    /// Everything [`copper_designation`] emits must be a registration [`MAU_TYPES`] carries.
+    /// That is what makes the derivation a *definition* rather than a guess, and what guarantees it
+    /// can never disagree with the MAU-MIB walk that writes the same column.
+    #[test]
+    fn every_derived_designation_is_a_real_registration() {
+        let mut seen = 0;
+        for bps in [10_000_000i64, 100_000_000, 1_000_000_000, 10_000_000_000] {
+            let d = copper_designation(bps).unwrap_or_else(|| panic!("{bps} bps must resolve"));
+            assert!(
+                MAU_TYPES.iter().any(|(_, media, _)| *media == d),
+                "{d} is not a transcribed dot3MauType registration",
+            );
+            seen += 1;
+        }
+        assert_eq!(seen, 4, "all four derivable speeds were checked");
+    }
+
+    /// ⚠️ A speed with no *checked* twisted-pair registration answers nothing.
+    ///
+    /// 2.5G and 5G BASE-T are real; they sit above [`MAU_TYPES`]'s transcribed block, and that
+    /// table's rule is to grow from the registry rather than from memory. Anything at or above 25G is
+    /// twinax rather than twisted pair. Both cases are an empty cell, which is the honest answer.
+    #[test]
+    fn a_speed_with_no_transcribed_twisted_pair_standard_is_none() {
+        for bps in [
+            0i64,
+            -1,
+            64_000,
+            2_500_000_000,
+            5_000_000_000,
+            25_000_000_000,
+            40_000_000_000,
+            100_000_000_000,
+        ] {
+            assert_eq!(copper_designation(bps), None, "{bps} bps");
+        }
+    }
+
     #[test]
     fn if_type_rejects_implausible_readings_and_keeps_real_ones() {
         assert_eq!(if_type_from_snmp(6.0), Some(IF_TYPE_ETHERNET_CSMACD));

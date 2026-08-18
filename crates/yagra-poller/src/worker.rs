@@ -22,12 +22,13 @@ use yagra_bus::{
     SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck,
 };
 use yagra_common::{
-    duplex_from_dot3, duplex_from_huawei, if_type_from_snmp, DnsFailure, IfIndex, InterfaceField,
-    MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS,
-    METRIC_DNS_UP, METRIC_HTTP_BODY_MATCH, METRIC_HTTP_BODY_TRUNCATED,
-    METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS,
-    METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
-    OID_IF_HIGH_SPEED, OID_IF_TYPE,
+    copper_designation, duplex_from_dot3, duplex_from_huawei, if_type_from_snmp,
+    medium_from_huawei, DnsFailure, IfIndex, InterfaceField, Medium, MetricKind, NodeId,
+    METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
+    METRIC_HTTP_BODY_MATCH, METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS,
+    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
+    OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX, OID_HW_ETHERNET_PORT_TYPE, OID_IF_HIGH_SPEED,
+    OID_IF_TYPE,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -789,6 +790,11 @@ async fn execute_table_walk(
         // devices that answer the standard one. ⚠️ Its enumeration is NOT the standard one —
         // see `duplex_from_huawei`, which is why the fold below cannot share a mapper.
         numeric_oids.push(OID_HW_ETHERNET_DUPLEX.to_owned());
+        // Whether the port is metal or optical (ADR-063 Inc.4), two columns from the duplex one in
+        // the same Huawei table. The standard answer — `ifMauType` — is walked by the hourly media
+        // job and is dead on this platform (`1.3.6.1.2.1.26` answers No Such Object), and the other
+        // implemented source only ever names a pluggable, so a fixed RJ45 port had no source at all.
+        numeric_oids.push(OID_HW_ETHERNET_PORT_TYPE.to_owned());
         numeric_oids.push(OID_IF_TYPE.to_owned());
     }
 
@@ -800,6 +806,24 @@ async fn execute_table_walk(
     {
         Ok(rows) => {
             for row in rows {
+                // 🚨 `ifHighSpeed` is TWO things at once and must feed both.
+                //
+                // It is a declared metric column in the built-in interface template
+                // (`if_high_speed`, a gauge) *and* the 64-bit source `resolve_if_speed` needs. It
+                // used to sit in the `else if` chain below, where the metric arm matched first and
+                // this insert was **unreachable on every node whose profile carries the standard
+                // interface template** — i.e. every SNMP node. The visible effect was a permanently
+                // empty speed column wherever `ifSpeed` could not answer: a device that reports only
+                // ifXTable (measured: 19 of 21 lab devices) got nothing at all, and a real 10G+ port
+                // whose 32-bit `ifSpeed` saturates got nothing either, because decision 7 refuses the
+                // sentinel and then had no fallback left to reach.
+                //
+                // Hoisted out of the chain rather than reordered: the metric sample is still owed,
+                // so this is an `and`, not an `or`. `the_high_speed_column_is_both_a_metric_and_the_
+                // speed_source` pins the overlap so a catalog edit cannot quietly make this dead code.
+                if row.oid_base == OID_IF_HIGH_SPEED {
+                    raw.high.insert(row.ifindex, row.value);
+                }
                 if let Some(col) = by_base.get(row.oid_base.as_str()) {
                     samples.push(Sample::interface(
                         col.metric_name.clone(),
@@ -808,11 +832,15 @@ async fn execute_table_walk(
                         col.kind,
                     ));
                 } else if row.oid_base == OID_IF_HIGH_SPEED {
-                    raw.high.insert(row.ifindex, row.value);
+                    // Already captured above; kept as an explicit no-op arm so the chain still
+                    // enumerates every OID this walk appends and nothing falls through to
+                    // `speed_oids` by accident.
                 } else if row.oid_base == OID_DOT3_DUPLEX_STATUS {
                     raw.duplex.insert(row.ifindex, row.value);
                 } else if row.oid_base == OID_HW_ETHERNET_DUPLEX {
                     raw.hw_duplex.insert(row.ifindex, row.value);
+                } else if row.oid_base == OID_HW_ETHERNET_PORT_TYPE {
+                    raw.hw_port_type.insert(row.ifindex, row.value);
                 } else if row.oid_base == OID_IF_TYPE {
                     raw.if_type.insert(row.ifindex, row.value);
                 } else if speed_oids.iter().any(|o| o == &row.oid_base) {
@@ -1825,6 +1853,10 @@ struct RawInterfaceNumerics {
     /// rather than merged into `duplex`**: the two columns disagree on what `1` means, so a
     /// merged map would need to remember which column each row came from anyway.
     hw_duplex: HashMap<u32, f64>,
+    /// `hwEthernetPortType` (`other(1)` / `copper(2)` / `fiber(3)`) — the only medium source any
+    /// device in this lab supplies. ⚠️ Its own map for the same reason `hw_duplex` has one: it
+    /// overlaps the duplex enumeration on every value and agrees with it on none.
+    hw_port_type: HashMap<u32, f64>,
     /// `ifType` (IANAifType).
     if_type: HashMap<u32, f64>,
 }
@@ -1845,6 +1877,7 @@ async fn walk_interface_metadata(
         high: raw_high,
         duplex: raw_duplex,
         hw_duplex: raw_hw_duplex,
+        hw_port_type: raw_hw_port_type,
         if_type: raw_iftype,
     } = raw;
     let field_by_base: HashMap<&str, InterfaceField> = meta_columns
@@ -1959,6 +1992,30 @@ async fn walk_interface_metadata(
         let rec = ifs.entry(ifindex).or_insert_with(|| blank(ifindex));
         rec.if_duplex = duplex;
         rec.if_type = if_type;
+    }
+
+    // Media, for the devices that name the medium (ADR-063 Inc.4). Last of the three folds because
+    // a designation is medium × speed and neither half answers alone — this reads the `if_speed` the
+    // first fold resolved.
+    //
+    // Only interfaces the walk already produced a record for are touched (`get_mut`, never
+    // `or_insert`): a port with a medium but no speed has nothing to say, and materialising an
+    // index-only row for it would put a blank line in the inventory.
+    for (ifindex, reading) in raw_hw_port_type {
+        // ⚠️ Fibre is read and deliberately dropped — `copper_designation` carries the reason
+        // (two writers, one COALESCEd column, and only copper's designation is unique per speed).
+        if !matches!(medium_from_huawei(*reading), Some(Medium::Copper)) {
+            continue;
+        }
+        let Some(rec) = ifs.get_mut(ifindex) else {
+            continue;
+        };
+        let Some(bps) = rec.if_speed else {
+            continue;
+        };
+        if let Some(designation) = copper_designation(bps) {
+            rec.if_media = Some(designation.to_owned());
+        }
     }
 
     ifs.into_values().collect()
@@ -2950,6 +3007,221 @@ mod tests {
         assert!(r.samples.iter().any(|s| s.metric == "if_oper_status"
             && s.ifindex == Some(IfIndex(1))
             && s.kind == MetricKind::Gauge));
+    }
+
+    /// A table job built from the **real built-in catalog**, not from a hand-written fixture.
+    ///
+    /// 🚨 The hand-written `snmp_table_job` declares two metric columns and neither is
+    /// `if_high_speed`, which is precisely why nothing caught the demux bug it was supposed to
+    /// cover: the fake was narrower than the thing it stood for, so every test agreed while every
+    /// real node behaved differently. Anything asserting how metric columns and interface-metadata
+    /// columns interact has to be built from the catalog that actually ships.
+    fn catalog_table_job() -> PollJob {
+        use yagra_bus::{SnmpColumn, SnmpMetaColumn, SnmpTableCheck};
+        use yagra_common::{builtin_catalog, builtin_interface_meta_columns, CollectionKind};
+        PollJob::snmp_table(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            SnmpTableCheck {
+                community: "public".to_owned(),
+                columns: builtin_catalog()
+                    .into_iter()
+                    .filter(|i| i.kind == CollectionKind::Table)
+                    .map(|i| SnmpColumn {
+                        metric_name: i.metric_name,
+                        oid: i.oid,
+                        kind: i.metric_kind,
+                    })
+                    .collect(),
+                meta_columns: builtin_interface_meta_columns()
+                    .into_iter()
+                    .map(|(field, oid)| SnmpMetaColumn {
+                        field,
+                        oid: oid.to_owned(),
+                    })
+                    .collect(),
+                timeout_ms: 2000,
+            },
+            60,
+        )
+    }
+
+    /// The overlap this walk has to survive, stated as its own assertion.
+    ///
+    /// `ifHighSpeed` is a metric the catalog charts **and** the only 64-bit source for the speed
+    /// column. If a future edit drops it from the catalog, the hoisted capture in the demux becomes
+    /// ordinary code rather than a deliberate exception — and the comment explaining why it is
+    /// hoisted becomes a lie. Failing here is how that gets noticed.
+    #[test]
+    fn the_high_speed_column_is_both_a_metric_and_the_speed_source() {
+        use yagra_common::{builtin_catalog, builtin_interface_meta_columns, InterfaceField};
+        assert!(
+            builtin_catalog().iter().any(|i| i.oid == OID_IF_HIGH_SPEED),
+            "ifHighSpeed must still be a declared metric column, or the demux hoist is pointless",
+        );
+        // …and it must NOT be the declared meta column, which is the 32-bit ifSpeed. If these two
+        // ever became the same OID, `resolve_if_speed` would read Mbps as bits/sec and store a
+        // 1 Gbps link as 1000 bps — a wrong number, which is worse than the empty cell this fixes.
+        let meta_speed = builtin_interface_meta_columns()
+            .into_iter()
+            .find(|(f, _)| matches!(f, InterfaceField::Speed))
+            .map(|(_, oid)| oid)
+            .expect("a Speed meta column exists");
+        assert_ne!(meta_speed, OID_IF_HIGH_SPEED);
+    }
+
+    /// A device that answers **only** ifXTable still gets a speed.
+    ///
+    /// This is the shape 19 of the 21 lab devices actually have — `ifSpeed` absent, `ifHighSpeed`
+    /// present — and the shape every 10G+ port has once its 32-bit gauge saturates. Before the
+    /// demux hoist this stored `None` for all of them.
+    #[tokio::test]
+    async fn if_high_speed_feeds_the_speed_column_as_well_as_the_metric() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            // ifHighSpeed only — no ifSpeed row at all, exactly as the lab captures answer.
+            SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 7,
+                value: 10_000.0,
+            },
+            SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 8,
+                value: 1_000.0,
+            },
+        ]);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+
+        let speed = |ifindex: u32| {
+            r.interfaces
+                .iter()
+                .find(|i| i.ifindex == IfIndex(ifindex))
+                .unwrap_or_else(|| panic!("ifIndex {ifindex} must have an interface row"))
+                .if_speed
+        };
+        assert_eq!(speed(7), Some(10_000_000_000), "10 Gbps from ifHighSpeed");
+        assert_eq!(speed(8), Some(1_000_000_000), "1 Gbps from ifHighSpeed");
+
+        // …and the metric is still charted. The fix is an `and`: reordering the chain instead of
+        // hoisting would have swapped one silent loss for another.
+        for ifindex in [7u32, 8] {
+            assert!(
+                r.samples.iter().any(|s| s.metric == "if_high_speed"
+                    && s.ifindex == Some(IfIndex(ifindex))
+                    && s.kind == MetricKind::Gauge),
+                "if_high_speed sample for ifIndex {ifindex} must still be emitted",
+            );
+        }
+    }
+
+    /// A saturated 32-bit `ifSpeed` resolves through `ifHighSpeed` when both arrive together.
+    ///
+    /// ADR-063 decision 7 refuses to store the `4294967295` sentinel. That refusal is only correct
+    /// if the 64-bit column can still answer — otherwise it turns a wrong number into no number,
+    /// which is what the lab's two real 10G ports had.
+    #[tokio::test]
+    async fn a_saturated_if_speed_still_resolves_through_the_high_speed_column() {
+        use yagra_transport::SnmpTableSample;
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            SnmpTableSample {
+                oid_base: "1.3.6.1.2.1.2.2.1.5".to_owned(),
+                ifindex: 4,
+                value: u32::MAX as f64,
+            },
+            SnmpTableSample {
+                oid_base: OID_IF_HIGH_SPEED.to_owned(),
+                ifindex: 4,
+                value: 10_000.0,
+            },
+        ]);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        let iface = r
+            .interfaces
+            .iter()
+            .find(|i| i.ifindex == IfIndex(4))
+            .expect("ifIndex 4");
+        assert_eq!(iface.if_speed, Some(10_000_000_000));
+    }
+
+    /// The lab's real Huawei USG, port for port (ADR-063 Inc.4).
+    ///
+    /// Its two live ports are metal and run at 100 Mbit/s and 1 Gbit/s; its two 10GE ports are
+    /// optical. Before this increment every one of the sixteen media cells was empty, because the
+    /// standard source (`ifMauType`) answers No Such Object on this platform and the other one only
+    /// ever names a pluggable.
+    #[tokio::test]
+    async fn a_huawei_port_gets_its_media_from_the_medium_and_the_speed() {
+        use yagra_transport::SnmpTableSample;
+        let sample = |oid: &str, ifindex: u32, value: f64| SnmpTableSample {
+            oid_base: oid.to_owned(),
+            ifindex,
+            value,
+        };
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            // GE0/0/1 — copper at 100 Mbit/s.
+            sample(OID_IF_HIGH_SPEED, 7, 100.0),
+            sample(OID_HW_ETHERNET_PORT_TYPE, 7, 2.0),
+            // GE0/0/2 — copper at 1 Gbit/s.
+            sample(OID_IF_HIGH_SPEED, 8, 1_000.0),
+            sample(OID_HW_ETHERNET_PORT_TYPE, 8, 2.0),
+            // 10GE0/0/0 — optical. Read, and deliberately left without a designation.
+            sample(OID_IF_HIGH_SPEED, 4, 10_000.0),
+            sample(OID_HW_ETHERNET_PORT_TYPE, 4, 3.0),
+            // A port the agent will not classify: other(1) is "not known", not a third medium.
+            sample(OID_IF_HIGH_SPEED, 9, 1_000.0),
+            sample(OID_HW_ETHERNET_PORT_TYPE, 9, 1.0),
+        ]);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        let media = |ifindex: u32| {
+            r.interfaces
+                .iter()
+                .find(|i| i.ifindex == IfIndex(ifindex))
+                .unwrap_or_else(|| panic!("ifIndex {ifindex}"))
+                .if_media
+                .clone()
+        };
+        assert_eq!(media(7).as_deref(), Some("100BASE-TX"));
+        assert_eq!(media(8).as_deref(), Some("1000BASE-T"));
+        assert_eq!(
+            media(4),
+            None,
+            "a fibre port must not be given a designation"
+        );
+        assert_eq!(media(9), None, "other(1) must not become a medium");
+    }
+
+    /// A medium with no speed, and a speed with no medium, both stay empty.
+    ///
+    /// Stated because the fold reads two maps and the failure would be silent either way: a
+    /// designation invented from half the inputs is a wrong value in a column whose whole point is
+    /// that it never guesses.
+    #[tokio::test]
+    async fn media_needs_both_halves_and_declines_when_it_has_one() {
+        use yagra_transport::SnmpTableSample;
+        let sample = |oid: &str, ifindex: u32, value: f64| SnmpTableSample {
+            oid_base: oid.to_owned(),
+            ifindex,
+            value,
+        };
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            // Copper, but the device never reported a speed for it.
+            sample(OID_HW_ETHERNET_PORT_TYPE, 11, 2.0),
+            // A speed, but no medium column at all — every non-Huawei device in the lab.
+            sample(OID_IF_HIGH_SPEED, 12, 1_000.0),
+            // Copper at a speed with no transcribed twisted-pair registration (2.5GBASE-T).
+            sample(OID_HW_ETHERNET_PORT_TYPE, 13, 2.0),
+            sample(OID_IF_HIGH_SPEED, 13, 2_500.0),
+        ]);
+        let r = execute(&catalog_table_job(), &t, 1_000).await;
+        let iface = |ifindex: u32| r.interfaces.iter().find(|i| i.ifindex == IfIndex(ifindex));
+        // No speed ⇒ no row is materialised for it at all, and certainly no media.
+        assert!(iface(11).is_none_or(|i| i.if_media.is_none()));
+        assert_eq!(iface(12).expect("ifIndex 12").if_media, None);
+        assert_eq!(iface(13).expect("ifIndex 13").if_media, None);
+        // …and the speed itself is still stored for the two that reported one.
+        assert_eq!(iface(12).unwrap().if_speed, Some(1_000_000_000));
     }
 
     #[tokio::test]
