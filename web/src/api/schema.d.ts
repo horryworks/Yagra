@@ -8430,7 +8430,8 @@ export interface components {
             pool?: string | null;
             /**
              * Format: int32
-             * @description Targets probed so far / total targets in the sweep.
+             * @description Targets probed so far, and the sweep's total. An address counts once a probe has been
+             *     addressed to it, which is not the same as the sweep having finished identifying it.
              */
             probed: number;
             /** Format: uuid */

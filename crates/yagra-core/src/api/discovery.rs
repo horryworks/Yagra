@@ -1034,4 +1034,86 @@ mod tests {
             assert_eq!(got, want, "limit={asked:?}");
         }
     }
+
+    /// A full sweep's cumulative result has to fit in one bus message, and nothing enforced that.
+    ///
+    /// The poller republishes the **whole** candidate list on every chunk — `DiscoveryResult::found`
+    /// is cumulative by design, so that an older core reading one message as final still converges
+    /// (ADR-017). The largest such message a single request can provoke is therefore bounded by
+    /// [`MAX_SCAN_TARGETS`], here, and the ceiling it must clear is NATS's `max_payload`, which is
+    /// 1 MiB unless the server config says otherwise (`docker/nats/nats-server.conf` now says so
+    /// out loud rather than inheriting it).
+    ///
+    /// Exceeding it fails the way this feature has already failed twice: the publish is rejected,
+    /// the poller logs one warning, no terminal result is ever sent, and the scan sits at
+    /// `running` forever. So the budget is pinned rather than reasoned about — this fails the day
+    /// someone raises the cap or adds a field to `DiscoveredDevice`.
+    ///
+    /// **The device below is measured, not imagined.** Sixteen real SNMP walks off the lab devices
+    /// (2026-08-18) put the longest `sysDescr` at 384 bytes — a Huawei VRP NE8000-M8 — with a
+    /// median near 150. The address is IPv6 because its text form is the longer one, and every
+    /// optional field is populated because a real device fills them all in.
+    ///
+    /// ⚠️ **`sysDescr` is device-supplied and unbounded**, so "it fits today" is only half an
+    /// answer. The second assertion is the other half: it bisects the real encoder for the sysDescr
+    /// length at which the message stops fitting, which turns the remaining risk into a number
+    /// rather than a shrug — and, because it bounds that number from *both* sides, it is also what
+    /// stops the first assertion passing vacuously if serialization ever returned something tiny.
+    #[test]
+    fn a_full_sweep_of_the_widest_devices_still_fits_in_one_bus_message() {
+        // NATS's default, restated here as well as in the server config. The config is loaded on
+        // one deployment shape (the remote-poller one); this bound applies to all of them.
+        const NATS_MAX_PAYLOAD: usize = 1024 * 1024;
+        const OBSERVED_WORST_SYSDESCR: usize = 384;
+
+        fn message_bytes(sysdescr_len: usize) -> usize {
+            let found: Vec<yagra_bus::DiscoveredDevice> = (0..MAX_SCAN_TARGETS)
+                .map(|i| yagra_bus::DiscoveredDevice {
+                    address: std::net::IpAddr::V6(std::net::Ipv6Addr::new(
+                        0x2001,
+                        0x0db8,
+                        0xdead,
+                        0xbeef,
+                        0xffff,
+                        0xffff,
+                        0xffff,
+                        u16::try_from(i).unwrap_or(u16::MAX),
+                    )),
+                    reachable: true,
+                    sysdescr: Some("W".repeat(sysdescr_len)),
+                    sysname: Some("edge-router-with-a-long-hostname.example.net".to_owned()),
+                    sysobjectid: Some("1.3.6.1.4.1.2011.2.240.121".to_owned()),
+                    matched_credential: Some(Uuid::from_u128(1)),
+                })
+                .collect();
+            let targets = u32::try_from(MAX_SCAN_TARGETS).unwrap_or(u32::MAX);
+            serde_json::to_vec(&yagra_bus::DiscoveryResult {
+                scan_id: Uuid::from_u128(7),
+                found,
+                probed: targets,
+                total: targets,
+                done: true,
+                cancelled: false,
+            })
+            .expect("a discovery result serializes")
+            .len()
+        }
+
+        let realistic = message_bytes(OBSERVED_WORST_SYSDESCR);
+        assert!(
+            realistic < NATS_MAX_PAYLOAD,
+            "a full sweep of {MAX_SCAN_TARGETS} devices at the longest sysDescr seen on real              hardware serializes to {realistic} bytes, past the {NATS_MAX_PAYLOAD}-byte bus limit              -- such a sweep would end with no terminal message and sit at `running` forever"
+        );
+
+        // The margin as a number rather than an adjective: how long a sysDescr this budget can
+        // absorb on *every* one of the targets before the message stops fitting. Bisected over the
+        // real encoder (~13 calls), not interpolated from the one sample above.
+        const CEILING: usize = 8 * 1024;
+        let lengths: Vec<usize> = (0..=CEILING).collect();
+        let break_even = lengths.partition_point(|&n| message_bytes(n) < NATS_MAX_PAYLOAD);
+        assert!(
+            (750..CEILING).contains(&break_even),
+            "the budget absorbs a sysDescr of {break_even} bytes on every one of              {MAX_SCAN_TARGETS} devices before the message stops fitting. Below 750 the margin              over the {OBSERVED_WORST_SYSDESCR} bytes measured on real hardware is too thin to              call a margin -- if a field was just added to DiscoveredDevice, this is the number              that has to be re-decided rather than the floor that has to be lowered. At {CEILING}              nothing was found to fail at all, which would mean this test measures nothing."
+        );
+    }
 }

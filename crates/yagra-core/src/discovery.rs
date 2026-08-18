@@ -178,7 +178,8 @@ pub struct ScanStatus {
     /// from `state` rather than stored, so the two cannot disagree.
     pub done: bool,
     pub state: DiscoveryScanState,
-    /// Targets probed so far / total targets in the sweep.
+    /// Targets probed so far, and the sweep's total. An address counts once a probe has been
+    /// addressed to it, which is not the same as the sweep having finished identifying it.
     pub probed: u32,
     pub total: u32,
     /// The address the sweep is currently at (the next unprobed target), while running.

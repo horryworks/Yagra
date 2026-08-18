@@ -29961,7 +29961,7 @@
           "probed": {
             "type": "integer",
             "format": "int32",
-            "description": "Targets probed so far / total targets in the sweep.",
+            "description": "Targets probed so far, and the sweep's total. An address counts once a probe has been\naddressed to it, which is not the same as the sweep having finished identifying it.",
             "minimum": 0
           },
           "scan_id": {

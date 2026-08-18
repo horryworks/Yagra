@@ -2247,7 +2247,9 @@ pub struct DiscoveryResult {
     pub scan_id: Uuid,
     /// All devices found so far (cumulative).
     pub found: Vec<DiscoveredDevice>,
-    /// Targets probed so far. Defaults to 0 for an older poller's single final message.
+    /// Targets probed so far — addresses this sweep has put a probe at, which is not the same as
+    /// addresses it finished identifying. A target cut short mid-identification still counts; one
+    /// the sweep never reached does not. Defaults to 0 for an older poller's single final message.
     #[serde(default)]
     pub probed: u32,
     /// Total targets in the sweep.

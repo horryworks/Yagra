@@ -427,9 +427,29 @@ async fn publish(bus: &dyn DiscoveryBus, result: DiscoveryResult) {
 
 /// Probe one chunk of targets with bounded concurrency.
 ///
-/// Returns the devices that responded **and how many targets were actually probed** — the second
-/// value is what keeps `probed` honest when a stop lands mid-chunk. A target skipped because the
-/// sweep was cancelled counts as neither probed nor absent; it simply was not looked at.
+/// Returns the devices that responded **and how many targets this chunk looked at** — the second
+/// value is what keeps `probed` honest when a stop lands mid-chunk.
+///
+/// **"Looked at" means an ICMP probe was addressed to the target. That is the definition, and it
+/// is chosen rather than incidental.** Three cases sit either side of the line, and this doc used
+/// to describe only the first — which left the other two reading as bugs:
+///
+/// * A target the stop reached **before its future began** is *not* counted. Nothing was sent to
+///   it, and counting it is exactly how a stopped sweep would claim to have finished the work it
+///   abandoned.
+/// * A target whose **credential loop ended early** — cut short by the stop (`break 'candidates`)
+///   or by the per-device cooldown — **is** counted. Its ICMP probe had already gone out and been
+///   awaited before either check could run, so the address really was looked at; only its
+///   identification is incomplete, and an incomplete identification is reported as a device with
+///   fewer fields, not as an address nobody visited.
+/// * A target the **ICMP gate refused** is counted as well. The gate is a decision taken *about* a
+///   probed target, not a reason to skip one; `probe_one` returning `None` there means "not a
+///   candidate", never "not looked at".
+///
+/// So `probed` is "addresses this sweep put a packet at", never "addresses it finished with". The
+/// property the operator actually reads is unaffected: `probed < total` on a cancelled sweep still
+/// means the stop took effect, because the only thing that fails to increment the count is a target
+/// that was never sent anything.
 async fn sweep_chunk(
     targets: &[IpAddr],
     ctx: &SweepCtx,
