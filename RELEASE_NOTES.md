@@ -65,7 +65,10 @@
   IOS-XR router — `Transceiver Rx Power Sensor`, which is the name of a **sensor**. A component is
   now taken for a module only if the device marks it field-replaceable or the text carries a rate or
   part number. Real modules are unaffected; `GLC-SX-MMD`, `SFP-H10GB-CU1M` and Huawei's
-  `10000Mb/s-…-Copper Pigtail` all still show.
+  `10000Mb/s-…-Copper Pigtail` all still show, and a Nexus that reported `Linecard-Port` on 54
+  ports now reports its nine actual optics. A **sensor** is excluded outright — an IOS-XR router
+  attaches `Transceiver Voltage Sensor - 3.3V` to thirteen of its ports, which reads convincingly
+  and is not a module.
 
 - **Optical: a port with no transceiver no longer charts a reading.** Huawei reports `-1` on every
   column of an empty port and the poller scaled that to a flat **-0.01 dBm** line; the vendor-neutral

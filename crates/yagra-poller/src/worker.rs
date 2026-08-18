@@ -1444,8 +1444,9 @@ async fn walk_entity_media_text(
         ENT_PHYSICAL_MODEL_NAME.to_owned(),
         optical::ENT_PHYSICAL_DESCR.to_owned(),
         optical::ENT_PHYSICAL_NAME.to_owned(),
-        // Not a describing column either — the second yardstick. See `mau::entity_text`'s 🚨.
+        // Not describing columns either — the two yardsticks. See `mau::entity_text`'s 🚨.
         ENT_PHYSICAL_IS_FRU.to_owned(),
+        ENT_PHYSICAL_CLASS.to_owned(),
     ];
     match walker
         .walk_instances(
@@ -1457,7 +1458,12 @@ async fn walk_entity_media_text(
         )
         .await
     {
-        Ok(rows) => crate::mau::entity_text(&rows, optical::ENT_PHYSICAL_NAME, ENT_PHYSICAL_IS_FRU),
+        Ok(rows) => crate::mau::entity_text(
+            &rows,
+            optical::ENT_PHYSICAL_NAME,
+            ENT_PHYSICAL_IS_FRU,
+            ENT_PHYSICAL_CLASS,
+        ),
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity media text walk failed");
             BTreeMap::new()
@@ -1472,6 +1478,11 @@ const ENT_PHYSICAL_MODEL_NAME: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
 /// `entPhysicalIsFRU` — whether the component can be pulled out and replaced. A transceiver can; a
 /// soldered port cannot, which is what makes this the structural half of "is this text a module?".
 const ENT_PHYSICAL_IS_FRU: &str = "1.3.6.1.2.1.47.1.1.1.1.16";
+
+/// `entPhysicalClass` — what kind of component this is. Read only to exclude `sensor(8)`, which
+/// reaches a port through the same containment chain a transceiver does and whose *name* reads like
+/// a module's. See `mau::entity_text`'s 🚨.
+const ENT_PHYSICAL_CLASS: &str = "1.3.6.1.2.1.47.1.1.1.1.5";
 
 /// Walk the two ENTITY-MIB relations that attach a physical entity to an interface.
 async fn walk_entity_index(

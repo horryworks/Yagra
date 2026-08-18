@@ -17,6 +17,10 @@
 //! it is not expected to answer this either. Every guard below therefore drops rather than guesses.
 
 use std::collections::BTreeMap;
+
+/// `entPhysicalClass` value for `sensor(8)` — the one class that can never be a transceiver, and
+/// the one that produced a convincing-looking wrong answer on real hardware.
+const ENT_CLASS_SENSOR: i64 = 8;
 use yagra_common::{mau_subid, media_from_mau_oid, media_from_transceiver_text, Duplex};
 use yagra_transport::{SnmpInstanceRow, SnmpValue};
 
@@ -123,6 +127,7 @@ pub fn entity_text(
     rows: &[SnmpInstanceRow],
     name_oid: &str,
     fru_oid: &str,
+    class_oid: &str,
 ) -> BTreeMap<u32, String> {
     let read = |row: &SnmpInstanceRow| -> Option<(u32, String)> {
         let &ent = row.instance.first()?;
@@ -133,6 +138,18 @@ pub fn entity_text(
         (!text.is_empty()).then_some((ent, text))
     };
     let fold = |s: &str| s.trim().to_ascii_lowercase();
+
+    // 🚨 A **sensor** is never a module, and one slipped past the two rules above on the first live
+    // run: an IOS-XR router attaches `Transceiver Voltage Sensor - 3.3V` to 13 of its ports, and
+    // "3.3V" is a digit, so the digit clause admitted it. The word "Transceiver" in it makes it read
+    // convincingly, which is exactly what makes it worth excluding structurally rather than by text:
+    // `entPhysicalClass` says `sensor(8)` and no string rule has to guess.
+    let mut sensors: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    for row in rows.iter().filter(|r| r.oid_base == class_oid) {
+        if let (Some(&ent), SnmpValue::Int(ENT_CLASS_SENSOR)) = (row.instance.first(), &row.value) {
+            sensors.insert(ent);
+        }
+    }
 
     // `entPhysicalIsFRU`: true(1) / false(2). Absent is treated as "not stated", which falls to the
     // digit rule rather than to either extreme.
@@ -153,11 +170,14 @@ pub fn entity_text(
     let mut out: BTreeMap<u32, String> = BTreeMap::new();
     for row in rows
         .iter()
-        .filter(|r| r.oid_base != name_oid && r.oid_base != fru_oid)
+        .filter(|r| r.oid_base != name_oid && r.oid_base != fru_oid && r.oid_base != class_oid)
     {
         let Some((ent, text)) = read(row) else {
             continue;
         };
+        if sensors.contains(&ent) {
+            continue;
+        }
         if names.get(&ent).is_some_and(|n| fold(n) == fold(&text)) {
             continue;
         }
@@ -238,6 +258,16 @@ mod tests {
     const MODEL_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
     /// `entPhysicalIsFRU` — walked beside the describing columns, and a yardstick like NAME_OID.
     const FRU_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.16";
+    /// `entPhysicalClass` — the third yardstick.
+    const CLASS_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.5";
+
+    fn class_row(ent: u32, class: i64) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: CLASS_OID.to_owned(),
+            instance: vec![ent],
+            value: SnmpValue::Int(class),
+        }
+    }
 
     fn fru_row(ent: u32, yes: bool) -> SnmpInstanceRow {
         SnmpInstanceRow {
@@ -319,6 +349,7 @@ mod tests {
             ],
             NAME_OID,
             FRU_OID,
+            CLASS_OID,
         );
         assert_eq!(got[&101], "SFP-1000BaseLX transceiver");
         assert!(!got.contains_key(&102), "blank text is not an answer");
@@ -346,6 +377,7 @@ mod tests {
             ],
             NAME_OID,
             FRU_OID,
+            CLASS_OID,
         );
         assert!(!got.contains_key(&101), "port name is not a part number");
         assert!(!got.contains_key(&102), "case/space folded comparison");
@@ -372,7 +404,7 @@ mod tests {
             rows.push(row_on(MODEL_OID, ent, text));
             rows.push(fru_row(ent, false));
         }
-        let got = entity_text(&rows, NAME_OID, FRU_OID);
+        let got = entity_text(&rows, NAME_OID, FRU_OID, CLASS_OID);
         assert!(
             got.is_empty(),
             "none of these is a part number; got {got:?}",
@@ -407,6 +439,7 @@ mod tests {
             ],
             NAME_OID,
             FRU_OID,
+            CLASS_OID,
         );
         assert_eq!(got[&301], "GLC-SX-MMD", "kept by isFRU with no digit");
         assert_eq!(
@@ -420,12 +453,62 @@ mod tests {
     ///
     /// Same trap as `entPhysicalName`: it is walked alongside the describing columns, so without an
     /// explicit exclusion the integer `1` would be read as a candidate part number.
+    /// 🚨 The one that got past both earlier rules, found on the first live run after shipping them.
+    ///
+    /// An IOS-XR router attaches `Transceiver Voltage Sensor - 3.3V` to 13 of its ports. It is not
+    /// the port's own name, and "3.3V" is a digit — so the name rule and the digit rule both let it
+    /// through, and the word *Transceiver* in it made the result read as correct. The exclusion is
+    /// structural: `entPhysicalClass` says `sensor(8)`, so no string has to be interpreted.
+    #[test]
+    fn a_sensor_is_never_a_transceiver_however_convincing_its_name() {
+        let got = entity_text(
+            &[
+                row_on(NAME_OID, 501, "GigabitEthernet0/7/1/1"),
+                row_on(MODEL_OID, 501, "Transceiver Voltage Sensor - 3.3V"),
+                class_row(501, 8),
+                // A module on the same device, reached the same way, must survive — otherwise this
+                // rule is "reject IOS-XR" rather than "reject sensors".
+                row_on(NAME_OID, 502, "TenGigE0/0/0/0"),
+                row_on(
+                    MODEL_OID,
+                    502,
+                    "1000BASE-LX/LH SFP transceiver module, MMF/SMF",
+                ),
+                class_row(502, 9),
+            ],
+            NAME_OID,
+            FRU_OID,
+            CLASS_OID,
+        );
+        assert!(!got.contains_key(&501), "a sensor is not a module: {got:?}");
+        assert_eq!(
+            got[&502], "1000BASE-LX/LH SFP transceiver module, MMF/SMF",
+            "a real module on the same device is unaffected",
+        );
+    }
+
+    /// The class column must never become an answer itself — the same trap as the other two.
+    #[test]
+    fn the_class_column_is_never_itself_a_candidate() {
+        let got = entity_text(
+            &[row_on(NAME_OID, 601, "Gi1/0/1"), class_row(601, 10)],
+            NAME_OID,
+            FRU_OID,
+            CLASS_OID,
+        );
+        assert!(
+            got.is_empty(),
+            "entPhysicalClass is a yardstick, not a description"
+        );
+    }
+
     #[test]
     fn the_fru_column_is_never_itself_a_candidate() {
         let got = entity_text(
             &[row_on(NAME_OID, 401, "Gi1/0/1"), fru_row(401, true)],
             NAME_OID,
             FRU_OID,
+            CLASS_OID,
         );
         assert!(got.is_empty(), "isFRU is a yardstick, not a description");
     }
@@ -434,7 +517,12 @@ mod tests {
     fn the_name_column_is_never_itself_a_candidate() {
         // Even with no describing column at all, `entPhysicalName` must not become the answer —
         // otherwise the rule above is trivially defeated by a device that only implements .7.
-        let got = entity_text(&[row_on(NAME_OID, 101, "GE0/0/1")], NAME_OID, FRU_OID);
+        let got = entity_text(
+            &[row_on(NAME_OID, 101, "GE0/0/1")],
+            NAME_OID,
+            FRU_OID,
+            CLASS_OID,
+        );
         assert!(got.is_empty());
     }
 
