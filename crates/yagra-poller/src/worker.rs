@@ -1444,6 +1444,8 @@ async fn walk_entity_media_text(
         ENT_PHYSICAL_MODEL_NAME.to_owned(),
         optical::ENT_PHYSICAL_DESCR.to_owned(),
         optical::ENT_PHYSICAL_NAME.to_owned(),
+        // Not a describing column either — the second yardstick. See `mau::entity_text`'s 🚨.
+        ENT_PHYSICAL_IS_FRU.to_owned(),
     ];
     match walker
         .walk_instances(
@@ -1455,7 +1457,7 @@ async fn walk_entity_media_text(
         )
         .await
     {
-        Ok(rows) => crate::mau::entity_text(&rows, optical::ENT_PHYSICAL_NAME),
+        Ok(rows) => crate::mau::entity_text(&rows, optical::ENT_PHYSICAL_NAME, ENT_PHYSICAL_IS_FRU),
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity media text walk failed");
             BTreeMap::new()
@@ -1466,6 +1468,10 @@ async fn walk_entity_media_text(
 /// `entPhysicalModelName` — ENTITY-MIB's vendor part number for a physical component. The column
 /// `optical.rs` had no use for, since a part number says nothing about a light level.
 const ENT_PHYSICAL_MODEL_NAME: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
+
+/// `entPhysicalIsFRU` — whether the component can be pulled out and replaced. A transceiver can; a
+/// soldered port cannot, which is what makes this the structural half of "is this text a module?".
+const ENT_PHYSICAL_IS_FRU: &str = "1.3.6.1.2.1.47.1.1.1.1.16";
 
 /// Walk the two ENTITY-MIB relations that attach a physical entity to an interface.
 async fn walk_entity_index(

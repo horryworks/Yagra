@@ -57,6 +57,15 @@
   because the 32-bit gauge saturates there and is refused. Measured across 22 lab devices, 8 of 231
   live ports had a speed; the rest were blank for this reason. Utilization percentages that depend
   on the speed return with it.
+- **The Transceiver column no longer shows things that are not transceivers.** ENTITY-MIB describes
+  every component, and a port's entity is usually the port itself. Text that merely restated the
+  port's name was already dropped, but text that was *different* and still said nothing about a
+  module was not: the running deployment was showing `Linecard-Port` on 54 Nexus ports, `Port` on
+  53 Huawei ports, `Ethernet Port, Vitual Domain: root` on 47 FortiGate ports, `N/A`, and — on an
+  IOS-XR router — `Transceiver Rx Power Sensor`, which is the name of a **sensor**. A component is
+  now taken for a module only if the device marks it field-replaceable or the text carries a rate or
+  part number. Real modules are unaffected; `GLC-SX-MMD`, `SFP-H10GB-CU1M` and Huawei's
+  `10000Mb/s-…-Copper Pigtail` all still show.
 
 - **Optical: a port with no transceiver no longer charts a reading.** Huawei reports `-1` on every
   column of an empty port and the poller scaled that to a flat **-0.01 dBm** line; the vendor-neutral

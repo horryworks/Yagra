@@ -97,8 +97,33 @@ pub fn media_by_ifindex(rows: &[SnmpInstanceRow]) -> (BTreeMap<u32, MediaRow>, V
 ///
 /// Comparison is case- and whitespace-insensitive: a vendor that writes `GE0/0/1` in one column and
 /// `ge0/0/1 ` in the other is saying the same nothing twice.
+/// 🚨 **A second rule was needed, and only a live deployment showed why.** Dropping a description
+/// that equals the entity's own name is not enough: most devices describe the *port* with a string
+/// that is merely *different* from its name and still says nothing about a module. Measured on the
+/// running deployment, `transceiver_model` had been filled with `"Linecard-Port"` on 54 Nexus
+/// ports, `"Port"` on 53 Huawei ports, `"Ethernet Port, Vitual Domain: root"` on 47 FortiGate
+/// ports, `"N/A"` and — worst — `"Transceiver Rx Power Sensor"`, which is a **sensor's** name, on
+/// IOS-XR. An operator reading that column was being told a part number that does not exist.
+///
+/// The guard is [`ENT_PHYSICAL_IS_FRU`]: a pluggable is field-replaceable, a soldered-down port is
+/// not. Measured across eight captures it separates them 7/8 —
+///
+/// | device | isFRU | text | verdict |
+/// |---|---|---|---|
+/// | c9500X / 2960X / c9400 | true | `SFP-H10GB-CU1M`, `GLC-SX-MMD`, `SFP-10G-AOC2M` | kept ✓ |
+/// | N9K / IOS-XR / FortiGate / S5720 | false | `Linecard-Port`, `N/A`, `Port` | dropped ✓ |
+/// | NE8000 | false | `10000Mb/s-1200nm-Copper Pigtail-10m` | a **real** module marked not-FRU ✗ |
+///
+/// ⚠️ So `isFRU = false` is **not** proof of "no module" — one vendor gets it wrong — and rejecting
+/// on it alone would lose a genuine part string. The second half of the rule catches that case: a
+/// part number or a rate always contains a **digit**, and every noise string measured above contains
+/// none. Both halves are needed; either alone is wrong on real data.
 #[must_use]
-pub fn entity_text(rows: &[SnmpInstanceRow], name_oid: &str) -> BTreeMap<u32, String> {
+pub fn entity_text(
+    rows: &[SnmpInstanceRow],
+    name_oid: &str,
+    fru_oid: &str,
+) -> BTreeMap<u32, String> {
     let read = |row: &SnmpInstanceRow| -> Option<(u32, String)> {
         let &ent = row.instance.first()?;
         let SnmpValue::Bytes(bytes) = &row.value else {
@@ -109,6 +134,15 @@ pub fn entity_text(rows: &[SnmpInstanceRow], name_oid: &str) -> BTreeMap<u32, St
     };
     let fold = |s: &str| s.trim().to_ascii_lowercase();
 
+    // `entPhysicalIsFRU`: true(1) / false(2). Absent is treated as "not stated", which falls to the
+    // digit rule rather than to either extreme.
+    let mut is_fru: BTreeMap<u32, bool> = BTreeMap::new();
+    for row in rows.iter().filter(|r| r.oid_base == fru_oid) {
+        if let (Some(&ent), SnmpValue::Int(v)) = (row.instance.first(), &row.value) {
+            is_fru.insert(ent, *v == 1);
+        }
+    }
+
     let mut names: BTreeMap<u32, String> = BTreeMap::new();
     for row in rows.iter().filter(|r| r.oid_base == name_oid) {
         if let Some((ent, text)) = read(row) {
@@ -117,11 +151,20 @@ pub fn entity_text(rows: &[SnmpInstanceRow], name_oid: &str) -> BTreeMap<u32, St
     }
 
     let mut out: BTreeMap<u32, String> = BTreeMap::new();
-    for row in rows.iter().filter(|r| r.oid_base != name_oid) {
+    for row in rows
+        .iter()
+        .filter(|r| r.oid_base != name_oid && r.oid_base != fru_oid)
+    {
         let Some((ent, text)) = read(row) else {
             continue;
         };
         if names.get(&ent).is_some_and(|n| fold(n) == fold(&text)) {
+            continue;
+        }
+        // See the 🚨 above: field-replaceable, or bearing a digit. Neither test alone survives the
+        // measured data.
+        if !is_fru.get(&ent).copied().unwrap_or(false) && !text.chars().any(|c| c.is_ascii_digit())
+        {
             continue;
         }
         // Keep the longer candidate: `entPhysicalModelName` is usually the part number and
@@ -193,6 +236,16 @@ mod tests {
     const NAME_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.7";
     /// `entPhysicalModelName` — a candidate.
     const MODEL_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.13";
+    /// `entPhysicalIsFRU` — walked beside the describing columns, and a yardstick like NAME_OID.
+    const FRU_OID: &str = "1.3.6.1.2.1.47.1.1.1.1.16";
+
+    fn fru_row(ent: u32, yes: bool) -> SnmpInstanceRow {
+        SnmpInstanceRow {
+            oid_base: FRU_OID.to_owned(),
+            instance: vec![ent],
+            value: SnmpValue::Int(if yes { 1 } else { 2 }),
+        }
+    }
 
     fn text_row(ent: u32, text: &str) -> SnmpInstanceRow {
         row_on(MODEL_OID, ent, text)
@@ -265,6 +318,7 @@ mod tests {
                 text_row(102, "  "),
             ],
             NAME_OID,
+            FRU_OID,
         );
         assert_eq!(got[&101], "SFP-1000BaseLX transceiver");
         assert!(!got.contains_key(&102), "blank text is not an answer");
@@ -291,17 +345,96 @@ mod tests {
                 row_on(MODEL_OID, 103, "SFP-1000BaseLX"),
             ],
             NAME_OID,
+            FRU_OID,
         );
         assert!(!got.contains_key(&101), "port name is not a part number");
         assert!(!got.contains_key(&102), "case/space folded comparison");
         assert_eq!(got[&103], "SFP-1000BaseLX");
     }
 
+    /// 🚨 The second defect a live deployment showed, one increment after the first.
+    ///
+    /// These are the exact strings the running box was storing as transceiver models. None is a
+    /// part number; the last is a **sensor's** name. Every one is *different* from the port's own
+    /// name, so the earlier rule let all of them through.
+    #[test]
+    fn a_description_of_the_port_is_not_a_module_even_when_it_differs_from_the_name() {
+        let noise = [
+            (201u32, "Linecard-1 Port-1", "Linecard-Port"), // Nexus, 54 ports
+            (202, "GigabitEthernet0/0/1", "Port"),          // Huawei S5720, 53 ports
+            (203, "mgmt1", "Ethernet Port, Vitual Domain: root"), // FortiGate, 47 ports
+            (204, "TenGigE0/0/0/1", "N/A"),                 // IOS-XR
+            (205, "TenGigE0/7/0/0", "Transceiver Rx Power Sensor"), // IOS-XR: a SENSOR name
+        ];
+        let mut rows = Vec::new();
+        for (ent, name, text) in noise {
+            rows.push(row_on(NAME_OID, ent, name));
+            rows.push(row_on(MODEL_OID, ent, text));
+            rows.push(fru_row(ent, false));
+        }
+        let got = entity_text(&rows, NAME_OID, FRU_OID);
+        assert!(
+            got.is_empty(),
+            "none of these is a part number; got {got:?}",
+        );
+    }
+
+    /// ⚠️ …and the accepting half, which is what stops the rule above from being "reject
+    /// everything". Both of these are real strings from real devices, and each survives by a
+    /// *different* clause — which is the point: neither clause alone is enough.
+    #[test]
+    fn a_replaceable_module_survives_and_so_does_a_part_string_with_a_rate_in_it() {
+        let got = entity_text(
+            &[
+                // Field-replaceable, and no digit anywhere in the text: kept by isFRU alone.
+                // Cisco 2960X, measured.
+                row_on(NAME_OID, 301, "GigabitEthernet1/0/52"),
+                row_on(MODEL_OID, 301, "GLC-SX-MMD"),
+                fru_row(301, true),
+                // NOT flagged replaceable — the vendor is wrong — but unmistakably a module.
+                // Huawei NE8000, measured. Rejecting on isFRU alone would lose this.
+                row_on(NAME_OID, 302, "GigabitEthernet0/8/0"),
+                row_on(
+                    MODEL_OID,
+                    302,
+                    "10000Mb/s-1200nm-Copper Pigtail-10m(0.05mm)",
+                ),
+                fru_row(302, false),
+                // Replaceable and digit-bearing — the ordinary case. Cisco c9500X, measured.
+                row_on(NAME_OID, 303, "FiftyGigE1/0/1"),
+                row_on(MODEL_OID, 303, "SFP-H10GB-CU1M"),
+                fru_row(303, true),
+            ],
+            NAME_OID,
+            FRU_OID,
+        );
+        assert_eq!(got[&301], "GLC-SX-MMD", "kept by isFRU with no digit");
+        assert_eq!(
+            got[&302], "10000Mb/s-1200nm-Copper Pigtail-10m(0.05mm)",
+            "kept by the digit rule despite isFRU=false",
+        );
+        assert_eq!(got[&303], "SFP-H10GB-CU1M");
+    }
+
+    /// The FRU column must never become an answer itself.
+    ///
+    /// Same trap as `entPhysicalName`: it is walked alongside the describing columns, so without an
+    /// explicit exclusion the integer `1` would be read as a candidate part number.
+    #[test]
+    fn the_fru_column_is_never_itself_a_candidate() {
+        let got = entity_text(
+            &[row_on(NAME_OID, 401, "Gi1/0/1"), fru_row(401, true)],
+            NAME_OID,
+            FRU_OID,
+        );
+        assert!(got.is_empty(), "isFRU is a yardstick, not a description");
+    }
+
     #[test]
     fn the_name_column_is_never_itself_a_candidate() {
         // Even with no describing column at all, `entPhysicalName` must not become the answer —
         // otherwise the rule above is trivially defeated by a device that only implements .7.
-        let got = entity_text(&[row_on(NAME_OID, 101, "GE0/0/1")], NAME_OID);
+        let got = entity_text(&[row_on(NAME_OID, 101, "GE0/0/1")], NAME_OID, FRU_OID);
         assert!(got.is_empty());
     }
 
