@@ -58,7 +58,9 @@
     "resize": "{{name}} のサイズを変更",
     "resizeHint": "ドラッグでサイズ変更（矢印キーも可）",
     "sizeReadout": "{{w}} × {{h}}",
-    "sizeAnnounce": "幅 12 分割中 {{w}}、高さ {{h}} 行"
+    "sizeAnnounce": "幅 12 分割中 {{w}}、高さ {{h}} 行",
+    "nameAria": "この「{{name}}」カードの名前",
+    "namePlaceholder": "このカードの名前…"
   },
   "catalog": {
     "title": "ウィジェットを追加",

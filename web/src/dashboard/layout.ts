@@ -49,6 +49,68 @@ export function clampRowSpan(type: string, rowSpan: number, reg: RegistryView): 
   return allowed.reduce((best, r) => (Math.abs(r - rowSpan) < Math.abs(best - rowSpan) ? r : best));
 }
 
+/** Longest operator-given widget name kept. A card header is one line at `--font-md`; past this the
+ *  name pushes the edit controls off the row and stops being readable anyway. */
+export const WIDGET_TITLE_MAX = 60;
+
+/**
+ * Normalize an operator-given widget name: trim it, drop anything that is not a non-empty string,
+ * and cap the length.
+ *
+ * The check lives here rather than on the input, because the layout document is user-editable JSON
+ * that round-trips through localStorage and the server — `maxLength` on a text box is a
+ * convenience, not a defence. A blank or whitespace-only name is `undefined`, which is what makes
+ * clearing the box the way to go back to the definition's title.
+ */
+export function normalizeWidgetTitle(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const t = raw.trim();
+  return t === '' ? undefined : t.slice(0, WIDGET_TITLE_MAX);
+}
+
+/** Return `w` carrying `title`, or with the field stripped when there is no name. Absent-when-unset
+ *  keeps an un-renamed board's JSON byte-identical to what it was before ADR-071. */
+function withTitle(w: WidgetInstance, title: string | undefined): WidgetInstance {
+  if (title === undefined) {
+    const next = { ...w };
+    delete next.title;
+    return next;
+  }
+  return { ...w, title };
+}
+
+/** Separator between a widget's type and its own name. The same mark this product already uses to
+ *  join two different things on one line (`node · interface`) — one such convention, not two. */
+export const TITLE_SEP = ' · ';
+
+/**
+ * A card's heading, split in two so the frame can style them differently.
+ *
+ * The operator's name sits BESIDE the definition's title rather than replacing it (ADR-071
+ * decision 0): the type is the only word a card and the catalogue share, so replacing it trades
+ * "what widget is this" for "what is it showing" when both fit.
+ */
+export function widgetHeading(
+  w: WidgetInstance,
+  defaultTitle: string,
+): { base: string; own?: string } {
+  return { base: defaultTitle, own: normalizeWidgetTitle(w.title) };
+}
+
+/**
+ * The same heading as one string, for the aria-labels that name the card ("Remove …", "Drag …",
+ * "Resize …").
+ *
+ * Built from {@link widgetHeading} rather than beside it, because the split is a presentation
+ * detail: a screen reader must hear what the screen shows. Passing only the operator's name would
+ * announce one thing where two are drawn, and passing only the type leaves six cards
+ * indistinguishable — which is the problem this ADR exists to fix.
+ */
+export function widgetLabel(w: WidgetInstance, defaultTitle: string): string {
+  const { base, own } = widgetHeading(w, defaultTitle);
+  return own ? `${base}${TITLE_SEP}${own}` : base;
+}
+
 /** Return `w` carrying `rowSpan`, or with the field stripped when it's standard (1). Keeping the
  *  field absent for standard height means untouched/old widgets serialize exactly as before. */
 function withRowSpan(w: WidgetInstance, rowSpan: RowSpan): WidgetInstance {
@@ -91,9 +153,11 @@ export function sanitizeWidgets(rawWidgets: unknown, reg: RegistryView): WidgetI
       typeof e.rowSpan === 'number' ? e.rowSpan : reg.defaultRowSpanFor(e.type),
       reg,
     );
+    const title = normalizeWidgetTitle(e.title);
     widgets.push({
       instanceId: id,
       type: e.type,
+      ...(title !== undefined ? { title } : {}),
       span: clampSpan(e.type, typeof e.span === 'number' ? e.span : reg.defaultSpanFor(e.type), reg),
       ...(rowSpan > 1 ? { rowSpan } : {}),
       settings:
@@ -240,6 +304,18 @@ export function removeBoard(boards: Board[], id: string): Board[] {
 }
 
 /** Rename one board (no-op if `id` is absent). */
+/** Rename one placed widget (no-op if `instanceId` is absent). A blank name clears it, so the card
+ *  falls back to the definition's title — see {@link normalizeWidgetTitle}. */
+export function renameWidgetById(
+  widgets: WidgetInstance[],
+  instanceId: string,
+  title: string,
+): WidgetInstance[] {
+  return widgets.map((w) =>
+    w.instanceId === instanceId ? withTitle(w, normalizeWidgetTitle(title)) : w,
+  );
+}
+
 export function renameBoard(boards: Board[], id: string, name: string): Board[] {
   return boards.map((b) => (b.id === id ? { ...b, name } : b));
 }

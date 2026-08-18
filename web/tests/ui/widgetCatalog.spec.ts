@@ -271,3 +271,102 @@ test.describe('with a link already plotted', () => {
     expect(seriesCalls(), 'flipping the unit re-queried the store').toBe(before);
   });
 });
+
+// 🚨 Layout, and specifically the kind of layout bug nothing else in this repo can see: tsc does not
+// read CSS and Vitest runs with no layout engine.
+//
+// The add row's controls overlapped on the real deployment — `NodePicker`'s `.nodepick-control`
+// carries `min-width: 180px`, which is wider than the flex track it was given, so it spilled over
+// the interface select and covered the interface name. `.metricchart-actions` overrides that same
+// rule for the same reason; this widget did not.
+//
+// ⚠️ The first version of this test asserted only that each control sat inside the PANEL, and it
+// passed while the bug was on screen: the overflowing element was `.nodepick-control`, which is
+// inside the panel and merely outside its own parent. A containment check that does not name the
+// element that overflows is a check that cannot fail. Assert what the operator actually lost —
+// the select being covered — and assert the parent/child relation directly.
+test('the picker controls do not overlap each other', async ({ page }) => {
+  await openCatalog(page);
+  await card(page, 'Interface traffic').click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+  await page.getByRole('button', { name: 'Done' }).click();
+  await page.locator('.iftraffic-trigger').first().click();
+
+  const pop = page.locator('.apop.iftraffic-pop');
+  await expect(pop).toBeVisible({ timeout: 15_000 });
+  const box = async (sel: string) => {
+    const b = await pop.locator(sel).first().boundingBox();
+    expect(b, `${sel} has no box`).not.toBeNull();
+    return b!;
+  };
+
+  const panel = (await pop.boundingBox())!;
+  const node = await box('.iftraffic-node');
+  const control = await box('.nodepick-control');
+  const select = await box('select');
+  const add = await box('.btn');
+
+  // The node picker's inner control must fit the slot it was given. This is the assertion that
+  // fails when the shared `min-width: 180px` is not overridden.
+  expect(
+    control.x + control.width,
+    'the node picker control overflows its own wrapper',
+  ).toBeLessThanOrEqual(node.x + node.width + 1);
+
+  // Nothing covers the interface select.
+  //
+  // ⚠️ Overlap is a two-axis question, and asserting it on x alone is wrong in a way that looks
+  // right: the controls are stacked, so the select legitimately starts to the LEFT of the node
+  // picker's right edge while sitting on the row below it. Test the actual rectangle intersection
+  // so the assertion survives the layout being changed again.
+  const overlaps = (a: typeof control, b: typeof select) =>
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+  expect(overlaps(control, select), 'the node picker covers the interface select').toBe(false);
+
+  // And it is wide enough to show a name rather than just its caret — `GigabitEthernet0/0/1` is an
+  // ordinary interface name on the devices this monitors.
+  expect(select.width, 'the interface select is too narrow to read a name').toBeGreaterThan(140);
+
+  // And everything is still inside the panel it was drawn in.
+  for (const [name, b] of [['add row', await box('.iftraffic-add')], ['select', select], ['add button', add]] as const) {
+    expect(b.x, `${name} starts left of the panel`).toBeGreaterThanOrEqual(panel.x - 1);
+    expect(b.x + b.width, `${name} overflows the panel`).toBeLessThanOrEqual(panel.x + panel.width + 1);
+  }
+});
+
+// Per-card names (ADR-071). The decisive assertion is that the widget TYPE survives: the name is
+// drawn beside it, never instead of it, and a test that only looked for the operator's words would
+// pass just as well against the replace-the-heading design this ADR started as and abandoned.
+test('a placed card can be given its own name beside the type', async ({ page, errors }) => {
+  await openCatalog(page);
+  await card(page, 'Interface traffic').click();
+  await page.locator('.modal').getByRole('button', { name: 'Done' }).click();
+
+  const cell = page.locator('.mydash-cell').first();
+  // Still in Customize, which is where the rename box lives.
+  const box = cell.locator('.widgetframe-name');
+  await expect(box).toBeVisible();
+  await box.fill('HQ uplink');
+  await box.press('Enter');
+
+  // Leave edit mode: the box becomes text, and both halves are on screen.
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(cell.locator('.widgetframe-kind')).toHaveText('Interface traffic');
+  await expect(cell.locator('.widgetframe-own')).toHaveText('HQ uplink');
+
+  // The controls that name this card announce the same line the screen shows — neither the type
+  // alone (six cards would sound identical) nor the name alone (the screen shows two things).
+  await page.getByRole('button', { name: 'Customize' }).click();
+  await expect(
+    cell.getByRole('button', { name: 'Remove Interface traffic · HQ uplink' }),
+  ).toBeVisible();
+
+  // Clearing the box is the undo: the type is left standing on its own.
+  await cell.locator('.widgetframe-name').fill('');
+  await cell.locator('.widgetframe-name').press('Enter');
+  await page.getByRole('button', { name: 'Done' }).click();
+  await expect(cell.locator('.widgetframe-kind')).toHaveText('Interface traffic');
+  await expect(cell.locator('.widgetframe-own')).toHaveCount(0);
+
+  expect(errors.uncaught).toEqual([]);
+});

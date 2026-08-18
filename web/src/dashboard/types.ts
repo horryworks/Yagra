@@ -70,6 +70,17 @@ export interface WidgetDefinition {
 export interface WidgetInstance {
   instanceId: string;
   type: string;
+  /** Operator-given name for THIS card, shown instead of the definition's title (ADR-071).
+   *
+   *  On the instance rather than in `settings` on purpose: the bag below is documented as opaque to
+   *  everything but the owning widget, and the title is rendered by the *frame*. Putting it there
+   *  would make the frame read a bag it is told not to read, and would leave 48 widgets agreeing on
+   *  a key name by convention instead of by type.
+   *
+   *  Absent when unnamed, so a board nobody has renamed serializes exactly as before — the same
+   *  reason `rowSpan` is stripped at its default. Clearing the field is how a rename is undone;
+   *  there is deliberately no separate reset. */
+  title?: string;
   span: Span;
   /** Stepped height. Absent ⇒ 1 (standard). Only present when the user picked a taller size, so a
    *  standard-height widget serializes lean and old (pre-height) docs load unchanged. */

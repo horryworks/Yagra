@@ -18,6 +18,16 @@
   checkbox on the scan form, off by default.
 
 ### New Features
+- **Every dashboard card can be given a name of your own.** Customize the board and the card's
+  heading gains a text box: type "HQ uplink" and the card reads *Interface traffic · HQ uplink*.
+  The widget type stays put beside it, so a card still says what kind of thing it is — which is the
+  word it shares with the widget catalogue. Clearing the box removes the name again.
+  - It applies to all forty-eight widgets. None of them limits how many copies you may place, so
+    two cards of the same type on one board were previously indistinguishable — most visibly for
+    the ones whose contents you choose (Metric chart, Top nodes by metric, Latest events,
+    Interface traffic).
+  - The remove, drag and resize controls announce the full heading, so a screen reader can tell six
+    cards of one type apart.
 - **A dashboard widget for the specific links you watch.** Capacity ▸ *Interface traffic* plots up
   to six interfaces you name, and they may live on different nodes — so an uplink and its backup
   can be compared on one chart instead of in two browser tabs. Receive is drawn above the zero line

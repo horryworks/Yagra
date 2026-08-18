@@ -215,3 +215,65 @@
     display: none;
   }
 }
+/* Heading (ADR-071): the widget type, then the operator's name beside it. The two are styled apart
+   on purpose — one long string in one treatment reads as a single name, and then the card has lost
+   the word it shares with the catalogue. The type keeps the small-caps label look `.card-title`
+   gives every card; the name is set in body colour and not uppercased, because it is the
+   operator's own words rather than a category. */
+.widgetframe-title {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.widgetframe-kind {
+  flex: none;
+}
+
+.widgetframe-own {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  text-transform: none;
+  letter-spacing: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Its own element, not a `::before` — in edit mode it precedes an <input>, and a replaced element
+   generates no pseudo-elements. Keeping it out of the name string also means an unnamed card
+   carries no stray mark. */
+.widgetframe-sep {
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+/* The rename box. It sits in the heading beside the type, inherits that row's type treatment, and
+   shows a border only on hover/focus so edit mode is not a row of empty boxes. */
+.widgetframe-name {
+  flex: 1;
+  min-width: 0;
+  padding: 1px 4px;
+  font: inherit;
+  color: var(--text-primary);
+  text-transform: none;
+  letter-spacing: normal;
+  background: none;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+}
+
+.widgetframe-name::placeholder {
+  color: var(--text-tertiary);
+  text-transform: none;
+}
+
+.widgetframe-name:hover {
+  border-color: var(--border-color);
+}
+
+.widgetframe-name:focus {
+  border-color: var(--accent-color);
+  outline: none;
+}

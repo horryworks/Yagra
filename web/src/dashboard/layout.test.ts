@@ -18,8 +18,13 @@ import {
   setSettingsById,
   setSizeById,
   type RegistryView,
+  normalizeWidgetTitle,
+  renameWidgetById,
+  widgetHeading,
+  widgetLabel,
+  WIDGET_TITLE_MAX,
 } from './layout';
-import type { Board, WidgetInstance } from './types';
+import type { Board, RowSpan, Span, WidgetInstance } from './types';
 
 // Fake registry: type `a` allows spans 4/6 (default 4) and heights 1/2 (default 1); `b` allows only
 // span 12 (default 12) and is fixed-height (only 1).
@@ -257,5 +262,136 @@ describe('list mutators', () => {
     expect(countOfType(base, 'a')).toBe(2);
     expect(countOfType(base, 'b')).toBe(1);
     expect(countOfType(base, 'c')).toBe(0);
+  });
+});
+
+// ── Per-widget names (ADR-071) ──────────────────────────────────────────────
+//
+// The name is drawn BESIDE the type, never instead of it, so every assertion here checks both
+// halves. A test that only looked at the operator's name would pass just as well against the
+// replace-the-heading design this ADR started as and then abandoned.
+
+const named = (title?: string): WidgetInstance => ({
+  instanceId: 'w1',
+  type: 'metric-chart',
+  span: 6,
+  ...(title !== undefined ? { title } : {}),
+});
+
+describe('normalizeWidgetTitle', () => {
+  it('keeps a real name, trimmed', () => {
+    expect(normalizeWidgetTitle('  HQ uplink  ')).toBe('HQ uplink');
+  });
+
+  it('treats blank and whitespace-only as no name', () => {
+    // This is what makes "clear the box" the way to undo a rename — there is no separate reset.
+    expect(normalizeWidgetTitle('')).toBeUndefined();
+    expect(normalizeWidgetTitle('   ')).toBeUndefined();
+  });
+
+  it('drops anything that is not a string', () => {
+    // The layout document is user-editable JSON that round-trips through localStorage and the
+    // server, so a number or an object here is a shape that can actually arrive.
+    for (const v of [42, null, undefined, {}, ['a'], true]) {
+      expect(normalizeWidgetTitle(v)).toBeUndefined();
+    }
+  });
+
+  it('caps the length, because the input’s maxLength is a convenience and not a defence', () => {
+    const long = 'x'.repeat(WIDGET_TITLE_MAX + 40);
+    expect(normalizeWidgetTitle(long)).toHaveLength(WIDGET_TITLE_MAX);
+  });
+});
+
+describe('widgetHeading / widgetLabel', () => {
+  it('shows the type alone when the widget has no name', () => {
+    expect(widgetHeading(named(), 'Metric chart')).toEqual({ base: 'Metric chart', own: undefined });
+    expect(widgetLabel(named(), 'Metric chart')).toBe('Metric chart');
+  });
+
+  it('keeps the type and adds the name beside it', () => {
+    // 🚨 The `base` assertion is the point of this test. The name must not replace the type: it is
+    // the only word a placed card and the catalogue share.
+    expect(widgetHeading(named('HQ uplink'), 'Metric chart')).toEqual({
+      base: 'Metric chart',
+      own: 'HQ uplink',
+    });
+    expect(widgetLabel(named('HQ uplink'), 'Metric chart')).toBe('Metric chart · HQ uplink');
+  });
+
+  it('applies the same normalization the store does, so a hand-edited doc cannot bypass it', () => {
+    expect(widgetHeading(named('   '), 'Metric chart').own).toBeUndefined();
+    expect(widgetLabel(named('  HQ  '), 'Metric chart')).toBe('Metric chart · HQ');
+  });
+
+  it('says on one line exactly what the split says in two', () => {
+    // The split exists only so the frame can style the halves differently; a screen reader has to
+    // hear what the screen shows (ADR-071 decision 6).
+    for (const title of [undefined, 'HQ uplink', '  ']) {
+      const h = widgetHeading(named(title), 'Metric chart');
+      const parts = widgetLabel(named(title), 'Metric chart').split(' · ');
+      expect(parts[0]).toBe(h.base);
+      expect(parts[1]).toBe(h.own);
+    }
+  });
+});
+
+describe('renameWidgetById', () => {
+  const base: WidgetInstance[] = [
+    { instanceId: 'a', type: 'x', span: 6 },
+    { instanceId: 'b', type: 'y', span: 6, title: 'old' },
+  ];
+
+  it('names the widget it was asked for and leaves the others alone', () => {
+    const next = renameWidgetById(base, 'a', 'HQ uplink');
+    expect(next[0].title).toBe('HQ uplink');
+    expect(next[1].title).toBe('old');
+  });
+
+  it('removes the field entirely when cleared, so an unnamed board serializes as it did before', () => {
+    const next = renameWidgetById(base, 'b', '   ');
+    expect('title' in next[1]).toBe(false);
+    expect(JSON.stringify(next[1])).not.toContain('title');
+  });
+
+  it('is a no-op for an unknown instance', () => {
+    expect(renameWidgetById(base, 'nope', 'x')).toEqual(base);
+  });
+});
+
+describe('sanitizeWidgets and the widget name', () => {
+  // Its own stub: the shared one above only knows types 'a' and 'b', and an unknown type is
+  // dropped before the title is ever looked at — which would make these pass for the wrong reason.
+  const anyType: RegistryView = {
+    isKnownType: () => true,
+    allowedSpansFor: () => [4, 6, 8, 12] as Span[],
+    defaultSpanFor: () => 6 as Span,
+    allowedRowSpansFor: () => [1] as RowSpan[],
+    defaultRowSpanFor: () => 1 as RowSpan,
+  };
+
+  it('keeps a valid name and normalizes it on the way in', () => {
+    const out = sanitizeWidgets([{ instanceId: 'a', type: 'x', span: 6, title: '  HQ  ' }], anyType);
+    expect(out[0].title).toBe('HQ');
+  });
+
+  it('drops a malformed one rather than storing it', () => {
+    // The load path is the last place this can be caught: everything downstream renders it.
+    const out = sanitizeWidgets(
+      [
+        { instanceId: 'a', type: 'x', span: 6, title: 42 },
+        { instanceId: 'b', type: 'x', span: 6, title: '   ' },
+        { instanceId: 'c', type: 'x', span: 6, title: 'z'.repeat(200) },
+      ],
+      anyType,
+    );
+    expect('title' in out[0]).toBe(false);
+    expect('title' in out[1]).toBe(false);
+    expect(out[2].title).toHaveLength(WIDGET_TITLE_MAX);
+  });
+
+  it('leaves an unnamed widget without the field', () => {
+    const out = sanitizeWidgets([{ instanceId: 'a', type: 'x', span: 6 }], anyType);
+    expect('title' in out[0]).toBe(false);
   });
 });

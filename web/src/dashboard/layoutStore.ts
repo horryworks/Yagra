@@ -23,6 +23,7 @@ import {
   removeBoard,
   removeInstance,
   renameBoard,
+  renameWidgetById,
   reorderByIds,
   sanitizeLayout,
   setBoardWidgets,
@@ -82,6 +83,8 @@ export interface LayoutStore {
   reorder: (orderedIds: string[]) => void;
   setSize: (instanceId: string, span: number, rowSpan: number) => void;
   setSettings: (instanceId: string, patch: WidgetSettings) => void;
+  /** Give one placed widget its own name; a blank one clears it (ADR-071). */
+  renameWidget: (instanceId: string, title: string) => void;
   resetToDefault: () => void;
   // Board actions.
   setActiveBoard: (id: string) => void;
@@ -242,6 +245,9 @@ export function createLayoutStore(config: LayoutStoreConfig) {
 
       setSettings: (instanceId, patch) =>
         applyWidgets(setSettingsById(get().widgets, instanceId, patch)),
+
+      renameWidget: (instanceId, title) =>
+        applyWidgets(renameWidgetById(get().widgets, instanceId, title)),
 
       // Reset just the *active* board to the default widget set.
       resetToDefault: () =>

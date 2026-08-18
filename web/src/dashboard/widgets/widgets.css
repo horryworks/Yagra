@@ -346,23 +346,42 @@ html[data-viewport='mobile'] .iftraffic-actions select {
   color: var(--status-critical);
 }
 
+/* The add controls stack rather than sharing one row. Three controls across a 320px popover leaves
+   the interface select too narrow to read a port name, and `GigabitEthernet0/0/1` is an ordinary
+   name on the devices this monitors. */
 .iftraffic-add {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--space-1);
   min-width: 0;
   padding-top: var(--space-2);
   border-top: var(--border-width) solid var(--border-color);
 }
 
-.iftraffic-add .iftraffic-node {
+/* ⚠️ `NodePicker` puts `min-width: 180px` on its own control — a floor sized for a page toolbar,
+   not for a popover. Without this override it spills out of the track it is given here and covers
+   whatever sits to its right, which is how the interface name became unreadable. The identical
+   override exists on `.metricchart-actions`; a third call site will need it too. */
+.iftraffic-add .iftraffic-node,
+.iftraffic-add .iftraffic-node .nodepick-control {
+  min-width: 0;
+}
+
+/* Interface + Add share the second row: the button is a fixed width, the select takes the rest. */
+.iftraffic-pick {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.iftraffic-pick select {
   flex: 1;
   min-width: 0;
 }
 
-.iftraffic-add select {
-  flex: 1;
-  min-width: 0;
+.iftraffic-pick .btn {
+  flex: none;
 }
 
 /* Touch targets stay at the 40px floor for in-row controls under the mobile shell. */
@@ -371,6 +390,3 @@ html[data-viewport='mobile'] .iftraffic-rm {
   height: 40px;
 }
 
-html[data-viewport='mobile'] .iftraffic-add {
-  flex-wrap: wrap;
-}

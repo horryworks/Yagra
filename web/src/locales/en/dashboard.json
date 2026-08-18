@@ -58,7 +58,9 @@
     "resize": "Resize {{name}}",
     "resizeHint": "Drag to resize (arrow keys also work)",
     "sizeReadout": "{{w}} × {{h}}",
-    "sizeAnnounce": "Width {{w}} of 12 columns, height {{h}} rows"
+    "sizeAnnounce": "Width {{w}} of 12 columns, height {{h}} rows",
+    "nameAria": "Rename this {{name}} card",
+    "namePlaceholder": "Name this card…"
   },
   "catalog": {
     "title": "Add a widget",

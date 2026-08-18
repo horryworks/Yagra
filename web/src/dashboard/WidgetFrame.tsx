@@ -6,12 +6,13 @@
 // the instance (or, mid-drag, the live `preview`) and maps to `.mydash-span-N` / `.mydash-rowspan-N`
 // classes on the cell.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useTranslation } from 'react-i18next';
 import { Card } from '../components/ui/Card';
 import { useLayoutStoreContext } from './LayoutStoreContext';
+import { widgetHeading, widgetLabel, WIDGET_TITLE_MAX } from './layout';
 import { getDefinition } from './registry';
 import { useResizeHandle } from './useResizeHandle';
 import type { WidgetDefinition, WidgetInstance, WidgetSettings } from './types';
@@ -27,6 +28,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
   const setSize = useStore((s) => s.setSize);
   const removeWidget = useStore((s) => s.removeWidget);
   const setSettingsAction = useStore((s) => s.setSettings);
+  const renameWidget = useStore((s) => s.renameWidget);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: instance.instanceId,
     disabled: !editing,
@@ -47,13 +49,18 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
   const rowSpan = preview?.rowSpan ?? instance.rowSpan ?? 1;
   const resizable = def.allowedSpans.length > 1 || (def.allowedRowSpans?.length ?? 0) > 1;
 
+  // The heading, split for display and joined for the labels. Both come from one resolver so the
+  // screen and the screen reader cannot describe this card differently (ADR-071 decisions 0 and 6).
+  const heading = widgetHeading(instance, t(def.title));
+  const name = widgetLabel(instance, t(def.title));
+
   const actions = editing ? (
     <span className="widgetframe-edit">
       <button
         type="button"
         className="widgetframe-remove"
         onClick={() => removeWidget(instance.instanceId)}
-        aria-label={t('widgetFrame.remove', { name: t(def.title) })}
+        aria-label={t('widgetFrame.remove', { name })}
         title={t('common:actions.remove')}
       >
         ×
@@ -61,7 +68,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
       <button
         type="button"
         className="widgetframe-handle"
-        aria-label={t('widgetFrame.drag', { name: t(def.title) })}
+        aria-label={t('widgetFrame.drag', { name })}
         title={t('widgetFrame.dragTitle')}
         {...attributes}
         {...listeners}
@@ -88,7 +95,34 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         .filter(Boolean)
         .join(' ')}
     >
-      <Card title={t(def.title)} actions={actions}>
+      <Card
+        title={
+          <span className="widgetframe-title">
+            <span className="widgetframe-kind">{heading.base}</span>
+            {/* The separator is an element rather than a `::before`, because in edit mode the thing
+                it precedes is an <input> — a replaced element, which generates no pseudo-elements.
+                Keeping it out of the name string also means an unnamed card carries no stray mark
+                and nobody copies one out of the box. `aria-hidden` because `widgetLabel` already
+                puts the same character into the labels that name this card. */}
+            {(editing || heading.own) && (
+              <span className="widgetframe-sep" aria-hidden="true">
+                ·
+              </span>
+            )}
+            {editing ? (
+              <WidgetName
+                value={instance.title ?? ''}
+                aria={t('widgetFrame.nameAria', { name: heading.base })}
+                placeholder={t('widgetFrame.namePlaceholder')}
+                onCommit={(v) => renameWidget(instance.instanceId, v)}
+              />
+            ) : (
+              heading.own && <span className="widgetframe-own">{heading.own}</span>
+            )}
+          </span>
+        }
+        actions={actions}
+      >
         <Body instance={instance} setSettings={setSettings} />
       </Card>
 
@@ -96,7 +130,7 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         <button
           type="button"
           className="widgetframe-resize"
-          aria-label={t('widgetFrame.resize', { name: t(def.title) })}
+          aria-label={t('widgetFrame.resize', { name })}
           title={t('widgetFrame.resizeHint')}
           onFocus={() => setGripFocused(true)}
           onBlur={() => setGripFocused(false)}
@@ -116,5 +150,57 @@ export function WidgetFrame({ instance, editing }: { instance: WidgetInstance; e
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The card heading while the board is being edited: a text box carrying this card's own name.
+ *
+ * Committed on blur or Enter rather than per keystroke, for the reason `MetricTopActions` gives
+ * about its own field — every commit rewrites the layout document and re-renders the board, so
+ * `up` and `upl` would each cost one. Escape abandons the edit, which is the only way back to the
+ * previous name once a character has been typed.
+ *
+ * Empty is a real state, not a broken one: the type's name is drawn to its left either way, so a
+ * card with no name of its own reads exactly as it did before ADR-071.
+ */
+function WidgetName({
+  value,
+  aria,
+  placeholder,
+  onCommit,
+}: {
+  value: string;
+  aria: string;
+  placeholder: string;
+  onCommit: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  return (
+    <input
+      className="widgetframe-name"
+      type="text"
+      value={draft}
+      maxLength={WIDGET_TITLE_MAX}
+      placeholder={placeholder}
+      aria-label={aria}
+      title={aria}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => onCommit(draft)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          onCommit(draft);
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          // Stop here: the board's own Escape handling would otherwise read this as "leave edit
+          // mode" and take the abandoned draft with it.
+          e.stopPropagation();
+          setDraft(value);
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }

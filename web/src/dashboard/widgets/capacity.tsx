@@ -385,23 +385,27 @@ function LinkEditor({
             className="iftraffic-node"
             onChange={onPickNode}
           />
-          <Select
-            value={pickIfindex}
-            disabled={options.length === 0}
-            aria-label={t('widgets.ifTraffic.pickIfaceAria')}
-            title={t('widgets.ifTraffic.pickIfaceAria')}
-            onChange={(e) => onPickIfindex(e.target.value)}
-          >
-            <option value="">{placeholder()}</option>
-            {options.map((r) => (
-              <option key={r.ifindex} value={r.ifindex}>
-                {interfaceLabel(r.ifindex, r.if_name, r.if_alias)}
-              </option>
-            ))}
-          </Select>
-          <Button variant="primary" disabled={!pickIfindex} onClick={onAdd}>
-            {t('common:actions.add')}
-          </Button>
+          {/* The interface select and Add share the second row; the node picker has the first to
+              itself, because a node name is the longest thing in this panel. */}
+          <div className="iftraffic-pick">
+            <Select
+              value={pickIfindex}
+              disabled={options.length === 0}
+              aria-label={t('widgets.ifTraffic.pickIfaceAria')}
+              title={t('widgets.ifTraffic.pickIfaceAria')}
+              onChange={(e) => onPickIfindex(e.target.value)}
+            >
+              <option value="">{placeholder()}</option>
+              {options.map((r) => (
+                <option key={r.ifindex} value={r.ifindex}>
+                  {interfaceLabel(r.ifindex, r.if_name, r.if_alias)}
+                </option>
+              ))}
+            </Select>
+            <Button variant="primary" disabled={!pickIfindex} onClick={onAdd}>
+              {t('common:actions.add')}
+            </Button>
+          </div>
         </div>
       )}
     </div>
