@@ -27,7 +27,8 @@ use yagra_common::{
     builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
     builtin_neighbor_columns, builtin_routing_columns, route_probe_columns, route_probe_oid,
     CollectionItem, CollectionKind, DnsCheckConfig, HttpAuth, Node, NodeId, NodeKind, NodeRows,
-    OpticalFlavor, ProfileId, UrlCheckConfig, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
+    OpticalFlavor, ProfileId, UrlCheckConfig, METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM,
+    METRIC_IF_TX_POWER_DBM,
 };
 
 /// The effective polling interval (seconds) for a node: its profile's override if one is set, else
@@ -298,6 +299,7 @@ fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
                     flavor,
                     rx_metric: None,
                     tx_metric: None,
+                    temp_metric: None,
                 });
                 probes.last_mut().expect("just pushed")
             }
@@ -305,13 +307,18 @@ fn optical_probes(items: &[CollectionItem]) -> Vec<OpticalProbe> {
         match item.metric_name.as_str() {
             METRIC_IF_RX_POWER_DBM => probe.rx_metric = Some(item.metric_name.clone()),
             METRIC_IF_TX_POWER_DBM => probe.tx_metric = Some(item.metric_name.clone()),
+            // Not an optical reading — the chassis sensors in the same table (ADR-070). It shares
+            // the probe so the table is walked once; `optical_probes` groups by `flavor`, so a
+            // node carrying both the Cisco optical template and the temperature template lands
+            // both metric names on one probe.
+            METRIC_CISCO_TEMP_C => probe.temp_metric = Some(item.metric_name.clone()),
             // The API edge refuses any other name for an optical item; a row that predates that
             // rule (or arrived by config bundle) is skipped rather than published under a name
             // the poller has no reading for.
             _ => {}
         }
     }
-    probes.retain(|p| p.rx_metric.is_some() || p.tx_metric.is_some());
+    probes.retain(|p| p.rx_metric.is_some() || p.tx_metric.is_some() || p.temp_metric.is_some());
     probes
 }
 

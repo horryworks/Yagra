@@ -183,8 +183,110 @@ pub fn simple_dialect(flavor: OpticalFlavor) -> Option<SimpleDialect> {
             // the same class of marker passes for Huawei because it happens to be small.
             no_module: Some(2_147_483_647.0),
         }),
-        OpticalFlavor::EntitySensor => None,
+        OpticalFlavor::EntitySensor | OpticalFlavor::CiscoEntitySensor => None,
     }
+}
+
+// ── The correlated sensor-table dialects ───────────────────────────────────────────────
+
+/// `cesSensorType` — CISCO-ENTITY-SENSOR-MIB's column 1, the same quantity code as
+/// [`ENT_SENSOR_TYPE`] (Cisco's `SensorDataType` is where `dBm(14)` came from in the first place).
+pub const CISCO_SENSOR_TYPE: &str = "1.3.6.1.4.1.9.9.91.1.1.1.1.1";
+/// `cesSensorScale` — column 2.
+pub const CISCO_SENSOR_SCALE: &str = "1.3.6.1.4.1.9.9.91.1.1.1.1.2";
+/// `cesSensorPrecision` — column 3.
+pub const CISCO_SENSOR_PRECISION: &str = "1.3.6.1.4.1.9.9.91.1.1.1.1.3";
+/// `cesSensorValue` — column 4.
+pub const CISCO_SENSOR_VALUE: &str = "1.3.6.1.4.1.9.9.91.1.1.1.1.4";
+
+/// `entPhySensorType` value for a temperature in degrees Celsius.
+const SENSOR_TYPE_CELSIUS: i64 = 8;
+
+/// The plausible range of a chassis temperature reading, in degrees Celsius.
+///
+/// Same purpose as [`yagra_common::is_plausible_dbm`]: catch a scale that was applied wrongly.
+/// Measured chassis sensors sit between 31 and 53 °C; the window is wide enough that a cold room
+/// or a thermal event still reads, and narrow enough that a ×1000 error does not.
+const SENSOR_CELSIUS_MIN: f64 = -50.0;
+/// Upper end of [`SENSOR_CELSIUS_MIN`]'s window.
+const SENSOR_CELSIUS_MAX: f64 = 150.0;
+
+/// A dialect whose reading is spread across four correlated columns, selected by an entry OID.
+///
+/// The counterpart of [`SimpleDialect`]: there, one column is one reading. Here the raw integer in
+/// `value_oid` means nothing without the `type`, `scale` and `precision` rows that share its index,
+/// and the row's *identity* (which port, transmit or receive, or no port at all) comes from
+/// ENTITY-MIB entirely separately.
+///
+/// The two members differ **only in their OIDs** — the column offsets, the arithmetic and the
+/// free-text rules are identical, which is the whole reason Cisco support is a table of constants
+/// rather than a second implementation (ADR-070 decision 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SensorDialect {
+    /// Column 1 — the quantity code (`dBm(14)`, `celsius(8)`, …).
+    pub type_oid: &'static str,
+    /// Column 2 — the power-of-ten prefix.
+    pub scale_oid: &'static str,
+    /// Column 3 — decimal places carried by the raw integer.
+    pub precision_oid: &'static str,
+    /// Column 4 — the raw integer.
+    pub value_oid: &'static str,
+}
+
+/// The four columns for a correlated dialect, or `None` for the single-column ones.
+///
+/// Exactly one of [`simple_dialect`] and this returns `Some` for any flavour — the pair is what the
+/// poller dispatches on, and `every_flavor_is_served_by_exactly_one_dialect_kind` pins it.
+#[must_use]
+pub fn sensor_dialect(flavor: OpticalFlavor) -> Option<SensorDialect> {
+    match flavor {
+        OpticalFlavor::EntitySensor => Some(SensorDialect {
+            type_oid: ENT_SENSOR_TYPE,
+            scale_oid: ENT_SENSOR_SCALE,
+            precision_oid: ENT_SENSOR_PRECISION,
+            value_oid: ENT_SENSOR_VALUE,
+        }),
+        OpticalFlavor::CiscoEntitySensor => Some(SensorDialect {
+            type_oid: CISCO_SENSOR_TYPE,
+            scale_oid: CISCO_SENSOR_SCALE,
+            precision_oid: CISCO_SENSOR_PRECISION,
+            value_oid: CISCO_SENSOR_VALUE,
+        }),
+        OpticalFlavor::Huawei | OpticalFlavor::Juniper | OpticalFlavor::H3c => None,
+    }
+}
+
+/// Apply a sensor row's `scale` and `precision` to its raw integer.
+///
+/// Shared by every quantity this table can carry, because the arithmetic is a property of the MIB's
+/// encoding and not of what is being measured. What each quantity does *afterwards* differs sharply
+/// — see the zero rule in [`entity_sensor_dbm`], which must **not** be copied to a temperature.
+fn scale_sensor_value(value: i64, scale: i64, precision: i64) -> Option<f64> {
+    // `precision` is documented as -8..=9; clamp rather than trust, since 10^-300 is a silent zero.
+    let precision = precision.clamp(-8, 9);
+    let exponent = (scale - SENSOR_SCALE_UNITS) * 3 - precision;
+    Some(value as f64 * powi10(exponent)?)
+}
+
+/// Normalise a sensor row to degrees Celsius, or `None` when it is not a plausible temperature.
+///
+/// ⚠️ **Zero is a real temperature here.** [`entity_sensor_dbm`] rejects a scaled zero because
+/// 0 dBm is a *stronger* reading than any working port and is what a vendor sends for "no module";
+/// 0 °C is just a cold chassis. Copying that rule across would be the kind of plausible-looking
+/// mistake this comment exists to stop.
+#[must_use]
+pub fn entity_sensor_celsius(
+    value: i64,
+    sensor_type: i64,
+    scale: i64,
+    precision: i64,
+) -> Option<f64> {
+    if sensor_type != SENSOR_TYPE_CELSIUS {
+        return None;
+    }
+    let scaled = scale_sensor_value(value, scale, precision)?;
+    (scaled.is_finite() && (SENSOR_CELSIUS_MIN..=SENSOR_CELSIUS_MAX).contains(&scaled))
+        .then_some(scaled)
 }
 
 /// The module's acceptable window for one direction, after validation.
@@ -246,11 +348,7 @@ pub fn validated_window(low: Option<f64>, high: Option<f64>) -> (Option<f64>, Op
 /// from a very weak but real signal.
 #[must_use]
 pub fn entity_sensor_dbm(value: i64, sensor_type: i64, scale: i64, precision: i64) -> Option<f64> {
-    // `precision` is documented as -8..=9; clamp rather than trust, since 10^-300 is a silent zero.
-    let precision = precision.clamp(-8, 9);
-    let exponent = (scale - SENSOR_SCALE_UNITS) * 3 - precision;
-    let magnitude = powi10(exponent)?;
-    let scaled = value as f64 * magnitude;
+    let scaled = scale_sensor_value(value, scale, precision)?;
     match sensor_type {
         // Zero is this dialect's "no light / not measurable" marker, not a measurement: 0 dBm is
         // 1 mW, which on the same Nexus that reports it is *stronger than any working port*
@@ -502,15 +600,25 @@ mod tests {
         );
     }
 
+    /// **Exactly one of the two dialect tables serves each flavour, and every column sits under
+    /// the root that selected it.**
+    ///
+    /// This replaces `every_flavor_has_a_root_and_only_entity_sensor_needs_correlation`, which
+    /// asserted that the correlated dialect was `EntitySensor` *and no other*. That was true when
+    /// there was one; ADR-070 added Cisco's spelling of the same table, so the invariant worth
+    /// keeping is the **biconditional** — a flavour is simple xor correlated — not the identity of
+    /// the correlated one. `execute_optical` dispatches on exactly this pair, and a flavour served
+    /// by neither would fall through and collect nothing, silently.
     #[test]
-    fn every_flavor_has_a_root_and_only_entity_sensor_needs_correlation() {
+    fn every_flavor_is_served_by_exactly_one_dialect_kind() {
         for f in OpticalFlavor::ALL {
             assert!(!f.root_oid().is_empty(), "{f:?} has no root OID");
             let simple = simple_dialect(f);
-            assert_eq!(
-                simple.is_none(),
-                f == OpticalFlavor::EntitySensor,
-                "{f:?}: only the ENTITY-SENSOR dialect correlates columns"
+            let sensor = sensor_dialect(f);
+            assert_ne!(
+                simple.is_some(),
+                sensor.is_some(),
+                "{f:?} must be served by exactly one of simple_dialect / sensor_dialect"
             );
             // A simple dialect's columns must sit under the root that selects it, or the poller
             // would walk a table the operator did not ask for.
@@ -519,7 +627,84 @@ mod tests {
                 assert!(d.tx_oid.starts_with(f.root_oid()), "{f:?} tx outside root");
                 assert_ne!(d.rx_oid, d.tx_oid, "{f:?} rx and tx are the same column");
             }
+            // Same rule for the correlated ones, and it is the load-bearing half of ADR-070: the
+            // Cisco dialect exists *only* because its four columns live somewhere else. Four
+            // distinct columns, all under the root, is the whole specification.
+            if let Some(d) = sensor {
+                let cols = [d.type_oid, d.scale_oid, d.precision_oid, d.value_oid];
+                for c in cols {
+                    assert!(
+                        c.starts_with(f.root_oid()),
+                        "{f:?}: {c} is outside the dialect's root"
+                    );
+                }
+                let mut sorted = cols.to_vec();
+                sorted.sort_unstable();
+                let before = sorted.len();
+                sorted.dedup();
+                assert_eq!(before, sorted.len(), "{f:?} reuses a sensor column");
+            }
         }
+    }
+
+    /// The two correlated dialects must not share a column, or one device's walk would demux into
+    /// the other's buckets. They are the same table shape at two different roots — that is the
+    /// point, and it only works while the roots are genuinely disjoint.
+    #[test]
+    fn the_two_sensor_dialects_share_no_column() {
+        let std = sensor_dialect(OpticalFlavor::EntitySensor).expect("standard");
+        let cisco = sensor_dialect(OpticalFlavor::CiscoEntitySensor).expect("cisco");
+        for a in [
+            std.type_oid,
+            std.scale_oid,
+            std.precision_oid,
+            std.value_oid,
+        ] {
+            for b in [
+                cisco.type_oid,
+                cisco.scale_oid,
+                cisco.precision_oid,
+                cisco.value_oid,
+            ] {
+                assert_ne!(a, b, "the standard and Cisco tables share a column");
+            }
+        }
+        // And the column offsets line up, which is why one implementation reads both.
+        assert!(std.type_oid.ends_with(".1") && cisco.type_oid.ends_with(".1"));
+        assert!(std.value_oid.ends_with(".4") && cisco.value_oid.ends_with(".4"));
+    }
+
+    /// 🚨 Zero is a marker for optical power and a temperature for a chassis sensor.
+    ///
+    /// `entity_sensor_dbm` refuses a scaled zero because 0 dBm is 1 mW — stronger than any working
+    /// port on the switch that reports it, so a dark port would chart as the healthiest one.
+    /// Copying that rule into the temperature path would silently drop a chassis at 0 °C. The two
+    /// live in one module and read the same rows, so the difference is asserted rather than left
+    /// to a comment.
+    #[test]
+    fn zero_is_refused_as_optical_power_and_accepted_as_a_temperature() {
+        assert_eq!(entity_sensor_dbm(0, 14, 9, 0), None);
+        assert_eq!(entity_sensor_celsius(0, 8, 9, 0), Some(0.0));
+    }
+
+    /// The real chassis rows from the lab walks, and the ones that must not become temperatures.
+    #[test]
+    fn chassis_temperatures_scale_the_way_the_devices_report_them() {
+        // N9K `module-1 FRONT` = 31, scale units(9), no decimals — a bare integer °C.
+        assert_eq!(entity_sensor_celsius(31, 8, 9, 0), Some(31.0));
+        // c9400 `Slot 2 Temp: Coretemp` = 53.
+        assert_eq!(entity_sensor_celsius(53, 8, 9, 0), Some(53.0));
+        // A tenth-of-a-degree agent: precision 1 means the integer carries one decimal place.
+        assert_eq!(entity_sensor_celsius(425, 8, 9, 1), Some(42.5));
+        // Not a temperature: the dBm, volt and ampere rows in the very same table. Returning a
+        // number for any of these would put an optical level on the temperature chart.
+        assert_eq!(entity_sensor_celsius(-13187, 14, 8, 0), None, "dBm");
+        assert_eq!(entity_sensor_celsius(3300, 4, 8, 0), None, "voltsDC");
+        assert_eq!(entity_sensor_celsius(61, 5, 8, 0), None, "amperes");
+        // A scale error is refused rather than charted: milli-degrees would read as 0.031 °C and
+        // kilo-degrees as 31000 °C. The first is plausible-looking and the second is not, which is
+        // exactly why the window has both ends.
+        assert_eq!(entity_sensor_celsius(31, 8, 12, 0), None, "kilo-degrees");
     }
 
     #[test]

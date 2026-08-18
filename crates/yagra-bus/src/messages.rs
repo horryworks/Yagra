@@ -1467,6 +1467,17 @@ pub struct OpticalProbe {
     /// Metric name for transmit power, or `None` to skip it.
     #[serde(default)]
     pub tx_metric: Option<String>,
+    /// Metric name for **chassis temperature**, or `None` to skip it (ADR-070 decision 2).
+    ///
+    /// Only the correlated sensor dialects can produce this, and it is not an optical reading at
+    /// all — it is the rows of the same sensor table that do *not* belong to a port. It rides this
+    /// probe because it is literally the same walk: splitting it into its own `CheckSpec` would
+    /// make a device answer the identical table twice per poll.
+    ///
+    /// `#[serde(default)]` is what keeps this N-1 safe in both directions: an older poller ignores
+    /// the field, and an older core simply never sets it.
+    #[serde(default)]
+    pub temp_metric: Option<String>,
 }
 
 /// SNMP v2c optical-transceiver probe parameters (ADR-062).
@@ -3454,6 +3465,7 @@ mod tests {
                 flavor,
                 rx_metric: Some("if_rx_power_dbm".to_owned()),
                 tx_metric: None,
+                temp_metric: Some("cisco_temp_c".to_owned()),
             };
             let wire = serde_json::to_string(&probe).unwrap();
             let back: OpticalProbe = serde_json::from_str(&wire).unwrap();
@@ -3464,9 +3476,38 @@ mod tests {
             flavor: yagra_common::OpticalFlavor::EntitySensor,
             rx_metric: None,
             tx_metric: None,
+            temp_metric: None,
         })
         .unwrap();
         assert!(wire.contains(r#""flavor":"entity_sensor""#), "{wire}");
+        // ADR-070's dialect, pinned the same way. The standard one above must keep its token or
+        // every deployed poller silently stops collecting optics; this one must keep its token for
+        // the same reason from the day it ships.
+        let wire = serde_json::to_string(&OpticalProbe {
+            flavor: yagra_common::OpticalFlavor::CiscoEntitySensor,
+            rx_metric: None,
+            tx_metric: None,
+            temp_metric: None,
+        })
+        .unwrap();
+        assert!(wire.contains(r#""flavor":"cisco_entity_sensor""#), "{wire}");
+    }
+
+    /// An N-1 core sends no `temp_metric`; a probe without it must still decode (ADR-070).
+    ///
+    /// The mirror case — a new core sending it to an old poller — is covered by serde ignoring
+    /// unknown fields, which every message here relies on and no lint enforces.
+    #[test]
+    fn an_optical_probe_tolerates_a_missing_temp_metric() {
+        let json = r#"{"flavor":"entity_sensor","rx_metric":"if_rx_power_dbm"}"#;
+        let probe: OpticalProbe = serde_json::from_str(json).expect("N-1 probe decodes");
+        assert_eq!(probe.rx_metric.as_deref(), Some("if_rx_power_dbm"));
+        assert_eq!(probe.tx_metric, None);
+        assert_eq!(probe.temp_metric, None);
+        // And a field this binary has never heard of does not fail the decode either.
+        let json = r#"{"flavor":"entity_sensor","some_future_reading":"x"}"#;
+        let probe: OpticalProbe = serde_json::from_str(json).expect("unknown field tolerated");
+        assert_eq!(probe.temp_metric, None);
     }
 
     /// ADR-043 Increment 3's result field, N-1 sensitive in exactly the way `l3` was.

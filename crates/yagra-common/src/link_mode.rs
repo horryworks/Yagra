@@ -113,6 +113,51 @@ pub fn duplex_from_dot3(value: f64) -> Option<Duplex> {
     }
 }
 
+/// `hwEthernetDuplex` — HUAWEI-PORT-MIB, the same fact as [`OID_DOT3_DUPLEX_STATUS`] for devices
+/// that do not implement EtherLike-MIB (ADR-063 Inc.3).
+///
+/// Indexed by `hwEthernetIfIndex`, which the MIB types as `InterfaceIndex` — a single
+/// sub-identifier equal to `ifIndex`, so this rides the ordinary numeric interface walk exactly as
+/// the standard column does. No new SNMP session, no new `InterfaceField`, no bus change.
+///
+/// # Why a second column exists at all
+///
+/// Huawei's YunShan OS answers **neither** EtherLike-MIB nor MAU-MIB. Walked on the lab USG
+/// (`jpmyj01fw01`, 2026-08-18): `1.3.6.1.2.1.10.7` and `1.3.6.1.2.1.26` both return
+/// `No Such Object`, so both of ADR-063's existing paths are dead there and the duplex column was
+/// permanently blank. Note this is a *platform* split, not a vendor one — the S5720 switch answers
+/// `dot3StatsDuplexStatus` for 53 interfaces.
+///
+/// # How the table was identified without trusting the MIB
+///
+/// The neighbouring column `.13` (`hwEthernetSpeedSet`, `speed100(3)/speed1000(4)/speed10000(5)`)
+/// returned 5,5,4,3,4,… across the USG's twelve physical ports, matching `ifHighSpeed`'s
+/// 10000,10000,1000,100,1000,… on every one. A MIB file says what a column *should* be; that
+/// agreement is what says the walk is reading the column the file describes.
+pub const OID_HW_ETHERNET_DUPLEX: &str = "1.3.6.1.4.1.2011.5.25.157.1.1.1.1.14";
+
+/// Map a `hwEthernetDuplex` reading to a [`Duplex`].
+///
+/// 🚨 **The enumeration is not the standard one, and `1` is the value that differs.**
+/// EtherLike-MIB is `unknown(1) / halfDuplex(2) / fullDuplex(3)`; HUAWEI-PORT-MIB is
+/// `full(1) / half(2)` with no `unknown`. Reusing [`duplex_from_dot3`] here would read every
+/// full-duplex port as `unknown` and store `NULL` — the column would stay blank exactly as it is
+/// today, so **the bug would look like the fix simply not working** rather than like wrong data.
+/// `every_mapper_disagrees_where_the_enumerations_disagree` pins the two apart.
+///
+/// Anything outside `{1, 2}` is `None`, the same collapse [`duplex_from_dot3`] documents.
+#[must_use]
+pub fn duplex_from_huawei(value: f64) -> Option<Duplex> {
+    if !value.is_finite() || (value - value.round()).abs() > 1e-6 {
+        return None;
+    }
+    match value.round() as i64 {
+        1 => Some(Duplex::Full),
+        2 => Some(Duplex::Half),
+        _ => None,
+    }
+}
+
 /// Coerce an SNMP numeric reading to an `ifType` code, or `None` if it is not a plausible one.
 ///
 /// IANAifType codes are positive and small; the upper bound is a sanity check on a garbage reading,
@@ -428,6 +473,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn huawei_readings_map_to_the_two_real_modes() {
+        // Accepting cases first, for the reason stated above: a mapper that returned None for
+        // everything would satisfy every rejection test and leave the column exactly as blank as
+        // it is today — the failure would be indistinguishable from "the feature never shipped".
+        // 1 is what the lab USG returns on all twelve physical ports.
+        assert_eq!(duplex_from_huawei(1.0), Some(Duplex::Full));
+        assert_eq!(duplex_from_huawei(2.0), Some(Duplex::Half));
+    }
+
+    /// 🚨 The two enumerations disagree, and reusing one mapper for both would be silent.
+    ///
+    /// EtherLike `unknown(1)/half(2)/full(3)` vs Huawei `full(1)/half(2)`. They agree only on 2.
+    /// A copy-paste of `duplex_from_dot3` into the Huawei path would read `full(1)` as `unknown`
+    /// and store NULL for every port — no wrong value to notice, just nothing, which is precisely
+    /// the symptom the Huawei path exists to remove.
+    #[test]
+    fn every_mapper_disagrees_where_the_enumerations_disagree() {
+        assert_eq!(duplex_from_dot3(1.0), None);
+        assert_eq!(duplex_from_huawei(1.0), Some(Duplex::Full));
+        assert_eq!(duplex_from_dot3(3.0), Some(Duplex::Full));
+        assert_eq!(duplex_from_huawei(3.0), None);
+        // The one value they agree on, stated so a future edit that "unifies" them has to break
+        // the two assertions above rather than this one.
+        assert_eq!(duplex_from_dot3(2.0), duplex_from_huawei(2.0));
+    }
+
+    #[test]
+    fn out_of_range_huawei_readings_are_none() {
+        // No `unknown` in this enumeration, so 0 and 3 are both simply not values.
+        for v in [0.0, 3.0, 4.0, -1.0, 1.5, f64::NAN, f64::INFINITY] {
+            assert_eq!(duplex_from_huawei(v), None, "value {v}");
+        }
+    }
+
+    /// The two duplex OIDs must be distinct subtrees, or the poller's `oid_base` demux would fold
+    /// one column's rows into the other's map and read them with the wrong enumeration.
+    #[test]
+    fn the_two_duplex_columns_are_different_oids() {
+        assert_ne!(OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX);
+        assert!(!OID_HW_ETHERNET_DUPLEX.starts_with(OID_DOT3_DUPLEX_STATUS));
+        assert!(!OID_DOT3_DUPLEX_STATUS.starts_with(OID_HW_ETHERNET_DUPLEX));
+    }
     #[test]
     fn if_type_rejects_implausible_readings_and_keeps_real_ones() {
         assert_eq!(if_type_from_snmp(6.0), Some(IF_TYPE_ETHERNET_CSMACD));

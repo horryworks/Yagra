@@ -105,6 +105,17 @@ pub enum OpticalFlavor {
     /// *type*, a *scale* and a *precision* that must be combined, and nothing but the physical
     /// entity's free-text name says whether a row is the transmit or the receive sensor.
     EntitySensor,
+    /// **The same table shape at Cisco's own root** — CISCO-ENTITY-SENSOR-MIB
+    /// `cesSensorValue`, read exactly like [`Self::EntitySensor`] (type / scale / precision /
+    /// value, correlated to a port through ENTITY-MIB).
+    ///
+    /// Not a nicety: **Cisco does not implement RFC 3433 at all.** Measured across eight real
+    /// walks (2026-08-18) the standard `1.3.6.1.2.1.99` returns 0 rows on seven of them — the
+    /// lone exception is a wireless controller — while this root returns 10–342. So every
+    /// Catalyst and Nexus profile was pointed at a table its device does not serve, which is
+    /// invisible: the item exists, the walk goes out, the agent returns nothing, and one
+    /// `no_data` row appears (ADR-070).
+    CiscoEntitySensor,
     /// HUAWEI-ENTITY-EXTENT-MIB `hwOpticalModuleInfoTable` — Rx `.8`, Tx `.9`, both dBm × 100,
     /// indexed by `entPhysicalIndex`.
     Huawei,
@@ -118,7 +129,13 @@ pub enum OpticalFlavor {
 
 impl OpticalFlavor {
     /// Every dialect, for exhaustive iteration in tests and seeding.
-    pub const ALL: [Self; 4] = [Self::EntitySensor, Self::Huawei, Self::Juniper, Self::H3c];
+    pub const ALL: [Self; 5] = [
+        Self::EntitySensor,
+        Self::CiscoEntitySensor,
+        Self::Huawei,
+        Self::Juniper,
+        Self::H3c,
+    ];
 
     /// The entry OID that selects this dialect — the value an [`CollectionKind::Optical`] item
     /// carries in its `oid` field.
@@ -126,6 +143,7 @@ impl OpticalFlavor {
     pub const fn root_oid(self) -> &'static str {
         match self {
             Self::EntitySensor => "1.3.6.1.2.1.99.1.1.1",
+            Self::CiscoEntitySensor => "1.3.6.1.4.1.9.9.91.1.1.1.1",
             Self::Huawei => "1.3.6.1.4.1.2011.5.25.31.1.1.3.1",
             Self::Juniper => "1.3.6.1.4.1.2636.3.18.1.1.1",
             Self::H3c => "1.3.6.1.4.1.25506.2.70.1.1.1",
@@ -152,7 +170,7 @@ impl OpticalFlavor {
     pub const fn is_ifindex_keyed(self) -> bool {
         match self {
             Self::Juniper | Self::H3c => true,
-            Self::EntitySensor | Self::Huawei => false,
+            Self::EntitySensor | Self::CiscoEntitySensor | Self::Huawei => false,
         }
     }
 
@@ -161,6 +179,7 @@ impl OpticalFlavor {
     pub const fn template_name(self) -> &'static str {
         match self {
             Self::EntitySensor => T_OPTICAL_STD,
+            Self::CiscoEntitySensor => T_OPTICAL_CISCO,
             Self::Huawei => T_OPTICAL_HUAWEI,
             Self::Juniper => T_OPTICAL_JUNIPER,
             Self::H3c => T_OPTICAL_H3C,
@@ -175,6 +194,18 @@ pub const METRIC_IF_RX_POWER_DBM: &str = "if_rx_power_dbm";
 
 /// Transmit optical power, dBm. Module-level, with the same caveat as [`METRIC_IF_RX_POWER_DBM`].
 pub const METRIC_IF_TX_POWER_DBM: &str = "if_tx_power_dbm";
+
+/// Chassis temperature, degrees Celsius, from the Cisco sensor table (ADR-070 decision 2).
+///
+/// **Node-level, not per-port.** It is the *other* half of the same walk the Cisco optical dialect
+/// already performs: the rows that do **not** resolve to an interface. That split is structural,
+/// not textual — an SFP's sensors reach a port through ENTITY-MIB (measured 42 of 42), a chassis
+/// sensor does not (`module-1 FRONT` climbs four containment hops and dead-ends).
+///
+/// ⚠️ **Only temperature.** The same table also carries the SFP's own temperature/voltage/bias
+/// current — excluded by ADR-062 Issue #66 and still excluded — and the chassis voltage rails,
+/// which on one c9500X alone would add ~94 series (ADR-011).
+pub const METRIC_CISCO_TEMP_C: &str = "cisco_temp_c";
 
 /// The plausible range of a real optical power reading, in dBm.
 ///
@@ -481,6 +512,9 @@ pub const TEMPLATE_STANDARD_SNMP: &str = "Standard SNMP";
 // Role-base (vendor-neutral).
 const T_HOST_RESOURCES: &str = "Host resources";
 const T_ENTITY_SENSORS: &str = "Entity sensors";
+const T_CISCO_SENSORS: &str = "Cisco chassis temperature";
+const T_CISCO_ENV_STATE: &str = "Cisco fan/power state";
+const T_POE: &str = "PoE (POWER-ETHERNET-MIB)";
 const T_BGP: &str = "BGP peers";
 const T_UPS: &str = "UPS (RFC1628)";
 const T_PRINTER: &str = "Printer (Printer-MIB)";
@@ -512,6 +546,7 @@ const T_PANOS: &str = "Palo Alto sessions/VPN";
 // because the *reading* differs, not just the OID: see `OpticalFlavor`. Each carries the same
 // two metric names, so a node bound to two of them by mistake still produces one series pair.
 const T_OPTICAL_STD: &str = "Optical transceivers (ENTITY-SENSOR)";
+const T_OPTICAL_CISCO: &str = "Optical transceivers (Cisco)";
 const T_OPTICAL_HUAWEI: &str = "Optical transceivers (Huawei)";
 const T_OPTICAL_JUNIPER: &str = "Optical transceivers (Juniper)";
 const T_OPTICAL_H3C: &str = "Optical transceivers (H3C/Comware)";
@@ -581,36 +616,66 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         // ── Vendor-health (per NOS) ──
         BuiltinTemplate {
             name: T_CISCO_IOS,
-            description: "Cisco IOS/IOS-XE CPU (cpmCPUTotal5minRev), memory-pool used/free, temp.",
+            description: "Cisco IOS/IOS-XE CPU (cpmCPUTotal5minRev), memory used/free across the \
+                 three MIBs different Catalyst generations answer, and chassis temperature.",
             items: vec![
                 vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
+                // ⚠️ Three memory families, deliberately (ADR-070 decision 4). ciscoMemoryPool
+                // answers on 2960X/3560 and returns **0 rows on Catalyst 9000**; cpmCPUMemory and
+                // cempMemPool answer on Catalyst 9000 and return 0 rows on 2960X. The poller skips
+                // an OID a device does not implement, so listing all three is what makes one
+                // template cover both generations — and the asymmetry is why: adding is free,
+                // removing would need a migration and would strand whichever generation lost.
                 vendor_table("cisco_mem_used", "1.3.6.1.4.1.9.9.48.1.1.1.5"),
                 vendor_table("cisco_mem_free", "1.3.6.1.4.1.9.9.48.1.1.1.6"),
+                vendor_table("cisco_cpu_mem_used", "1.3.6.1.4.1.9.9.109.1.1.1.1.12"),
+                vendor_table("cisco_cpu_mem_free", "1.3.6.1.4.1.9.9.109.1.1.1.1.13"),
+                vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
+                vendor_table("cisco_cemp_mem_free", "1.3.6.1.4.1.9.9.221.1.1.1.1.20"),
                 vendor_table("cisco_env_temp", "1.3.6.1.4.1.9.9.13.1.3.1.3"),
             ],
         },
         BuiltinTemplate {
             name: T_CISCO_NXOS,
-            description: "Cisco NX-OS CPU and memory utilization % (CISCO-SYSTEM-EXT-MIB).",
+            description: "Cisco NX-OS CPU and memory. The CISCO-SYSTEM-EXT-MIB scalars first, \
+                 then the CISCO-PROCESS/ENHANCED-MEMPOOL columns real Nexus hardware answers.",
             items: vec![
+                // ⚠️ These two return **nothing** on a real Nexus — measured 0 rows on the lab N3K
+                // walk (ADR-070). They are kept rather than removed because removing an item needs
+                // a migration, and two scalar GETs that a device ignores cost nothing measurable.
+                // If a future NX-OS build does answer them, it costs nothing to have asked.
                 vendor_scalar("nxos_cpu_util", "1.3.6.1.4.1.9.9.305.1.1.1.0"),
                 vendor_scalar("nxos_mem_util", "1.3.6.1.4.1.9.9.305.1.1.2.0"),
+                // What the N3K actually answers: cpmCPUTotal5minRev = 14 %, cempMemPoolHCUsed =
+                // 2589782016 bytes. Both are the **same OIDs Yagra already uses for IOS-XR and
+                // ASA**, so this needed no new research — only the observation that NX-OS is in
+                // that family too. Sharing `cisco_cpu_5min` also lights the Device-health CPU
+                // gauge, which already lists that name among its candidates.
+                vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
+                vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
+                vendor_table("cisco_cemp_mem_free", "1.3.6.1.4.1.9.9.221.1.1.1.1.20"),
             ],
         },
         BuiltinTemplate {
             name: T_CISCO_XR,
-            description: "Cisco IOS-XR CPU (cpmCPUTotal5minRev) and enhanced memory-pool used.",
+            description: "Cisco IOS-XR CPU (cpmCPUTotal5minRev) and enhanced memory-pool \
+                 used/free.",
             items: vec![
                 vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
                 vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
+                // Used alone is a number with no denominator — the Device-health memory card needs
+                // a pair to show "2.4 GB / 3.9 GB". Measured present wherever `used` is: 12 rows on
+                // the lab ASR9010, 9 on the ASA, 2 on Catalyst 9000, 1 on the N3K.
+                vendor_table("cisco_cemp_mem_free", "1.3.6.1.4.1.9.9.221.1.1.1.1.20"),
             ],
         },
         BuiltinTemplate {
             name: T_CISCO_ASA,
-            description: "Cisco ASA CPU (cpmCPUTotal5minRev) and enhanced memory-pool used.",
+            description: "Cisco ASA CPU (cpmCPUTotal5minRev) and enhanced memory-pool used/free.",
             items: vec![
                 vendor_table("cisco_cpu_5min", "1.3.6.1.4.1.9.9.109.1.1.1.1.8"),
                 vendor_table("cisco_cemp_mem_used", "1.3.6.1.4.1.9.9.221.1.1.1.1.18"),
+                vendor_table("cisco_cemp_mem_free", "1.3.6.1.4.1.9.9.221.1.1.1.1.20"),
             ],
         },
         BuiltinTemplate {
@@ -684,18 +749,51 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         },
         BuiltinTemplate {
             name: T_HUAWEI_USG_SESSIONS,
-            description: "Huawei USG firewall current total session count and session setup rate \
+            description: "Huawei USG firewall session counts: the total, the TCP/UDP/ICMP \
+                 breakdown, half-open connections, and the since-boot connection counter \
                  (HUAWEI-SECURITY-STAT-MIB).",
-            // Both are gauges, not counters: the MIB types them Counter64 but they are
-            // instantaneous (rise and fall), so they're stored as-is with no rate() at query time.
+            // ⚠️ Most of these are gauges despite the MIB typing every one of them Counter64:
+            // they are instantaneous levels that rise and fall, so they are stored as-is with no
+            // rate() at query time. The one genuine counter is called out below.
             items: vec![
                 vendor_table(
                     "huawei_usg_total_sessions",
                     "1.3.6.1.4.1.2011.6.122.15.1.2.1.4",
                 ),
+                // hwSecStatMonCurSessSpeed. ⚠️ Kept, but it is a poor signal and the counter below
+                // is the one to read: it is a **one-second instantaneous rate sampled every five
+                // minutes**, so on the lab USG 8 of 13 samples were 0 and the rest were spikes.
+                // Removing it would need a migration; the WebUI prefers the derived rate instead.
                 vendor_table(
                     "huawei_usg_session_setup_rate",
                     "1.3.6.1.4.1.2011.6.122.15.1.2.1.3",
+                ),
+                // hwSecStatMonTotalBootConnNum — connections since boot. A **real** monotonic
+                // counter, so the setup rate becomes rate() at query time (ADR-012) instead of a
+                // one-second sample that mostly reads zero.
+                vendor_scalar_counter(
+                    "huawei_usg_session_total",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.1.0",
+                ),
+                // hwSecStatMonHalfConn. ⚠️ **Not a protocol** — incomplete (half-open) sessions.
+                // The ADR first read .5–.8 as a four-way protocol split because their sum tracked
+                // the total; the MIB says otherwise, and this one is the more useful of the four:
+                // a climbing half-open count is what a SYN flood looks like.
+                vendor_table(
+                    "huawei_usg_half_open_sessions",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.5",
+                ),
+                vendor_table(
+                    "huawei_usg_tcp_sessions",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.6",
+                ),
+                vendor_table(
+                    "huawei_usg_udp_sessions",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.7",
+                ),
+                vendor_table(
+                    "huawei_usg_icmp_sessions",
+                    "1.3.6.1.4.1.2011.6.122.15.1.2.1.8",
                 ),
             ],
         },
@@ -763,6 +861,64 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         optical_template(OpticalFlavor::Huawei),
         optical_template(OpticalFlavor::Juniper),
         optical_template(OpticalFlavor::H3c),
+        // ADR-070 decision 1. Appended after H3c so the four ids above keep their array positions.
+        optical_template(OpticalFlavor::CiscoEntitySensor),
+        // ADR-070 decision 2 — the *other* half of the Cisco dialect's walk.
+        //
+        // `CollectionKind::Optical` despite not being optical, and deliberately: the kind means
+        // "a correlated multi-column sensor walk selected by an entry OID", which is exactly what
+        // this is. Sharing the entry OID with the template above means a node carrying both walks
+        // the table **once**. Splitting it into a `Table` item instead would store the raw
+        // unscaled integer and would include the very SFP rows Issue #66 excluded.
+        BuiltinTemplate {
+            name: T_CISCO_SENSORS,
+            description: "Chassis temperature in degrees Celsius (CISCO-ENTITY-SENSOR-MIB) — the \
+                 sensors in that table which are NOT attached to a port, read from the same walk \
+                 as the Cisco optical template. Catalyst already reports this through \
+                 ciscoEnvMonTemp; attach this to the platforms that do not (NX-OS, IOS-XR).",
+            items: vec![CollectionItem {
+                metric_name: METRIC_CISCO_TEMP_C.to_owned(),
+                oid: OpticalFlavor::CiscoEntitySensor.root_oid().to_owned(),
+                kind: CollectionKind::Optical,
+                metric_kind: MetricKind::Gauge,
+            }],
+        },
+        // ADR-070 decision 5. Two families in one template, for the same reason decision 4 lists
+        // three memory MIBs: Catalyst answers ciscoEnvMon and Nexus does not, Nexus answers
+        // cefcFanTray and Catalyst does not, and cefcFRUPower turns out to answer on both. The
+        // device skips what it lacks.
+        //
+        // ⚠️ Stored as the raw enumeration integer, like if_oper_status — this product has no
+        // "OID enum value → label" table by design, and the meaning is applied once at the display
+        // layer. The _state suffix is load-bearing: analysis.rs::anomaly_usable excludes any
+        // metric whose name contains it from anomaly detection, which is right for a discrete code.
+        BuiltinTemplate {
+            name: T_CISCO_ENV_STATE,
+            description: "Cisco fan and power-supply operational state — ciscoEnvMon (Catalyst, \
+                 IOS/IOS-XE) and CISCO-ENTITY-FRU-CONTROL (Nexus, and the Catalyst 9000 chassis). \
+                 Raw enumeration values; normal is 1 for ciscoEnvMon and 2 (up/on) for FRU.",
+            items: vec![
+                vendor_table("cisco_fan_state", "1.3.6.1.4.1.9.9.13.1.4.1.3"),
+                vendor_table("cisco_psu_state", "1.3.6.1.4.1.9.9.13.1.5.1.3"),
+                vendor_table("cisco_fantray_state", "1.3.6.1.4.1.9.9.117.1.4.1.1.1"),
+                vendor_table("cisco_fru_power_state", "1.3.6.1.4.1.9.9.117.1.1.2.1.2"),
+            ],
+        },
+        // ADR-070 decision 6. Vendor-neutral (POWER-ETHERNET-MIB), but attached to Catalyst alone:
+        // of 1,984 public device walks exactly one carries it, so putting it on every access-switch
+        // profile would buy a per-poll empty walk on all of them for no measured return.
+        //
+        // ⚠️ Chassis totals only. The per-port table is one series per port (ADR-011) and, on the
+        // one walk that has this MIB at all, it is absent — so there is nothing to verify against.
+        BuiltinTemplate {
+            name: T_POE,
+            description: "PoE chassis power: what the switch can supply and what it is drawing \
+                 (POWER-ETHERNET-MIB, vendor-neutral). Watts.",
+            items: vec![
+                vendor_table("poe_power_capacity_w", "1.3.6.1.2.1.105.1.3.1.1.2"),
+                vendor_table("poe_power_consumed_w", "1.3.6.1.2.1.105.1.3.1.1.4"),
+            ],
+        },
     ]
 }
 
@@ -782,6 +938,12 @@ fn optical_template(flavor: OpticalFlavor) -> BuiltinTemplate {
                 "Transceiver receive/transmit optical power in dBm, read from ENTITY-SENSOR-MIB \
                  (RFC 3433) and attached to interfaces through ENTITY-MIB's alias mapping. The \
                  vendor-neutral spelling — Cisco, Arista and most implementers of ENTITY-MIB."
+            }
+            OpticalFlavor::CiscoEntitySensor => {
+                "Transceiver receive/transmit optical power in dBm, read from \
+                 CISCO-ENTITY-SENSOR-MIB and attached to interfaces through ENTITY-MIB's alias \
+                 mapping. Cisco does not implement the vendor-neutral RFC 3433 table at all, so \
+                 this is the spelling every Catalyst and Nexus actually answers."
             }
             OpticalFlavor::Huawei => {
                 "Transceiver receive/transmit optical power in dBm, read from Huawei's \
@@ -834,7 +996,8 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 T_CISCO_IOS,
                 T_ENTITY_SENSORS,
                 T_BGP,
-                T_OPTICAL_STD,
+                T_OPTICAL_CISCO,
+                T_CISCO_ENV_STATE,
             ],
         ),
         prof(
@@ -846,7 +1009,11 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 T_CISCO_XR,
                 T_ENTITY_SENSORS,
                 T_BGP,
-                T_OPTICAL_STD,
+                T_OPTICAL_CISCO,
+                // ciscoEnvMonTempValue returns nothing on IOS-XR; the 60 chassis sensors on the
+                // lab ASR9010 are all in the Cisco sensor table (ADR-070).
+                T_CISCO_SENSORS,
+                T_CISCO_ENV_STATE,
             ],
         ),
         prof(
@@ -910,7 +1077,14 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 TEMPLATE_STANDARD_SNMP,
                 T_CISCO_IOS,
                 T_ENTITY_SENSORS,
-                T_OPTICAL_STD,
+                // No T_CISCO_SENSORS: T_CISCO_IOS already carries ciscoEnvMonTempValue, which
+                // answers on every measured Catalyst (3–44 rows). Attaching both would store the
+                // same sensors twice under two names.
+                T_OPTICAL_CISCO,
+                T_CISCO_ENV_STATE,
+                // The only profile that gets PoE: of 1,984 public walks, the one carrying
+                // POWER-ETHERNET-MIB is a Catalyst 2960X (ADR-070 decision 6).
+                T_POE,
             ],
         ),
         prof(
@@ -921,7 +1095,10 @@ pub fn builtin_profiles() -> Vec<BuiltinProfile> {
                 TEMPLATE_STANDARD_SNMP,
                 T_CISCO_NXOS,
                 T_ENTITY_SENSORS,
-                T_OPTICAL_STD,
+                T_OPTICAL_CISCO,
+                // Nexus has no ciscoEnvMon at all, so this is its only temperature (ADR-070).
+                T_CISCO_SENSORS,
+                T_CISCO_ENV_STATE,
             ],
         ),
         prof(
@@ -1477,27 +1654,65 @@ mod tests {
         }
     }
 
-    /// ⚠️ The optical templates must stay at the END of `builtin_templates()`.
+    /// 🚨 **The built-in template array is append-only, and this is what enforces it.**
     ///
-    /// `repo.rs` derives a template's seed id from its index in this array, so inserting one above
-    /// re-keys every template after it and silently breaks the profile→template links of every
-    /// existing deployment. `builtin_profiles` has an end-of-array guard; this array had none, and
-    /// this is it.
+    /// `repo.rs` derives a template's seed id from its **index here** (`SeedRange::
+    /// CollectionTemplates.id(i)`), and the seeder inserts `ON CONFLICT (id) DO NOTHING`. So
+    /// inserting or reordering an entry does not fail, does not warn, and does not even change
+    /// anything on a fresh install — it silently breaks **existing** deployments two ways at once:
+    /// every template after the insertion point keeps the old row under its id (so the new content
+    /// never arrives), and the profile→template links built from those ids now point at the wrong
+    /// templates.
+    ///
+    /// This replaces `optical_templates_stay_at_the_end_of_the_array`, which pinned only the four
+    /// optical entries — a proxy for "nothing moved" that stopped working the moment ADR-070
+    /// appended a template that is not optical. Listing every name is the direct statement, and it
+    /// makes appending an explicit act: add your name at the **end** of this array.
+    ///
+    /// ⚠️ Renaming a template is a different question and is deliberately *not* pinned here — the
+    /// stored id is the identity, and `collection_templates.name` is never updated by the seeder
+    /// anyway (`ON CONFLICT (id) DO NOTHING`), so an existing deployment keeps the old display name
+    /// regardless.
     #[test]
-    fn optical_templates_stay_at_the_end_of_the_array() {
-        let templates = builtin_templates();
-        let tail: Vec<&str> = templates
-            .iter()
-            .rev()
-            .take(OpticalFlavor::ALL.len())
-            .map(|t| t.name)
-            .collect();
-        for flavor in OpticalFlavor::ALL {
-            assert!(
-                tail.contains(&flavor.template_name()),
-                "{flavor:?}'s template moved out of the array tail — seed ids are array positions"
-            );
-        }
+    fn the_template_order_is_the_one_seed_ids_were_issued_for() {
+        let expected = [
+            TEMPLATE_STANDARD_SNMP,
+            T_HOST_RESOURCES,
+            T_ENTITY_SENSORS,
+            T_BGP,
+            T_UPS,
+            T_PRINTER,
+            T_CISCO_IOS,
+            T_CISCO_NXOS,
+            T_CISCO_XR,
+            T_CISCO_ASA,
+            T_JUNIPER,
+            T_HUAWEI,
+            T_FORTINET,
+            T_MIKROTIK,
+            T_NETSNMP,
+            T_ASA_SESSIONS,
+            T_HUAWEI_USG_SESSIONS,
+            T_CISCO_RA_VPN,
+            T_CISCO_IPSEC,
+            T_FORTINET_VPN,
+            T_PANOS,
+            OpticalFlavor::EntitySensor.template_name(),
+            OpticalFlavor::Huawei.template_name(),
+            OpticalFlavor::Juniper.template_name(),
+            OpticalFlavor::H3c.template_name(),
+            // ── ADR-070 appended from here ──
+            OpticalFlavor::CiscoEntitySensor.template_name(),
+            T_CISCO_SENSORS,
+            T_CISCO_ENV_STATE,
+            T_POE,
+        ];
+        let actual: Vec<&str> = builtin_templates().iter().map(|t| t.name).collect();
+        assert_eq!(
+            actual, expected,
+            "the built-in template array changed order or gained an entry that is not at the end; \
+             seed ids are array positions (extensibility.md §6)"
+        );
     }
 
     /// Every profile that attaches an optical template attaches exactly one.
@@ -1611,19 +1826,36 @@ mod tests {
             .any(|i| i.metric_name == "huawei_mem_free" && i.metric_kind == MetricKind::Gauge));
         assert!(!huawei.iter().any(|i| i.metric_name == "huawei_mem_size"));
 
-        // USG firewall sessions = current total sessions + setup rate, both table gauges
-        // (instantaneous, never counters — see the template description).
+        // USG firewall sessions. Everything the MIB types Counter64 but which actually rises and
+        // falls is a **gauge** here — storing a level as a counter would serve it through rate()
+        // and plot the change in a session count per second (ADR-012).
         let usg = &by_name(T_HUAWEI_USG_SESSIONS).items;
-        assert_eq!(usg.len(), 2);
-        assert!(usg
-            .iter()
-            .any(|i| i.metric_name == "huawei_usg_total_sessions"
-                && i.kind == CollectionKind::Table
-                && i.metric_kind == MetricKind::Gauge));
-        assert!(usg
-            .iter()
-            .any(|i| i.metric_name == "huawei_usg_session_setup_rate"
-                && i.metric_kind == MetricKind::Gauge));
+        let gauges = [
+            "huawei_usg_total_sessions",
+            "huawei_usg_session_setup_rate",
+            "huawei_usg_half_open_sessions",
+            "huawei_usg_tcp_sessions",
+            "huawei_usg_udp_sessions",
+            "huawei_usg_icmp_sessions",
+        ];
+        for name in gauges {
+            assert!(
+                usg.iter().any(|i| i.metric_name == name
+                    && i.kind == CollectionKind::Table
+                    && i.metric_kind == MetricKind::Gauge),
+                "{name} must be a table gauge"
+            );
+        }
+        // The one genuine counter: connections since boot. It is what makes a setup *rate*
+        // computable at query time instead of relying on the device's one-second sample.
+        assert!(
+            usg.iter()
+                .any(|i| i.metric_name == "huawei_usg_session_total"
+                    && i.kind == CollectionKind::Scalar
+                    && i.metric_kind == MetricKind::Counter),
+            "the since-boot connection count must be a scalar counter"
+        );
+        assert_eq!(usg.len(), gauges.len() + 1, "no unaccounted USG item");
     }
 
     #[test]

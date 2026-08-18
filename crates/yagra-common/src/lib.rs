@@ -44,8 +44,8 @@ pub use collection::{
     builtin_catalog, builtin_interface_meta_columns, builtin_metric_kind, builtin_profiles,
     builtin_templates, is_plausible_dbm, resolve_collection_set, BuiltinProfile, BuiltinTemplate,
     CollectionItem, CollectionKind, InterfaceField, OpticalFlavor, ScopedCollectionItem,
-    METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM, OID_IF_HIGH_SPEED, OPTICAL_DBM_MAX,
-    OPTICAL_DBM_MIN, TEMPLATE_STANDARD_SNMP,
+    METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM, OID_IF_HIGH_SPEED,
+    OPTICAL_DBM_MAX, OPTICAL_DBM_MIN, TEMPLATE_STANDARD_SNMP,
 };
 pub use dns_check::{
     is_resolver_blocked, normalize_dns_name, validate_dns_name, DnsAnswer, DnsChain,
@@ -60,9 +60,10 @@ pub use l3::{
     MAX_ADDRESSES_PER_NODE, MAX_L3_WALK_ROWS, METRIC_SNMP_L3_ADDRESS_COUNT,
 };
 pub use link_mode::{
-    duplex_from_dot3, if_type_from_snmp, mau_subid, media_from_mau_oid,
+    duplex_from_dot3, duplex_from_huawei, if_type_from_snmp, mau_subid, media_from_mau_oid,
     media_from_transceiver_text, Duplex, MauMedia, DOT3_MAU_TYPE_ROOT, IF_TYPE_ETHERNET_CSMACD,
-    OID_DOT3_DUPLEX_STATUS, OID_IF_MAU_IFINDEX, OID_IF_MAU_TYPE, OID_IF_TYPE,
+    OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX, OID_IF_MAU_IFINDEX, OID_IF_MAU_TYPE,
+    OID_IF_TYPE,
 };
 pub use meraki::{
     api_profile_name_for_product_type, category_for_product_type, is_meraki_api_host,

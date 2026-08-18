@@ -192,6 +192,57 @@ mod tests {
         }
     }
 
+    /// Migration `0091` names four profile ids and one template id as literals; this is what stops
+    /// them from being a hand-written fifth copy of "seed id = array index".
+    ///
+    /// The ids in that file were verified against a running deployment when it was written, which
+    /// proves they were right **then**. Appending a profile before one of these four in
+    /// `builtin_profiles()` would silently re-point the literal at a different profile, and the
+    /// migration would quietly delete the wrong link on every deployment that had not run it yet.
+    /// `collection.rs::the_template_order_is_the_one_seed_ids_were_issued_for` guards the template
+    /// array the same way; this guards the pairing the SQL depends on.
+    #[test]
+    fn migration_0091_names_the_ids_the_catalog_issues_today() {
+        let sql = include_str!("../../../migrations/0091_cisco_optical_dialect.sql");
+        let templates = yagra_common::builtin_templates();
+        let std_optical = templates
+            .iter()
+            .position(|t| t.name == yagra_common::OpticalFlavor::EntitySensor.template_name())
+            .expect("the standard optical template is still in the catalog");
+        let template_id = SeedRange::CollectionTemplates.id(std_optical).to_string();
+        assert!(
+            sql.contains(&template_id),
+            "0091 deletes links to {template_id} but the catalog now issues a different id"
+        );
+
+        let profiles = yagra_common::builtin_profiles();
+        for name in [
+            "Cisco IOS/IOS-XE router",
+            "Cisco IOS-XR router",
+            "Cisco Catalyst switch (IOS/IOS-XE)",
+            "Cisco Nexus switch (NX-OS)",
+        ] {
+            let i = profiles
+                .iter()
+                .position(|p| p.name == name)
+                .unwrap_or_else(|| panic!("built-in profile {name} disappeared"));
+            let id = SeedRange::Profiles.id(i).to_string();
+            assert!(sql.contains(&id), "0091 does not name {name} ({id})");
+        }
+
+        // The ASA keeps the standard dialect (its walk has 15 rows there and none in Cisco's), so
+        // its id must NOT appear. Stated as an assertion because "we left one out" is exactly the
+        // kind of intent that reads as an oversight to the next person.
+        let asa = profiles
+            .iter()
+            .position(|p| p.name == "Cisco ASA firewall")
+            .expect("the ASA profile is still in the catalog");
+        assert!(
+            !sql.contains(&SeedRange::Profiles.id(asa).to_string()),
+            "0091 must leave the ASA on the standard dialect"
+        );
+    }
+
     /// The same pairing for the seeded trap rules, which migration `0047` writes as literals.
     #[test]
     fn the_builtin_event_rule_ids_are_the_ones_migration_0047_inserts() {

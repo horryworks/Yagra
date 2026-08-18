@@ -63,7 +63,10 @@ export const METRIC_CARDS = [
     // per-second rate on one axis flattens whichever is smaller.
     id: 'setupRate',
     labelKey: 'overview.setupRate',
-    candidates: ['huawei_usg_session_setup_rate'],
+    // The since-boot counter first: the device's own `setup_rate` column is a one-second
+    // instantaneous sample read every five minutes, so on real hardware most samples are 0 and the
+    // rest are spikes. The counter is served through rate() and reads as an actual rate (ADR-070).
+    candidates: ['huawei_usg_session_total', 'huawei_usg_session_setup_rate'],
     scale: 'count',
     unit: '/s',
   },
@@ -138,9 +141,16 @@ export interface MemSpec {
   readonly unitToBytes: number;
 }
 
+// Order is precedence: `resolveMem` takes the first source whose **both** inputs the node has.
+// The Cisco families are mutually exclusive in practice — ciscoMemoryPool answers on 2960X/3560,
+// cempMemPool on Catalyst 9000 / Nexus / IOS-XR / ASA — so the order between them only decides a
+// device that somehow answers both, where the 64-bit family is the better answer anyway.
 export const MEM_SPECS = [
   { id: 'huawei', metrics: ['huawei_mem_total', 'huawei_mem_free'], unitToBytes: 1 },
   { id: 'cisco', metrics: ['cisco_mem_used', 'cisco_mem_free'], unitToBytes: 1 },
+  { id: 'cisco-cemp', metrics: ['cisco_cemp_mem_used', 'cisco_cemp_mem_free'], unitToBytes: 1 },
+  // cpmCPUMemory is reported in kilobytes, unlike the two byte-valued families above.
+  { id: 'cisco-cpu', metrics: ['cisco_cpu_mem_used', 'cisco_cpu_mem_free'], unitToBytes: 1024 },
   { id: 'ucd', metrics: ['ucd_mem_total_kb', 'ucd_mem_avail_kb'], unitToBytes: 1024 },
 ] as const satisfies readonly MemSpec[];
 

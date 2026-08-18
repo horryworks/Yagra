@@ -223,6 +223,41 @@ describe('format', () => {
     });
   });
 
+  /// Three Cisco memory MIBs, and no measured device answers more than one (ADR-070).
+  it('derives memory from each Cisco family, including the kilobyte one', () => {
+    // CISCO-ENHANCED-MEMPOOL — 64-bit bytes. The real N3K figures.
+    expect(
+      deriveMem('cisco-cemp', {
+        cisco_cemp_mem_used: 2_589_782_016,
+        cisco_cemp_mem_free: 1_406_861_312,
+      }),
+    ).toEqual({
+      usedBytes: 2_589_782_016,
+      totalBytes: 3_996_643_328,
+      pct: (2_589_782_016 / 3_996_643_328) * 100,
+    });
+
+    // CISCO-PROCESS cpmCPUMemory — the same shape but in **kilobytes**, so the caller passes 1024.
+    // Getting this scale wrong would under-report a Catalyst 9000's memory by 1000× while still
+    // producing a believable percentage, which is why the byte figures are asserted and not just
+    // the percent.
+    expect(
+      deriveMem('cisco-cpu', { cisco_cpu_mem_used: 2_528_860, cisco_cpu_mem_free: 1_374_112 }, 1024),
+    ).toEqual({
+      usedBytes: 2_528_860 * 1024,
+      totalBytes: (2_528_860 + 1_374_112) * 1024,
+      pct: (2_528_860 / (2_528_860 + 1_374_112)) * 100,
+    });
+
+    // Each family reads only its own metric names: feeding one family's values under another's id
+    // must yield nothing rather than silently borrowing the wrong pair.
+    expect(deriveMem('cisco-cemp', { cisco_mem_used: 750, cisco_mem_free: 250 })).toEqual({
+      usedBytes: null,
+      totalBytes: null,
+      pct: null,
+    });
+  });
+
   it('formats SNMP TimeTicks as a compact human uptime (mo + HH:MM)', () => {
     // The screenshot value: 337326072 ticks ≈ 39 days 1h 1m.
     expect(formatUptimeTicks(337326072)).toBe('1mo 9d 01:01');

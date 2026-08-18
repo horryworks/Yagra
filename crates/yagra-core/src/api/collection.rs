@@ -28,7 +28,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use yagra_common::{
-    resolve_collection_set, OpticalFlavor, METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM,
+    resolve_collection_set, OpticalFlavor, METRIC_CISCO_TEMP_C, METRIC_IF_RX_POWER_DBM,
+    METRIC_IF_TX_POWER_DBM,
 };
 
 /// An interface whose metadata has not been refreshed within this window is flagged stale. The UI
@@ -140,13 +141,24 @@ fn validate_item(body: &CreateCollectionItem) -> Result<(), ApiError> {
                 "oid must be the entry OID of a supported optical MIB",
             ));
         }
-        if !matches!(
-            body.metric_name.as_str(),
-            METRIC_IF_RX_POWER_DBM | METRIC_IF_TX_POWER_DBM
-        ) {
+        // The correlated Cisco table carries one reading that is not a port's: the chassis
+        // temperature (ADR-070 decision 2). It is permitted **only** for that dialect, because
+        // only that walk produces rows with no interface behind them — allowing it everywhere
+        // would let an operator configure an item the poller can never publish, which is the
+        // "stored, listed, silently never collected" outcome this whole block exists to prevent.
+        let permitted: &[&str] = match OpticalFlavor::from_root(&body.oid) {
+            Some(OpticalFlavor::CiscoEntitySensor) => &[
+                METRIC_IF_RX_POWER_DBM,
+                METRIC_IF_TX_POWER_DBM,
+                METRIC_CISCO_TEMP_C,
+            ],
+            _ => &[METRIC_IF_RX_POWER_DBM, METRIC_IF_TX_POWER_DBM],
+        };
+        if !permitted.contains(&body.metric_name.as_str()) {
             return Err(ApiError::bad_request(
                 "invalid_optical_metric",
-                "an optical item must be named if_rx_power_dbm or if_tx_power_dbm",
+                "an optical item must be named if_rx_power_dbm or if_tx_power_dbm \
+                 (or cisco_temp_c, for the Cisco sensor dialect)",
             ));
         }
         if body.metric_kind != "gauge" {
@@ -770,6 +782,39 @@ mod tests {
         // Optical power is a level, not an odometer — a counter would be served through rate().
         let err = validate_item(&body(METRIC_IF_RX_POWER_DBM, huawei, "optical", "counter"))
             .expect_err("a counter must be refused");
+        assert_eq!(err.code(), "invalid_optical_metric");
+    }
+
+    /// The chassis temperature is accepted on the Cisco dialect **and refused on every other one**
+    /// (ADR-070 decision 2).
+    ///
+    /// Both halves matter and for opposite reasons. Accepting it is what lets the built-in
+    /// template survive a round trip through the collection editor at all. Refusing it elsewhere
+    /// is what keeps the edge honest: no other dialect's walk produces a row with no interface
+    /// behind it, so an item named this on a Huawei or Juniper node could never publish anything.
+    #[test]
+    fn the_chassis_temperature_is_a_cisco_only_optical_reading() {
+        let cisco = OpticalFlavor::CiscoEntitySensor.root_oid();
+        assert!(
+            validate_item(&body(METRIC_CISCO_TEMP_C, cisco, "optical", "gauge")).is_ok(),
+            "the built-in Cisco temperature template must validate"
+        );
+        for flavor in OpticalFlavor::ALL {
+            if flavor == OpticalFlavor::CiscoEntitySensor {
+                continue;
+            }
+            let err = validate_item(&body(
+                METRIC_CISCO_TEMP_C,
+                flavor.root_oid(),
+                "optical",
+                "gauge",
+            ))
+            .expect_err("a non-Cisco dialect must refuse a chassis temperature");
+            assert_eq!(err.code(), "invalid_optical_metric", "{flavor:?}");
+        }
+        // A counter is still refused, dialect or not — the kind check runs after the name check.
+        let err = validate_item(&body(METRIC_CISCO_TEMP_C, cisco, "optical", "counter"))
+            .expect_err("a temperature is a gauge");
         assert_eq!(err.code(), "invalid_optical_metric");
     }
 

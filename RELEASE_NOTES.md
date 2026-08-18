@@ -10,6 +10,39 @@
 
 ## Unreleased
 
+### New Features
+
+- **Cisco Catalyst and Nexus switches now report optical power.** They never did: the built-in
+  profiles read the vendor-neutral ENTITY-SENSOR-MIB, which Cisco does not implement — measured
+  across eight real device walks, that table returns nothing on seven of them. The profiles now read
+  Cisco's own sensor table, which carries the same readings. Nothing about the chart changes; there
+  was simply never a line on it. Affects the Catalyst, Nexus, IOS/IOS-XE router and IOS-XR router
+  profiles. The Cisco ASA keeps the standard table, which is the one it answers.
+- **Cisco Nexus and IOS-XR now report chassis temperature.** Neither answers the `ciscoEnvMon`
+  table the other Cisco profiles use, so their Device health had no temperature at all. It comes
+  from the same walk as the optical readings, so it costs no extra device traffic. A transceiver's
+  own temperature is still not collected.
+- **Cisco Nexus now reports CPU and memory.** The profile read two CISCO-SYSTEM-EXT-MIB scalars that
+  a real Nexus does not answer. It now also reads the CPU and memory OIDs already used for IOS-XR
+  and ASA, which it does answer. The old OIDs are still read in case a future NX-OS build serves
+  them.
+- **Catalyst 9000 now reports memory.** Its memory lives in a different MIB from the 2960X/3560
+  generation, and only the older one was being read. Both are now read, plus a third family, so one
+  profile covers every generation.
+- **Fan and power-supply state for Cisco devices**, and **PoE supply and draw for Catalyst
+  switches**. Fan/PSU state is stored as the raw enumeration the device reports.
+- **Huawei USG firewalls report the session breakdown**: TCP, UDP and ICMP session counts,
+  half-open connections, and a since-boot connection counter. The existing "session setup rate"
+  reading is unchanged but is a one-second sample taken every five minutes, so the Device health
+  card now prefers the rate derived from the counter.
+
+### Improvements
+
+- **Huawei firewalls now show interface duplex.** Huawei's YunShan OS implements neither of the
+  two standard MIBs Yagra reads for it, so the Duplex column was permanently blank on those
+  devices. It now falls back to Huawei's own reading. Devices that answer the standard MIB are
+  unaffected — that reading still wins.
+
 ### Bug Fixes
 
 - **Optical: a port with no transceiver no longer charts a reading.** Huawei reports `-1` on every

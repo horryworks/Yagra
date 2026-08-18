@@ -256,13 +256,19 @@ export function formatBytes(bytes: number | null): string {
  *  imported by the card registry that lists each source's inputs — it was written out twice, once
  *  as this function's parameter type and once as the registry's, which is two places to add a
  *  source and only one of them makes the arithmetic handle it. */
-export type MemId = 'huawei' | 'cisco' | 'ucd';
+export type MemId = 'huawei' | 'cisco' | 'cisco-cemp' | 'cisco-cpu' | 'ucd';
 
 /** Per-source memory math: normalize a node's raw metric values (keyed by metric name) to used
  *  and total **bytes**, plus the derived utilization %. Each built-in source exposes a different
  *  pair of inputs, all reducible to used+total:
  *   - `huawei`: HUAWEI-MEMORY-MIB total + free bytes -> used = total - free.
  *   - `cisco` : CISCO-MEMORY-POOL used + free bytes -> total = used + free.
+ *   - `cisco-cemp`: CISCO-ENHANCED-MEMPOOL 64-bit used + free bytes, same arithmetic. A separate
+ *     id rather than more candidates on `cisco` because a device answers one family or the other:
+ *     ciscoMemoryPool is 2960X/3560-era, cempMemPool is Catalyst 9000, Nexus, IOS-XR and ASA, and
+ *     no measured device answered both (ADR-070).
+ *   - `cisco-cpu`: CISCO-PROCESS cpmCPUMemoryUsed/Free, in **kilobytes** — the third family, and
+ *     the fallback for a Catalyst 9000 whose cempMemPool rows are absent.
  *   - `ucd`   : UCD real-memory total + avail KB -> used = total - avail (scaled to bytes).
  *  `unitToBytes` scales the inputs to bytes (1 for byte OIDs, 1024 for KB). Fields are null when
  *  the inputs needed for them are missing/non-finite; `pct` needs both used and a positive total. */
@@ -282,9 +288,11 @@ export function deriveMem(
     const f = num('huawei_mem_free');
     if (t != null) total = t * unitToBytes;
     if (t != null && f != null) used = (t - f) * unitToBytes;
-  } else if (id === 'cisco') {
-    const u = num('cisco_mem_used');
-    const f = num('cisco_mem_free');
+  } else if (id === 'cisco' || id === 'cisco-cemp' || id === 'cisco-cpu') {
+    const prefix =
+      id === 'cisco' ? 'cisco_mem' : id === 'cisco-cemp' ? 'cisco_cemp_mem' : 'cisco_cpu_mem';
+    const u = num(`${prefix}_used`);
+    const f = num(`${prefix}_free`);
     if (u != null) used = u * unitToBytes;
     if (u != null && f != null) total = (u + f) * unitToBytes;
   } else {

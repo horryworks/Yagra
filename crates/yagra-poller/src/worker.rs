@@ -22,11 +22,12 @@ use yagra_bus::{
     SnmpMetaColumn, SnmpTableCheck, SnmpV3TableCheck,
 };
 use yagra_common::{
-    duplex_from_dot3, if_type_from_snmp, DnsFailure, IfIndex, InterfaceField, MetricKind, NodeId,
-    METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
-    METRIC_HTTP_BODY_MATCH, METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS,
-    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
-    OID_DOT3_DUPLEX_STATUS, OID_IF_HIGH_SPEED, OID_IF_TYPE,
+    duplex_from_dot3, duplex_from_huawei, if_type_from_snmp, DnsFailure, IfIndex, InterfaceField,
+    MetricKind, NodeId, METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS,
+    METRIC_DNS_UP, METRIC_HTTP_BODY_MATCH, METRIC_HTTP_BODY_TRUNCATED,
+    METRIC_HTTP_RESPONSE_TIME_MS, METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS,
+    METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
+    OID_IF_HIGH_SPEED, OID_IF_TYPE,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -782,6 +783,12 @@ async fn execute_table_walk(
         // a new variant would make every N-1 poller drop the entire SnmpTable spec. The reasoning
         // is on `yagra_common::link_mode`, next to the constants.
         numeric_oids.push(OID_DOT3_DUPLEX_STATUS.to_owned());
+        // Huawei YunShan implements neither EtherLike-MIB nor MAU-MIB, so both of ADR-063's
+        // existing paths are dead there and the duplex column was permanently blank. This is
+        // one more column on a walk already being issued, and it returns no rows on the
+        // devices that answer the standard one. ⚠️ Its enumeration is NOT the standard one —
+        // see `duplex_from_huawei`, which is why the fold below cannot share a mapper.
+        numeric_oids.push(OID_HW_ETHERNET_DUPLEX.to_owned());
         numeric_oids.push(OID_IF_TYPE.to_owned());
     }
 
@@ -804,6 +811,8 @@ async fn execute_table_walk(
                     raw.high.insert(row.ifindex, row.value);
                 } else if row.oid_base == OID_DOT3_DUPLEX_STATUS {
                     raw.duplex.insert(row.ifindex, row.value);
+                } else if row.oid_base == OID_HW_ETHERNET_DUPLEX {
+                    raw.hw_duplex.insert(row.ifindex, row.value);
                 } else if row.oid_base == OID_IF_TYPE {
                     raw.if_type.insert(row.ifindex, row.value);
                 } else if speed_oids.iter().any(|o| o == &row.oid_base) {
@@ -882,20 +891,37 @@ async fn execute_optical(
     let mut entity: Option<optical::EntityIndex> = None;
 
     for probe in probes {
-        if probe.rx_metric.is_none() && probe.tx_metric.is_none() {
+        if probe.rx_metric.is_none() && probe.tx_metric.is_none() && probe.temp_metric.is_none() {
             continue;
         }
-        let (readings, raw_windows) = match optical::simple_dialect(probe.flavor) {
-            Some(dialect) => walk_simple_optical(job, transport, walker, timeout, &dialect).await,
-            // ENTITY-SENSOR-MIB has no threshold objects at all — RFC 3433 defines none, and
-            // Cisco's live in a separate table with a different row shape. So this dialect draws
-            // its two lines and no band, which is a stated degradation rather than a missing case.
-            None => (
-                walk_entity_sensor_optical(job, transport, walker, timeout).await,
-                HashMap::new(),
-            ),
+        let (readings, raw_windows, temps) = match optical::simple_dialect(probe.flavor) {
+            Some(dialect) => {
+                let (r, w) = walk_simple_optical(job, transport, walker, timeout, &dialect).await;
+                (r, w, Vec::new())
+            }
+            // The correlated dialects have no threshold objects at all — RFC 3433 defines none,
+            // and Cisco's live in a separate table with a different row shape. So they draw their
+            // two lines and no band, which is a stated degradation rather than a missing case.
+            None => match optical::sensor_dialect(probe.flavor) {
+                Some(dialect) => {
+                    let (r, t) = walk_entity_sensor_optical(
+                        job,
+                        transport,
+                        walker,
+                        timeout,
+                        &dialect,
+                        probe.temp_metric.is_some(),
+                    )
+                    .await;
+                    (r, HashMap::new(), t)
+                }
+                // Unreachable today — every flavour is served by one of the two tables, and
+                // `every_flavor_is_served_by_exactly_one_dialect_kind` pins that. Skipping rather
+                // than panicking is what an older poller meeting a newer dialect must do anyway.
+                None => continue,
+            },
         };
-        if readings.is_empty() {
+        if readings.is_empty() && temps.is_empty() {
             continue;
         }
 
@@ -904,16 +930,48 @@ async fn execute_optical(
         // `MetricDimension::Entity`, which costs storage and appears on no chart (decision 3).
         // The thresholds travel through exactly the same translation — they are keyed by the same
         // row, so a window that survives while its reading did not would be a band with no line.
+        // Both the readings and the temperatures are keyed by entPhysicalIndex and need the same
+        // index — the readings to *find* their port, the temperatures to prove they have none.
+        if !probe.flavor.is_ifindex_keyed() && entity.is_none() {
+            entity = Some(walk_entity_index(job, transport, walker, timeout).await);
+        }
+
+        // Chassis temperature (ADR-070 decision 2). The rows kept here are the ones that reach no
+        // interface: an SFP's own sensors climb ENTITY-MIB to their port (measured 42 of 42), a
+        // chassis sensor dead-ends. That is the whole of the SFP/chassis split — no free-text rule
+        // is added, and ADR-062 Issue #66's exclusion of a module's own temperature holds by
+        // construction rather than by a list of strings.
+        if let (Some(metric), Some(idx)) = (probe.temp_metric.as_ref(), entity.as_ref()) {
+            let mut kept = 0usize;
+            for (ent, celsius) in &temps {
+                if idx.ifindex_for(*ent).is_some() {
+                    continue;
+                }
+                kept += 1;
+                samples.push(Sample::interface(
+                    metric.clone(),
+                    IfIndex(*ent),
+                    *celsius,
+                    MetricKind::Gauge,
+                ));
+            }
+            if !temps.is_empty() {
+                tracing::debug!(
+                    job_id = %job.job_id,
+                    flavor = ?probe.flavor,
+                    kept,
+                    port_attached = temps.len() - kept,
+                    "chassis temperature sensors",
+                );
+            }
+        }
+
         let (resolved, resolved_windows) = if probe.flavor.is_ifindex_keyed() {
             (readings, raw_windows)
         } else {
-            let idx = match &entity {
-                Some(idx) => idx,
-                None => {
-                    entity = Some(walk_entity_index(job, transport, walker, timeout).await);
-                    entity.as_ref().expect("just assigned")
-                }
-            };
+            let idx = entity
+                .as_ref()
+                .expect("built above for a non-ifindex-keyed dialect");
             let before = readings.len();
             let mapped: Vec<optical::OpticalSample> = readings
                 .into_iter()
@@ -1085,29 +1143,39 @@ async fn walk_simple_optical(
     (samples, windows)
 }
 
-/// Walk ENTITY-SENSOR-MIB and correlate its columns into dBm readings keyed by
-/// `entPhysicalIndex`.
+/// Walk a correlated sensor table and pull two different things out of one pass: the optical
+/// readings, and — when asked — the chassis temperatures.
 ///
 /// Four numeric columns in one session, then the entity text in a second — the same two-session
 /// shape the interface walk uses, and for the same reason: the numeric and string walkers are
 /// separate transports.
+///
+/// The `dialect` argument is the whole of ADR-070 decision 1 on this side: Cisco does not implement
+/// RFC 3433, but it implements the identical table at its own root, so the columns move and nothing
+/// else does.
+///
+/// Returns `(optical readings, (entPhysicalIndex, °C) candidates)`. The temperatures are
+/// **candidates** because "is this a chassis sensor or an SFP's own?" is answered by whether the
+/// entity resolves to an interface, and that index belongs to the caller.
 async fn walk_entity_sensor_optical(
     job: &PollJob,
     transport: &dyn Transport,
     walker: &SnmpWalker,
     timeout: Duration,
-) -> Vec<optical::OpticalSample> {
+    dialect: &optical::SensorDialect,
+    want_temperature: bool,
+) -> (Vec<optical::OpticalSample>, Vec<(u32, f64)>) {
     let columns = vec![
-        optical::ENT_SENSOR_TYPE.to_owned(),
-        optical::ENT_SENSOR_SCALE.to_owned(),
-        optical::ENT_SENSOR_PRECISION.to_owned(),
-        optical::ENT_SENSOR_VALUE.to_owned(),
+        dialect.type_oid.to_owned(),
+        dialect.scale_oid.to_owned(),
+        dialect.precision_oid.to_owned(),
+        dialect.value_oid.to_owned(),
     ];
     let rows = match walker.walk(transport, job.target, &columns, timeout).await {
         Ok(rows) => rows,
         Err(err) => {
             tracing::debug!(job_id = %job.job_id, error = %err, "entity-sensor walk failed");
-            return Vec::new();
+            return (Vec::new(), Vec::new());
         }
     };
     let mut types: HashMap<u32, i64> = HashMap::new();
@@ -1116,18 +1184,52 @@ async fn walk_entity_sensor_optical(
     let mut values: HashMap<u32, i64> = HashMap::new();
     for row in rows {
         let v = row.value as i64;
-        let bucket = match row.oid_base.as_str() {
-            optical::ENT_SENSOR_TYPE => &mut types,
-            optical::ENT_SENSOR_SCALE => &mut scales,
-            optical::ENT_SENSOR_PRECISION => &mut precisions,
-            optical::ENT_SENSOR_VALUE => &mut values,
-            _ => continue,
+        // Not a `match`: the arms are runtime values now, so the compiler cannot help here. The
+        // `else` arm is the one that matters — a column this dialect did not ask for is skipped
+        // rather than folded into whichever bucket happened to come last.
+        let base = row.oid_base.as_str();
+        let bucket = if base == dialect.type_oid {
+            &mut types
+        } else if base == dialect.scale_oid {
+            &mut scales
+        } else if base == dialect.precision_oid {
+            &mut precisions
+        } else if base == dialect.value_oid {
+            &mut values
+        } else {
+            continue;
         };
         bucket.insert(row.ifindex, v);
     }
     if values.is_empty() {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     }
+
+    // units(9) and no decimals are the MIB's own defaults for an agent that omits either column.
+    let scale_of = |ent: &u32| scales.get(ent).copied().unwrap_or(9);
+    let precision_of = |ent: &u32| precisions.get(ent).copied().unwrap_or(0);
+
+    // Chassis temperature, from the same rows (ADR-070 decision 2). Deliberately computed before
+    // the text walk: a temperature needs no free text, so a device with nothing but chassis
+    // sensors still reports them.
+    let temps: Vec<(u32, f64)> = if want_temperature {
+        let mut t: Vec<(u32, f64)> = values
+            .iter()
+            .filter_map(|(ent, value)| {
+                let celsius = optical::entity_sensor_celsius(
+                    *value,
+                    *types.get(ent)?,
+                    scale_of(ent),
+                    precision_of(ent),
+                )?;
+                Some((*ent, celsius))
+            })
+            .collect();
+        t.sort_unstable_by_key(|(ent, _)| *ent);
+        t
+    } else {
+        Vec::new()
+    };
 
     // Only now walk the text, and only for the entities that produced a candidate reading.
     let text = walk_entity_text(job, transport, walker, timeout).await;
@@ -1135,14 +1237,14 @@ async fn walk_entity_sensor_optical(
     // Ascending entity order so "first lane wins" in `dedupe_readings` is deterministic.
     let mut ents: Vec<u32> = values.keys().copied().collect();
     ents.sort_unstable();
-    ents.into_iter()
+    let readings = ents
+        .into_iter()
         .filter_map(|ent| {
             let dbm = optical::entity_sensor_dbm(
                 *values.get(&ent)?,
                 *types.get(&ent)?,
-                // `units(9)` / no decimals are the MIB's own defaults for an agent that omits them.
-                scales.get(&ent).copied().unwrap_or(9),
-                precisions.get(&ent).copied().unwrap_or(0),
+                scale_of(&ent),
+                precision_of(&ent),
             )?;
             let reading = optical::reading_from_text(text.get(&ent)?)?;
             Some(optical::OpticalSample {
@@ -1151,7 +1253,8 @@ async fn walk_entity_sensor_optical(
                 dbm,
             })
         })
-        .collect()
+        .collect();
+    (readings, temps)
 }
 
 /// `entPhysicalIndex` → the best free text describing it (`entPhysicalName` preferred, falling
@@ -1718,6 +1821,10 @@ struct RawInterfaceNumerics {
     high: HashMap<u32, f64>,
     /// `dot3StatsDuplexStatus` (`unknown(1)` / `halfDuplex(2)` / `fullDuplex(3)`).
     duplex: HashMap<u32, f64>,
+    /// `hwEthernetDuplex` (`full(1)` / `half(2)`) — the Huawei fallback. **Kept in its own map
+    /// rather than merged into `duplex`**: the two columns disagree on what `1` means, so a
+    /// merged map would need to remember which column each row came from anyway.
+    hw_duplex: HashMap<u32, f64>,
     /// `ifType` (IANAifType).
     if_type: HashMap<u32, f64>,
 }
@@ -1737,6 +1844,7 @@ async fn walk_interface_metadata(
         speed: raw_speed,
         high: raw_high,
         duplex: raw_duplex,
+        hw_duplex: raw_hw_duplex,
         if_type: raw_iftype,
     } = raw;
     let field_by_base: HashMap<&str, InterfaceField> = meta_columns
@@ -1821,11 +1929,23 @@ async fn walk_interface_metadata(
     // ifSpeed it does not report, and vice versa.
     for ifindex in raw_duplex
         .keys()
+        .chain(raw_hw_duplex.keys())
         .chain(raw_iftype.keys())
         .copied()
         .collect::<BTreeSet<u32>>()
     {
-        let duplex = raw_duplex.get(&ifindex).copied().and_then(duplex_from_dot3);
+        // EtherLike wins when present: it is the standard, and a device answering both should
+        // not have its duplex decided by which vendor MIB the poller happened to read second.
+        let duplex = raw_duplex
+            .get(&ifindex)
+            .copied()
+            .and_then(duplex_from_dot3)
+            .or_else(|| {
+                raw_hw_duplex
+                    .get(&ifindex)
+                    .copied()
+                    .and_then(duplex_from_huawei)
+            });
         let if_type = raw_iftype
             .get(&ifindex)
             .copied()
@@ -2121,6 +2241,129 @@ mod tests {
             "a marker row must not become a band either"
         );
         assert!(windows.contains_key(&2), "the live port keeps its band");
+    }
+
+    /// **The Cisco sensor dialect end to end: optical readings, the sentinel, and the SFP/chassis
+    /// split** (ADR-070 decisions 1 and 2).
+    ///
+    /// There was no test of the correlated path at all before this — every optical test exercised
+    /// a `SimpleDialect`. That gap is why the shape of this one matters more than its size: the
+    /// four things asserted here each fail *silently* into "no series", which on a real device is
+    /// indistinguishable from "this switch has no optics".
+    #[tokio::test]
+    async fn the_cisco_sensor_dialect_splits_optical_readings_from_chassis_temperature() {
+        use yagra_transport::{SnmpInstanceRow, SnmpTableSample, SnmpTableString, SnmpValue};
+        let d = optical::sensor_dialect(yagra_common::OpticalFlavor::CiscoEntitySensor)
+            .expect("cisco is a correlated dialect");
+        let num = |oid: &str, ent: u32, value: f64| SnmpTableSample {
+            oid_base: oid.to_owned(),
+            ifindex: ent,
+            value,
+        };
+        // type / scale / precision / value for one entity, in the shape a real Nexus sends.
+        let sensor = |ent: u32, ty: f64, scale: f64, prec: f64, value: f64| {
+            vec![
+                num(d.type_oid, ent, ty),
+                num(d.scale_oid, ent, scale),
+                num(d.precision_oid, ent, prec),
+                num(d.value_oid, ent, value),
+            ]
+        };
+        let text = |ent: u32, s: &str| SnmpTableString {
+            oid_base: optical::ENT_PHYSICAL_NAME.to_owned(),
+            ifindex: ent,
+            value: s.to_owned(),
+        };
+
+        let mut fake = FakeTransport::reachable(1.0);
+        fake.snmp_table = [
+            // ent 100 — a live receive sensor on Ethernet1/1. The exact row from the lab N3K.
+            sensor(100, 14.0, 8.0, 0.0, -13187.0),
+            // ent 101 — the SFP's *own* temperature, sitting in the same table. Excluded by
+            // ADR-062 Issue #66, and excluded here because it reaches a port.
+            sensor(101, 8.0, 9.0, 0.0, 45.0),
+            // ent 200 — `module-1 FRONT`, a chassis sensor. Reaches no port, so it is the one
+            // temperature that survives.
+            sensor(200, 8.0, 9.0, 0.0, 31.0),
+            // ent 300 — a transmit sensor reading 0, which is what an N9K sends for all fourteen
+            // of its dBm sensors when nothing is plugged in. 0 dBm is 1 mW — stronger than the
+            // live port above — so it must produce nothing.
+            sensor(300, 14.0, 8.0, 0.0, 0.0),
+        ]
+        .concat();
+        fake.snmp_table_strings = vec![
+            text(100, "Ethernet1/1 Lane 1 Transceiver Receive Power Sensor"),
+            text(101, "Ethernet1/1 Lane 1 Transceiver Temperature Sensor"),
+            text(200, "module-1 FRONT"),
+            text(300, "Ethernet1/2 Lane 1 Transceiver Transmit Power Sensor"),
+        ];
+        // ENTITY-MIB: the two optical sensors and the SFP temperature hang off ports; the chassis
+        // sensor has a parent that leads nowhere. This is the whole SFP/chassis discriminator.
+        let alias = |ent: u32, ifindex: u32| SnmpInstanceRow {
+            oid_base: optical::ENT_ALIAS_MAPPING.to_owned(),
+            instance: vec![ent, 0],
+            value: SnmpValue::Oid(format!("1.3.6.1.2.1.2.2.1.1.{ifindex}")),
+        };
+        let parent = |ent: u32, p: u32| SnmpInstanceRow {
+            oid_base: optical::ENT_PHYSICAL_CONTAINED_IN.to_owned(),
+            instance: vec![ent],
+            value: SnmpValue::Int(i64::from(p)),
+        };
+        fake.snmp_instances = vec![
+            parent(100, 10),
+            parent(101, 10),
+            alias(10, 1), // port Ethernet1/1
+            parent(300, 20),
+            alias(20, 2), // port Ethernet1/2
+            // The chassis sensor climbs to a module that owns no interface — a dead end, exactly
+            // as `module-1 FRONT` does on the real N9K (four hops, no alias).
+            parent(200, 900),
+        ];
+
+        let job = PollJob::snmp_optical(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
+            yagra_bus::SnmpOpticalCheck {
+                community: "public".to_owned(),
+                probes: vec![yagra_bus::OpticalProbe {
+                    flavor: yagra_common::OpticalFlavor::CiscoEntitySensor,
+                    rx_metric: Some(yagra_common::METRIC_IF_RX_POWER_DBM.to_owned()),
+                    tx_metric: Some(yagra_common::METRIC_IF_TX_POWER_DBM.to_owned()),
+                    temp_metric: Some(yagra_common::METRIC_CISCO_TEMP_C.to_owned()),
+                }],
+                timeout_ms: 1_000,
+            },
+            30,
+        );
+        let r = execute(&job, &fake, 1_000).await;
+        let of = |metric: &str| -> Vec<(Option<u32>, f64)> {
+            r.samples
+                .iter()
+                .filter(|s| s.metric == metric)
+                .map(|s| (s.ifindex.map(|i| i.0), s.value))
+                .collect()
+        };
+
+        // The Cisco columns were walked at all — if the dialect were still hardcoded to the
+        // standard root this would be empty, which is the pre-ADR-070 behaviour on every Catalyst.
+        assert_eq!(
+            of(yagra_common::METRIC_IF_RX_POWER_DBM),
+            vec![(Some(1), -13.187)],
+            "the live receive level, translated to its ifIndex"
+        );
+        // The 0 dBm marker must not become the strongest reading on the switch.
+        assert!(
+            of(yagra_common::METRIC_IF_TX_POWER_DBM).is_empty(),
+            "a 0 dBm sensor is 'no module', not a measurement"
+        );
+        // Exactly one temperature: the chassis one. The SFP's own temperature (ent 101, 45 °C) is
+        // excluded *structurally* — it reaches a port — not by matching its description.
+        assert_eq!(
+            of(yagra_common::METRIC_CISCO_TEMP_C),
+            vec![(Some(200), 31.0)],
+            "only the sensor that belongs to no port becomes a chassis temperature"
+        );
     }
 
     fn icmp_job() -> PollJob {
@@ -3629,6 +3872,75 @@ mod tests {
             "`unknown(1)` must store as unknown, not as a duplex"
         );
         assert_eq!(loopback.if_type, Some(24));
+    }
+
+    /// A device with no EtherLike-MIB still reports duplex, via Huawei's column (ADR-063 Inc.3).
+    ///
+    /// 🚨 The assertion on ifIndex 1 is the one that matters: `hwEthernetDuplex` says `full(1)`,
+    /// and the standard mapper reads `1` as `unknown`. If the Huawei rows were ever fed through
+    /// `duplex_from_dot3` — the obvious "reuse" — this would be `None`, which is byte-identical to
+    /// the behaviour before this feature existed. **The bug would look like the feature simply not
+    /// working**, on a device nobody can compare against, so it has to be pinned here.
+    #[tokio::test]
+    async fn a_device_without_etherlike_mib_gets_duplex_from_the_huawei_column() {
+        use yagra_transport::SnmpTableSample;
+        let metric = |ifindex: u32| SnmpTableSample {
+            oid_base: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),
+            ifindex,
+            value: 10.0,
+        };
+        let hw = |ifindex: u32, value: f64| SnmpTableSample {
+            oid_base: OID_HW_ETHERNET_DUPLEX.to_owned(),
+            ifindex,
+            value,
+        };
+        let t = FakeTransport::reachable(0.0).with_snmp_table(vec![
+            metric(1),
+            metric(2),
+            metric(3),
+            metric(4),
+            // ifIndex 1: the lab USG's shape — Huawei column only, `full(1)` on every port.
+            hw(1, 1.0),
+            hw(2, 2.0),
+            // ifIndex 3: both columns present and *disagreeing*. EtherLike is the standard and
+            // must win, so the answer is Half even though the Huawei column says full.
+            SnmpTableSample {
+                oid_base: OID_DOT3_DUPLEX_STATUS.to_owned(),
+                ifindex: 3,
+                value: 2.0,
+            },
+            hw(3, 1.0),
+            // ifIndex 4: `3` is a value the Huawei enumeration does not define. It must not be
+            // read as `fullDuplex(3)` from the other MIB.
+            hw(4, 3.0),
+        ]);
+        let r = execute(&snmp_table_job(), &t, 1_000).await;
+        let row = |ix: u32| r.interfaces.iter().find(|i| i.ifindex == IfIndex(ix));
+        let duplex = |ix: u32| {
+            row(ix)
+                .unwrap_or_else(|| panic!("ifIndex {ix} discovered"))
+                .if_duplex
+        };
+
+        assert_eq!(
+            duplex(1),
+            Some(yagra_common::Duplex::Full),
+            "hwEthernetDuplex full(1) — reusing the dot3 mapper here would silently give None"
+        );
+        assert_eq!(duplex(2), Some(yagra_common::Duplex::Half));
+        assert_eq!(
+            duplex(3),
+            Some(yagra_common::Duplex::Half),
+            "dot3StatsDuplexStatus wins when a device answers both"
+        );
+        // 3 is not a value in Huawei's enumeration. It must not borrow `fullDuplex(3)` from the
+        // standard one — and because that leaves the row with nothing usable, the fold declines to
+        // materialise the interface at all rather than adding an index-only record (the same guard
+        // that stops a device answering `unknown(1)` everywhere from inflating the inventory).
+        assert!(
+            row(4).is_none(),
+            "an unmappable duplex reading must not conjure an interface row"
+        );
     }
 
     /// A device that implements neither OID still gets its names and speed — the ADR-063 columns
