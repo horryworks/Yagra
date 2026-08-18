@@ -23,13 +23,16 @@ import type {
 import {
   canRequestStop,
   isScanInFlight,
+  MAX_POLL_FAILURES,
   mergeScanIntoList,
   pickDefaultPool,
+  POLL_INTERVAL_MS,
   poolIsUnrouted,
   SCAN_STATE_SPECS,
   scanState,
   selectInitialScan,
   shouldPollScan,
+  statusFor,
 } from './discoveryScans';
 import { expandTargets } from '../lib/cidr';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -57,6 +60,11 @@ import { facetCounts } from '../lib/filterCounts';
 import { buildPredicate } from '../lib/filterPredicate';
 import { isSnmpCredentialKind } from '../lib/credentialKinds';
 import './DiscoveryPage.css';
+
+/** A stable empty list, so `candidates` keeps its identity between renders when there is no scan
+ *  on screen. `?? []` would mint a new array every render and re-run the effect that seeds the
+ *  per-row form state on each one. */
+const NO_CANDIDATES: DiscoveryCandidate[] = [];
 
 interface RowState {
   selected: boolean;
@@ -94,7 +102,6 @@ export function DiscoveryPage() {
   /** What the last stop request was told about this fleet's ability to honour it. */
   const [stopOutcome, setStopOutcome] = useState<'requested' | 'unsupported' | null>(null);
   const [stopError, setStopError] = useState<string | null>(null);
-  const [candidates, setCandidates] = useState<DiscoveryCandidate[]>([]);
   const [rowState, setRowState] = useState<Record<string, RowState>>({});
   const [imported, setImported] = useState<Record<string, boolean>>({});
   const [importNote, setImportNote] = useState<string | null>(null);
@@ -111,6 +118,42 @@ export function DiscoveryPage() {
   /** The `?scan=` present when the page was opened. Held in a ref because the URL is rewritten from
    *  `scanId` below, so reading the live value during the reattach would race with our own write. */
   const arrivedWith = useRef(searchParams.get('scan'));
+
+  /** The status the page may act on, and the candidates that come with it.
+   *
+   *  🚨 `status` holds the last reply from *any* scan; `shown` is the part of it that is about the
+   *  one on screen. Three separate guards used to keep those in step by hand — and each was added
+   *  after the same defect was found again on a real deployment. `statusFor` is the one answer they
+   *  collapse into; everything below reads `shown`, never `status`. */
+  const shown = statusFor(scanId, status);
+  const candidates = shown?.candidates ?? NO_CANDIDATES;
+
+  /** Point the page at a scan — or at none — and clear everything that described the last one.
+   *
+   *  🚨 There were two of these and they had **already** drifted: `startScan` cleared thirteen
+   *  pieces of state and the sweep-row click cleared nine, leaving `note`, `error` and both import
+   *  messages behind. Picking another sweep out of Recent sweeps therefore showed the previous
+   *  one's "Scan complete: 8 devices" above the new one's results. A second copy of a field list
+   *  always drifts — it is why `ui-conventions.md` says a dialog's reset is unmounting it rather
+   *  than a `resetFooForm()` that enumerates the fields. This is the one copy.
+   *
+   *  ⚠️ `reattached` is deliberately **not** here: it is the single thing that genuinely differs
+   *  between the callers (arrived at one vs. started one), so each says it for itself. */
+  const selectScan = useCallback((id: string | null) => {
+    setScanId(id);
+    setStatus(null);
+    setRowState({});
+    setImported({});
+    setFailures(0);
+    setJustStarted(false);
+    setUnknownScan(false);
+    setStopOutcome(null);
+    setStopError(null);
+    setNote(null);
+    setError(null);
+    setImportNote(null);
+    setImportError(null);
+  }, []);
 
   useEffect(() => {
     api.listProfiles().then(setProfiles).catch(() => undefined);
@@ -144,11 +187,11 @@ export function DiscoveryPage() {
         setScans(rows);
         const pick = selectInitialScan(rows, arrivedWith.current);
         if (!pick) return;
-        setScanId(pick);
+        selectScan(pick);
         setReattached(true);
       })
       .catch(() => undefined);
-  }, []);
+  }, [selectScan]);
 
   // The one place the URL is written. Two handlers each calling `setSearchParams` would have the
   // second silently undo the first, because both act on the params they captured at render.
@@ -168,9 +211,13 @@ export function DiscoveryPage() {
   // too, so import binds the working secret automatically.
   const seedRows = useCallback((list: DiscoveryCandidate[]) => {
     setRowState((cur) => {
-      const next = { ...cur };
+      // ⚠️ Returning `cur` unchanged when nothing was added is what lets React skip the render.
+      // This runs on every poll, and always handing back a fresh object re-rendered the whole
+      // candidate table twice a second for a sweep that had found nothing new since the last one.
+      let next: Record<string, RowState> | null = null;
       for (const c of list) {
-        if (next[c.address]) continue;
+        if (cur[c.address]) continue;
+        next ??= { ...cur };
         next[c.address] = {
           selected: false,
           name: c.sysname?.trim() || c.address,
@@ -180,31 +227,52 @@ export function DiscoveryPage() {
           model: c.model ?? '',
         };
       }
-      return next;
+      return next ?? cur;
     });
   }, []);
 
+  // Driven by what is on screen rather than called from inside the poll's callback — a reply about
+  // a scan the page had already left used to seed rows for that scan's addresses.
+  useEffect(() => {
+    seedRows(candidates);
+  }, [candidates, seedRows]);
+
+  // The progress line, likewise derived. It was written from the poll's `.then`, which is how a
+  // finished scan's "Scan complete" could end up describing a sweep that had only just begun.
+  useEffect(() => {
+    if (!shown) return;
+    if (scanState(shown.state) === 'queued') {
+      // The state exists to be said out loud. Without this the main card reads `0/254 probed` — the
+      // same thing it says for a sweep that is running and finding nothing — and the distinction
+      // would live only in the Recent sweeps badge, which is not where the operator is looking.
+      setNote(t('discovery.scans.queuedNote'));
+      return;
+    }
+    if (!isScanInFlight(shown.state)) {
+      setNote(t('discovery.msg.scanComplete', { count: shown.candidates.length }));
+      return;
+    }
+    const at = shown.scanning ? t('discovery.msg.nowAt', { addr: shown.scanning }) : '';
+    setNote(t('discovery.msg.scanningProgress', { probed: shown.probed, total: shown.total }) + at);
+  }, [shown, t]);
+
   const startScan = () => {
-    setError(null);
-    setNote(null);
-    setImportNote(null);
-    setImportError(null);
+    // Validate before clearing anything. A range that does not parse started nothing, so nothing
+    // that describes the previous sweep should disappear — the operator gets an error line above
+    // results that are still theirs.
     const targets = expandTargets(targetSpec);
     if (targets.length === 0) {
       setError(t('discovery.err.badTargets'));
       return;
     }
-    setCandidates([]);
-    setRowState({});
-    setImported({});
-    setStatus(null);
-    setUnknownScan(false);
+    // 🚨 Selecting *nothing* is load-bearing, not tidiness. The new scan has no id until the
+    // server answers, and this used to leave the previous scan selected across that window — so the
+    // page fired one more read of the old scan, whose reply cleared `justStarted` and installed a
+    // `done` status before the new id existed. With no scan selected there is nothing to read.
+    selectScan(null);
     setReattached(false);
-    setFailures(0);
-    setStopOutcome(null);
-    setStopError(null);
-    // Set before the request: polling is driven by the act of starting, so that a slow or
-    // momentarily unanswerable server cannot leave the page silent (`shouldPollScan`).
+    // After the reset, and before the request: polling is driven by the act of starting, so that a
+    // slow or momentarily unanswerable server cannot leave the page silent (`shouldPollScan`).
     setJustStarted(true);
     api
       // `pool` decides which site sweeps. Omitted means "any poller", which is what this screen
@@ -217,6 +285,8 @@ export function DiscoveryPage() {
       })
       .then(({ scan_id }) => {
         setScanId(scan_id);
+        // Superseded by the derived progress line as soon as the first status lands; until then it
+        // is the only thing on screen saying the sweep was accepted.
         setNote(t('discovery.msg.scanningCount', { count: targets.length }));
         api.listDiscoveryScans().then(setScans).catch(() => undefined);
       })
@@ -226,42 +296,29 @@ export function DiscoveryPage() {
       });
   };
 
-  // Which scan the page is showing, readable from inside an in-flight `poll`. A ref and not the
-  // state value because `poll` is a `useCallback` and would otherwise capture whichever id was
-  // selected when it was created.
-  const selectedScan = useRef<string | null>(null);
-  useEffect(() => {
-    selectedScan.current = scanId;
-  }, [scanId]);
-
+  /** Read the selected scan once.
+   *
+   *  `alive` is the calling effect's own liveness. A reply that lands after the page has moved on
+   *  must neither write state nor schedule the next read — and it is the effect, not this function,
+   *  that knows whether it is still the current one. Nothing here filters by scan id any more:
+   *  `statusFor` makes a reply about the wrong scan harmless wherever it is read. */
   const poll = useCallback(
-    (id: string) => {
+    (id: string, alive: () => boolean) =>
       api
         .getDiscoveryScan(id)
         .then((s) => {
-          // ⚠️ Drop a reply about a scan the page has moved on from. Pressing Scan fires one
-          // last poll of the *previous* scan before the new id exists, and letting that reply land
-          // installs a finished status over a sweep that has just begun.
-          if (selectedScan.current !== null && selectedScan.current !== id) return;
+          if (!alive()) return;
           setStatus(s);
           setUnknownScan(false);
           setFailures(0);
           setJustStarted(false);
-          setCandidates(s.candidates);
-          seedRows(s.candidates);
           // Keep the row in Recent sweeps in step with the progress line. Only the status is
           // polled, so without this the row froze at whatever the one-off list fetch returned —
           // "Running · 0/254 probed · 0 devices" above a table listing the devices it had found.
           setScans((prev) => mergeScanIntoList(prev, s));
-          if (!isScanInFlight(s.state)) {
-            setNote(t('discovery.msg.scanComplete', { count: s.candidates.length }));
-          } else {
-            const at = s.scanning ? t('discovery.msg.nowAt', { addr: s.scanning }) : '';
-            setNote(t('discovery.msg.scanningProgress', { probed: s.probed, total: s.total }) + at);
-          }
         })
         .catch((e: unknown) => {
-          if (selectedScan.current !== null && selectedScan.current !== id) return;
+          if (!alive()) return;
           setFailures((n) => n + 1);
           // A 404 is the specific, expected failure: this core restarted (or the scan aged out)
           // while a poller may still be sweeping. It gets its own message rather than being
@@ -271,25 +328,38 @@ export function DiscoveryPage() {
             setJustStarted(false);
             setNote(null);
           }
-        });
-    },
-    [seedRows, t],
+        }),
+    [],
   );
 
-  const polling = shouldPollScan({ scanId, status, justStarted, failures });
+  const polling = shouldPollScan({ status: shown, justStarted, failures });
 
   useEffect(() => {
     if (!scanId || !polling) return;
-    poll(scanId);
-    const timer = setInterval(() => poll(scanId), 2000);
-    return () => clearInterval(timer);
-    // ⚠️ `status` is deliberately not a dependency: it changes on every tick, and re-running this
-    // would tear down and rebuild the interval each time, so the 2s cadence would restart forever.
-    // `polling` is the boolean distillation of it, and only flips when the answer changes.
+    // ⚠️ A self-scheduling timeout, **not** `setInterval`. An interval fires on the clock whether
+    // or not the previous read came back, so on a slow link reads stack up and the last one to
+    // *arrive* wins — which makes the progress line go backwards on screen even though the server's
+    // `probed` only ever increases. Chaining keeps exactly one read outstanding and makes the 2s a
+    // gap between reads rather than a promise about their rate.
+    let live = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const tick = () => {
+      void poll(scanId, () => live).then(() => {
+        if (live) timer = setTimeout(tick, POLL_INTERVAL_MS);
+      });
+    };
+    tick();
+    return () => {
+      live = false;
+      if (timer) clearTimeout(timer);
+    };
+    // `status` is deliberately not a dependency: it changes on every tick, and re-running this
+    // would abandon the chain and start a fresh one each time. `polling` is its boolean
+    // distillation, and only changes when the answer does.
   }, [scanId, polling, poll]);
 
   /** The scan on screen is still producing results. */
-  const inFlight = status ? isScanInFlight(status.state) : justStarted;
+  const inFlight = shown ? isScanInFlight(shown.state) : justStarted;
   const unroutedPool = poolIsUnrouted(pools, pool);
 
   const requestStop = () => {
@@ -300,7 +370,9 @@ export function DiscoveryPage() {
       .then((r) => {
         // Optimistic, and only as far as the truth goes: the request is a fact, the stop is not.
         // The authoritative answer arrives on the next poll as the scan's own state.
-        setStatus((cur) => (cur ? { ...cur, state: 'cancelling' } : cur));
+        // ⚠️ Patch only a status that is about the scan just cancelled — `status` holds the last
+        // reply from any of them, and `statusFor` is what makes that safe everywhere else.
+        setStatus((cur) => (cur && cur.scan_id === scanId ? { ...cur, state: 'cancelling' } : cur));
         setStopOutcome(r.poller_supports_cancel ? 'requested' : 'unsupported');
       })
       .catch((e: unknown) => setStopError(errMsg(e, t('discovery.scans.stopErr'))));
@@ -473,7 +545,7 @@ export function DiscoveryPage() {
                   explains itself on hover alone, which is nothing on a touch device
                   (ui-conventions R4 / ADR-056). Once asked, the button goes and the sentence below
                   takes over. */}
-              {canRequestStop(status?.state) && (
+              {canRequestStop(shown?.state) && (
                 <Button onClick={requestStop}>{t('discovery.scans.stop')}</Button>
               )}
             </div>
@@ -486,7 +558,7 @@ export function DiscoveryPage() {
             answers "no such scan" while a poller may well still be probing, so "nothing here" would
             be the one reading that is definitely wrong. */}
         {unknownScan && <p className="disco-pool-warn">{t('discovery.scans.unknownScan')}</p>}
-        {failures >= 5 && !unknownScan && (
+        {failures >= MAX_POLL_FAILURES && !unknownScan && (
           <p className="disco-pool-warn">{t('discovery.scans.pollFailed')}</p>
         )}
         {reattached && !unknownScan && note && (
@@ -498,16 +570,16 @@ export function DiscoveryPage() {
             request and cannot know who acted, so until the poller reports, "requested" is the whole
             truth — and `finishedAnyway` is the case where the answer turned out to be "it did not
             stop, it completed". */}
-        {stopOutcome === 'unsupported' && status?.state === 'cancelling' && (
+        {stopOutcome === 'unsupported' && shown?.state === 'cancelling' && (
           <p className="disco-pool-warn">{t('discovery.scans.stopUnsupported')}</p>
         )}
-        {stopOutcome === 'requested' && status?.state === 'cancelling' && (
+        {stopOutcome === 'requested' && shown?.state === 'cancelling' && (
           <p className="muted">{t('discovery.scans.stopRequested')}</p>
         )}
-        {status?.state === 'cancelled' && (
+        {shown?.state === 'cancelled' && (
           <p className="muted">{t('discovery.scans.stoppedNote')}</p>
         )}
-        {stopOutcome !== null && status?.state === 'done' && (
+        {stopOutcome !== null && shown?.state === 'done' && (
           <p className="muted">{t('discovery.scans.finishedAnyway')}</p>
         )}
         {note && <p className="muted">{note}</p>}
@@ -528,16 +600,8 @@ export function DiscoveryPage() {
                     type="button"
                     className={`disco-scan${s.scan_id === scanId ? ' selected' : ''}`}
                     onClick={() => {
-                      setScanId(s.scan_id);
+                      selectScan(s.scan_id);
                       setReattached(true);
-                      setUnknownScan(false);
-                      setFailures(0);
-                      setStopOutcome(null);
-                      setStopError(null);
-                      setStatus(null);
-                      setCandidates([]);
-                      setRowState({});
-                      setImported({});
                     }}
                   >
                     <Badge tone={spec.tone}>{t(spec.labelKey)}</Badge>

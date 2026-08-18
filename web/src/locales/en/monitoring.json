@@ -248,12 +248,14 @@
       "candidates_other": "{{count}} devices",
       "pollFailed": "Stopped checking this sweep after repeated errors. Reload to try again.",
       "state": {
+        "queued": "Waiting for a poller",
         "running": "Running",
         "cancelling": "Stopping…",
         "cancelled": "Stopped",
         "done": "Finished",
         "unknown": "Unknown"
       },
+      "queuedNote": "Waiting for a poller to pick this sweep up. Nothing has been probed yet.",
       "stop": "Stop sweep",
       "stopping": "Stopping the sweep…",
       "stopRequested": "Stop requested. The poller finishes what it is already probing, so this takes a few seconds.",

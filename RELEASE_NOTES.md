@@ -17,6 +17,38 @@
   SNMP. Send `"snmp_when_unreachable": true` for the previous behaviour. In the WebUI it is a
   checkbox on the scan form, off by default.
 
+### Improvements
+- **A sweep that no poller has picked up now says so, instead of claiming to be running.** A
+  discovery scan starts in a new state, *Waiting for a poller*, and only becomes *Running* once a
+  poller reports. This matters most when a scan is sent to a poller pool with nothing alive in it:
+  such a sweep used to read `Running · 0/254` for the life of the core process, indistinguishable
+  from one that was running and finding nothing. A queued sweep can be stopped — that is the
+  cheapest stop there is, since it has not probed anything yet — and one nobody ever picks up is
+  retired after two hours rather than listed forever.
+  - ⚠️ **API clients**: `state` on `GET /api/v1/discovery/scan/{id}` and `/discovery/scans` can now
+    return `queued`. It is an addition; no existing value changed meaning.
+  - A poller running an older release does not send the new "I have it" message, so a sweep it is
+    genuinely running reads as queued until its first batch of 32 addresses completes.
+- **A discovery sweep no longer reports an empty subnet when the poller cannot send ICMP at all.**
+  With the ping gate on, a probe that *failed* (no raw socket, no route, an address family the
+  poller cannot use) was treated exactly like an address that stayed silent — so a poller with
+  broken ICMP swept a whole range without sending one SNMP packet and finished successfully with no
+  devices and no error. A failed probe now bypasses the gate, and the sweep logs one line naming how
+  many targets it could not reach that way.
+- **Finished sweeps now actually age out.** The six-hour retention window was only applied when a
+  new sweep was started, so on a deployment where nobody swept again, old scans stayed in *Recent
+  sweeps* and kept feeding the dashboard's discovery queue indefinitely. They are now pruned when
+  either surface is read.
+
+### Bug Fixes
+- **The Discovery progress line no longer describes the wrong sweep.** Choosing another sweep from
+  *Recent sweeps* left the previous one's "Scan complete: 8 devices" on screen, along with any error
+  or import message, because the two places that reset the page had drifted apart.
+- **Discovery progress can no longer appear to go backwards.** The page asked for the scan's status
+  every two seconds regardless of whether the previous request had come back, so on a slow
+  connection replies could arrive out of order and an older one would win. It now waits for each
+  reply before scheduling the next.
+
 ### New Features
 - **Every dashboard card can be given a name of your own.** Customize the board and the card's
   heading gains a text box: type "HQ uplink" and the card reads *Interface traffic · HQ uplink*.

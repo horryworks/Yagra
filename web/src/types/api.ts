@@ -1196,7 +1196,13 @@ export type AnalysisJobState = (typeof ANALYSIS_JOB_STATES)[number];
  *  `cancelling`/`cancelled` are declared ahead of the cancel path (ADR-068 Increment 2) so the
  *  exhaustive label map and both locales exist before the state can occur — the same reason
  *  `ANALYSIS_JOB_STATES` carries `queued`. Until then they are never rendered. */
-export const DISCOVERY_SCAN_STATES = ['running', 'cancelling', 'cancelled', 'done'] as const;
+export const DISCOVERY_SCAN_STATES = [
+  'queued',
+  'running',
+  'cancelling',
+  'cancelled',
+  'done',
+] as const;
 export type DiscoveryScanState = (typeof DISCOVERY_SCAN_STATES)[number];
 
 /** One row of the discovery scan list. */

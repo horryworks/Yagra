@@ -7,6 +7,19 @@
 //! the raw socket. Progress is published as **cumulative** partial results after each chunk
 //! of targets, so core can show the sweep advancing; the final message carries `done: true`.
 //!
+//! ## "We have it" comes before "we found something" (ADR-068 Increment 4)
+//!
+//! The first thing a sweep publishes is a zero-progress result, before it probes a single address.
+//! This loop is **strictly sequential** — one job at a time, start to finish — so a job can sit on
+//! the subscription for the length of the sweep ahead of it, which with the ICMP gate off is
+//! minutes. Core used to mark a scan `Running` the moment it accepted it, so "queued behind another
+//! sweep", "no poller ever took this" and "sweeping, and everything out there is silent" were one
+//! sentence on the operator's screen. This message is what core turns into `Running`; a scan nobody
+//! sends it for stays `Queued` and says so.
+//!
+//! It is an ordinary partial result, so it needs no wire change and an N-1 core folds it in as a
+//! zero-progress update.
+//!
 //! ## Stopping a sweep (ADR-068 Increment 2)
 //!
 //! A stop arrives as a [`yagra_bus::DiscoveryCancel`] **broadcast to every poller** — core cannot
@@ -53,9 +66,18 @@
 //! silent for one full timeout, so raising `count` buys nothing), which means one lost packet is
 //! indistinguishable here from a silent address. Discovery has no dwell window to absorb that the
 //! way liveness does.
+//!
+//! 🚨 **What the gate does *not* do is treat a failed probe as a silent host.** `probe_icmp`
+//! returning `Err` — no raw socket, no route, an address family this poller cannot send on — is a
+//! fault here and says nothing about the target, so the gate does not apply to it and the target is
+//! probed with SNMP as it was before the gate existed. This shipped the other way round for one
+//! release: both outcomes collapsed into `reachable == false`, so a poller that could not send ICMP
+//! at all swept an entire subnet without asking a single address for its identity and reported it,
+//! successfully, as empty. The module doc named that as a thing to watch for. Watching is not a fix.
 
 use std::collections::HashMap;
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -223,6 +245,13 @@ struct SweepCtx {
     cancels: Arc<CancelSet>,
     /// Whether a target that did not answer ICMP is still tried with SNMP (ADR-068 Increment 3).
     snmp_when_unreachable: bool,
+    /// How many of this sweep's targets could not be probed at all — `probe_icmp` returned `Err`.
+    ///
+    /// Counted rather than logged per target: a poller that cannot send ICMP fails on *every*
+    /// address, and a line each would be 254 of them for a /24 — which reads as noise and gets
+    /// filtered out, which is how the condition stayed invisible. One line at the end says the same
+    /// thing and says how big it was.
+    icmp_errors: AtomicUsize,
 }
 
 impl SweepCtx {
@@ -269,6 +298,24 @@ pub async fn run_discovery_stream<S>(
             snmp_when_unreachable = job.snmp_when_unreachable,
             "discovery sweep starting"
         );
+        // Before the first probe: see the module doc. ⚠️ It carries an empty `found`, and core's
+        // `ScanState::apply` *replaces* the candidate list rather than appending to it — so a
+        // reordered or duplicated copy landing after real progress would, read literally, empty the
+        // operator's table. What refuses it is the regression guard core already had
+        // (`result.probed < self.probed`), which predates this message and is not obviously
+        // connected to it; there is a test on the core side pinning that it keeps refusing.
+        publish(
+            bus.as_ref(),
+            DiscoveryResult {
+                scan_id: job.scan_id,
+                found: Vec::new(),
+                probed: 0,
+                total,
+                done: false,
+                cancelled: false,
+            },
+        )
+        .await;
         let ctx = SweepCtx {
             candidates: Arc::new(candidates_of(&job)),
             timeout: Duration::from_millis(u64::from(job.timeout_ms)),
@@ -280,6 +327,7 @@ pub async fn run_discovery_stream<S>(
             scan_id: job.scan_id,
             cancels: cancels.clone(),
             snmp_when_unreachable: job.snmp_when_unreachable,
+            icmp_errors: AtomicUsize::new(0),
         };
         let mut found: Vec<DiscoveredDevice> = Vec::new();
         let mut probed: u32 = 0;
@@ -345,6 +393,18 @@ pub async fn run_discovery_stream<S>(
                 },
             )
             .await;
+        }
+        // One line for the whole sweep — see `SweepCtx::icmp_errors`. `warn` rather than `info`
+        // because the sweep quietly stopped being the fast one: every target it could not ping was
+        // probed with SNMP regardless of the gate, so "the gate is on but the sweep took five
+        // minutes" has its explanation here rather than looking like the gate not working.
+        let icmp_errors = ctx.icmp_errors.load(Ordering::Relaxed);
+        if icmp_errors > 0 {
+            tracing::warn!(
+                scan = %job.scan_id, icmp_errors, total,
+                "discovery could not send ICMP to some targets; the ping gate did not apply to \
+                 those, so they were probed with SNMP and this sweep was slower than usual"
+            );
         }
         if cancelled {
             tracing::info!(
@@ -419,20 +479,27 @@ async fn probe_one(
     ctx: &SweepCtx,
     transport: &dyn Transport,
 ) -> Option<DiscoveredDevice> {
-    let reachable = (transport.probe_icmp(target, 1, ctx.timeout).await)
-        .map(|p| p.reachable)
-        .unwrap_or(false);
+    // Three outcomes, not two, and keeping them apart is the whole of this block. "The host was
+    // silent" is what the gate is for. "The probe itself failed" is a fault on *this poller* — no
+    // raw socket, no route, an address family it cannot send on — and says nothing whatever about
+    // the target, so it must not be read as silence.
+    let probe = transport.probe_icmp(target, 1, ctx.timeout).await;
+    let could_not_probe = probe.is_err();
+    if could_not_probe {
+        ctx.icmp_errors.fetch_add(1, Ordering::Relaxed);
+    }
+    let reachable = probe.map(|p| p.reachable).unwrap_or(false);
 
     // The ICMP gate (ADR-068 Inc.3). `None` and not a partial device: a silent address that was
     // never asked for its identity is not a candidate, and reporting it as one — `reachable: false`
     // with no identity — would fill the import table with every unassigned address in the subnet.
     //
-    // ⚠️ Note what is *not* here: a distinction between "did not answer" and "the probe errored".
-    // `probe_icmp` failing (no IPv6 socket, say) already collapses to `reachable == false` above,
-    // so a poller that cannot send ICMP at all would, with this gate on, sweep an entire subnet
-    // without probing anything and report it as empty. That is the one failure mode worth watching
-    // on a deployment whose pollers are not both address families.
-    if !reachable && !ctx.snmp_when_unreachable {
+    // 🚨 `could_not_probe` is the half that shipped missing. Without it a poller whose ICMP is
+    // broken reports every subnet as empty — successfully, with no error anywhere — because a failed
+    // probe and a silent address were the same value. On a failure the gate simply does not apply:
+    // the target is probed exactly as it was before the gate existed. That costs the sweep its
+    // speed, which is the correct thing to lose, and the count is reported once at the end.
+    if !reachable && !could_not_probe && !ctx.snmp_when_unreachable {
         return None;
     }
 
@@ -589,8 +656,25 @@ mod tests {
 
     /// Answers SNMP only for a specific v2c community and/or v3 user, so tests can assert
     /// which candidate matched.
+    /// What the fake's ICMP probe does.
+    ///
+    /// Three outcomes, not two, because that is the distinction under test: a `bool` can say
+    /// "answered" or "did not answer" and has no way to say "the probe never happened". The
+    /// production code collapsed those last two for a release, so a test type that cannot express
+    /// them apart would be unable to catch it coming back.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Ping {
+        /// Answered the echo.
+        Answers,
+        /// Reachable in principle; simply did not reply. What the gate exists to skip.
+        Silent,
+        /// `probe_icmp` itself returned `Err` — no raw socket, no route, wrong address family.
+        /// Says nothing about the target.
+        Errors,
+    }
+
     struct SelectiveFake {
-        ping: bool,
+        ping: Ping,
         good_community: Option<String>,
         good_v3_user: Option<String>,
     }
@@ -603,10 +687,14 @@ mod tests {
             _count: u8,
             _timeout: Duration,
         ) -> Result<IcmpProbe, TransportError> {
+            if self.ping == Ping::Errors {
+                return Err(TransportError::Io("no raw socket".to_owned()));
+            }
+            let up = self.ping == Ping::Answers;
             Ok(IcmpProbe {
-                reachable: self.ping,
-                rtt_ms: self.ping.then_some(1.0),
-                loss_pct: if self.ping { 0.0 } else { 100.0 },
+                reachable: up,
+                rtt_ms: up.then_some(1.0),
+                loss_pct: if up { 0.0 } else { 100.0 },
             })
         }
 
@@ -823,6 +911,7 @@ mod tests {
             scan_id: Uuid::nil(),
             cancels: no_cancels(),
             snmp_when_unreachable: true,
+            icmp_errors: AtomicUsize::new(0),
         }
     }
 
@@ -842,7 +931,7 @@ mod tests {
         let id = Uuid::from_u128(1);
         let cands = candidates_of(&job(vec![v2c_cred(id, "secret")], vec![]));
         let fake = SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("secret".to_owned()),
             good_v3_user: None,
         };
@@ -866,7 +955,7 @@ mod tests {
             vec![],
         ));
         let fake = SelectiveFake {
-            ping: false,
+            ping: Ping::Silent,
             good_community: None,
             good_v3_user: Some("monitor".to_owned()),
         };
@@ -883,7 +972,7 @@ mod tests {
     async fn adhoc_community_match_has_no_credential_ref() {
         let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
         let fake = SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         };
@@ -904,7 +993,7 @@ mod tests {
             vec!["shared".to_owned()],
         ));
         let fake = SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("shared".to_owned()),
             good_v3_user: None,
         };
@@ -918,7 +1007,7 @@ mod tests {
     async fn silent_target_yields_nothing() {
         let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
         let fake = SelectiveFake {
-            ping: false,
+            ping: Ping::Silent,
             good_community: None,
             good_v3_user: None,
         };
@@ -940,7 +1029,7 @@ mod tests {
         // it is the only outcome consistent with SNMP never having been attempted at all.
         let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
         let fake = SelectiveFake {
-            ping: false,
+            ping: Ping::Silent,
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         };
@@ -962,7 +1051,7 @@ mod tests {
         let id = Uuid::from_u128(3);
         let cands = candidates_of(&job(vec![v2c_cred(id, "secret")], vec![]));
         let fake = SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("secret".to_owned()),
             good_v3_user: None,
         };
@@ -976,13 +1065,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_probe_that_could_not_be_sent_does_not_count_as_silence() {
+        // 🚨 The gate's third case, and the one that shipped wrong. `probe_icmp` returning `Err`
+        // is a fault on this poller — no raw socket, no route, an address family it cannot send on
+        // — and it used to collapse into the same `reachable == false` a silent host produces. With
+        // the gate on, that meant a poller whose ICMP was broken swept an entire subnet without
+        // sending one SNMP packet and reported it as empty, with no error logged anywhere and the
+        // scan finishing successfully. The whole failure is invisible: every layer says it worked.
+        //
+        // So: gate ON, ICMP broken, and the device must still be found.
+        let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
+        let fake = SelectiveFake {
+            ping: Ping::Errors,
+            good_community: Some("public".to_owned()),
+            good_v3_user: None,
+        };
+        let mut c = ctx(cands);
+        c.snmp_when_unreachable = false;
+        let d = probe_one(target(), &c, &fake)
+            .await
+            .expect("a target whose ICMP probe could not be sent must still be asked over SNMP");
+        assert_eq!(d.sysdescr.as_deref(), Some("Cisco IOS Software"));
+        assert!(
+            !d.reachable,
+            "and is still reported honestly as not having answered ping"
+        );
+        assert_eq!(
+            c.icmp_errors.load(Ordering::Relaxed),
+            1,
+            "and the sweep counts it, so the one warning at the end can say how many there were — \
+             without that count the operator sees only that the sweep got slow"
+        );
+    }
+
+    #[tokio::test]
     async fn opting_in_still_finds_a_device_that_blocks_icmp() {
         // The capability the gate would otherwise delete, and the reason it is a switch rather than
         // a rule: a firewall that drops echo requests and answers SNMP is a real device on a real
         // network, and this is the only way discovery reaches it.
         let cands = candidates_of(&job(vec![], vec!["public".to_owned()]));
         let fake = SelectiveFake {
-            ping: false,
+            ping: Ping::Silent,
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         };
@@ -1190,7 +1313,7 @@ mod tests {
             snmp_when_unreachable: true,
         };
         let transport = Arc::new(SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         });
@@ -1207,16 +1330,31 @@ mod tests {
         while let Ok(r) = rx.try_recv() {
             results.push(r);
         }
-        assert_eq!(results.len(), 2, "one progress result per chunk");
+        assert_eq!(
+            results.len(),
+            3,
+            "the 'we have it' message, then one progress result per chunk"
+        );
+        // The zero-progress message (ADR-068 Inc.4). It is what core turns into `Running`, so a
+        // sweep that never sends it stays `Queued` — which is the whole point, and why this is
+        // asserted rather than skipped past by bumping an index.
         assert!(!results[0].done);
-        assert_eq!(results[0].probed, u32::try_from(PROGRESS_CHUNK).unwrap());
-        assert_eq!(results[0].found.len(), PROGRESS_CHUNK);
-        assert!(results[1].done, "the last chunk closes the scan");
-        assert_eq!(results[1].probed, total);
-        assert_eq!(results[1].total, total);
+        assert_eq!(
+            (results[0].probed, results[0].total),
+            (0, total),
+            "it announces the size of the work and no progress at all"
+        );
+        assert!(results[0].found.is_empty());
+
+        assert!(!results[1].done);
+        assert_eq!(results[1].probed, u32::try_from(PROGRESS_CHUNK).unwrap());
+        assert_eq!(results[1].found.len(), PROGRESS_CHUNK);
+        assert!(results[2].done, "the last chunk closes the scan");
+        assert_eq!(results[2].probed, total);
+        assert_eq!(results[2].total, total);
         // Cumulative, not per-chunk: core replaces its candidate list wholesale from each partial,
         // so a delta here would make the UI drop everything found before the final chunk.
-        assert_eq!(results[1].found.len(), usize::from(count));
+        assert_eq!(results[2].found.len(), usize::from(count));
     }
 
     /// A sweep with no targets still has to close, or core's scan sits at "scanning" forever.
@@ -1235,7 +1373,7 @@ mod tests {
             snmp_when_unreachable: true,
         };
         let transport = Arc::new(SelectiveFake {
-            ping: false,
+            ping: Ping::Silent,
             good_community: None,
             good_v3_user: None,
         });
@@ -1248,10 +1386,14 @@ mod tests {
         )
         .await;
 
+        let first = rx
+            .try_recv()
+            .expect("even an empty sweep says it was picked up");
+        assert!(!first.done, "being taken off the bus is not being finished");
         let r = rx.try_recv().expect("the degenerate sweep still reports");
         assert!(r.done);
         assert_eq!((r.probed, r.total), (0, 0));
-        assert!(rx.try_recv().is_err(), "exactly one message");
+        assert!(rx.try_recv().is_err(), "and nothing after the terminal one");
     }
 
     // ── Stopping a sweep (ADR-068 Increment 2) ───────────────────────────────
@@ -1298,7 +1440,7 @@ mod tests {
             .collect();
         // Answers every target, so a single probe would show up as a candidate.
         let transport = Arc::new(SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         });
@@ -1489,7 +1631,7 @@ mod tests {
 
         let transport = Arc::new(CancelAtProbe {
             inner: SelectiveFake {
-                ping: true,
+                ping: Ping::Answers,
                 good_community: Some("public".to_owned()),
                 good_v3_user: None,
             },
@@ -1554,7 +1696,7 @@ mod tests {
     async fn a_chunk_counts_what_it_probed_not_what_it_was_given() {
         let scan = Uuid::from_u128(11);
         let transport: Arc<dyn Transport> = Arc::new(SelectiveFake {
-            ping: true,
+            ping: Ping::Answers,
             good_community: Some("public".to_owned()),
             good_v3_user: None,
         });

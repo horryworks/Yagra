@@ -122,6 +122,21 @@ pub struct Candidate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum DiscoveryScanState {
+    /// Accepted and published to the bus, and no poller has said anything about it yet.
+    ///
+    /// **Core's own word — nothing on the bus ever reports it.** `yagra-poller`'s sweep loop is
+    /// strictly sequential, so a job can sit on its subscription for the length of the sweep ahead
+    /// of it; and a job published to a pool whose pollers are all gone sits there for good. Both
+    /// used to render as `Running · 0/254`, which made "queued behind another sweep", "no poller
+    /// ever took this" and "sweeping, and everything out there is silent" one sentence on screen.
+    ///
+    /// Non-terminal on purpose, so [`RUNNING_MAX_AGE`] retires a sweep nobody ever picks up rather
+    /// than leaving it listed forever.
+    ///
+    /// ⚠️ Against an N-1 poller this reads early: that poller sends nothing until its first chunk
+    /// completes, so a sweep it really is running shows as queued for the length of one chunk
+    /// (~30s). That is a bounded wrong replacing an unbounded one.
+    Queued,
     /// Sweeping; the poller is reporting progress.
     Running,
     /// A stop was requested and published; the poller has not confirmed yet.
@@ -149,7 +164,7 @@ impl DiscoveryScanState {
     pub fn is_terminal(self) -> bool {
         match self {
             Self::Cancelled | Self::Done => true,
-            Self::Running | Self::Cancelling => false,
+            Self::Queued | Self::Running | Self::Cancelling => false,
         }
     }
 }
@@ -217,7 +232,9 @@ impl ScanState {
     fn new(targets: Vec<IpAddr>, pool: Option<String>, now: DateTime<Utc>) -> Self {
         Self {
             targets,
-            state: DiscoveryScanState::Running,
+            // Not `Running`: at this point the job has been published and nothing has confirmed
+            // that any poller holds it. See [`DiscoveryScanState::Queued`].
+            state: DiscoveryScanState::Queued,
             probed: 0,
             candidates: Vec::new(),
             started_at: now,
@@ -233,6 +250,12 @@ impl ScanState {
     fn apply(&mut self, result: DiscoveryResult, classifier: &Classifier, now: DateTime<Utc>) {
         if result.probed < self.probed && !result.done {
             return;
+        }
+        // Any message at all means a poller has this sweep in hand, so this is where `Queued`
+        // ends. Every message qualifies, deliberately: the zero-progress one a current poller sends
+        // when it takes the job, and equally a first chunk from one too old to send that.
+        if self.state == DiscoveryScanState::Queued {
+            self.state = DiscoveryScanState::Running;
         }
         self.updated_at = now;
         self.candidates = result
@@ -281,12 +304,22 @@ impl ScanState {
             // Exhaustive over the state rather than `_ =>`: a future variant must be decided here,
             // not defaulted into `Done` (extensibility.md §1).
             self.state = match (self.state, result.cancelled) {
-                (DiscoveryScanState::Running | DiscoveryScanState::Cancelling, true) => {
-                    DiscoveryScanState::Cancelled
-                }
-                (DiscoveryScanState::Running | DiscoveryScanState::Cancelling, false) => {
-                    DiscoveryScanState::Done
-                }
+                // `Queued` cannot actually reach here — the promotion above ran on this same
+                // message — but it is listed rather than wildcarded, because the day a promotion
+                // rule gains a condition is the day this needs to be decided again rather than
+                // silently defaulting (extensibility.md §1).
+                (
+                    DiscoveryScanState::Queued
+                    | DiscoveryScanState::Running
+                    | DiscoveryScanState::Cancelling,
+                    true,
+                ) => DiscoveryScanState::Cancelled,
+                (
+                    DiscoveryScanState::Queued
+                    | DiscoveryScanState::Running
+                    | DiscoveryScanState::Cancelling,
+                    false,
+                ) => DiscoveryScanState::Done,
                 // Already settled — a duplicate or late terminal result must not move it.
                 (s @ (DiscoveryScanState::Cancelled | DiscoveryScanState::Done), _) => s,
             };
@@ -299,13 +332,20 @@ impl ScanState {
 
     fn status(&self, scan_id: Uuid) -> ScanStatus {
         let total = self.total();
-        let scanning = (!self.state.is_terminal())
-            .then(|| {
-                self.targets
-                    .get(self.probed as usize)
-                    .map(IpAddr::to_string)
-            })
-            .flatten();
+        // Only while a poller is actually working through the list — not merely "not finished".
+        // A queued sweep would otherwise report `targets[0]`, i.e. "now probing 192.168.1.1" about
+        // a sweep nobody has picked up, which is the exact false impression `Queued` exists to
+        // remove.
+        let scanning = matches!(
+            self.state,
+            DiscoveryScanState::Running | DiscoveryScanState::Cancelling
+        )
+        .then(|| {
+            self.targets
+                .get(self.probed as usize)
+                .map(IpAddr::to_string)
+        })
+        .flatten();
         ScanStatus {
             scan_id,
             done: self.state.is_terminal(),
@@ -471,7 +511,15 @@ impl DiscoveryRunner {
                 // Only a running sweep moves. A finished one stays finished — re-cancelling it
                 // would rewrite history, and a `Cancelling` one is already asked.
                 Some(s) => {
-                    if s.state == DiscoveryScanState::Running {
+                    // `Queued` as well as `Running`. The poller's first cancel check runs when it
+                    // takes a job off the bus, precisely so a sweep stopped while it queued never
+                    // starts probing — and refusing to move a queued scan here would make that
+                    // layer unreachable from the screen, which is the one case where stopping costs
+                    // the network nothing at all.
+                    if matches!(
+                        s.state,
+                        DiscoveryScanState::Running | DiscoveryScanState::Queued
+                    ) {
                         s.state = DiscoveryScanState::Cancelling;
                         s.updated_at = Utc::now();
                     }
@@ -495,7 +543,13 @@ impl DiscoveryRunner {
     /// probing. What bounds this list is [`evict`], not a query parameter — see [`FINISHED_TTL`].
     #[must_use]
     pub fn list(&self, limit: usize) -> Vec<ScanSummary> {
-        let g = self.scans.lock().expect("scans mutex poisoned");
+        let mut g = self.scans.lock().expect("scans mutex poisoned");
+        // Retention is enforced on read as well as at [`Self::start`], because `start` is not
+        // guaranteed to run again: a deployment where nobody sweeps a second time kept a
+        // three-day-old scan listed here and feeding the dashboard's discovery-queue widget for the
+        // life of the process. [`MAX_SCANS`] bounded the memory, so this was never a leak — it was
+        // [`FINISHED_TTL`] not being a window, because nothing ever closed it.
+        evict(&mut g, Utc::now());
         let mut ordered: Vec<(&Uuid, &ScanState)> = g.iter().collect();
         // Newest first — the scan an operator is coming back to is the one they just started.
         // Ordered on the `DateTime`, never on the rendered RFC 3339 string: they happen to sort
@@ -524,7 +578,13 @@ impl DiscoveryRunner {
     /// process and the widget only ever grew.
     #[must_use]
     pub fn recent_candidates(&self, limit: usize) -> Vec<Candidate> {
-        let g = self.scans.lock().expect("scans mutex poisoned");
+        let mut g = self.scans.lock().expect("scans mutex poisoned");
+        // Pruned here too — see [`Self::list`]. Between the two, any deployment where somebody
+        // looks at either the Discovery screen or the dashboard closes the window.
+        //
+        // ⚠️ Deliberately **not** in [`Self::get`]. That is the one read on a two-second timer,
+        // and a poll that can delete the very scan it is reading is a shape worth not having.
+        evict(&mut g, Utc::now());
         let mut seen = std::collections::HashSet::new();
         let mut out = Vec::new();
         for scan in g.values() {
@@ -632,7 +692,11 @@ mod tests {
         let mut s = scan(4);
         let st = s.status(Uuid::nil());
         assert_eq!((st.probed, st.total), (0, 4));
-        assert_eq!(st.scanning.as_deref(), Some("10.0.0.1"));
+        assert_eq!(
+            st.scanning, None,
+            "a queued sweep has no current address — saying '10.0.0.1' about one no poller has \
+             picked up is the false impression `Queued` exists to remove"
+        );
 
         s.apply(partial(2, false, vec![device(1, None)]), &c, Utc::now());
         let st = s.status(Uuid::nil());
@@ -1062,10 +1126,65 @@ mod tests {
         assert_eq!(rows[0].pool.as_deref(), Some("tokyo"));
         assert_eq!(rows[1].pool, None);
         assert_eq!(rows[0].total, 3);
-        assert_eq!(rows[0].state, DiscoveryScanState::Running);
+        assert_eq!(
+            rows[0].state,
+            DiscoveryScanState::Queued,
+            "published, and nothing has confirmed a poller has it"
+        );
         assert_eq!(rows[0].candidate_count, 0);
 
         assert_eq!(runner.list(1).len(), 1, "limit applies");
+    }
+
+    #[test]
+    fn a_scan_stays_queued_until_a_poller_says_something_about_it() {
+        // 🚨 The point of the state, and the case that matters most is the second assertion's
+        // absence of a poller: a sweep published to a pool whose pollers are all gone used to read
+        // `Running · 0/254` forever. So did one queued behind another sweep — the poller's job loop
+        // is strictly sequential, so with the gate off that wait is minutes.
+        let c = classifier();
+        let mut s = scan(4);
+        assert_eq!(s.state, DiscoveryScanState::Queued);
+        assert!(!s.state.is_terminal(), "so RUNNING_MAX_AGE can retire it");
+
+        // The zero-progress message a current poller sends the moment it takes the job. It carries
+        // nothing else at all — no progress, no candidates — and that is the whole signal.
+        s.apply(partial(0, false, vec![]), &c, Utc::now());
+        assert_eq!(s.state, DiscoveryScanState::Running);
+    }
+
+    #[test]
+    fn an_old_pollers_first_chunk_also_ends_the_queue() {
+        // N-1: a poller that predates the start message says nothing until its first chunk lands.
+        // The promotion therefore keys off *any* message rather than that specific one — otherwise
+        // a sweep an old poller is actively running would read as queued for its entire length.
+        let c = classifier();
+        let mut s = scan(4);
+        s.apply(partial(2, false, vec![device(1, None)]), &c, Utc::now());
+        assert_eq!(s.state, DiscoveryScanState::Running);
+    }
+
+    #[test]
+    fn a_late_start_message_cannot_wipe_the_candidates_found_since() {
+        // ⚠️ The start message carries an empty `found`, and `apply` replaces the candidate list
+        // rather than appending to it — so a reordered or duplicated copy arriving after real
+        // progress would, taken literally, empty the table under the operator. The regression guard
+        // (`result.probed < self.probed`) already refuses it; this pins that it keeps doing so, since
+        // the guard predates the message and nothing else connects the two.
+        let c = classifier();
+        let mut s = scan(4);
+        s.apply(partial(0, false, vec![]), &c, Utc::now());
+        s.apply(partial(2, false, vec![device(1, None)]), &c, Utc::now());
+        assert_eq!(s.status(Uuid::nil()).candidates.len(), 1);
+
+        s.apply(partial(0, false, vec![]), &c, Utc::now());
+        let st = s.status(Uuid::nil());
+        assert_eq!(
+            st.candidates.len(),
+            1,
+            "a late start message is not 'found nothing'"
+        );
+        assert_eq!(st.probed, 2, "and it does not rewind the progress either");
     }
 
     #[test]
@@ -1073,7 +1192,7 @@ mod tests {
         let c = classifier();
         let now = Utc::now();
         let mut s = scan(4);
-        assert_eq!(s.state, DiscoveryScanState::Running);
+        assert_eq!(s.state, DiscoveryScanState::Queued);
         s.apply(partial(4, true, vec![device(1, None)]), &c, now);
         assert_eq!(s.state, DiscoveryScanState::Done);
         assert!(s.status(Uuid::nil()).done, "`done` is derived from `state`");
@@ -1165,6 +1284,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_sweep_already_under_way_is_still_stoppable() {
+        // The other side of the widened guard. Having taught `cancel` to move a `Queued` scan, a
+        // guard that *only* accepted `Queued` would pass every test above while making the stop
+        // button inert for the entire time it matters most — the sweep actually putting SNMP on the
+        // network (rejection-only tests pass when everything rejects).
+        let bus = Arc::new(yagra_bus::InMemoryBus::new(8));
+        let runner = DiscoveryRunner::new(bus, Arc::new(classifier()));
+        let scan = runner
+            .start(
+                targets(4),
+                Vec::new(),
+                Vec::new(),
+                None,
+                SilentTargets::Skip,
+            )
+            .await
+            .expect("publish succeeds");
+
+        // A poller reports, so the scan is genuinely running.
+        {
+            let mut g = runner.scans.lock().unwrap();
+            g.get_mut(&scan).unwrap().apply(
+                DiscoveryResult {
+                    scan_id: scan,
+                    found: Vec::new(),
+                    probed: 0,
+                    total: 4,
+                    done: false,
+                    cancelled: false,
+                },
+                &classifier(),
+                Utc::now(),
+            );
+        }
+        assert_eq!(
+            runner.get(scan).expect("registered").state,
+            DiscoveryScanState::Running
+        );
+
+        runner.cancel(scan).await.unwrap();
+        assert_eq!(
+            runner.get(scan).expect("still listed").state,
+            DiscoveryScanState::Cancelling
+        );
+    }
+
+    #[tokio::test]
     async fn a_stop_is_published_even_for_a_scan_this_core_has_forgotten() {
         // The core-restart case, and the reason this endpoint does not 404 like `analysis`'s does.
         // Scan state is in memory, so a restarted core has no record of sweeps its pollers are
@@ -1197,6 +1363,16 @@ mod tests {
             )
             .await
             .expect("publish succeeds");
+
+        // ⚠️ Note which state this cancels *from*: `start` registers a scan as `Queued`, so this
+        // is also the proof that a sweep no poller has picked up can be stopped. That is the
+        // cheapest stop there is — the poller's first cancel check runs when it takes the job off
+        // the bus, so the sweep never probes a single address — and gating `cancel` on `Running`
+        // alone would have put that layer out of the screen's reach.
+        assert_eq!(
+            runner.get(scan).expect("registered").state,
+            DiscoveryScanState::Queued
+        );
 
         runner.cancel(scan).await.unwrap();
         let st = runner.get(scan).expect("still listed");

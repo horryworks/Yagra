@@ -22723,6 +22723,7 @@
         "type": "string",
         "description": "Where a scan is in its life (ADR-068).\n\nDeliberately has **no `Unknown` variant**, unlike the enums built by `stored_enum::token_enum!`:\nthose degrade a token a *newer writer* put in a database column, and this value is never read\nback from storage — it only ever travels outward. The corresponding defensiveness lives on the\nTypeScript side, which narrows the wire value and renders anything it does not recognise\nneutrally. ⚠️ Rendering an unrecognised state as a failure is a real bug this codebase has\nalready shipped once (report runs, painted red by a `switch` with a `default:` arm).",
         "enum": [
+          "queued",
           "running",
           "cancelling",
           "cancelled",

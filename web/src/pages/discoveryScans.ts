@@ -25,6 +25,12 @@ export interface ScanStateSpec {
 
 /** The label/tone table. Keyed by the union, so a new backend state is a compile error here. */
 export const SCAN_STATE_SPECS: Record<DiscoveryScanState | 'unknown', ScanStateSpec> = {
+  // Accepted, and no poller has said anything about it. In flight — something is expected to
+  // happen — but deliberately **not** the same tone as `running`: the operator's next question
+  // when a sweep sits here is "is anything actually going to pick this up?", and painting it the
+  // colour of work-in-progress answers that wrongly. Neutral, with the label carrying the meaning,
+  // is the same treatment `cancelled` gets.
+  queued: { tone: 'neutral', labelKey: 'discovery.scans.state.queued', inFlight: true },
   running: { tone: 'info', labelKey: 'discovery.scans.state.running', inFlight: true },
   // Still in flight: the poller may yet report, and that report is what turns "we asked it to
   // stop" into "it stopped". Polling through this state is how the page learns which happened.
@@ -76,12 +82,42 @@ export function selectInitialScan(
   return running?.scan_id ?? scans[0]?.scan_id ?? null;
 }
 
+/** The status the page is entitled to act on: the last reply fetched, but **only while it is about
+ *  the scan on screen**. `null` for everything else, including a perfectly good reply about a
+ *  different sweep.
+ *
+ *  🚨 **This one function replaced three separate guards, and all three existed because of the
+ *  same defect found three times on a real deployment.** The page kept `scanId` and `status` as two
+ *  independent pieces of state, so they could disagree — and each time they did, the fix was another
+ *  check at the place that noticed:
+ *
+ *  1. `shouldPollScan` reading `status === null` as "nothing to watch", which silenced the whole
+ *     reattach path;
+ *  2. `shouldPollScan` accepting a status about the *previous* scan, so pressing Scan while a
+ *     finished sweep was on screen left the new one frozen at `0/254`;
+ *  3. the poll's own `.then` installing a reply the page had already moved on from.
+ *
+ *  Three guards that must all agree is three chances to disagree. Deriving instead means there is
+ *  one answer, and every consumer — the polling decision, the progress line, the Stop button, the
+ *  candidate table — asks it. The rule underneath: *a state that is about something must carry what
+ *  it is about.*
+ *
+ *  Kept here rather than inlined in the component so it can be tested: Vitest executes no `.tsx`. */
+export function statusFor(
+  scanId: string | null,
+  status: DiscoveryScan | null,
+): DiscoveryScan | null {
+  if (!scanId || !status) return null;
+  return status.scan_id === scanId ? status : null;
+}
+
 /** Inputs to the polling decision, named so the call site cannot transpose two booleans. */
 export interface PollInputs {
-  /** The scan the page is showing. */
-  scanId: string | null;
-  /** The last status fetched, or `null` when none has been. ⚠️ Not necessarily about `scanId` —
-   *  see the identity check in `shouldPollScan`. */
+  /** The last status fetched **about the scan on screen**, or `null` when there is none.
+   *
+   *  ⚠️ The null is load-bearing and the caller must respect what it means: a reply about some
+   *  *other* scan is not a status here, it is `null`. Pass `statusFor(scanId, status)`, never the
+   *  raw last reply. */
   status: DiscoveryScan | null;
   /** The operator pressed Scan in this session and the server has not answered yet. */
   justStarted: boolean;
@@ -95,6 +131,14 @@ export interface PollInputs {
  *  404 every two seconds forever, with the progress note frozen at whatever it last said. */
 export const MAX_POLL_FAILURES = 5;
 
+/** How often the page re-reads the selected scan, in milliseconds.
+ *
+ *  Here rather than in the component so it sits beside the failure cap it is paced against — and
+ *  because the cap had already been written out a second time as a bare `5` in the component's
+ *  "gave up" notice, where changing the constant would have changed the behaviour and left the
+ *  message describing the old one. */
+export const POLL_INTERVAL_MS = 2000;
+
 /** Should the page keep re-reading the scan?
  *
  *  Driven by **the act of starting** and by *not having been told it is over* — never by the
@@ -106,32 +150,26 @@ export const MAX_POLL_FAILURES = 5;
  *  So the rule is negative: poll unless something says stop. A terminal state stops it; repeated
  *  failure stops it; nothing selected stops it; and a state this build cannot read stops it too —
  *  see `SCAN_STATE_SPECS.unknown`, where waiting for a word that will never arrive is the worse of
- *  the two mistakes. */
-export function shouldPollScan({ scanId, status, justStarted, failures }: PollInputs): boolean {
+ *  the two mistakes.
+ *
+ *  ⚠️ "Is this status even about the scan on screen?" is **not** asked here — `statusFor` answers
+ *  it once, for every consumer, and this function's `status` is already its output. */
+export function shouldPollScan({ status, justStarted, failures }: PollInputs): boolean {
   if (failures >= MAX_POLL_FAILURES) return false;
   if (justStarted) return true;
-  // 🚨 `null` means "we have not asked yet", **not** "there is nothing to watch". Reading it as the
-  // latter is the exact inversion this function's doc warns about, and it shipped anyway: the
-  // reattach path selects a scan id from the list and has never fetched it, so it arrives here with
-  // `justStarted: false` and `status: null` — and a running sweep was never polled at all. On a
-  // real deployment that looked like the whole feature half-working: the sweep listed as `Running`
-  // in Recent sweeps, while the progress line, the Stop button and the disabled Scan button (all
-  // derived from `status`) were simply absent.
+  // 🚨 `null` means "nothing is known about the scan on screen" — **not** "there is nothing to
+  // watch". Reading it as the latter is the exact inversion this function's doc warns about, and it
+  // shipped twice, from two directions. Once because the reattach path selects a scan id from the
+  // list and has never fetched it, so it arrives with `justStarted: false` and no status; and once
+  // because a reply about the *previous* scan used to count as a status, so pressing Scan while a
+  // finished sweep was on screen concluded there was nothing to watch before the new id existed.
+  // `statusFor` now folds the second into the first, which is why one branch covers both.
   //
-  // Whether a scan is *selected* is the caller's question, not this one's — the effect that polls
-  // is already guarded on having a scan id.
+  // On a real deployment the first read as the whole feature half-working — the sweep listed as
+  // `Running` while the progress line, the Stop button and the disabled Scan button, all derived
+  // from the status, were simply absent. The second read as a sweep frozen at `0/254` that a reload
+  // revealed had finished.
   if (!status) return true;
-  // 🚨 …and neither does a status about a **different** scan, which is the same mistake one
-  // level subtler. Pressing Scan while a finished sweep is on screen starts a poll immediately (on
-  // `justStarted`), and the id it polls is still the *old* one, because the new id only exists once
-  // the server answers. That old poll lands first, clears `justStarted` and installs a `done`
-  // status — so by the time the new scan id arrives, this function has already concluded there is
-  // nothing to watch. The sweep then ran to completion with the row frozen at `0/254` and the
-  // progress line stuck, and only a reload showed it had finished.
-  //
-  // Reattach made this the *normal* path rather than an edge case: arriving at the page now selects
-  // the newest sweep, so there is almost always a finished scan on screen when Scan is pressed.
-  if (scanId && status.scan_id !== scanId) return true;
   return isScanInFlight(status.state);
 }
 
@@ -187,15 +225,21 @@ export function pickDefaultPool(pools: readonly PoolOption[]): string | null {
 
 /** Whether the operator may ask this sweep to stop.
  *
- *  Only a sweep still running: one already being stopped has been asked, and a terminal one has
- *  nothing left to stop. ⚠️ The control is **removed** in those cases rather than disabled — a
- *  disabled button explains itself only on hover, which is nothing at all on a touch device
- *  (`ui-conventions.md`). What replaces it is a line of text saying the stop was requested.
+ *  A sweep that is running, **and one that is only queued**. The queued case is the cheapest stop
+ *  there is: the poller checks for cancellations as it takes a job off the bus, precisely so a sweep
+ *  stopped while it waited never probes a single address. Leaving it out would put that layer beyond
+ *  the screen's reach in the one situation where stopping costs the network nothing.
+ *
+ *  Not the others: one already being stopped has been asked, and a terminal one has nothing left to
+ *  stop. ⚠️ The control is **removed** in those cases rather than disabled — a disabled button
+ *  explains itself only on hover, which is nothing at all on a touch device (`ui-conventions.md`).
+ *  What replaces it is a line of text saying the stop was requested.
  *
  *  Takes the raw wire value so an unrecognised state answers `false`: offering to stop a sweep this
  *  build cannot reason about would be guessing at its behalf. */
 export function canRequestStop(state: string | null | undefined): boolean {
-  return scanState(state) === 'running';
+  const s = scanState(state);
+  return s === 'running' || s === 'queued';
 }
 
 /** Whether choosing this pool means the sweep's site is undecided.

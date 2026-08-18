@@ -244,12 +244,14 @@
       "candidates_other": "デバイス {{count}} 台",
       "pollFailed": "エラーが続いたため、この掃引の確認を停止しました。再読み込みすると再開します。",
       "state": {
+        "queued": "ポーラー待ち",
         "running": "実行中",
         "cancelling": "停止中…",
         "cancelled": "停止済み",
         "done": "完了",
         "unknown": "不明"
       },
+      "queuedNote": "この掃引を受け持つポーラーを待っています。まだ 1 台も調べていません。",
       "stop": "掃引を停止",
       "stopping": "掃引を停止中…",
       "stopRequested": "停止を要求しました。ポーラーは実行中の確認を終えてから止まるため、数秒かかります。",

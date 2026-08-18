@@ -5318,7 +5318,7 @@ export interface components {
          *     already shipped once (report runs, painted red by a `switch` with a `default:` arm).
          * @enum {string}
          */
-        DiscoveryScanState: "running" | "cancelling" | "cancelled" | "done";
+        DiscoveryScanState: "queued" | "running" | "cancelling" | "cancelled" | "done";
         /**
          * @description Usage of one watched filesystem (or a store-size proxy, e.g. the PostgreSQL database size which
          *     core cannot `statvfs`). `size_bytes == 0` means "total capacity unknown" — the value is a bare
