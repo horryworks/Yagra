@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.16 — the All nodes split can be dragged, and a selection can be cleared again
+
 ### New Features
 
 - **The All nodes screen can be re-proportioned.** The inventory tree was a fixed 312px however
