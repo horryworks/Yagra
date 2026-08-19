@@ -64,6 +64,13 @@ import {
 import { inheritedGroupPool } from '../lib/pool';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
 import { escapeClearsSelection } from '../lib/escapeDismiss';
+import {
+  maxTreeWidth,
+  resolveTreeWidth,
+  TREE_MIN_PX,
+  widthFromDrag,
+  widthFromKey,
+} from './nodesPaneWidth';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ActionMenu } from '../components/ui/ActionMenu';
@@ -110,6 +117,87 @@ export function NodesPage() {
   const toggleNodesPane = usePrefsStore((s) => s.toggleNodesPane);
   const isMobileView = useViewportMode() === 'mobile';
   const railed = paneCollapsed && !isMobileView;
+
+  // ── Split resize (ADR-074) ────────────────────────────────────────────────────────────────────
+  // The handle between the two panes. Arithmetic in `nodesPaneWidth.ts`; only the pointer plumbing
+  // is here, because Vitest cannot reach a `.tsx`.
+  const storedWidth = usePrefsStore((s) => s.nodesPaneWidth);
+  const setStoredWidth = usePrefsStore((s) => s.setNodesPaneWidth);
+  // The width while a gesture is in flight, kept local so a drag does not write to the persisted
+  // store once per frame — the store gets one write on release.
+  const [liveWidth, setLiveWidth] = useState<number | null>(null);
+  const [splitEl, setSplitEl] = useState<HTMLDivElement | null>(null);
+  const [splitPx, setSplitPx] = useState(0);
+  const drag = useRef<{ x: number; w: number } | null>(null);
+  const dragRaf = useRef(0);
+  const pointerX = useRef(0);
+  const treeWidth = resolveTreeWidth(liveWidth ?? storedWidth, splitPx);
+
+  // Measure the space the two panes share. Observes `.nodes-split` itself, whose width is set by
+  // the page column — nothing inside it can change that, so this observer cannot loop with the
+  // column widths it feeds.
+  useEffect(() => {
+    if (!splitEl) return;
+    const measure = () => setSplitPx(splitEl.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(splitEl);
+    return () => ro.disconnect();
+  }, [splitEl]);
+
+  const onSplitDown = useCallback(
+    (e: React.PointerEvent) => {
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      e.preventDefault(); // no text selection across the tree while dragging
+      drag.current = { x: e.clientX, w: treeWidth };
+      pointerX.current = e.clientX;
+      setLiveWidth(treeWidth);
+    },
+    [treeWidth],
+  );
+
+  const onSplitMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!drag.current) return;
+      pointerX.current = e.clientX;
+      // Coalesce to one update per frame: pointermove can outrun paint, and each update relayouts
+      // the virtualized tree and the whole detail pane. Same shape as the Interfaces dock.
+      cancelAnimationFrame(dragRaf.current);
+      dragRaf.current = requestAnimationFrame(() => {
+        const d = drag.current;
+        if (!d) return;
+        setLiveWidth(widthFromDrag(d.w, d.x, pointerX.current, splitPx));
+      });
+    },
+    [splitPx],
+  );
+
+  const endSplitDrag = useCallback(
+    (e: React.PointerEvent) => {
+      const d = drag.current;
+      if (!d) return;
+      (e.target as Element).releasePointerCapture?.(e.pointerId);
+      cancelAnimationFrame(dragRaf.current);
+      const final = widthFromDrag(d.w, d.x, pointerX.current, splitPx);
+      drag.current = null;
+      setLiveWidth(null);
+      setStoredWidth(final);
+    },
+    [splitPx, setStoredWidth],
+  );
+
+  const onSplitKey = useCallback(
+    (e: React.KeyboardEvent) => {
+      // Keyboard-operable, like every other primary control (ui-conventions.md). ⚠️ This handle is
+      // horizontal — ArrowLeft/Right — which is neither of the two that came before it.
+      const next = widthFromKey(treeWidth, e.key, splitPx);
+      if (next == null) return;
+      e.preventDefault();
+      setStoredWidth(next);
+    },
+    [treeWidth, splitPx, setStoredWidth],
+  );
 
   // The right-pane selection and the inline detail tab live in the URL (`?sel=node:<id>&tab=…`)
   // so a browser reload restores the same pane instead of snapping back to the empty state
@@ -593,7 +681,11 @@ export function NodesPage() {
       )}
 
       <div
+        ref={setSplitEl}
         className={`nodes-split${selected ? ' has-sel' : ''}${railed ? ' inv-collapsed' : ''}`}
+        // A custom property rather than an inline `gridTemplateColumns`: the mobile and ≤860px
+        // rules in NodesPage.css re-declare the columns, and an inline declaration would beat them.
+        style={{ ['--nodes-tree-w' as string]: `${treeWidth}px` }}
       >
         {railed ? (
           <div className="nodes-pane nodes-rail">
@@ -739,6 +831,35 @@ export function NodesPage() {
             pools={pools}
             onSetPool={canConfig ? setPool : undefined}
           />
+          </div>
+        )}
+
+        {/* The seam between the panes, as a real control: focusable, announced, arrow-key operable
+            and resettable by double-click. How the screen is divided between "what is there" and
+            "what is wrong with it" is an operator decision, not a constant (ADR-074).
+            `role="slider"` with explicit bounds, matching the Interfaces dock — `separator` is the
+            more literal role for a splitter, but two handles already ship as sliders and a third
+            spelling would be the surprise. Not rendered while railed (nothing to proportion) or on
+            mobile (one pane at a time, ADR-027). */}
+        {!railed && !isMobileView && (
+          <div
+            className="nodes-split-handle"
+            role="slider"
+            tabIndex={0}
+            aria-label={t('inventory.resizePane')}
+            aria-orientation="horizontal"
+            aria-valuenow={treeWidth}
+            aria-valuemin={TREE_MIN_PX}
+            aria-valuemax={maxTreeWidth(splitPx)}
+            title={t('inventory.resizePane')}
+            onPointerDown={onSplitDown}
+            onPointerMove={onSplitMove}
+            onPointerUp={endSplitDrag}
+            onPointerCancel={endSplitDrag}
+            onKeyDown={onSplitKey}
+            onDoubleClick={() => setStoredWidth(null)}
+          >
+            <span className="nodes-split-grip" aria-hidden="true" />
           </div>
         )}
 

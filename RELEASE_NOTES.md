@@ -10,6 +10,16 @@
 
 ## Unreleased
 
+### New Features
+
+- **The All nodes screen can be re-proportioned.** The inventory tree was a fixed 312px however
+  wide the window, so a deep folder path or a long node name was truncated on a screen with room to
+  spare. A **drag handle now sits on the seam between the two panes**: pull it right for more tree,
+  left for more detail. It is keyboard-operable (`←`/`→` once focused) and double-clicking it
+  restores the default width. The width is remembered in this browser. Each pane keeps a floor, so
+  neither can be dragged away — the « button is still the way to give the detail the whole page.
+  Not shown on phones, where the two panes are already one at a time.
+
 ### Improvements
 
 - **A selection in All nodes can be cleared again.** Picking a group or a node in the inventory

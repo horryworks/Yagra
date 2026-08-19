@@ -61,6 +61,16 @@ interface PrefsStore {
   /** Collapse the Nodes page inventory-tree pane to a slim rail so the node detail uses the full
    *  width (desktop only; on mobile the pane switcher governs). */
   nodesPaneCollapsed: boolean;
+  /** How wide the operator dragged the All-nodes inventory pane, in px. `null` = never resized, so
+   *  the split keeps the 312px it has always had (`pages/nodesPaneWidth.ts`).
+   *
+   *  ⚠️ **Local-only, and that is a decision rather than an omission** (ADR-074). The Interfaces
+   *  dock height beside it follows the account (ADR-058), so the obvious move was to do the same
+   *  here — but the pref this one actually sits next to is `nodesPaneCollapsed` above, which is
+   *  local. "How wide is the tree" and "is the tree collapsed" are one continuum (collapsed *is* a
+   *  width), and splitting a continuum across two homes is the surprise `rateUnit` documents. If
+   *  this is ever promoted, promote both, and add them to `serverPrefs.ts` together. */
+  nodesPaneWidth: number | null;
   /** Whether the column filter row is open on desktop (ADR-053 Inc.9). **Closed by default** — the
    *  row reached every list in Inc.0–8 and then occupied a band on screens nobody was filtering.
    *
@@ -95,6 +105,9 @@ interface PrefsStore {
   setUiMode: (mode: UiMode) => void;
   /** Toggle the Nodes inventory pane between full and a slim rail (persisted). */
   toggleNodesPane: () => void;
+  /** Record the All-nodes inventory pane width. `null` restores the default (see
+   *  [`nodesPaneWidth`]). Call it on gesture *end*, not per pointer event. */
+  setNodesPaneWidth: (px: number | null) => void;
   /** Show or hide the desktop column filter row (global + persisted; see [`filterRowOpen`]). */
   toggleFilterRow: () => void;
   /** Record the Interfaces dock height locally. ⚠️ Prefer `serverPrefs.ts`'s setter, which also
@@ -115,6 +128,9 @@ export const usePrefsStore = create<PrefsStore>()(
       rateUnit: 'bps',
       uiMode: 'auto',
       nodesPaneCollapsed: false,
+      // Absent from every `yagra_prefs` written before this shipped; `persist` merges the stored
+      // object over the initial state, so a missing key reads as `null` and no migration is owed.
+      nodesPaneWidth: null,
       // Absent from every `yagra_prefs` written before this shipped. `persist` merges the stored
       // object over the initial state, so a missing key reads as `false` and no migration is owed.
       filterRowOpen: false,
@@ -139,6 +155,7 @@ export const usePrefsStore = create<PrefsStore>()(
       toggleRateUnit: () => set((s) => ({ rateUnit: s.rateUnit === 'bps' ? 'pps' : 'bps' })),
       setUiMode: (uiMode) => set({ uiMode }),
       toggleNodesPane: () => set((s) => ({ nodesPaneCollapsed: !s.nodesPaneCollapsed })),
+      setNodesPaneWidth: (nodesPaneWidth) => set({ nodesPaneWidth }),
       toggleFilterRow: () => set((s) => ({ filterRowOpen: !s.filterRowOpen })),
       setInterfaceDockHeight: (interfaceDockHeight) => set({ interfaceDockHeight }),
     }),

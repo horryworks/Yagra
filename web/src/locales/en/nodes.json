@@ -61,6 +61,7 @@
     "backToList": "Inventory",
     "hideTree": "Collapse inventory",
     "showTree": "Show inventory",
+    "resizePane": "Drag to resize the inventory pane (double-click to reset)",
     "filterScanTruncated": "Some matches are not shown: the filter examined as many nodes as it is allowed to. Add a search term to narrow it.",
     "cols": {
       "state": "State",

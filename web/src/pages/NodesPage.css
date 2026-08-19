@@ -10,12 +10,21 @@
   font-size: var(--font-sm);
 }
 
+/* Three columns: inventory | drag handle | detail. The handle **is** the gap — it occupies the same
+   14px the `gap` used to, so the two panes sit exactly where they always did and the split gains a
+   control rather than a strip of chrome. That is why `gap` is 0 here and restored in each override
+   below where the handle is not rendered (railed, mobile, narrow). ADR-074.
+
+   The tree's width arrives as an inline custom property from the component, because it is an
+   operator preference that persists (`pages/nodesPaneWidth.ts`). A custom property rather than an
+   inline `grid-template-columns`, so the media queries below can still win — an inline
+   `grid-template-columns` would beat every one of them. */
 .nodes-split {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: 312px 1fr;
-  gap: 14px;
+  grid-template-columns: var(--nodes-tree-w, 312px) 14px 1fr;
+  gap: 0;
 }
 
 .nodes-pane {
@@ -94,9 +103,40 @@
   min-width: 6rem;
 }
 
-/* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). */
+/* Collapse the inventory pane to a slim rail so the detail uses the full width (desktop). No handle
+   is rendered while railed — there is nothing to proportion — so this is a two-column grid and the
+   gap comes back as a gap. */
 .nodes-split.inv-collapsed {
   grid-template-columns: 40px 1fr;
+  gap: 14px;
+}
+
+/* The split handle. A vertical rail continuous with the two panes' borders, not a widget: it reads
+   as the seam between them. Mirrors `.geopage-resize` / `.nd-if-resize` turned 90°. */
+.nodes-split-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: col-resize;
+  touch-action: none; /* the drag is ours; the browser must not scroll the page instead */
+}
+
+.nodes-split-grip {
+  width: 3px;
+  height: 34px;
+  background: var(--border-color);
+  border-radius: 2px;
+  transition: background var(--transition);
+}
+
+.nodes-split-handle:hover .nodes-split-grip,
+.nodes-split-handle:focus-visible .nodes-split-grip {
+  background: var(--accent-color);
+}
+
+/* The grip is the focus mark (ui-conventions: focus is a colour change, never an outline). */
+.nodes-split-handle:focus-visible {
+  outline: none;
 }
 
 .nodes-pane-collapse,
@@ -138,9 +178,33 @@
   font-size: var(--font-sm);
 }
 
+/* Touch: a 14px rail is not a 44px target. Channel 2 (`hover: none`), independent of layout mode, so
+   a tablet forced to the desktop shell still gets a grabbable rail. The handle overhangs its column
+   by 5px each side rather than widening it, so the panes do not shift on a touch device — hence the
+   stacking context, or the detail pane (later in DOM order) would paint over the overhang. */
+@media (hover: none) {
+  .nodes-split-handle {
+    position: relative;
+    z-index: 1;
+    width: 24px;
+    margin: 0 -5px;
+  }
+
+  .nodes-split-grip {
+    width: 4px;
+  }
+}
+
+/* Too narrow to proportion: the panes stack, so the gap goes back to being a gap and the handle has
+   nothing to divide. */
 @media (max-width: 860px) {
   .nodes-split {
     grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .nodes-split-handle {
+    display: none;
   }
 }
 
@@ -164,6 +228,13 @@ html[data-viewport='mobile'] .nodes-detail-active > .nodes-truncated {
 
 html[data-viewport='mobile'] .nodes-split {
   display: block;
+}
+
+/* One pane at a time (ADR-027) — there is no proportion to set, and the component does not render
+   the handle on mobile either. This rule is the belt to that braces: a tablet whose width crosses
+   the 768px boundary mid-session re-renders through this CSS before the component notices. */
+html[data-viewport='mobile'] .nodes-split-handle {
+  display: none;
 }
 
 html[data-viewport='mobile'] .nodes-split > .nodes-pane {
