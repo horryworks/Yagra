@@ -1318,14 +1318,16 @@ impl ConfigBundleRepo {
                 c.skipped += 1;
                 continue;
             }
-            // `scope_id` is TEXT because a group scope is a tag value, not a uuid. Only the two
-            // levels that *are* uuids are validated; a tag scope has nothing to resolve against.
-            if matches!(t.scope_level.as_str(), "node" | "profile") {
+            // `scope_id` is TEXT because the legacy `group` scope is a tag value, not a uuid. Only
+            // the levels that *are* uuids are validated; a tag scope has nothing to resolve
+            // against, and `global` has no id at all.
+            if matches!(t.scope_level.as_str(), "node" | "profile" | "group_id") {
                 let known =
                     t.scope_id
                         .parse::<Uuid>()
                         .is_ok_and(|id| match t.scope_level.as_str() {
                             "node" => node_ids.contains(&id),
+                            "group_id" => group_ids.contains(&id),
                             _ => profile_ids.contains(&id),
                         });
                 if !known {

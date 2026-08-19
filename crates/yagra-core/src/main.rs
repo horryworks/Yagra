@@ -3794,6 +3794,15 @@ async fn load_alert_config_base(
             poolres::PoolResolver::empty()
         }
     };
+    // Folder-group threshold scope (ADR-075 増分 3): a rule on a group covers every group inside
+    // it, so each node needs its group plus every group above it. Read the edges once — the walk
+    // is per-node and `group_ancestors` is a linear scan of this slice. Degrading to an empty
+    // list makes folder-group rules match nothing, which is the narrowing failure (no rule fires
+    // that would not have fired anyway) rather than the fail-open one.
+    let group_edges = groups.edges().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "loading group edges failed; folder-group thresholds will not resolve");
+        Vec::new()
+    });
     let mut meta = HashMap::new();
     let mut pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>> = HashMap::new();
     for node in &nodes {
@@ -3813,6 +3822,12 @@ async fn load_alert_config_base(
                 // different things — see the `NodeMeta` docs before touching either.
                 tag_groups: node.tags.values().cloned().collect(),
                 folder_group: node.group.map(|g| g.as_uuid()),
+                folder_chain: node.group.map_or_else(Vec::new, |g| {
+                    let own = g.as_uuid();
+                    std::iter::once(own)
+                        .chain(groups::group_ancestors(&group_edges, own))
+                        .collect()
+                }),
             },
         );
     }

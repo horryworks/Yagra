@@ -78,13 +78,38 @@ export function thresholdFormFrom(rule?: StoredThreshold): ThresholdForm {
   };
 }
 
+/** What the scope-id field *is* at a given level — which decides the control the dialog renders.
+ *
+ *  Named rather than branched on inline because two places need the same answer (which control to
+ *  show, and whether the form is ready) and a second copy would let them disagree — a field that
+ *  renders a picker while readiness still tests a text box is a Save button that never enables. */
+export type ScopeIdKind = 'none' | 'profile' | 'folderGroup' | 'tag' | 'node';
+
+/** ⚠️ Exhaustive over `ScopeLevel` on purpose: a new level must decide what its id is, rather than
+ *  falling into a default that renders a free-text box for something the server will reject. */
+export function scopeIdKind(level: ScopeLevel): ScopeIdKind {
+  switch (level) {
+    case 'global':
+      return 'none';
+    case 'profile':
+      return 'profile';
+    case 'group_id':
+      return 'folderGroup';
+    case 'group':
+      return 'tag';
+    case 'node':
+      return 'node';
+  }
+}
+
 /** Whether the form can be submitted.
  *
  *  A `global` rule needs no scope id — it targets every node — so demanding one would make the
  *  level unusable. Every other level needs one, because an empty scope id matches nothing and the
- *  rule would be stored, listed, and silently inert. */
+ *  rule would be stored, listed, and silently inert (the server refuses one since ADR-075 増分 3;
+ *  this is the half that keeps the operator from getting a 400 for a field they can see is blank). */
 export function isThresholdReady(f: ThresholdForm): boolean {
-  return f.metric.trim() !== '' && (f.level === 'global' || f.scopeId.trim() !== '');
+  return f.metric.trim() !== '' && (scopeIdKind(f.level) === 'none' || f.scopeId.trim() !== '');
 }
 
 /** The body sent to `POST /api/v1/thresholds` or `PUT /api/v1/thresholds/{id}`. */
@@ -94,7 +119,7 @@ export function thresholdBody(f: ThresholdForm): ThresholdInput {
     // Pinned, not merely omitted: the operator may have typed an id and then switched the level to
     // "every node", and two global rules differing only in a stray scope id both apply, look
     // identical in the list, and cannot be told apart.
-    scope_id: f.level === 'global' ? '' : f.scopeId.trim(),
+    scope_id: scopeIdKind(f.level) === 'none' ? '' : f.scopeId.trim(),
     metric: f.metric.trim(),
     direction: f.direction,
     warning: optionalNumber(f.warning),

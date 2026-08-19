@@ -152,6 +152,14 @@ pub struct NodeMeta {
     /// The node's folder group (`nodes.group_id`), for RBAC visibility. `None` = ungrouped, which
     /// a scoped principal may **not** see.
     pub folder_group: Option<Uuid>,
+    /// The node's folder group and every group above it, **nearest first** — the chain a
+    /// `ScopeLevel::FolderGroup` threshold is matched against (ADR-075 増分 3).
+    ///
+    /// Ordered, not a set, because the position *is* the specificity: a rule on the node's own
+    /// group must beat one on its grandparent. `folder_group` stays separate and stays first here;
+    /// RBAC is defined over the node's own group only, and widening it to the chain would let a
+    /// principal scoped to a parent see a child it was not granted.
+    pub folder_chain: Vec<Uuid>,
 }
 
 /// A snapshot of thresholds + node metadata + dependency topology the engine evaluates
@@ -222,12 +230,46 @@ impl AlertConfig {
     fn resolve(&self, node: NodeId, metric: &str) -> Option<EffectiveThreshold> {
         let candidates = self.by_metric.get(metric)?;
         let meta = self.node_meta.get(&node);
-        let scoped: Vec<ScopedThreshold> = candidates
+        let matched: Vec<&StoredThreshold> = candidates
             .iter()
             .filter(|t| self.applies(t, node, meta))
+            .collect();
+        // A folder-group rule can match the node's own group *and* any group above it, so several
+        // rules can arrive at the same `ScopeLevel::FolderGroup`. `resolve_effective` only knows
+        // levels, and would merge them with "most restrictive wins" — which would silently ignore
+        // a deliberately looser rule on an inner group. ADR-013's first rule is most-specific-wins,
+        // and the chain is ordered, so the nearest group's rules are the only ones that survive.
+        let nearest = Self::nearest_folder_depth(&matched, meta);
+        let scoped: Vec<ScopedThreshold> = matched
+            .into_iter()
+            .filter(|t| {
+                t.level != ScopeLevel::FolderGroup || Self::folder_depth(t, meta) == nearest
+            })
             .map(|t| ScopedThreshold::new(t.level, t.rule.clone()))
             .collect();
         resolve_effective(&scoped)
+    }
+
+    /// How far up the node's folder chain `t` sits — `0` is the node's own group. `None` when `t`
+    /// is not a folder-group rule, or names a group the node is not under (which `applies` has
+    /// already excluded, so in practice only the former).
+    fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Option<usize> {
+        if t.level != ScopeLevel::FolderGroup {
+            return None;
+        }
+        let want = Uuid::parse_str(&t.scope_id).ok()?;
+        meta?.folder_chain.iter().position(|g| *g == want)
+    }
+
+    /// The smallest depth any matched folder-group rule sits at, or `None` when there are none.
+    fn nearest_folder_depth(
+        matched: &[&StoredThreshold],
+        meta: Option<&NodeMeta>,
+    ) -> Option<usize> {
+        matched
+            .iter()
+            .filter_map(|t| Self::folder_depth(t, meta))
+            .min()
     }
 
     fn applies(&self, t: &StoredThreshold, node: NodeId, meta: Option<&NodeMeta>) -> bool {
@@ -243,6 +285,10 @@ impl AlertConfig {
             // Tag values, deliberately — a `ScopeLevel::Group` threshold matches a node *tag*, not
             // the folder tree. See the `NodeMeta` docs for why the distinction is load-bearing.
             ScopeLevel::Group => meta.is_some_and(|m| m.tag_groups.contains(&t.scope_id)),
+            // The folder tree (ADR-022), inherited downwards: the chain holds the node's own group
+            // and every group above it. A rule on a parent therefore covers everything inside it,
+            // the same way a maintenance window on a folder group does.
+            ScopeLevel::FolderGroup => Self::folder_depth(t, meta).is_some(),
         }
     }
 }
@@ -2473,6 +2519,7 @@ mod tests {
                 profile: None,
                 tag_groups: BTreeSet::from(["tokyo".to_owned()]),
                 folder_group: Some(folder),
+                folder_chain: vec![folder],
             },
         );
         let mgr = manager();
@@ -2491,6 +2538,7 @@ mod tests {
                 profile: None,
                 tag_groups: BTreeSet::from(["tokyo".to_owned()]),
                 folder_group: None,
+                folder_chain: Vec::new(),
             },
         );
         let mgr2 = manager();
@@ -2499,6 +2547,122 @@ mod tests {
             mgr2.node_folder_group(node),
             None,
             "a tag value must never be read as a folder group"
+        );
+    }
+
+    fn folder_rule(group: Uuid, warning: f64) -> StoredThreshold {
+        StoredThreshold {
+            id: Uuid::from_u128(u128::from(warning as u64) + 1),
+            level: ScopeLevel::FolderGroup,
+            scope_id: group.to_string(),
+            rule: yagra_common::ThresholdRule {
+                metric: "cpu_util".into(),
+                direction: yagra_common::Direction::Above,
+                warning: Some(warning),
+                critical: None,
+                dwell_samples: 1,
+            },
+        }
+    }
+
+    fn in_folder(node: NodeId, chain: Vec<Uuid>) -> HashMap<NodeId, NodeMeta> {
+        let mut meta = HashMap::new();
+        meta.insert(
+            node,
+            NodeMeta {
+                folder_group: chain.first().copied(),
+                folder_chain: chain,
+                ..NodeMeta::default()
+            },
+        );
+        meta
+    }
+
+    #[test]
+    fn a_folder_group_rule_covers_that_group_and_every_group_inside_it() {
+        // Both directions on purpose: a matcher that answered `false` for everything would pass a
+        // test that only checked the unrelated group.
+        let node = NodeId::new();
+        let own = Uuid::from_u128(0xf001);
+        let parent = Uuid::from_u128(0xf002);
+        let unrelated = Uuid::from_u128(0xf003);
+        let meta = in_folder(node, vec![own, parent]);
+
+        let warn = |c: AlertConfig| c.resolve(node, "cpu_util").and_then(|e| e.warning);
+        // The node's own group.
+        assert_eq!(
+            warn(cfg(vec![folder_rule(own, 10.0)], meta.clone())),
+            Some(10.0)
+        );
+        // A group above it — inherited downwards, the way a maintenance window on a folder is.
+        assert_eq!(
+            warn(cfg(vec![folder_rule(parent, 20.0)], meta.clone())),
+            Some(20.0)
+        );
+        // A group the node is not under.
+        assert_eq!(warn(cfg(vec![folder_rule(unrelated, 30.0)], meta)), None);
+        // And a node the snapshot has no metadata for is under no folder at all.
+        let orphan = cfg(vec![folder_rule(own, 10.0)], HashMap::new());
+        assert_eq!(
+            orphan.resolve(node, "cpu_util").and_then(|e| e.warning),
+            None
+        );
+    }
+
+    #[test]
+    fn the_nearest_folder_group_wins_even_when_its_bound_is_looser() {
+        // ADR-013's first rule is most-specific-wins and the folder chain is ordered, so an inner
+        // group's rule replaces its parent's rather than merging with it. The looser inner bound is
+        // the whole point: "most restrictive wins" would answer 50 here and silently discard a
+        // deliberate relaxation for one site.
+        let node = NodeId::new();
+        let own = Uuid::from_u128(0xf011);
+        let parent = Uuid::from_u128(0xf012);
+        let meta = in_folder(node, vec![own, parent]);
+        let c = cfg(
+            vec![folder_rule(parent, 50.0), folder_rule(own, 90.0)],
+            meta.clone(),
+        );
+        assert_eq!(
+            c.resolve(node, "cpu_util").and_then(|e| e.warning),
+            Some(90.0),
+            "the node's own group must beat its parent"
+        );
+
+        // Two rules at the *same* depth have no order between them, so the old tie-break still
+        // applies there: the most restrictive value wins (ADR-013).
+        let c = cfg(
+            vec![folder_rule(own, 90.0), folder_rule(own, 60.0)],
+            meta.clone(),
+        );
+        assert_eq!(
+            c.resolve(node, "cpu_util").and_then(|e| e.warning),
+            Some(60.0),
+            "same depth ⇒ strictest wins"
+        );
+
+        // And a node-scoped rule still outranks every folder group, however near.
+        let c = cfg(
+            vec![
+                folder_rule(own, 90.0),
+                StoredThreshold {
+                    id: Uuid::from_u128(0xf013),
+                    level: ScopeLevel::Node,
+                    scope_id: node.to_string(),
+                    rule: yagra_common::ThresholdRule {
+                        metric: "cpu_util".into(),
+                        direction: yagra_common::Direction::Above,
+                        warning: Some(99.0),
+                        critical: None,
+                        dwell_samples: 1,
+                    },
+                },
+            ],
+            meta,
+        );
+        assert_eq!(
+            c.resolve(node, "cpu_util").and_then(|e| e.warning),
+            Some(99.0)
         );
     }
 

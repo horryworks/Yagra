@@ -3,10 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DWELL,
   isThresholdReady,
+  scopeIdKind,
   thresholdBody,
   thresholdFormFrom,
 } from './thresholdRequest';
-import type { StoredThreshold } from '../types/api';
+import { SCOPE_LEVELS, type ScopeLevel, type StoredThreshold } from '../types/api';
 
 function rule(over: Partial<StoredThreshold> = {}): StoredThreshold {
   return {
@@ -31,6 +32,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
       rule(),
       rule({ scope_level: 'node', warning: null, critical: 0.5, dwell_samples: 2 }),
       rule({ scope_level: 'group', scope_id: 'tokyo', direction: 'below', warning: 20 }),
+      rule({ scope_level: 'group_id', scope_id: '22222222-2222-2222-2222-222222222222' }),
       rule({ scope_level: 'global', scope_id: '', metric: '__liveness__', warning: null, critical: null }),
     ]) {
       expect(thresholdBody(thresholdFormFrom(r))).toEqual({
@@ -75,7 +77,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
     expect(thresholdBody(f).scope_id).toBe('');
     // The receiving side: every other level keeps what was typed, trimmed. Without this the test
     // above would also pass for a function that emptied every scope id.
-    for (const level of ['profile', 'group', 'node'] as const) {
+    for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
       expect(thresholdBody({ ...f, level, scopeId: '  keep-me  ' }).scope_id).toBe('keep-me');
     }
   });
@@ -83,12 +85,35 @@ describe('thresholdFormFrom + thresholdBody', () => {
   it('lets a global rule be saved with no scope id, and refuses the others', () => {
     const base = { ...thresholdFormFrom(), metric: 'icmp_rtt_ms', scopeId: '' };
     expect(isThresholdReady({ ...base, level: 'global' })).toBe(true);
-    for (const level of ['profile', 'group', 'node'] as const) {
+    for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
       expect(isThresholdReady({ ...base, level })).toBe(false);
       expect(isThresholdReady({ ...base, level, scopeId: 'x' })).toBe(true);
     }
     // A rule with no metric is never ready — including a global one, which the clause above would
     // otherwise wave through.
     expect(isThresholdReady({ ...base, level: 'global', metric: '   ' })).toBe(false);
+  });
+
+  it('gives every scope level a scope-id control, and only the fleet-wide one none', () => {
+    // Driven from `SCOPE_LEVELS` rather than a list written out here: a level added to the backend
+    // and forgotten in the dialog would render whatever the last `case` returned, which for a
+    // free-text fallback is a box the server then rejects.
+    const kinds = Object.fromEntries(SCOPE_LEVELS.map((l) => [l, scopeIdKind(l)])) as Record<
+      ScopeLevel,
+      ReturnType<typeof scopeIdKind>
+    >;
+    expect(kinds).toEqual({
+      global: 'none',
+      profile: 'profile',
+      group: 'tag',
+      group_id: 'folderGroup',
+      node: 'node',
+    });
+    // The two "group" levels must never resolve to the same control — one picks a folder from the
+    // inventory tree, the other is free-form tag text, and offering the tree for the tag level
+    // would store a UUID that matches no tag at all.
+    expect(scopeIdKind('group')).not.toBe(scopeIdKind('group_id'));
+    // Exactly one level has no id, and readiness agrees with it.
+    expect(SCOPE_LEVELS.filter((l) => scopeIdKind(l) === 'none')).toEqual(['global']);
   });
 });

@@ -96,6 +96,24 @@ impl ThresholdStore {
          AND ($2::text[] IS NULL OR scope_level = ANY($2)) \
          AND ($3::text[] IS NULL OR direction = ANY($3))";
 
+    /// `CASE scope_level WHEN … END` ranking the levels broadest-first, **built from
+    /// [`ScopeLevel::ALL`]** rather than written out.
+    ///
+    /// That order is also the precedence `resolve_effective` applies, so a hand-written copy is a
+    /// second place the precedence lives — and the copy that rots is this one, because getting it
+    /// wrong only changes the order of a table nobody diffs. Interpolating into SQL is safe here
+    /// and only here: every fragment comes from `as_str()`, which is a `const fn` over the enum.
+    fn scope_level_rank() -> String {
+        let arms: String = ScopeLevel::ALL
+            .iter()
+            .enumerate()
+            .map(|(rank, level)| format!("WHEN '{}' THEN {rank} ", level.as_str()))
+            .collect();
+        // The `ELSE` catches a level written by a *newer* core after a rollback: sort it last
+        // rather than dropping the row out of the page.
+        format!("CASE scope_level {arms}ELSE {} END", ScopeLevel::ALL.len())
+    }
+
     /// One page of threshold rules for the API, plus how many matched, so the caller can tell the
     /// operator how many were withheld rather than silently showing a prefix.
     ///
@@ -126,12 +144,10 @@ impl ThresholdStore {
         .try_get(0)?;
         let rows = Self::bind_filter(
             sqlx::query(&format!(
-                "SELECT {} FROM thresholds WHERE {} \
-                 ORDER BY CASE scope_level WHEN 'global' THEN 0 WHEN 'profile' THEN 1 \
-                 WHEN 'group' THEN 2 ELSE 3 END, \
-                 metric, scope_id LIMIT $4",
+                "SELECT {} FROM thresholds WHERE {} ORDER BY {}, metric, scope_id LIMIT $4",
                 Self::COLUMNS,
-                Self::FILTER_WHERE
+                Self::FILTER_WHERE,
+                Self::scope_level_rank()
             )),
             filter,
         )
@@ -301,13 +317,15 @@ mod tests {
         // these tokens. If the writer's vocabulary and this reader ever disagreed, every stored
         // rule would silently read back as the fallback — a node override behaving as a
         // fleet-wide profile rule.
-        for (token, level) in [
-            ("global", ScopeLevel::Global),
-            ("profile", ScopeLevel::Profile),
-            ("group", ScopeLevel::Group),
-            ("node", ScopeLevel::Node),
-        ] {
-            assert_eq!(parse_level(token), level, "{token} does not round-trip");
+        // Driven from the enum, not from a list written out here — a hand-written list would keep
+        // passing after a new level shipped, which is exactly when this check is needed.
+        for level in ScopeLevel::ALL {
+            assert_eq!(
+                parse_level(level.as_str()),
+                level,
+                "{} does not round-trip",
+                level.as_str()
+            );
         }
         for dir in [Direction::Above, Direction::Below] {
             assert_eq!(
@@ -439,13 +457,27 @@ mod tests {
     fn the_page_is_ordered_broadest_scope_first_so_it_is_stable() {
         // Without an ORDER BY, PostgreSQL may return a different arbitrary subset for the same
         // page each time, which reads as rules appearing and disappearing.
-        // The CASE spans two source lines since ADR-075 added the `global` tier, so assert the
-        // tiers rather than one literal — and assert all four, because the failure this guards
-        // against is a new level landing outside the CASE and sorting into the `ELSE` bucket.
-        let src = production_source();
-        assert!(src.contains("ORDER BY CASE scope_level WHEN 'global' THEN 0"));
-        assert!(src.contains("WHEN 'profile' THEN 1"));
-        assert!(src.contains("WHEN 'group' THEN 2 ELSE 3 END"));
+        //
+        // The CASE used to be written out, and was therefore a second copy of the precedence order
+        // — a new level could land outside it and sort into `ELSE` while the engine ranked it
+        // correctly. It is generated from `ScopeLevel::ALL` now, so this asserts the *generator*:
+        // every level present, in the enum's order, with an `ELSE` past the end for a level a
+        // newer core wrote before a rollback.
+        let sql = ThresholdStore::scope_level_rank();
+        for (rank, level) in ScopeLevel::ALL.iter().enumerate() {
+            assert!(
+                sql.contains(&format!("WHEN '{}' THEN {rank} ", level.as_str())),
+                "{level:?} is missing from the ORDER BY rank, or is not at rank {rank}: {sql}"
+            );
+        }
+        assert!(
+            sql.ends_with(&format!("ELSE {} END", ScopeLevel::ALL.len())),
+            "{sql}"
+        );
+        assert!(
+            production_source().contains("ORDER BY {}, metric, scope_id LIMIT $4"),
+            "the page must order by the generated rank, not a hand-written CASE"
+        );
     }
 
     #[test]

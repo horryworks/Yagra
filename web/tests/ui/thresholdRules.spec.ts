@@ -112,6 +112,54 @@ test('the row actions are actually on screen when the row is hovered', async ({ 
   await expect.poll(opacity).toBe(1);
 });
 
+test('the scope id is a picker, and which picker follows the level', async ({ page }) => {
+  // ADR-075 増分 3. The field used to be one text box asking for a UUID that is printed nowhere in
+  // the WebUI, so a profile-scoped rule could not really be created. What Tier1 can see and a unit
+  // test cannot: which *control* each level renders, and whether it has anything in it — an empty
+  // `<select>` is still a `<select>`, and would be exactly what a failed profile load looks like.
+  const [profile] = defaultBodyFor('/api/v1/profiles') as Record<string, Json>[];
+  await page.goto('/alerts/rules');
+  await page
+    .locator('.dt-row')
+    .filter({ hasText: PROFILE_RULE_METRIC })
+    .first()
+    .getByRole('button', { name: 'Edit' })
+    .click();
+
+  const dialog = page.getByRole('dialog');
+  const scope = dialog.locator('.modal-field').filter({ hasText: 'Scope id' });
+  const level = dialog.locator('.modal-field').filter({ hasText: 'Scope level' }).locator('select');
+
+  // profile ⇒ a populated list, showing the profile's name and holding its id.
+  await expect(scope.locator('select')).toHaveCount(1);
+  expect(await scope.locator('select option').count()).toBeGreaterThan(1);
+  await expect(scope.locator('select')).toHaveValue(String(profile.id));
+  await expect(scope).toContainText(String(profile.name));
+
+  // folder group ⇒ the inventory tree, and the hint that says a rule inherits downwards.
+  await level.selectOption('group_id');
+  await expect(scope.locator('select')).toHaveCount(1);
+  expect(await scope.locator('select option').count()).toBeGreaterThan(1);
+  await expect(scope).toContainText('every group inside it');
+  // Switching levels clears the id — a profile UUID left on a folder-group rule matches nothing.
+  await expect(scope.locator('select')).toHaveValue('');
+
+  // node ⇒ the typeahead, not a dropdown of the whole inventory.
+  await level.selectOption('node');
+  await expect(scope.locator('select')).toHaveCount(0);
+  await expect(scope.locator('.nodepick-trigger')).toHaveCount(1);
+
+  // every node ⇒ no id field at all.
+  await level.selectOption('global');
+  await expect(dialog.locator('.modal-field').filter({ hasText: 'Scope id' })).toHaveCount(0);
+
+  // The legacy tag scope is not offered for a rule being pointed somewhere new.
+  const offered = await level.locator('option').evaluateAll((os) =>
+    os.map((o) => (o as HTMLOptionElement).value),
+  );
+  expect(offered).toEqual(['global', 'profile', 'group_id', 'node']);
+});
+
 test('a rule opens for editing with its own values, and reachability offers no bounds', async ({
   page,
 }) => {

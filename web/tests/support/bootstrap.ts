@@ -81,6 +81,18 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     return body as unknown as Json;
   })(),
 
+  // The same trap as `promoted_node_id`, on the other side: the generator fills every nullable
+  // uuid, so the one group it invents claims a **parent that does not exist**. Every consumer
+  // builds the folder forest by walking down from `parent_id === null` (`lib/nodeTree.ts`
+  // `groupOptions`, the inventory tree), so the single group is unreachable and every folder-group
+  // picker in the app renders with nothing but its placeholder — a `<select>` that is present,
+  // correct, and empty. Patch the generated body rather than hand-writing one.
+  '/api/v1/node-groups': (() => {
+    const body = defaultBodyFor('/api/v1/node-groups') as { parent_id: string | null }[];
+    for (const g of body) g.parent_id = null;
+    return body as unknown as Json;
+  })(),
+
   // Two things at once, both invisible to the schema:
   //
   //  - **Lifecycle enums are declared in lifecycle order**, so "the first member" is always the

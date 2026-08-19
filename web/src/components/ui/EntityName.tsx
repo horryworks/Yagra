@@ -83,19 +83,27 @@ export function useEntityNames() {
   const groupName = useCallback((id: string) => resolveName(groups, id), [groups]);
   const profileName = useCallback((id: string) => resolveName(profiles, id), [profiles]);
 
-  /** Resolve a threshold scope id by its level. A `group`-scoped threshold's id is a tag value
-   *  (already human-readable), so it falls through `groupName` unchanged when it isn't a folder id.
-   *  A `global` rule has no id to resolve — it targets every node — so it resolves to the empty
-   *  string and the caller shows the level badge alone. */
+  /** Resolve a threshold scope id by its level. A `global` rule has no id to resolve — it targets
+   *  every node — so it resolves to the empty string and the caller shows the level badge alone.
+   *
+   *  ⚠️ The two group levels are named separately rather than sharing a fallthrough: `group_id` is
+   *  a folder in the inventory tree and always resolves, while `group` is a **tag value** that is
+   *  already human-readable and is handed to `groupName` only so an older rule carrying a folder
+   *  id still reads as a name. Collapsing them would work today by coincidence. */
   const scopeName = useCallback(
-    (level: ScopeLevel, id: string) =>
-      level === 'global'
-        ? ''
-        : level === 'node'
-          ? nodeName(id)
-          : level === 'profile'
-            ? profileName(id)
-            : groupName(id),
+    (level: ScopeLevel, id: string) => {
+      switch (level) {
+        case 'global':
+          return '';
+        case 'node':
+          return nodeName(id);
+        case 'profile':
+          return profileName(id);
+        case 'group_id':
+        case 'group':
+          return groupName(id);
+      }
+    },
     [nodeName, profileName, groupName],
   );
 

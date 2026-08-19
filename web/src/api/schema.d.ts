@@ -8530,11 +8530,11 @@ export interface components {
             Groups: string[];
         };
         /**
-         * @description The scope a threshold is defined at, ordered least → most specific: `Node` wins over `Group`,
-         *     which wins over `Profile`, which wins over `Global` (every node).
+         * @description The scope a threshold is defined at, ordered least → most specific: `Node` wins over a folder
+         *     group, which wins over `Group`, which wins over `Profile`, which wins over `Global` (every node).
          * @enum {string}
          */
-        ScopeLevel: "global" | "profile" | "group" | "node";
+        ScopeLevel: "global" | "profile" | "group" | "group_id" | "node";
         /**
          * @description How secrets appear in a bundle. See the module docs for why there is only one variant.
          * @enum {string}

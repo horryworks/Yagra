@@ -23,6 +23,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use yagra_common::ScopeLevel;
 
 /// Maximum rules returned by one list call. Matches the poller drill-down's cap: enough that no
 /// real hand-authored ruleset is ever truncated, small enough that a fleet-scale accident is a
@@ -207,25 +208,55 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
             "metric must be a valid identifier",
         ));
     }
-    if !matches!(
-        body.scope_level.as_str(),
-        "global" | "profile" | "group" | "node"
-    ) || !matches!(body.direction.as_str(), "above" | "below")
-    {
+    // The vocabulary comes from the enum, not from a list of literals repeated here — a new
+    // `ScopeLevel` variant would otherwise be rejected by an edge nobody remembered to widen.
+    let Some(level) = ScopeLevel::from_token(&body.scope_level) else {
         return Err(ApiError::bad_request(
             "invalid_threshold",
-            "scope_level must be global|profile|group|node and direction above|below",
+            "scope_level must be one of global|profile|group|group_id|node",
+        ));
+    };
+    if !matches!(body.direction.as_str(), "above" | "below") {
+        return Err(ApiError::bad_request(
+            "invalid_threshold",
+            "direction must be above or below",
         ));
     }
     // A `global` rule targets the whole fleet, so it has nothing to point at (ADR-075). Pinning
     // the id here rather than trusting the caller is what keeps `AlertConfig::applies` able to
     // ignore the column for this level: two global rules that differed only in a stray scope id
     // would both apply, look identical in the list, and be impossible to tell apart.
-    let scope_id = if body.scope_level == "global" {
+    let scope_id = if level == ScopeLevel::Global {
         ""
     } else {
         body.scope_id.as_str()
     };
+    // The id's *shape* is checked here, and was not before. An unparseable id is not a rule that
+    // does something slightly wrong — `AlertConfig::applies` compares it against a uuid or a tag
+    // and simply never matches, so the rule is created, listed, and silently evaluates for no
+    // node at all (the `StoredThreshold` docs say so). Since ADR-075 増分 3 the WebUI picks these
+    // from a list, so a malformed one now only arrives from a hand-written call.
+    match level {
+        ScopeLevel::Global => {}
+        ScopeLevel::Profile | ScopeLevel::FolderGroup | ScopeLevel::Node => {
+            if Uuid::parse_str(scope_id).is_err() {
+                return Err(ApiError::bad_request(
+                    "invalid_scope_id",
+                    "scope_id must be a uuid for the profile, group_id and node levels",
+                ));
+            }
+        }
+        // A tag value is free-form text, so only emptiness is checkable — and an empty one is the
+        // same silent no-op as a malformed uuid.
+        ScopeLevel::Group => {
+            if scope_id.trim().is_empty() {
+                return Err(ApiError::bad_request(
+                    "invalid_scope_id",
+                    "scope_id must name a node tag value for the group level",
+                ));
+            }
+        }
+    }
     Ok(ParsedThreshold {
         scope_level: &body.scope_level,
         scope_id,
@@ -482,12 +513,44 @@ mod tests {
         // The receiving half, and it is the one that makes the test mean something: a normalizer
         // that emptied every scope id would pass the assertion above while silently making every
         // profile/group/node rule fleet-wide.
-        for level in ["profile", "group", "node"] {
-            let b = body(level, "keep-me", "icmp_rtt_ms", "above");
+        let id = Uuid::from_u128(7).to_string();
+        for (level, sent) in [
+            ("profile", id.as_str()),
+            ("group", "keep-me"),
+            ("group_id", id.as_str()),
+            ("node", id.as_str()),
+        ] {
+            let b = body(level, sent, "icmp_rtt_ms", "above");
             let p = parse_threshold_body(&b).unwrap();
-            assert_eq!(p.scope_id, "keep-me", "{level}");
+            assert_eq!(p.scope_id, sent, "{level}");
             assert_eq!(p.scope_level, level);
         }
+    }
+
+    #[test]
+    fn a_scope_id_that_cannot_match_anything_is_refused_instead_of_stored() {
+        // Before this check a malformed id was accepted, listed, and evaluated for no node at all
+        // — `applies` compares it against a uuid or a tag and simply never matches. A rule that
+        // exists and does nothing is worse than one that was refused, because the operator has
+        // been told it is in place.
+        let id = Uuid::from_u128(9).to_string();
+        for level in ["profile", "group_id", "node"] {
+            for bad in ["", "not-a-uuid", "00000000-0000-0000-0000"] {
+                let err =
+                    parse_threshold_body(&body(level, bad, "icmp_rtt_ms", "above")).unwrap_err();
+                assert!(
+                    format!("{err:?}").contains("invalid_scope_id"),
+                    "{level} accepted {bad:?}"
+                );
+            }
+            // The accepting side — without it, a validator that refused everything would pass.
+            assert!(parse_threshold_body(&body(level, &id, "icmp_rtt_ms", "above")).is_ok());
+        }
+        // A tag value is free text, so only emptiness is checkable. Both directions again.
+        assert!(parse_threshold_body(&body("group", "  ", "icmp_rtt_ms", "above")).is_err());
+        assert!(parse_threshold_body(&body("group", "osaka", "icmp_rtt_ms", "above")).is_ok());
+        // And `global` still keeps its exemption: it has nothing to point at.
+        assert!(parse_threshold_body(&body("global", "", "icmp_rtt_ms", "above")).is_ok());
     }
 
     #[test]

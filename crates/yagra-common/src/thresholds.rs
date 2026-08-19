@@ -2,12 +2,17 @@
 //! Thresholds and their inheritance resolution.
 //!
 //! Thresholds resolve by **inheritance with override** (ADR-013, monitoring-conventions):
-//! most-specific scope wins — `Node` > `Group` > `Profile` > `Global`. `Global` is the
-//! "system default" tier ADR-013 named from the start and ADR-075 finally implemented. When a
-//! node matches several scopes at the *same* level (e.g. two groups), the tie-break is
+//! most-specific scope wins — `Node` > `FolderGroup` > `Group` > `Profile` > `Global`. `Global` is
+//! the "system default" tier ADR-013 named from the start and ADR-075 finally implemented. When a
+//! node matches several scopes at the *same* level (e.g. two tag groups), the tie-break is
 //! **most-restrictive value wins**. Resolution lives *only here* so precedence logic is
 //! never scattered. Hysteresis (dwell) is carried on the rule but applied over time by
 //! the alert engine, not here.
+//!
+//! ⚠️ One half is **not** here: a `FolderGroup` rule matches the node's own folder *and every
+//! folder above it*, so several can arrive at that one level. Which of them survives is decided by
+//! depth — nearest wins — and depth is a fact about the node, not about the rule, so
+//! `alerts.rs::resolve` filters before calling [`resolve_effective`] (ADR-075 増分 3).
 
 use crate::state::NodeState;
 use serde::{Deserialize, Serialize};
@@ -63,8 +68,8 @@ impl fmt::Display for Direction {
     }
 }
 
-/// The scope a threshold is defined at, ordered least → most specific: `Node` wins over `Group`,
-/// which wins over `Profile`, which wins over `Global` (every node).
+/// The scope a threshold is defined at, ordered least → most specific: `Node` wins over a folder
+/// group, which wins over `Group`, which wins over `Profile`, which wins over `Global` (every node).
 //
 // The two notes below are deliberately `//`, not `///`: this type derives `ToSchema`, so a `///`
 // line is published verbatim to every API client (see `openapi.json`). They are for whoever edits
@@ -96,8 +101,16 @@ pub enum ScopeLevel {
     Global,
     /// Defined on a device-class/profile.
     Profile,
-    /// Defined on a group (site/region/role/…).
+    /// Defined on a **node tag value** (site/region/role/…), matched as a string against any of the
+    /// node's tags. Legacy: nothing in the product writes `nodes.tags` except a config-bundle
+    /// import, so `FolderGroup` is what a new rule uses. Kept because existing rules resolve
+    /// through it.
     Group,
+    /// Defined on a **folder group** (the inventory tree, ADR-022), and inherited by every group
+    /// inside it. Serialized as `group_id` — the same spelling `WindowScope::FolderGroup` uses — so
+    /// it cannot be confused with the tag-based `Group` above.
+    #[serde(rename = "group_id")]
+    FolderGroup,
     /// Defined directly on the node (narrowest).
     Node,
 }
@@ -105,16 +118,17 @@ pub enum ScopeLevel {
 impl ScopeLevel {
     /// Every level, broadest first — the order the threshold list is sorted in and the order a
     /// picker should offer them.
-    pub const ALL: [ScopeLevel; 4] = [
+    pub const ALL: [ScopeLevel; 5] = [
         ScopeLevel::Global,
         ScopeLevel::Profile,
         ScopeLevel::Group,
+        ScopeLevel::FolderGroup,
         ScopeLevel::Node,
     ];
 
     /// Stable lowercase string for API payloads, DB columns, and logs.
     ///
-    /// The `thresholds.scope_level` column holds exactly these four, written verbatim from the
+    /// The `thresholds.scope_level` column holds exactly these five, written verbatim from the
     /// create request and read back by `ThresholdStore::parse_level`, so anything that binds a
     /// level into SQL must go through here rather than formatting the enum.
     #[must_use]
@@ -123,6 +137,7 @@ impl ScopeLevel {
             ScopeLevel::Global => "global",
             ScopeLevel::Profile => "profile",
             ScopeLevel::Group => "group",
+            ScopeLevel::FolderGroup => "group_id",
             ScopeLevel::Node => "node",
         }
     }
@@ -269,19 +284,28 @@ mod tests {
             let back: ScopeLevel =
                 serde_json::from_str(&json).expect("round-trips through its own tag");
             assert_eq!(back, level);
+            // And the third mechanism: `from_token` is what the API edge and the store's reader
+            // both go through, so it has to invert `as_str` for every level too. `FolderGroup` is
+            // where all three would disagree by default — serde would say `folder_group`.
+            assert_eq!(
+                ScopeLevel::from_token(level.as_str()),
+                Some(level),
+                "{level:?}"
+            );
         }
         // ALL is the whole enum, not a list someone forgot to extend when a level was added.
-        assert_eq!(ScopeLevel::ALL.len(), 4);
+        assert_eq!(ScopeLevel::ALL.len(), 5);
         assert_eq!(
             ScopeLevel::ALL.map(ScopeLevel::as_str),
-            ["global", "profile", "group", "node"],
+            ["global", "profile", "group", "group_id", "node"],
             "ALL is ordered broadest-first — the threshold list and its filter both rely on it"
         );
         // The order is also the precedence (`resolve_effective` takes `.max()`), so assert it as
         // an ordering rather than trusting the array to be read that way.
         assert!(ScopeLevel::Global < ScopeLevel::Profile);
         assert!(ScopeLevel::Profile < ScopeLevel::Group);
-        assert!(ScopeLevel::Group < ScopeLevel::Node);
+        assert!(ScopeLevel::Group < ScopeLevel::FolderGroup);
+        assert!(ScopeLevel::FolderGroup < ScopeLevel::Node);
     }
 
     fn rule(level: ScopeLevel, warning: f64, critical: f64) -> ScopedThreshold {

@@ -138,8 +138,9 @@
     "scopeLevel": {
       "global": "every node",
       "profile": "profile",
-      "group": "group",
-      "node": "node"
+      "group": "group tag",
+      "node": "node",
+      "group_id": "folder group"
     },
     "direction": {
       "above": "above",
@@ -150,15 +151,17 @@
       "scopeLevel": "Scope level",
       "scopeId": "Scope id",
       "scopeIdPlaceholder": {
-        "profile": "profile id",
-        "group": "group tag value",
-        "node": "node id"
+        "profile": "Pick a device profile",
+        "group": "node tag value (e.g. a site name)",
+        "node": "Pick a node",
+        "group_id": "Pick a folder group"
       },
       "scopeIdNoun": {
         "global": "This rule applies to every node. Anything you set at a profile, group or node scope overrides it.",
-        "profile": "device-profile id",
-        "group": "group tag value (e.g. a site name)",
-        "node": "node id"
+        "profile": "device profile",
+        "group": "node tag value",
+        "node": "node",
+        "group_id": "folder group"
       },
       "scopeIdHint": "The {{noun}} this rule targets.",
       "metric": "Metric",
@@ -171,7 +174,9 @@
       "dwellTitle": "Consecutive breaches: readings that must cross the bound in a row before the alert fires",
       "boundsHint": "Warn / crit / breaches are optional. Breaches is how many consecutive readings must cross the bound before the alert fires — higher values suppress flapping (rapid on/off alerts).",
       "add": "Add rule",
-      "dwellOnly": "Breaches"
+      "dwellOnly": "Breaches",
+      "folderGroupHint": "Applies to this group and every group inside it. A rule on a group further in wins over this one.",
+      "legacyTagHint": "Legacy scope: matches a node's tag value, not the folder tree. Kept so existing rules keep working — new rules use a folder group."
     },
     "deleteModal": {
       "title": "Delete threshold rule",

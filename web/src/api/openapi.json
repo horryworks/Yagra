@@ -30211,11 +30211,12 @@
       },
       "ScopeLevel": {
         "type": "string",
-        "description": "The scope a threshold is defined at, ordered least → most specific: `Node` wins over `Group`,\nwhich wins over `Profile`, which wins over `Global` (every node).",
+        "description": "The scope a threshold is defined at, ordered least → most specific: `Node` wins over a folder\ngroup, which wins over `Group`, which wins over `Profile`, which wins over `Global` (every node).",
         "enum": [
           "global",
           "profile",
           "group",
+          "group_id",
           "node"
         ]
       },

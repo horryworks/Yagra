@@ -12,6 +12,15 @@
 
 ### Breaking changes
 
+- **A threshold rule's `scope_id` is now validated.** `POST`/`PUT /api/v1/thresholds` used to
+  accept any string, including an empty one — and an id that names nothing is not a rule that
+  behaves oddly, it is a rule that is stored, listed, and silently matches no node at all. The
+  `profile`, `node` and `group_id` levels now require a UUID and the `group` level a non-empty
+  tag value, or the call is refused with `invalid_scope_id` (400). `global` is unchanged: it has
+  nothing to point at, and its `scope_id` is still pinned to the empty string. Existing rules are
+  untouched — this is checked on write, not on read — but editing a rule whose id was already
+  malformed will now be refused until the id is corrected.
+
 - **Node up/down is now an alert *rule*, not built-in behaviour — and it can be deleted.**
   Reachability alerting used to come from a constant in the engine: three consecutive failed
   polls, critical, no way to change either. It now comes from a rule on **Reachability** in
@@ -25,6 +34,19 @@
   same history rows), so open alerts and open PagerDuty/JSM incidents survive the upgrade.
 
 ### New Features
+
+- **A rule's scope is picked from a list, and can now be a folder group.** The scope id was one
+  free-text box asking for a UUID, and the UUID it wanted — a device profile's — is printed nowhere
+  in the app, so a profile-scoped rule could not realistically be created. The dialog now offers a
+  device-profile list, a node search, or the inventory folder tree, depending on the scope level.
+  The new **folder group** level (`scope_level=group_id`, `scope_id` a group UUID) covers that
+  group **and every group inside it**, and where a parent and a child group both carry a rule for
+  the same metric, the nearer one wins. The older **group** level — which matches a node's *tag
+  value*, not the folder tree — keeps working and stays visible and editable, but is no longer
+  offered when creating a rule: nothing in the product writes node tags, so a rule created at it
+  could not match anything. Maintenance windows made the same move earlier. ⚠️ **On a downgrade a
+  folder-group rule stops applying**: an older core does not know the level and reads the row as an
+  inert profile rule. Nothing is lost, and upgrading again restores it.
 
 - **Metric alert rules says what each rule is watching.** A row read `Reachability | below |
   (no bounds) | 3 breaches` — how the rule behaves, and nothing about what it measures. A

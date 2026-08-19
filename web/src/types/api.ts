@@ -394,8 +394,20 @@ export type ProfileSummary = components['schemas']['ProfileSummary'];
 export type ProfileInput = components['schemas']['ProfileBody'];
 
 /** Every threshold scope level, broadest → most specific. `global` is every node and carries no
- *  scope id (ADR-075); the server pins its `scope_id` to the empty string. */
-export const SCOPE_LEVELS = ['global', 'profile', 'group', 'node'] as const;
+ *  scope id (ADR-075); the server pins its `scope_id` to the empty string. `group_id` is a folder
+ *  group in the inventory tree and covers every group inside it; the older `group` matches a node
+ *  **tag value** and is legacy (ADR-075 増分 3). */
+export const SCOPE_LEVELS = ['global', 'profile', 'group', 'group_id', 'node'] as const;
+
+/** The levels a *new* rule may be created at — every level except the legacy tag-based `group`.
+ *
+ *  Nothing in the product writes `nodes.tags` except a config-bundle import, so offering that level
+ *  in the add dialog offers a rule that cannot match anything. Existing rules keep resolving,
+ *  listing and editing at that level, which is why it stays in `SCOPE_LEVELS` above — the filter
+ *  row and the table badge both iterate that one. Same shape the maintenance-window form uses. */
+export const CREATABLE_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(
+  (l) => l !== 'group',
+);
 
 /** Threshold scope level (snake_case). Most-specific wins. Pinned to `schemas.ScopeLevel`. */
 export type ScopeLevel = (typeof SCOPE_LEVELS)[number];
