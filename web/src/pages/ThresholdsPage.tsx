@@ -26,6 +26,7 @@ import {
   type StoredThreshold,
 } from '../types/api';
 import { METRIC_PRESETS } from '../lib/suppression';
+import { LIVENESS_METRIC } from '../lib/format';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -60,7 +61,10 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const ready = metric.trim() !== '' && scopeId.trim() !== '';
+  // A `global` rule targets every node, so it has nothing to point at and the server pins its
+  // `scope_id` to the empty string. Requiring one here would make the level unusable.
+  const global = level === 'global';
+  const ready = metric.trim() !== '' && (global || scopeId.trim() !== '');
 
   const submit = () => {
     if (!ready) return;
@@ -70,7 +74,7 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
     api
       .createThreshold({
         scope_level: level,
-        scope_id: scopeId.trim(),
+        scope_id: global ? '' : scopeId.trim(),
         metric: metric.trim(),
         direction,
         warning: num(warning),
@@ -112,21 +116,27 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
           ))}
         </Select>
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
-        <TextInput
-          className="mono"
-          placeholder={t(`thresholds.addModal.scopeIdPlaceholder.${level}`)}
-          value={scopeId}
-          onChange={(e) => setScopeId(e.target.value)}
-          autoFocus
-        />
-        <span className="modal-hint">
-          {t('thresholds.addModal.scopeIdHint', {
-            noun: t(`thresholds.addModal.scopeIdNoun.${level}`),
-          })}
-        </span>
-      </div>
+      {global ? (
+        <div className="modal-field">
+          <span className="modal-hint">{t(`thresholds.addModal.scopeIdNoun.global`)}</span>
+        </div>
+      ) : (
+        <div className="modal-field">
+          <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
+          <TextInput
+            className="mono"
+            placeholder={t(`thresholds.addModal.scopeIdPlaceholder.${level}`)}
+            value={scopeId}
+            onChange={(e) => setScopeId(e.target.value)}
+            autoFocus
+          />
+          <span className="modal-hint">
+            {t('thresholds.addModal.scopeIdHint', {
+              noun: t(`thresholds.addModal.scopeIdNoun.${level}`),
+            })}
+          </span>
+        </div>
+      )}
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
         <TextInput
@@ -229,6 +239,13 @@ export function ThresholdsPage() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
+  /** Whether any reachability rule exists **anywhere** — `null` until the question is answered.
+   *
+   *  It cannot be read off `rows`: that list is the operator's current filter, capped by the
+   *  server, so an absent rule and a narrowed view look identical. And the tri-state matters —
+   *  rendering the warning while the answer is still `undefined` would flash "nothing is watching
+   *  your fleet" on every page load. */
+  const [hasLiveness, setHasLiveness] = useState<boolean | null>(null);
   const { scopeName } = useEntityNames();
 
   const [sheet, setSheet] = useState(false);
@@ -249,7 +266,11 @@ export function ThresholdsPage() {
         render: (row) => (
           <>
             <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
-            <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
+            {/* A global rule has no id to resolve; the badge already says "every node", and an
+                `EntityName` on an empty id would render a bare em dash beside it. */}
+            {row.scope_level !== 'global' && (
+              <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
+            )}
           </>
         ),
       },
@@ -257,7 +278,15 @@ export function ThresholdsPage() {
         key: 'q',
         header: t('thresholds.cols.metric'),
         width: '1.4fr',
-        render: (row) => <span className="mono">{row.metric}</span>,
+        // The reachability rule carries the engine's internal check name. Every other surface
+        // already shows it as "Reachability" (`AlertWhatText`), and this is the one screen where
+        // an operator would otherwise meet the raw sentinel.
+        render: (row) =>
+          row.metric === LIVENESS_METRIC ? (
+            <span>{t('format:liveness')}</span>
+          ) : (
+            <span className="mono">{row.metric}</span>
+          ),
       },
       {
         key: 'direction',
@@ -338,6 +367,12 @@ export function ThresholdsPage() {
       })
       .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
+    // Asked separately and unfiltered, because the question is about the whole ruleset. Rides
+    // `load` so it is re-asked after an add or a delete — the two moments the answer changes.
+    api
+      .listThresholds({ q: LIVENESS_METRIC })
+      .then((p) => setHasLiveness(p.total > 0))
+      .catch(() => setHasLiveness(null));
   }, [filterCols, filters]);
 
   useEffect(() => {
@@ -355,6 +390,15 @@ export function ThresholdsPage() {
       <Card className="thresholds-note-card">
         <p className="thresholds-note">{t('thresholds.explainer')}</p>
       </Card>
+
+      {/* Deleting the reachability rule is allowed — it is an ordinary row — and it switches off
+          node-down paging for the whole fleet. Saying so where it happened is the alternative to
+          making that one row undeletable, which would make it a different kind of row. */}
+      {hasLiveness === false && (
+        <Card className="thresholds-warn-card">
+          <p className="thresholds-note">{t('thresholds.noLiveness')}</p>
+        </Card>
+      )}
 
       {block ? (
         <LoadBlockNotice

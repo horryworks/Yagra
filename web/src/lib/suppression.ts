@@ -4,6 +4,7 @@
 // (which nodes/groups are currently under maintenance or muted, propagated down a targeted folder
 // group). Kept free of React so the index logic is unit-tested directly.
 
+import { LIVENESS_METRIC } from './format';
 import type {
   Alert,
   MaintenanceWindow,
@@ -58,10 +59,20 @@ export function muteTargetFromAlert(
 
 /** Metric-name presets offered as a `<datalist>` wherever the operator types a metric by hand
  *  (alert-rule metric, mute check). These are the series every node emits today — ICMP on all of
- *  them, sysUptime whenever SNMP is bound — so they cover the common case without pretending to be
- *  the full catalogue; free text stays allowed for anything else collected. Shared because the
- *  alert-rule form and the mute form each carried their own identical copy. */
-export const METRIC_PRESETS = ['icmp_rtt_ms', 'icmp_loss_pct', 'snmp_sys_uptime_ticks'];
+ *  them, `snmp_up` and sysUptime whenever SNMP is bound — so they cover the common case without
+ *  pretending to be the full catalogue; free text stays allowed for anything else collected.
+ *  Shared because the alert-rule form and the mute form each carried their own identical copy.
+ *
+ *  `LIVENESS_METRIC` leads the list and is not a series at all: it is the reachability *check*,
+ *  and since ADR-075 the up/down alert comes from a rule on it. It has to be offerable here or an
+ *  operator who deletes the seeded rule has no way to type it back. */
+export const METRIC_PRESETS = [
+  LIVENESS_METRIC,
+  'icmp_rtt_ms',
+  'icmp_loss_pct',
+  'snmp_up',
+  'snmp_sys_uptime_ticks',
+];
 
 /** Quick-duration presets (milliseconds from "now") offered in the right-click submenu. */
 export const DURATION_PRESETS: { label: string; ms: number }[] = [

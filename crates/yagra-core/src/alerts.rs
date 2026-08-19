@@ -54,8 +54,40 @@ use yagra_common::{AlertFacts, NotifyEvent};
 /// recognise the sentinel — the RCA prompt renders it as "liveness" rather than showing an operator
 /// an internal token — tests against this rather than re-spelling the literal.
 pub(crate) const LIVENESS: &str = "__liveness__";
-/// Consecutive samples a state must hold before it commits (anti-flap) for liveness.
-const DWELL_SAMPLES: u32 = 3;
+/// Consecutive failed polls the **seeded fleet-default** liveness rule asks for (ADR-075).
+///
+/// This is the seed's value, not the engine's. The engine reads the dwell off whichever
+/// `__liveness__` rule resolves for the node, so an operator can raise it for one site or delete
+/// the rule and stop paging altogether. It stays 3 because that is what the removed hard-coded
+/// constant was: an upgrade must not change how quickly an existing fleet pages.
+///
+/// It is also the fallback the **state machine** uses when no rule resolves. That is deliberate
+/// and is not "the rule is still there": the committed state drives the Nodes page, the down-set
+/// and dependency suppression, none of which an operator asked to switch off by deleting an
+/// alert rule. Deleting the rule stops the paging, not the bookkeeping.
+pub(crate) const DEFAULT_LIVENESS_DWELL: u32 = 3;
+/// The fleet-default liveness rule every deployment is seeded with (`repo.rs`, ADR-075).
+///
+/// Test-only, and shared rather than re-spelled: up/down alerting is rule-driven now, so an
+/// `AlertManager` with no config commits state and pages nobody. Any test that expects a node to
+/// fire has to install this, and two modules needed it — a second copy would be a second chance
+/// to disagree with what `repo.rs` actually seeds.
+#[cfg(test)]
+pub(crate) fn seeded_liveness_rule() -> StoredThreshold {
+    StoredThreshold {
+        id: uuid::Uuid::nil(),
+        level: ScopeLevel::Global,
+        scope_id: String::new(),
+        rule: yagra_common::ThresholdRule {
+            metric: LIVENESS.to_owned(),
+            direction: Direction::Below,
+            warning: None,
+            critical: None,
+            dwell_samples: DEFAULT_LIVENESS_DWELL,
+        },
+    }
+}
+
 /// Flapping detection window and threshold.
 const FLAP_WINDOW_MS: i64 = 600_000;
 const FLAP_THRESHOLD: usize = 5;
@@ -200,6 +232,10 @@ impl AlertConfig {
 
     fn applies(&self, t: &StoredThreshold, node: NodeId, meta: Option<&NodeMeta>) -> bool {
         match t.level {
+            // The fleet default (ADR-075). It matches a node with no profile and no tags too —
+            // which is the whole reason it exists, since a profile-scoped default cannot reach
+            // one. `scope_id` is unread here; the API pins it to the empty string.
+            ScopeLevel::Global => true,
             ScopeLevel::Node => t.scope_id == node.to_string(),
             ScopeLevel::Profile => {
                 meta.and_then(|m| m.profile.as_deref()) == Some(t.scope_id.as_str())
@@ -227,13 +263,20 @@ struct ThresholdEval {
 }
 
 /// Everything identifying the check being evaluated for one sample: its stable id, the metric
-/// it measures, the dwell, whether it's the liveness check, and (for thresholds) the breach eval.
+/// it measures, the dwell, whether it's the liveness check, whether it may page, and (for
+/// thresholds) the breach eval.
 /// Bundled so [`AlertManager::process_check`] takes one descriptor instead of a long arg list.
 struct CheckSpec<'a> {
     check: CheckId,
     metric: &'a str,
     dwell: u32,
     is_liveness: bool,
+    /// Whether a committed transition may raise an alert (ADR-075).
+    ///
+    /// A threshold check is always `true` — the rule's existence *is* the check. Liveness is
+    /// `false` when no `__liveness__` rule resolves for the node, which means the state machine
+    /// still runs (display state, down-set, dependency suppression) and nobody is paged.
+    alerting: bool,
     eval: Option<ThresholdEval>,
 }
 
@@ -465,12 +508,16 @@ impl AlertManager {
         // even for a wide table, and this way a sample-free result (ICMP liveness, the common case)
         // allocates nothing at all.
         let mut resolved: Vec<(&str, Option<(CheckId, EffectiveThreshold)>)> = Vec::new();
+        // The liveness rule (ADR-075), resolved under the same lock as the sample thresholds.
+        // `None` = no rule anywhere in this node's scope chain ⇒ commit state, page nobody.
+        let liveness_dwell: Option<u32>;
         // Inside an active maintenance window every check observes `Maintenance` instead of
         // its real state: no alert can fire (Maintenance carries no severity) and existing
         // alerts resolve after the usual dwell. The real state flows again when the window
         // ends, re-committing any surviving problem.
         let in_maintenance = {
             let config = self.config.read().expect("config rwlock poisoned");
+            liveness_dwell = config.resolve(node, LIVENESS).map(|eff| eff.dwell_samples);
             for sample in &result.samples {
                 if !resolved.iter().any(|(metric, _)| *metric == sample.metric) {
                     let eff = config
@@ -499,8 +546,11 @@ impl AlertManager {
             CheckSpec {
                 check: check_id(node, LIVENESS),
                 metric: LIVENESS,
-                dwell: DWELL_SAMPLES,
+                // No rule ⇒ the state machine keeps its usual cadence so the Nodes page and the
+                // down-set behave exactly as before; only `alerting` changes.
+                dwell: liveness_dwell.unwrap_or(DEFAULT_LIVENESS_DWELL),
                 is_liveness: true,
+                alerting: liveness_dwell.is_some(),
                 eval: None,
             },
         ));
@@ -542,6 +592,8 @@ impl AlertManager {
                         metric: &sample.metric,
                         dwell: eff.dwell_samples,
                         is_liveness: false,
+                        // A threshold check exists only because a rule resolved for it.
+                        alerting: true,
                         eval: Some(eval),
                     },
                 ));
@@ -576,6 +628,7 @@ impl AlertManager {
             metric,
             dwell,
             is_liveness,
+            alerting,
             eval,
         } = spec;
         let (transition, committed) = {
@@ -583,6 +636,11 @@ impl AlertManager {
             let cs = states.entry(check).or_insert_with(|| {
                 CheckState::new(NodeState::Ok, dwell.max(1), FLAP_WINDOW_MS, FLAP_THRESHOLD)
             });
+            // A check's state lives for the process, so the dwell captured at first observation
+            // would otherwise outlive every edit to the rule that set it — an operator raising
+            // "3 breaches" to "5" would see no effect until the next core restart, with the UI
+            // showing 5. Re-point it every observation instead (ADR-075).
+            cs.set_dwell(dwell.max(1));
             let t = cs.observe(raw, at_unix_ms);
             (t, cs.committed())
         };
@@ -613,6 +671,30 @@ impl AlertManager {
         } else {
             false
         };
+
+        // No rule ⇒ no paging (ADR-075). Everything above still ran: the committed state, the
+        // down-set and the re-sweep below are what the Nodes page, the fleet summary and
+        // dependency suppression read, and deleting an *alert rule* does not ask for those to
+        // stop. What it does ask for is that an alert already open on this check be closed —
+        // otherwise deleting the rule strands it forever, active in the UI and open in whatever
+        // external tool its dedup key reached. Resolving here rather than at config-reload time
+        // keeps it to one code path: the poll loop is already visiting every node.
+        if !alerting {
+            let stranded = self
+                .active
+                .lock()
+                .expect("alerts mutex poisoned")
+                .remove(&check);
+            let mut actions = Vec::new();
+            if let Some(alert) = stranded {
+                self.broadcast(&alert, true);
+                actions.push(NotifyAction::Resolve(alert));
+            }
+            if down_set_changed {
+                actions.extend(self.resweep_suppression(node));
+            }
+            return actions;
+        }
 
         let Some(t) = transition else {
             return Vec::new();
@@ -2009,6 +2091,29 @@ mod tests {
     use uuid::Uuid;
     use yagra_common::NodeId;
 
+    /// The fleet-default liveness rule every deployment is seeded with (ADR-075, `repo.rs`).
+    ///
+    /// Up/down alerting is rule-driven now, so a manager with no config commits state and pages
+    /// nobody. Tests that exercise firing must install this; the ones that assert the opposite
+    /// deliberately leave it out.
+    fn liveness_rule() -> StoredThreshold {
+        seeded_liveness_rule()
+    }
+
+    /// `AlertConfig::new` with the seeded liveness rule already in it — what a real deployment
+    /// looks like. Take this rather than `AlertConfig::new` unless the test is about its absence.
+    fn cfg(mut thresholds: Vec<StoredThreshold>, meta: HashMap<NodeId, NodeMeta>) -> AlertConfig {
+        thresholds.push(liveness_rule());
+        AlertConfig::new(thresholds, meta)
+    }
+
+    /// A manager configured the way a seeded deployment is.
+    fn manager() -> AlertManager {
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()));
+        mgr
+    }
+
     fn result(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
         PollResult {
             job_id: Uuid::nil(),
@@ -2188,13 +2293,112 @@ mod tests {
         assert!(!blocked("http://10.0.0.5/hook").await);
     }
 
+    /// ADR-075, the half that is easy to get wrong: with no `__liveness__` rule the engine must
+    /// still commit the node's state, keep the down-set current and run dependency suppression —
+    /// only the paging stops. Deleting an *alert rule* is not a request to blank the Nodes page.
+    #[test]
+    fn without_a_liveness_rule_the_state_still_commits_and_nobody_is_paged() {
+        let mgr = AlertManager::new();
+        mgr.set_config(AlertConfig::new(Vec::new(), HashMap::new()));
+        let node = NodeId::new();
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            assert!(
+                mgr.observe(&result(node, CheckOutcome::Unreachable, i))
+                    .is_empty(),
+                "no rule ⇒ no alert, at sample {i}"
+            );
+        }
+        assert!(mgr.active_alerts().is_empty());
+        // …but everything the UI and the suppression graph read is current.
+        assert_eq!(mgr.node_state(node), Some(NodeState::Unreachable));
+        assert!(mgr.down_set().contains(&node));
+    }
+
+    /// The receiving side of the same rule, which a rejection-only test would miss entirely: with
+    /// the seeded rule installed the node fires exactly as it did before ADR-075.
+    #[test]
+    fn with_the_seeded_rule_a_down_node_fires_at_the_same_cadence_as_before() {
+        let mgr = manager();
+        let node = NodeId::new();
+        for i in 0..(DEFAULT_LIVENESS_DWELL - 1) {
+            assert!(mgr
+                .observe(&result(node, CheckOutcome::Unreachable, i64::from(i)))
+                .is_empty());
+        }
+        let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 100));
+        assert!(matches!(actions.as_slice(), [NotifyAction::Fire(_)]));
+        // The alert still carries the sentinel, which is what `check_id`, the dedup key, the
+        // history rows and dependency suppression are all keyed on (ADR-075 decision 2).
+        assert_eq!(mgr.active_alerts()[0].metric, LIVENESS);
+    }
+
+    /// Deleting the rule while an alert is open must close it. Without this the alert is stranded:
+    /// active in the UI forever, and open in whatever external tool its dedup key reached, with no
+    /// remaining code path that could ever resolve it.
+    #[test]
+    fn deleting_the_liveness_rule_resolves_the_alert_it_had_already_raised() {
+        let mgr = manager();
+        let node = NodeId::new();
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i));
+        }
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        mgr.set_config(AlertConfig::new(Vec::new(), HashMap::new()));
+        let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 100));
+        assert!(
+            matches!(actions.as_slice(), [NotifyAction::Resolve(_)]),
+            "the open alert is closed once, on the first poll after the rule went away"
+        );
+        assert!(mgr.active_alerts().is_empty());
+        // Once, not on every subsequent poll — a resolve per poll would be a notification storm.
+        assert!(mgr
+            .observe(&result(node, CheckOutcome::Unreachable, 101))
+            .is_empty());
+    }
+
+    /// The dwell is read off the rule, and an edit takes effect without a core restart. The check
+    /// state outlives any one config snapshot, so this is the property that makes the number the
+    /// UI shows the number the engine uses.
+    #[test]
+    fn the_liveness_dwell_comes_from_the_rule_and_an_edit_applies_live() {
+        let with_dwell = |n: u32| {
+            let mut r = liveness_rule();
+            r.rule.dwell_samples = n;
+            AlertConfig::new(vec![r], HashMap::new())
+        };
+        let mgr = AlertManager::new();
+        mgr.set_config(with_dwell(1));
+        let node = NodeId::new();
+        let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, 0));
+        assert!(
+            matches!(actions.as_slice(), [NotifyAction::Fire(_)]),
+            "dwell 1 fires on the first failed poll"
+        );
+
+        // Recover, then widen the window on the live manager: the next two failures must not fire.
+        mgr.observe(&result(node, CheckOutcome::Reachable, 1));
+        assert!(mgr.active_alerts().is_empty());
+        mgr.set_config(with_dwell(3));
+        assert!(mgr
+            .observe(&result(node, CheckOutcome::Unreachable, 2))
+            .is_empty());
+        assert!(mgr
+            .observe(&result(node, CheckOutcome::Unreachable, 3))
+            .is_empty());
+        assert!(matches!(
+            mgr.observe(&result(node, CheckOutcome::Unreachable, 4))
+                .as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+    }
     #[test]
     fn fires_after_dwell_then_resolves_on_recovery() {
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
 
-        // Unreachable must persist DWELL_SAMPLES times before it commits/fires.
-        for i in 0..(DWELL_SAMPLES - 1) {
+        // Unreachable must persist DEFAULT_LIVENESS_DWELL times before it commits/fires.
+        for i in 0..(DEFAULT_LIVENESS_DWELL - 1) {
             let actions = mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
             assert!(actions.is_empty(), "should not fire before dwell satisfied");
         }
@@ -2202,9 +2406,9 @@ mod tests {
         assert!(matches!(actions.as_slice(), [NotifyAction::Fire(_)]));
         assert_eq!(mgr.active_alerts().len(), 1);
 
-        // Recovery is symmetric: it also needs DWELL_SAMPLES consecutive reachable
+        // Recovery is symmetric: it also needs DEFAULT_LIVENESS_DWELL consecutive reachable
         // samples before the alert resolves (anti-flap on the way back too).
-        for i in 0..(DWELL_SAMPLES - 1) {
+        for i in 0..(DEFAULT_LIVENESS_DWELL - 1) {
             let actions = mgr.observe(&result(node, CheckOutcome::Reachable, 200 + i64::from(i)));
             assert!(
                 actions.is_empty(),
@@ -2220,7 +2424,7 @@ mod tests {
     fn observe_broadcasts_node_state_changes_only() {
         // S14: the node-state SSE stream carries one event per rolled-up display-state change
         // (including the first observation), and nothing while the state is steady.
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
         let mut rx = mgr.subscribe_node_states();
 
@@ -2243,7 +2447,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "steady Ok must not emit");
 
         // Drive Unreachable up to the dwell threshold; only the committing observe changes state.
-        for i in 0..(DWELL_SAMPLES - 1) {
+        for i in 0..(DEFAULT_LIVENESS_DWELL - 1) {
             mgr.observe(&result(node, CheckOutcome::Unreachable, 10 + i64::from(i)));
             assert!(rx.try_recv().is_err(), "pre-dwell must not emit");
         }
@@ -2271,8 +2475,8 @@ mod tests {
                 folder_group: Some(folder),
             },
         );
-        let mgr = AlertManager::new();
-        mgr.set_config(AlertConfig::new(Vec::new(), meta));
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), meta));
 
         // The folder group is what visibility reads, and it is a uuid — never the tag string.
         assert_eq!(mgr.node_folder_group(node), Some(folder));
@@ -2289,8 +2493,8 @@ mod tests {
                 folder_group: None,
             },
         );
-        let mgr2 = AlertManager::new();
-        mgr2.set_config(AlertConfig::new(Vec::new(), tagged_only));
+        let mgr2 = manager();
+        mgr2.set_config(cfg(Vec::new(), tagged_only));
         assert_eq!(
             mgr2.node_folder_group(node),
             None,
@@ -2300,7 +2504,7 @@ mod tests {
 
     #[test]
     fn steady_reachable_never_fires() {
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
         for i in 0..10 {
             assert!(mgr
@@ -2316,11 +2520,11 @@ mod tests {
         use yagra_common::{Direction, ThresholdRule};
 
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = manager();
         // Node-scoped threshold: icmp_rtt_ms critical at/above 100ms, no dwell.
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
-        mgr.set_config(AlertConfig::new(
+        mgr.set_config(cfg(
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
@@ -2364,10 +2568,10 @@ mod tests {
         use yagra_common::{Direction, ThresholdRule};
 
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
-        mgr.set_config(AlertConfig::new(
+        mgr.set_config(cfg(
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
@@ -2409,11 +2613,11 @@ mod tests {
         use yagra_common::{Direction, ThresholdRule};
 
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = manager();
         // A rule that predates the create-side counter rejection: octets "above 1000".
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
-        mgr.set_config(AlertConfig::new(
+        mgr.set_config(cfg(
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
@@ -2459,10 +2663,10 @@ mod tests {
         use yagra_common::{Direction, ThresholdRule};
 
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
-        mgr.set_config(AlertConfig::new(
+        mgr.set_config(cfg(
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
@@ -2495,10 +2699,10 @@ mod tests {
     #[test]
     fn fired_liveness_alert_carries_sentinel_metric_and_no_breach() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = manager();
         // Drive unreachable past the dwell so liveness commits and fires.
         let mut fired = None;
-        for i in 0..=i64::from(DWELL_SAMPLES) {
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
             for action in mgr.observe(&result(node, CheckOutcome::Unreachable, i)) {
                 if let NotifyAction::Fire(a) = action {
                     fired = Some(a);
@@ -2513,7 +2717,7 @@ mod tests {
     #[test]
     fn metric_without_threshold_is_ignored() {
         let node = NodeId::new();
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let mut r = result(node, CheckOutcome::Reachable, 0);
         r.samples = vec![yagra_bus::Sample::gauge("icmp_rtt_ms", 9999.0)];
         // No thresholds configured ⇒ no metric alert (and reachable ⇒ no liveness alert).
@@ -2525,7 +2729,7 @@ mod tests {
         use yagra_bus::Sample;
         use yagra_common::{Direction, ThresholdRule};
 
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
 
         // A node never observed has no rolled-up state.
@@ -2542,7 +2746,7 @@ mod tests {
         // its liveness is still `ok` underneath.
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
-        mgr.set_config(AlertConfig::new(
+        mgr.set_config(cfg(
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
@@ -2570,10 +2774,10 @@ mod tests {
     fn node_state_counts_tally_the_whole_fleet_and_match_node_states() {
         // The fleet-summary source (S12): counts every observed node by rolled-up state, over the
         // whole engine — not a paged slice. Must agree with counting `node_states()` (its source).
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let up = NodeId::new();
         let down = NodeId::new();
-        for i in 0..DWELL_SAMPLES {
+        for i in 0..DEFAULT_LIVENESS_DWELL {
             mgr.observe(&result(up, CheckOutcome::Reachable, i64::from(i)));
             mgr.observe(&result(down, CheckOutcome::Unreachable, i64::from(i)));
         }
@@ -2590,12 +2794,12 @@ mod tests {
 
     #[test]
     fn maintenance_node_never_fires_and_existing_alert_resolves() {
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
 
         // Drive the node down until its liveness alert commits.
         let mut fired = false;
-        for i in 0..DWELL_SAMPLES {
+        for i in 0..DEFAULT_LIVENESS_DWELL {
             for action in mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i))) {
                 if matches!(action, NotifyAction::Fire(_)) {
                     fired = true;
@@ -2609,9 +2813,9 @@ mod tests {
         // the display state flips to `maintenance`.
         let mut maintenance = BTreeSet::new();
         maintenance.insert(node);
-        mgr.set_config(AlertConfig::default().with_maintenance(maintenance));
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_maintenance(maintenance));
         let mut resolved = false;
-        for i in 0..DWELL_SAMPLES {
+        for i in 0..DEFAULT_LIVENESS_DWELL {
             for action in mgr.observe(&result(node, CheckOutcome::Unreachable, 100 + i64::from(i)))
             {
                 if matches!(action, NotifyAction::Resolve(_)) {
@@ -2631,9 +2835,9 @@ mod tests {
         }
 
         // The window ends: the real (down) state flows again and re-commits after dwell.
-        mgr.set_config(AlertConfig::default());
+        mgr.set_config(cfg(Vec::new(), HashMap::new()));
         let mut refired = false;
-        for i in 0..DWELL_SAMPLES {
+        for i in 0..DEFAULT_LIVENESS_DWELL {
             for action in mgr.observe(&result(node, CheckOutcome::Unreachable, 300 + i64::from(i)))
             {
                 if matches!(action, NotifyAction::Fire(_)) {
@@ -2665,10 +2869,10 @@ mod tests {
             },
         }];
 
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let mut maintenance = BTreeSet::new();
         maintenance.insert(node);
-        mgr.set_config(AlertConfig::new(thresholds, meta).with_maintenance(maintenance));
+        mgr.set_config(cfg(thresholds, meta).with_maintenance(maintenance));
 
         // A breaching sample during maintenance must not fire.
         let mut high = result(node, CheckOutcome::Reachable, 0);
@@ -2724,13 +2928,13 @@ mod tests {
         let mut topo = Topology::new();
         topo.add_dependency(child, parent);
 
-        let mgr = AlertManager::new();
-        mgr.set_config(AlertConfig::default().with_topology(topo));
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
 
         // Helper: drive a node Unreachable until it commits and return the fired alert.
         let drive_down = |node: NodeId, base: i64| -> Alert {
             let mut fired = None;
-            for i in 0..DWELL_SAMPLES {
+            for i in 0..DEFAULT_LIVENESS_DWELL {
                 for action in mgr.observe(&result(
                     node,
                     CheckOutcome::Unreachable,
@@ -2770,13 +2974,13 @@ mod tests {
         let mut topo = Topology::new();
         topo.add_dependency(child, parent);
 
-        let mgr = AlertManager::new();
-        mgr.set_config(AlertConfig::default().with_topology(topo));
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
 
         // Collect every action produced while driving `node` to `outcome` across the dwell window.
         let drive = |node: NodeId, outcome: CheckOutcome, base: i64| -> Vec<NotifyAction> {
             let mut out = Vec::new();
-            for i in 0..DWELL_SAMPLES {
+            for i in 0..DEFAULT_LIVENESS_DWELL {
                 out.extend(mgr.observe(&result(node, outcome, base + i64::from(i))));
             }
             out
@@ -2830,12 +3034,12 @@ mod tests {
         let mut topo = Topology::new();
         topo.add_dependency(child, parent);
 
-        let mgr = AlertManager::new();
-        mgr.set_config(AlertConfig::default().with_topology(topo));
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
 
         let drive = |node: NodeId, outcome: CheckOutcome, base: i64| -> Vec<NotifyAction> {
             let mut out = Vec::new();
-            for i in 0..DWELL_SAMPLES {
+            for i in 0..DEFAULT_LIVENESS_DWELL {
                 out.extend(mgr.observe(&result(node, outcome, base + i64::from(i))));
             }
             out
@@ -2880,11 +3084,11 @@ mod tests {
         topo.add_dependency(parent, gp);
         topo.add_dependency(child, parent);
 
-        let mgr = AlertManager::new();
-        mgr.set_config(AlertConfig::default().with_topology(topo));
+        let mgr = manager();
+        mgr.set_config(cfg(Vec::new(), HashMap::new()).with_topology(topo));
 
         let drive = |node: NodeId, outcome: CheckOutcome, base: i64| {
-            for i in 0..DWELL_SAMPLES {
+            for i in 0..DEFAULT_LIVENESS_DWELL {
                 mgr.observe(&result(node, outcome, base + i64::from(i)));
             }
         };
@@ -2923,9 +3127,9 @@ mod tests {
     #[tokio::test]
     async fn broadcast_acked_emits_upsert_for_active_alert() {
         // Fire a liveness alert, then mirror an inbound ack for it (ADR-015).
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
-        for i in 0..DWELL_SAMPLES {
+        for i in 0..DEFAULT_LIVENESS_DWELL {
             mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
         }
         let active = mgr.active_alerts();
@@ -2959,11 +3163,11 @@ mod tests {
         // the JSON. If a sender ever attached the wrong id — or a placeholder — the filter would
         // silently pass an out-of-scope alert to a scoped subscriber, or hide an in-scope one, with
         // the payload looking perfectly correct either way. So the two must agree at the source.
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
         let mut alerts = mgr.subscribe();
         let mut states = mgr.subscribe_node_states();
-        for i in 0..DWELL_SAMPLES {
+        for i in 0..DEFAULT_LIVENESS_DWELL {
             mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
         }
 
@@ -2990,7 +3194,7 @@ mod tests {
 
     #[tokio::test]
     async fn broadcast_acked_is_noop_when_alert_not_active() {
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let mut rx = mgr.subscribe();
         // No matching active alert ⇒ nothing on screen to update, so no event is sent.
         mgr.broadcast_acked(
@@ -3079,7 +3283,7 @@ mod tests {
     /// display state and shows up on a page it does not belong to.
     #[test]
     fn a_pool_coverage_alert_stays_out_of_every_node_keyed_view() {
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let node = NodeId::new();
         assert!(mgr
             .raise_pool_coverage_alert("tokyo", 1_000)
@@ -3104,7 +3308,7 @@ mod tests {
         // `node` must stay present and stay a string for *every* subject — getting that wrong is a
         // silently dead live feed, not a visible error. `subject_kind`/`subject_name` beside it are
         // what let the client render a pool as a pool rather than as an unresolvable node.
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let mut rx = mgr.subscribe();
         mgr.raise_pool_coverage_alert("tokyo", 1_000);
 
@@ -3127,10 +3331,10 @@ mod tests {
         // The whole reason the subject is a sum type: the operator scoped to the site that went
         // dark is exactly the person who must see this, and a synthetic node id would have hidden
         // it from them (and only them). Answered from the config snapshot, so no I/O per frame.
-        let mgr = AlertManager::new();
+        let mgr = manager();
         let (mine, theirs) = (Uuid::from_u128(1), Uuid::from_u128(2));
         mgr.set_config(
-            AlertConfig::new(Vec::new(), HashMap::new()).with_pool_groups(HashMap::from([(
+            cfg(Vec::new(), HashMap::new()).with_pool_groups(HashMap::from([(
                 "tokyo".to_owned(),
                 BTreeSet::from([mine]),
             )])),
@@ -3157,7 +3361,7 @@ mod tests {
     }
 
     fn mgr_alert() -> NotifyAction {
-        AlertManager::new()
+        manager()
             .raise_pool_coverage_alert("tokyo", 1_000)
             .expect("a fresh manager raises")
     }

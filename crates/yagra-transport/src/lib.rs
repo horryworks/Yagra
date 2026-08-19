@@ -480,6 +480,12 @@ pub struct FakeTransport {
     pub meraki: Vec<MerakiObservation>,
     /// The chain every DNS resolution returns.
     pub dns: DnsChain,
+    /// When set, every scalar SNMP GET (v2c and v3) fails with this message instead of
+    /// returning [`Self::snmp`].
+    ///
+    /// "The agent refused" and "the agent answered with nothing" are different device states
+    /// that a caller can easily conflate, and the empty-vec default can only express the second.
+    pub snmp_get_error: Option<String>,
 }
 
 /// A canned one-hop chain resolving to `10.1.2.3`, or the same query having timed out.
@@ -551,6 +557,7 @@ impl FakeTransport {
                 body: None,
             },
             meraki: Vec::new(),
+            snmp_get_error: None,
             dns: fake_dns_chain(true),
         }
     }
@@ -577,6 +584,7 @@ impl FakeTransport {
                 body: None,
             },
             meraki: Vec::new(),
+            snmp_get_error: None,
             dns: fake_dns_chain(false),
         }
     }
@@ -585,6 +593,13 @@ impl FakeTransport {
     #[must_use]
     pub fn with_snmp(mut self, samples: Vec<SnmpSample>) -> Self {
         self.snmp = samples;
+        self
+    }
+
+    /// Make every scalar SNMP GET (v2c and v3) fail, as an unreachable or refusing agent does.
+    #[must_use]
+    pub fn with_snmp_get_error(mut self, message: &str) -> Self {
+        self.snmp_get_error = Some(message.to_owned());
         self
     }
 
@@ -643,7 +658,10 @@ impl Transport for FakeTransport {
         _oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
-        Ok(self.snmp.clone())
+        match &self.snmp_get_error {
+            Some(e) => Err(TransportError::Io(e.clone())),
+            None => Ok(self.snmp.clone()),
+        }
     }
 
     async fn snmp_v3_get(
@@ -653,7 +671,10 @@ impl Transport for FakeTransport {
         _oids: &[String],
         _timeout: Duration,
     ) -> Result<Vec<SnmpSample>, TransportError> {
-        Ok(self.snmp.clone())
+        match &self.snmp_get_error {
+            Some(e) => Err(TransportError::Io(e.clone())),
+            None => Ok(self.snmp.clone()),
+        }
     }
 
     async fn snmp_v3_get_strings(

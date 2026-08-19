@@ -23,12 +23,16 @@ pub struct StoredThreshold {
     pub rule: ThresholdRule,
 }
 
+/// Read the stored token back into the enum.
+///
+/// ⚠️ Goes through [`ScopeLevel::from_token`] rather than a hand-written `match` with a `_` arm.
+/// The wildcard this replaces mapped anything unrecognised to `Profile`, which was harmless
+/// while the vocabulary was closed and became a trap the moment ADR-075 added `global`: a global
+/// rule read as a profile rule with an empty `scope_id` matches no node and goes silently inert.
+/// An unknown token still falls back to `Profile` — a column value nothing writes — but the fall
+/// back is now a single named default instead of a match arm that swallows new variants.
 fn parse_level(s: &str) -> ScopeLevel {
-    match s {
-        "node" => ScopeLevel::Node,
-        "group" => ScopeLevel::Group,
-        _ => ScopeLevel::Profile,
-    }
+    ScopeLevel::from_token(s).unwrap_or(ScopeLevel::Profile)
 }
 
 fn parse_direction(s: &str) -> Direction {
@@ -95,7 +99,8 @@ impl ThresholdStore {
     /// One page of threshold rules for the API, plus how many matched, so the caller can tell the
     /// operator how many were withheld rather than silently showing a prefix.
     ///
-    /// Ordered so the page is stable and readable: broadest scope first (profile → group → node),
+    /// Ordered so the page is stable and readable: broadest scope first (global → profile →
+    /// group → node),
     /// then by metric. Without an `ORDER BY`, PostgreSQL is free to return a different arbitrary
     /// subset each time the same page is fetched.
     ///
@@ -122,7 +127,8 @@ impl ThresholdStore {
         let rows = Self::bind_filter(
             sqlx::query(&format!(
                 "SELECT {} FROM thresholds WHERE {} \
-                 ORDER BY CASE scope_level WHEN 'profile' THEN 0 WHEN 'group' THEN 1 ELSE 2 END, \
+                 ORDER BY CASE scope_level WHEN 'global' THEN 0 WHEN 'profile' THEN 1 \
+                 WHEN 'group' THEN 2 ELSE 3 END, \
                  metric, scope_id LIMIT $4",
                 Self::COLUMNS,
                 Self::FILTER_WHERE
@@ -244,6 +250,7 @@ mod tests {
         assert_eq!(parse_level("node"), ScopeLevel::Node);
         assert_eq!(parse_level("group"), ScopeLevel::Group);
         assert_eq!(parse_level("profile"), ScopeLevel::Profile);
+        assert_eq!(parse_level("global"), ScopeLevel::Global);
         assert_eq!(parse_direction("below"), Direction::Below);
         assert_eq!(parse_direction("above"), Direction::Above);
     }
@@ -255,6 +262,7 @@ mod tests {
         // rule would silently read back as the fallback — a node override behaving as a
         // fleet-wide profile rule.
         for (token, level) in [
+            ("global", ScopeLevel::Global),
             ("profile", ScopeLevel::Profile),
             ("group", ScopeLevel::Group),
             ("node", ScopeLevel::Node),
@@ -356,9 +364,13 @@ mod tests {
     fn the_page_is_ordered_broadest_scope_first_so_it_is_stable() {
         // Without an ORDER BY, PostgreSQL may return a different arbitrary subset for the same
         // page each time, which reads as rules appearing and disappearing.
-        assert!(production_source().contains(
-            "ORDER BY CASE scope_level WHEN 'profile' THEN 0 WHEN 'group' THEN 1 ELSE 2 END"
-        ));
+        // The CASE spans two source lines since ADR-075 added the `global` tier, so assert the
+        // tiers rather than one literal — and assert all four, because the failure this guards
+        // against is a new level landing outside the CASE and sorting into the `ELSE` bucket.
+        let src = production_source();
+        assert!(src.contains("ORDER BY CASE scope_level WHEN 'global' THEN 0"));
+        assert!(src.contains("WHEN 'profile' THEN 1"));
+        assert!(src.contains("WHEN 'group' THEN 2 ELSE 3 END"));
     }
 
     #[test]

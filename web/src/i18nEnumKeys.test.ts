@@ -218,7 +218,12 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
   it('every threshold scope level and direction has a label (alertsConfig)', () => {
     const locales = { en: enAlertsConfig, ja: jaAlertsConfig };
     expectKeys('scope level', locales, 'thresholds.scopeLevel.', SCOPE_LEVELS);
-    expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', SCOPE_LEVELS);
+    // The placeholder is checked over a *subset*, derived rather than listed: the scope-id input
+    // is not rendered for `global` (a fleet-wide rule has nothing to point at), so demanding a
+    // string there would demand one nobody can ever see — and an unread string is what drifts.
+    // The *noun* is still checked over every level: it doubles as the `global` explanation.
+    const WITH_SCOPE_ID = SCOPE_LEVELS.filter((l) => l !== 'global');
+    expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', WITH_SCOPE_ID);
     expectKeys('scope id noun', locales, 'thresholds.addModal.scopeIdNoun.', SCOPE_LEVELS);
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
   });

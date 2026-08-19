@@ -35,6 +35,20 @@ impl DwellTracker {
         self.committed
     }
 
+    /// Change how many consecutive samples a flip needs, keeping the committed state and any
+    /// candidate run in place.
+    ///
+    /// A tracker is created once per check and lives for the process, so without this an edited
+    /// rule would need a core restart to take effect — which makes "you can tune the dwell" a
+    /// claim the UI states and the engine does not honour. Lowering it commits on the next
+    /// sample if the candidate has already run long enough (`observe` compares `>=`); raising it
+    /// makes the current run wait longer. The candidate is deliberately **not** reset: an
+    /// operator widening the window while a device is already failing should not restart the
+    /// count and delay the alert twice over.
+    pub fn set_dwell(&mut self, dwell: u32) {
+        self.dwell = dwell.max(1);
+    }
+
     /// Feed one raw sample. Returns `Some(new_state)` exactly when a transition commits.
     pub fn observe(&mut self, raw: NodeState) -> Option<NodeState> {
         if raw == self.committed {

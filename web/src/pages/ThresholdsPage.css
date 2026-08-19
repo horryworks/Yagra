@@ -25,3 +25,10 @@
   display: flex;
   gap: 6px;
 }
+
+/* The "no reachability rule" warning. Same shape as the explainer card above it, in the warning
+   colour: it is not an error (the operator may have meant it) but it must not read as prose. */
+.thresholds-warn-card {
+  margin-bottom: 16px;
+  border-left: 2px solid var(--status-warning);
+}

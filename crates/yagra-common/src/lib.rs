@@ -74,7 +74,7 @@ pub use meraki::{
     METRIC_MERAKI_UPLINK_LATENCY_MS, METRIC_MERAKI_UPLINK_LOSS_PCT, METRIC_MERAKI_UPLINK_STATUS,
     METRIC_MERAKI_USAGE_RECV_KB, METRIC_MERAKI_USAGE_SENT_KB,
 };
-pub use metric::{is_valid_metric_name, MetricKind, SeriesKey, METRIC_ICMP_RTT_MS};
+pub use metric::{is_valid_metric_name, MetricKind, SeriesKey, METRIC_ICMP_RTT_MS, METRIC_SNMP_UP};
 pub use neighbor::{
     builtin_neighbor_columns, cdp_capabilities, lldp_capabilities, render_bare_address,
     render_chassis_id, render_hex, render_mac, render_network_address, render_port_id, render_text,

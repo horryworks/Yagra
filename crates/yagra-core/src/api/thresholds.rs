@@ -73,8 +73,8 @@ pub(super) struct ThresholdQuery {
     limit: Option<i64>,
     /// Case-insensitive substring of the metric name.
     q: Option<String>,
-    /// Comma-separated scope levels (`profile` | `group` | `node`); empty or absent means every
-    /// level.
+    /// Comma-separated scope levels (`global` | `profile` | `group` | `node`); empty or absent
+    /// means every level.
     scope_level: Option<String>,
     /// Comma-separated directions (`above` | `below`); empty or absent means both.
     direction: Option<String>,
@@ -100,7 +100,7 @@ async fn list_thresholds(
     let levels = super::util::parse_set(
         "scope_level",
         q.scope_level.as_deref(),
-        "profile, group or node",
+        "global, profile, group or node",
         yagra_common::ScopeLevel::from_token,
     )?;
     let directions = super::util::parse_set(
@@ -186,7 +186,7 @@ pub(super) struct CreateThreshold {
     request_body = CreateThreshold,
     responses(
         (status = 201, description = "Rule created", body = CreatedId),
-        (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound)", body = super::error::ErrorBody),
+        (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound). A `global` rule ignores `scope_id` — it targets every node", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
         (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
@@ -203,14 +203,25 @@ async fn create_threshold(
             "metric must be a valid identifier",
         ));
     }
-    if !matches!(body.scope_level.as_str(), "profile" | "group" | "node")
-        || !matches!(body.direction.as_str(), "above" | "below")
+    if !matches!(
+        body.scope_level.as_str(),
+        "global" | "profile" | "group" | "node"
+    ) || !matches!(body.direction.as_str(), "above" | "below")
     {
         return Err(ApiError::bad_request(
             "invalid_threshold",
-            "scope_level must be profile|group|node and direction above|below",
+            "scope_level must be global|profile|group|node and direction above|below",
         ));
     }
+    // A `global` rule targets the whole fleet, so it has nothing to point at (ADR-075). Pinning
+    // the id here rather than trusting the caller is what keeps `AlertConfig::applies` able to
+    // ignore the column for this level: two global rules that differed only in a stray scope id
+    // would both apply, look identical in the list, and be impossible to tell apart.
+    let scope_id = if body.scope_level == "global" {
+        String::new()
+    } else {
+        body.scope_id.clone()
+    };
     // A raw counter's sampled value only ever increases (until it wraps or the device reboots),
     // so a fixed bound cannot be evaluated against it: `above` latches permanently and `below`
     // fires on every reset. Rates come from the TSDB at query time (ADR-012). The engine also
@@ -237,7 +248,7 @@ async fn create_threshold(
         .thresholds
         .create(
             &body.scope_level,
-            &body.scope_id,
+            &scope_id,
             &body.metric,
             &body.direction,
             body.warning,

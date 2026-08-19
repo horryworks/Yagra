@@ -2068,6 +2068,64 @@ impl NodeRepo {
                 .await?;
             }
         }
+        // 7. The fleet defaults (ADR-075) — `global` scope, so they reach every node including
+        //    the ones no profile-scoped rule can: a node with no profile, and a node on a profile
+        //    the operator created. Three rows, and each is an ordinary row: editable per scope,
+        //    and deletable. Deleting the reachability one stops node-down paging, which is the
+        //    point of making it a rule; the screen says so.
+        //
+        //    WARNING: the bounds on the 0/1 gauges are **0.5, not 1.0**. The engine's `below`
+        //    comparison is inclusive (`value <= bound`, `yagra_common::thresholds`), so 1.0 would
+        //    fire on the healthy value too — the mistake migration 0030 had to correct for
+        //    `http_up`. These are `ON CONFLICT (id) DO NOTHING`, so getting one wrong needs a
+        //    corrective migration rather than an edit here.
+        //
+        //    WARNING: reachability carries **no bound at all** — it is not evaluated against a
+        //    sample. The engine reads only `dwell_samples` off it and takes the severity from the
+        //    committed `NodeState` (`Unreachable` is always critical). A direction is stored
+        //    because the column is NOT NULL, and is unread.
+        //
+        //    Offsets are explicit and **append-only** — the ids are derived from them and are
+        //    `DO NOTHING`, so reusing or reordering one would shadow an operator's edited row
+        //    instead of updating it (see `seed_ids`).
+        {
+            // (offset, metric, direction, warning, critical, dwell_samples)
+            let defaults = [
+                // The node stopped answering. Dwell 3 is what the removed hard-coded constant was,
+                // so an upgrade does not change how quickly an existing fleet pages.
+                (
+                    0usize,
+                    crate::alerts::LIVENESS,
+                    "below",
+                    None::<f64>,
+                    None::<f64>,
+                    i32::try_from(crate::alerts::DEFAULT_LIVENESS_DWELL).unwrap_or(3),
+                ),
+                // The SNMP agent stopped answering while the device itself is fine. Two polls
+                // rather than three: SNMP intervals are longer than ICMP, so three would be a long
+                // wait, and a scalar GET is not lossy the way a single ping is.
+                (1, yagra_common::METRIC_SNMP_UP, "below", None, Some(0.5), 2),
+                // Degradation before the node is gone. Warning only — 100% loss is the
+                // reachability rule's job, and two criticals for one outage is a notification
+                // storm, which this project treats as a bug rather than a feature.
+                (2, "icmp_loss_pct", "above", Some(20.0), None, 3),
+            ];
+            for (offset, metric, direction, warning, critical, dwell) in defaults {
+                sqlx::query(
+                    "INSERT INTO thresholds \
+                        (id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples) \
+                     VALUES ($1, 'global', '', $2, $3, $4, $5, $6) ON CONFLICT (id) DO NOTHING",
+                )
+                .bind(SeedRange::DefaultThresholds.id(offset))
+                .bind(metric)
+                .bind(direction)
+                .bind(warning)
+                .bind(critical)
+                .bind(dwell)
+                .execute(&self.pool)
+                .await?;
+            }
+        }
         tracing::info!(
             "seeded built-in collection templates + device profiles + classification rules"
         );

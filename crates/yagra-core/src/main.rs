@@ -4263,6 +4263,13 @@ mod tests {
     /// property of the engine's own liveness machine — a stub would just assert the stub.
     async fn drive_ingest(results: Vec<PollResult>) -> Vec<crate::alerts::NotifyAction> {
         let alerts = Arc::new(AlertManager::new());
+        // Up/down alerting is rule-driven (ADR-075), so a bare manager commits state and pages
+        // nobody. Install what `repo.rs` seeds, or every liveness assertion below would pass for
+        // the wrong reason — "no Fire" is what a missing rule and a working suppression look like.
+        alerts.set_config(crate::alerts::AlertConfig::new(
+            vec![crate::alerts::seeded_liveness_rule()],
+            std::collections::HashMap::new(),
+        ));
         let (notify_tx, mut notify_rx) = tokio::sync::mpsc::channel(64);
         let (metrics_tx, _metrics_rx) = tokio::sync::mpsc::channel::<Arc<PollResult>>(64);
         let (meta_tx, _meta_rx) = tokio::sync::mpsc::channel::<MetaRecord>(64);

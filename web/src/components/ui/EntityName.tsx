@@ -84,10 +84,18 @@ export function useEntityNames() {
   const profileName = useCallback((id: string) => resolveName(profiles, id), [profiles]);
 
   /** Resolve a threshold scope id by its level. A `group`-scoped threshold's id is a tag value
-   *  (already human-readable), so it falls through `groupName` unchanged when it isn't a folder id. */
+   *  (already human-readable), so it falls through `groupName` unchanged when it isn't a folder id.
+   *  A `global` rule has no id to resolve — it targets every node — so it resolves to the empty
+   *  string and the caller shows the level badge alone. */
   const scopeName = useCallback(
     (level: ScopeLevel, id: string) =>
-      level === 'node' ? nodeName(id) : level === 'profile' ? profileName(id) : groupName(id),
+      level === 'global'
+        ? ''
+        : level === 'node'
+          ? nodeName(id)
+          : level === 'profile'
+            ? profileName(id)
+            : groupName(id),
     [nodeName, profileName, groupName],
   );
 

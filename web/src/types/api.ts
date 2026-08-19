@@ -393,8 +393,9 @@ export type ProfileSummary = components['schemas']['ProfileSummary'];
 /** Create/update-profile request body (`POST`/`PUT /api/v1/profiles`). */
 export type ProfileInput = components['schemas']['ProfileBody'];
 
-/** Every threshold scope level, broadest → most specific. */
-export const SCOPE_LEVELS = ['profile', 'group', 'node'] as const;
+/** Every threshold scope level, broadest → most specific. `global` is every node and carries no
+ *  scope id (ADR-075); the server pins its `scope_id` to the empty string. */
+export const SCOPE_LEVELS = ['global', 'profile', 'group', 'node'] as const;
 
 /** Threshold scope level (snake_case). Most-specific wins. Pinned to `schemas.ScopeLevel`. */
 export type ScopeLevel = (typeof SCOPE_LEVELS)[number];

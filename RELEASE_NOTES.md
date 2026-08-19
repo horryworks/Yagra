@@ -10,6 +10,47 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **Node up/down is now an alert *rule*, not built-in behaviour — and it can be deleted.**
+  Reachability alerting used to come from a constant in the engine: three consecutive failed
+  polls, critical, no way to change either. It now comes from a rule on **Reachability** in
+  Alerts ▸ Metric alert rules, seeded at the new **every node** scope with the same three
+  breaches, so nothing about how quickly an existing fleet pages changes on upgrade. What does
+  change: the breach count is editable, it can be overridden per profile, group or node, and
+  deleting the rule switches node-down **paging** off for whatever it covered. Node state on the
+  Nodes page, the fleet summary and parent-down suppression are unaffected either way — those
+  are not alerting, and deleting an alert rule does not ask for them to stop. The screen says so
+  when no reachability rule is left. Alert identity is unchanged (same check id, same dedup key,
+  same history rows), so open alerts and open PagerDuty/JSM incidents survive the upgrade.
+
+### New Features
+
+- **A "snmp down" alert, which did not previously exist.** Pollers now emit **`snmp_up`** (1 when
+  the SNMP agent answered a scalar GET, 0 when it answered with nothing or the request failed),
+  and a seeded rule raises critical after two consecutive zeroes. Until now an agent that stopped
+  answering on a device that still answered ping produced **no alert at all**: every check on a
+  node shares one reachability window, so the more frequent ICMP successes kept breaking the run
+  of SNMP failures before it could commit. `snmp_up` has its own window and is unaffected by that.
+- **A fourth threshold scope: "every node".** Rules could only be attached to a profile, a group
+  or a node, so there was no way to state a fleet default — and a node with no profile, or one on
+  a profile you created yourself, could not be reached by a default at all. `scope_level=global`
+  is the broadest tier and loses to all three others, completing the precedence ADR-013 always
+  described. `GET /api/v1/thresholds` accepts it in `scope_level`; `POST` ignores `scope_id` for
+  it.
+- **A default packet-loss warning.** A seeded rule warns at **20% ICMP loss** across every node,
+  so degradation is visible before the node is gone. Warning only — total loss is the
+  reachability rule’s job, and two alerts for one outage is a notification storm.
+
+### Improvements
+
+- **Editing a rule’s breach count now takes effect immediately.** A check’s hysteresis window was
+  fixed at the first sample it ever saw, so raising "3 breaches" to "5" on any threshold rule did
+  nothing until the next core restart while the UI showed 5. The engine now re-reads it every
+  poll.
+- The metric name `__liveness__` is refused for a collection item: it is the reachability
+  check’s name, and a collected metric spelled that way would land on the same check state.
+
 ## v0.2.16 — the All nodes split can be dragged, and a selection can be cleared again
 
 ### New Features

@@ -92,6 +92,13 @@ impl CheckState {
         self.dwell.committed()
     }
 
+    /// Re-point the dwell at what the check's rule says now — see
+    /// [`hysteresis::DwellTracker::set_dwell`]. The flap detector is untouched: its window is a
+    /// property of the engine, not of any one rule.
+    pub fn set_dwell(&mut self, dwell: u32) {
+        self.dwell.set_dwell(dwell);
+    }
+
     /// Feed one raw sample observed at `now_ms`. Returns a [`Transition`] iff the
     /// committed state changed.
     pub fn observe(&mut self, raw: NodeState, now_ms: i64) -> Option<Transition> {

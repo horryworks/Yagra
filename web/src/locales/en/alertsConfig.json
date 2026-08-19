@@ -114,7 +114,8 @@
   },
   "thresholds": {
     "note": "Hierarchical overrides: profile → group → node. The most specific scope wins.",
-    "explainer": "ICMP liveness (node up/down) alerts automatically — no rule needed. Rules here add metric thresholds on top: each is evaluated live on every matching poll sample, with the most-specific scope winning. Warning/critical bounds and the number of consecutive breaches before it commits (anti-flap) are per rule.",
+    "explainer": "Every alert Yagra raises from polling comes from a rule here, node up/down included. Each is evaluated live on every matching poll sample; the most-specific scope wins, and a rule at \"every node\" is the fleet default. Warning/critical bounds and the number of consecutive breaches before it commits (anti-flap) are per rule. Reachability is the exception to one of those: it has no bounds, because a node either answered or it did not — only the breach count applies.",
+    "noLiveness": "No reachability rule exists, so a node going down raises no alert and sends no notification. Node state on the Nodes page still updates. Add a rule on Reachability to start paging again.",
     "unavailable": "Threshold management is unavailable in skeleton mode.",
     "add": "+ Add rule",
     "cols": {
@@ -133,6 +134,7 @@
     "dwellValue": "{{n}} breaches",
     "delete": "Delete",
     "scopeLevel": {
+      "global": "every node",
       "profile": "profile",
       "group": "group",
       "node": "node"
@@ -151,6 +153,7 @@
         "node": "node id"
       },
       "scopeIdNoun": {
+        "global": "This rule applies to every node. Anything you set at a profile, group or node scope overrides it.",
         "profile": "device-profile id",
         "group": "group tag value (e.g. a site name)",
         "node": "node id"

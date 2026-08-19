@@ -8543,11 +8543,11 @@ export interface components {
             Groups: string[];
         };
         /**
-         * @description The scope a threshold is defined at, ordered least → most specific so the derived
-         *     `Ord` makes `Node` win over `Group` win over `Profile`.
+         * @description The scope a threshold is defined at, ordered least → most specific: `Node` wins over `Group`,
+         *     which wins over `Profile`, which wins over `Global` (every node).
          * @enum {string}
          */
-        ScopeLevel: "profile" | "group" | "node";
+        ScopeLevel: "global" | "profile" | "group" | "node";
         /**
          * @description How secrets appear in a bundle. See the module docs for why there is only one variant.
          * @enum {string}
@@ -23702,8 +23702,8 @@ export interface operations {
                 /** @description Case-insensitive substring of the metric name. */
                 q?: string;
                 /**
-                 * @description Comma-separated scope levels (`profile` | `group` | `node`); empty or absent means every
-                 *     level.
+                 * @description Comma-separated scope levels (`global` | `profile` | `group` | `node`); empty or absent
+                 *     means every level.
                  */
                 scope_level?: string;
                 /** @description Comma-separated directions (`above` | `below`); empty or absent means both. */
@@ -23784,7 +23784,7 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedId"];
                 };
             };
-            /** @description The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound) */
+            /** @description The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound). A `global` rule ignores `scope_id` — it targets every node */
             400: {
                 headers: {
                     [name: string]: unknown;

@@ -33,6 +33,17 @@ pub enum MetricKind {
 /// in both places, which is what let the fleet-coverage query hardcode it for every kind (ADR-059).
 pub const METRIC_ICMP_RTT_MS: &str = "icmp_rtt_ms";
 
+/// Whether the SNMP agent answered this poll — `1` when the scalar GET returned at least one
+/// value, `0` when it returned nothing (agent down / wrong credential / view excludes the OIDs)
+/// or the GET itself failed. A 0/1 gauge, so one `below 0.5` threshold covers every way of
+/// failing, exactly as [`crate::METRIC_HTTP_UP`] and [`crate::METRIC_DNS_UP`] do (ADR-075).
+///
+/// ⚠️ **Not a liveness metric, and deliberately absent from [`crate::NodeKind::LIVENESS_METRICS`]**
+/// — that list drives freshness coverage (ADR-059) and a ping-only device has no SNMP at all, so
+/// counting this would report those nodes as uncovered forever. A device's liveness metric stays
+/// [`METRIC_ICMP_RTT_MS`]; this says whether one *check* on it is answering.
+pub const METRIC_SNMP_UP: &str = "snmp_up";
+
 /// Whether `name` is a legal Prometheus/VictoriaMetrics metric name — `[a-zA-Z_:][a-zA-Z0-9_:]*`,
 /// non-empty. Series identity is the single biggest cardinality risk (ADR-011), so this is the
 /// shape check applied at every edge where a metric name enters series identity: the API (operator

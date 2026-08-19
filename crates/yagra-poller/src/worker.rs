@@ -26,9 +26,9 @@ use yagra_common::{
     medium_from_huawei, DnsFailure, IfIndex, InterfaceField, Medium, MetricKind, NodeId,
     METRIC_DNS_ANSWER_COUNT, METRIC_DNS_CHAIN_LENGTH, METRIC_DNS_RESOLVE_MS, METRIC_DNS_UP,
     METRIC_HTTP_BODY_MATCH, METRIC_HTTP_BODY_TRUNCATED, METRIC_HTTP_RESPONSE_TIME_MS,
-    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SSL_CERT_DAYS_TO_EXPIRY,
-    OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX, OID_HW_ETHERNET_PORT_TYPE, OID_IF_HIGH_SPEED,
-    OID_IF_TYPE,
+    METRIC_HTTP_STATUS_CODE, METRIC_HTTP_UP, METRIC_ICMP_RTT_MS, METRIC_SNMP_UP,
+    METRIC_SSL_CERT_DAYS_TO_EXPIRY, OID_DOT3_DUPLEX_STATUS, OID_HW_ETHERNET_DUPLEX,
+    OID_HW_ETHERNET_PORT_TYPE, OID_IF_HIGH_SPEED, OID_IF_TYPE,
 };
 use yagra_transport::{
     DnsProbeSpec, HttpProbeSpec, MerakiCollectSpec, SnmpTableSample, SnmpTableString, SnmpV3Params,
@@ -696,6 +696,13 @@ impl SnmpWalker {
 /// differed only in the credential type and which transport method was called. The table path had
 /// already solved exactly that with [`SnmpWalker`]; this brings the scalar path in line, so an SNMP
 /// behaviour change (a new outcome rule, a naming tweak) is one edit rather than two that can drift.
+///
+/// Every result carries [`METRIC_SNMP_UP`] (ADR-075) — `1` when the agent answered with at least
+/// one value, `0` when it answered with nothing or the GET failed. This is the only signal that
+/// distinguishes "the SNMP agent stopped" from "the device is fine", because the node-wide
+/// liveness window is shared by every check on the node: with ICMP polling more often than SNMP,
+/// an SNMP-only failure never reaches the consecutive-sample count and commits nothing. Being a
+/// sample rather than an outcome, it drives its own threshold check with its own dwell window.
 async fn execute_scalar_get(
     job: &PollJob,
     transport: &dyn Transport,
@@ -717,7 +724,8 @@ async fn execute_scalar_get(
             } else {
                 CheckOutcome::Reachable
             };
-            let mapped = samples
+            let answered = f64::from(u8::from(!samples.is_empty()));
+            let mut mapped: Vec<Sample> = samples
                 .into_iter()
                 .map(|s| match col_by_oid.get(s.oid.as_str()) {
                     // Configured column → honour its metric name and kind.
@@ -731,6 +739,7 @@ async fn execute_scalar_get(
                     None => Sample::gauge(snmp_metric_name(&s.oid), s.value),
                 })
                 .collect();
+            mapped.push(Sample::gauge(METRIC_SNMP_UP, answered));
             let mut r = result(job, at_unix_ms, outcome, mapped);
             if job.probe_identity && outcome == CheckOutcome::Reachable {
                 r.sys_descr = walker.fetch_sys_descr(transport, job.target, timeout).await;
@@ -739,7 +748,15 @@ async fn execute_scalar_get(
         }
         Err(err) => {
             tracing::warn!(job_id = %job.job_id, error = %err, "snmp get failed");
-            result(job, at_unix_ms, CheckOutcome::Error, Vec::new())
+            // `snmp_up = 0` on the error path too: a GET that could not be issued is an agent the
+            // operator cannot reach, and emitting nothing here would leave the rule with no
+            // sample to evaluate — the alert would depend on *how* the agent failed.
+            result(
+                job,
+                at_unix_ms,
+                CheckOutcome::Error,
+                vec![Sample::gauge(METRIC_SNMP_UP, 0.0)],
+            )
         }
     }
 }
@@ -2913,11 +2930,84 @@ mod tests {
 
     #[tokio::test]
     async fn snmp_no_values_is_unreachable() {
-        // FakeTransport with no canned SNMP samples → empty → unreachable.
+        // FakeTransport with no canned SNMP samples -> empty -> unreachable.
         let t = FakeTransport::reachable(0.0);
         let r = execute(&snmp_job(), &t, 1_000).await;
         assert_eq!(r.outcome, CheckOutcome::Unreachable);
-        assert!(r.samples.is_empty());
+        // The only sample is the agent-health gauge (ADR-075); nothing was read off the device.
+        assert_eq!(r.samples.len(), 1);
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+    }
+
+    /// ADR-075. This gauge is the *only* thing that distinguishes "the SNMP agent stopped" from
+    /// "the device is fine": the node-wide liveness window is shared by every check on the node,
+    /// so with ICMP polling more often than SNMP an SNMP-only failure never reaches the
+    /// consecutive-sample count and commits nothing. Both directions are asserted — a gauge that
+    /// only ever reads 0 would satisfy a rejection-only test while alerting on every healthy node.
+    #[tokio::test]
+    async fn every_snmp_scalar_result_says_whether_the_agent_answered() {
+        use yagra_transport::SnmpSample;
+        let answered = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+            value: 123.0,
+        }]);
+        let r = execute(&snmp_job(), &answered, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(1.0));
+
+        let silent = FakeTransport::reachable(0.0);
+        let r = execute(&snmp_job(), &silent, 1_000).await;
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
+    }
+
+    /// v3 goes through the same `execute_scalar_get`, but "the same function" is exactly the claim
+    /// that stops being true when someone splits the arms again — so assert it rather than assume.
+    #[tokio::test]
+    async fn the_v3_scalar_path_reports_the_agent_the_same_way() {
+        use yagra_bus::SnmpV3Check;
+        use yagra_transport::SnmpSample;
+        let job = PollJob::snmp_v3(
+            Uuid::nil(),
+            NodeId::from(Uuid::nil()),
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
+            SnmpV3Check {
+                user: "monitor".to_owned(),
+                security_level: "authpriv".to_owned(),
+                auth_protocol: Some("sha256".to_owned()),
+                auth_key: Some("auth-pass".to_owned()),
+                priv_protocol: Some("aes256".to_owned()),
+                priv_key: Some("priv-pass".to_owned()),
+                oids: vec!["1.3.6.1.2.1.1.3.0".to_owned()],
+                columns: Vec::new(),
+                timeout_ms: 2000,
+            },
+            30,
+        );
+        let answered = FakeTransport::reachable(0.0).with_snmp(vec![SnmpSample {
+            oid: "1.3.6.1.2.1.1.3.0".to_owned(),
+            value: 7.0,
+        }]);
+        assert_eq!(
+            sample(&execute(&job, &answered, 1_000).await, METRIC_SNMP_UP),
+            Some(1.0)
+        );
+        assert_eq!(
+            sample(
+                &execute(&job, &FakeTransport::reachable(0.0), 1_000).await,
+                METRIC_SNMP_UP
+            ),
+            Some(0.0)
+        );
+    }
+
+    /// The failure mode this closes: with no sample on the error path, whether the operator gets
+    /// an alert would depend on *how* the agent failed — a refused connection would be silent
+    /// while an empty answer alerted. Both must read 0.
+    #[tokio::test]
+    async fn a_failed_snmp_get_still_reports_the_agent_as_down() {
+        let t = FakeTransport::reachable(0.0).with_snmp_get_error("snmp connect refused");
+        let r = execute(&snmp_job(), &t, 1_000).await;
+        assert_eq!(r.outcome, CheckOutcome::Error);
+        assert_eq!(sample(&r, METRIC_SNMP_UP), Some(0.0));
     }
 
     #[tokio::test]

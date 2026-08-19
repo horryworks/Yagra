@@ -37,16 +37,23 @@ pub enum SeedRange {
     UrlThresholds,
     /// `thresholds` seeded for the built-in DNS name-resolution profile.
     DnsThresholds,
+    /// `thresholds` seeded at **global** scope — the fleet defaults every deployment starts
+    /// with (ADR-075): reachability, SNMP agent health, packet loss.
+    ///
+    /// Unlike the two above these are not tied to a profile, so they reach a node with no
+    /// profile at all — which is the reason the global scope exists.
+    DefaultThresholds,
 }
 
 impl SeedRange {
     /// Every declared range. Iterated by [`is_builtin`] and by the disjointness test.
-    pub const ALL: [SeedRange; 5] = [
+    pub const ALL: [SeedRange; 6] = [
         SeedRange::Profiles,
         SeedRange::CollectionTemplates,
         SeedRange::ClassificationRules,
         SeedRange::UrlThresholds,
         SeedRange::DnsThresholds,
+        SeedRange::DefaultThresholds,
     ];
 
     /// The first id of the range.
@@ -58,6 +65,7 @@ impl SeedRange {
             SeedRange::ClassificationRules => 0x0000_0000_0000_0000_0000_0000_5eed_8000,
             SeedRange::UrlThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_a000,
             SeedRange::DnsThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_b000,
+            SeedRange::DefaultThresholds => 0x0000_0000_0000_0000_0000_0000_5eed_c000,
         }
     }
 

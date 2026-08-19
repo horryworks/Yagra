@@ -116,6 +116,17 @@ fn validate_item(body: &CreateCollectionItem) -> Result<(), ApiError> {
             "metric_name must be a valid identifier",
         ));
     }
+    // The liveness sentinel is a *check* name, not a metric, and the two share an identity space:
+    // `check_id` is a hash of `(node, name)`, so a collected metric spelled this way would land on
+    // the node's liveness check state and have its samples fight the reachability outcome for the
+    // same dwell window. Nothing downstream would report an error — the node would just start
+    // flipping. Refuse it here, where the operator can be told why (ADR-075).
+    if body.metric_name == crate::alerts::LIVENESS {
+        return Err(ApiError::bad_request(
+            "reserved_metric_name",
+            "that name is reserved for the built-in reachability check",
+        ));
+    }
     if !is_valid_oid(&body.oid) {
         return Err(ApiError::bad_request(
             "invalid_oid",

@@ -2,7 +2,8 @@
 //! Thresholds and their inheritance resolution.
 //!
 //! Thresholds resolve by **inheritance with override** (ADR-013, monitoring-conventions):
-//! most-specific scope wins — `Node` > `Group` > `Profile` > system default. When a
+//! most-specific scope wins — `Node` > `Group` > `Profile` > `Global`. `Global` is the
+//! "system default" tier ADR-013 named from the start and ADR-075 finally implemented. When a
 //! node matches several scopes at the *same* level (e.g. two groups), the tie-break is
 //! **most-restrictive value wins**. Resolution lives *only here* so precedence logic is
 //! never scattered. Hysteresis (dwell) is carried on the rule but applied over time by
@@ -62,8 +63,20 @@ impl fmt::Display for Direction {
     }
 }
 
-/// The scope a threshold is defined at, ordered least → most specific so the derived
-/// `Ord` makes `Node` win over `Group` win over `Profile`.
+/// The scope a threshold is defined at, ordered least → most specific: `Node` wins over `Group`,
+/// which wins over `Profile`, which wins over `Global` (every node).
+//
+// The two notes below are deliberately `//`, not `///`: this type derives `ToSchema`, so a `///`
+// line is published verbatim to every API client (see `openapi.json`). They are for whoever edits
+// this enum, not for whoever calls the API.
+//
+// WARNING: variant order is load-bearing. `resolve_effective` takes `.max()` over the levels
+// present, so a variant declared in the wrong position silently changes which rule wins.
+// `Global` must stay first.
+//
+// WARNING: shared with `collection_items`, which has no `Global` scope. A collection item's level
+// is decided by the endpoint that writes it (profile or node), never by client input, so the
+// variant is unreachable there rather than a hole.
 #[derive(
     Debug,
     Clone,
@@ -79,7 +92,9 @@ impl fmt::Display for Direction {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum ScopeLevel {
-    /// Defined on a device-class/profile (broadest).
+    /// Every node, with no scope id (broadest). `scope_id` is the empty string.
+    Global,
+    /// Defined on a device-class/profile.
     Profile,
     /// Defined on a group (site/region/role/…).
     Group,
@@ -90,16 +105,22 @@ pub enum ScopeLevel {
 impl ScopeLevel {
     /// Every level, broadest first — the order the threshold list is sorted in and the order a
     /// picker should offer them.
-    pub const ALL: [ScopeLevel; 3] = [ScopeLevel::Profile, ScopeLevel::Group, ScopeLevel::Node];
+    pub const ALL: [ScopeLevel; 4] = [
+        ScopeLevel::Global,
+        ScopeLevel::Profile,
+        ScopeLevel::Group,
+        ScopeLevel::Node,
+    ];
 
     /// Stable lowercase string for API payloads, DB columns, and logs.
     ///
-    /// The `thresholds.scope_level` column holds exactly these three, written verbatim from the
+    /// The `thresholds.scope_level` column holds exactly these four, written verbatim from the
     /// create request and read back by `ThresholdStore::parse_level`, so anything that binds a
     /// level into SQL must go through here rather than formatting the enum.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            ScopeLevel::Global => "global",
             ScopeLevel::Profile => "profile",
             ScopeLevel::Group => "group",
             ScopeLevel::Node => "node",
@@ -250,12 +271,17 @@ mod tests {
             assert_eq!(back, level);
         }
         // ALL is the whole enum, not a list someone forgot to extend when a level was added.
-        assert_eq!(ScopeLevel::ALL.len(), 3);
+        assert_eq!(ScopeLevel::ALL.len(), 4);
         assert_eq!(
             ScopeLevel::ALL.map(ScopeLevel::as_str),
-            ["profile", "group", "node"],
+            ["global", "profile", "group", "node"],
             "ALL is ordered broadest-first — the threshold list and its filter both rely on it"
         );
+        // The order is also the precedence (`resolve_effective` takes `.max()`), so assert it as
+        // an ordering rather than trusting the array to be read that way.
+        assert!(ScopeLevel::Global < ScopeLevel::Profile);
+        assert!(ScopeLevel::Profile < ScopeLevel::Group);
+        assert!(ScopeLevel::Group < ScopeLevel::Node);
     }
 
     fn rule(level: ScopeLevel, warning: f64, critical: f64) -> ScopedThreshold {
@@ -284,6 +310,22 @@ mod tests {
         assert_eq!(eff.critical, Some(85.0));
     }
 
+    #[test]
+    fn a_global_rule_is_the_weakest_and_applies_when_nothing_else_does() {
+        // ADR-075: `Global` is the "system default" tier ADR-013 named. It must lose to every
+        // other level — a fleet default that overrode a node override would be the opposite of an
+        // override — and must still resolve on its own when it is the only rule.
+        let eff = resolve_effective(&[
+            rule(ScopeLevel::Global, 90.0, 99.0),
+            rule(ScopeLevel::Profile, 80.0, 95.0),
+        ])
+        .unwrap();
+        assert_eq!(eff.warning, Some(80.0), "profile beats global");
+
+        let alone = resolve_effective(&[rule(ScopeLevel::Global, 90.0, 99.0)]).unwrap();
+        assert_eq!(alone.warning, Some(90.0));
+        assert_eq!(alone.critical, Some(99.0));
+    }
     #[test]
     fn same_level_tiebreak_takes_most_restrictive_above() {
         // Two groups; "above" → smaller bound is stricter.
