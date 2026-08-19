@@ -119,13 +119,14 @@
     "unavailable": "Threshold management is unavailable in skeleton mode.",
     "add": "+ Add rule",
     "cols": {
-      "scope": "Scope",
+      "scope": "Scope level",
       "metric": "Metric",
       "direction": "Direction",
       "bounds": "Bounds",
       "dwell": "Breaches",
       "actions": "Actions",
-      "meaning": "What it measures"
+      "meaning": "What it measures",
+      "scopeId": "Scope id"
     },
     "empty": "No threshold rules yet",
     "emptySub": "Add a metric threshold scoped to a profile, group, or node.",
@@ -169,15 +170,17 @@
       "dwellPlaceholder": "breaches",
       "dwellTitle": "Consecutive breaches: readings that must cross the bound in a row before the alert fires",
       "boundsHint": "Warn / crit / breaches are optional. Breaches is how many consecutive readings must cross the bound before the alert fires — higher values suppress flapping (rapid on/off alerts).",
-      "add": "Add rule"
+      "add": "Add rule",
+      "dwellOnly": "Breaches"
     },
     "deleteModal": {
       "title": "Delete threshold rule",
-      "body": "Delete the <strong>{{level}}</strong> rule on <mono>{{metric}}</mono> for <mono>{{scope}}</mono>? This cannot be undone."
+      "body": "Delete the <strong>{{level}}</strong> rule on <mono>{{metric}}</mono> for <mono>{{scope}}</mono>? This cannot be undone.",
+      "bodyGlobal": "Delete the fleet-wide rule on <mono>{{metric}}</mono>? It applies to every node. This cannot be undone."
     },
     "err": {
-      "add": "failed to add",
-      "delete": "failed to delete"
+      "delete": "failed to delete",
+      "save": "failed to save"
     },
     "emptyFiltered": "No rules match these filters.",
     "filter": {
@@ -208,7 +211,12 @@
       "dns_chain_length": "How many hops the resolution chain took (CNAME → … → A/AAAA).",
       "meraki_device_up": "Does the Meraki dashboard report the device online. 1 = online, 0 = offline."
     },
-    "meaningUnknown": "Yagra has no description for this metric — see the Metric set that defines its collection item."
+    "meaningUnknown": "Yagra has no description for this metric — see the Metric set that defines its collection item.",
+    "scopeIdNone": "This rule targets every node, so it has no scope id.",
+    "livenessMetric": "Reachability has no bounds — a node either answered or it did not — so only the breach count applies.",
+    "editModal": {
+      "title": "Edit threshold rule"
+    }
   },
   "eventRules": {
     "note": "Match received syslog / SNMP-trap / webhook events (substring or regex) and raise alerts. Info-severity rules record the match without alerting.",

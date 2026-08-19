@@ -50,3 +50,14 @@ html[data-viewport='mobile'] .thresholds-meaning {
   white-space: normal;
   overflow: visible;
 }
+
+/* A field the dialog shows instead of an input, because the value is not the operator's to change:
+   editing the reachability rule shows its friendly name rather than the engine's internal
+   `__liveness__` sentinel, which is the one string this screen exists to keep out of sight. Styled
+   as text at input height so the form does not visibly lose a row. */
+.thresholds-fixed {
+  margin: 0;
+  padding: 7px 0;
+  color: var(--text-primary);
+  font-size: var(--font-sm);
+}

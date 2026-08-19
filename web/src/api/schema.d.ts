@@ -3589,7 +3589,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+        put: operations["update_threshold"];
         post?: never;
         delete: operations["delete_threshold"];
         options?: never;
@@ -5040,19 +5040,6 @@ export interface components {
         CreateTemplate: {
             description?: string | null;
             name: string;
-        };
-        /** @description Create-threshold request body. */
-        CreateThreshold: {
-            /** Format: double */
-            critical?: number | null;
-            direction: string;
-            /** Format: int32 */
-            dwell_samples?: number | null;
-            metric: string;
-            scope_id: string;
-            scope_level: string;
-            /** Format: double */
-            warning?: number | null;
         };
         /**
          * @description `name`/`parent_id`/`pool` plus a flattened [`UrlCheckConfig`] (only `url` is required;
@@ -8838,6 +8825,25 @@ export interface components {
         TestResult: {
             delivered: boolean;
             error?: string | null;
+        };
+        /**
+         * @description A threshold rule as the caller states it — the body of both `POST` and `PUT`.
+         *
+         *     One type for both, the shape `ProfileBody` already uses. Two would be two validators, and this
+         *     repo has paid for that: URL-check and DNS-check CRUD were two copies of one writer, so the "a
+         *     node is exactly one kind" rule shipped enforced on only one of them.
+         */
+        ThresholdBody: {
+            /** Format: double */
+            critical?: number | null;
+            direction: string;
+            /** Format: int32 */
+            dwell_samples?: number | null;
+            metric: string;
+            scope_id: string;
+            scope_level: string;
+            /** Format: double */
+            warning?: number | null;
         };
         /**
          * @description A capped page of threshold rules.
@@ -23771,7 +23777,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CreateThreshold"];
+                "application/json": components["schemas"]["ThresholdBody"];
             };
         };
         responses: {
@@ -23804,6 +23810,76 @@ export interface operations {
             };
             /** @description Role lacks ManageConfig */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    update_threshold: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Threshold rule id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ThresholdBody"];
+            };
+        };
+        responses: {
+            /** @description Rule updated */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter. A `global` rule ignores `scope_id` — it targets every node */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such rule */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

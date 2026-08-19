@@ -211,6 +211,46 @@ impl ThresholdStore {
         Ok(id)
     }
 
+    /// Overwrite a threshold rule **in place, keeping its id**. Returns whether a row was updated.
+    ///
+    /// Keeping the id is what makes editing safe rather than merely convenient: the alert engine
+    /// keys its state on `(node, metric)` — never on this id — so rewriting a rule cannot strand an
+    /// open alert or change the dedup key an external on-call tool is holding. Delete-and-recreate
+    /// would additionally leave a window in which the rule does not exist, during which the fleet
+    /// is not paged for the very thing the operator was adjusting.
+    ///
+    /// The `dwell_samples.max(1)` floor is applied here **as well as** in [`Self::create`]: an edit
+    /// is a second write path to the same column, and a floor that only one writer applies is a
+    /// floor the other one silently removes.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn update(
+        &self,
+        id: Uuid,
+        scope_level: &str,
+        scope_id: &str,
+        metric: &str,
+        direction: &str,
+        warning: Option<f64>,
+        critical: Option<f64>,
+        dwell_samples: i32,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE thresholds SET scope_level = $2, scope_id = $3, metric = $4, direction = $5, \
+             warning = $6, critical = $7, dwell_samples = $8 WHERE id = $1",
+        )
+        .bind(id)
+        .bind(scope_level)
+        .bind(scope_id)
+        .bind(metric)
+        .bind(direction)
+        .bind(warning)
+        .bind(critical)
+        .bind(dwell_samples.max(1))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
     /// Delete a threshold rule. Returns whether a row was removed.
     pub async fn delete(&self, id: Uuid) -> anyhow::Result<bool> {
         let res = sqlx::query("DELETE FROM thresholds WHERE id = $1")
@@ -295,7 +335,42 @@ mod tests {
         assert_eq!(read(0), 0);
         assert_eq!(read(-1), 1);
         assert_eq!(read(3), 3);
-        assert!(production_source().contains("dwell_samples.max(1)"));
+        // **Twice**, not once: `create` and `update` are two writers of the same column, and a
+        // floor only one of them applies is a floor the other silently removes. This counts rather
+        // than merely finding one, because the failure it guards is "the second writer was added
+        // without it" — which a `contains` check passes.
+        assert_eq!(
+            production_source().matches("dwell_samples.max(1)").count(),
+            2,
+            "every writer of dwell_samples applies the anti-flap floor"
+        );
+    }
+
+    #[test]
+    fn the_update_binds_every_placeholder_it_names_and_sets_every_column_but_the_id() {
+        // The binds are positional and silent when wrong: swapping two still compiles, still runs,
+        // and writes the operator's metric name into the direction column. Counting is the only
+        // check there is — nothing about this is a type error.
+        let src = production_source();
+        let after = src
+            .split_once("pub async fn update")
+            .expect("update exists")
+            .1;
+        let body = after.split_once("\n    }").map_or(after, |(b, _)| b);
+        let placeholders = (1..=8).filter(|n| body.contains(&format!("${n}"))).count();
+        assert_eq!(placeholders, 8, "{body}");
+        assert_eq!(
+            body.matches(".bind(").count(),
+            placeholders,
+            "one bind per placeholder, in the one order that matches the statement"
+        );
+        // Every stored column is rewritten except the id, which is the key. A column left out of
+        // the SET list would keep its old value through an edit that appeared to succeed — the
+        // failure mode is a form that saves and changes nothing.
+        for col in ThresholdStore::COLUMNS.split(", ").filter(|c| *c != "id") {
+            assert!(body.contains(&format!("{col} = $")), "{col} is not updated");
+        }
+        assert!(body.contains("WHERE id = $1"), "{body}");
     }
 
     #[test]

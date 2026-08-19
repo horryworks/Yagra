@@ -117,13 +117,14 @@
     "unavailable": "しきい値管理はスケルトンモードでは利用できません。",
     "add": "+ ルールを追加",
     "cols": {
-      "scope": "スコープ",
+      "scope": "スコープレベル",
       "metric": "メトリクス",
       "direction": "方向",
       "bounds": "境界値",
       "dwell": "連続検出回数",
       "actions": "操作",
-      "meaning": "測っているもの"
+      "meaning": "測っているもの",
+      "scopeId": "スコープ ID"
     },
     "empty": "しきい値ルールがまだありません",
     "emptySub": "プロファイル・グループ・ノードのいずれかを対象に、メトリクスのしきい値を追加してください。",
@@ -167,15 +168,17 @@
       "dwellPlaceholder": "連続検出回数",
       "dwellTitle": "連続検出回数: アラートを出すまでに、境界を超えた読み取りが連続して必要な回数",
       "boundsHint": "警告 / 重大 / 連続検出回数はいずれも任意です。連続検出回数は、アラートを出すまでに境界を超えた読み取りが連続して必要な回数で、大きくするほどフラッピング（短時間で発生と解消を繰り返す状態）を抑えられます。",
-      "add": "ルールを追加"
+      "add": "ルールを追加",
+      "dwellOnly": "連続検出回数"
     },
     "deleteModal": {
       "title": "しきい値ルールを削除",
-      "body": "<mono>{{metric}}</mono> の <strong>{{level}}</strong> ルール（対象: <mono>{{scope}}</mono>）を削除しますか？この操作は取り消せません。"
+      "body": "<mono>{{metric}}</mono> の <strong>{{level}}</strong> ルール（対象: <mono>{{scope}}</mono>）を削除しますか？この操作は取り消せません。",
+      "bodyGlobal": "<mono>{{metric}}</mono> の全ノード向けルールを削除しますか？このルールはすべてのノードに効いています。この操作は取り消せません。"
     },
     "err": {
-      "add": "追加に失敗しました",
-      "delete": "削除に失敗しました"
+      "delete": "削除に失敗しました",
+      "save": "保存に失敗しました"
     },
     "emptyFiltered": "この絞り込みに一致するルールがありません。",
     "filter": {
@@ -206,7 +209,12 @@
       "dns_chain_length": "解決チェーンのホップ数（CNAME → … → A/AAAA）。",
       "meraki_device_up": "Meraki ダッシュボードが機器をオンラインと報告しているか。1 = オンライン、0 = オフライン。"
     },
-    "meaningUnknown": "このメトリクスの説明は Yagra が持っていません。収集項目を定義した Metric set を見てください。"
+    "meaningUnknown": "このメトリクスの説明は Yagra が持っていません。収集項目を定義した Metric set を見てください。",
+    "scopeIdNone": "このルールは全ノードが対象なので、スコープ ID はありません。",
+    "livenessMetric": "到達性に境界値はありません。応答が有ったか無かったかのどちらかなので、効くのは連続検出回数だけです。",
+    "editModal": {
+      "title": "しきい値ルールを編集"
+    }
   },
   "eventRules": {
     "note": "受信した syslog / SNMP トラップ / webhook のイベントを部分一致または正規表現で照合し、アラートを出します。重大度が info のルールは、アラートを出さずに一致だけを記録します。",

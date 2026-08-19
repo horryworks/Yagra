@@ -415,6 +415,12 @@ export type Direction = (typeof DIRECTIONS)[number];
  *  The GET shape uses `scope_level`, matching the POST body. */
 export type StoredThreshold = components['schemas']['StoredThreshold'];
 
+/** A threshold rule as the caller states it — the body of **both** `POST /api/v1/thresholds` and
+ *  `PUT /api/v1/thresholds/{id}` (ADR-075 増分 2). One type because the server validates both
+ *  through one function; hand-writing it here would put a second, unchecked copy of the shape in
+ *  a language nothing compares to the first. */
+export type ThresholdInput = components['schemas']['ThresholdBody'];
+
 /** A capped page of threshold rules (`GET /api/v1/thresholds`).
  *
  *  Thresholds are the one configuration table that grows with the fleet — a node-level override is

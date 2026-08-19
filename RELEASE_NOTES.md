@@ -43,12 +43,27 @@
   is the broadest tier and loses to all three others, completing the precedence ADR-013 always
   described. `GET /api/v1/thresholds` accepts it in `scope_level`; `POST` ignores `scope_id` for
   it.
+- **A threshold rule can be edited.** Alerts ▸ Metric alert rules only offered add and delete, so
+  changing a breach count from 3 to 5 meant deleting the rule and typing it again — including its
+  scope UUID by hand, and with no rule in place while you did it. Each row now has an edit action
+  that opens the same dialog with the rule's values, and `PUT /api/v1/thresholds/{id}` rewrites it
+  in place. The rule keeps its id, and alert identity never depended on it, so an edit cannot
+  strand an open alert or change a dedup key an on-call tool is holding. Editing the
+  **Reachability** rule shows its name rather than the engine's internal metric, and offers only
+  the breach count — that rule carries no bounds and the engine reads none from it.
 - **A default packet-loss warning.** A seeded rule warns at **20% ICMP loss** across every node,
   so degradation is visible before the node is gone. Warning only — total loss is the
   reachability rule’s job, and two alerts for one outage is a notification storm.
 
 ### Improvements
 
+- **Scope and scope id are separate columns** in Alerts ▸ Metric alert rules. They shared one
+  cell, so a row showed a level badge next to a resolved name with nothing saying which was which.
+  The two headings are now the add dialog's own field names — **Scope level** and **Scope id** — and
+  a fleet-wide rule shows "—" for the id it does not have.
+- Deleting a fleet-wide rule no longer asks you to confirm deleting it "for ``". The confirmation
+  named the rule's scope id, which an every-node rule does not have, so the sentence rendered with
+  an empty pair of quotes where the target belongs.
 - **Editing a rule’s breach count now takes effect immediately.** A check’s hysteresis window was
   fixed at the first sample it ever saw, so raising "3 breaches" to "5" on any threshold rule did
   nothing until the next core restart while the UI showed 5. The engine now re-reads it every

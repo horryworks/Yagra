@@ -18,7 +18,7 @@ use super::{is_valid_metric_name, ApiState};
 use axum::{
     extract::{Path, Query},
     http::StatusCode,
-    routing::{delete, get},
+    routing::{get, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,7 @@ const THRESHOLDS_MAX: i64 = 500;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(list_thresholds, create_threshold, delete_threshold))]
+#[openapi(paths(list_thresholds, create_threshold, update_threshold, delete_threshold))]
 pub(super) struct Doc;
 
 /// The threshold routes, merged into `/api/v1` by [`super::router`].
@@ -41,7 +41,10 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/thresholds",
             get(list_thresholds).post(create_threshold),
         )
-        .route("/api/v1/thresholds/:id", delete(delete_threshold))
+        .route(
+            "/api/v1/thresholds/:id",
+            put(update_threshold).delete(delete_threshold),
+        )
 }
 
 /// A capped page of threshold rules.
@@ -169,9 +172,13 @@ fn is_builtin_counter(metric: &str) -> bool {
     }
 }
 
-/// Create-threshold request body.
+/// A threshold rule as the caller states it — the body of both `POST` and `PUT`.
+///
+/// One type for both, the shape `ProfileBody` already uses. Two would be two validators, and this
+/// repo has paid for that: URL-check and DNS-check CRUD were two copies of one writer, so the "a
+/// node is exactly one kind" rule shipped enforced on only one of them.
 #[derive(Deserialize, utoipa::ToSchema)]
-pub(super) struct CreateThreshold {
+pub(super) struct ThresholdBody {
     scope_level: String,
     scope_id: String,
     metric: String,
@@ -181,22 +188,19 @@ pub(super) struct CreateThreshold {
     dwell_samples: Option<i32>,
 }
 
-#[utoipa::path(
-    post, path = "/api/v1/thresholds", tag = "thresholds",
-    request_body = CreateThreshold,
-    responses(
-        (status = 201, description = "Rule created", body = CreatedId),
-        (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound). A `global` rule ignores `scope_id` — it targets every node", body = super::error::ErrorBody),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
-        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
-    ),
-)]
-async fn create_threshold(
-    _guard: RequireManageConfig,
-    admin: Admin,
-    Json(body): Json<CreateThreshold>,
-) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+/// A body that passed the checks that need no I/O, with `scope_id` already normalized.
+#[derive(Debug)]
+struct ParsedThreshold<'a> {
+    scope_level: &'a str,
+    scope_id: &'a str,
+    direction: &'a str,
+}
+
+/// The synchronous half of validating a rule — shared by create and update.
+///
+/// The counter check is **not** here: it reads the stored collection items, so it is async and
+/// stays in the handlers, which call it in the same order on both paths.
+fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> {
     if !is_valid_metric_name(&body.metric) {
         return Err(ApiError::bad_request(
             "invalid_metric_name",
@@ -218,39 +222,65 @@ async fn create_threshold(
     // ignore the column for this level: two global rules that differed only in a stray scope id
     // would both apply, look identical in the list, and be impossible to tell apart.
     let scope_id = if body.scope_level == "global" {
-        String::new()
+        ""
     } else {
-        body.scope_id.clone()
+        body.scope_id.as_str()
     };
-    // A raw counter's sampled value only ever increases (until it wraps or the device reboots),
-    // so a fixed bound cannot be evaluated against it: `above` latches permanently and `below`
-    // fires on every reset. Rates come from the TSDB at query time (ADR-012). The engine also
-    // refuses to evaluate counter samples, so this is the operator-facing half of one rule.
-    let is_counter = is_builtin_counter(&body.metric)
+    Ok(ParsedThreshold {
+        scope_level: &body.scope_level,
+        scope_id,
+        direction: &body.direction,
+    })
+}
+
+/// Whether `metric` may not carry a threshold because its samples only ever increase.
+///
+/// A raw counter's sampled value rises until it wraps or the device reboots, so a fixed bound
+/// cannot be evaluated against it: `above` latches permanently and `below` fires on every reset.
+/// Rates come from the TSDB at query time (ADR-012). The engine also refuses to evaluate counter
+/// samples, so this is the operator-facing half of one rule — and it is a `SELECT`, which is why
+/// it is not part of [`parse_threshold_body`].
+async fn reject_counter_metric(admin: &super::AdminState, metric: &str, op: &str) -> ApiResult<()> {
+    let is_counter = is_builtin_counter(metric)
         || admin
             .collection
-            .metric_declared_counter(&body.metric)
+            .metric_declared_counter(metric)
             .await
-            .map_err(|e| {
-                ApiError::from_internal(
-                    e.as_ref(),
-                    "create threshold",
-                    "failed to create threshold",
-                )
-            })?;
+            .map_err(|e| ApiError::from_internal(e.as_ref(), op, "failed to save threshold"))?;
     if is_counter {
         return Err(ApiError::bad_request(
             "counter_metric",
             "the metric is a raw counter; its sampled value only ever increases, so a fixed threshold cannot be evaluated against it",
         ));
     }
+    Ok(())
+}
+
+#[utoipa::path(
+    post, path = "/api/v1/thresholds", tag = "thresholds",
+    request_body = ThresholdBody,
+    responses(
+        (status = 201, description = "Rule created", body = CreatedId),
+        (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter (a monotonic value has no meaningful fixed bound). A `global` rule ignores `scope_id` — it targets every node", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
+async fn create_threshold(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Json(body): Json<ThresholdBody>,
+) -> ApiResult<(StatusCode, Json<CreatedId>)> {
+    let p = parse_threshold_body(&body)?;
+    reject_counter_metric(&admin, &body.metric, "create threshold").await?;
     let id = admin
         .thresholds
         .create(
-            &body.scope_level,
-            &scope_id,
+            p.scope_level,
+            p.scope_id,
             &body.metric,
-            &body.direction,
+            p.direction,
             body.warning,
             body.critical,
             body.dwell_samples.unwrap_or(3),
@@ -260,6 +290,53 @@ async fn create_threshold(
             ApiError::from_internal(e.as_ref(), "create threshold", "failed to create threshold")
         })?;
     Ok((StatusCode::CREATED, Json(CreatedId { id })))
+}
+
+#[utoipa::path(
+    put, path = "/api/v1/thresholds/{id}", tag = "thresholds",
+    params(("id" = Uuid, Path, description = "Threshold rule id")),
+    request_body = ThresholdBody,
+    responses(
+        (status = 204, description = "Rule updated"),
+        (status = 400, description = "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter. A `global` rule ignores `scope_id` — it targets every node", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig", body = super::error::ErrorBody),
+        (status = 404, description = "No such rule", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
+async fn update_threshold(
+    _guard: RequireManageConfig,
+    admin: Admin,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ThresholdBody>,
+) -> ApiResult<StatusCode> {
+    let p = parse_threshold_body(&body)?;
+    reject_counter_metric(&admin, &body.metric, "update threshold").await?;
+    let updated = admin
+        .thresholds
+        .update(
+            id,
+            p.scope_level,
+            p.scope_id,
+            &body.metric,
+            p.direction,
+            body.warning,
+            body.critical,
+            body.dwell_samples.unwrap_or(3),
+        )
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(e.as_ref(), "update threshold", "failed to update threshold")
+        })?;
+    if updated {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found(
+            "threshold_not_found",
+            format!("no threshold {id}"),
+        ))
+    }
 }
 
 #[utoipa::path(
@@ -309,6 +386,7 @@ mod tests {
         vec![
             ("GET", "/api/v1/thresholds".to_owned()),
             ("POST", "/api/v1/thresholds".to_owned()),
+            ("PUT", format!("/api/v1/thresholds/{ID}")),
             ("DELETE", format!("/api/v1/thresholds/{ID}")),
         ]
     }
@@ -318,7 +396,7 @@ mod tests {
         if let Some(t) = token {
             b = b.header(AUTHORIZATION, format!("Bearer {t}"));
         }
-        let body = if method == "POST" {
+        let body = if method == "POST" || method == "PUT" {
             b = b.header("content-type", "application/json");
             Body::from("{}")
         } else {
@@ -381,6 +459,76 @@ mod tests {
         assert!(!is_builtin_counter("snmp_sys_uptime_ticks"));
         // A name outside the catalog is not rejected here — the stored-item check owns it.
         assert!(!is_builtin_counter("icmp_rtt_ms"));
+    }
+
+    fn body(scope_level: &str, scope_id: &str, metric: &str, direction: &str) -> ThresholdBody {
+        ThresholdBody {
+            scope_level: scope_level.to_owned(),
+            scope_id: scope_id.to_owned(),
+            metric: metric.to_owned(),
+            direction: direction.to_owned(),
+            warning: None,
+            critical: None,
+            dwell_samples: None,
+        }
+    }
+
+    #[test]
+    fn a_global_rule_has_its_scope_id_pinned_empty_and_every_other_level_keeps_what_was_sent() {
+        // The pinning half: a stray id on a global rule would produce two rules that both apply to
+        // every node, look identical in the list, and cannot be told apart.
+        let b = body("global", "not-a-real-id", "icmp_rtt_ms", "above");
+        assert_eq!(parse_threshold_body(&b).unwrap().scope_id, "");
+        // The receiving half, and it is the one that makes the test mean something: a normalizer
+        // that emptied every scope id would pass the assertion above while silently making every
+        // profile/group/node rule fleet-wide.
+        for level in ["profile", "group", "node"] {
+            let b = body(level, "keep-me", "icmp_rtt_ms", "above");
+            let p = parse_threshold_body(&b).unwrap();
+            assert_eq!(p.scope_id, "keep-me", "{level}");
+            assert_eq!(p.scope_level, level);
+        }
+    }
+
+    #[test]
+    fn a_token_outside_either_vocabulary_is_refused_rather_than_quietly_defaulted() {
+        // Dropping an unknown token would *widen* the rule: `parse_level` on the read side falls
+        // back to `Profile`, so a rule stored with a level nobody admits would come back as a
+        // profile rule with an empty scope id — inert, and indistinguishable from a typo.
+        for (level, dir) in [
+            ("galaxy", "above"),
+            ("global", "sideways"),
+            ("", "above"),
+            ("node", ""),
+        ] {
+            let b = body(level, "x", "icmp_rtt_ms", dir);
+            let err = parse_threshold_body(&b).unwrap_err();
+            assert!(
+                format!("{err:?}").contains("invalid_threshold"),
+                "{level}/{dir}"
+            );
+        }
+        // A metric name that is not an identifier is refused by its own code, so the operator is
+        // told which field is wrong.
+        let b = body("node", "x", "not a metric", "above");
+        let err = parse_threshold_body(&b).unwrap_err();
+        assert!(format!("{err:?}").contains("invalid_metric_name"));
+    }
+
+    #[test]
+    fn create_and_update_run_the_same_two_checks_in_the_same_order() {
+        // Two writers of one rule is how the DNS/URL CRUD pair shipped with the "a node is exactly
+        // one kind" guard on only one of them (extensibility.md §3). Both handlers must call the
+        // shared validator *and* the counter check, and the counter check must come second — it is
+        // a database round trip, and a malformed body should not cost one.
+        const SRC: &str = include_str!("thresholds.rs");
+        for handler in ["async fn create_threshold", "async fn update_threshold"] {
+            let after = SRC.split_once(handler).expect("handler exists").1;
+            let body = after.split_once("\n}").map_or(after, |(b, _)| b);
+            let parse = body.find("parse_threshold_body(&body)").expect(handler);
+            let counter = body.find("reject_counter_metric(").expect(handler);
+            assert!(parse < counter, "{handler} must validate before it queries");
+        }
     }
 
     #[test]

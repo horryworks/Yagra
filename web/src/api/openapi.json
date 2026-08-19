@@ -18157,7 +18157,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateThreshold"
+                "$ref": "#/components/schemas/ThresholdBody"
               }
             }
           },
@@ -18218,6 +18218,89 @@
       }
     },
     "/api/v1/thresholds/{id}": {
+      "put": {
+        "tags": [
+          "thresholds"
+        ],
+        "operationId": "update_threshold",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Threshold rule id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ThresholdBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Rule updated"
+          },
+          "400": {
+            "description": "The metric is not an identifier, scope_level/direction is outside its vocabulary, or the metric is a raw counter. A `global` rule ignores `scope_id` — it targets every node",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such rule",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "thresholds"
@@ -22138,51 +22221,6 @@
           },
           "name": {
             "type": "string"
-          }
-        }
-      },
-      "CreateThreshold": {
-        "type": "object",
-        "description": "Create-threshold request body.",
-        "required": [
-          "scope_level",
-          "scope_id",
-          "metric",
-          "direction"
-        ],
-        "properties": {
-          "critical": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
-          },
-          "direction": {
-            "type": "string"
-          },
-          "dwell_samples": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
-          "metric": {
-            "type": "string"
-          },
-          "scope_id": {
-            "type": "string"
-          },
-          "scope_level": {
-            "type": "string"
-          },
-          "warning": {
-            "type": [
-              "number",
-              "null"
-            ],
-            "format": "double"
           }
         }
       },
@@ -30921,6 +30959,51 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ThresholdBody": {
+        "type": "object",
+        "description": "A threshold rule as the caller states it — the body of both `POST` and `PUT`.\n\nOne type for both, the shape `ProfileBody` already uses. Two would be two validators, and this\nrepo has paid for that: URL-check and DNS-check CRUD were two copies of one writer, so the \"a\nnode is exactly one kind\" rule shipped enforced on only one of them.",
+        "required": [
+          "scope_level",
+          "scope_id",
+          "metric",
+          "direction"
+        ],
+        "properties": {
+          "critical": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "direction": {
+            "type": "string"
+          },
+          "dwell_samples": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "scope_id": {
+            "type": "string"
+          },
+          "scope_level": {
+            "type": "string"
+          },
+          "warning": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
           }
         }
       },

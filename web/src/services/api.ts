@@ -33,7 +33,6 @@ import type {
   CollectionTemplate,
   ConfigBundle,
   CredentialSummary,
-  Direction,
   DiscoveryCandidate,
   DiscoveryScan,
   DiscoveryScanSummary,
@@ -116,12 +115,12 @@ import type {
   SavedFinding,
   SavedFindingsQuery,
   Scope,
-  ScopeLevel,
   Severity,
   StateHistory,
   SuppressionExemption,
   ThroughputRange,
   StoredCollectionItem,
+  ThresholdInput,
   ThresholdPage,
   ThresholdQuery,
   RankedNodes,
@@ -1212,15 +1211,16 @@ export const api = {
     apiGet('/api/v1/thresholds', { query }),
 
   /** Create a threshold rule. */
-  createThreshold: (body: {
-    scope_level: ScopeLevel;
-    scope_id: string;
-    metric: string;
-    direction: Direction;
-    warning?: number;
-    critical?: number;
-    dwell_samples?: number;
-  }): Promise<{ id: string }> => apiPost('/api/v1/thresholds', { body }),
+  createThreshold: (body: ThresholdInput): Promise<{ id: string }> =>
+    apiPost('/api/v1/thresholds', { body }),
+
+  /** Overwrite a threshold rule, keeping its id.
+   *
+   *  The id is kept deliberately: the alert engine keys its state on `(node, metric)`, never on
+   *  the rule's id, so an edit cannot strand an open alert — and unlike delete-and-recreate it
+   *  leaves no window in which the rule does not exist and the fleet is not paged. */
+  updateThreshold: (id: string, body: ThresholdInput): Promise<void> =>
+    apiPut('/api/v1/thresholds/{id}', { path: { id }, body }),
 
   /** Delete a threshold rule. */
   deleteThreshold: (id: string): Promise<void> =>

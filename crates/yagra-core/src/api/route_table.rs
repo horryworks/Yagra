@@ -1525,6 +1525,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     ("GET", "/api/v1/thresholds", ADMIN_CFG, Tool("get_config")),
     ("POST", "/api/v1/thresholds", ADMIN_CFG, NO_MCP_WRITE),
+    ("PUT", "/api/v1/thresholds/:id", ADMIN_CFG, NO_MCP_WRITE),
     ("DELETE", "/api/v1/thresholds/:id", ADMIN_CFG, NO_MCP_WRITE),
     (
         "GET",

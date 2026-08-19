@@ -28,6 +28,12 @@ import {
 import { METRIC_PRESETS } from '../lib/suppression';
 import { LIVENESS_METRIC } from '../lib/format';
 import { metricMeaningKey } from './thresholdMeaning';
+import {
+  isThresholdReady,
+  thresholdBody,
+  thresholdFormFrom,
+  type ThresholdForm,
+} from './thresholdRequest';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -37,6 +43,7 @@ import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { IconButton } from '../components/ui/IconButton';
+import { EditIcon } from '../components/ui/icons';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
 import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
@@ -49,52 +56,73 @@ import './ThresholdsPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
-/** Create a threshold rule (focused-editing modal). */
-function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+/** Create or edit a threshold rule (focused-editing modal).
+ *
+ *  One dialog for both, the shape `EventRulesPage`'s `RuleModal` uses. Two would be two answers to
+ *  "what does this form send", and the add path and the edit path would drift. The judgement —
+ *  what the fields become, and whether they may be submitted — lives in `thresholdRequest.ts`,
+ *  because Vitest does not execute a `.tsx`.
+ *
+ *  ⚠️ The form state is held here, inside a conditionally-mounted component, so closing the dialog
+ *  *is* the reset (ui-conventions "Modals"). A `resetForm()` enumerating the fields would be a
+ *  second copy of the field list. */
+function ThresholdModal({
+  mode,
+  rule,
+  onClose,
+  onSaved,
+}: {
+  mode: 'add' | 'edit';
+  rule?: StoredThreshold;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
   const { t } = useTranslation('alertsConfig');
-  const [level, setLevel] = useState<ScopeLevel>('profile');
-  const [scopeId, setScopeId] = useState('');
-  const [metric, setMetric] = useState('');
-  const [direction, setDirection] = useState<Direction>('above');
-  const [warning, setWarning] = useState('');
-  const [critical, setCritical] = useState('');
-  const [dwell, setDwell] = useState('3');
+  const [form, setForm] = useState<ThresholdForm>(() => thresholdFormFrom(rule));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const set = <K extends keyof ThresholdForm>(key: K, value: ThresholdForm[K]) =>
+    setForm((f) => ({ ...f, [key]: value }));
 
   // A `global` rule targets every node, so it has nothing to point at and the server pins its
   // `scope_id` to the empty string. Requiring one here would make the level unusable.
-  const global = level === 'global';
-  const ready = metric.trim() !== '' && (global || scopeId.trim() !== '');
+  const global = form.level === 'global';
+  const ready = isThresholdReady(form);
+
+  // Two derivations of "this is the reachability rule", and they are deliberately different.
+  //
+  //  - `lockedMetric` reads the **stored** rule, so editing that row never shows or lets anyone
+  //    retype the engine's internal sentinel. Deriving it from the typed value instead would make
+  //    the input disappear the moment someone typed `__liveness__` into it, with no way back.
+  //  - `noBounds` reads the **current** value, so the bounds also disappear in add mode — the
+  //    sentinel is offered in the metric datalist, and bounds on it are read by nothing
+  //    (`repo.rs`'s seed comment): the engine takes the severity from the committed `NodeState`.
+  const lockedMetric = mode === 'edit' && rule?.metric === LIVENESS_METRIC;
+  const noBounds = form.metric.trim() === LIVENESS_METRIC;
 
   const submit = () => {
     if (!ready) return;
     setBusy(true);
     setError(null);
-    const num = (s: string) => (s.trim() === '' ? undefined : Number(s));
-    api
-      .createThreshold({
-        scope_level: level,
-        scope_id: global ? '' : scopeId.trim(),
-        metric: metric.trim(),
-        direction,
-        warning: num(warning),
-        critical: num(critical),
-        dwell_samples: num(dwell),
-      })
+    const body = thresholdBody(form);
+    const call =
+      mode === 'edit' && rule
+        ? api.updateThreshold(rule.id, body)
+        : api.createThreshold(body).then(() => undefined);
+    call
       .then(() => {
         onSaved();
         onClose();
       })
       .catch((e: unknown) => {
-        setError(errMsg(e, t('thresholds.err.add')));
+        setError(errMsg(e, t('thresholds.err.save')));
         setBusy(false);
       });
   };
 
   return (
     <Modal
-      title={t('thresholds.addModal.title')}
+      title={mode === 'edit' ? t('thresholds.editModal.title') : t('thresholds.addModal.title')}
       onClose={onClose}
       footer={
         <>
@@ -102,14 +130,14 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
             {t('common:actions.cancel')}
           </Button>
           <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {t('thresholds.addModal.add')}
+            {mode === 'edit' ? t('common:actions.save') : t('thresholds.addModal.add')}
           </Button>
         </>
       }
     >
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.scopeLevel')}</label>
-        <Select value={level} onChange={(e) => setLevel(e.target.value as ScopeLevel)}>
+        <Select value={form.level} onChange={(e) => set('level', e.target.value as ScopeLevel)}>
           {SCOPE_LEVELS.map((l) => (
             <option key={l} value={l}>
               {t(`thresholds.scopeLevel.${l}`)}
@@ -126,36 +154,48 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
           <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
           <TextInput
             className="mono"
-            placeholder={t(`thresholds.addModal.scopeIdPlaceholder.${level}`)}
-            value={scopeId}
-            onChange={(e) => setScopeId(e.target.value)}
+            placeholder={t(`thresholds.addModal.scopeIdPlaceholder.${form.level}`)}
+            value={form.scopeId}
+            onChange={(e) => set('scopeId', e.target.value)}
             autoFocus
           />
           <span className="modal-hint">
             {t('thresholds.addModal.scopeIdHint', {
-              noun: t(`thresholds.addModal.scopeIdNoun.${level}`),
+              noun: t(`thresholds.addModal.scopeIdNoun.${form.level}`),
             })}
           </span>
         </div>
       )}
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
-        <TextInput
-          className="mono"
-          placeholder={t('thresholds.addModal.metricPlaceholder')}
-          list="metric-presets"
-          value={metric}
-          onChange={(e) => setMetric(e.target.value)}
-        />
-        <datalist id="metric-presets">
-          {METRIC_PRESETS.map((m) => (
-            <option key={m} value={m} />
-          ))}
-        </datalist>
+        {lockedMetric ? (
+          <>
+            <p className="thresholds-fixed">{t('format:liveness')}</p>
+            <span className="modal-hint">{t('thresholds.livenessMetric')}</span>
+          </>
+        ) : (
+          <>
+            <TextInput
+              className="mono"
+              placeholder={t('thresholds.addModal.metricPlaceholder')}
+              list="metric-presets"
+              value={form.metric}
+              onChange={(e) => set('metric', e.target.value)}
+            />
+            <datalist id="metric-presets">
+              {METRIC_PRESETS.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </>
+        )}
       </div>
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.direction')}</label>
-        <Select value={direction} onChange={(e) => setDirection(e.target.value as Direction)}>
+        <Select
+          value={form.direction}
+          onChange={(e) => set('direction', e.target.value as Direction)}
+        >
           {DIRECTIONS.map((d) => (
             <option key={d} value={d}>
               {t(`thresholds.direction.${d}`)}
@@ -164,29 +204,37 @@ function AddThresholdModal({ onClose, onSaved }: { onClose: () => void; onSaved:
         </Select>
       </div>
       <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.boundsDwell')}</label>
+        <label className="modal-field-label">
+          {noBounds ? t('thresholds.addModal.dwellOnly') : t('thresholds.addModal.boundsDwell')}
+        </label>
         <div className="thresholds-bounds">
-          <TextInput
-            className="thresholds-num"
-            placeholder={t('thresholds.addModal.warnPlaceholder')}
-            value={warning}
-            onChange={(e) => setWarning(e.target.value)}
-          />
-          <TextInput
-            className="thresholds-num"
-            placeholder={t('thresholds.addModal.critPlaceholder')}
-            value={critical}
-            onChange={(e) => setCritical(e.target.value)}
-          />
+          {!noBounds && (
+            <>
+              <TextInput
+                className="thresholds-num"
+                placeholder={t('thresholds.addModal.warnPlaceholder')}
+                value={form.warning}
+                onChange={(e) => set('warning', e.target.value)}
+              />
+              <TextInput
+                className="thresholds-num"
+                placeholder={t('thresholds.addModal.critPlaceholder')}
+                value={form.critical}
+                onChange={(e) => set('critical', e.target.value)}
+              />
+            </>
+          )}
           <TextInput
             className="thresholds-num"
             placeholder={t('thresholds.addModal.dwellPlaceholder')}
-            value={dwell}
-            onChange={(e) => setDwell(e.target.value)}
+            value={form.dwell}
+            onChange={(e) => set('dwell', e.target.value)}
             title={t('thresholds.addModal.dwellTitle')}
           />
         </div>
-        <span className="modal-hint">{t('thresholds.addModal.boundsHint')}</span>
+        <span className="modal-hint">
+          {noBounds ? t('thresholds.livenessMetric') : t('thresholds.addModal.boundsHint')}
+        </span>
       </div>
       {error && <p className="form-error">{error}</p>}
     </Modal>
@@ -212,12 +260,20 @@ function DeleteThresholdModal({
       onClose={onClose}
       onDone={onDone}
     >
+      {/* A global rule has no scope id, and the shared sentence used to interpolate the empty
+          string straight into "… for <mono></mono>?" — an empty pair of quotes where the target
+          belongs, on a destructive confirmation. Two sentences rather than a placeholder that is
+          sometimes blank. */}
       <Trans
         t={t}
-        i18nKey="thresholds.deleteModal.body"
+        i18nKey={
+          rule.scope_level === 'global'
+            ? 'thresholds.deleteModal.bodyGlobal'
+            : 'thresholds.deleteModal.body'
+        }
         values={{
           level: t(`thresholds.scopeLevel.${rule.scope_level}`),
-          metric: rule.metric,
+          metric: rule.metric === LIVENESS_METRIC ? t('format:liveness') : rule.metric,
           scope: rule.scope_id,
         }}
         components={{ strong: <strong />, mono: <strong className="mono" /> }}
@@ -239,6 +295,7 @@ export function ThresholdsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<StoredThreshold | null>(null);
   const [deleting, setDeleting] = useState<StoredThreshold | null>(null);
   /** Whether any reachability rule exists **anywhere** — `null` until the question is answered.
    *
@@ -261,19 +318,32 @@ export function ThresholdsPage() {
   const columns = useMemo<Column<StoredThreshold>[]>(() => {
     const cols: Column<StoredThreshold>[] = [
       {
+        // Two values, two columns (ADR-075 増分 2). They shared a cell until an operator asked
+        // which of the two things in it was the scope id — every other column here is one value
+        // under a heading that names it, and this one was not. The headings are the add dialog's
+        // field names verbatim, so "where do I set this?" is answered by the words matching.
         key: 'scope_level',
         header: t('thresholds.cols.scope'),
-        width: '1.4fr',
-        render: (row) => (
-          <>
-            <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
-            {/* A global rule has no id to resolve; the badge already says "every node", and an
-                `EntityName` on an empty id would render a bare em dash beside it. */}
-            {row.scope_level !== 'global' && (
-              <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
-            )}
-          </>
-        ),
+        width: '110px',
+        render: (row) => <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>,
+      },
+      {
+        // Not filterable, and the absence is the declaration: this list is capped at 500 rules
+        // server-side, so a browser-side predicate would examine that prefix and report on it —
+        // see `thresholdQuery.ts`. The API has no `scope_id` parameter to push it into.
+        key: 'scope_id',
+        header: t('thresholds.cols.scopeId'),
+        width: '1.2fr',
+        render: (row) =>
+          // A global rule has no id to resolve — the level column already says "every node", and
+          // `EntityName` on an empty id renders a bare em dash with no explanation of why.
+          row.scope_level === 'global' ? (
+            <span className="muted" title={t('thresholds.scopeIdNone')}>
+              —
+            </span>
+          ) : (
+            <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
+          ),
       },
       {
         key: 'q',
@@ -316,7 +386,7 @@ export function ThresholdsPage() {
       {
         key: 'direction',
         header: t('thresholds.cols.direction'),
-        width: '100px',
+        width: '92px',
         render: (row) => (
           <span className="muted">{t(`thresholds.direction.${row.direction}`)}</span>
         ),
@@ -324,7 +394,7 @@ export function ThresholdsPage() {
       {
         key: 'bounds',
         header: t('thresholds.cols.bounds'),
-        width: '170px',
+        width: '150px',
         render: (row) => (
           <span className="thresholds-bounds">
             {row.warning != null && (
@@ -351,11 +421,16 @@ export function ThresholdsPage() {
       {
         key: 'actions',
         header: t('thresholds.cols.actions'),
-        width: '92px',
+        width: '124px',
         align: 'right',
+        // Drawn only for a caller who may use them (ADR-056) — not `disabled`, which explains
+        // itself on hover only and so explains itself to nobody on a touch device.
         render: (row) =>
           canConfig && (
             <span className="ytable-actions">
+              <IconButton title={t('common:actions.edit')} onClick={() => setEditing(row)}>
+                <EditIcon />
+              </IconButton>
               <IconButton
                 title={t('common:actions.delete')}
                 danger
@@ -501,7 +576,18 @@ export function ThresholdsPage() {
         </>
       )}
 
-      {adding && <AddThresholdModal onClose={() => setAdding(false)} onSaved={load} />}
+      {adding && <ThresholdModal mode="add" onClose={() => setAdding(false)} onSaved={load} />}
+      {editing && (
+        // Keyed by the row's id so opening a *different* rule remounts the dialog with that rule's
+        // values. Without it React would keep the mounted form state and show the previous rule.
+        <ThresholdModal
+          key={editing.id}
+          mode="edit"
+          rule={editing}
+          onClose={() => setEditing(null)}
+          onSaved={load}
+        />
+      )}
       {deleting && (
         <DeleteThresholdModal
           rule={deleting}
