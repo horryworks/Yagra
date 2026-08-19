@@ -32,3 +32,21 @@
   margin-bottom: 16px;
   border-left: 2px solid var(--status-warning);
 }
+
+/* The "what it measures" cell. Rows are a fixed 44px (DataTable's virtualizer), so the sentence is
+   one line; the full text is on `title` for a narrow window. Secondary colour: it explains the
+   metric beside it rather than competing with it. */
+.thresholds-meaning {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* On mobile the table is cards, where there is room to wrap — an ellipsis there would hide the
+   explanation for no reason. */
+html[data-viewport='mobile'] .thresholds-meaning {
+  white-space: normal;
+  overflow: visible;
+}

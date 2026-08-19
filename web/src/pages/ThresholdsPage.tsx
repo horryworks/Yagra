@@ -27,6 +27,7 @@ import {
 } from '../types/api';
 import { METRIC_PRESETS } from '../lib/suppression';
 import { LIVENESS_METRIC } from '../lib/format';
+import { metricMeaningKey } from './thresholdMeaning';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
@@ -262,7 +263,7 @@ export function ThresholdsPage() {
       {
         key: 'scope_level',
         header: t('thresholds.cols.scope'),
-        width: '1.6fr',
+        width: '1.4fr',
         render: (row) => (
           <>
             <Badge tone="neutral">{t(`thresholds.scopeLevel.${row.scope_level}`)}</Badge>
@@ -277,7 +278,7 @@ export function ThresholdsPage() {
       {
         key: 'q',
         header: t('thresholds.cols.metric'),
-        width: '1.4fr',
+        width: '1.1fr',
         // The reachability rule carries the engine's internal check name. Every other surface
         // already shows it as "Reachability" (`AlertWhatText`), and this is the one screen where
         // an operator would otherwise meet the raw sentinel.
@@ -289,9 +290,33 @@ export function ThresholdsPage() {
           ),
       },
       {
+        // What the metric measures. Every other column here is a property of the *rule*; this is
+        // the only one that is a property of the metric, and without it a row like
+        // `Reachability | below | (no bounds)` says how the rule behaves and nothing about what
+        // it watches. Not filterable — it is derived from the metric, which has its own filter.
+        key: 'meaning',
+        header: t('thresholds.cols.meaning'),
+        width: '2fr',
+        render: (row) => {
+          const key = metricMeaningKey(row.metric);
+          // Rows are a fixed 44px, so the text is one line with an ellipsis. `title` carries the
+          // tail for a narrow window — it is an overflow fallback, not the only place the
+          // explanation lives (ADR-055 R4), which is why the column is not hover-only.
+          return key ? (
+            <span className="thresholds-meaning" title={t(key)}>
+              {t(key)}
+            </span>
+          ) : (
+            <span className="muted" title={t('thresholds.meaningUnknown')}>
+              —
+            </span>
+          );
+        },
+      },
+      {
         key: 'direction',
         header: t('thresholds.cols.direction'),
-        width: '110px',
+        width: '100px',
         render: (row) => (
           <span className="muted">{t(`thresholds.direction.${row.direction}`)}</span>
         ),

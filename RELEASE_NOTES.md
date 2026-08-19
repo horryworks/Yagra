@@ -26,6 +26,11 @@
 
 ### New Features
 
+- **Metric alert rules says what each rule is watching.** A row read `Reachability | below |
+  (no bounds) | 3 breaches` — how the rule behaves, and nothing about what it measures. A
+  **What it measures** column now carries a one-line explanation for every metric Yagra emits
+  itself: the reachability probes and the URL, DNS and Meraki monitors. A metric with a Metric
+  set entry is deliberately left blank — it is explained where its collection item is defined.
 - **A "snmp down" alert, which did not previously exist.** Pollers now emit **`snmp_up`** (1 when
   the SNMP agent answered a scalar GET, 0 when it answered with nothing or the request failed),
   and a seeded rule raises critical after two consecutive zeroes. Until now an agent that stopped

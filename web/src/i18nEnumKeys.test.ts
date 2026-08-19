@@ -59,6 +59,7 @@ import {
 } from './components/NodeDetail/nodeEditForm';
 import { CREDENTIAL_KINDS } from './lib/credentialKinds';
 import { TEXT_MODES } from './lib/columnFilter';
+import { EXPLAINED_METRICS } from './pages/thresholdMeaning';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
@@ -226,6 +227,19 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('scope id placeholder', locales, 'thresholds.addModal.scopeIdPlaceholder.', WITH_SCOPE_ID);
     expectKeys('scope id noun', locales, 'thresholds.addModal.scopeIdNoun.', SCOPE_LEVELS);
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
+  });
+
+  it('every explained metric has a meaning (alertsConfig:thresholds.meaning.*)', () => {
+    // The key is built at runtime from the metric name, so a member added to
+    // `EXPLAINED_METRICS` without strings renders a raw key — in BOTH locales, which parity
+    // passes. This is the column an operator reads to find out what a rule is watching, so a
+    // raw key there is worse than no column at all.
+    expectKeys(
+      'metric meaning',
+      { en: enAlertsConfig, ja: jaAlertsConfig },
+      'thresholds.meaning.',
+      EXPLAINED_METRICS,
+    );
   });
 
   it('every credential kind has a label (access:cred.kind.*)', () => {

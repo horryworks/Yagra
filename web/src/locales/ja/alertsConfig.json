@@ -122,7 +122,8 @@
       "direction": "方向",
       "bounds": "境界値",
       "dwell": "連続検出回数",
-      "actions": "操作"
+      "actions": "操作",
+      "meaning": "測っているもの"
     },
     "empty": "しきい値ルールがまだありません",
     "emptySub": "プロファイル・グループ・ノードのいずれかを対象に、メトリクスのしきい値を追加してください。",
@@ -184,7 +185,28 @@
       "scopeAria": "適用範囲で絞り込む",
       "allDirections": "上振れ・下振れの両方",
       "directionAria": "方向で絞り込む"
-    }
+    },
+    "meaning": {
+      "__liveness__": "ノードがチェックに応答したか。境界値は持ちません。応答が有ったか無かったかのどちらかなので、効くのは連続検出回数だけです。",
+      "icmp_rtt_ms": "ICMP プローブの往復時間（ミリ秒）。",
+      "icmp_loss_pct": "応答が返らなかった ICMP プローブの割合（0〜100）。",
+      "snmp_up": "この周期で SNMP エージェントが答えたか。1 = 値が 1 つ以上返った、0 = 何も返らなかったか要求が失敗した。",
+      "snmp_neighbor_count": "直近のウォークで見つかった CDP/LLDP 隣接の数。",
+      "snmp_l3_address_count": "直近のウォークで見つかった L3 アドレスの数。",
+      "snmp_routing_adjacency_count": "直近のウォークで見つかった OSPF/BGP 隣接の数。",
+      "snmp_arp_entry_count": "直近のウォークで見つかった ARP エントリの数。",
+      "http_up": "URL が、監視が期待するステータスで応答したか。1 = した、0 = 到達不能かステータス不一致。",
+      "http_status_code": "監視が受け取った HTTP ステータスコード。",
+      "http_response_time_ms": "監視の要求にかかった時間（ミリ秒）。",
+      "http_body_match": "応答本文が、監視に設定した規則に一致したか。1 = 一致、0 = 不一致。",
+      "ssl_cert_days_to_expiry": "TLS 証明書の期限までの日数。切れた後は負になります。",
+      "dns_up": "名前が解決できたか。1 = できた、0 = 失敗（NXDOMAIN / SERVFAIL / REFUSED / タイムアウト / CNAME ループのいずれか）。",
+      "dns_resolve_ms": "名前解決にかかった時間（ミリ秒）。",
+      "dns_answer_count": "最終応答に含まれていた回答の数。",
+      "dns_chain_length": "解決チェーンのホップ数（CNAME → … → A/AAAA）。",
+      "meraki_device_up": "Meraki ダッシュボードが機器をオンラインと報告しているか。1 = オンライン、0 = オフライン。"
+    },
+    "meaningUnknown": "このメトリクスの説明は Yagra が持っていません。収集項目を定義した Metric set を見てください。"
   },
   "eventRules": {
     "note": "受信した syslog / SNMP トラップ / webhook のイベントを部分一致または正規表現で照合し、アラートを出します。重大度が info のルールは、アラートを出さずに一致だけを記録します。",
