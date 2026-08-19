@@ -84,6 +84,7 @@ describe('format', () => {
       metric: 'icmp_rtt_ms',
       condition: 'above 100',
       observed: 'was 450',
+      ifindex: null,
     });
 
     // A metric with no numeric breach (e.g. partial data) still shows the metric, no condition.
@@ -92,7 +93,30 @@ describe('format', () => {
       metric: 'http_up',
       condition: null,
       observed: null,
+      ifindex: null,
     });
+
+    // A per-interface breach names its port (ADR-076). Two alerts on one node differ only here,
+    // so dropping it would render them as two identical lines an operator cannot tell apart.
+    expect(
+      alertWhat({
+        metric: 'if_in_util_pct',
+        direction: 'above',
+        threshold_value: 90,
+        observed_value: 94.2,
+        ifindex: 7,
+      }),
+    ).toEqual({
+      kind: 'metric',
+      metric: 'if_in_util_pct',
+      condition: 'above 90',
+      observed: 'was 94.2',
+      ifindex: 7,
+    });
+
+    // Port 0 is a real ifIndex on some agents, so it must survive as 0 rather than collapsing to
+    // null through a falsy check — that would silently relabel one port's alert as node-wide.
+    expect(alertWhat({ metric: 'if_in_util_pct', ifindex: 0 })).toMatchObject({ ifindex: 0 });
   });
 
   it('describes a LIVE alert the same way as its history row (alertWhatOf)', () => {
@@ -110,13 +134,37 @@ describe('format', () => {
     };
     expect(alertWhatOf(live)).toEqual(alertWhat(historyRow));
 
+    // The same must hold for a per-interface breach: the live alert keeps `ifindex` beside the
+    // nested breach while history flattens it into a column, and the two must still agree.
+    expect(
+      alertWhatOf({
+        metric: 'if_in_util_pct',
+        breach: { value: 94.2, threshold: 90, direction: 'above' },
+        ifindex: 7,
+      }),
+    ).toEqual(
+      alertWhat({
+        metric: 'if_in_util_pct',
+        direction: 'above',
+        threshold_value: 90,
+        observed_value: 94.2,
+        ifindex: 7,
+      }),
+    );
+
     // A liveness alert carries no breach at all.
     expect(alertWhatOf({ metric: '__liveness__', breach: null })).toEqual({ kind: 'liveness' });
 
     // A threshold alert whose committed severity has no bound at that level: value, no threshold.
     expect(
       alertWhatOf({ metric: 'cpu_pct', breach: { value: 91, threshold: null, direction: 'above' } }),
-    ).toEqual({ kind: 'metric', metric: 'cpu_pct', condition: null, observed: 'was 91' });
+    ).toEqual({
+      kind: 'metric',
+      metric: 'cpu_pct',
+      condition: null,
+      observed: 'was 91',
+      ifindex: null,
+    });
 
     // An alert with no metric at all (an N-1 core that predates migration 0036) → "—".
     expect(alertWhatOf({})).toEqual({ kind: 'none' });

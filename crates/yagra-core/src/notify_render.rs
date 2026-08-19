@@ -325,9 +325,9 @@ mod tests {
             ),
             false,
         );
-        assert_eq!(r.subject, "CRITICAL: core-sw-01 (icmp_rtt_ms)");
+        assert_eq!(r.subject, "CRITICAL: core-sw-01 (if_in_util_pct)");
         assert_eq!(
-            r.body, "core-sw-01 at 192.0.2.11 — 412.5 > 200.0",
+            r.body, "core-sw-01 at 192.0.2.11 — 94.2 > 90.0",
             "numbers must render as numbers"
         );
         assert!(r.failures.is_empty());

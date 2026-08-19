@@ -51,6 +51,13 @@ pub struct AlertHistoryRow {
     pub threshold_value: Option<f64>,
     /// Which way the metric crossed its bound (threshold checks only).
     pub direction: Option<Direction>,
+    /// The SNMP ifIndex of the port this was about, for a per-interface metric (ADR-076).
+    ///
+    /// `None` for a node-level alert and for every row written before ADR-076 shipped — both mean
+    /// "no port was involved", which is why the column is nullable rather than defaulted (there is
+    /// no ifIndex value free to mean "none"; `0` is a real one on some agents).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ifindex: Option<u32>,
     /// Insertion time as an RFC 3339 timestamp, and the first half of the **keyset cursor**: the
     /// WebUI passes the last row's `recorded_at` as `before` **and its `id` as `before_id`** to
     /// fetch the next (older) page. Distinct from `at_unix_ms` (the event time).
@@ -106,6 +113,28 @@ fn breach_columns(alert: &Alert) -> (Option<String>, Option<f64>, Option<f64>, O
     // operator reads as "what fired".
     let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
     (metric, value, threshold, direction)
+}
+
+/// The port column, as the width PostgreSQL stores it in.
+///
+/// `IfIndex` is a `u32` and the column is `INTEGER` (signed 32-bit), so the top of the range does
+/// not fit. A `try_into` that silently dropped such a row's port would be worse than useless, so
+/// this saturates to `None` — "we could not record which port" — and says so in a log line rather
+/// than storing a negative number that would read back as a different port. No real agent numbers
+/// interfaces above 2^31; if one ever does, the log is what finds it.
+fn ifindex_column(alert: &Alert) -> Option<i32> {
+    let idx = alert.ifindex?;
+    i32::try_from(idx.0).map_or_else(
+        |_| {
+            tracing::warn!(
+                ifindex = idx.0,
+                metric = %alert.metric,
+                "ifIndex exceeds the history column's range; recording the alert without its port"
+            );
+            None
+        },
+        Some,
+    )
 }
 
 /// A validated alert-history query. Built at the API edge by `api::alerts::history_page`.
@@ -205,7 +234,7 @@ const HISTORY_FILTER_WHERE: &str = "\
 fn history_page_sql() -> String {
     format!(
         "SELECT id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
-                resolved, metric, observed_value, threshold_value, direction, recorded_at \
+                resolved, metric, observed_value, threshold_value, direction, ifindex, recorded_at \
          FROM alert_history \
          WHERE {HISTORY_FILTER_WHERE} \
          ORDER BY recorded_at DESC, id DESC LIMIT $13"
@@ -262,8 +291,8 @@ impl AlertHistoryStore {
         sqlx::query(
             "INSERT INTO alert_history \
              (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
-              metric, observed_value, threshold_value, direction) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+              metric, observed_value, threshold_value, direction, ifindex) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
         )
         .bind(Uuid::new_v4())
         .bind(alert.subject.storage_id())
@@ -278,6 +307,7 @@ impl AlertHistoryStore {
         .bind(value)
         .bind(threshold)
         .bind(direction.map(Direction::as_str))
+        .bind(ifindex_column(alert))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -285,7 +315,7 @@ impl AlertHistoryStore {
 
     /// Append a **batch** of fire/resolve records in one multi-row INSERT (the async ingest writer,
     /// ADR-025 — mirrors the event pipeline's batch writer). Runs off the matcher's hot path; a DB
-    /// hiccup must not stop alerting. 13 columns × the writer's batch cap stays well under Postgres'
+    /// hiccup must not stop alerting. 14 columns × the writer's batch cap stays well under Postgres'
     /// 65535-parameter ceiling. Returns rows inserted.
     pub async fn record_batch(&self, records: &[(Alert, bool)]) -> anyhow::Result<u64> {
         if records.is_empty() {
@@ -294,7 +324,7 @@ impl AlertHistoryStore {
         let mut qb = sqlx::QueryBuilder::new(
             "INSERT INTO alert_history \
              (id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, resolved, \
-              metric, observed_value, threshold_value, direction) ",
+              metric, observed_value, threshold_value, direction, ifindex) ",
         );
         qb.push_values(records, |mut b, (alert, resolved)| {
             let (metric, value, threshold, direction) = breach_columns(alert);
@@ -310,7 +340,8 @@ impl AlertHistoryStore {
                 .push_bind(metric)
                 .push_bind(value)
                 .push_bind(threshold)
-                .push_bind(direction.map(Direction::as_str));
+                .push_bind(direction.map(Direction::as_str))
+                .push_bind(ifindex_column(alert));
         });
         Ok(qb.build().execute(&self.pool).await?.rows_affected())
     }
@@ -500,6 +531,12 @@ impl AlertHistoryStore {
                     .try_get::<Option<String>, _>("direction")?
                     .as_deref()
                     .and_then(Direction::from_token),
+                // Stored as INTEGER; a negative value could only come from a hand-written row, and
+                // there is no port it could name, so it degrades to "no port" like a NULL rather
+                // than wrapping into a plausible-looking one.
+                ifindex: row
+                    .try_get::<Option<i32>, _>("ifindex")?
+                    .and_then(|v| u32::try_from(v).ok()),
                 recorded_at: recorded_at.to_rfc3339(),
             });
         }
@@ -537,6 +574,7 @@ mod tests {
             breach,
             flapping: false,
             root_cause: None,
+            ifindex: None,
         }
     }
 
@@ -620,10 +658,33 @@ mod tests {
             "the two alert_history INSERTs name different columns — the batch writer will file \
              every value under its neighbour's column"
         );
-        // And the bind list is as long as the column list, so a column added to one without a
-        // matching `push_bind` fails here rather than at runtime.
-        assert_eq!(lists[0].matches(',').count() + 1, 13);
-        assert!(src.contains("VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)"));
+        // And the placeholder list is as long as the column list, so a column added to one
+        // without a matching value fails here rather than at runtime (Postgres would reject it,
+        // but only on the first alert of a deployment that already stopped recording history).
+        //
+        // Derived from the column list rather than pinned to a literal count: a magic number here
+        // is a second copy of the same fact, and the one that gets "fixed" to match rather than
+        // read. What is actually invariant is column count == placeholder count.
+        let cols = lists[0].matches(',').count() + 1;
+        let placeholders: Vec<String> = (1..=cols).map(|i| format!("${i}")).collect();
+        let values = format!("VALUES ({})", placeholders.join(", "));
+        assert!(
+            src.contains(&values),
+            "the single-row INSERT names {cols} columns but its VALUES list is not {values}"
+        );
+        // The batch writer builds its values with `push_bind` instead of a VALUES literal, so
+        // count those the same way — this is the half that has no Postgres-side backstop at all
+        // when it is short, because `QueryBuilder` simply emits a narrower row.
+        let batch = src
+            .split_once("push_values(records")
+            .expect("the batch writer exists")
+            .1;
+        let body = batch.split_once("});").map_or(batch, |(b, _)| b);
+        assert_eq!(
+            body.matches("push_bind(").count(),
+            cols,
+            "the batch writer binds a different number of values than the column list names"
+        );
     }
 
     #[test]
@@ -650,6 +711,7 @@ mod tests {
                 threshold_value: None,
                 direction: None,
                 recorded_at: String::new(),
+                ifindex: None,
             };
             assert_eq!(row.subject().as_ref(), Some(&subject), "{subject}");
             // `node` is populated exactly when the subject is a node — that biconditional is what

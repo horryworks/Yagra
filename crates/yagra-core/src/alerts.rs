@@ -39,8 +39,8 @@ use yagra_alert::{
 };
 use yagra_bus::{CheckOutcome, PollResult};
 use yagra_common::{
-    is_ssrf_blocked, resolve_effective, CheckId, Direction, EffectiveThreshold, MetricKind, NodeId,
-    NodeState, ScopeLevel, ScopedThreshold, Severity,
+    is_ssrf_blocked, resolve_effective, CheckId, Direction, EffectiveThreshold, IfIndex,
+    MetricKind, NodeId, NodeState, ScopeLevel, ScopedThreshold, Severity,
 };
 use yagra_topology::Topology;
 
@@ -185,6 +185,19 @@ pub struct AlertConfig {
     /// config generation advances (S6/ADR-026). Ungrouped nodes contribute nothing: a scoped caller
     /// cannot see them anyway, so a pool that only holds ungrouped nodes stays admin-only.
     pool_groups: HashMap<String, BTreeSet<Uuid>>,
+    /// Metric names that publish **one series per interface**, so a sample of one needs its own
+    /// check per port rather than sharing the node's (ADR-076 decision 1).
+    ///
+    /// 🚨 The membership comes from the **collection catalogue**
+    /// (`yagra_common::item_publishes_per_interface`), never from whether a sample happens to
+    /// carry an `ifindex`. ADR-011 gives a table walk exactly one row key, so a CPU number, an
+    /// `entPhysicalIndex` and a PoE group all arrive spelled `ifindex`; on a chassis those
+    /// collide with real port numbers (measured v0.2.15: 30 of 108 vendor readings). Splitting on
+    /// the label would therefore invent a per-port check for a chassis-wide reading.
+    ///
+    /// Empty means "nothing is per-interface", which is the pre-ADR-076 behaviour — the safe
+    /// direction for a config that failed to load.
+    per_interface: BTreeSet<String>,
 }
 
 impl AlertConfig {
@@ -202,6 +215,7 @@ impl AlertConfig {
             topology: Topology::new(),
             maintenance: BTreeSet::new(),
             pool_groups: HashMap::new(),
+            per_interface: BTreeSet::new(),
         }
     }
 
@@ -226,13 +240,95 @@ impl AlertConfig {
         self
     }
 
+    /// Attach the set of metric names that publish one series per interface (ADR-076).
+    #[must_use]
+    pub fn with_per_interface(mut self, per_interface: BTreeSet<String>) -> Self {
+        self.per_interface = per_interface;
+        self
+    }
+
+    /// Whether `metric` publishes one series per interface, per the collection catalogue.
+    #[must_use]
+    pub fn is_per_interface(&self, metric: &str) -> bool {
+        self.per_interface.contains(metric)
+    }
+
+    /// What the rules in force for `metric` cover, for the interface evaluator's query planning
+    /// (ADR-076 decision 3).
+    ///
+    /// Returns the smallest bound any of them names, and the nodes they name **when every rule is
+    /// narrow enough to enumerate**. A `global`, `profile`, `group` or `group_id` rule covers a set
+    /// the evaluator cannot enumerate without a fleet walk, so any of those collapses the node list
+    /// to `None` = "the whole fleet" and the floor becomes the only bound on the query.
+    ///
+    /// Reading the snapshot the engine already holds, rather than re-querying `ThresholdStore`,
+    /// is what keeps "the rules the query was planned for" and "the rules the classification uses"
+    /// the same set — a plan built from a staler read would query ports nothing evaluates, or miss
+    /// ports something does.
+    #[must_use]
+    pub fn interface_rule_coverage(&self, metric: &str) -> RuleCoverage {
+        let Some(rules) = self.by_metric.get(metric) else {
+            return RuleCoverage::default();
+        };
+        let mut lowest_bound: Option<f64> = None;
+        let mut nodes: Option<BTreeSet<Uuid>> = Some(BTreeSet::new());
+        for t in rules {
+            // The lowest bound of either severity: whichever trips first is what the floor must
+            // not exclude. A rule with neither bound cannot fire and contributes nothing.
+            for bound in [t.rule.warning, t.rule.critical].into_iter().flatten() {
+                lowest_bound = Some(lowest_bound.map_or(bound, |b: f64| b.min(bound)));
+            }
+            match t.level {
+                ScopeLevel::Node => {
+                    if let (Some(set), Ok(id)) = (nodes.as_mut(), Uuid::parse_str(&t.scope_id)) {
+                        set.insert(id);
+                    }
+                }
+                ScopeLevel::Interface => {
+                    if let (Some(set), Some((id, _))) = (
+                        nodes.as_mut(),
+                        yagra_common::parse_interface_scope_id(&t.scope_id),
+                    ) {
+                        set.insert(id);
+                    }
+                }
+                // Not enumerable without walking the fleet — and a rule scoped this broadly is one
+                // whose author meant it to be.
+                ScopeLevel::Global
+                | ScopeLevel::Profile
+                | ScopeLevel::Group
+                | ScopeLevel::FolderGroup => nodes = None,
+            }
+        }
+        RuleCoverage {
+            lowest_bound_pct: lowest_bound,
+            nodes: if lowest_bound.is_none() {
+                // No bound anywhere ⇒ nothing can fire ⇒ nothing to query. Spelled as an empty
+                // set rather than `None`, which would mean "the whole fleet".
+                Some(BTreeSet::new())
+            } else {
+                nodes
+            },
+        }
+    }
+
     /// Resolve the effective threshold for one (node, metric), honouring scope inheritance.
-    fn resolve(&self, node: NodeId, metric: &str) -> Option<EffectiveThreshold> {
+    ///
+    /// `ifindex` names the port a per-interface sample came from, so an [`ScopeLevel::Interface`]
+    /// rule can be matched against it (ADR-076). `None` means "not a per-port question" and makes
+    /// every interface-scoped rule non-applicable, which is the correct answer for a node-wide
+    /// metric: a port rule must not leak onto the node's own check.
+    fn resolve(
+        &self,
+        node: NodeId,
+        ifindex: Option<IfIndex>,
+        metric: &str,
+    ) -> Option<EffectiveThreshold> {
         let candidates = self.by_metric.get(metric)?;
         let meta = self.node_meta.get(&node);
         let matched: Vec<&StoredThreshold> = candidates
             .iter()
-            .filter(|t| self.applies(t, node, meta))
+            .filter(|t| self.applies(t, node, ifindex, meta))
             .collect();
         // A folder-group rule can match the node's own group *and* any group above it, so several
         // rules can arrive at the same `ScopeLevel::FolderGroup`. `resolve_effective` only knows
@@ -272,7 +368,13 @@ impl AlertConfig {
             .min()
     }
 
-    fn applies(&self, t: &StoredThreshold, node: NodeId, meta: Option<&NodeMeta>) -> bool {
+    fn applies(
+        &self,
+        t: &StoredThreshold,
+        node: NodeId,
+        ifindex: Option<IfIndex>,
+        meta: Option<&NodeMeta>,
+    ) -> bool {
         match t.level {
             // The fleet default (ADR-075). It matches a node with no profile and no tags too —
             // which is the whole reason it exists, since a profile-scoped default cannot reach
@@ -289,8 +391,24 @@ impl AlertConfig {
             // and every group above it. A rule on a parent therefore covers everything inside it,
             // the same way a maintenance window on a folder group does.
             ScopeLevel::FolderGroup => Self::folder_depth(t, meta).is_some(),
+            // One port of one node (ADR-076). Both halves must match, and a sample with no port
+            // matches nothing here — an interface rule is never the fallback for a node check.
+            ScopeLevel::Interface => ifindex.is_some_and(|idx| {
+                yagra_common::parse_interface_scope_id(&t.scope_id) == Some((node.as_uuid(), idx.0))
+            }),
         }
     }
+}
+
+/// What the interface-threshold rules for one metric cover (ADR-076 decision 3).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct RuleCoverage {
+    /// The smallest warning-or-critical bound any rule names, as a percentage. `None` = no rule
+    /// that can fire, so the evaluator runs no query at all.
+    pub lowest_bound_pct: Option<f64>,
+    /// The nodes the rules name, or `None` when at least one rule is scoped too broadly to
+    /// enumerate (global / profile / tag group / folder group) and the query must cover the fleet.
+    pub nodes: Option<BTreeSet<Uuid>>,
 }
 
 /// Threshold evaluation context for one sample, used to describe *what* fired (metric, value,
@@ -324,6 +442,9 @@ struct CheckSpec<'a> {
     /// still runs (display state, down-set, dependency suppression) and nobody is paged.
     alerting: bool,
     eval: Option<ThresholdEval>,
+    /// The port this check is about, for a per-interface metric (ADR-076). Descriptive only —
+    /// identity already lives in `check`, which [`interface_check_id`] built from the same port.
+    ifindex: Option<IfIndex>,
 }
 
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
@@ -347,6 +468,51 @@ pub(crate) fn subject_check_id(subject: &Subject, name: &str) -> CheckId {
         &Uuid::NAMESPACE_OID,
         format!("{subject}:{name}").as_bytes(),
     ))
+}
+
+/// What one sample's threshold resolves against: its metric, and its port when the metric is
+/// collected per interface.
+type ResolveKey<'a> = (&'a str, Option<IfIndex>);
+
+/// Build a [`ResolveKey`]. The port is kept only when the **catalogue** says the metric is
+/// per-interface — never merely because the sample carries an `ifindex`, which on a chassis is an
+/// `entPhysicalIndex` or a CPU number rather than a port (ADR-011).
+///
+/// One function because the key is built twice per result — once to fill the memo under the config
+/// lock, once to read it back — and two spellings that drifted would silently miss the memo and
+/// resolve every sample again.
+fn resolve_key<'a>(
+    metric: &'a str,
+    ifindex: Option<IfIndex>,
+    per_if_metrics: &[&str],
+) -> ResolveKey<'a> {
+    let port = per_if_metrics
+        .contains(&metric)
+        .then_some(ifindex)
+        .flatten();
+    (metric, port)
+}
+
+/// Deterministic check id for one **port's** metric on a node (ADR-076 decision 1).
+///
+/// Before this existed, every interface's sample of one metric advanced the *same* check: on a
+/// 48-port switch a `below` rule saw 47 `Ok`s interleaved with one `Critical` every poll, so a
+/// 3-sample dwell was never satisfied and the rule **never fired at all** while the flap detector
+/// churned. The fix is to give each port its own identity, not to change what a node check is.
+///
+/// # Why the port goes on the *name* side, when [`subject_check_id`]'s doc forbids a prefix there
+///
+/// That rule is about *forgeable* prefixes: the name is operator-authored on the mute path and is
+/// any metric a poller emits on the threshold path, so a caller-supplied `pool:`-style prefix could
+/// impersonate another subject. `@` cannot do that. [`yagra_common::is_valid_metric_name`] admits
+/// only `[a-zA-Z_:][a-zA-Z0-9_:]*`, and it is enforced at **both** edges a name can enter from —
+/// the API (operator input) and the TSDB write path (poller-supplied sample names) — so no metric
+/// name can ever contain `@`. The suffix is therefore unreachable from either input, and
+/// `check_id(node, metric)` keeps returning exactly the bytes it always did: ADR-075 decision 2
+/// hangs dependency-suppression selection and the PagerDuty/JSM dedup key off that value, and an
+/// open external incident that stops matching is one nothing will ever close.
+pub(crate) fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -> CheckId {
+    subject_check_id(&Subject::Node(node), &format!("{metric}@{ifindex}"))
 }
 
 /// Severity ordering over [`NodeState`] for rolling several states up to one headline.
@@ -553,7 +719,17 @@ impl AlertManager {
         // A small `Vec` with a linear scan rather than a map: the distinct-metric count is a handful
         // even for a wide table, and this way a sample-free result (ICMP liveness, the common case)
         // allocates nothing at all.
-        let mut resolved: Vec<(&str, Option<(CheckId, EffectiveThreshold)>)> = Vec::new();
+        //
+        // ⚠️ The memo key is the metric name, but the **check id is not**: a per-interface metric
+        // gets one check per port (ADR-076). Resolution is still per metric — a threshold rule
+        // scopes to a node, not to a port, at this increment — so the memo stays one entry per
+        // distinct name and the port is applied when the id is built, below.
+        let mut resolved: Vec<(ResolveKey<'_>, Option<EffectiveThreshold>)> = Vec::new();
+        // The metric names in this result that the catalogue calls per-interface. Captured while
+        // the config lock is held so the second pass can rebuild the same memo key without
+        // re-acquiring it (`process_check` takes the lock itself, and `std::sync::RwLock` offers no
+        // re-entrancy guarantee — a writer arriving in between deadlocks the thread against itself).
+        let mut per_if_metrics: Vec<&str> = Vec::new();
         // The liveness rule (ADR-075), resolved under the same lock as the sample thresholds.
         // `None` = no rule anywhere in this node's scope chain ⇒ commit state, page nobody.
         let liveness_dwell: Option<u32>;
@@ -563,13 +739,24 @@ impl AlertManager {
         // ends, re-committing any surviving problem.
         let in_maintenance = {
             let config = self.config.read().expect("config rwlock poisoned");
-            liveness_dwell = config.resolve(node, LIVENESS).map(|eff| eff.dwell_samples);
+            liveness_dwell = config
+                .resolve(node, None, LIVENESS)
+                .map(|eff| eff.dwell_samples);
             for sample in &result.samples {
-                if !resolved.iter().any(|(metric, _)| *metric == sample.metric) {
-                    let eff = config
-                        .resolve(node, &sample.metric)
-                        .map(|eff| (check_id(node, &sample.metric), eff));
-                    resolved.push((sample.metric.as_str(), eff));
+                if config.is_per_interface(&sample.metric)
+                    && !per_if_metrics.contains(&sample.metric.as_str())
+                {
+                    per_if_metrics.push(sample.metric.as_str());
+                }
+                // ⚠️ The memo key is the metric name **plus the port**, because since ADR-076 a rule
+                // can be scoped to one port: two ports of one metric can resolve to different
+                // bounds, and memoizing on the name alone would apply the first port's rule to
+                // every port. A node-wide metric keys on `None` and collapses to one entry, as
+                // before — the repeats a table walk produces are still resolved once.
+                let key = resolve_key(&sample.metric, sample.ifindex, &per_if_metrics);
+                if !resolved.iter().any(|(k, _)| *k == key) {
+                    let eff = config.resolve(node, key.1, &sample.metric);
+                    resolved.push((key, eff));
                 }
             }
             config.maintenance.contains(&node)
@@ -598,6 +785,7 @@ impl AlertManager {
                 is_liveness: true,
                 alerting: liveness_dwell.is_some(),
                 eval: None,
+                ifindex: None,
             },
         ));
 
@@ -605,11 +793,17 @@ impl AlertManager {
         // is still fed through `process_check` individually — the memo above dedupes the *lookup*,
         // never the observation, so the dwell window sees exactly the sample count it did before.
         for sample in &result.samples {
+            let key = resolve_key(&sample.metric, sample.ifindex, &per_if_metrics);
             let eff = resolved
                 .iter()
-                .find(|(metric, _)| *metric == sample.metric)
+                .find(|(k, _)| *k == key)
                 .and_then(|(_, eff)| eff.as_ref());
-            if let Some((check, eff)) = eff {
+            if let Some(eff) = eff {
+                let ifindex = key.1;
+                let check = match ifindex {
+                    Some(idx) => interface_check_id(node, idx, &sample.metric),
+                    None => check_id(node, &sample.metric),
+                };
                 let raw = if in_maintenance {
                     NodeState::Maintenance
                 } else if sample.kind == MetricKind::Counter {
@@ -634,13 +828,14 @@ impl AlertManager {
                     raw,
                     result.at_unix_ms,
                     CheckSpec {
-                        check: *check,
+                        check,
                         metric: &sample.metric,
                         dwell: eff.dwell_samples,
                         is_liveness: false,
                         // A threshold check exists only because a rule resolved for it.
                         alerting: true,
                         eval: Some(eval),
+                        ifindex,
                     },
                 ));
             }
@@ -676,6 +871,7 @@ impl AlertManager {
             is_liveness,
             alerting,
             eval,
+            ifindex,
         } = spec;
         let (transition, committed) = {
             let mut states = self.states.lock().expect("states mutex poisoned");
@@ -765,6 +961,10 @@ impl AlertManager {
                 // Tag the alert with what it measured so the history log / notification is
                 // human-readable. The crossed bound depends on the committed severity, now known.
                 alert.metric = metric.to_string();
+                // Which port, for a per-interface metric. Purely descriptive — `check` already
+                // carries it — but it is the only way History, the API and a notification can name
+                // the port, since the check id is a one-way hash (ADR-076).
+                alert.ifindex = ifindex;
                 if let Some(ev) = eval {
                     let threshold = match alert.severity {
                         Severity::Critical => ev.critical,
@@ -998,7 +1198,95 @@ impl AlertManager {
                 threshold: Some(1.0),
                 direction: Direction::Below,
             }),
+            // A pool is not a port.
+            ifindex: None,
         })
+    }
+
+    /// Feed one **derived** per-interface reading through the ordinary threshold machinery
+    /// (ADR-076 decision 3).
+    ///
+    /// A thin seam onto [`Self::process_check`] rather than a second engine: dwell, flap damping,
+    /// dependency suppression, dedup, mutes and the SSE broadcast are the *same code* the poll path
+    /// runs. A copy would be a second place alert quality is decided, and the copy is the one that
+    /// gets a fix late.
+    ///
+    /// Returns no action when no rule resolves for this port — the metric is computed for every
+    /// candidate, and computing it is much cheaper than asking whether it is wanted.
+    ///
+    /// # What the caller must decide before calling
+    ///
+    /// 🚨 **A node that is not committed-`Ok` must not be observed at all** — not `Ok` (which would
+    /// resolve a real congestion alert the moment the device went unreachable) and not `Unknown`
+    /// (a problem state, which would raise "utilisation unknown" noise on top of the outage the
+    /// liveness check is already paging about). Freezing is what leaves the port's alert open and
+    /// honest while the node's own alert does the paging. [`Self::node_state`] is the question.
+    ///
+    /// Maintenance is handled here rather than by the caller, because `observe` handles it here too
+    /// and the two must not disagree about what a window means.
+    pub fn observe_interface_metric(
+        &self,
+        node: NodeId,
+        ifindex: IfIndex,
+        metric: &'static str,
+        value: f64,
+        at_unix_ms: i64,
+    ) -> Vec<NotifyAction> {
+        let (eff, in_maintenance) = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            (
+                config.resolve(node, Some(ifindex), metric),
+                config.maintenance.contains(&node),
+            )
+        };
+        let Some(eff) = eff else {
+            return Vec::new();
+        };
+        let raw = if in_maintenance {
+            NodeState::Maintenance
+        } else {
+            eff.evaluate(value)
+        };
+        self.process_check(
+            node,
+            raw,
+            at_unix_ms,
+            CheckSpec {
+                check: interface_check_id(node, ifindex, metric),
+                metric,
+                dwell: eff.dwell_samples,
+                is_liveness: false,
+                alerting: true,
+                eval: Some(ThresholdEval {
+                    value,
+                    direction: eff.direction,
+                    warning: eff.warning,
+                    critical: eff.critical,
+                }),
+                ifindex: Some(ifindex),
+            },
+        )
+    }
+
+    /// What the interface-threshold rules in force for `metric` cover — the evaluator plans its
+    /// query from this rather than re-reading `ThresholdStore`, so the rules the query was built
+    /// for and the rules the classification uses are the same snapshot.
+    #[must_use]
+    pub fn interface_rule_coverage(&self, metric: &str) -> RuleCoverage {
+        self.config
+            .read()
+            .expect("config rwlock poisoned")
+            .interface_rule_coverage(metric)
+    }
+
+    /// Whether a node's committed state is `Ok` — the gate the interface evaluator freezes on.
+    ///
+    /// `None` (never observed) counts as **not** `Ok`: a node the engine has no opinion about is one
+    /// whose liveness has not been established, and raising a congestion alert about a device that
+    /// may not be there is the wrong way round.
+    #[must_use]
+    pub fn node_is_ok(&self, node: NodeId) -> bool {
+        self.node_state(node) == Some(NodeState::Ok)
     }
 
     /// Resolve a pool's coverage alert. `None` if it was not active.
@@ -1544,10 +1832,13 @@ impl NotifyChannel for MultiChannel {
 /// An unexpired mute, resolved for matching: the node plus the precomputed [`CheckId`]
 /// (mutes are stored by check *name*, but an [`Alert`] only carries the id — the v5 hash
 /// is recomputed here at load time). `check: None` mutes every check on the node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveMute {
     pub node: NodeId,
     pub check: Option<CheckId>,
+    /// The stored check name verbatim, so a per-interface metric's alerts match too (ADR-076).
+    /// See [`mute_matches`] for why the id alone is not enough.
+    pub metric: Option<String>,
 }
 
 impl ActiveMute {
@@ -1558,6 +1849,7 @@ impl ActiveMute {
         Self {
             node,
             check: check_name.map(|name| check_id(node, name)),
+            metric: check_name.map(str::to_owned),
         }
     }
 }
@@ -1567,14 +1859,35 @@ impl ActiveMute {
 /// A mute names a node, so an alert with a non-node subject is never muted — a pool-coverage
 /// alert cannot be silenced from the UI in this increment. That is a gap, not a decision: giving
 /// a mute a pool target belongs with the rest of the scope-and-surface work (Increment 2).
+///
+/// # Why the metric is matched as well as the check id (ADR-076 decision 5)
+///
+/// A mute stores a *check name* and [`ActiveMute::new`] turns it into `check_id(node, name)` — the
+/// **node-level** id. Since ADR-076 a per-interface metric's alerts carry
+/// `interface_check_id(node, ifindex, name)` instead, so an id-only comparison would match none of
+/// them: the operator picks `if_oper_status` from the metric picker (ADR-075 decision 18 put the
+/// same picker on this form), saves, and the mute silently silences nothing. Matching the metric
+/// name too makes a node-level mute cover **every port's** alerts for that metric, which is what
+/// picking a per-interface metric on a node-scoped form plainly means.
+///
+/// ⚠️ Muting **one port** is still impossible: `api/maintenance.rs` validates `check_name` with
+/// [`yagra_common::is_valid_metric_name`], which cannot express the `metric@ifindex` form. Written
+/// down rather than worked around — the form has no port field to fill in either.
 #[must_use]
 fn mute_matches(mutes: &[ActiveMute], alert: &Alert) -> bool {
     let Some(node) = alert.node() else {
         return false;
     };
-    mutes
-        .iter()
-        .any(|m| m.node == node && m.check.is_none_or(|c| c == alert.check))
+    mutes.iter().any(|m| {
+        m.node == node
+            && match (&m.metric, m.check) {
+                // A mute with no check name covers the whole node, as it always has.
+                (None, _) => true,
+                (Some(metric), check) => {
+                    check.is_some_and(|c| c == alert.check) || *metric == alert.metric
+                }
+            }
+    })
 }
 
 /// A channel's notification-template override plus the one thing rendering needs to know about
@@ -2229,6 +2542,7 @@ mod tests {
             flapping: false,
             metric: "event:test".to_owned(),
             breach: None,
+            ifindex: None,
         };
         Notification::for_alert(&alert, "node down", r#"{"metric":"event:test"}"#)
     }
@@ -2588,7 +2902,7 @@ mod tests {
         let unrelated = Uuid::from_u128(0xf003);
         let meta = in_folder(node, vec![own, parent]);
 
-        let warn = |c: AlertConfig| c.resolve(node, "cpu_util").and_then(|e| e.warning);
+        let warn = |c: AlertConfig| c.resolve(node, None, "cpu_util").and_then(|e| e.warning);
         // The node's own group.
         assert_eq!(
             warn(cfg(vec![folder_rule(own, 10.0)], meta.clone())),
@@ -2604,7 +2918,9 @@ mod tests {
         // And a node the snapshot has no metadata for is under no folder at all.
         let orphan = cfg(vec![folder_rule(own, 10.0)], HashMap::new());
         assert_eq!(
-            orphan.resolve(node, "cpu_util").and_then(|e| e.warning),
+            orphan
+                .resolve(node, None, "cpu_util")
+                .and_then(|e| e.warning),
             None
         );
     }
@@ -2624,7 +2940,7 @@ mod tests {
             meta.clone(),
         );
         assert_eq!(
-            c.resolve(node, "cpu_util").and_then(|e| e.warning),
+            c.resolve(node, None, "cpu_util").and_then(|e| e.warning),
             Some(90.0),
             "the node's own group must beat its parent"
         );
@@ -2636,7 +2952,7 @@ mod tests {
             meta.clone(),
         );
         assert_eq!(
-            c.resolve(node, "cpu_util").and_then(|e| e.warning),
+            c.resolve(node, None, "cpu_util").and_then(|e| e.warning),
             Some(60.0),
             "same depth ⇒ strictest wins"
         );
@@ -2661,7 +2977,7 @@ mod tests {
             meta,
         );
         assert_eq!(
-            c.resolve(node, "cpu_util").and_then(|e| e.warning),
+            c.resolve(node, None, "cpu_util").and_then(|e| e.warning),
             Some(99.0)
         );
     }
@@ -2719,6 +3035,411 @@ mod tests {
         let actions = mgr.observe(&reachable_ok);
         assert!(matches!(actions.as_slice(), [NotifyAction::Resolve(_)]));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// An interface-scoped rule beats the node's, and applies to that port only (ADR-076).
+    #[test]
+    fn an_interface_rule_wins_on_its_port_and_nowhere_else() {
+        use yagra_bus::Sample;
+        use yagra_common::{interface_scope_id, Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+
+        let rule = |level: ScopeLevel, scope_id: String, critical: f64| StoredThreshold {
+            id: Uuid::new_v4(),
+            level,
+            scope_id,
+            rule: ThresholdRule {
+                metric: "if_in_util_pct".into(),
+                direction: Direction::Above,
+                warning: None,
+                critical: Some(critical),
+                dwell_samples: 1,
+            },
+        };
+        mgr.set_config(
+            cfg(
+                vec![
+                    // The node says 90 for every port; port 7 is allowed to run hotter.
+                    rule(ScopeLevel::Node, node.to_string(), 90.0),
+                    rule(
+                        ScopeLevel::Interface,
+                        interface_scope_id(node.as_uuid(), 7),
+                        99.0,
+                    ),
+                ],
+                meta,
+            )
+            .with_per_interface(["if_in_util_pct".to_owned()].into_iter().collect()),
+        );
+
+        // 95% on both ports: port 8 breaches the node rule, port 7 does not breach its own.
+        // Note this is *looser* than the node rule — most-specific-wins, not most-restrictive-wins,
+        // is what makes an exception for one uplink expressible at all.
+        let mut res = result(node, CheckOutcome::Reachable, 0);
+        res.samples = vec![
+            Sample::interface("if_in_util_pct", IfIndex(7), 95.0, MetricKind::Gauge),
+            Sample::interface("if_in_util_pct", IfIndex(8), 95.0, MetricKind::Gauge),
+        ];
+        let actions = mgr.observe(&res);
+        assert_eq!(actions.len(), 1, "only port 8 is over its own bound");
+        let NotifyAction::Fire(alert) = &actions[0] else {
+            panic!("expected a fire");
+        };
+        assert_eq!(alert.ifindex, Some(IfIndex(8)));
+
+        // And port 7 does fire once it passes its own, looser bound.
+        let mut res = result(node, CheckOutcome::Reachable, 1_000);
+        res.samples = vec![Sample::interface(
+            "if_in_util_pct",
+            IfIndex(7),
+            99.5,
+            MetricKind::Gauge,
+        )];
+        let actions = mgr.observe(&res);
+        assert_eq!(actions.len(), 1);
+        let NotifyAction::Fire(alert) = &actions[0] else {
+            panic!("expected a fire");
+        };
+        assert_eq!(alert.ifindex, Some(IfIndex(7)));
+    }
+
+    /// An interface rule must not leak onto a node-wide metric's check.
+    #[test]
+    fn an_interface_rule_never_applies_to_a_node_level_check() {
+        use yagra_bus::Sample;
+        use yagra_common::{interface_scope_id, Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        // The metric is deliberately absent from the per-interface set, so its samples resolve
+        // with no port — the interface rule then has nothing to match against.
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Interface,
+                scope_id: interface_scope_id(node.as_uuid(), 7),
+                rule: ThresholdRule {
+                    metric: "icmp_rtt_ms".into(),
+                    direction: Direction::Above,
+                    warning: None,
+                    critical: Some(1.0),
+                    dwell_samples: 1,
+                },
+            }],
+            meta,
+        ));
+
+        let mut res = result(node, CheckOutcome::Reachable, 0);
+        res.samples = vec![Sample::gauge("icmp_rtt_ms", 999.0)];
+        assert!(
+            mgr.observe(&res).is_empty(),
+            "a port-scoped rule must not fire on the node's own metric"
+        );
+    }
+
+    /// A node check id must never move: it is the PagerDuty/JSM dedup key (ADR-075 decision 2).
+    ///
+    /// Pinned to literals rather than recomputed, because a test that derives the expected value
+    /// the same way the code does would follow any change the code made and prove nothing. If this
+    /// fails, every open external incident on every deployment stops matching and nothing will
+    /// ever close it.
+    #[test]
+    fn a_node_check_id_is_unchanged_by_the_interface_split() {
+        let node = NodeId::from(
+            Uuid::parse_str("6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60").expect("literal uuid"),
+        );
+        assert_eq!(
+            check_id(node, LIVENESS).as_uuid().to_string(),
+            "ef1b3ae6-8d6a-577f-b62c-a0182ee5872d".to_owned(),
+            "the liveness check id moved — dependency suppression and every external dedup key \
+             are derived from it"
+        );
+        assert_eq!(
+            check_id(node, "icmp_rtt_ms").as_uuid().to_string(),
+            "e85d51fd-4eb1-554b-b7c5-9de3491b5b45".to_owned(),
+            "a threshold check id moved"
+        );
+    }
+
+    /// The per-port id is distinct from the node id, and no metric name can be typed to forge one.
+    #[test]
+    fn an_interface_check_id_never_collides_with_a_node_check_id() {
+        use yagra_common::IfIndex;
+
+        let node = NodeId::new();
+        // The port must actually change the identity — otherwise the whole increment is a no-op.
+        assert_ne!(
+            interface_check_id(node, IfIndex(0), "if_in_util_pct"),
+            check_id(node, "if_in_util_pct"),
+            "port 0 is a real port, not 'no port'"
+        );
+        assert_ne!(
+            interface_check_id(node, IfIndex(7), "if_in_util_pct"),
+            interface_check_id(node, IfIndex(8), "if_in_util_pct"),
+        );
+        assert_eq!(
+            interface_check_id(node, IfIndex(7), "if_in_util_pct"),
+            interface_check_id(node, IfIndex(7), "if_in_util_pct"),
+            "the id must be stable across calls, or it survives no restart"
+        );
+
+        // ── The forgery question, stated exactly ──────────────────────────────────────────
+        // `interface_check_id` hashes the same string `check_id` would for a metric *named*
+        // `if_in_util_pct@7`, so as values these two ARE equal. That is not a collision, because
+        // no such metric can exist: `is_valid_metric_name` admits only `[a-zA-Z_:][a-zA-Z0-9_:]*`
+        // and is enforced at both edges a name enters from (the threshold API and the TSDB write
+        // path). The safety property is therefore the *charset*, not the hash — so that is what
+        // this pins. If someone ever widens the charset to admit `@`, this fails here rather than
+        // silently merging one port's check with a node-level one.
+        assert_eq!(
+            interface_check_id(node, IfIndex(7), "if_in_util_pct"),
+            check_id(node, "if_in_util_pct@7"),
+            "the composed form is what is hashed — see the charset assertion below"
+        );
+        assert!(
+            !yagra_common::is_valid_metric_name("if_in_util_pct@7"),
+            "'@' must stay unspellable in a metric name, or the port suffix becomes forgeable"
+        );
+        assert!(yagra_common::is_valid_metric_name("if_in_util_pct"));
+    }
+
+    /// A node-scoped mute silences every port's alerts for that metric (ADR-076 decision 5).
+    ///
+    /// Before this, `ActiveMute::new` built `check_id(node, name)` — the node-level id — so once
+    /// per-interface alerts carried a per-port id, a mute created from the metric picker matched
+    /// nothing at all. Silently: the operator saw the mute listed and kept being paged.
+    #[test]
+    fn a_node_mute_on_a_per_interface_metric_covers_every_port() {
+        use yagra_common::IfIndex;
+
+        let node = NodeId::new();
+        let mute = ActiveMute::new(node.as_uuid(), Some("if_in_util_pct"));
+
+        let port_alert = |idx: u32| Alert {
+            subject: Subject::Node(node),
+            check: interface_check_id(node, IfIndex(idx), "if_in_util_pct"),
+            severity: Severity::Critical,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause: None,
+            flapping: false,
+            metric: "if_in_util_pct".to_owned(),
+            breach: None,
+            ifindex: Some(IfIndex(idx)),
+        };
+        assert!(mute_matches(std::slice::from_ref(&mute), &port_alert(7)));
+        assert!(mute_matches(std::slice::from_ref(&mute), &port_alert(48)));
+
+        // It must not spill onto a different metric on the same node.
+        let other = Alert {
+            metric: "icmp_rtt_ms".to_owned(),
+            check: check_id(node, "icmp_rtt_ms"),
+            ifindex: None,
+            ..port_alert(7)
+        };
+        assert!(!mute_matches(std::slice::from_ref(&mute), &other));
+
+        // Nor onto another node.
+        let elsewhere = Alert {
+            subject: Subject::Node(NodeId::new()),
+            ..port_alert(7)
+        };
+        assert!(!mute_matches(std::slice::from_ref(&mute), &elsewhere));
+
+        // A mute with no check name still covers the whole node, as it always did.
+        let whole_node = ActiveMute::new(node.as_uuid(), None);
+        assert!(mute_matches(
+            std::slice::from_ref(&whole_node),
+            &port_alert(7)
+        ));
+        assert!(mute_matches(std::slice::from_ref(&whole_node), &other));
+    }
+
+    /// The ADR-076 regression: a per-interface rule used to be **inert**, not merely coarse.
+    ///
+    /// Before the split, all 48 ports fed one `check_id(node, metric)`. A rule with a 3-sample
+    /// dwell therefore saw `Ok, Ok, …, Critical, Ok, …` every poll, the dwell never reached three
+    /// consecutive problem samples, and the alert **never fired at all** while the flap detector
+    /// churned. Asserting "one port fires" is not enough on its own — assert the other 47 stay
+    /// silent too, or a change that fired one alert per sample would also pass.
+    #[test]
+    fn one_breaching_port_among_many_fires_exactly_one_alert() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(
+            cfg(
+                vec![StoredThreshold {
+                    id: Uuid::nil(),
+                    level: ScopeLevel::Node,
+                    scope_id: node.to_string(),
+                    rule: ThresholdRule {
+                        metric: "if_oper_status".into(),
+                        // 1 = up, 2 = down: "not up" is `above 1.5`, not `below 0.5` — ifOperStatus
+                        // never reports 0, so a `below` rule on it can never fire at all.
+                        direction: Direction::Above,
+                        warning: None,
+                        critical: Some(1.5),
+                        dwell_samples: 3,
+                    },
+                }],
+                meta,
+            )
+            .with_per_interface(["if_oper_status".to_owned()].into_iter().collect()),
+        );
+
+        // 48 ports; port 7 is down, the rest are up. Three polls, i.e. exactly the dwell.
+        let mut fired = Vec::new();
+        for (poll, at) in [0_i64, 1_000, 2_000].into_iter().enumerate() {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = (1..=48)
+                .map(|idx| {
+                    let up = if idx == 7 { 2.0 } else { 1.0 };
+                    Sample::interface("if_oper_status", IfIndex(idx), up, MetricKind::Gauge)
+                })
+                .collect();
+            let actions = mgr.observe(&res);
+            if poll < 2 {
+                assert!(
+                    actions.is_empty(),
+                    "poll {poll} must not satisfy a three-sample dwell yet"
+                );
+            }
+            fired.extend(actions);
+        }
+
+        // Exactly one alert, and it names the port that was actually down.
+        assert_eq!(fired.len(), 1, "one down port must raise exactly one alert");
+        let NotifyAction::Fire(alert) = &fired[0] else {
+            panic!("expected a fire, got {:?}", fired[0]);
+        };
+        assert_eq!(alert.ifindex, Some(IfIndex(7)));
+        assert_eq!(alert.metric, "if_oper_status");
+        assert_eq!(
+            alert.check,
+            interface_check_id(node, IfIndex(7), "if_oper_status")
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        // Port 7 coming back resolves exactly one alert and leaves nothing active.
+        for at in [3_000_i64, 4_000, 5_000] {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = (1..=48)
+                .map(|idx| {
+                    Sample::interface("if_oper_status", IfIndex(idx), 1.0, MetricKind::Gauge)
+                })
+                .collect();
+            fired.extend(mgr.observe(&res));
+        }
+        assert_eq!(fired.len(), 2, "recovery must resolve exactly once");
+        assert!(matches!(fired[1], NotifyAction::Resolve(_)));
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// Two ports keep independent dwell windows, so one cannot commit on the other's samples.
+    #[test]
+    fn two_ports_on_one_node_are_two_independent_checks() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(
+            cfg(
+                vec![StoredThreshold {
+                    id: Uuid::nil(),
+                    level: ScopeLevel::Node,
+                    scope_id: node.to_string(),
+                    rule: ThresholdRule {
+                        metric: "if_in_util_pct".into(),
+                        direction: Direction::Above,
+                        warning: None,
+                        critical: Some(90.0),
+                        dwell_samples: 2,
+                    },
+                }],
+                meta,
+            )
+            .with_per_interface(["if_in_util_pct".to_owned()].into_iter().collect()),
+        );
+
+        // Port 1 breaches on both polls; port 2 only on the second. Port 1 must commit (two
+        // consecutive) and port 2 must not (one) — impossible if they shared a window.
+        let mut res = result(node, CheckOutcome::Reachable, 0);
+        res.samples = vec![
+            Sample::interface("if_in_util_pct", IfIndex(1), 95.0, MetricKind::Gauge),
+            Sample::interface("if_in_util_pct", IfIndex(2), 10.0, MetricKind::Gauge),
+        ];
+        assert!(mgr.observe(&res).is_empty());
+
+        let mut res = result(node, CheckOutcome::Reachable, 1_000);
+        res.samples = vec![
+            Sample::interface("if_in_util_pct", IfIndex(1), 96.0, MetricKind::Gauge),
+            Sample::interface("if_in_util_pct", IfIndex(2), 99.0, MetricKind::Gauge),
+        ];
+        let actions = mgr.observe(&res);
+        assert_eq!(actions.len(), 1, "only port 1 has two consecutive breaches");
+        let NotifyAction::Fire(alert) = &actions[0] else {
+            panic!("expected a fire");
+        };
+        assert_eq!(alert.ifindex, Some(IfIndex(1)));
+    }
+
+    /// A metric the catalogue does not call per-interface keeps the node-level check, even when
+    /// its samples carry an `ifindex` — the label is a row key, not a port number (ADR-011).
+    #[test]
+    fn a_row_key_that_is_not_a_port_does_not_split_the_check() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        // Note the empty per-interface set: the catalogue says this metric is chassis-wide, so the
+        // ifindex on its samples is an entPhysicalIndex or a CPU number, not a port.
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_id: node.to_string(),
+                rule: ThresholdRule {
+                    metric: "cisco_env_temp".into(),
+                    direction: Direction::Above,
+                    warning: None,
+                    critical: Some(70.0),
+                    dwell_samples: 2,
+                },
+            }],
+            meta,
+        ));
+
+        // Two "rows" breaching in one poll satisfies a two-sample dwell only if they share one
+        // window — which is exactly the node-level behaviour this asserts is preserved.
+        let mut res = result(node, CheckOutcome::Reachable, 0);
+        res.samples = vec![
+            Sample::interface("cisco_env_temp", IfIndex(17), 80.0, MetricKind::Gauge),
+            Sample::interface("cisco_env_temp", IfIndex(18), 81.0, MetricKind::Gauge),
+        ];
+        let actions = mgr.observe(&res);
+        assert_eq!(actions.len(), 1, "chassis rows share one check");
+        let NotifyAction::Fire(alert) = &actions[0] else {
+            panic!("expected a fire");
+        };
+        assert_eq!(alert.ifindex, None, "a chassis reading names no port");
+        assert_eq!(alert.check, check_id(node, "cisco_env_temp"));
     }
 
     #[test]
@@ -3059,6 +3780,7 @@ mod tests {
             flapping: false,
             metric: "icmp_rtt_ms".to_string(),
             breach: None,
+            ifindex: None,
         };
 
         // Whole-node mute matches any check on the node; another node's mute doesn't.

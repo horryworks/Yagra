@@ -383,13 +383,23 @@ export const LIVENESS_METRIC = '__liveness__';
 export type AlertWhat =
   | { kind: 'none' }
   | { kind: 'liveness' }
-  | { kind: 'metric'; metric: string; condition: string | null; observed: string | null };
+  | {
+      kind: 'metric';
+      metric: string;
+      condition: string | null;
+      observed: string | null;
+      /** SNMP ifIndex when the alert is about one port rather than the node (ADR-076).
+       *  A number, not a name: the alert carries the index, and the name is resolved by the
+       *  surface that has the node's interface roster. `null` is the ordinary node-level case. */
+      ifindex: number | null;
+    };
 
 export function alertWhat(row: {
   metric?: string | null;
   direction?: string | null;
   threshold_value?: number | null;
   observed_value?: number | null;
+  ifindex?: number | null;
 }): AlertWhat {
   if (!row.metric) return { kind: 'none' };
   if (row.metric === LIVENESS_METRIC) return { kind: 'liveness' };
@@ -401,7 +411,13 @@ export function alertWhat(row: {
     row.observed_value != null
       ? i18n.t('format:alertObservedWas', { value: row.observed_value })
       : null;
-  return { kind: 'metric', metric: row.metric, condition, observed };
+  return {
+    kind: 'metric',
+    metric: row.metric,
+    condition,
+    observed,
+    ifindex: row.ifindex ?? null,
+  };
 }
 
 /** Same question for a **live** alert. The two carry the identical fact in two shapes: history
@@ -411,12 +427,14 @@ export function alertWhat(row: {
 export function alertWhatOf(alert: {
   metric?: string | null;
   breach?: { value?: number; threshold?: number | null; direction?: string } | null;
+  ifindex?: number | null;
 }): AlertWhat {
   return alertWhat({
     metric: alert.metric,
     direction: alert.breach?.direction,
     threshold_value: alert.breach?.threshold,
     observed_value: alert.breach?.value,
+    ifindex: alert.ifindex,
   });
 }
 

@@ -56,6 +56,20 @@ export const CHECK_METRICS = [
   'meraki_device_up',
 ] as const;
 
+/**
+ * Metrics Yagra **derives** rather than collects: interface utilisation as a percentage of the
+ * port's own speed (ADR-076).
+ *
+ * A category of their own, not members of `CHECK_METRICS`, because they differ from those in the
+ * two ways a picker has to show: they are per-interface, and they exist in no time series at all —
+ * they are computed at evaluation time from a counter rate and `interfaces.if_speed` (ADR-012), so
+ * they will never appear in the metric list of a node, nor on a chart reached from one.
+ *
+ * Receive and transmit are separate names because a link is asymmetric far more often than not,
+ * and "which direction is congested" is the first thing an operator asks.
+ */
+export const DERIVED_METRICS = ['if_in_util_pct', 'if_out_util_pct'] as const;
+
 /** One row of the generated built-in catalog (`web/src/api/metricCatalog.json`). */
 export interface BuiltinMetric {
   metric_name: string;
@@ -97,6 +111,7 @@ export function builtinMetric(metric: string): BuiltinMetric | undefined {
  */
 export const EXPLAINED_METRICS: readonly string[] = [
   ...CHECK_METRICS,
+  ...DERIVED_METRICS,
   ...BUILTIN_METRICS.filter((m) => m.metric_kind === 'gauge').map((m) => m.metric_name),
 ];
 

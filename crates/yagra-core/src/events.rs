@@ -1973,6 +1973,9 @@ impl EventEngine {
                 flapping: false,
                 metric: format!("event:{}", rule.name),
                 breach: None,
+                // A passive event names its node, never a port: syslog and traps carry an
+                // interface in their *text*, not as a series key we could resolve to an ifIndex.
+                ifindex: None,
             };
             // Raise in the manager while holding the runtime lock, then mirror into
             // `runtime.active`. Because both sets are mutated together, the sweeper can
@@ -2932,6 +2935,7 @@ mod tests {
             flapping: false,
             metric: "event:test".into(),
             breach: None,
+            ifindex: None,
         }
     }
 
@@ -3275,6 +3279,7 @@ mod tests {
             flapping: false,
             metric: "event:test".into(),
             breach: None,
+            ifindex: None,
         };
 
         // First raise fires; a same-severity duplicate is deduped at the manager.

@@ -367,7 +367,9 @@
       "up": "Up",
       "down": "Down",
       "unknown": "Unknown"
-    }
+    },
+    "addRule": "Add an alert rule for this port",
+    "addRuleTitle": "Create a threshold rule for this port — the bounds are a percentage of the speed shown above"
   },
   "collection": {
     "statusOk": "Collecting normally",

@@ -57,9 +57,10 @@ impl Transition {
             at_unix_ms,
             root_cause,
             flapping: self.flapping,
-            // Descriptive context is filled in by the engine (it knows the metric/breach).
+            // Descriptive context is filled in by the engine (it knows the metric/breach/port).
             metric: String::new(),
             breach: None,
+            ifindex: None,
         })
     }
 }

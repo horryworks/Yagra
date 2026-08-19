@@ -500,6 +500,7 @@ mod tests {
             flapping: false,
             metric: "__liveness__".to_owned(),
             breach: None,
+            ifindex: None,
         }
     }
 

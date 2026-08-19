@@ -219,6 +219,7 @@ mod tests {
             flapping: false,
             metric: "__liveness__".to_string(),
             breach: None,
+            ifindex: None,
         };
         Notification::for_alert(&alert, "node down", "{}")
     }

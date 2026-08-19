@@ -40,6 +40,7 @@
   "localTimeZoneFallback": "your local time",
   "liveness": "Reachability",
   "alertObservedWas": "was {{value}}",
+  "alertOnPort": "port {{ifindex}}",
   "scalar": {
     "snmp_sys_uptime_ticks": "Uptime",
     "meraki_device_up": "Availability",

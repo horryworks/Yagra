@@ -14,6 +14,7 @@ import { LIVENESS_METRIC } from './format';
 
 const LABELS = {
   checks: "Yagra's own checks",
+  derived: 'Computed by Yagra',
   standard: 'Standard SNMP',
   liveness: 'Reachability',
   // Only the two the tests name — everything else reads as "no sentence", which is the fallback
@@ -117,6 +118,15 @@ describe('filterMetricOptions', () => {
 
   it('matches on the metric name', () => {
     expect(filterMetricOptions(opts, 'oper').map((o) => o.name)).toEqual(['if_oper_status']);
+    // The derived metrics are searchable by name too, and by the direction in it — which is the
+    // whole reason they are two names rather than one (ADR-076).
+    expect(filterMetricOptions(opts, 'util_pct').map((o) => o.name)).toEqual([
+      'if_in_util_pct',
+      'if_out_util_pct',
+    ]);
+    expect(filterMetricOptions(opts, 'if_out_util').map((o) => o.name)).toEqual([
+      'if_out_util_pct',
+    ]);
   });
 
   it('matches on the metric set', () => {
@@ -154,6 +164,10 @@ describe('groupMetricOptions', () => {
     expect(groups[0].group).toBe("Yagra's own checks");
     expect(groups.map((g) => g.group)).toEqual([
       "Yagra's own checks",
+      // The derived metrics sit right after the checks and before anything collected: they are
+      // Yagra's own numbers too, and a reader hunting for them under a vendor heading would not
+      // find them (ADR-076).
+      'Computed by Yagra',
       'Standard SNMP',
       'Cisco IOS/IOS-XE health',
       'Acme',

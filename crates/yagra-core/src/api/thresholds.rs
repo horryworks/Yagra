@@ -23,7 +23,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::ScopeLevel;
+use yagra_common::{Direction, ScopeLevel};
 
 /// Maximum rules returned by one list call. Matches the poller drill-down's cap: enough that no
 /// real hand-authored ruleset is ever truncated, small enough that a fleet-scale accident is a
@@ -211,17 +211,27 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
     // The vocabulary comes from the enum, not from a list of literals repeated here — a new
     // `ScopeLevel` variant would otherwise be rejected by an edge nobody remembered to widen.
     let Some(level) = ScopeLevel::from_token(&body.scope_level) else {
+        // The message lists the vocabulary from the enum rather than spelling it out: the literal
+        // that used to be here still read "global|profile|group|group_id|node" after a sixth level
+        // existed, so the error told the caller a valid value was invalid.
         return Err(ApiError::bad_request(
             "invalid_threshold",
-            "scope_level must be one of global|profile|group|group_id|node",
+            format!(
+                "scope_level must be one of {}",
+                ScopeLevel::ALL.map(ScopeLevel::as_str).join("|")
+            ),
         ));
     };
-    if !matches!(body.direction.as_str(), "above" | "below") {
+    // Same reasoning as the level above: two tokens, one enum that already knows them.
+    let Some(_) = Direction::from_token(&body.direction) else {
         return Err(ApiError::bad_request(
             "invalid_threshold",
-            "direction must be above or below",
+            format!(
+                "direction must be one of {}",
+                Direction::ALL.map(Direction::as_str).join("|")
+            ),
         ));
-    }
+    };
     // A `global` rule targets the whole fleet, so it has nothing to point at (ADR-075). Pinning
     // the id here rather than trusting the caller is what keeps `AlertConfig::applies` able to
     // ignore the column for this level: two global rules that differed only in a stray scope id
@@ -243,6 +253,17 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
                 return Err(ApiError::bad_request(
                     "invalid_scope_id",
                     "scope_id must be a uuid for the profile, group_id and node levels",
+                ));
+            }
+        }
+        // One port of one node (ADR-076), spelled `<node-uuid>:<ifindex>`. Parsed through the one
+        // codec the alert engine's `applies` also uses, so "the API accepted it" and "the engine
+        // can match it" cannot come apart.
+        ScopeLevel::Interface => {
+            if yagra_common::parse_interface_scope_id(scope_id).is_none() {
+                return Err(ApiError::bad_request(
+                    "invalid_scope_id",
+                    "scope_id must be <node-uuid>:<ifindex> for the interface level",
                 ));
             }
         }
@@ -272,6 +293,14 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
 /// samples, so this is the operator-facing half of one rule — and it is a `SELECT`, which is why
 /// it is not part of [`parse_threshold_body`].
 async fn reject_counter_metric(admin: &super::AdminState, metric: &str, op: &str) -> ApiResult<()> {
+    // A derived metric (interface utilisation, ADR-076) is a gauge Yagra computes rather than
+    // collects, so it appears in neither the built-in catalogue nor either item table. Answering
+    // from the derived list first is what stops the two database probes from running for it, and
+    // is also the only place that can answer at all — `metric_declared_counter` would say "not a
+    // counter" for a typo just as readily.
+    if crate::interface_util::derived_metric_kind(metric).is_some() {
+        return Ok(());
+    }
     let is_counter = is_builtin_counter(metric)
         || admin
             .collection

@@ -74,6 +74,7 @@ export function MetricPicker({ value, onChange, id }: Props) {
         catalog,
         {
           checks: t('picker.checks'),
+          derived: t('picker.derived'),
           standard: t('picker.standard'),
           liveness: tf('liveness'),
           // The key already carries its namespace (`metrics:meaning.…`), so it resolves whichever

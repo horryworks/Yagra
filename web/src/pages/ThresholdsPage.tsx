@@ -16,37 +16,19 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Trans, useTranslation } from 'react-i18next';
-import { api, errMsg } from '../services/api';
+import { api } from '../services/api';
 import { useCan } from '../store';
-import {
-  CREATABLE_SCOPE_LEVELS,
-  DIRECTIONS,
-  type Direction,
-  type NodeGroup,
-  type ProfileSummary,
-  type ScopeLevel,
-  type StoredThreshold,
-} from '../types/api';
+import type { StoredThreshold } from '../types/api';
 import { LIVENESS_METRIC } from '../lib/format';
 import { metricMeaningKey } from '../lib/metricMeaning';
-import { MetricPicker } from '../components/MetricPicker/MetricPicker';
-import {
-  isThresholdReady,
-  scopeIdKind,
-  thresholdBody,
-  thresholdFormFrom,
-  type ThresholdForm,
-} from './thresholdRequest';
+import { ThresholdModal } from '../components/ThresholdModal/ThresholdModal';
+import { splitInterfaceScopeId } from '../lib/interfaceScope';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { ConfirmDeleteModal } from '../components/ui/ConfirmDeleteModal';
-import { Modal } from '../components/ui/Modal';
-import { TextInput, Select } from '../components/ui/Field';
 import { Badge } from '../components/ui/Badge';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
-import { NodePicker } from '../components/NodePicker/NodePicker';
-import { groupOptions } from '../lib/nodeTree';
 import { IconButton } from '../components/ui/IconButton';
 import { EditIcon } from '../components/ui/icons';
 import { ClearFilters } from '../components/ui/ClearFilters';
@@ -60,267 +42,6 @@ import { TrashIcon } from '../components/ui/icons';
 import './ThresholdsPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-
-/** The scope-id control for the level the operator has chosen.
- *
- *  Before ADR-075 増分 3 this was one free-text box for every level, and the id it wanted — a
- *  device profile's UUID — is printed nowhere in the WebUI, so creating a profile-scoped rule was
- *  not actually possible. A mistyped id is not an error either: the engine compares it and simply
- *  never matches, so the rule is created, listed, and silently evaluates for no node.
- *
- *  Which control belongs to which level is `scopeIdKind`'s answer, not a second `switch` here —
- *  the same answer decides whether Save may be pressed, and two copies would let the dialog show a
- *  picker while readiness still tested a text box. */
-function ScopeIdField({
-  form,
-  onChange,
-}: {
-  form: ThresholdForm;
-  onChange: (scopeId: string) => void;
-}) {
-  const { t } = useTranslation('alertsConfig');
-  const kind = scopeIdKind(form.level);
-  const [profiles, setProfiles] = useState<ProfileSummary[]>([]);
-  const [groups, setGroups] = useState<NodeGroup[]>([]);
-  const { nodeName } = useEntityNames();
-
-  // Both lists are small, bounded config tables — the same two the maintenance-window form loads.
-  // Failing quietly leaves an empty picker rather than blocking the dialog: the operator can still
-  // switch to a level whose list did load.
-  useEffect(() => {
-    if (kind === 'profile') api.listProfiles().then(setProfiles).catch(() => setProfiles([]));
-    if (kind === 'folderGroup') api.listNodeGroups().then(setGroups).catch(() => setGroups([]));
-  }, [kind]);
-
-  const groupItems = useMemo(() => groupOptions(groups), [groups]);
-
-  if (kind === 'none') {
-    return (
-      <div className="modal-field">
-        <span className="modal-hint">{t(`thresholds.addModal.scopeIdNoun.global`)}</span>
-      </div>
-    );
-  }
-  return (
-    <div className="modal-field">
-      <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
-      {kind === 'node' ? (
-        <NodePicker
-          value={form.scopeId || null}
-          valueLabel={form.scopeId ? nodeName(form.scopeId) : undefined}
-          onChange={(n) => onChange(n?.id ?? '')}
-          placeholder={t('thresholds.addModal.scopeIdPlaceholder.node')}
-        />
-      ) : kind === 'profile' ? (
-        <Select value={form.scopeId} onChange={(e) => onChange(e.target.value)}>
-          <option value="">{t('thresholds.addModal.scopeIdPlaceholder.profile')}</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
-      ) : kind === 'folderGroup' ? (
-        <Select value={form.scopeId} onChange={(e) => onChange(e.target.value)}>
-          <option value="">{t('thresholds.addModal.scopeIdPlaceholder.group_id')}</option>
-          {groupItems.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.label}
-            </option>
-          ))}
-        </Select>
-      ) : (
-        // The legacy tag scope. Free text because a tag value *is* free text, and no list of the
-        // ones in use exists — nothing in the product writes `nodes.tags` but a bundle import.
-        <TextInput
-          className="mono"
-          placeholder={t('thresholds.addModal.scopeIdPlaceholder.group')}
-          value={form.scopeId}
-          onChange={(e) => onChange(e.target.value)}
-        />
-      )}
-      <span className="modal-hint">
-        {kind === 'folderGroup'
-          ? t('thresholds.addModal.folderGroupHint')
-          : kind === 'tag'
-            ? t('thresholds.addModal.legacyTagHint')
-            : t('thresholds.addModal.scopeIdHint', {
-                noun: t(`thresholds.addModal.scopeIdNoun.${form.level}`),
-              })}
-      </span>
-    </div>
-  );
-}
-
-/** Create or edit a threshold rule (focused-editing modal).
- *
- *  One dialog for both, the shape `EventRulesPage`'s `RuleModal` uses. Two would be two answers to
- *  "what does this form send", and the add path and the edit path would drift. The judgement —
- *  what the fields become, and whether they may be submitted — lives in `thresholdRequest.ts`,
- *  because Vitest does not execute a `.tsx`.
- *
- *  ⚠️ The form state is held here, inside a conditionally-mounted component, so closing the dialog
- *  *is* the reset (ui-conventions "Modals"). A `resetForm()` enumerating the fields would be a
- *  second copy of the field list. */
-function ThresholdModal({
-  mode,
-  rule,
-  onClose,
-  onSaved,
-}: {
-  mode: 'add' | 'edit';
-  rule?: StoredThreshold;
-  onClose: () => void;
-  onSaved: () => void;
-}) {
-  const { t } = useTranslation('alertsConfig');
-  const [form, setForm] = useState<ThresholdForm>(() => thresholdFormFrom(rule));
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const set = <K extends keyof ThresholdForm>(key: K, value: ThresholdForm[K]) =>
-    setForm((f) => ({ ...f, [key]: value }));
-
-  const ready = isThresholdReady(form);
-
-  // The legacy tag-based `group` level is not offered for a *new* rule — nothing in the product
-  // writes `nodes.tags`, so a rule created at it cannot match anything (ADR-075 増分 3, the same
-  // move the maintenance-window form already made). ⚠️ It must still appear while editing a rule
-  // that already sits at it: a `<select>` whose value is absent from its options renders blank,
-  // and the next save would silently move the rule to whichever level rendered first.
-  const levels = useMemo(
-    () =>
-      CREATABLE_SCOPE_LEVELS.includes(form.level)
-        ? CREATABLE_SCOPE_LEVELS
-        : [...CREATABLE_SCOPE_LEVELS, form.level],
-    [form.level],
-  );
-
-  // Two derivations of "this is the reachability rule", and they are deliberately different.
-  //
-  //  - `lockedMetric` reads the **stored** rule, so editing that row never shows or lets anyone
-  //    retype the engine's internal sentinel. Deriving it from the typed value instead would make
-  //    the input disappear the moment someone typed `__liveness__` into it, with no way back.
-  //  - `noBounds` reads the **current** value, so the bounds also disappear in add mode — the
-  //    sentinel is offered in the metric picker, and bounds on it are read by nothing
-  //    (`repo.rs`'s seed comment): the engine takes the severity from the committed `NodeState`.
-  const lockedMetric = mode === 'edit' && rule?.metric === LIVENESS_METRIC;
-  const noBounds = form.metric.trim() === LIVENESS_METRIC;
-
-  const submit = () => {
-    if (!ready) return;
-    setBusy(true);
-    setError(null);
-    const body = thresholdBody(form);
-    const call =
-      mode === 'edit' && rule
-        ? api.updateThreshold(rule.id, body)
-        : api.createThreshold(body).then(() => undefined);
-    call
-      .then(() => {
-        onSaved();
-        onClose();
-      })
-      .catch((e: unknown) => {
-        setError(errMsg(e, t('thresholds.err.save')));
-        setBusy(false);
-      });
-  };
-
-  return (
-    <Modal
-      title={mode === 'edit' ? t('thresholds.editModal.title') : t('thresholds.addModal.title')}
-      onClose={onClose}
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {t('common:actions.cancel')}
-          </Button>
-          <Button variant="primary" onClick={submit} disabled={!ready || busy}>
-            {mode === 'edit' ? t('common:actions.save') : t('thresholds.addModal.add')}
-          </Button>
-        </>
-      }
-    >
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.scopeLevel')}</label>
-        <Select
-          value={form.level}
-          onChange={(e) =>
-            // Clear the id with the level. Ids are not interchangeable across levels — a profile
-            // UUID left behind on a folder-group rule is a rule that matches nothing — and every
-            // control below is now a picker, so there is nothing an operator would want carried.
-            setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeId: '' }))
-          }
-        >
-          {levels.map((l) => (
-            <option key={l} value={l}>
-              {t(`thresholds.scopeLevel.${l}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <ScopeIdField form={form} onChange={(scopeId) => set('scopeId', scopeId)} />
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
-        {lockedMetric ? (
-          <>
-            <p className="thresholds-fixed">{t('format:liveness')}</p>
-            <span className="modal-hint">{t('thresholds.livenessMetric')}</span>
-          </>
-        ) : (
-          <MetricPicker value={form.metric} onChange={(m) => set('metric', m)} />
-        )}
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.direction')}</label>
-        <Select
-          value={form.direction}
-          onChange={(e) => set('direction', e.target.value as Direction)}
-        >
-          {DIRECTIONS.map((d) => (
-            <option key={d} value={d}>
-              {t(`thresholds.direction.${d}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
-      <div className="modal-field">
-        <label className="modal-field-label">
-          {noBounds ? t('thresholds.addModal.dwellOnly') : t('thresholds.addModal.boundsDwell')}
-        </label>
-        <div className="thresholds-bounds">
-          {!noBounds && (
-            <>
-              <TextInput
-                className="thresholds-num"
-                placeholder={t('thresholds.addModal.warnPlaceholder')}
-                value={form.warning}
-                onChange={(e) => set('warning', e.target.value)}
-              />
-              <TextInput
-                className="thresholds-num"
-                placeholder={t('thresholds.addModal.critPlaceholder')}
-                value={form.critical}
-                onChange={(e) => set('critical', e.target.value)}
-              />
-            </>
-          )}
-          <TextInput
-            className="thresholds-num"
-            placeholder={t('thresholds.addModal.dwellPlaceholder')}
-            value={form.dwell}
-            onChange={(e) => set('dwell', e.target.value)}
-            title={t('thresholds.addModal.dwellTitle')}
-          />
-        </div>
-        <span className="modal-hint">
-          {noBounds ? t('thresholds.livenessMetric') : t('thresholds.addModal.boundsHint')}
-        </span>
-      </div>
-      {error && <p className="form-error">{error}</p>}
-    </Modal>
-  );
-}
 
 /** Confirm + delete a threshold rule (destructive-consent modal). */
 function DeleteThresholdModal({
@@ -422,6 +143,14 @@ export function ThresholdsPage() {
             <span className="muted" title={t('thresholds.scopeIdNone')}>
               —
             </span>
+          ) : row.scope_level === 'interface' ? (
+            // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's half —
+            // `EntityName` would offer the whole composed string as a copyable "id", which is not
+            // an id anything else accepts.
+            <EntityName
+              name={scopeName(row.scope_level, row.scope_id)}
+              id={splitInterfaceScopeId(row.scope_id)[0]}
+            />
           ) : (
             <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
           ),

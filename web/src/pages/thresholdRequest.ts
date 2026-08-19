@@ -15,6 +15,7 @@
 // One module for both modes on purpose. Two would be two answers to "what does this form send",
 // and the add path and the edit path would drift the way every mirror in this repo has.
 
+import { isInterfaceScopeId } from '../lib/interfaceScope';
 import type { Direction, ScopeLevel, StoredThreshold, ThresholdInput } from '../types/api';
 
 /** What the dialog's inputs hold. Every field is a string because that is what an `<input>` gives
@@ -83,7 +84,7 @@ export function thresholdFormFrom(rule?: StoredThreshold): ThresholdForm {
  *  Named rather than branched on inline because two places need the same answer (which control to
  *  show, and whether the form is ready) and a second copy would let them disagree — a field that
  *  renders a picker while readiness still tests a text box is a Save button that never enables. */
-export type ScopeIdKind = 'none' | 'profile' | 'folderGroup' | 'tag' | 'node';
+export type ScopeIdKind = 'none' | 'profile' | 'folderGroup' | 'tag' | 'node' | 'interface';
 
 /** ⚠️ Exhaustive over `ScopeLevel` on purpose: a new level must decide what its id is, rather than
  *  falling into a default that renders a free-text box for something the server will reject. */
@@ -99,6 +100,8 @@ export function scopeIdKind(level: ScopeLevel): ScopeIdKind {
       return 'tag';
     case 'node':
       return 'node';
+    case 'interface':
+      return 'interface';
   }
 }
 
@@ -109,7 +112,14 @@ export function scopeIdKind(level: ScopeLevel): ScopeIdKind {
  *  rule would be stored, listed, and silently inert (the server refuses one since ADR-075 増分 3;
  *  this is the half that keeps the operator from getting a 400 for a field they can see is blank). */
 export function isThresholdReady(f: ThresholdForm): boolean {
-  return f.metric.trim() !== '' && (scopeIdKind(f.level) === 'none' || f.scopeId.trim() !== '');
+  if (f.metric.trim() === '') return false;
+  const kind = scopeIdKind(f.level);
+  if (kind === 'none') return true;
+  // A port rule's id is a composed string rather than a picked uuid, so "non-empty" is not enough:
+  // the server refuses anything that is not exactly `<node-uuid>:<ifindex>`, and a Save that turns
+  // into a 400 for a value the form could have judged itself is a worse form than a disabled one.
+  if (kind === 'interface') return isInterfaceScopeId(f.scopeId.trim());
+  return f.scopeId.trim() !== '';
 }
 
 /** The body sent to `POST /api/v1/thresholds` or `PUT /api/v1/thresholds/{id}`. */

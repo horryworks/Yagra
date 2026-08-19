@@ -19707,6 +19707,17 @@
             "type": "boolean",
             "description": "Whether the underlying check is currently flapping."
           },
+          "ifindex": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IfIndex",
+                "description": "The interface this alert is about, for a per-interface metric; `None` for a node-level one."
+              }
+            ]
+          },
           "metric": {
             "type": "string",
             "description": "Metric the check measured (e.g. `\"icmp_rtt_ms\"`; the liveness sentinel for up/down).\nCarried for the history log + notification payload so a human can read *what* fired —\nnot part of alert identity (dedup/grouping ignore it)."
@@ -19822,6 +19833,15 @@
             "type": "string",
             "format": "uuid",
             "description": "This row's identity, and the second half of the keyset cursor — pass it as `before_id`\nbeside `before`. Also the stable key for a list: no other field, or combination of them, is\nunique."
+          },
+          "ifindex": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "The SNMP ifIndex of the port this was about, for a per-interface metric (ADR-076).\n\n`None` for a node-level alert and for every row written before ADR-076 shipped — both mean\n\"no port was involved\", which is why the column is nullable rather than defaulted (there is\nno ifIndex value free to mean \"none\"; `0` is a real one on some agents).",
+            "minimum": 0
           },
           "metric": {
             "type": [
@@ -25009,6 +25029,12 @@
           "HEAD",
           "POST"
         ]
+      },
+      "IfIndex": {
+        "type": "integer",
+        "format": "int32",
+        "description": "SNMP interface index (`ifIndex`).\n\nIdentifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,\nso the `(NodeId, IfIndex)` pair is re-resolved against PostgreSQL interface\nmetadata on each discovery (ADR-011); a remap is recorded when it changes.",
+        "minimum": 0
       },
       "ImportDiscovered": {
         "type": "object",
@@ -30211,13 +30237,14 @@
       },
       "ScopeLevel": {
         "type": "string",
-        "description": "The scope a threshold is defined at, ordered least → most specific: `Node` wins over a folder\ngroup, which wins over `Group`, which wins over `Profile`, which wins over `Global` (every node).",
+        "description": "The scope a threshold is defined at, ordered least → most specific: `Interface` (one port)\nwins over `Node`, which wins over a folder group, which wins over `Group`, which wins over\n`Profile`, which wins over `Global` (every node).",
         "enum": [
           "global",
           "profile",
           "group",
           "group_id",
-          "node"
+          "node",
+          "interface"
         ]
       },
       "SecretsMode": {

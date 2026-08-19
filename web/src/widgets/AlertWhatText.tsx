@@ -18,6 +18,12 @@ export function AlertWhatText({ what }: { what: AlertWhat }) {
   return (
     <span>
       <span className="mono">{what.metric}</span>
+      {/* The port, when the alert is about one. Rendered right after the metric because that is
+          what the pair means — "this metric, on this port" — and before the bound, so two alerts
+          on one node read as different lines rather than as a repeat. */}
+      {what.ifindex != null && (
+        <span className="mono"> {t('format:alertOnPort', { ifindex: what.ifindex })}</span>
+      )}
       {what.condition && <span className="muted"> {what.condition}</span>}
       {what.observed && <span className="muted"> ({what.observed})</span>}
     </span>

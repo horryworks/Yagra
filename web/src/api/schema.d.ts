@@ -3993,6 +3993,7 @@ export interface components {
             check: components["schemas"]["CheckId"];
             /** @description Whether the underlying check is currently flapping. */
             flapping: boolean;
+            ifindex?: null | components["schemas"]["IfIndex"];
             /**
              * @description Metric the check measured (e.g. `"icmp_rtt_ms"`; the liveness sentinel for up/down).
              *     Carried for the history log + notification payload so a human can read *what* fired —
@@ -4041,6 +4042,15 @@ export interface components {
              *     unique.
              */
             id: string;
+            /**
+             * Format: int32
+             * @description The SNMP ifIndex of the port this was about, for a per-interface metric (ADR-076).
+             *
+             *     `None` for a node-level alert and for every row written before ADR-076 shipped — both mean
+             *     "no port was involved", which is why the column is nullable rather than defaulted (there is
+             *     no ifIndex value free to mean "none"; `0` is a real one on some agents).
+             */
+            ifindex?: number | null;
             /**
              * @description Metric the check measured (e.g. `icmp_rtt_ms`, or the liveness sentinel). `None` for
              *     rows recorded before this was captured (legacy) so the WebUI can show "—".
@@ -6262,6 +6272,15 @@ export interface components {
          * @enum {string}
          */
         HttpMethod: "GET" | "HEAD" | "POST";
+        /**
+         * Format: int32
+         * @description SNMP interface index (`ifIndex`).
+         *
+         *     Identifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,
+         *     so the `(NodeId, IfIndex)` pair is re-resolved against PostgreSQL interface
+         *     metadata on each discovery (ADR-011); a remap is recorded when it changes.
+         */
+        IfIndex: number;
         /** @description Import body: the selected devices to create as nodes. */
         ImportDiscovered: {
             nodes: components["schemas"]["ImportNode"][];
@@ -8530,11 +8549,12 @@ export interface components {
             Groups: string[];
         };
         /**
-         * @description The scope a threshold is defined at, ordered least → most specific: `Node` wins over a folder
-         *     group, which wins over `Group`, which wins over `Profile`, which wins over `Global` (every node).
+         * @description The scope a threshold is defined at, ordered least → most specific: `Interface` (one port)
+         *     wins over `Node`, which wins over a folder group, which wins over `Group`, which wins over
+         *     `Profile`, which wins over `Global` (every node).
          * @enum {string}
          */
-        ScopeLevel: "global" | "profile" | "group" | "group_id" | "node";
+        ScopeLevel: "global" | "profile" | "group" | "group_id" | "node" | "interface";
         /**
          * @description How secrets appear in a bundle. See the module docs for why there is only one variant.
          * @enum {string}

@@ -186,6 +186,24 @@ pub trait MetricStore: Send + Sync {
         agg: TopAgg,
         limit: usize,
     ) -> Vec<(Uuid, i32, f64)>;
+    /// Every interface whose current throughput is at or above `floor_bps`, as
+    /// `(node, ifindex, bits/sec)` — the candidate set a per-interface threshold evaluator
+    /// classifies (ADR-076).
+    ///
+    /// 🚨 **`None` means the query did not answer; `Some(vec![])` means nothing is above the
+    /// floor. Every other read on this trait collapses those two into an empty vector, and this
+    /// one deliberately does not.** A threshold evaluator treats "absent from the candidate set"
+    /// as "below its bound", so an empty answer *clears* alerts. If a five-minute VictoriaMetrics
+    /// hiccup returned `Some(vec![])`, every interface alert in the fleet would resolve, send a
+    /// recovery to PagerDuty, and re-fire on the way back — a notification storm produced by the
+    /// monitoring system's own infrastructure, which `monitoring-conventions.md` classes as a bug.
+    /// Do not "tidy" this signature to match its neighbours.
+    async fn interface_candidates(
+        &self,
+        metric: InterfaceTopMetric,
+        floor_bps: f64,
+    ) -> Option<Vec<(Uuid, i32, f64)>>;
+
     /// The node ids that have reported **any of** `metrics` within the trailing `within_secs`
     /// window — the "fresh" set for fleet data-coverage. The API edge diffs this against the
     /// inventory to find stale (silent) nodes. Empty if the store has no such data.
@@ -377,6 +395,17 @@ impl MetricStore for InMemorySink {
     async fn top_nodes(&self, _metric: &str, _agg: TopAgg, _limit: usize) -> Vec<(Uuid, f64)> {
         // The skeleton sink holds a single demo series, not a fleet — nothing to rank.
         Vec::new()
+    }
+
+    async fn interface_candidates(
+        &self,
+        _metric: InterfaceTopMetric,
+        _floor_bps: f64,
+    ) -> Option<Vec<(Uuid, i32, f64)>> {
+        // `Some(empty)`, not `None`: this sink *did* answer, and its answer is that nothing is
+        // above the floor. `None` would mean "the store is unreachable", which would make a
+        // skeleton deployment freeze every interface check instead of simply never raising one.
+        Some(Vec::new())
     }
 
     async fn top_interfaces(
@@ -716,6 +745,32 @@ fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize) -
         TopAgg::Max1h => format!("max_over_time(({expr})[{MAX_WINDOW_SECS}s:{w}s])"),
     };
     format!("topk({n}, max by (node,ifindex) ({instant}))")
+}
+
+/// Fleet PromQL for **interface throughput candidates**: every `(node,ifindex)` whose current
+/// rate is at or above `floor_bps` (ADR-076).
+///
+/// Unlike [`topk_interface_query`] there is no `topk`, because a threshold evaluator cannot use a
+/// ranking: the tenth-busiest port may be the one over its own bound while the busiest is a 100G
+/// link at 3%. The floor is what bounds the answer instead, and it is only sound because it is an
+/// **absolute** rate below which no configured percentage of any covered port's speed can be
+/// reached — the caller computes it from the slowest covered link, so a value under it cannot
+/// breach any rule.
+///
+/// ⚠️ **The floor bounds the transfer, it does not bound it *well*.** It is set by the slowest
+/// covered link, so one 64 kbps circuit with a 70% rule puts the floor at `45 kbps and essentially
+/// every series passes it. Do not describe this as "the query is bounded"; what actually bounds a
+/// normal deployment is that the caller builds the selector from the rules in force, and only
+/// falls back to the whole fleet when a rule is scoped broadly enough to mean it.
+fn interface_candidates_query(metric: InterfaceTopMetric, floor_bps: f64) -> String {
+    let expr = interface_expr(metric);
+    let w = INTERFACE_RATE_LOOKBACK_SECS;
+    // `last_over_time` over a subquery, exactly as `TopAgg::Now` does: an SNMP poll is jittered, so
+    // an instant read of `rate()` lands between samples often enough to matter.
+    let instant = format!("last_over_time(({expr})[{INSTANT_LOOKBACK_SECS}s:{w}s])");
+    // `max by` collapses any duplicate series for one port before the comparison, so a port cannot
+    // appear twice in the candidate set and be observed twice in one tick.
+    format!("max by (node,ifindex) ({instant}) >= {floor_bps}")
 }
 
 /// Fleet interface rate-delta PromQL: per `(node,ifindex)`, total throughput now minus the rate
@@ -1142,6 +1197,53 @@ impl MetricStore for VmStore {
             return Vec::new();
         };
         parse_top_interfaces(&json)
+    }
+
+    async fn interface_candidates(
+        &self,
+        metric: InterfaceTopMetric,
+        floor_bps: f64,
+    ) -> Option<Vec<(Uuid, i32, f64)>> {
+        let url = format!("{}/api/v1/query", self.base);
+        let resp = match self
+            .http
+            .get(&url)
+            .query(&[("query", interface_candidates_query(metric, floor_bps))])
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                // `None`, not an empty vector — see the trait doc. Treating a transport failure as
+                // "nothing is busy" would resolve every interface alert in the fleet.
+                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate query failed");
+                return None;
+            }
+        };
+        // A non-2xx is just as much a non-answer as a dropped connection: VictoriaMetrics reports
+        // a malformed query as 4xx with a JSON body that parses fine and carries no `result`, so
+        // checking the status is what stops a bad query from reading as a quiet fleet.
+        if !resp.status().is_success() {
+            tracing::warn!(
+                status = %resp.status(),
+                "VictoriaMetrics refused the interface-candidate query"
+            );
+            return None;
+        }
+        let json = match resp.json::<serde_json::Value>().await {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate response was not JSON");
+                return None;
+            }
+        };
+        // VictoriaMetrics reports a query-time error in the body with `status: "error"` and HTTP
+        // 200 in some configurations, so the envelope is checked too.
+        if json.get("status").and_then(|v| v.as_str()) != Some("success") {
+            tracing::warn!("VictoriaMetrics interface-candidate query returned a non-success body");
+            return None;
+        }
+        Some(parse_top_interfaces(&json))
     }
 
     async fn fresh_node_ids(&self, metrics: &[&str], within_secs: u64) -> Vec<Uuid> {

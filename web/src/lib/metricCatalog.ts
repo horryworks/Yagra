@@ -21,7 +21,12 @@
 
 import type { MibCatalogEntry } from '../types/api';
 import { LIVENESS_METRIC } from './format';
-import { CHECK_METRICS, builtinMetric, metricMeaningKey } from './metricMeaning';
+import {
+  CHECK_METRICS,
+  DERIVED_METRICS,
+  builtinMetric,
+  metricMeaningKey,
+} from './metricMeaning';
 
 /** One row of the picker. */
 export interface MetricOption {
@@ -46,8 +51,10 @@ export interface MetricOption {
 
 /** How the picker's headings are labelled — supplied by the caller so this stays translator-free. */
 export interface MetricLabels {
-  /** Heading for Yagra's own check metrics. */
+  /** Heading for Yagra's own checks. */
   checks: string;
+  /** Heading for the metrics Yagra derives rather than collects (interface utilisation). */
+  derived: string;
   /** Heading for catalog rows with no metric set named (the vendor-less standard set). */
   standard: string;
   /** The meaning of a metric, by key, or `''`. */
@@ -86,6 +93,20 @@ export function metricOptions(
     oid: '',
   }));
 
+  // Derived metrics (ADR-076). Listed beside the checks rather than among the collected
+  // metrics because they are in neither the catalogue nor any time series — a reader who looked
+  // for them under a vendor heading would not find them, and one who looked for their chart would
+  // not find that either. `perInterface` is stated here rather than looked up, because the
+  // generated catalogue only knows about metrics that are *collected*.
+  const derived: MetricOption[] = DERIVED_METRICS.map((name) => ({
+    name,
+    label: name,
+    group: labels.derived,
+    meaning: meaningOf(name),
+    oid: '',
+    perInterface: true,
+  }));
+
   const collected: MetricOption[] = catalog
     .filter((e) => e.metric_kind !== 'counter')
     .map((e) => ({
@@ -103,7 +124,7 @@ export function metricOptions(
       perInterface: builtinMetric(e.metric_name)?.per_interface,
     }));
 
-  const out = [...checks, ...collected];
+  const out = [...checks, ...derived, ...collected];
   if (current && current.trim() && !out.some((o) => o.name === current)) {
     out.unshift({
       name: current,

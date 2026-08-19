@@ -185,6 +185,13 @@ pub const TEMPLATE_VARIABLES: &[TemplateVariable] = &[
         always_present: false,
     },
     TemplateVariable {
+        name: "ifindex",
+        description: "The SNMP ifIndex of the port that breached, for a metric collected once per \
+                      interface. Absent when the alert is about the node as a whole. It is the \
+                      index the device files the row under, not a front-panel position.",
+        always_present: false,
+    },
+    TemplateVariable {
         name: "at",
         description: "When the transition committed, as an RFC 3339 timestamp in UTC.",
         always_present: true,
@@ -266,6 +273,14 @@ pub struct AlertFacts {
     /// `above` / `below`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
+    /// The SNMP ifIndex of the port that breached, for a per-interface metric (ADR-076).
+    //
+    // The number rather than the port's name, because the alert engine has no inventory to
+    // resolve one from and a name resolved later would be the name at *send* time, not at
+    // breach time. The API responses carry the name beside this for display; a template that
+    // wants to read like an operator does should print both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ifindex: Option<u32>,
     /// RFC 3339 UTC timestamp of the transition.
     pub at: String,
     /// The same instant in milliseconds since the Unix epoch.
@@ -302,10 +317,16 @@ pub fn sample_facts(event: NotifyEvent) -> AlertFacts {
             .to_owned(),
         severity: "critical".to_owned(),
         state: "critical".to_owned(),
-        metric: Some("icmp_rtt_ms".to_owned()),
-        value: Some(412.5),
-        threshold: Some(200.0),
+        // A **per-interface** threshold breach, deliberately: this is now the fullest form an
+        // alert can take (it is the only one that populates `ifindex` as well as the four breach
+        // variables), and the doc above promises the sample shows the fullest form. It used to be
+        // `icmp_rtt_ms above 200`, which cannot carry a port — leaving `ifindex` unrendered in
+        // every preview, i.e. invisible to the operator writing the template that needs it.
+        metric: Some("if_in_util_pct".to_owned()),
+        value: Some(94.2),
+        threshold: Some(90.0),
         direction: Some("above".to_owned()),
+        ifindex: Some(7),
         // `at` and `at_unix_ms` are the same instant, and the preview shows both — a mismatch is
         // the kind of thing an operator notices and then distrusts the whole preview over.
         // `the_preview_sample_states_one_instant_two_ways` pins them together.
@@ -333,6 +354,7 @@ pub fn minimal_facts(event: NotifyEvent) -> AlertFacts {
         value: None,
         threshold: None,
         direction: None,
+        ifindex: None,
         root_cause_id: None,
         root_cause_name: None,
         ..sample_facts(event)

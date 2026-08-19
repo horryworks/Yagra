@@ -68,8 +68,9 @@ impl fmt::Display for Direction {
     }
 }
 
-/// The scope a threshold is defined at, ordered least → most specific: `Node` wins over a folder
-/// group, which wins over `Group`, which wins over `Profile`, which wins over `Global` (every node).
+/// The scope a threshold is defined at, ordered least → most specific: `Interface` (one port)
+/// wins over `Node`, which wins over a folder group, which wins over `Group`, which wins over
+/// `Profile`, which wins over `Global` (every node).
 //
 // The two notes below are deliberately `//`, not `///`: this type derives `ToSchema`, so a `///`
 // line is published verbatim to every API client (see `openapi.json`). They are for whoever edits
@@ -77,7 +78,7 @@ impl fmt::Display for Direction {
 //
 // WARNING: variant order is load-bearing. `resolve_effective` takes `.max()` over the levels
 // present, so a variant declared in the wrong position silently changes which rule wins.
-// `Global` must stay first.
+// `Global` must stay first and `Interface` must stay last.
 //
 // WARNING: shared with `collection_items`, which has no `Global` scope. A collection item's level
 // is decided by the endpoint that writes it (profile or node), never by client input, so the
@@ -111,24 +112,34 @@ pub enum ScopeLevel {
     /// it cannot be confused with the tag-based `Group` above.
     #[serde(rename = "group_id")]
     FolderGroup,
-    /// Defined directly on the node (narrowest).
+    /// Defined directly on the node.
     Node,
+    /// Defined on **one interface of one node** (narrowest, ADR-076). `scope_id` is
+    /// `<node-uuid>:<ifindex>` — build and read it with [`interface_scope_id`] and
+    /// [`parse_interface_scope_id`] rather than formatting it, so the resolver and the API
+    /// validator cannot disagree about the shape.
+    ///
+    /// Only meaningful for a metric collected once per interface; a rule at this level on a
+    /// node-wide metric matches nothing, because the engine only reaches for a per-port check
+    /// when the collection catalogue says the metric is per-interface.
+    Interface,
 }
 
 impl ScopeLevel {
     /// Every level, broadest first — the order the threshold list is sorted in and the order a
     /// picker should offer them.
-    pub const ALL: [ScopeLevel; 5] = [
+    pub const ALL: [ScopeLevel; 6] = [
         ScopeLevel::Global,
         ScopeLevel::Profile,
         ScopeLevel::Group,
         ScopeLevel::FolderGroup,
         ScopeLevel::Node,
+        ScopeLevel::Interface,
     ];
 
     /// Stable lowercase string for API payloads, DB columns, and logs.
     ///
-    /// The `thresholds.scope_level` column holds exactly these five, written verbatim from the
+    /// The `thresholds.scope_level` column holds exactly these six, written verbatim from the
     /// create request and read back by `ThresholdStore::parse_level`, so anything that binds a
     /// level into SQL must go through here rather than formatting the enum.
     #[must_use]
@@ -139,6 +150,7 @@ impl ScopeLevel {
             ScopeLevel::Group => "group",
             ScopeLevel::FolderGroup => "group_id",
             ScopeLevel::Node => "node",
+            ScopeLevel::Interface => "interface",
         }
     }
 
@@ -148,6 +160,36 @@ impl ScopeLevel {
     pub fn from_token(s: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|v| v.as_str() == s)
     }
+}
+
+/// The `scope_id` of an [`ScopeLevel::Interface`] rule: `<node-uuid>:<ifindex>`.
+///
+/// One function so the API validator, the alert engine's `applies` and the WebUI's prefill cannot
+/// disagree about the separator. A UUID contains no `:`, so the split is unambiguous.
+#[must_use]
+pub fn interface_scope_id(node: uuid::Uuid, ifindex: u32) -> String {
+    format!("{node}:{ifindex}")
+}
+
+/// The inverse of [`interface_scope_id`]. `None` for anything that is not exactly that shape.
+///
+/// Strict on purpose: a scope id that does not parse is a rule that matches no port, and the API
+/// refuses it at write time rather than storing something that looks configured and does nothing
+/// (the failure ADR-075 決定 12 closed for the other levels). `rsplit_once` rather than
+/// `split_once` would accept a UUID with a stray colon; there are none, but the whole point of a
+/// single codec is that the reader and the writer agree without either having to be careful.
+#[must_use]
+pub fn parse_interface_scope_id(s: &str) -> Option<(uuid::Uuid, u32)> {
+    let (node, idx) = s.split_once(':')?;
+    // The digits are checked before parsing, because `u32::from_str` **accepts a leading `+`** —
+    // so `<uuid>:+7` and `<uuid>:7` would both resolve to port 7 and the same rule could be stored
+    // twice under two ids, one of which renders as "+7" in the list. One canonical spelling per
+    // port is what makes the id usable as a key at all. (A unit test caught this; the comment
+    // here used to claim the opposite.)
+    if idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some((uuid::Uuid::parse_str(node).ok()?, idx.parse::<u32>().ok()?))
 }
 
 /// A threshold rule for a single metric.
@@ -294,10 +336,17 @@ mod tests {
             );
         }
         // ALL is the whole enum, not a list someone forgot to extend when a level was added.
-        assert_eq!(ScopeLevel::ALL.len(), 5);
+        assert_eq!(ScopeLevel::ALL.len(), 6);
         assert_eq!(
             ScopeLevel::ALL.map(ScopeLevel::as_str),
-            ["global", "profile", "group", "group_id", "node"],
+            [
+                "global",
+                "profile",
+                "group",
+                "group_id",
+                "node",
+                "interface"
+            ],
             "ALL is ordered broadest-first — the threshold list and its filter both rely on it"
         );
         // The order is also the precedence (`resolve_effective` takes `.max()`), so assert it as
@@ -306,6 +355,46 @@ mod tests {
         assert!(ScopeLevel::Profile < ScopeLevel::Group);
         assert!(ScopeLevel::Group < ScopeLevel::FolderGroup);
         assert!(ScopeLevel::FolderGroup < ScopeLevel::Node);
+        assert!(ScopeLevel::Node < ScopeLevel::Interface);
+    }
+
+    /// The interface scope id round-trips, and everything that is not exactly its shape is refused.
+    ///
+    /// The rejection half is the load-bearing one: a scope id that parses to nothing is a rule that
+    /// is stored, listed, and matches no port — the exact failure ADR-075 決定 12 closed for the
+    /// other levels. Note it includes an accepting case, so "reject everything" cannot pass.
+    #[test]
+    fn an_interface_scope_id_round_trips_and_rejects_everything_else() {
+        let node = uuid::Uuid::parse_str("6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60").expect("literal");
+        for idx in [0_u32, 7, 4_294_967_295] {
+            let id = interface_scope_id(node, idx);
+            assert_eq!(
+                parse_interface_scope_id(&id),
+                Some((node, idx)),
+                "{id} does not round-trip"
+            );
+        }
+        // Port 0 is a real ifIndex on some agents, so it must survive as a value rather than
+        // reading as "no port".
+        assert_eq!(
+            parse_interface_scope_id(&interface_scope_id(node, 0)),
+            Some((node, 0))
+        );
+
+        for bad in [
+            "",
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60",  // no port
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60:", // empty port
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60:-1", // negative
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60:+7", // signed
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60: 7", // padded
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60:x", // not a number
+            "6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60:4294967296", // one past u32
+            "not-a-uuid:7",
+            ":7",
+        ] {
+            assert_eq!(parse_interface_scope_id(bad), None, "{bad} was accepted");
+        }
     }
 
     fn rule(level: ScopeLevel, warning: f64, critical: f64) -> ScopedThreshold {

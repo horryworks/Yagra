@@ -18,7 +18,10 @@ import { StatusDot } from '../ui/StatusDot';
 import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/MetricChart';
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
-import { useRangeStore } from '../../store';
+import { useCan, useRangeStore } from '../../store';
+import { ThresholdModal } from '../ThresholdModal/ThresholdModal';
+import { interfaceScopeId } from '../../lib/interfaceScope';
+import { BellIcon } from '../ui/icons';
 import { usePrefsStore } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
@@ -609,6 +612,8 @@ function InterfaceDock({
   resize: DockResize | null;
 }) {
   const { t } = useTranslation('nodes');
+  const canConfig = useCan('manage_config');
+  const [addingRule, setAddingRule] = useState(false);
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
@@ -849,6 +854,24 @@ function InterfaceDock({
           </span>
           <RangeControl value={range} onChange={setRange} />
         </div>
+        {/* Create a bandwidth rule for THIS port (ADR-076). It lives here rather than on the
+            row for two reasons: a row is itself a `<button>`, so nesting one would be invalid
+            markup and unreachable by keyboard; and the dock is where the port's speed is already
+            shown, which is what the percentage is a percentage of.
+
+            Rendered only when the operator may configure — never disabled with a tooltip
+            (ADR-056). */}
+        {canConfig && (
+          <button
+            type="button"
+            className="nd-if-dock-rule"
+            aria-label={t('interfaces.addRule')}
+            title={t('interfaces.addRuleTitle')}
+            onClick={() => setAddingRule(true)}
+          >
+            <BellIcon />
+          </button>
+        )}
         <button
           type="button"
           className="nd-if-dock-close"
@@ -861,6 +884,23 @@ function InterfaceDock({
           </svg>
         </button>
       </div>
+
+      {addingRule && (
+        <ThresholdModal
+          mode="add"
+          prefill={{
+            level: 'interface',
+            scopeId: interfaceScopeId(nodeId, row.ifindex),
+            metric: 'if_in_util_pct',
+            direction: 'above',
+            critical: '90',
+          }}
+          onClose={() => setAddingRule(false)}
+          // Nothing on this screen shows the rule, so there is nothing to refresh — the rule is
+          // listed on Alerts ▸ Metric alert rules and the alert it produces appears on its own.
+          onSaved={() => {}}
+        />
+      )}
 
       <div className="nd-if-dock-charts">
         <div className="nd-if-chart">

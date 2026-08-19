@@ -35,6 +35,7 @@
   "localTimeZoneFallback": "ローカル時刻",
   "liveness": "到達性",
   "alertObservedWas": "実測 {{value}}",
+  "alertOnPort": "ポート {{ifindex}}",
   "scalar": {
     "snmp_sys_uptime_ticks": "稼働時間",
     "meraki_device_up": "可用性",

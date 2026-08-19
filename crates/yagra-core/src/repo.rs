@@ -1256,6 +1256,43 @@ impl NodeRepo {
             .collect()
     }
 
+    /// The slowest usable interface speed in bits/sec, over the whole fleet or over `node_ids`.
+    ///
+    /// This is the denominator of the interface-utilisation evaluator's query floor (ADR-076): the
+    /// smallest percentage any rule names, times this, is a rate below which no covered port can
+    /// breach anything. Ports with no speed, a zero speed, or the saturated 32-bit sentinel are
+    /// excluded — none of them is a rate, and including one would drag the floor to a value that
+    /// admits everything (or, for the sentinel, one that is simply wrong).
+    ///
+    /// `None` when no covered port has a usable speed, which the caller reads as "evaluate
+    /// nothing" rather than "evaluate everything" — the narrowing failure.
+    ///
+    /// An empty `node_ids` means the whole fleet, not "no nodes": the caller passes the set only
+    /// when the rules in force are narrow enough to enumerate.
+    pub async fn slowest_interface_speed_bps(
+        &self,
+        node_ids: &[Uuid],
+    ) -> anyhow::Result<Option<i64>> {
+        // `u32::MAX` is the "too fast to express" marker of the 32-bit gauge, not a rate
+        // (ADR-063 decision 7). The poller stopped storing it, and migration 0086 cleared the rows
+        // that already had it — this exclusion is the belt to that braces, because a single stale
+        // row would otherwise be a plausible-looking 4.29 Gbps floor.
+        let sql = if node_ids.is_empty() {
+            "SELECT min(if_speed) AS slowest FROM interfaces              WHERE if_speed > 0 AND if_speed <> 4294967295"
+        } else {
+            "SELECT min(if_speed) AS slowest FROM interfaces              WHERE node_id = ANY($1) AND if_speed > 0 AND if_speed <> 4294967295"
+        };
+        let row = if node_ids.is_empty() {
+            sqlx::query(sql).fetch_one(&self.pool).await?
+        } else {
+            sqlx::query(sql)
+                .bind(node_ids)
+                .fetch_one(&self.pool)
+                .await?
+        };
+        Ok(row.try_get::<Option<i64>, _>("slowest")?)
+    }
+
     /// Upsert interfaces for MANY nodes in one statement — the async ingest writer (ADR-025)
     /// coalesces many polls, so this must not fan out per node. Names/aliases are device-supplied
     /// metadata kept in PostgreSQL (joined to metrics at query time) — never TSDB labels (ADR-011).

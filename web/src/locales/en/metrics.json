@@ -8,7 +8,8 @@
     "empty": "Nothing matches. Type a metric name to use it anyway.",
     "perInterface": "per port",
     "scopeNote": "A rule only fires on nodes whose metric set actually collects this metric.",
-    "current": "Current value"
+    "current": "Current value",
+    "derived": "Computed by Yagra"
   },
   "meaning": {
     "__liveness__": "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies.",
@@ -103,6 +104,8 @@
     "ups_battery_status": "Battery condition. 1 = unknown, 2 = normal, 3 = low, 4 = depleted. Anything above 2 needs attention.",
     "ups_charge_remaining_pct": "Estimated battery charge remaining, in percent.",
     "ups_minutes_remaining": "Estimated run time left on battery, in minutes. Meaningful only while the UPS is actually on battery.",
-    "ups_output_load_pct": "Output load as a percentage of the UPS’s rated capacity. One row per output line."
+    "ups_output_load_pct": "Output load as a percentage of the UPS’s rated capacity. One row per output line.",
+    "if_in_util_pct": "Inbound traffic as a percentage of the port’s own speed. Computed from the octet counter and the speed the device reports — it is not collected, so it has no chart of its own; the Interfaces tab draws the same figure. A port whose speed is unknown cannot be evaluated and never fires.",
+    "if_out_util_pct": "Outbound traffic as a percentage of the port’s own speed. Separate from the inbound figure on purpose: a link is asymmetric more often than not, and a rule on one direction says nothing about the other."
   }
 }

@@ -47,6 +47,7 @@ mod forward_store;
 mod gcp;
 mod groups;
 mod history;
+mod interface_util;
 mod ipasn;
 mod l3;
 mod ldap;
@@ -1509,6 +1510,19 @@ impl LeaderTasks {
                 self.group_repo.clone(),
             ),
         );
+        // Per-interface bandwidth utilisation (ADR-076). Leader-only for the same reason pool
+        // coverage is: the engine's check state is process-local and two evaluators would double
+        // every notification.
+        spawn_cancellable(
+            &self.shutdown,
+            run_interface_utilization_watch(
+                self.store.clone(),
+                self.repo.clone(),
+                self.alerts.clone(),
+                self.notifier.clone(),
+                self.history.clone(),
+            ),
+        );
         spawn_cancellable(
             &self.shutdown,
             run_pool_coverage_watch(
@@ -1978,7 +1992,8 @@ async fn run_alert_config_refresh(
             let config = AlertConfig::new(base.rules.clone(), base.meta.clone())
                 .with_topology(base.topology.clone())
                 .with_maintenance(in_maintenance.clone())
-                .with_pool_groups(base.pool_groups.clone());
+                .with_pool_groups(base.pool_groups.clone())
+                .with_per_interface(base.per_interface.clone());
             alerts.set_config(config);
             last_maintenance = Some(in_maintenance);
         }
@@ -2405,6 +2420,153 @@ async fn run_pool_coverage_watch(
                 }
             }
             notifier.handle(action).await;
+        }
+    }
+}
+
+/// Evaluate per-interface bandwidth utilisation against the threshold rules, on the leader
+/// (ADR-076 decision 3).
+///
+/// Modelled on [`run_pool_coverage_watch`] — the other loop that raises alerts from outside the
+/// poll path — and it follows the same order for the same reason: persist to History **before**
+/// notifying, so an operator who is paged can always find the row.
+///
+/// Utilisation is not a stored series (ADR-012), so each tick is: ask the rules what they cover →
+/// compute the query floor from the slowest covered port → ask VictoriaMetrics for the ports above
+/// it → join their speeds from PostgreSQL → divide → feed the engine. The pure half of that is
+/// [`crate::interface_util`]; this function is the I/O and the ordering.
+///
+/// Leader-only for the same reason pool coverage is: two instances evaluating the same ports would
+/// double every notification, and the engine's check state is process-local.
+async fn run_interface_utilization_watch(
+    store: Arc<dyn MetricStore>,
+    repo: Arc<NodeRepo>,
+    alerts: Arc<AlertManager>,
+    notifier: Arc<Notifier>,
+    history: Arc<AlertHistoryStore>,
+) {
+    use crate::interface_util as util;
+    use std::collections::{BTreeMap, BTreeSet};
+    use store::InterfaceTopMetric;
+
+    // Which VictoriaMetrics dimension each derived metric divides. Spelled as a pair rather than
+    // derived from the name, so a third derived metric has to say which rate it is a percentage of
+    // instead of inheriting one by string coincidence.
+    const DIMENSIONS: [(&str, InterfaceTopMetric); 2] = [
+        (util::METRIC_IF_IN_UTIL_PCT, InterfaceTopMetric::InBps),
+        (util::METRIC_IF_OUT_UTIL_PCT, InterfaceTopMetric::OutBps),
+    ];
+
+    let mut tracked = util::TrackedChecks::default();
+    loop {
+        tokio::time::sleep(util::WATCH_TICK).await;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        for (metric, dimension) in DIMENSIONS {
+            let coverage = alerts.interface_rule_coverage(metric);
+            let Some(lowest_bound) = coverage.lowest_bound_pct else {
+                // No rule that can fire. Nothing is queried and nothing is swept clear — a port that
+                // was alerting when its rule was deleted is resolved by the config refresh, not by
+                // pretending its utilisation dropped.
+                continue;
+            };
+            // An enumerable rule set names its nodes; a broadly-scoped one means the fleet.
+            let scoped: Vec<Uuid> = coverage
+                .nodes
+                .as_ref()
+                .map(|s| s.iter().copied().collect())
+                .unwrap_or_default();
+            if coverage.nodes.as_ref().is_some_and(BTreeSet::is_empty) {
+                continue;
+            }
+            let slowest = match repo.slowest_interface_speed_bps(&scoped).await {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, metric, "reading the interface speed floor failed");
+                    continue;
+                }
+            };
+            let Some(floor) = util::candidate_floor_bps(slowest, Some(lowest_bound)) else {
+                // No covered port has a usable speed. Not an error — it is what a fleet of agents
+                // that implement neither speed OID looks like — but it is invisible without a
+                // number, so publish one.
+                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => metric).set(0.0);
+                continue;
+            };
+
+            let Some(candidates) = store.interface_candidates(dimension, floor).await else {
+                // 🚨 The store could not answer. Skip the whole tick rather than treating it as
+                // "nothing is busy": the recovery sweep below would otherwise resolve every open
+                // interface alert and send a recovery to PagerDuty for each, then re-fire them all
+                // when VictoriaMetrics came back.
+                metrics::counter!("yagra_interface_util_query_failures_total").increment(1);
+                tracing::warn!(
+                    metric,
+                    "interface-utilisation query did not answer; tick skipped"
+                );
+                continue;
+            };
+
+            // Speeds for exactly the candidate nodes — bounded by what crossed the floor, not by
+            // the fleet.
+            let nodes: Vec<Uuid> = candidates
+                .iter()
+                .map(|(n, _, _)| *n)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let idents = match repo.interface_idents_for(&nodes).await {
+                Ok(m) => m,
+                Err(e) => {
+                    tracing::warn!(error = %e, metric, "reading interface speeds failed");
+                    continue;
+                }
+            };
+            let speeds: BTreeMap<(Uuid, i32), Option<i64>> =
+                idents.iter().map(|(k, v)| (*k, v.if_speed)).collect();
+
+            let (readings, skipped) = util::evaluate(&candidates, &speeds);
+            metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => metric)
+                .set(skipped as f64);
+            metrics::gauge!("yagra_interface_util_tracked", "metric" => metric)
+                .set(tracked.len() as f64);
+
+            let mut present = BTreeSet::new();
+            let mut actions = Vec::new();
+            for r in &readings {
+                present.insert((r.node, r.ifindex));
+                // 🚨 A node that is not committed-Ok is frozen, not observed. Feeding `Ok` would
+                // resolve a real congestion alert the moment the device went unreachable; feeding
+                // the reading would page about a link on a box that is already down.
+                if !alerts.node_is_ok(r.node) {
+                    continue;
+                }
+                tracked.mark((r.node, r.ifindex, metric));
+                actions.extend(
+                    alerts.observe_interface_metric(r.node, r.ifindex, metric, r.pct, now_ms),
+                );
+            }
+
+            // Anything tracked that is no longer above the floor has recovered: below the floor is
+            // below every rule's bound by construction. Frozen nodes are skipped here too, for the
+            // same reason they are skipped above.
+            for key in tracked.absent(metric, &present) {
+                let (node, ifindex, m) = key;
+                if !alerts.node_is_ok(node) {
+                    continue;
+                }
+                actions.extend(alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms));
+            }
+
+            for action in actions {
+                if let Some(alert) = coverage_alert_of(&action) {
+                    let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
+                    if let Err(e) = history.record(alert, resolved).await {
+                        tracing::warn!(error = %e, "recording an interface-utilisation transition failed");
+                    }
+                }
+                notifier.handle(action).await;
+            }
         }
     }
 }
@@ -3771,6 +3933,9 @@ struct AlertConfigBase {
     /// which a shadow graph can suppress anything — not because a flag says so, but because the
     /// engine is never given one.
     topology: Topology,
+    /// Metric names that publish one series per interface, so each port gets its own check
+    /// (ADR-076). Rebuilt on the same config-generation gate as everything else here.
+    per_interface: std::collections::BTreeSet<String>,
 }
 
 /// Load the config-derived alert base (thresholds + node-meta + dependency topology).
@@ -3803,6 +3968,21 @@ async fn load_alert_config_base(
         tracing::warn!(error = %e, "loading group edges failed; folder-group thresholds will not resolve");
         Vec::new()
     });
+    // Which metrics are per-interface (ADR-076). Built from the collection catalogue, never from
+    // whether a sample carries an `ifindex` label — that label is a row key, so a chassis reading
+    // would otherwise be split into one bogus check per "port" (ADR-011).
+    //
+    // The repo is constructed here rather than threaded through `LeaderTasks`: it is a handle on
+    // the pool `repo` already owns, and this runs only when the config generation advances.
+    // Degrading to an empty set restores the pre-ADR-076 behaviour (every port shares the node's
+    // check), which under-fires rather than over-fires — the safe direction for a failed load.
+    let per_interface = crate::collection::CollectionRepo::new(repo.pool())
+        .per_interface_metric_names()
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "loading per-interface metric names failed; interface thresholds will share one check per node");
+            std::collections::BTreeSet::new()
+        });
     let mut meta = HashMap::new();
     let mut pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>> = HashMap::new();
     for node in &nodes {
@@ -3847,6 +4027,7 @@ async fn load_alert_config_base(
         meta,
         pool_groups,
         topology,
+        per_interface,
     }
 }
 
@@ -3940,6 +4121,7 @@ async fn load_alert_config(
         .with_topology(base.topology)
         .with_maintenance(in_maintenance)
         .with_pool_groups(base.pool_groups)
+        .with_per_interface(base.per_interface)
 }
 
 /// Load the unexpired mutes into the notifier (check ids recomputed from names here). A
@@ -4111,6 +4293,7 @@ mod tests {
             flapping: false,
             metric: "live_pollers".to_owned(),
             breach: None::<Breach>,
+            ifindex: None,
         };
         // A fire and a resolve are both rows; the two are told apart by `resolved`, which the
         // caller derives from the same action.
@@ -4461,6 +4644,14 @@ mod tests {
             _l: usize,
         ) -> Vec<(Uuid, i32, f64)> {
             Vec::new()
+        }
+        async fn interface_candidates(
+            &self,
+            _m: store::InterfaceTopMetric,
+            _floor_bps: f64,
+        ) -> Option<Vec<(Uuid, i32, f64)>> {
+            // Answers, with nothing — the read paths are not what this fake exercises.
+            Some(Vec::new())
         }
         async fn fresh_node_ids(&self, _m: &[&str], _w: u64) -> Vec<Uuid> {
             Vec::new()

@@ -1,0 +1,32 @@
+-- 0094_alert_history_ifindex — an alert can now be about one PORT, not just one node (ADR-076).
+--
+-- Since ADR-076 a per-interface metric gets one check per interface: the check id is
+-- `v5("<node>:<metric>@<ifindex>")` instead of `v5("<node>:<metric>")`. That fixed a rule that
+-- could never fire (all 48 ports shared one dwell window, so a 3-sample dwell never saw three
+-- consecutive problem samples), but the check id is a one-way hash — nothing can read the port
+-- back out of it. This column is how History, the API and a notification say *which* port.
+--
+-- Additive / expand-only (ADR-017): one nullable column, no rewrite, no index, nothing existing
+-- changes. Every historical row keeps `NULL`, which reads correctly as "this was not about a
+-- port" — that is what those rows meant.
+--
+-- ## Why no `schema_compat` floor is owed
+--
+-- A floor is owed by any migration after which the oldest bootable core moves up (0078's lesson:
+-- *adding* a table still stranded every prior release). This one does not move it. An N-1 core
+-- names its columns explicitly in `history_page_sql()` and in both writers, so it neither selects
+-- nor inserts this column; a row a newer core wrote decodes exactly as it did before, minus the
+-- port. Degraded, not broken — the same property migration 0075 chose `subject_kind` to preserve.
+--
+-- ## Why not `NOT NULL DEFAULT`
+--
+-- There is no honest default. `0` is a real ifIndex on some agents, so a defaulted 0 would claim
+-- every node-level alert in history happened on port 0. NULL is the only value that means
+-- "no port was involved", and it is what the reader maps to `None`.
+--
+-- reversible: additive nullable column; dropping it loses only the port label on rows written
+-- since this shipped, and no reader requires it (both writers and the page query name their
+-- columns explicitly, so an older binary ignores it).
+
+ALTER TABLE alert_history
+    ADD COLUMN IF NOT EXISTS ifindex INTEGER;

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
-use yagra_common::{CheckId, Direction, NodeId, NodeState, Severity};
+use yagra_common::{CheckId, Direction, IfIndex, NodeId, NodeState, Severity};
 
 /// Prefix distinguishing a pool subject from a node subject in the flat string form.
 ///
@@ -274,6 +274,17 @@ pub struct Alert {
     pub metric: String,
     /// Numeric breach detail for a threshold alert; `None` for a liveness alert.
     pub breach: Option<Breach>,
+    /// The interface this alert is about, for a per-interface metric; `None` for a node-level one.
+    //
+    // Descriptive only — alert *identity* lives in [`Self::check`], which already namespaces the
+    // port (`alerts.rs::interface_check_id`). This field exists so History, the API and a
+    // notification can say *which* port without re-deriving it from a hash that cannot be inverted.
+    //
+    // `#[serde(default)]` plus `skip_serializing_if` is what keeps N-1 safe in both directions: an
+    // older core deserialising a newer alert ignores the key (`Alert` has no `deny_unknown_fields`),
+    // and a newer core deserialising an older one gets `None` rather than a decode error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ifindex: Option<IfIndex>,
 }
 
 impl Alert {
@@ -309,6 +320,7 @@ mod tests {
             flapping: false,
             metric: "__liveness__".to_string(),
             breach: None,
+            ifindex: None,
         }
     }
 

@@ -35,6 +35,31 @@
 
 ### New Features
 
+- **Alert when a link passes a percentage of its own bandwidth.** Two new metrics —
+  **if_in_util_pct** and **if_out_util_pct** — carry receive and transmit traffic as a percentage
+  of the speed the port itself reports, so one rule reading "above 90" covers a fleet of 1G and
+  10G ports without either of them needing its own number. The two directions are separate on
+  purpose: a link is asymmetric far more often than not, and a rule on one says nothing about the
+  other. They are computed rather than collected — the same figure the Interfaces tab already
+  draws, taken from the octet counters and the port's speed at evaluation time — so a port whose
+  speed the device does not report cannot be evaluated and never fires; the count of such ports is
+  published as a metric rather than left invisible.
+
+  Rules are created from **Node detail ▸ Interfaces**: select a port and the dock offers a rule
+  already pointed at it. They are listed, edited and deleted alongside every other rule on
+  Alerts ▸ Metric alert rules. Evaluation is on the leader, once a minute, so a rule's breach count
+  is a count of minutes rather than of polls. Two behaviours worth knowing, both deliberate: while
+  a node is not reachable its ports' rules are **frozen** rather than cleared — the node's own
+  alert is what pages, and a congestion alert should not silently resolve because the device went
+  away — and if the metrics store stops answering, the whole evaluation round is skipped rather
+  than read as "every link is idle".
+
+- **A rule can target one port.** A new **interface** scope sits below node in the same
+  most-specific-wins order as the rest, so a single uplink expected to run hot can carry a looser
+  bound than the node it belongs to. It is created from the Interfaces dock, for the same reason
+  the legacy tag scope is not offered in the add dialog: there is nowhere to pick a port from on a
+  fleet-wide screen, and the dock is where the port is already in view.
+
 - **A rule's metric is chosen from a searchable list that says what each metric means.** The metric
   was a free-text box whose only help was a five-entry suggestion list, against a catalog of
   eighty-eight — so writing a rule on anything beyond ICMP meant knowing the exact name.
@@ -107,6 +132,23 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **A threshold rule on a per-interface metric never fired at all.** Port status, optical level,
+  per-port utilisation — anything the device reports once per interface — shared a *single* check
+  per node, so one poll of a 48-port switch fed that check 47 healthy samples interleaved with one
+  bad one. A rule asking for three consecutive breaches therefore never saw three, and the alert
+  was never raised, while the flap detector churned in the background. This was not a rule that
+  behaved coarsely; it was a rule that was inert, and the searchable metric list added in this
+  same release made it easier to write one. Each port now gets its own check, its own breach
+  count and its own alert, and the alert says which port: Active alerts, History, the API, the
+  MCP tools and notification templates all carry the interface index.
+
+  Two consequences worth knowing. A mute on a per-interface metric now silences **every** port on
+  that node for that metric, which is what picking one on a node-scoped form plainly means —
+  before, it silenced nothing at all. And if a deployment already had a rule on such a metric, its
+  alert identity changes, so any incident it had opened in PagerDuty or Jira Service Management
+  must be closed by hand — in practice there is nothing to close, because such a rule has never
+  fired.
 
 - **Two defects in popovers opened from inside a dialog**, both found by the metric picker being
   the first one this product has ever placed there, and neither reachable on an existing screen.

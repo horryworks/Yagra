@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../services/api';
 import type { NodeGroup, ProfileSummary, ScopeLevel } from '../../types/api';
+import { splitInterfaceScopeId } from '../../lib/interfaceScope';
 import { createNameBatcher, type NameBatcher } from './entityNameBatch';
 import { IconButton } from './IconButton';
 import { CopyIcon } from './icons';
@@ -102,6 +103,14 @@ export function useEntityNames() {
         case 'group_id':
         case 'group':
           return groupName(id);
+        // `<node-uuid>:<ifindex>` (ADR-076). Only the node half is resolvable here — this hook
+        // holds the fleet's node, group and profile names, not any node's interface roster, and
+        // fetching one per row would be a request per rule. The port is shown as its index, which
+        // is also what the alert itself carries.
+        case 'interface': {
+          const [node, port] = splitInterfaceScopeId(id);
+          return port === null ? nodeName(id) : `${nodeName(node)} · #${port}`;
+        }
       }
     },
     [nodeName, profileName, groupName],

@@ -121,6 +121,15 @@ pub struct AlertDto {
     pub fired_at: String,
     /// Upstream root-cause node id when this alert was attributed by dependency analysis.
     pub root_cause: Option<Uuid>,
+    /// The port this is about, as its SNMP ifIndex, for a metric collected once per interface —
+    /// interface utilisation, port status, optical level. `null` means the alert is about the node
+    /// as a whole, which is the ordinary case and not a missing value.
+    ///
+    /// This is the index the device files the row under, **not** a position on the front panel and
+    /// not a name: pair it with `get_node_status`, whose `interfaces` carry the same `ifindex`
+    /// alongside the port's name, alias and speed. Two alerts on one node with different values
+    /// here are about different ports and are separate incidents, each with its own `check_id`.
+    pub ifindex: Option<u32>,
     /// Whether the underlying check is currently flapping.
     pub flapping: bool,
     pub breach: Option<BreachDto>,
@@ -144,6 +153,7 @@ impl AlertDto {
             metric: alert.metric.clone(),
             fired_at: unix_ms_to_rfc3339(alert.at_unix_ms),
             root_cause: alert.root_cause.map(|r| r.0),
+            ifindex: alert.ifindex.map(|i| i.0),
             flapping: alert.flapping,
             breach: alert.breach.as_ref().map(|b| BreachDto {
                 value: b.value,
@@ -176,6 +186,18 @@ pub struct AlertHistoryDto {
     pub threshold_value: Option<f64>,
     /// Breach direction, `above`/`below` (threshold checks only).
     pub direction: Option<String>,
+    /// The port this is about, as its SNMP ifIndex, for a metric collected once per interface —
+    /// interface utilisation, port status, optical level. `null` means the alert is about the node
+    /// as a whole, which is the ordinary case and not a missing value.
+    ///
+    /// This is the index the device files the row under, **not** a position on the front panel and
+    /// not a name: pair it with `get_node_status`, whose `interfaces` carry the same `ifindex`
+    /// alongside the port's name, alias and speed. Two alerts on one node with different values
+    /// here are about different ports and are separate incidents, each with its own `check_id`.
+    ///
+    /// Also `null` on every row recorded before Yagra could alert per port, so an old row is not
+    /// evidence that the alert was node-wide.
+    pub ifindex: Option<u32>,
     /// Keyset cursor for the next page, first half — pass the **oldest** returned row's value as
     /// `before`. This is insertion time, which is **not** `at`: `at` is when the alert fired, and
     /// paging on it returns the wrong rows.
@@ -203,6 +225,7 @@ impl AlertHistoryDto {
             observed_value: row.observed_value,
             threshold_value: row.threshold_value,
             direction: row.direction.map(|d| d.as_str().to_owned()),
+            ifindex: row.ifindex,
             // Without these the tool advertised `before` while returning nothing a caller could
             // build it from — and its description pointed at `at`, which is a different clock.
             cursor_at: row.recorded_at.clone(),
@@ -902,6 +925,8 @@ mod tests {
             metric: "icmp_rtt_ms".to_owned(),
             fired_at: unix_ms_to_rfc3339(0),
             root_cause: None,
+            // Populated, not `None`: the canary only scans the fields an instance actually fills.
+            ifindex: Some(7),
             flapping: false,
             breach: Some(BreachDto {
                 value: 900.0,
@@ -1209,6 +1234,7 @@ mod tests {
                 threshold_value: Some(2.0),
                 direction: None,
                 recorded_at: "1970-01-01T00:00:00Z".to_owned(),
+                ifindex: None,
             },
             Some("edge-router-1".to_owned()),
         );

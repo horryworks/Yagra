@@ -794,6 +794,7 @@ html[data-viewport='mobile'] .nd-extract-row {
   color: var(--status-warning);
 }
 
+.nd-if-dock-rule,
 .nd-if-dock-close {
   flex: none;
   width: 26px;
@@ -809,11 +810,13 @@ html[data-viewport='mobile'] .nd-extract-row {
   transition: color var(--transition), background var(--transition);
 }
 
+.nd-if-dock-rule:hover,
 .nd-if-dock-close:hover {
   background: var(--bg-tertiary);
   color: var(--text-primary);
 }
 
+.nd-if-dock-rule svg,
 .nd-if-dock-close svg {
   width: 14px;
   height: 14px;

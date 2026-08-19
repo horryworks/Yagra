@@ -108,6 +108,7 @@ describe('thresholdFormFrom + thresholdBody', () => {
       group: 'tag',
       group_id: 'folderGroup',
       node: 'node',
+      interface: 'interface',
     });
     // The two "group" levels must never resolve to the same control — one picks a folder from the
     // inventory tree, the other is free-form tag text, and offering the tree for the tag level
@@ -115,5 +116,36 @@ describe('thresholdFormFrom + thresholdBody', () => {
     expect(scopeIdKind('group')).not.toBe(scopeIdKind('group_id'));
     // Exactly one level has no id, and readiness agrees with it.
     expect(SCOPE_LEVELS.filter((l) => scopeIdKind(l) === 'none')).toEqual(['global']);
+  });
+
+  it('judges a port rule scope id itself rather than letting the server 400 it', () => {
+    // Every other level's id comes from a picker, so "non-empty" is the whole question. A port
+    // rule's id is composed (`<node-uuid>:<ifindex>`), so the form has to know the shape — the
+    // server refuses anything else, and a Save that turns into a 400 for a value the form could
+    // have judged is a worse form than a disabled button.
+    const base = {
+      metric: 'if_in_util_pct',
+      direction: 'above' as const,
+      warning: '',
+      critical: '90',
+      dwell: '3',
+    };
+    const node = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
+
+    expect(
+      isThresholdReady({ ...base, level: 'interface', scopeId: `${node}:7` }),
+    ).toBe(true);
+    // Port 0 is a real ifIndex, so it must not read as "no port".
+    expect(
+      isThresholdReady({ ...base, level: 'interface', scopeId: `${node}:0` }),
+    ).toBe(true);
+
+    for (const bad of ['', node, `${node}:`, `${node}:x`, `${node}:-1`, 'not-a-uuid:7']) {
+      expect(isThresholdReady({ ...base, level: 'interface', scopeId: bad })).toBe(false);
+    }
+
+    // The strictness is confined to this level: a node rule still only needs a non-empty id, so
+    // this did not quietly tighten every other level as well.
+    expect(isThresholdReady({ ...base, level: 'node', scopeId: 'anything' })).toBe(true);
   });
 });

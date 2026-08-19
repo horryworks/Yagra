@@ -8,6 +8,7 @@
 
 use serde::Serialize;
 use sqlx::{PgPool, Row};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 use yagra_common::{CollectionItem, CollectionKind, MetricKind, ScopeLevel, ScopedCollectionItem};
 
@@ -221,6 +222,45 @@ impl CollectionRepo {
         .fetch_one(&self.pool)
         .await?;
         Ok(row.try_get("is_counter")?)
+    }
+
+    /// Every metric name that publishes **one series per interface** (ADR-076).
+    ///
+    /// The union of the built-in catalogue and both operator-editable item tables, answered by
+    /// [`yagra_common::item_publishes_per_interface`] — the OID rules it applies are the only
+    /// thing that can decide this, and they live in Rust because `ifindex` is a row key rather
+    /// than a port number (ADR-011). The engine needs the set, not a per-metric probe, because it
+    /// asks the question once per distinct metric on every poll result.
+    ///
+    /// Both item tables are consulted, exactly as [`Self::metric_declared_counter`] does: an item
+    /// defined on a template and one defined at a scope are the same thing to a poller, and
+    /// consulting only one would silently leave half the fleet's interface metrics sharing a
+    /// single check.
+    pub async fn per_interface_metric_names(&self) -> anyhow::Result<BTreeSet<String>> {
+        let mut out: BTreeSet<String> = yagra_common::builtin_catalog()
+            .iter()
+            .filter(|i| yagra_common::item_publishes_per_interface(i))
+            .map(|i| i.metric_name.clone())
+            .collect();
+        let rows = sqlx::query(
+            "SELECT metric_name, oid, collection FROM collection_items              UNION              SELECT metric_name, oid, collection FROM collection_template_items",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for row in rows {
+            let item = CollectionItem {
+                metric_name: row.try_get("metric_name")?,
+                oid: row.try_get("oid")?,
+                kind: parse_collection_kind(&row.try_get::<String, _>("collection")?),
+                // Unread by `item_publishes_per_interface`; the dimension is decided by the OID
+                // and the collection kind, never by whether the value is a counter.
+                metric_kind: yagra_common::MetricKind::Gauge,
+            };
+            if yagra_common::item_publishes_per_interface(&item) {
+                out.insert(item.metric_name);
+            }
+        }
+        Ok(out)
     }
 
     /// Delete a collection item by id. Returns whether a row was removed.

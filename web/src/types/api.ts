@@ -397,16 +397,32 @@ export type ProfileInput = components['schemas']['ProfileBody'];
  *  scope id (ADR-075); the server pins its `scope_id` to the empty string. `group_id` is a folder
  *  group in the inventory tree and covers every group inside it; the older `group` matches a node
  *  **tag value** and is legacy (ADR-075 増分 3). */
-export const SCOPE_LEVELS = ['global', 'profile', 'group', 'group_id', 'node'] as const;
+export const SCOPE_LEVELS = [
+  'global',
+  'profile',
+  'group',
+  'group_id',
+  'node',
+  'interface',
+] as const;
 
-/** The levels a *new* rule may be created at — every level except the legacy tag-based `group`.
+/** The levels a *new* rule may be created at from the Metric alert rules screen.
  *
- *  Nothing in the product writes `nodes.tags` except a config-bundle import, so offering that level
- *  in the add dialog offers a rule that cannot match anything. Existing rules keep resolving,
- *  listing and editing at that level, which is why it stays in `SCOPE_LEVELS` above — the filter
- *  row and the table badge both iterate that one. Same shape the maintenance-window form uses. */
+ *  Two are excluded, for different reasons.
+ *
+ *  `group` (a node **tag value**) is legacy: nothing in the product writes `nodes.tags` except a
+ *  config-bundle import, so offering it in the add dialog offers a rule that cannot match anything.
+ *
+ *  `interface` (one port of one node, ADR-076) is excluded because this screen has nowhere to pick
+ *  a port from — a fleet-wide interface picker does not exist, and building one is its own piece of
+ *  work. A port rule is created from Node detail ▸ Interfaces, where the port being looked at *is*
+ *  the target and nothing has to be searched for.
+ *
+ *  Both still resolve, list, filter and **edit** at their level, which is why they stay in
+ *  `SCOPE_LEVELS` above — the filter row, the table badge and the edit dialog all iterate that one,
+ *  and the dialog re-adds a rule's own level when it is not creatable. */
 export const CREATABLE_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(
-  (l) => l !== 'group',
+  (l) => l !== 'group' && l !== 'interface',
 );
 
 /** Threshold scope level (snake_case). Most-specific wins. Pinned to `schemas.ScopeLevel`. */
