@@ -308,11 +308,15 @@ export function GeoMapPage() {
                       transform={`translate(${p.x} ${p.y})`}
                       role="button"
                       tabIndex={0}
-                      onClick={() => navigate(`/nodes?sel=${g.id}`)}
+                      // ⚠️ The `group:` prefix is not decoration. `parseSelection` splits on the
+                      // first colon and returns null without one, so a bare UUID landed on All
+                      // nodes with nothing selected at all — the pin navigated, and then quietly
+                      // did nothing. (`PollersPage` has always written the `node:` form.)
+                      onClick={() => navigate(`/nodes?sel=${encodeURIComponent(`group:${g.id}`)}`)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault();
-                          navigate(`/nodes?sel=${g.id}`);
+                          navigate(`/nodes?sel=${encodeURIComponent(`group:${g.id}`)}`);
                         }
                       }}
                     >

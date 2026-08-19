@@ -25,13 +25,24 @@ export function CredentialPicker({ options, selected, onChange, disabled }: Cred
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
+  // Same dismissal contract as `UserMenu` / `OverflowMenu`: gated on `open`, and Escape closes.
+  // Both were added by ADR-073 — the chips already had their own ✕, so what could not be dismissed
+  // was the dropdown itself, and only by keyboard.
   useEffect(() => {
+    if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, []);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   const toggle = (id: string) =>
     onChange(selected.includes(id) ? selected.filter((x) => x !== id) : [...selected, id]);

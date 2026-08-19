@@ -23,13 +23,25 @@ export function UserMenu() {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
+  // Dismissal, in the shape every other menu in the app uses (`OverflowMenu`). Two things were
+  // missing until ADR-073: Escape did nothing — this and `CredentialPicker` were the only two
+  // popovers in the product without it — and the outside-click listener was mounted unconditionally,
+  // so a menu that is closed 99% of the time still inspected every click on every screen.
   useEffect(() => {
+    if (!open) return;
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
-    return () => document.removeEventListener('mousedown', onDown);
-  }, []);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
 
   const logout = () => {
     // Fire the server-side revoke (request() captures the token synchronously before it's

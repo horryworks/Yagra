@@ -23,6 +23,7 @@ import { usePrefsStore } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
 import { useViewportMode } from '../../lib/viewport';
 import { useRefreshTick } from '../../lib/refreshTick';
+import { escapeClosesInPageSurface } from '../../lib/escapeDismiss';
 import {
   FAULT_SERIES,
   faultValues,
@@ -153,6 +154,22 @@ export function InterfacesTab({ nodeId, rows, loaded, error }: Props) {
   const [filters, setFilters] = useState<FilterState>(() => defaultFilters(columns));
   const [sheet, setSheet] = useState(false);
   const [selected, setSelected] = useState<number | null>(null);
+  // Escape closes the dock (ADR-073). It was the one dismissal this tab lacked — re-clicking the
+  // row and the dock's own ✕ were already there, and `keepSelectedInView` exists specifically to
+  // keep the first of those one click away.
+  //
+  // `escapeClosesInPageSurface` rather than `escapeClearsSelection`: the dock is itself listed as
+  // an in-page layer, so asking the outer question would make it block its own dismissal. On the
+  // Nodes split that layering is what stops one press from closing the dock *and* deselecting the
+  // node whose detail pane the dock lives in.
+  useEffect(() => {
+    if (selected === null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (escapeClosesInPageSurface(e)) setSelected(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selected]);
   const listRef = useRef<HTMLDivElement>(null);
   // The tab root, held in *state* rather than a ref. ⚠️ A ref does not work here: this component
   // returns an early tree while it has no rows, so on the render the measuring effect first ran

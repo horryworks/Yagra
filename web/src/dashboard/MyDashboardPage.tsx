@@ -26,6 +26,7 @@ import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
 import { PageHeader } from '../components/ui/PageHeader';
 import { useAlertStream } from '../hooks/useAlertStream';
+import { escapeClearsSelection } from '../lib/escapeDismiss';
 import { BoardTabs } from './BoardTabs';
 import { CatalogModal } from './CatalogModal';
 import { LayoutStoreProvider } from './LayoutStoreContext';
@@ -96,6 +97,23 @@ export function MyDashboardPage() {
     if (isDirty()) setConfirmCancel(true);
     else cancelEditing();
   };
+
+  // Escape leaves edit mode, through that same handler so a dirty board still asks before it
+  // discards anything (ADR-073). `WidgetFrame`'s Escape branch has always carried a comment saying
+  // it stops "the board's own Escape handling" from taking an abandoned title draft with it — the
+  // board had no such handling, so that `stopPropagation()` guarded nothing. It does now.
+  // The body is inlined rather than calling `onCancel`, which is a fresh closure every render and
+  // would re-subscribe the listener on each one.
+  useEffect(() => {
+    if (!editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!escapeClearsSelection(e)) return;
+      if (isDirty()) setConfirmCancel(true);
+      else cancelEditing();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [editing, isDirty, cancelEditing]);
 
   const actions = editing ? (
     <>

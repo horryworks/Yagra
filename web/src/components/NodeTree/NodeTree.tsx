@@ -99,6 +99,10 @@ interface Props {
   /** Select a node/group row (single-click). Falls back to `onOpenNode` when not provided. */
   onSelectNode?: (node: NodeSummary) => void;
   onSelectGroup?: (group: NodeGroup) => void;
+  /** Clear the selection (ADR-073). Two gestures reach it: clicking the already-selected row, and
+   *  clicking the empty space below the rows. Omit and both become no-ops — the tree keeps its
+   *  pre-ADR-073 behaviour of only ever moving the selection, never removing it. */
+  onSelectNone?: () => void;
   /** Case-insensitive name filter; non-empty force-expands and hides non-matching rows. */
   filter?: string;
   /** The nodes handed in were already narrowed by the pane's state / kind / pool controls, which
@@ -169,6 +173,7 @@ export function NodeTree({
   selected,
   onSelectNode,
   onSelectGroup,
+  onSelectNone,
   filter,
   narrowed,
   showToolbar = true,
@@ -235,8 +240,21 @@ export function NodeTree({
   });
   // Row click selects (drives the split detail pane); without a select handler, fall back to the
   // legacy "open node" behaviour so the tree still works on its own.
-  const selectNode = (node: NodeSummary) => (onSelectNode ? onSelectNode(node) : onOpenNode(node));
-  const selectGroup = (group: NodeGroup) => onSelectGroup?.(group);
+  //
+  // Clicking the row that is already selected clears it instead (ADR-073 decision 1). Both the row
+  // and its name button funnel through here, so one place covers both. This is the gesture that
+  // works when the others cannot: the blank-space click needs blank space, which a tree taller than
+  // its pane does not have, and Escape needs a keyboard.
+  const isSelected = (kind: 'node' | 'group', id: string) =>
+    selected?.kind === kind && selected.id === id;
+  const selectNode = (node: NodeSummary) => {
+    if (onSelectNone && isSelected('node', node.id)) return onSelectNone();
+    return onSelectNode ? onSelectNode(node) : onOpenNode(node);
+  };
+  const selectGroup = (group: NodeGroup) => {
+    if (onSelectNone && isSelected('group', group.id)) return onSelectNone();
+    onSelectGroup?.(group);
+  };
 
   // Whether a right-click on each row kind would produce a menu with anything in it.
   //
@@ -848,7 +866,21 @@ export function NodeTree({
         </div>
       )}
 
-      <div className="ntree-body" ref={scrollRef}>
+      {/* Clicking the empty space below the rows clears the selection (ADR-073 decision 5).
+          `e.target === e.currentTarget` is what makes this "blank space" and not "the tree": rows
+          live inside the virtualizer's spacer, so a click on one never reports the body as its
+          target. Deliberately a React `onClick` and not a `document` listener — the same-frame
+          bug `rowMenu.spec.ts` pins (the click that opens a menu also reaching the handler that
+          closes it) is specific to document-level dismissal, and this shape cannot have it.
+          While the context menu is open the click only dismisses that: transient first (decision 4). */}
+      <div
+        className="ntree-body"
+        ref={scrollRef}
+        onClick={(e) => {
+          if (menu || !onSelectNone) return;
+          if (e.target === e.currentTarget) onSelectNone();
+        }}
+      >
         {flat.length === 0 ? (
           // Empty flat list: a blank body while filtering with no matches, else loading / empty-state.
           filtering ? null : loading ? (

@@ -4,7 +4,7 @@
 // Global search opens as a full-width row under the bar rather than living in it: at 44px targets
 // the bar has no room for a field, and a tap-to-open row keeps the burger/home/bell reachable.
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAlertStore } from '../../store';
@@ -23,6 +23,30 @@ export function MobileTopBar({ onOpenMenu }: Props) {
   const navigate = useNavigate();
   const alertCount = useAlertStore((s) => Object.keys(s.alerts).length);
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+
+  // The row could only be closed by finding the ⌕ again (ADR-073). Escape and a tap outside now do
+  // it too, which is what every other transient surface in the app already offered. `GlobalSearch`
+  // handles its own Escape for the results popover; both fire on one press, so a single Escape
+  // dismisses the search outright rather than leaving an empty row behind.
+  useEffect(() => {
+    if (!searchOpen) return;
+    const onDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (searchRef.current?.contains(target) || toggleRef.current?.contains(target)) return;
+      setSearchOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSearchOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [searchOpen]);
 
   return (
     <header className="mtopbar">
@@ -48,6 +72,7 @@ export function MobileTopBar({ onOpenMenu }: Props) {
 
       <div className="mtopbar-right">
         <button
+          ref={toggleRef}
           className="mtopbar-bell"
           onClick={() => setSearchOpen((v) => !v)}
           aria-label={t('shell.globalSearch')}
@@ -72,7 +97,7 @@ export function MobileTopBar({ onOpenMenu }: Props) {
       </div>
 
       {searchOpen && (
-        <div className="mtopbar-search">
+        <div className="mtopbar-search" ref={searchRef}>
           <GlobalSearch mobile />
         </div>
       )}

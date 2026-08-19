@@ -599,7 +599,17 @@ export function DiscoveryPage() {
                   <button
                     type="button"
                     className={`disco-scan${s.scan_id === scanId ? ' selected' : ''}`}
+                    // Clicking the selected scan again goes back to "no scan selected" — the
+                    // state the page starts in, and the one it had no way back to (ADR-073).
+                    // ⚠️ This one deselection means more than the others: the page stops following
+                    // the scan. The sweep keeps running server-side and clicking the row again
+                    // re-attaches to it, which is what `reattached` has always been for.
                     onClick={() => {
+                      if (s.scan_id === scanId) {
+                        selectScan(null);
+                        setReattached(false);
+                        return;
+                      }
                       selectScan(s.scan_id);
                       setReattached(true);
                     }}

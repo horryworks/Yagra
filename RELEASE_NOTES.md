@@ -10,6 +10,25 @@
 
 ## Unreleased
 
+### Improvements
+
+- **A selection in All nodes can be cleared again.** Picking a group or a node in the inventory
+  tree used to be one-way on a desktop: the right pane could be pointed at a different row, but
+  never back to nothing. Three gestures now clear it — **Escape**, **clicking the empty space below
+  the tree**, and **clicking the selected row a second time**. Escape yields to whatever is open
+  above the page, so closing a dialog or the row menu leaves the selection alone.
+- **Escape now closes the account menu, the credential picker on Discovery, and the search row in
+  the mobile top bar.** Every other menu in the product already answered it; these three did not.
+- **Escape closes the interface detail dock** on a node's Interfaces tab, and **leaves dashboard
+  edit mode** — through the same confirmation an unsaved layout already gets from Cancel.
+- **A discovery scan can be deselected.** Clicking the selected scan in the recent-scans list
+  returns to the unattached state; clicking it again re-attaches. The sweep itself is unaffected.
+
+### Bug Fixes
+
+- **A pin on the Geo map now actually selects its group.** It navigated to All nodes with the group
+  id malformed, so the page opened with nothing selected.
+
 ## v0.2.15 — Cisco devices answer about their own health, and a port stops inventing its speed, media and light
 
 ### New Features

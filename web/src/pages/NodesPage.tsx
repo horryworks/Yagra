@@ -63,6 +63,7 @@ import {
 } from '../lib/suppression';
 import { inheritedGroupPool } from '../lib/pool';
 import { parseSelection, selectionToParam } from '../lib/treeSelection';
+import { escapeClearsSelection } from '../lib/escapeDismiss';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
 import { ActionMenu } from '../components/ui/ActionMenu';
@@ -131,6 +132,23 @@ export function NodesPage() {
     },
     [searchParams, setSearchParams],
   );
+
+  // Escape clears the selection (ADR-073). Before this the split had no desktop way back to the
+  // empty right pane at all: `select(null)` existed but its only caller was the mobile pane
+  // switcher's back chevron, which `.nodes-detail-back { display: none }` hides on a desktop.
+  //
+  // The guard is shared rather than spelled here, because the dashboard's edit mode and the
+  // Interfaces dock ask the same question and three copies would drift. It answers false while a
+  // modal, a popover or the tree's context menu is open — those own the press — and false while the
+  // operator is typing, so Escape still belongs to the pane's search box.
+  useEffect(() => {
+    if (!selected) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (escapeClearsSelection(e)) select(null);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [selected, select]);
 
   const setTab = useCallback(
     (next: string) => {
@@ -700,6 +718,7 @@ export function NodesPage() {
             narrowed={serverNarrowed}
             onSelectNode={(n) => select({ kind: 'node', id: n.id })}
             onSelectGroup={(g) => select({ kind: 'group', id: g.id })}
+            onSelectNone={() => select(null)}
             onOpenNode={(n) => navigate(`/nodes/${n.id}`)}
             onAddGroup={(pid) => setGroupModal({ mode: 'add', parentId: pid })}
             onEditGroup={(g) => setGroupModal({ mode: 'edit', group: g, parentId: g.parent_id ?? null })}
