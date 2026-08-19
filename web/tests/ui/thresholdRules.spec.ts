@@ -189,3 +189,79 @@ test('a rule opens for editing with its own values, and reachability offers no b
   await expect(liveness).toContainText('Reachability');
   await expect(liveness).not.toContainText('__liveness__');
 });
+
+test('the metric is picked from a searchable list that explains each choice', async ({ page }) => {
+  await page.goto('/alerts/rules');
+  await page.getByRole('button', { name: '+ Add rule' }).click();
+  const dialog = page.getByRole('dialog');
+
+  // The field is a listbox trigger now, not a text box: the value is chosen, never typed blind.
+  const trigger = dialog.locator('.metricpick-trigger');
+  await expect(trigger).toHaveCount(1);
+  await trigger.click();
+  const list = page.locator('.metricpick-list');
+  await expect(list).toBeVisible();
+
+  // 1. A counter is not offered. `POST /thresholds` refuses one with `counter_metric`, so
+  //    offering it would be offering a choice the save rejects — the error this control removes.
+  //    The mock supplies `if_hc_in_octets` precisely so this can be asserted against a row that
+  //    really is in the catalog rather than against an empty list.
+  await expect(list.locator('.metricpick-row', { hasText: 'if_hc_in_octets' })).toHaveCount(0);
+  //    …and the gauge beside it IS offered, so "nothing is offered" cannot pass this test.
+  await expect(list.locator('.metricpick-row', { hasText: 'if_oper_status' })).toHaveCount(1);
+
+  // 2. Every row carries its meaning, and the search reaches the meaning as well as the name.
+  //    "port" appears in `if_oper_status`'s sentence; the row must show that sentence, not just
+  //    the bare name — reading before choosing is the whole point of the control.
+  const search = page.locator('.metricpick-search input');
+  await search.fill('port');
+  const operRow = list.locator('.metricpick-row', { hasText: 'if_oper_status' });
+  await expect(operRow).toHaveCount(1);
+  await expect(operRow.locator('.metricpick-meaning')).toContainText('1 = up');
+
+  // 3. A metric nothing explains falls back to its OID rather than an empty line — the shape an
+  //    operator's own collection item takes.
+  await search.fill('ymock');
+  const customRow = list.locator('.metricpick-row', { hasText: 'ymock_widget_temp' });
+  await expect(customRow).toHaveCount(1);
+  await expect(customRow.locator('.metricpick-meaning')).toContainText('1.3.6.1.4.1.99999.1.1');
+
+  // 4. A name the catalog has never heard of can still be used — an operator may attach a
+  //    collection item with any valid name, so a closed list would block a real metric.
+  await search.fill('acme_widget_hz');
+  await expect(list.locator('.metricpick-row', { hasText: 'if_oper_status' })).toHaveCount(0);
+  const useIt = list.locator('.metricpick-row.custom');
+  await expect(useIt).toContainText('acme_widget_hz');
+  await useIt.click();
+  await expect(dialog.locator('.metricpick-trigger')).toContainText('acme_widget_hz');
+
+  // 5. Choosing a metric that IS explained shows the sentence beside the closed field, so the
+  //    operator who never opens the list still sees what the rule watches.
+  await dialog.locator('.metricpick-trigger').click();
+  await page.locator('.metricpick-search input').fill('if_oper_status');
+  await page.locator('.metricpick-list .metricpick-row').first().click();
+  await expect(dialog.locator('.metricpick .modal-hint')).toContainText('1 = up');
+});
+
+test('Escape closes the metric list without throwing away the rule behind it', async ({ page }) => {
+  // The metric picker is the first popover this product puts inside a dialog, and `AnchoredPopover`
+  // and `Modal` both listen for Escape on `document` — so one press used to close both, discarding
+  // a half-filled form. Two presses, two different things closing, is the property.
+  await page.goto('/alerts/rules');
+  await page.getByRole('button', { name: '+ Add rule' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.locator('.thresholds-num').first().fill('42');
+
+  await dialog.locator('.metricpick-trigger').click();
+  await expect(page.locator('.metricpick-list')).toBeVisible();
+
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.metricpick-list')).toHaveCount(0);
+  // Still open, and still holding what was typed.
+  await expect(dialog).toBeVisible();
+  await expect(dialog.locator('.thresholds-num').first()).toHaveValue('42');
+
+  // …and the second press still closes the dialog, so the fix did not just break Escape.
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+});

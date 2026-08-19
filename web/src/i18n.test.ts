@@ -55,6 +55,8 @@ import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
 import enRca from './locales/en/rca.json';
 import jaRca from './locales/ja/rca.json';
+import enMetrics from './locales/en/metrics.json';
+import jaMetrics from './locales/ja/metrics.json';
 
 type Json = Record<string, unknown>;
 
@@ -95,6 +97,7 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   'settings-tls': { en: enSettingsTls, ja: jaSettingsTls },
   'settings-upgrade': { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
   rca: { en: enRca, ja: jaRca },
+  metrics: { en: enMetrics, ja: jaMetrics },
 };
 
 describe('i18n mechanism', () => {

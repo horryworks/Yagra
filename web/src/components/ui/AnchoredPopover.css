@@ -8,7 +8,9 @@
 
 .apop {
   position: fixed;
-  z-index: 70;
+  /* Above the modal overlay: a popover opened from a control inside a dialog is otherwise drawn
+     correctly and completely unclickable. See the note beside the token. */
+  z-index: var(--z-popover);
   background: var(--bg-secondary);
   border: var(--border-width) solid var(--border-color);
   border-radius: var(--radius);

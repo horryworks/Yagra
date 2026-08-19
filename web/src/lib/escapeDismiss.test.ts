@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { FLOATING_SELECTOR, OVERLAY_SELECTOR, shouldDismissOnEscape } from './escapeDismiss';
+import {
+  ABOVE_DIALOG_SELECTOR, FLOATING_SELECTOR, OVERLAY_SELECTOR, shouldDismissOnEscape } from './escapeDismiss';
 
 /** The plain case: Escape on a page with nothing open and focus nowhere in particular. */
 const plain = { key: 'Escape', overlayOpen: false, tagName: 'BODY', isEditable: false };
@@ -71,5 +72,23 @@ describe('the two selectors', () => {
     for (const part of FLOATING_SELECTOR.split(', ')) {
       expect(OVERLAY_SELECTOR).toContain(part);
     }
+  });
+});
+
+describe('ABOVE_DIALOG_SELECTOR', () => {
+  it('names every floating layer except a dialog', () => {
+    // A modal asks "is anything stacked above me?" and must not answer yes because of itself —
+    // that would make Escape unable to close any dialog at all.
+    expect(ABOVE_DIALOG_SELECTOR).not.toContain('role="dialog"');
+    expect(ABOVE_DIALOG_SELECTOR).toContain('.apop');
+    for (const part of ABOVE_DIALOG_SELECTOR.split(', ')) {
+      expect(FLOATING_SELECTOR).toContain(part);
+    }
+  });
+
+  it('is exactly the floating layers minus dialogs, not a hand-written second list', () => {
+    // Derived, so a fourth popover primitive added to FLOATING_LAYERS reaches the dialog rule too.
+    const floating = FLOATING_SELECTOR.split(', ').filter((s) => s !== '[role="dialog"]');
+    expect(ABOVE_DIALOG_SELECTOR.split(', ')).toEqual(floating);
   });
 });

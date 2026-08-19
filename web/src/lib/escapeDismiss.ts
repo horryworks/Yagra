@@ -36,6 +36,14 @@ const FLOATING_LAYERS = [
  *  clear, so one press would close the dock and throw away the node it belonged to. */
 const IN_PAGE_LAYERS = ['.nd-if-dock'] as const;
 
+/** Everything that outranks a **dialog**: the floating layers minus dialogs themselves, so a
+ *  modal asking this is not blocked by its own presence in the document.
+ *
+ *  Derived from the same array rather than spelled out, for the reason the file exists. */
+export const ABOVE_DIALOG_SELECTOR = FLOATING_LAYERS.filter(
+  (s) => s !== '[role="dialog"]',
+).join(', ');
+
 /** Everything that outranks a page-level selection. */
 export const OVERLAY_SELECTOR = [...FLOATING_LAYERS, ...IN_PAGE_LAYERS].join(', ');
 /** Everything that outranks an in-page surface — the floating layers only, so a surface asking this
@@ -94,4 +102,20 @@ export function escapeClearsSelection(e: KeyboardEvent): boolean {
  *  so the caller is not blocked by its own presence in the document. */
 export function escapeClosesInPageSurface(e: KeyboardEvent): boolean {
   return ask(e, FLOATING_SELECTOR);
+}
+
+/** For a modal dialog closing itself. Yields to a popover or menu opened **from inside it**, and to
+ *  nothing else.
+ *
+ *  It deliberately does **not** go through {@link shouldDismissOnEscape}: that refuses while the
+ *  operator is typing, which is right for a page-level selection and wrong for a dialog — a form is
+ *  mostly text inputs, and Escape has always closed it from one. The only question here is whether
+ *  something is stacked above.
+ *
+ *  ⚠️ The case is real, not theoretical. `AnchoredPopover` and `Modal` both listen on `document`,
+ *  so before this the metric picker's Escape closed the popover **and** threw away the half-filled
+ *  rule behind it. Nothing had noticed because the metric picker is the first popover this product
+ *  has ever put inside a dialog. */
+export function escapeClosesDialog(e: KeyboardEvent): boolean {
+  return e.key === 'Escape' && document.querySelector(ABOVE_DIALOG_SELECTOR) === null;
 }

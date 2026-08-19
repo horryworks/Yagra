@@ -27,9 +27,9 @@ import {
   type ScopeLevel,
   type StoredThreshold,
 } from '../types/api';
-import { METRIC_PRESETS } from '../lib/suppression';
 import { LIVENESS_METRIC } from '../lib/format';
-import { metricMeaningKey } from './thresholdMeaning';
+import { metricMeaningKey } from '../lib/metricMeaning';
+import { MetricPicker } from '../components/MetricPicker/MetricPicker';
 import {
   isThresholdReady,
   scopeIdKind,
@@ -201,7 +201,7 @@ function ThresholdModal({
   //    retype the engine's internal sentinel. Deriving it from the typed value instead would make
   //    the input disappear the moment someone typed `__liveness__` into it, with no way back.
   //  - `noBounds` reads the **current** value, so the bounds also disappear in add mode — the
-  //    sentinel is offered in the metric datalist, and bounds on it are read by nothing
+  //    sentinel is offered in the metric picker, and bounds on it are read by nothing
   //    (`repo.rs`'s seed comment): the engine takes the severity from the committed `NodeState`.
   const lockedMetric = mode === 'edit' && rule?.metric === LIVENESS_METRIC;
   const noBounds = form.metric.trim() === LIVENESS_METRIC;
@@ -268,20 +268,7 @@ function ThresholdModal({
             <span className="modal-hint">{t('thresholds.livenessMetric')}</span>
           </>
         ) : (
-          <>
-            <TextInput
-              className="mono"
-              placeholder={t('thresholds.addModal.metricPlaceholder')}
-              list="metric-presets"
-              value={form.metric}
-              onChange={(e) => set('metric', e.target.value)}
-            />
-            <datalist id="metric-presets">
-              {METRIC_PRESETS.map((m) => (
-                <option key={m} value={m} />
-              ))}
-            </datalist>
-          </>
+          <MetricPicker value={form.metric} onChange={(m) => set('metric', m)} />
         )}
       </div>
       <div className="modal-field">

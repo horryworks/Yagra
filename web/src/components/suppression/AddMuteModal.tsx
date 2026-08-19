@@ -15,7 +15,8 @@ import { TextInput, Select } from '../ui/Field';
 import { NodePicker } from '../NodePicker/NodePicker';
 import { groupOptions } from '../../lib/nodeTree';
 import { localTimeZone, LIVENESS_METRIC } from '../../lib/format';
-import { METRIC_PRESETS, type SuppressionTarget } from '../../lib/suppression';
+import { type SuppressionTarget } from '../../lib/suppression';
+import { MetricPicker } from '../MetricPicker/MetricPicker';
 
 const TZ = localTimeZone();
 const toRfc3339 = (local: string) => new Date(local).toISOString();
@@ -166,20 +167,7 @@ export function AddMuteModal({
               <strong>{t('format:liveness')}</strong>
             </p>
           ) : (
-            <>
-              <TextInput
-                className="mono"
-                placeholder={t('muteForm.metricPlaceholder')}
-                list="mute-check-presets"
-                value={check}
-                onChange={(e) => setCheck(e.target.value)}
-              />
-              <datalist id="mute-check-presets">
-                {METRIC_PRESETS.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </>
+            <MetricPicker value={check} onChange={setCheck} />
           )}
         </div>
       )}

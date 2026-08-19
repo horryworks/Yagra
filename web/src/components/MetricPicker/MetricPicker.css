@@ -1,0 +1,151 @@
+/* Metric picker: a field-styled trigger + a searchable, grouped listbox (ADR-075 増分 4).
+   Mirrors the NodePicker / CredentialPicker look; theme variables only, no hardcoded colours.
+   The popover surface itself (border, radius, shadow, placement) comes from AnchoredPopover. */
+
+.metricpick {
+  position: relative;
+}
+
+/* Looks like the `TextInput` it replaced, so the dialog's fields stay one column of controls. */
+.metricpick-trigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  padding: 6px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-md);
+  cursor: pointer;
+}
+
+.metricpick-trigger:hover {
+  border-color: var(--accent-hover);
+}
+
+.metricpick-trigger:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.metricpick-trigger.placeholder {
+  color: var(--text-tertiary);
+}
+
+.metricpick-trigger > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Wide enough for a metric name and its sentence side by side on one line at most sizes; the
+   height is a scroller because the catalog is ~90 rows. */
+.metricpick-pop {
+  width: min(460px, calc(100vw - 24px));
+  padding: 8px;
+}
+
+.metricpick-search {
+  margin-bottom: 6px;
+}
+
+.metricpick-list {
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.metricpick-group-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 6px 8px 2px;
+  background: var(--bg-secondary);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.metricpick-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.metricpick-row:hover,
+.metricpick-row[data-active='true'] {
+  background: var(--bg-tertiary);
+}
+
+.metricpick-row.selected .metricpick-name {
+  color: var(--accent-color);
+}
+
+.metricpick-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+.metricpick-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-md);
+}
+
+.metricpick-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-tertiary);
+  font-size: var(--font-xs);
+}
+
+/* Two lines, then clipped: the sentence is the reason to read the row, but a five-line row would
+   put three metrics on a screen. The full text is on the trigger's hint once it is chosen. */
+.metricpick-meaning {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  line-height: 1.35;
+}
+
+.metricpick-empty,
+.metricpick-note {
+  margin: 0;
+  padding: 6px 8px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+}
+
+.metricpick-note {
+  border-top: 1px solid var(--border-color);
+  margin-top: 6px;
+}
+
+/* A 6px row is not a touch target, and this list is scrolled with a thumb on a tablet. */
+@media (hover: none) {
+  .metricpick-row {
+    min-height: var(--touch-target);
+    justify-content: center;
+  }
+}

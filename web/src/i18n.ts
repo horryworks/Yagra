@@ -37,6 +37,7 @@ import enSettingsAi from './locales/en/settings-ai.json';
 import enSettingsTls from './locales/en/settings-tls.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import enRca from './locales/en/rca.json';
+import enMetrics from './locales/en/metrics.json';
 
 /** All translation namespaces. Keep in sync with the files under `locales/<lng>/`. */
 export const NAMESPACES = [
@@ -63,6 +64,7 @@ export const NAMESPACES = [
   'settings-tls',
   'settings-upgrade',
   'rca',
+  'metrics',
 ] as const;
 
 void i18n
@@ -107,6 +109,7 @@ void i18n
         'settings-tls': enSettingsTls,
         'settings-upgrade': enSettingsUpgrade,
         rca: enRca,
+        metrics: enMetrics,
       },
     },
     partialBundledLanguages: true, // mix the eager EN resources above with lazily-loaded languages

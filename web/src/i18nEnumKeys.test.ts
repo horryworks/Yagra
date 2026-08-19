@@ -59,7 +59,7 @@ import {
 } from './components/NodeDetail/nodeEditForm';
 import { CREDENTIAL_KINDS } from './lib/credentialKinds';
 import { TEXT_MODES } from './lib/columnFilter';
-import { EXPLAINED_METRICS } from './pages/thresholdMeaning';
+import { EXPLAINED_METRICS } from './lib/metricMeaning';
 import { WEEKDAY_KEYS } from './lib/cadence';
 import { BACKINGS } from './dashboard/types';
 import { GEO_PROBLEMS } from './components/GroupModal/geoFields';
@@ -148,6 +148,8 @@ import enRca from './locales/en/rca.json';
 import jaRca from './locales/ja/rca.json';
 import enAlertsConfig from './locales/en/alertsConfig.json';
 import jaAlertsConfig from './locales/ja/alertsConfig.json';
+import enMetrics from './locales/en/metrics.json';
+import jaMetrics from './locales/ja/metrics.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
 import jaSettingsForwarding from './locales/ja/settings-forwarding.json';
 import enTroubleshoot from './locales/en/troubleshoot.json';
@@ -229,15 +231,20 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
   });
 
-  it('every explained metric has a meaning (alertsConfig:thresholds.meaning.*)', () => {
-    // The key is built at runtime from the metric name, so a member added to
-    // `EXPLAINED_METRICS` without strings renders a raw key — in BOTH locales, which parity
-    // passes. This is the column an operator reads to find out what a rule is watching, so a
-    // raw key there is worse than no column at all.
+  it('every explained metric has a meaning (metrics:meaning.*)', () => {
+    // The key is built at runtime from the metric name, so a member of `EXPLAINED_METRICS` with
+    // no strings renders a raw key — in BOTH locales, which parity passes. Two screens read it:
+    // the column an operator uses to find out what a rule is watching, and the picker they read
+    // *before* choosing. A raw key in either is worse than no text at all.
+    //
+    // ⚠️ **Most of that list is generated** (`web/src/api/metricCatalog.json`, written by
+    // `mib.rs::the_committed_metric_catalog_is_current`), so this is the test that fails when a
+    // metric is added on the Rust side and nobody writes the sentences. It is the only mechanical
+    // link between the two — nothing else notices.
     expectKeys(
       'metric meaning',
-      { en: enAlertsConfig, ja: jaAlertsConfig },
-      'thresholds.meaning.',
+      { en: enMetrics, ja: jaMetrics },
+      'meaning.',
       EXPLAINED_METRICS,
     );
   });

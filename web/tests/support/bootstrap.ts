@@ -87,6 +87,61 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
   // `groupOptions`, the inventory tree), so the single group is unreachable and every folder-group
   // picker in the app renders with nothing but its placeholder — a `<select>` that is present,
   // correct, and empty. Patch the generated body rather than hand-writing one.
+  // The metric picker (ADR-075 増分 4) joins this catalog against the translated meanings, and the
+  // generator gives it one row with an invented name — enough to prove a list renders, and unable
+  // to prove any of the three things that actually matter. So three rows, one per behaviour:
+  //
+  //  - `if_oper_status` — a gauge the app has a sentence for. Proves the join.
+  //  - `if_hc_in_octets` — a counter. Must NOT be offered: `POST /thresholds` refuses one, and
+  //    dropping it is the reason this control removes an error rather than just looking nicer.
+  //  - `ymock_widget_temp` — a name nothing explains, standing in for an operator's own metric.
+  //    Proves the fallback renders its OID instead of a blank line.
+  // The metric picker (ADR-075 増分 4) joins this catalog against the translated meanings, and the
+  // generator gives it one row with an invented name — enough to prove a list renders, and unable
+  // to prove any of the three things that actually matter. So the generated row is **kept** (the
+  // route walk demands a visible `ymock-` string on Settings ▸ MIB repository, and a hand-written
+  // body would have removed it) and three are added, one per behaviour:
+  //
+  //  - `if_oper_status` — a gauge the app has a sentence for. Proves the join.
+  //  - `if_hc_in_octets` — a counter. Must NOT be offered: `POST /thresholds` refuses one, and
+  //    dropping it is the reason this control removes an error rather than just looking nicer.
+  //  - `ymock_widget_temp` — a name nothing explains, standing in for an operator's own metric.
+  //    Proves the fallback renders its OID instead of a blank line.
+  //
+  // ⚠️ The names are real ones on purpose. A metric name is `[a-zA-Z_:][a-zA-Z0-9_:]*`, so the
+  // generator's `ymock-…` spelling is not one a device could ever carry, and the counter case in
+  // particular has to be a name the product genuinely treats as a counter.
+  '/api/v1/mib-catalog': [
+    ...(defaultBodyFor('/api/v1/mib-catalog') as Json[]),
+    {
+      id: '00000000-0000-4000-8000-0000000000a1',
+      metric_name: 'if_oper_status',
+      oid: '1.3.6.1.2.1.2.2.1.8',
+      collection: 'table',
+      metric_kind: 'gauge',
+      vendor: null,
+      description: null,
+    },
+    {
+      id: '00000000-0000-4000-8000-0000000000a2',
+      metric_name: 'if_hc_in_octets',
+      oid: '1.3.6.1.2.1.31.1.1.1.6',
+      collection: 'table',
+      metric_kind: 'counter',
+      vendor: null,
+      description: null,
+    },
+    {
+      id: '00000000-0000-4000-8000-0000000000a3',
+      metric_name: 'ymock_widget_temp',
+      oid: '1.3.6.1.4.1.99999.1.1',
+      collection: 'scalar',
+      metric_kind: 'gauge',
+      vendor: 'Ymock device health',
+      description: null,
+    },
+  ],
+
   '/api/v1/node-groups': (() => {
     const body = defaultBodyFor('/api/v1/node-groups') as { parent_id: string | null }[];
     for (const g of body) g.parent_id = null;

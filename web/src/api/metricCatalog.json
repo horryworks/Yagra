@@ -1,0 +1,442 @@
+[
+  {
+    "metric_kind": "gauge",
+    "metric_name": "asa_current_connections",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "bgp_peer_admin_status",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "bgp_peer_state",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_cemp_mem_free",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_cemp_mem_used",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_cpu_5min",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_cpu_mem_free",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_cpu_mem_used",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_env_temp",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_fan_state",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_fantray_state",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_fru_power_state",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_ike_active_tunnels",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_ipsec_active_tunnels",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "cisco_ipsec_in_octets",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "cisco_ipsec_out_octets",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_mem_free",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_mem_used",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_psu_state",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "cisco_ra_in_octets",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "cisco_ra_out_octets",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_ra_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_ra_users",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "cisco_temp_c",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ent_sensor_value",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "fortinet_cpu_usage",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "fortinet_mem_usage",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "fortinet_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "fortinet_sslvpn_users",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "fortinet_vpn_tunnels_up",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "hr_processor_load",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "hr_storage_size",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "hr_storage_used",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "hr_system_processes",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_cpu_usage",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_mem_free",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_mem_total",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_mem_usage",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_temp",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_usg_half_open_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_usg_icmp_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_usg_session_setup_rate",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "huawei_usg_session_total",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_usg_tcp_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_usg_total_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "huawei_usg_udp_sessions",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "if_admin_status",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_hc_in_octets",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_hc_in_ucast_pkts",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_hc_out_octets",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_hc_out_ucast_pkts",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "if_high_speed",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_in_discards",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_in_errors",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "if_oper_status",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_out_discards",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "counter",
+    "metric_name": "if_out_errors",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "if_rx_power_dbm",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "if_tx_power_dbm",
+    "per_interface": true
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "juniper_buffer_util",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "juniper_cpu_1min",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "juniper_temp",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "mikrotik_cpu_temp",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "mikrotik_voltage",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "nxos_cpu_util",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "nxos_mem_util",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "panos_gp_active_tunnels",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "panos_session_util_pct",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "panos_sessions_active",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "poe_power_capacity_w",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "poe_power_consumed_w",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "prt_alert_severity",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "prt_marker_life_count",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "snmp_sys_uptime_ticks",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "tcp_curr_estab",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_cpu_idle_pct",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_disk_used_pct",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_load_15min",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_load_1min",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_load_5min",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_mem_avail_kb",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_mem_total_kb",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_swap_avail_kb",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ucd_swap_total_kb",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ups_battery_status",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ups_charge_remaining_pct",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ups_minutes_remaining",
+    "per_interface": false
+  },
+  {
+    "metric_kind": "gauge",
+    "metric_name": "ups_output_load_pct",
+    "per_interface": false
+  }
+]

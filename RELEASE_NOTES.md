@@ -35,6 +35,19 @@
 
 ### New Features
 
+- **A rule's metric is chosen from a searchable list that says what each metric means.** The metric
+  was a free-text box whose only help was a five-entry suggestion list, against a catalog of
+  eighty-eight — so writing a rule on anything beyond ICMP meant knowing the exact name.
+  Alerts ▸ Metric alert rules and Alerts ▸ Mutes now open a list grouped by metric set, filtered as
+  you type; the search matches the description as well as the name, so "temperature" finds
+  `cisco_env_temp`. Each row carries a one-line meaning covering the unit and, where the value is
+  an enumeration, what the numbers are — `if_oper_status` is 1 = up, 2 = down, and
+  `ucd_load_1min` is the load average **times 100**, which is the difference between a threshold
+  that fires and one that never does. **Raw counters are no longer offered**: the API has always
+  refused a threshold on one (a monotonic value has no meaningful fixed bound), but until now the
+  refusal arrived on save. A metric the catalog does not list can still be entered — type the name
+  and the list offers to use it — because a collection item may name any valid metric.
+
 - **A rule's scope is picked from a list, and can now be a folder group.** The scope id was one
   free-text box asking for a UUID, and the UUID it wanted — a device profile's — is printed nowhere
   in the app, so a profile-scoped rule could not realistically be created. The dialog now offers a
@@ -94,6 +107,14 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **Two defects in popovers opened from inside a dialog**, both found by the metric picker being
+  the first one this product has ever placed there, and neither reachable on an existing screen.
+  A popover sat *below* the dialog's overlay, which then swallowed every click on it while the
+  popover itself looked perfectly normal; the layer ordering is now stated once, as a token pair,
+  rather than as two numbers in two files. And one Escape press closed the popover **and** the
+  dialog behind it, discarding whatever had been filled in — a dialog now yields the press to
+  anything stacked above it, and closes on the next one.
 
 - **The edit and delete icons were invisible on ten list screens.** Row actions fade in when the
   row is hovered, and every rule that did the fading named the older table's row class — so on the

@@ -57,15 +57,19 @@ export function muteTargetFromAlert(
   };
 }
 
-/** Metric-name presets offered as a `<datalist>` wherever the operator types a metric by hand
- *  (alert-rule metric, mute check). These are the series every node emits today — ICMP on all of
- *  them, `snmp_up` and sysUptime whenever SNMP is bound — so they cover the common case without
- *  pretending to be the full catalogue; free text stays allowed for anything else collected.
- *  Shared because the alert-rule form and the mute form each carried their own identical copy.
+/** Metric names to suggest where the operator types one by hand and nothing better is available.
+ *  These are the series every node emits today — ICMP on all of them, `snmp_up` and sysUptime
+ *  whenever SNMP is bound — so they cover the common case without pretending to be the catalogue.
  *
  *  `LIVENESS_METRIC` leads the list and is not a series at all: it is the reachability *check*,
- *  and since ADR-075 the up/down alert comes from a rule on it. It has to be offerable here or an
- *  operator who deletes the seeded rule has no way to type it back. */
+ *  and since ADR-075 the up/down alert comes from a rule on it.
+ *
+ *  ⚠️ **One reader left: the dashboard's metric-top widget.** This was shared because the
+ *  alert-rule form and the mute form each carried an identical copy of it; both moved to
+ *  `MetricPicker` in ADR-075 増分 4, which reads the deployment's real catalog over the API
+ *  instead. The widget still has a free-text field, so it still needs a starting suggestion —
+ *  moving it to the picker is a separate change (it ranks metrics, so it must also exclude
+ *  counters for a different reason: a ranked counter puts the longest-uptime node on top). */
 export const METRIC_PRESETS = [
   LIVENESS_METRIC,
   'icmp_rtt_ms',

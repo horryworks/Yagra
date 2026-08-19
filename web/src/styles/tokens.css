@@ -99,6 +99,16 @@
   --weight-semibold: 600; /* emphasis a step above medium (section titles, active tabs) */
 
   /* ---- shape & space (§1.4: flat, 0.5px borders, generous whitespace) ---- */
+  /* The only two stacking levels with a *required* relationship, so they live together rather
+     than as two magic numbers in two files. A popover is opened from a trigger and must sit above
+     it; since a trigger can be inside a modal, the popover has to clear the modal overlay too.
+     ⚠️ Getting this backwards does not look like a z-index bug: the popover renders where it
+     should and the overlay silently eats every click on it (found by Tier1 on the metric picker,
+     the first AnchoredPopover placed inside a Modal). Other z-indexes in the tree are not part of
+     a scale — do not read this as one. */
+  --z-modal: 100;
+  --z-popover: 110;
+
   --radius: 6px;
   --radius-sm: 4px;
   --border-width: 0.5px;
