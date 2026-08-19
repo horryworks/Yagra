@@ -154,7 +154,15 @@
   max-width: 100%;
 }
 
-/* Row actions: icon buttons revealed on row hover, right-aligned. */
+/* Row actions: icon buttons revealed on row hover, right-aligned.
+   🚨 **Every row class that can contain `.ytable-actions` must appear in the reveal selectors
+   below, and `.dt-row` did not.** `DataTable` renders `.dt-row`, not `.ytable-row`, so on all ten
+   `DataTable` screens that draw row actions the icons were `opacity: 0` on hover *and* on focus —
+   permanently invisible, with only the `(hover: none)` block below making them reachable at all
+   (on touch). Nothing caught it for two reasons worth knowing: the declaration is here and looks
+   right when read, and **Playwright's `isVisible()` returns true for an `opacity: 0` element**, so
+   a browser test can click a control no human can see. Assert the computed opacity, not
+   visibility — `tests/ui/thresholdRules.spec.ts` does. */
 .ytable-actions {
   display: inline-flex;
   align-items: center;
@@ -164,12 +172,14 @@
 }
 
 .ytable-row:hover .ytable-actions,
+.dt-row:hover .ytable-actions,
 .il-row:hover .il-actions {
   opacity: 1;
 }
 
 /* Keyboard focus inside a hidden action group must still be visible. */
 .ytable-row:focus-within .ytable-actions,
+.dt-row:focus-within .ytable-actions,
 .il-row:focus-within .il-actions {
   opacity: 1;
 }
@@ -344,7 +354,10 @@ html[data-viewport='mobile'] .ytable {
   flex: none;
 }
 
+/* `.dt-row` for the same reason as `.ytable-actions` above — a `DataTable` row is not a
+   `.ytable-row`, so on those screens the copy button only appeared when it took keyboard focus. */
 .ytable-row:hover .yt-copy-btn,
+.dt-row:hover .yt-copy-btn,
 .yt-copy:focus-within .yt-copy-btn {
   opacity: 1;
 }

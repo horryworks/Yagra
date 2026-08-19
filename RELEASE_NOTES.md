@@ -71,6 +71,16 @@
 - The metric name `__liveness__` is refused for a collection item: it is the reachability
   check’s name, and a collected metric spelled that way would land on the same check state.
 
+### Bug Fixes
+
+- **The edit and delete icons were invisible on ten list screens.** Row actions fade in when the
+  row is hovered, and every rule that did the fading named the older table's row class — so on the
+  screens built with the newer table component (Metric alert rules, Event rules, Event sources,
+  Notification delivery, Classification rules, Credentials, Maintenance, Mutes, MIB repository,
+  Pollers) the icons stayed fully transparent on hover **and** on keyboard focus. They were
+  reachable only on a touch device, where hover-revealed controls are always shown. The copy-id
+  button in a table cell was affected the same way. Both now reveal on either table.
+
 ## v0.2.16 — the All nodes split can be dragged, and a selection can be cleared again
 
 ### New Features

@@ -89,6 +89,29 @@ test('the scope level and the scope id are two columns, each carrying its own va
   await expect(target.locator('.yt-entity-name')).toHaveCount(1);
 });
 
+test('the row actions are actually on screen when the row is hovered', async ({ page }) => {
+  // 🚨 This is the assertion the first version of this file did NOT make, and the bug it missed
+  // shipped: `.ytable-actions` is `opacity: 0` until a reveal rule fires, and every reveal rule
+  // named `.ytable-row` — which a `DataTable` row is not. The icons were invisible on ten screens.
+  //
+  // **`isVisible()` cannot see this.** Playwright counts an `opacity: 0` element as visible (it
+  // checks display, visibility and box size), so the click below succeeded the whole time and the
+  // test was green while no human could find the button. Read the computed value instead.
+  await page.goto('/alerts/rules');
+  const row = page.locator('.dt-row').first();
+  const actions = row.locator('.ytable-actions');
+  const opacity = async () => Number(await actions.evaluate((e) => getComputedStyle(e).opacity));
+
+  // Hidden until asked for — the convention these icons follow (and the half that still worked).
+  expect(await opacity()).toBe(0);
+  await row.hover();
+  await expect.poll(opacity).toBe(1);
+  // Keyboard reach is the other path, and it was broken by the same missing selector.
+  await page.keyboard.press('Escape');
+  await row.getByRole('button', { name: 'Edit' }).focus();
+  await expect.poll(opacity).toBe(1);
+});
+
 test('a rule opens for editing with its own values, and reachability offers no bounds', async ({
   page,
 }) => {
