@@ -366,6 +366,12 @@
   reachable only on a touch device, where hover-revealed controls are always shown. The copy-id
   button in a table cell was affected the same way. Both now reveal on either table.
 
+- **The Audit log's Status filter listed three raw translation keys instead of its three
+  choices.** The dropdown offered `audit.status.ok`, `audit.status.client` and
+  `audit.status.server` rather than "Success (2xx)", "Refused (3xx–4xx)" and "Server error
+  (5xx)". The filter itself worked; only its labels were unreadable. The key was absent from
+  **both** locales, which is why the English/Japanese parity check did not see it.
+
 ## v0.2.16 — the All nodes split can be dragged, and a selection can be cleared again
 
 ### New Features

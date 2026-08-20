@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 /** The `scope_id` of an interface-scoped threshold rule: `<node-uuid>:<ifindex>` (ADR-076).
  *
  *  ⚠️ **This is a mirror of `yagra_common::thresholds`** (`interface_scope_id` /

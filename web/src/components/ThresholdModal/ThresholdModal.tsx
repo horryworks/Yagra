@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // The shared create/edit dialog for a metric alert rule.
 //
 // Mounted from two places (ADR-076): Alerts ▸ Metric alert rules, where a rule is created at a

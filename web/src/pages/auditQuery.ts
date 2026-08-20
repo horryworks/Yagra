@@ -192,7 +192,10 @@ export function auditFilters(t: TFunction): Record<string, ColumnFilterSpec<Audi
     },
     status: {
       kind: 'enum',
-      options: AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.status.${s}`) })),
+      // `statusClass`, not `status` — that is the prefix the locales carry and the one
+      // `i18nEnumKeys.test.ts` pins. A key absent from BOTH locales passes the parity gate, so
+      // this read as translated right up until the dropdown drew `audit.status.ok`.
+      options: AUDIT_STATUS_CLASSES.map((s) => ({ value: s, label: t(`audit.statusClass.${s}`) })),
       allLabel: t('audit.filter.allStatuses'),
     },
   };

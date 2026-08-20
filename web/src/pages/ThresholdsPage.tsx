@@ -128,8 +128,14 @@ export function ThresholdsPage() {
   const { scopeName } = useEntityNames();
   // The whole target list, for the cell's `title`. Two names are drawn; this is what makes the
   // other two readable rather than merely counted.
-  const scopeTitle = (row: StoredThreshold) =>
-    row.scope_ids.map((id) => scopeName(row.scope_level, id)).join(', ');
+  // `useCallback` because the columns memo below closes over it. Its only input is `scopeName`,
+  // which that memo already depends on — pinning the identity to the same thing keeps the memo
+  // recomputing exactly when it did before, and lets the dependency be named rather than implied.
+  const scopeTitle = useCallback(
+    (row: StoredThreshold) =>
+      row.scope_ids.map((id) => scopeName(row.scope_level, id)).join(', '),
+    [scopeName],
+  );
 
   const [sheet, setSheet] = useState(false);
 
@@ -303,7 +309,7 @@ export function ThresholdsPage() {
     ];
     for (const c of cols) c.filter = specs[c.key];
     return cols;
-  }, [canConfig, scopeName, specs, t]);
+  }, [canConfig, scopeName, scopeTitle, specs, t]);
 
   // The filters live in the URL — nothing else holds them, so a narrowed ruleset survives a
   // reload and can be shared. Since Inc.10 that is the shared codec (`useFilterParams`) rather
