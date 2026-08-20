@@ -1,8 +1,7 @@
 {
   "prefs": {
     "title": "Preferences",
-    "pageNote": "Theme, language and layout — this account only.",
-    "appearance": "Appearance",
+    "note": "Theme, language and layout — this account only. Every choice applies at once; there is nothing to save.",
     "theme": "Theme",
     "themeHelp": "Light and dark both use the Yagra token palette.",
     "themes": {

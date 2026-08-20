@@ -47,6 +47,9 @@ describe('nav IA', () => {
     expect(sectionForPath('/alerts/event-sources').key).toBe('alerts');
     expect(sectionForPath('/settings/forwarding').key).toBe('settings');
     expect(sectionForPath('/settings/credentials').key).toBe('settings');
+    // ADR-055 Inc.7 vacated this one too — it is a dialog now, and `routes.tsx` opens the dialog
+    // on the way to the dashboard rather than letting the settings splat swallow the bookmark.
+    expect(sectionForPath('/settings/preferences').key).toBe('settings');
   });
 
   it('gives passive monitoring one tab, and puts every one of its screens under it', () => {
@@ -127,14 +130,18 @@ describe('nav IA', () => {
     ]);
   });
 
-  it('files About under System, and leaves Personal holding only what affects one account', () => {
-    // ADR-055 決定 6. About describes the deployment; Personal means "affects only me". Folding
-    // Preferences into System instead would make a theme switch look fleet-wide.
+  it('files About under System, and leaves Settings with no Personal group at all', () => {
+    // ADR-055 決定 9 (Inc.7) partly reverses 決定 6. About still describes the deployment and stays
+    // at the end of System. Personal is gone: it held Preferences alone, and Preferences is now a
+    // dialog on the account badge — a shelf that is only the signed-in person's by construction,
+    // which is the line the group header was drawn to make.
     const settings = NAV.find((s) => s.key === 'settings')!;
     const system = settings.groups.find((g) => g.labelKey === 'groups.system')!;
-    const personal = settings.groups.find((g) => g.labelKey === 'groups.personal')!;
     expect(system.items[system.items.length - 1].path).toBe('/settings/about');
-    expect(personal.items.map((i) => i.path)).toEqual(['/settings/preferences']);
+    expect(settings.groups.map((g) => g.labelKey)).toEqual(['groups.system', 'groups.access']);
+    // The screen has no nav entry anywhere — asserted fleet-wide, not just under Settings, so
+    // re-filing it somewhere else is a deliberate act rather than a quiet one.
+    expect(NAV.flatMap(sectionItems).some((i) => i.path === '/settings/preferences')).toBe(false);
   });
 
   it('the Nodes ▸ Dependencies placeholder was removed (now a Topology redirect)', () => {

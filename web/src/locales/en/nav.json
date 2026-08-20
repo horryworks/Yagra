@@ -62,7 +62,6 @@
     "configBundle": "Configuration bundle",
     "supportBundle": "Support bundle",
     "upgrade": "Upgrade",
-    "preferences": "Preferences",
     "about": "About"
   },
   "groups": {
@@ -72,7 +71,6 @@
     "configure": "Configure",
     "system": "System",
     "access": "Access",
-    "personal": "Personal",
     "comingSoon": "Coming soon"
   },
   "descriptions": {
@@ -117,8 +115,7 @@
     "settingsUsers": "Accounts that can sign in, their role, and the node groups each may see",
     "settingsRoles": "What each role is allowed to do, privilege by privilege",
     "settingsAuth": "Sign-in sources — local passwords, an external identity provider, LDAP",
-    "settingsAudit": "Who changed or acknowledged what, and when",
-    "settingsPreferences": "Theme, language and layout — this account only"
+    "settingsAudit": "Who changed or acknowledged what, and when"
   },
   "shell": {
     "home": "Home",
@@ -149,6 +146,7 @@
     "scopedTo_one": "Limited to {{count}} node group",
     "scopedTo_other": "Limited to {{count}} node groups",
     "notSignedIn": "Not signed in",
+    "preferences": "Preferences",
     "logOut": "Log out",
     "signIn": "Sign in"
   }

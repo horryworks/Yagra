@@ -15,12 +15,13 @@
 // already-loaded group never flashes the fallback. React.lazy also caches the resolved module, so
 // leaving a group and coming back is synchronous too.
 
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect } from 'react';
 import { Navigate, Outlet, Route, Routes } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { AppShell } from './components/shell/AppShell';
 import { MovedTo } from './components/shell/MovedTo';
 import { LoginPage } from './pages/LoginPage';
+import { usePrefsDialogStore } from './store';
 import { SharedDashboardPage } from './dashboard/SharedDashboardPage';
 import { MyDashboardPage } from './dashboard/MyDashboardPage';
 import { ReportsPage } from './reports/ReportsPage';
@@ -57,6 +58,17 @@ const EventsRoutes = lazy(() => import('./routeGroups/events'));
 const CredentialsPage = lazy(() =>
   import('./pages/CredentialsPage').then((m) => ({ default: m.CredentialsPage })),
 );
+
+/** The address Preferences had before ADR-055 Inc.7 made it a dialog. Falling through to the
+ *  settings splat's catch-all would redirect to the dashboard with nothing to show for it, so a
+ *  bookmark would look like the screen had been deleted. Open the dialog on the way instead. */
+function OpenPreferences() {
+  const setPrefsOpen = usePrefsDialogStore((s) => s.setOpen);
+  useEffect(() => {
+    setPrefsOpen(true);
+  }, [setPrefsOpen]);
+  return <Navigate to="/dashboard" replace />;
+}
 
 /** Layout route for the lazy groups: holds the one Suspense boundary, inside the AppShell so the
  *  top bar and sidebar stay put while a group's chunk arrives. The fallback is the app's existing
@@ -121,6 +133,9 @@ export function AppRoutes() {
         <Route path="alerts/event-sources" element={<MovedTo to="/events/webhooks" />} />
         <Route path="settings/forwarding" element={<MovedTo to="/events/forwarding" />} />
         <Route path="settings/credentials" element={<MovedTo to="/nodes/credentials" />} />
+        {/* Not `MovedTo`: there is no page to move to. A static segment, so it outranks the
+            `settings/*` splat below and never fetches the settings chunk. */}
+        <Route path="settings/preferences" element={<OpenPreferences />} />
 
         {/* Settings lands on System health (the first sidebar item). Kept here rather than inside
             the group so a bare `/settings` redirects without fetching the settings chunk — a

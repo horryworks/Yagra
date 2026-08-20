@@ -146,3 +146,17 @@ export function sortedAlerts(alerts: Record<string, Alert>): Alert[] {
       severityRank(b.severity) - severityRank(a.severity) || b.at_unix_ms - a.at_unix_ms,
   );
 }
+
+// Whether the Preferences dialog is open (ADR-055 Inc.7). Shell-wide rather than local to
+// `UserMenu` because two unrelated things open it: the account badge's menu item, and a visit to
+// `/settings/preferences` — the address the screen had before it became a dialog, which a bookmark
+// should not turn into a blank redirect. Ephemeral, so no `persist`.
+interface PrefsDialogStore {
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}
+
+export const usePrefsDialogStore = create<PrefsDialogStore>((set) => ({
+  open: false,
+  setOpen: (open) => set({ open }),
+}));

@@ -245,6 +245,13 @@
 
 ### Improvements
 
+- **Preferences moved out of Settings and into the account badge, and is now a dialog.** Theme,
+  language and layout used to be a page at `Settings ▸ Personal ▸ Preferences`, two steps from
+  anywhere. They now sit under the initial in the top-right corner, above **Log out**, and open
+  over whatever is on screen — so switching the theme no longer costs you the node or list you were
+  looking at. The `Personal` group is gone from the Settings sidebar; it held that one item. The
+  old address `/settings/preferences` still works: it opens the dialog and lands on the dashboard.
+
 - **Interface threshold alerting no longer slows down as the fleet or the ruleset grows.** Three
   measured problems, all invisible in a small deployment and all of the kind that stops alerting
   rather than merely slowing it — when the evaluator's query overruns its 60-second tick, that

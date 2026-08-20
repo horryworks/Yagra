@@ -140,10 +140,6 @@ export const SCREEN_EXPECT: Record<string, Expect> = {
   '/settings/auth': MARKER,
   '/settings/api-tokens': MARKER,
   '/settings/audit': MARKER,
-  '/settings/preferences': {
-    kind: 'none',
-    why: 'Purely local prefs (theme, language, layout). It calls no API at all, which is itself worth knowing.',
-  },
   '/settings/about': MARKER,
   '/nodes/00000000-0000-4000-8000-000000000001': MARKER,
   '/settings/integrations/meraki': MARKER,

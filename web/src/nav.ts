@@ -428,21 +428,9 @@ export const NAV: NavSection[] = [
           },
         ],
       },
-      {
-        // One item, and the group header stays. Folding Preferences into System would put a
-        // theme switch beside fleet-wide defaults and make it look like it changed them for
-        // everyone — the line between "affects only me" and "affects the deployment" is the whole
-        // reason this group exists (ADR-055 決定 6).
-        labelKey: 'groups.personal',
-        items: [
-          {
-            labelKey: 'settings.preferences',
-            descKey: 'descriptions.settingsPreferences',
-            path: '/settings/preferences',
-            implemented: true,
-          },
-        ],
-      },
+      // There is no `Personal` group. It held Preferences alone, and ADR-055 Inc.7 moved that into
+      // the account badge — a shelf that is only the signed-in person's by construction, which is
+      // the line 決定 6 wanted the group header to draw. The header was the weaker way to draw it.
     ],
   },
 ];

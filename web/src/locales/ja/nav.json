@@ -62,7 +62,6 @@
     "configBundle": "設定バンドル",
     "supportBundle": "サポートバンドル",
     "upgrade": "アップグレード",
-    "preferences": "環境設定",
     "about": "バージョン情報"
   },
   "groups": {
@@ -72,7 +71,6 @@
     "configure": "設定",
     "system": "システム",
     "access": "アクセス",
-    "personal": "個人設定",
     "comingSoon": "近日公開"
   },
   "descriptions": {
@@ -117,8 +115,7 @@
     "settingsUsers": "サインインできるアカウントと、そのロール・閲覧できるノードグループ",
     "settingsRoles": "ロールごとに何を許可するかを、権限 1 つずつ設定します",
     "settingsAuth": "サインインの方式 — ローカルパスワード・外部 IdP・LDAP",
-    "settingsAudit": "誰が何を変更・ACK したか、その時刻",
-    "settingsPreferences": "テーマ・言語・レイアウト。このアカウントにだけ効きます"
+    "settingsAudit": "誰が何を変更・ACK したか、その時刻"
   },
   "shell": {
     "home": "ホーム",
@@ -147,6 +144,7 @@
     "signedInAs": "サインイン中 · {{role}}",
     "scopedTo_other": "ノードグループ {{count}} 件に限定",
     "notSignedIn": "サインインしていません",
+    "preferences": "環境設定",
     "logOut": "ログアウト",
     "signIn": "サインイン"
   }
