@@ -449,6 +449,14 @@ export type StoredThreshold = components['schemas']['StoredThreshold'];
  *  a language nothing compares to the first. */
 export type ThresholdInput = components['schemas']['ThresholdBody'];
 
+/** One rule that reaches a port, and whether it is in force there
+ *  (`GET /api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds`, ADR-076 決定 11).
+ *
+ *  `in_force` is "sits at the winning scope level for its metric", not "is the effective bound":
+ *  several rules at one level are merged by keeping the more restrictive of each severity, so more
+ *  than one can carry it. The port dialog says so rather than implying a single winner. */
+export type MatchingThreshold = components['schemas']['MatchingThreshold'];
+
 /** A capped page of threshold rules (`GET /api/v1/thresholds`).
  *
  *  Thresholds are the one configuration table that grows with the fleet — a node-level override is

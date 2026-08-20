@@ -86,6 +86,23 @@ export interface EnumFilterSpec<T> extends FilterSpecCommon {
    *  `'server'` asks an endpoint when the popover opens. Absent = no counts at all, which is the
    *  honest answer for a keyset-paged list with no aggregate endpoint. */
   counts?: 'client' | 'server';
+  /**
+   * The selection this column starts at, when that is **not** "everything".
+   *
+   * Comma-joined tokens, in the same encoding the URL carries. Absent (the normal case) means the
+   * column starts unfiltered.
+   *
+   * ⚠️ Set this, rather than a hand-written defaults object, when a table's own default narrows.
+   * Everything that has to agree about "is anything filtering" reads it from here — `defaultFilters`,
+   * `readFilterParams` (so a bare URL opens the narrowed view), `writeFilterParams` (so the URL
+   * stays clean at the default), `activeFilterCount` (so the row does not lock itself open and
+   * "clear all filters (1)" does not offer to undo something nobody set), and `isAnyFiltered` (so
+   * the empty state does not say "nothing matches your filter" about a default nobody chose).
+   * Discovery's endpoints table predates this and carries a `baseline` object through three props
+   * instead; that still works and is what to imitate when the narrowing is chosen by the page
+   * rather than by the column.
+   */
+  defaultSelection?: string;
 }
 
 // There used to be a `single?: boolean` here, and it is worth saying why it is gone rather than
@@ -243,7 +260,10 @@ export function specColumns<T>(
 }
 
 export function defaultValue<T>(spec: ColumnFilterSpec<T>): string {
-  return spec.kind === 'range' ? spec.defaultPreset : '';
+  if (spec.kind === 'range') return spec.defaultPreset;
+  // An enum may start at a subset of its options — see `EnumFilterSpec.defaultSelection`.
+  if (spec.kind === 'enum' && spec.defaultSelection) return spec.defaultSelection;
+  return '';
 }
 
 /**

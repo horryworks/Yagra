@@ -64,6 +64,7 @@ import type {
   InterfaceSeries,
   MaintenanceScopeLevel,
   MaintenanceWindow,
+  MatchingThreshold,
   MerakiCandidate,
   MerakiEnumeration,
   MerakiNetwork,
@@ -963,6 +964,18 @@ export const api = {
     apiGet('/api/v1/nodes/{node_id}/interfaces/{ifindex}/series', {
       path: { node_id: nodeId, ifindex },
       query: { from: opts?.from, to: opts?.to, step: opts?.step },
+    }),
+
+  /** Every threshold rule that reaches one port, from any scope level, each flagged with
+   *  whether it is in force (ADR-076 決定 11).
+   *
+   *  Not a filter over `listThresholds`: which rules reach a port depends on the node's profile,
+   *  tag values and folder chain resolved against the ruleset, which only the server can do — and
+   *  a list of the port's *own* rules would report nothing about a port governed from the node or
+   *  fleet level, which is the common case. */
+  listInterfaceThresholds: (nodeId: string, ifindex: number): Promise<MatchingThreshold[]> =>
+    apiGet('/api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds', {
+      path: { node_id: nodeId, ifindex },
     }),
 
   /** Delete a node. */

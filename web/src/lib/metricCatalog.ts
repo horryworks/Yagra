@@ -74,11 +74,25 @@ export interface MetricLabels {
  * operator-defined metric, or a catalog row an older release left behind — it is added at the top,
  * for the same reason the scope-level `<select>` keeps its current value: a control whose value is
  * absent from its options renders blank, and the next save silently stores something else.
+ *
+ * `onlyPerInterface` narrows the list to the metrics that publish one series per port — what a rule
+ * at the `interface` scope can be about. It is not a convenience: **an interface-scoped rule on a
+ * node-wide metric is structurally inert.** The engine passes a port number only for a metric the
+ * collection catalogue calls per-interface, and an interface rule with no port number matches
+ * nothing — so such a rule saves, lists, and never fires. Of the 88 catalogue rows, 13 are
+ * per-interface and 8 of those are counters the API refuses outright, which leaves 5 plus the
+ * derived pair. Offering the other 81 was the bulk of what made this dialog unreadable.
+ *
+ * ⚠️ A metric whose dimension nobody can state (`perInterface === undefined` — an operator's own
+ * collection item, since only the generated built-in list carries the flag) is **dropped** by that
+ * filter rather than guessed at. The typed-name row is the way back in, which is the same escape
+ * hatch this picker already relies on for a metric the catalogue has never heard of.
  */
 export function metricOptions(
   catalog: readonly MibCatalogEntry[],
   labels: MetricLabels,
   current?: string,
+  opts?: { onlyPerInterface?: boolean },
 ): MetricOption[] {
   const meaningOf = (name: string) => {
     const key = metricMeaningKey(name);
@@ -124,7 +138,13 @@ export function metricOptions(
       perInterface: builtinMetric(e.metric_name)?.per_interface,
     }));
 
-  const out = [...checks, ...derived, ...collected];
+  const all = [...checks, ...derived, ...collected];
+  // The current value survives the filter: an existing rule must stay editable even when its
+  // metric is one this list would not now offer, or reopening it would blank the control and the
+  // next save would store whichever option rendered first.
+  const out = opts?.onlyPerInterface
+    ? all.filter((o) => o.perInterface === true || o.name === current)
+    : all;
   if (current && current.trim() && !out.some((o) => o.name === current)) {
     out.unshift({
       name: current,

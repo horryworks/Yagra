@@ -35,6 +35,40 @@
 
 ### New Features
 
+- **Alert rules for a port are created, listed and edited from the port.** Node detail ▸ Interfaces
+  ▸ a port now opens the rules that govern it, with a count on the button so the fact that
+  something is watching it does not have to be discovered by clicking. The list is every rule that
+  reaches the port, not only the ones stored on it: a port is governed from six scope levels, and
+  showing only its own would report nothing about a port that is being alerted on from the node or
+  fleet level. Each row says which scope it came from and whether it is the one in force; the ones
+  from a wider scope are read-only here and are edited on Alerts ▸ Metric alert rules, which the
+  dialog says.
+
+  The form asks **what to watch** — inbound or outbound traffic, link state, optical receive or
+  transmit level — and, for traffic, whether the bound is **a percentage of the port's bandwidth or
+  an absolute rate**. It does not ask for a metric name. Three things follow from that: the
+  transmit side of a receive rule is one control away instead of a metric re-pick; the metrics that
+  cannot carry a rule on a port are not offered (of the 88 in the catalogue, 7 can); and "alert
+  when the link is down" writes the rule that fires. That last one is not cosmetic — `ifOperStatus`
+  reports down as 2 and never returns 0, so the rule that looks right written by hand, `below 0.5`,
+  can never fire at all.
+
+- **A port's traffic can carry an absolute bound.** Two new metrics, **if_in_bps** and
+  **if_out_bps**, hold receive and transmit traffic in bits per second, so "alert above 800 Mbps"
+  is expressible. It could not be before: the octet counters are counters, and a fixed bound on a
+  monotonic value is refused. They also reach the ports a percentage cannot — a percentage needs
+  the port's speed as its denominator, and a device that reports no speed left those ports with no
+  usable traffic rule of any kind.
+
+  Both are computed at evaluation time from the same figure the Interfaces tab draws, not
+  collected, so they add no series to the metrics store and cost no extra query: each direction is
+  read once and yields both its percentage and its rate.
+
+- **A rule created for a port can also be seen in the generic dialog.** When the scope is one
+  interface, Alerts ▸ Metric alert rules now offers only the metrics that have a value per port.
+  An interface-scoped rule on a node-wide metric saves, lists and never fires, so those were offers
+  of an inert rule.
+
 - **Alert when a link passes a percentage of its own bandwidth.** Two new metrics —
   **if_in_util_pct** and **if_out_util_pct** — carry receive and transmit traffic as a percentage
   of the speed the port itself reports, so one rule reading "above 90" covers a fleet of 1G and
@@ -117,6 +151,13 @@
 
 ### Improvements
 
+- **Alerts ▸ Metric alert rules no longer shows port rules by default.** A port rule is per (node ×
+  port × metric), so one 48-port switch contributes 96 rows for the two traffic directions alone,
+  against a list capped at 500 — enough to bury every other rule and then push the cap. The screen
+  now says how many it is holding back and shows them on one click; the count comes from the
+  server, so a hidden rule is never indistinguishable from a rule that does not exist. Bounds also
+  read in their metric's own unit, so an absolute rate shows as `800 Mbps` rather than `800000000`.
+
 - **Scope and scope id are separate columns** in Alerts ▸ Metric alert rules. They shared one
   cell, so a row showed a level badge next to a resolved name with nothing saying which was which.
   The two headings are now the add dialog's own field names — **Scope level** and **Scope id** — and
@@ -132,6 +173,13 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **A `below` threshold rule on an interface metric never fired.** The evaluator asks the metrics
+  store for the ports **above** a floor, which is correct for "alert when traffic is high" and
+  exactly backwards for "alert when it is low": the quiet ports such a rule is about were the ones
+  the floor excluded, so unless the port had been busy earlier in the same run it was never
+  evaluated at all. A direction with a `below` rule now queries without a floor. Deployments with
+  no `below` rule on a per-port metric are unaffected, including in query cost.
 
 - **A threshold rule on a per-interface metric never fired at all.** Port status, optical level,
   per-port utilisation — anything the device reports once per interface — shared a *single* check

@@ -19,7 +19,23 @@ import {
 } from '../lib/columnFilter';
 import { decodeCondition } from '../lib/filterCondition';
 import { unset } from '../lib/filterQuery';
-import { DIRECTIONS, SCOPE_LEVELS, type StoredThreshold } from '../types/api';
+import { DIRECTIONS, SCOPE_LEVELS, type ScopeLevel, type StoredThreshold } from '../types/api';
+
+/**
+ * The scope levels this screen shows **before anyone filters** — every level except `interface`.
+ *
+ * Port rules are per (node × port × metric), so one 48-port switch contributes 96 rows for the two
+ * traffic directions alone, and this list is capped at 500 server-side. Left in by default they
+ * bury every other rule and then push the cap, at which point the screen stops showing rules it is
+ * not hiding on purpose. They are one click away (the count and the control are above the table),
+ * and the port's own dialog — Node detail ▸ Interfaces — is where they are normally read anyway.
+ *
+ * ⚠️ Derived from `SCOPE_LEVELS`, so a seventh level joins the default view rather than being
+ * silently excluded by a hand-written list nobody revisits.
+ */
+export const DEFAULT_SCOPE_LEVELS: readonly ScopeLevel[] = SCOPE_LEVELS.filter(
+  (l) => l !== 'interface',
+);
 
 /** The columns this module's functions read (ADR-053 Inc.10, 決定 AA).
  *
@@ -80,6 +96,11 @@ export function thresholdFilters(t: TFunction): Record<string, ColumnFilterSpec<
       kind: 'enum',
       options: SCOPE_LEVELS.map((l) => ({ value: l, label: t(`thresholds.scopeLevel.${l}`) })),
       allLabel: t('thresholds.filter.allScopes'),
+      // The screen's default narrows (see `DEFAULT_SCOPE_LEVELS`). Stated on the spec rather than
+      // as a `baseline` object threaded through three props, so the URL codec, the active-filter
+      // count and the empty state all read the same answer and cannot disagree about whether the
+      // default view is "filtered".
+      defaultSelection: DEFAULT_SCOPE_LEVELS.join(','),
     },
     q: {
       kind: 'text',

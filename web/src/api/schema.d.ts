@@ -2173,6 +2173,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The threshold rules that reach one port (ADR-076 決定 11).
+         * @description A port is governed by rules at six scope levels, and the narrow ones are usually not where the
+         *     interesting rule lives — a fleet-wide "any link over 90%" is a global rule, and a page that
+         *     listed only the port's own rules would show an empty list about a port that is alerting.
+         *
+         *     Rules come from PostgreSQL on every call rather than from the alert engine's snapshot, which
+         *     refreshes on the config generation: a rule saved a second ago is not in that snapshot, and the
+         *     operator who just pressed Save is precisely the caller of this endpoint. The node's own
+         *     metadata (profile, tag values, folder chain) does come from the snapshot — it is what decides
+         *     whether a broad rule reaches this node, and it does not change under the operator's hand.
+         */
+        get: operations["list_interface_thresholds"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nodes/{node_id}/maintenance-exemption": {
         parameters: {
             query?: never;
@@ -6783,6 +6811,21 @@ export interface components {
             role: components["schemas"]["Role"];
             /** @description The bearer token for subsequent requests. */
             token: string;
+        };
+        /** @description One rule that reaches a port, and whether it is the one in force there. */
+        MatchingThreshold: {
+            /**
+             * @description Whether this rule sits at the **winning** scope level for its metric — the most specific
+             *     level that reaches this port, and among folder-group rules only the nearest group in the
+             *     chain (ADR-013 + ADR-075 決定 11).
+             *
+             *     Several rules can carry `true` for one metric at once: the engine merges rules at the
+             *     winning level by keeping the more restrictive bound of each severity. So this means "this
+             *     rule contributes to the effective bound", not "this rule *is* the effective bound".
+             */
+            in_force: boolean;
+            /** @description The stored rule, in the same shape the rules list serves. */
+            rule: components["schemas"]["StoredThreshold"];
         };
         MerakiCadenceReq: {
             /** Format: int32 */
@@ -18379,6 +18422,58 @@ export interface operations {
             };
             /** @description Role lacks the read permission */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    list_interface_thresholds: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Node id */
+                node_id: string;
+                /** @description SNMP ifIndex of the interface */
+                ifindex: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every rule that reaches this port, from any scope level, most specific first, each flagged with whether it is in force */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MatchingThreshold"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks ManageConfig, or the node is outside the token's group scope */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Skeleton mode has no write side */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

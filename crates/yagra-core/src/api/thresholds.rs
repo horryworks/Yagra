@@ -12,18 +12,18 @@
 //! exactly the wrong belief to hold about alerting configuration.
 
 use super::error::{ApiError, ApiResult};
-use super::extract::{Admin, RequireManageConfig};
+use super::extract::{Admin, RequireManageConfig, VisibleNode};
 use super::util::{normalize_search, CreatedId};
 use super::{is_valid_metric_name, ApiState};
 use axum::{
-    extract::{Path, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{Direction, ScopeLevel};
+use yagra_common::{Direction, IfIndex, NodeId, ScopeLevel};
 
 /// Maximum rules returned by one list call. Matches the poller drill-down's cap: enough that no
 /// real hand-authored ruleset is ever truncated, small enough that a fleet-scale accident is a
@@ -32,7 +32,13 @@ const THRESHOLDS_MAX: i64 = 500;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(list_thresholds, create_threshold, update_threshold, delete_threshold))]
+#[openapi(paths(
+    list_thresholds,
+    list_interface_thresholds,
+    create_threshold,
+    update_threshold,
+    delete_threshold
+))]
 pub(super) struct Doc;
 
 /// The threshold routes, merged into `/api/v1` by [`super::router`].
@@ -45,6 +51,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/thresholds/:id",
             put(update_threshold).delete(delete_threshold),
+        )
+        .route(
+            "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
+            get(list_interface_thresholds),
         )
 }
 
@@ -161,6 +171,87 @@ pub(crate) async fn threshold_page(
         total,
         truncated,
     })
+}
+
+/// One rule that reaches a port, and whether it is the one in force there.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct MatchingThreshold {
+    /// The stored rule, in the same shape the rules list serves.
+    rule: crate::thresholds::StoredThreshold,
+    /// Whether this rule sits at the **winning** scope level for its metric — the most specific
+    /// level that reaches this port, and among folder-group rules only the nearest group in the
+    /// chain (ADR-013 + ADR-075 決定 11).
+    ///
+    /// Several rules can carry `true` for one metric at once: the engine merges rules at the
+    /// winning level by keeping the more restrictive bound of each severity. So this means "this
+    /// rule contributes to the effective bound", not "this rule *is* the effective bound".
+    in_force: bool,
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds", tag = "thresholds",
+    params(
+        ("node_id" = Uuid, Path, description = "Node id"),
+        ("ifindex" = u32, Path, description = "SNMP ifIndex of the interface"),
+    ),
+    responses(
+        (status = 200, description = "Every rule that reaches this port, from any scope level, most specific first, each flagged with whether it is in force", body = Vec<MatchingThreshold>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageConfig, or the node is outside the token's group scope", body = super::error::ErrorBody),
+        (status = 503, description = "Skeleton mode has no write side", body = super::error::ErrorBody),
+    ),
+)]
+/// The threshold rules that reach one port (ADR-076 決定 11).
+///
+/// A port is governed by rules at six scope levels, and the narrow ones are usually not where the
+/// interesting rule lives — a fleet-wide "any link over 90%" is a global rule, and a page that
+/// listed only the port's own rules would show an empty list about a port that is alerting.
+///
+/// Rules come from PostgreSQL on every call rather than from the alert engine's snapshot, which
+/// refreshes on the config generation: a rule saved a second ago is not in that snapshot, and the
+/// operator who just pressed Save is precisely the caller of this endpoint. The node's own
+/// metadata (profile, tag values, folder chain) does come from the snapshot — it is what decides
+/// whether a broad rule reaches this node, and it does not change under the operator's hand.
+async fn list_interface_thresholds(
+    _perm: RequireManageConfig,
+    _visible: VisibleNode,
+    State(st): State<ApiState>,
+    Path((node_id, ifindex)): Path<(Uuid, u32)>,
+    admin: Admin,
+) -> ApiResult<Json<Vec<MatchingThreshold>>> {
+    Ok(Json(
+        interface_thresholds(&st, &admin.0, node_id, ifindex).await?,
+    ))
+}
+
+/// The seam both edges call — REST above, and the `get_interface_thresholds` MCP tool.
+///
+/// One function rather than two, for the reason ADR-042 exists: the two surfaces must not come to
+/// disagree about which rules reach a port. The scope and permission guards stay with each edge,
+/// because they are expressed differently there (extractors vs. an explicit scope check).
+pub(crate) async fn interface_thresholds(
+    st: &ApiState,
+    admin: &super::AdminState,
+    node_id: Uuid,
+    ifindex: u32,
+) -> ApiResult<Vec<MatchingThreshold>> {
+    let candidates = admin
+        .thresholds
+        .candidates_for_interface(node_id, ifindex)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "list interface thresholds",
+                "failed to list threshold rules for this interface",
+            )
+        })?;
+    Ok(st
+        .alerts
+        .matching_rules(&candidates, NodeId::from(node_id), Some(IfIndex(ifindex)))
+        .into_iter()
+        .map(|(rule, in_force)| MatchingThreshold { rule, in_force })
+        .collect())
 }
 
 /// Whether the built-in catalog declares `metric` a raw counter. Pure (no store) so the
@@ -448,6 +539,11 @@ mod tests {
             ("POST", "/api/v1/thresholds".to_owned()),
             ("PUT", format!("/api/v1/thresholds/{ID}")),
             ("DELETE", format!("/api/v1/thresholds/{ID}")),
+            // The per-port read is `ManageConfig` too, for the same reason the list is: it is the
+            // ruleset, sliced. Listed here so the two guard tests below cover it without being
+            // told about it separately — the failure they exist to catch is a route that answers
+            // 503 before it answers 401, and a new route is exactly where that reappears.
+            ("GET", format!("/api/v1/nodes/{ID}/interfaces/7/thresholds")),
         ]
     }
 

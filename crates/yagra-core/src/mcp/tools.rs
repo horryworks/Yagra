@@ -685,6 +685,61 @@ impl YagraMcp {
     }
 
     #[tool(
+        description = "Which threshold rules govern one interface, and which of them is in \
+                       force. A port is reached by rules at six scope levels — all nodes, device \
+                       profile, tag group, folder group, node, and the port itself — and the \
+                       narrow ones are usually not where the interesting rule lives, so listing \
+                       only the port's own rules would report nothing about a port that is \
+                       alerting. Each entry carries the rule (its `scope_level`, `scope_id`, \
+                       `metric`, `direction`, bounds and `dwell_samples`) and `in_force`: the \
+                       most specific level that reaches this port wins, and among folder-group \
+                       rules only the nearest group in the chain. Several rules can be in force \
+                       for one metric at once, in which case the engine keeps the more \
+                       restrictive bound of each severity — so `in_force` means the rule \
+                       contributes, not that it alone decides. Metrics reading `if_in_util_pct` \
+                       / `if_out_util_pct` are a percentage of the port's own speed and cannot be \
+                       evaluated at all where that speed is unknown; `if_in_bps` / `if_out_bps` \
+                       are absolute bits/sec and always can."
+    )]
+    async fn get_interface_thresholds(
+        &self,
+        Parameters(p): Parameters<InterfaceThresholdsParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_interface_thresholds";
+        if let Some(denied) = self.deny_unless_permitted(&ctx, TOOL, "") {
+            return denied;
+        }
+        match self.scope_of(&ctx).await {
+            Ok(scope) => self.get_interface_thresholds_in(p, &scope).await,
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    async fn get_interface_thresholds_in(
+        &self,
+        p: InterfaceThresholdsParams,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_interface_thresholds";
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
+            return deny;
+        }
+        let Some(admin) = self.state.admin.as_ref() else {
+            return tool_unavailable(TOOL, "the threshold ruleset requires live mode");
+        };
+        // The same seam the REST route calls, so the two surfaces cannot come to disagree about
+        // which rules reach a port — the resolution is scope inheritance, and a second copy of it
+        // is a second set of precedence rules.
+        match crate::api::thresholds::interface_thresholds(&self.state, admin, p.node_id, p.ifindex)
+            .await
+        {
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_api_error(TOOL, &e),
+        }
+    }
+
+    #[tool(
         description = "One interface's history: in/out throughput in bits/sec \
                        (`in_bps`/`out_bps`) and in unicast packets/sec \
                        (`in_ucast_pps`/`out_ucast_pps`), in/out error rates \
@@ -3571,6 +3626,14 @@ pub(crate) struct QueryMetricsParams {
     to: Option<i64>,
     /// Sample step in seconds (range/rate modes; clamped to bound the point count).
     step: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct InterfaceThresholdsParams {
+    /// The node's UUID.
+    node_id: Uuid,
+    /// SNMP ifIndex of the interface (from get_node_status's `interfaces`).
+    ifindex: u32,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

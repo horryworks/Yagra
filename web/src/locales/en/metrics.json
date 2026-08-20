@@ -106,6 +106,8 @@
     "ups_minutes_remaining": "Estimated run time left on battery, in minutes. Meaningful only while the UPS is actually on battery.",
     "ups_output_load_pct": "Output load as a percentage of the UPS’s rated capacity. One row per output line.",
     "if_in_util_pct": "Inbound traffic as a percentage of the port’s own speed. Computed from the octet counter and the speed the device reports — it is not collected, so it has no chart of its own; the Interfaces tab draws the same figure. A port whose speed is unknown cannot be evaluated and never fires.",
-    "if_out_util_pct": "Outbound traffic as a percentage of the port’s own speed. Separate from the inbound figure on purpose: a link is asymmetric more often than not, and a rule on one direction says nothing about the other."
+    "if_out_util_pct": "Outbound traffic as a percentage of the port’s own speed. Separate from the inbound figure on purpose: a link is asymmetric more often than not, and a rule on one direction says nothing about the other.",
+    "if_in_bps": "Inbound traffic in bits per second. Computed from the octet counter at evaluation time, not collected, so it has no chart of its own; the Interfaces tab draws the same figure. Unlike the percentage it needs no denominator, so it is the only way to alert on a port whose speed the device does not report.",
+    "if_out_bps": "Outbound traffic in bits per second. Computed from the octet counter at evaluation time, not collected, so it has no chart of its own; the Interfaces tab draws the same figure. Unlike the percentage it needs no denominator, so it is the only way to alert on a port whose speed the device does not report."
   }
 }

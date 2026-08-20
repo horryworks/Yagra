@@ -114,8 +114,10 @@
   },
   "thresholds": {
     "note": "Hierarchical overrides: profile → group → node. The most specific scope wins.",
-    "explainer": "Every alert Yagra raises from polling comes from a rule here, node up/down included. Each is evaluated live on every matching poll sample; the most-specific scope wins, and a rule at \"every node\" is the fleet default. Warning/critical bounds and the number of consecutive breaches before it commits (anti-flap) are per rule. Reachability is the exception to one of those: it has no bounds, because a node either answered or it did not — only the breach count applies.",
+    "explainer": "Every alert Yagra raises from polling comes from a rule here, node up/down included. Each is evaluated live on every matching poll sample; the most-specific scope wins, and a rule at “every node” is the fleet default. Warning/critical bounds and the number of consecutive breaches before it commits (anti-flap) are per rule. Two exceptions worth knowing: reachability has no bounds, because a node either answered or it did not — only the breach count applies; and the four interface metrics Yagra computes rather than collects (if_in_util_pct / if_out_util_pct / if_in_bps / if_out_bps) are evaluated once a minute rather than per poll, so their breach count counts minutes.",
     "noLiveness": "No reachability rule exists, so a node going down raises no alert and sends no notification. Node state on the Nodes page still updates. Add a rule on Reachability to start paging again.",
+    "portRulesHidden": "{{count}} port rules are hidden.",
+    "showPortRules": "Show them",
     "unavailable": "Threshold management is unavailable in skeleton mode.",
     "add": "+ Add rule",
     "cols": {

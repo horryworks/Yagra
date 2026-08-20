@@ -57,8 +57,8 @@ export const CHECK_METRICS = [
 ] as const;
 
 /**
- * Metrics Yagra **derives** rather than collects: interface utilisation as a percentage of the
- * port's own speed (ADR-076).
+ * Metrics Yagra **derives** rather than collects: one port's traffic, as a percentage of its own
+ * speed and as an absolute rate (ADR-076).
  *
  * A category of their own, not members of `CHECK_METRICS`, because they differ from those in the
  * two ways a picker has to show: they are per-interface, and they exist in no time series at all —
@@ -67,8 +67,19 @@ export const CHECK_METRICS = [
  *
  * Receive and transmit are separate names because a link is asymmetric far more often than not,
  * and "which direction is congested" is the first thing an operator asks.
+ *
+ * Percentage and absolute are separate names for a harder reason: **the percentage cannot be
+ * evaluated at all on a port whose speed the device does not report**, because that speed is its
+ * denominator. Before the absolute pair existed, such a port could carry no traffic rule of any
+ * kind — the octet counters are counters, and a fixed bound on a monotonic value is refused
+ * outright (ADR-012). They are the reason "800 Mbps" is expressible at all.
  */
-export const DERIVED_METRICS = ['if_in_util_pct', 'if_out_util_pct'] as const;
+export const DERIVED_METRICS = [
+  'if_in_util_pct',
+  'if_out_util_pct',
+  'if_in_bps',
+  'if_out_bps',
+] as const;
 
 /** One row of the generated built-in catalog (`web/src/api/metricCatalog.json`). */
 export interface BuiltinMetric {

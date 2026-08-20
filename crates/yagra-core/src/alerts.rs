@@ -268,15 +268,31 @@ impl AlertConfig {
     #[must_use]
     pub fn interface_rule_coverage(&self, metric: &str) -> RuleCoverage {
         let Some(rules) = self.by_metric.get(metric) else {
-            return RuleCoverage::default();
+            // An empty node set, not `Default` — `RuleCoverage::default()` leaves `nodes` at
+            // `None`, which means **the whole fleet**, the opposite of what "nobody wrote a rule
+            // for this metric" should say. Harmless while every caller checks `lowest_bound`
+            // first, and a trap the moment one does not.
+            return RuleCoverage {
+                lowest_bound: None,
+                has_below: false,
+                nodes: Some(BTreeSet::new()),
+            };
         };
         let mut lowest_bound: Option<f64> = None;
+        let mut has_below = false;
         let mut nodes: Option<BTreeSet<Uuid>> = Some(BTreeSet::new());
         for t in rules {
             // The lowest bound of either severity: whichever trips first is what the floor must
             // not exclude. A rule with neither bound cannot fire and contributes nothing.
+            let mut can_fire = false;
             for bound in [t.rule.warning, t.rule.critical].into_iter().flatten() {
                 lowest_bound = Some(lowest_bound.map_or(bound, |b: f64| b.min(bound)));
+                can_fire = true;
+            }
+            // Only a rule that can actually fire gets to widen the query. A `below` rule with
+            // neither bound would otherwise force every port through the floorless path forever.
+            if can_fire && t.rule.direction == Direction::Below {
+                has_below = true;
             }
             match t.level {
                 ScopeLevel::Node => {
@@ -301,7 +317,8 @@ impl AlertConfig {
             }
         }
         RuleCoverage {
-            lowest_bound_pct: lowest_bound,
+            lowest_bound,
+            has_below,
             nodes: if lowest_bound.is_none() {
                 // No bound anywhere ⇒ nothing can fire ⇒ nothing to query. Spelled as an empty
                 // set rather than `None`, which would mean "the whole fleet".
@@ -328,84 +345,154 @@ impl AlertConfig {
         let meta = self.node_meta.get(&node);
         let matched: Vec<&StoredThreshold> = candidates
             .iter()
-            .filter(|t| self.applies(t, node, ifindex, meta))
+            .filter(|t| threshold_applies(t, node, ifindex, meta))
             .collect();
         // A folder-group rule can match the node's own group *and* any group above it, so several
         // rules can arrive at the same `ScopeLevel::FolderGroup`. `resolve_effective` only knows
         // levels, and would merge them with "most restrictive wins" — which would silently ignore
         // a deliberately looser rule on an inner group. ADR-013's first rule is most-specific-wins,
         // and the chain is ordered, so the nearest group's rules are the only ones that survive.
-        let nearest = Self::nearest_folder_depth(&matched, meta);
+        let nearest = nearest_folder_depth(&matched, meta);
         let scoped: Vec<ScopedThreshold> = matched
             .into_iter()
-            .filter(|t| {
-                t.level != ScopeLevel::FolderGroup || Self::folder_depth(t, meta) == nearest
-            })
+            .filter(|t| t.level != ScopeLevel::FolderGroup || folder_depth(t, meta) == nearest)
             .map(|t| ScopedThreshold::new(t.level, t.rule.clone()))
             .collect();
         resolve_effective(&scoped)
     }
+}
 
-    /// How far up the node's folder chain `t` sits — `0` is the node's own group. `None` when `t`
-    /// is not a folder-group rule, or names a group the node is not under (which `applies` has
-    /// already excluded, so in practice only the former).
-    fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Option<usize> {
-        if t.level != ScopeLevel::FolderGroup {
-            return None;
-        }
-        let want = Uuid::parse_str(&t.scope_id).ok()?;
-        meta?.folder_chain.iter().position(|g| *g == want)
-    }
-
-    /// The smallest depth any matched folder-group rule sits at, or `None` when there are none.
-    fn nearest_folder_depth(
-        matched: &[&StoredThreshold],
-        meta: Option<&NodeMeta>,
-    ) -> Option<usize> {
-        matched
-            .iter()
-            .filter_map(|t| Self::folder_depth(t, meta))
-            .min()
-    }
-
-    fn applies(
-        &self,
-        t: &StoredThreshold,
-        node: NodeId,
-        ifindex: Option<IfIndex>,
-        meta: Option<&NodeMeta>,
-    ) -> bool {
-        match t.level {
-            // The fleet default (ADR-075). It matches a node with no profile and no tags too —
-            // which is the whole reason it exists, since a profile-scoped default cannot reach
-            // one. `scope_id` is unread here; the API pins it to the empty string.
-            ScopeLevel::Global => true,
-            ScopeLevel::Node => t.scope_id == node.to_string(),
-            ScopeLevel::Profile => {
-                meta.and_then(|m| m.profile.as_deref()) == Some(t.scope_id.as_str())
-            }
-            // Tag values, deliberately — a `ScopeLevel::Group` threshold matches a node *tag*, not
-            // the folder tree. See the `NodeMeta` docs for why the distinction is load-bearing.
-            ScopeLevel::Group => meta.is_some_and(|m| m.tag_groups.contains(&t.scope_id)),
-            // The folder tree (ADR-022), inherited downwards: the chain holds the node's own group
-            // and every group above it. A rule on a parent therefore covers everything inside it,
-            // the same way a maintenance window on a folder group does.
-            ScopeLevel::FolderGroup => Self::folder_depth(t, meta).is_some(),
-            // One port of one node (ADR-076). Both halves must match, and a sample with no port
-            // matches nothing here — an interface rule is never the fallback for a node check.
-            ScopeLevel::Interface => ifindex.is_some_and(|idx| {
-                yagra_common::parse_interface_scope_id(&t.scope_id) == Some((node.as_uuid(), idx.0))
-            }),
-        }
+/// Whether one stored rule applies to `(node, ifindex)`.
+///
+/// Free rather than a method, and `pub(crate)` rather than private, because two places have to
+/// answer this identically: the engine, resolving a sample, and `GET
+/// /nodes/{id}/interfaces/{ifindex}/thresholds`, showing an operator which rules reach a port
+/// (ADR-076 決定 11). A second copy of scope inheritance is exactly the mirror `extensibility.md`
+/// forbids — the first one would drift the day a level is added.
+///
+/// `meta` is the node's own metadata (profile, tag values, folder chain); `None` for a node the
+/// snapshot has never seen, which matches only the global level.
+pub(crate) fn threshold_applies(
+    t: &StoredThreshold,
+    node: NodeId,
+    ifindex: Option<IfIndex>,
+    meta: Option<&NodeMeta>,
+) -> bool {
+    match t.level {
+        // The fleet default (ADR-075). It matches a node with no profile and no tags too —
+        // which is the whole reason it exists, since a profile-scoped default cannot reach
+        // one. `scope_id` is unread here; the API pins it to the empty string.
+        ScopeLevel::Global => true,
+        ScopeLevel::Node => t.scope_id == node.to_string(),
+        ScopeLevel::Profile => meta.and_then(|m| m.profile.as_deref()) == Some(t.scope_id.as_str()),
+        // Tag values, deliberately — a `ScopeLevel::Group` threshold matches a node *tag*, not
+        // the folder tree. See the `NodeMeta` docs for why the distinction is load-bearing.
+        ScopeLevel::Group => meta.is_some_and(|m| m.tag_groups.contains(&t.scope_id)),
+        // The folder tree (ADR-022), inherited downwards: the chain holds the node's own group
+        // and every group above it. A rule on a parent therefore covers everything inside it,
+        // the same way a maintenance window on a folder group does.
+        ScopeLevel::FolderGroup => folder_depth(t, meta).is_some(),
+        // One port of one node (ADR-076). Both halves must match, and a sample with no port
+        // matches nothing here — an interface rule is never the fallback for a node check.
+        ScopeLevel::Interface => ifindex.is_some_and(|idx| {
+            yagra_common::parse_interface_scope_id(&t.scope_id) == Some((node.as_uuid(), idx.0))
+        }),
     }
 }
 
-/// What the interface-threshold rules for one metric cover (ADR-076 decision 3).
+/// How far up the node's folder chain `t` sits — `0` is the node's own group. `None` when `t`
+/// is not a folder-group rule, or names a group the node is not under (which `threshold_applies`
+/// has already excluded, so in practice only the former).
+pub(crate) fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Option<usize> {
+    if t.level != ScopeLevel::FolderGroup {
+        return None;
+    }
+    let want = Uuid::parse_str(&t.scope_id).ok()?;
+    meta?.folder_chain.iter().position(|g| *g == want)
+}
+
+/// The smallest depth any matched folder-group rule sits at, or `None` when there are none.
+pub(crate) fn nearest_folder_depth(
+    matched: &[&StoredThreshold],
+    meta: Option<&NodeMeta>,
+) -> Option<usize> {
+    matched.iter().filter_map(|t| folder_depth(t, meta)).min()
+}
+
+/// The rules that reach `(node, ifindex)`, each flagged with whether it is the one in force.
+///
+/// "In force" is **the level that wins**, resolved exactly as [`AlertConfig::resolve`] does it:
+/// most specific level, and among folder-group rules only the nearest group in the chain
+/// (ADR-013 + ADR-075 決定 11). Per metric, because precedence is per metric.
+///
+/// Several rules can be in force for one metric at once — `resolve_effective` merges rules at the
+/// winning level by keeping the more restrictive bound of each severity. So this flag says "this
+/// rule contributes", never "this rule *is* the effective bound"; the caller that shows it says so.
+///
+/// Takes the rules as an argument rather than reading a snapshot, because the API wants the
+/// *current* ruleset — a rule created two seconds ago is not in the engine's snapshot yet, and a
+/// list that omitted it would be a list that answers the question wrongly for the person who just
+/// pressed Save.
+pub(crate) fn matching_rules(
+    rules: &[StoredThreshold],
+    node: NodeId,
+    ifindex: Option<IfIndex>,
+    meta: Option<&NodeMeta>,
+) -> Vec<(StoredThreshold, bool)> {
+    let matched: Vec<&StoredThreshold> = rules
+        .iter()
+        .filter(|t| threshold_applies(t, node, ifindex, meta))
+        .collect();
+    // The winning level per metric, and the nearest folder depth among that metric's own matches.
+    let mut winner: HashMap<&str, ScopeLevel> = HashMap::new();
+    let mut nearest: HashMap<&str, Option<usize>> = HashMap::new();
+    for t in &matched {
+        let m = t.rule.metric.as_str();
+        winner
+            .entry(m)
+            .and_modify(|w| *w = (*w).max(t.level))
+            .or_insert(t.level);
+        let d = folder_depth(t, meta);
+        nearest
+            .entry(m)
+            .and_modify(|n| {
+                *n = match (*n, d) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) => Some(a),
+                    (None, b) => b,
+                };
+            })
+            .or_insert(d);
+    }
+    matched
+        .into_iter()
+        .map(|t| {
+            let m = t.rule.metric.as_str();
+            let in_force = winner.get(m) == Some(&t.level)
+                && (t.level != ScopeLevel::FolderGroup
+                    || nearest.get(m).copied().flatten() == folder_depth(t, meta));
+            (t.clone(), in_force)
+        })
+        .collect()
+}
+
+/// What the interface-threshold rules for one metric cover (ADR-076 decisions 3 and 10).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct RuleCoverage {
-    /// The smallest warning-or-critical bound any rule names, as a percentage. `None` = no rule
-    /// that can fire, so the evaluator runs no query at all.
-    pub lowest_bound_pct: Option<f64>,
+    /// The smallest warning-or-critical bound any rule names, **in the metric's own unit** —
+    /// percent for `if_*_util_pct`, bits per second for `if_*_bps`. `None` = no rule that can
+    /// fire, so the evaluator runs no query at all.
+    ///
+    /// It was called `lowest_bound_pct` while percentages were the only derived metric; the
+    /// absolute ones (ADR-076 決定 9) made that name a lie about half the callers.
+    pub lowest_bound: Option<f64>,
+    /// Whether any of those rules is a `below` rule.
+    ///
+    /// The candidate query selects the ports **at or above** a floor, which assumes every rule is
+    /// breached from above. A `below` rule inverts that: the ports it is about are exactly the
+    /// ones a floor removes. The evaluator drops the floor to zero when this is set — see
+    /// `interface_util::query_floor_bps`, which is where the consequence is spelled out.
+    pub has_below: bool,
     /// The nodes the rules name, or `None` when at least one rule is scoped too broadly to
     /// enumerate (global / profile / tag group / folder group) and the query must cover the fleet.
     pub nodes: Option<BTreeSet<Uuid>>,
@@ -1277,6 +1364,29 @@ impl AlertManager {
             .read()
             .expect("config rwlock poisoned")
             .interface_rule_coverage(metric)
+    }
+
+    /// The rules that reach `(node, ifindex)`, each flagged with whether it is in force
+    /// (ADR-076 決定 11).
+    ///
+    /// The **rules** come from the caller — `GET /nodes/{id}/interfaces/{ifindex}/thresholds`
+    /// reads them straight from PostgreSQL — while the **node metadata** comes from the snapshot
+    /// held here. The split is deliberate: the snapshot refreshes on the config generation, so a
+    /// rule saved a second ago is not in it yet, and a list that omitted the operator's own new
+    /// rule would fail at exactly the moment they are looking. A node's profile, tags and folder
+    /// chain do not change under them in the same way.
+    ///
+    /// A node the snapshot has never seen resolves against `None` metadata, which matches only
+    /// global rules — the same answer the engine would give for it.
+    #[must_use]
+    pub fn matching_rules(
+        &self,
+        rules: &[StoredThreshold],
+        node: NodeId,
+        ifindex: Option<IfIndex>,
+    ) -> Vec<(StoredThreshold, bool)> {
+        let config = self.config.read().expect("config rwlock poisoned");
+        matching_rules(rules, node, ifindex, config.node_meta.get(&node))
     }
 
     /// Whether a node's committed state is `Ok` — the gate the interface evaluator freezes on.
@@ -3344,6 +3454,253 @@ mod tests {
         assert_eq!(fired.len(), 2, "recovery must resolve exactly once");
         assert!(matches!(fired[1], NotifyAction::Resolve(_)));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// `matching_rules` is what the port's rule list is built from, so its two jobs are separate:
+    /// which rules *reach* the port at all (across six scope levels), and which of those are in
+    /// force. Getting the first wrong shows an empty list about a port that is alerting; getting
+    /// the second wrong tells the operator the wrong rule is the one to edit.
+    #[test]
+    fn matching_rules_lists_every_level_and_marks_the_winner() {
+        use yagra_common::{Direction, IfIndex, ThresholdRule};
+
+        let node = NodeId::new();
+        let other = NodeId::new();
+        let profile = "cisco-switch";
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+
+        let rule = |level: ScopeLevel, scope_id: String, metric: &str| StoredThreshold {
+            id: Uuid::new_v4(),
+            level,
+            scope_id,
+            rule: ThresholdRule {
+                metric: metric.into(),
+                direction: Direction::Above,
+                warning: None,
+                critical: Some(90.0),
+                dwell_samples: 3,
+            },
+        };
+        let rules = vec![
+            rule(ScopeLevel::Global, String::new(), "if_in_util_pct"),
+            rule(ScopeLevel::Profile, profile.to_owned(), "if_in_util_pct"),
+            rule(
+                ScopeLevel::FolderGroup,
+                parent.to_string(),
+                "if_in_util_pct",
+            ),
+            rule(ScopeLevel::FolderGroup, child.to_string(), "if_in_util_pct"),
+            rule(ScopeLevel::Node, node.to_string(), "if_in_util_pct"),
+            rule(
+                ScopeLevel::Interface,
+                yagra_common::interface_scope_id(node.as_uuid(), 7),
+                "if_in_util_pct",
+            ),
+            // Another port of the same node, and another node entirely: neither reaches port 7.
+            rule(
+                ScopeLevel::Interface,
+                yagra_common::interface_scope_id(node.as_uuid(), 8),
+                "if_in_util_pct",
+            ),
+            rule(
+                ScopeLevel::Interface,
+                yagra_common::interface_scope_id(other.as_uuid(), 7),
+                "if_in_util_pct",
+            ),
+            // A second metric, governed only from the node level — its winner is the node rule,
+            // because precedence is per metric and not per port.
+            rule(ScopeLevel::Node, node.to_string(), "if_out_util_pct"),
+            rule(ScopeLevel::Global, String::new(), "if_out_util_pct"),
+        ];
+        let meta = NodeMeta {
+            profile: Some(profile.to_owned()),
+            folder_chain: vec![child, parent],
+            ..NodeMeta::default()
+        };
+
+        let got = matching_rules(&rules, node, Some(IfIndex(7)), Some(&meta));
+        // Six reach this port for the first metric, two for the second; the three rules aimed at
+        // another port or another node reach nothing.
+        assert_eq!(got.len(), 8, "{got:#?}");
+        let in_force: Vec<(ScopeLevel, &str)> = got
+            .iter()
+            .filter(|(_, f)| *f)
+            .map(|(t, _)| (t.level, t.rule.metric.as_str()))
+            .collect();
+        assert_eq!(
+            in_force,
+            vec![
+                (ScopeLevel::Interface, "if_in_util_pct"),
+                (ScopeLevel::Node, "if_out_util_pct"),
+            ],
+            "the port rule wins its metric; the other metric is still decided at the node"
+        );
+        // The nearer folder group is listed, and so is the grandparent — an operator has to be
+        // able to see the rule that would take over if the near one were deleted — but only the
+        // nearer one would be in force if no narrower level existed.
+        let folders = matching_rules(
+            &rules
+                .iter()
+                .filter(|t| t.level == ScopeLevel::FolderGroup)
+                .cloned()
+                .collect::<Vec<_>>(),
+            node,
+            Some(IfIndex(7)),
+            Some(&meta),
+        );
+        assert_eq!(folders.len(), 2);
+        let winners: Vec<&str> = folders
+            .iter()
+            .filter(|(_, f)| *f)
+            .map(|(t, _)| t.scope_id.as_str())
+            .collect();
+        assert_eq!(winners, vec![child.to_string().as_str()]);
+    }
+
+    /// A node the engine's snapshot has never seen — added seconds ago, or the snapshot has not
+    /// refreshed yet. It must still get an honest answer rather than an empty one.
+    #[test]
+    fn a_node_with_no_metadata_still_matches_the_levels_that_do_not_need_it() {
+        use yagra_common::{Direction, IfIndex, ThresholdRule};
+
+        let node = NodeId::new();
+        let rule = |level: ScopeLevel, scope_id: String| StoredThreshold {
+            id: Uuid::new_v4(),
+            level,
+            scope_id,
+            rule: ThresholdRule {
+                metric: "if_in_util_pct".into(),
+                direction: Direction::Above,
+                warning: None,
+                critical: Some(90.0),
+                dwell_samples: 3,
+            },
+        };
+        let rules = vec![
+            rule(ScopeLevel::Global, String::new()),
+            rule(ScopeLevel::Profile, "cisco-switch".to_owned()),
+            rule(ScopeLevel::FolderGroup, Uuid::new_v4().to_string()),
+            rule(ScopeLevel::Node, node.to_string()),
+            rule(
+                ScopeLevel::Interface,
+                yagra_common::interface_scope_id(node.as_uuid(), 7),
+            ),
+        ];
+        let got = matching_rules(&rules, node, Some(IfIndex(7)), None);
+        // Global, node and interface need no metadata; profile and folder group do, and cannot
+        // match without it.
+        let levels: Vec<ScopeLevel> = got.iter().map(|(t, _)| t.level).collect();
+        assert_eq!(
+            levels,
+            vec![ScopeLevel::Global, ScopeLevel::Node, ScopeLevel::Interface]
+        );
+        assert!(got.iter().filter(|(_, f)| *f).count() == 1);
+
+        // And a node-wide question (no port) must not pick up the port rule — an interface rule is
+        // never the fallback for a node check.
+        let node_wide = matching_rules(&rules, node, None, None);
+        assert!(node_wide
+            .iter()
+            .all(|(t, _)| t.level != ScopeLevel::Interface));
+    }
+
+    /// What the evaluator plans its query from. The three facts it needs are the lowest bound,
+    /// whether any rule reads downwards, and whether the nodes can be enumerated at all.
+    #[test]
+    fn interface_rule_coverage_reports_the_lowest_bound_and_the_nodes() {
+        use yagra_common::{Direction, ThresholdRule};
+
+        let a = NodeId::new();
+        let b = NodeId::new();
+        let rule = |level: ScopeLevel, scope_id: String, crit: Option<f64>, warn: Option<f64>| {
+            StoredThreshold {
+                id: Uuid::new_v4(),
+                level,
+                scope_id,
+                rule: ThresholdRule {
+                    metric: "if_in_util_pct".into(),
+                    direction: Direction::Above,
+                    warning: warn,
+                    critical: crit,
+                    dwell_samples: 3,
+                },
+            }
+        };
+        let cov = AlertConfig::new(
+            vec![
+                rule(ScopeLevel::Node, a.to_string(), Some(90.0), None),
+                // The warning bound is lower than either critical, and it is what trips first.
+                rule(
+                    ScopeLevel::Interface,
+                    yagra_common::interface_scope_id(b.as_uuid(), 7),
+                    Some(95.0),
+                    Some(70.0),
+                ),
+            ],
+            HashMap::new(),
+        )
+        .interface_rule_coverage("if_in_util_pct");
+        assert_eq!(cov.lowest_bound, Some(70.0));
+        assert!(!cov.has_below);
+        assert_eq!(
+            cov.nodes,
+            Some([a.as_uuid(), b.as_uuid()].into_iter().collect())
+        );
+
+        // A metric nobody wrote a rule for asks for no query at all — spelled as an empty node
+        // set rather than `None`, which would mean the whole fleet.
+        let empty = AlertConfig::default().interface_rule_coverage("if_in_util_pct");
+        assert_eq!(empty.lowest_bound, None);
+        assert_eq!(empty.nodes, Some(BTreeSet::new()));
+
+        // One broadly-scoped rule collapses the node list: it cannot be enumerated without a
+        // fleet walk, and its author meant it that way.
+        let wide = AlertConfig::new(
+            vec![
+                rule(ScopeLevel::Node, a.to_string(), Some(90.0), None),
+                rule(ScopeLevel::Global, String::new(), Some(80.0), None),
+            ],
+            HashMap::new(),
+        )
+        .interface_rule_coverage("if_in_util_pct");
+        assert_eq!(wide.lowest_bound, Some(80.0));
+        assert_eq!(wide.nodes, None);
+    }
+
+    /// The `below` flag exists so the evaluator can drop its floor. Before it, a `below` rule on a
+    /// port metric never fired: the candidate query returns the ports **above** a floor, so the
+    /// quiet ports such a rule is about were never evaluated at all.
+    #[test]
+    fn a_below_rule_is_reported_so_the_floor_can_be_dropped() {
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let with = |direction: Direction, crit: Option<f64>| {
+            AlertConfig::new(
+                vec![StoredThreshold {
+                    id: Uuid::new_v4(),
+                    level: ScopeLevel::Node,
+                    scope_id: node.to_string(),
+                    rule: ThresholdRule {
+                        metric: "if_in_bps".into(),
+                        direction,
+                        warning: None,
+                        critical: crit,
+                        dwell_samples: 3,
+                    },
+                }],
+                HashMap::new(),
+            )
+            .interface_rule_coverage("if_in_bps")
+        };
+        assert!(with(Direction::Below, Some(1_000_000.0)).has_below);
+        assert!(!with(Direction::Above, Some(1_000_000.0)).has_below);
+        // A rule with neither bound cannot fire, so it must not widen the query either — it would
+        // otherwise pin every port of that direction to the floorless path forever.
+        let inert = with(Direction::Below, None);
+        assert!(!inert.has_below);
+        assert_eq!(inert.lowest_bound, None);
     }
 
     /// Two ports keep independent dwell windows, so one cannot commit on the other's samples.

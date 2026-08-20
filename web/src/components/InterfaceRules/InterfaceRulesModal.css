@@ -1,0 +1,144 @@
+/* SPDX-License-Identifier: AGPL-3.0-only */
+/* The port's alert-rule dialog (ADR-076 増分 5). Lives inside the shared `Modal` chrome, so this
+   file styles only the list rows and the form's inline groups — never the overlay, radius, header
+   or footer, which are the Modals consistency group's. */
+
+.ifrules-sub {
+  margin: 0 0 var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.ifrules-empty {
+  margin: var(--space-4) 0;
+  color: var(--text-secondary);
+}
+
+.ifrules-section + .ifrules-section {
+  margin-top: var(--space-4);
+}
+
+.ifrules-head {
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.ifrules-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ifrules-row:last-of-type {
+  border-bottom: none;
+}
+
+/* Filled = this rule decides; hollow = a narrower rule on the same metric wins. Never colour
+   alone: both carry a title/aria-label saying which (ui-conventions, colour-blind safety). */
+.ifrules-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-ok);
+  border: 1px solid var(--status-ok);
+}
+
+.ifrules-row.overridden .ifrules-dot {
+  background: transparent;
+  border-color: var(--text-tertiary);
+}
+
+.ifrules-row.overridden .ifrules-what {
+  color: var(--text-secondary);
+}
+
+.ifrules-what {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ifrules-subject {
+  font-weight: 500;
+}
+
+.ifrules-bound {
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+.ifrules-scope {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* Reserved even when empty, so the inherited rows' text does not sit at a different width from
+   the editable ones' — a ragged right edge reads as a rendering fault rather than as "no actions
+   here". */
+.ifrules-actions {
+  display: flex;
+  gap: var(--space-1);
+  min-width: 56px;
+  justify-content: flex-end;
+}
+
+.ifrules-basis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.ifrules-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+}
+
+.ifrules-bounds {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.ifrules-num {
+  max-width: 6.5rem;
+}
+
+.ifrules-unit {
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+.ifrules-fixed {
+  margin: 0;
+  font-weight: 500;
+}
+
+.ifrules-stored {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.modal-hint.warn {
+  color: var(--status-warning);
+}
+
+/* Touch: the row's actions are always visible here (they are not hover-revealed), but the targets
+   still have to be reachable by a finger. */
+@media (hover: none) {
+  .ifrules-actions {
+    min-width: var(--touch-target);
+  }
+}

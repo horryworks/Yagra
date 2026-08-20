@@ -37,9 +37,14 @@ interface Props {
   value: string;
   onChange: (metric: string) => void;
   id?: string;
+  /** Offer only the metrics that publish one series per port (ADR-076 増分 5).
+   *
+   *  Set by the dialog when the rule's scope is one interface, where a node-wide metric would
+   *  produce a rule that saves, lists and never fires — see `metricOptions`. */
+  onlyPerInterface?: boolean;
 }
 
-export function MetricPicker({ value, onChange, id }: Props) {
+export function MetricPicker({ value, onChange, id, onlyPerInterface }: Props) {
   const { t } = useTranslation('metrics');
   const { t: tf } = useTranslation('format');
   const [open, setOpen] = useState(false);
@@ -82,8 +87,9 @@ export function MetricPicker({ value, onChange, id }: Props) {
           meaning: (key) => t(key, { defaultValue: '' }),
         },
         value,
+        { onlyPerInterface },
       ),
-    [catalog, t, tf, value],
+    [catalog, t, tf, value, onlyPerInterface],
   );
 
   const shown = useMemo(() => filterMetricOptions(options, query), [options, query]);

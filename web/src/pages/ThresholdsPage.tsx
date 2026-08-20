@@ -21,6 +21,7 @@ import { useCan } from '../store';
 import type { StoredThreshold } from '../types/api';
 import { LIVENESS_METRIC } from '../lib/format';
 import { metricMeaningKey } from '../lib/metricMeaning';
+import { boundText } from '../lib/portRuleForm';
 import { ThresholdModal } from '../components/ThresholdModal/ThresholdModal';
 import { splitInterfaceScopeId } from '../lib/interfaceScope';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -33,7 +34,7 @@ import { IconButton } from '../components/ui/IconButton';
 import { EditIcon } from '../components/ui/icons';
 import { ClearFilters } from '../components/ui/ClearFilters';
 import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSheet';
-import { defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
+import { decodeSet, defaultFilters, isAnyFiltered, specColumns } from '../lib/columnFilter';
 import { useFilterParams } from '../lib/useFilterParams';
 import { TableToolbar, TableSpacer, ResultCount } from '../components/ui/TableToolbar';
 import { queryFor, thresholdFilters } from './thresholdQuery';
@@ -106,6 +107,13 @@ export function ThresholdsPage() {
    *  rendering the warning while the answer is still `undefined` would flash "nothing is watching
    *  your fleet" on every page load. */
   const [hasLiveness, setHasLiveness] = useState<boolean | null>(null);
+  /** How many port-scoped rules exist, whether or not this view is showing them.
+   *
+   *  🚨 Asked as its own request, not counted from `rows`. The rows are the operator's filter —
+   *  which by default excludes exactly these — and capped at 500 besides, so counting them would
+   *  answer "none" about a fleet with thousands. A default that hides rows without saying how many
+   *  is a screen that quietly reports a shorter ruleset than the deployment has. */
+  const [portRuleTotal, setPortRuleTotal] = useState(0);
   const { scopeName } = useEntityNames();
 
   const [sheet, setSheet] = useState(false);
@@ -207,14 +215,17 @@ export function ThresholdsPage() {
         width: '150px',
         render: (row) => (
           <span className="thresholds-bounds">
+            {/* Read in the metric's own unit. An absolute interface rate is stored in bits per
+                second (ADR-076 決定 9), so the raw value here was `800000000` — a number whose
+                digits an operator has to count. */}
             {row.warning != null && (
               <Badge tone="warning">
-                {t('thresholds.warnShort')} {row.warning}
+                {t('thresholds.warnShort')} {boundText(row.metric, row.warning)}
               </Badge>
             )}
             {row.critical != null && (
               <Badge tone="critical">
-                {t('thresholds.critShort')} {row.critical}
+                {t('thresholds.critShort')} {boundText(row.metric, row.critical)}
               </Badge>
             )}
           </span>
@@ -283,7 +294,20 @@ export function ThresholdsPage() {
       .listThresholds({ q: LIVENESS_METRIC })
       .then((p) => setHasLiveness(p.total > 0))
       .catch(() => setHasLiveness(null));
+    // Likewise unfiltered and likewise riding `load`: the count has to stay true after an add or
+    // a delete, and after the operator opens the level filter up.
+    api
+      .listThresholds({ scope_level: 'interface', limit: 1 })
+      .then((p) => setPortRuleTotal(p.total))
+      .catch(() => setPortRuleTotal(0));
   }, [filterCols, filters]);
+
+  /** Whether this view is currently leaving port rules out. */
+  const portRulesHidden = useMemo(() => {
+    const selected = decodeSet(filters.scope_level ?? '');
+    // An empty selection means every level, so nothing is being left out.
+    return selected.length > 0 && !selected.includes('interface');
+  }, [filters.scope_level]);
 
   useEffect(() => {
     load();
@@ -308,6 +332,23 @@ export function ThresholdsPage() {
         <Card className="thresholds-warn-card">
           <p className="thresholds-note">{t('thresholds.noLiveness')}</p>
         </Card>
+      )}
+
+      {/* The default view leaves port rules out (ADR-076 決定 12), and this line is the whole of
+          what makes that honest: the count comes from the server, and the way back in is one
+          click. Without it a hidden rule is indistinguishable from a rule that does not exist —
+          which is the wrong belief to hold about alerting configuration. */}
+      {portRulesHidden && portRuleTotal > 0 && (
+        <p className="thresholds-hidden">
+          {t('thresholds.portRulesHidden', { count: portRuleTotal })}{' '}
+          <button
+            type="button"
+            className="linklike"
+            onClick={() => setFilters({ ...filters, scope_level: '' })}
+          >
+            {t('thresholds.showPortRules')}
+          </button>
+        </p>
       )}
 
       {block ? (

@@ -19,8 +19,7 @@ import { MetricChart, PALETTE, SERIES_IN, SERIES_OUT } from '../MetricChart/Metr
 import { operState } from './healthTone';
 import { RangeControl, resolveRange } from './RangeControl';
 import { useCan, useRangeStore } from '../../store';
-import { ThresholdModal } from '../ThresholdModal/ThresholdModal';
-import { interfaceScopeId } from '../../lib/interfaceScope';
+import { InterfaceRulesModal } from '../InterfaceRules/InterfaceRulesModal';
 import { BellIcon } from '../ui/icons';
 import { usePrefsStore } from '../../prefs';
 import { setInterfaceDockHeight } from '../../serverPrefs';
@@ -613,7 +612,36 @@ function InterfaceDock({
 }) {
   const { t } = useTranslation('nodes');
   const canConfig = useCan('manage_config');
-  const [addingRule, setAddingRule] = useState(false);
+  const [rulesOpen, setRulesOpen] = useState(false);
+  /** How many rules reach this port. Shown on the button, so "something is watching this" is
+   *  visible without opening anything — the dock is where an operator looks at one port, and a
+   *  count they have to click to discover is a count most of them never see (ADR-055 R6).
+   *
+   *  Re-read when the dialog closes, which is how adding or deleting a rule updates it. */
+  const [ruleCount, setRuleCount] = useState(0);
+  /** The port as the header names it — one spelling, used by the header, the button's label and
+   *  the dialog's title. */
+  const portLabel = row.if_name ?? `if${row.ifindex}`;
+
+  useEffect(() => {
+    // Reading the ruleset is `ManageConfig` (a threshold decides when the fleet pages someone), so
+    // a viewer must not ask: they would get a 403 per port selection and see nothing either way.
+    if (!canConfig) return undefined;
+    let live = true;
+    api
+      .listInterfaceThresholds(nodeId, row.ifindex)
+      .then((rs) => {
+        if (live) setRuleCount(rs.length);
+      })
+      // A count that will not load is not worth an error surface here: the button still opens the
+      // dialog, which has its own.
+      .catch(() => {
+        if (live) setRuleCount(0);
+      });
+    return () => {
+      live = false;
+    };
+  }, [canConfig, nodeId, row.ifindex, rulesOpen]);
   const range = useRangeStore((s) => s.range);
   const setRange = useRangeStore((s) => s.setRange);
   const throughputScale = usePrefsStore((s) => s.throughputScale);
@@ -786,7 +814,7 @@ function InterfaceDock({
       )}
       <div className="nd-if-dock-head">
         <StatusDot state={operState(row.oper_status ?? null)} withLabel={false} />
-        <span className="mono nd-if-dock-name">{row.if_name ?? `if${row.ifindex}`}</span>
+        <span className="mono nd-if-dock-name">{portLabel}</span>
         {row.if_alias && <span className="nd-muted nd-if-dock-alias">{row.if_alias}</span>}
         <div className="nd-if-dock-ctl">
           <span className="nd-if-dock-stats">
@@ -854,22 +882,24 @@ function InterfaceDock({
           </span>
           <RangeControl value={range} onChange={setRange} />
         </div>
-        {/* Create a bandwidth rule for THIS port (ADR-076). It lives here rather than on the
-            row for two reasons: a row is itself a `<button>`, so nesting one would be invalid
-            markup and unreachable by keyboard; and the dock is where the port's speed is already
-            shown, which is what the percentage is a percentage of.
+        {/* The alert rules for THIS port (ADR-076). It lives here rather than on the row for two
+            reasons: a row is itself a `<button>`, so nesting one would be invalid markup and
+            unreachable by keyboard; and the dock is where the port's speed is already shown, which
+            is what a percentage rule is a percentage of.
 
             Rendered only when the operator may configure — never disabled with a tooltip
-            (ADR-056). */}
+            (ADR-056). Viewing the ruleset is `ManageConfig` too, so this gate is the read gate as
+            much as the write one. */}
         {canConfig && (
           <button
             type="button"
             className="nd-if-dock-rule"
-            aria-label={t('interfaces.addRule')}
-            title={t('interfaces.addRuleTitle')}
-            onClick={() => setAddingRule(true)}
+            aria-label={t('interfaces.rulesButton')}
+            title={t('interfaces.rulesButtonTitle')}
+            onClick={() => setRulesOpen(true)}
           >
             <BellIcon />
+            {ruleCount > 0 && <span className="nd-if-dock-rule-count">{ruleCount}</span>}
           </button>
         )}
         <button
@@ -885,20 +915,13 @@ function InterfaceDock({
         </button>
       </div>
 
-      {addingRule && (
-        <ThresholdModal
-          mode="add"
-          prefill={{
-            level: 'interface',
-            scopeId: interfaceScopeId(nodeId, row.ifindex),
-            metric: 'if_in_util_pct',
-            direction: 'above',
-            critical: '90',
-          }}
-          onClose={() => setAddingRule(false)}
-          // Nothing on this screen shows the rule, so there is nothing to refresh — the rule is
-          // listed on Alerts ▸ Metric alert rules and the alert it produces appears on its own.
-          onSaved={() => {}}
+      {rulesOpen && (
+        <InterfaceRulesModal
+          nodeId={nodeId}
+          ifindex={row.ifindex}
+          portLabel={portLabel}
+          speedBps={row.if_speed_bps ?? null}
+          onClose={() => setRulesOpen(false)}
         />
       )}
 

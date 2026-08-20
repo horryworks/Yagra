@@ -2438,6 +2438,29 @@ async fn run_pool_coverage_watch(
 ///
 /// Leader-only for the same reason pool coverage is: two instances evaluating the same ports would
 /// double every notification, and the engine's check state is process-local.
+/// Which VictoriaMetrics dimension each direction's derived metric pair is computed from.
+///
+/// One entry per **direction**, not per metric: the percentage and the absolute rate come out of
+/// the same answer, so a direction costs one query however many of its metrics carry rules.
+///
+/// The names come from `DERIVED_PAIRS` rather than being written again here; what this table adds
+/// is the dimension, which `interface_util` cannot name — it is the pure half and knows nothing
+/// about the store. The index-to-direction pairing is what
+/// `the_dimensions_match_their_metric_pairs` exists to pin.
+const INTERFACE_DIMENSIONS: [(
+    crate::interface_util::DerivedPair,
+    store::InterfaceTopMetric,
+); 2] = [
+    (
+        crate::interface_util::DERIVED_PAIRS[0],
+        store::InterfaceTopMetric::InBps,
+    ),
+    (
+        crate::interface_util::DERIVED_PAIRS[1],
+        store::InterfaceTopMetric::OutBps,
+    ),
+];
+
 async fn run_interface_utilization_watch(
     store: Arc<dyn MetricStore>,
     repo: Arc<NodeRepo>,
@@ -2447,115 +2470,161 @@ async fn run_interface_utilization_watch(
 ) {
     use crate::interface_util as util;
     use std::collections::{BTreeMap, BTreeSet};
-    use store::InterfaceTopMetric;
-
-    // Which VictoriaMetrics dimension each derived metric divides. Spelled as a pair rather than
-    // derived from the name, so a third derived metric has to say which rate it is a percentage of
-    // instead of inheriting one by string coincidence.
-    const DIMENSIONS: [(&str, InterfaceTopMetric); 2] = [
-        (util::METRIC_IF_IN_UTIL_PCT, InterfaceTopMetric::InBps),
-        (util::METRIC_IF_OUT_UTIL_PCT, InterfaceTopMetric::OutBps),
-    ];
 
     let mut tracked = util::TrackedChecks::default();
     loop {
         tokio::time::sleep(util::WATCH_TICK).await;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
-        for (metric, dimension) in DIMENSIONS {
-            let coverage = alerts.interface_rule_coverage(metric);
-            let Some(lowest_bound) = coverage.lowest_bound_pct else {
-                // No rule that can fire. Nothing is queried and nothing is swept clear — a port that
-                // was alerting when its rule was deleted is resolved by the config refresh, not by
-                // pretending its utilisation dropped.
-                continue;
+        for (pair, dimension) in INTERFACE_DIMENSIONS {
+            let pct_cov = alerts.interface_rule_coverage(pair.pct);
+            let bps_cov = alerts.interface_rule_coverage(pair.bps);
+            let pct_demand = util::BoundDemand {
+                lowest_bound: pct_cov.lowest_bound,
+                has_below: pct_cov.has_below,
             };
-            // An enumerable rule set names its nodes; a broadly-scoped one means the fleet.
-            let scoped: Vec<Uuid> = coverage
-                .nodes
+            let bps_demand = util::BoundDemand {
+                lowest_bound: bps_cov.lowest_bound,
+                has_below: bps_cov.has_below,
+            };
+            let pct_can_fire = pct_demand.lowest_bound.is_some();
+            let bps_can_fire = bps_demand.lowest_bound.is_some();
+            if !pct_can_fire && !bps_can_fire {
+                // No rule that can fire on either metric. Nothing is queried and nothing is swept
+                // clear — a port that was alerting when its rule was deleted is resolved by the
+                // config refresh, not by pretending its traffic dropped.
+                continue;
+            }
+            // The union of both families' node sets. A family with no rule contributes an empty
+            // set; one scoped too broadly to enumerate contributes `None`, which means the fleet.
+            let nodes = match (&pct_cov.nodes, &bps_cov.nodes) {
+                (Some(a), Some(b)) => Some(a.union(b).copied().collect::<BTreeSet<Uuid>>()),
+                _ => None,
+            };
+            if nodes.as_ref().is_some_and(BTreeSet::is_empty) {
+                continue;
+            }
+            let scoped: Vec<Uuid> = nodes
                 .as_ref()
                 .map(|s| s.iter().copied().collect())
                 .unwrap_or_default();
-            if coverage.nodes.as_ref().is_some_and(BTreeSet::is_empty) {
-                continue;
-            }
-            let slowest = match repo.slowest_interface_speed_bps(&scoped).await {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!(error = %e, metric, "reading the interface speed floor failed");
-                    continue;
+
+            // Only the percentage family needs a denominator, so an absolute-only tick asks
+            // PostgreSQL nothing. Taken over the union rather than over the percentage rules'
+            // own nodes: a slower link in the other family can only *lower* the floor, and a
+            // lower floor never hides a breaching port.
+            let slowest = if pct_can_fire {
+                match repo.slowest_interface_speed_bps(&scoped).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(error = %e, metric = pair.pct, "reading the interface speed floor failed");
+                        continue;
+                    }
                 }
+            } else {
+                None
             };
-            let Some(floor) = util::candidate_floor_bps(slowest, Some(lowest_bound)) else {
-                // No covered port has a usable speed. Not an error — it is what a fleet of agents
-                // that implement neither speed OID looks like — but it is invisible without a
-                // number, so publish one.
-                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => metric).set(0.0);
+            let Some(floor) = util::query_floor_bps(slowest, pct_demand, bps_demand) else {
+                // Percentage rules exist but no covered port has a usable speed, and no absolute
+                // rule is there to reach them. Not an error — it is what a fleet of agents that
+                // implement neither speed OID looks like — but it is invisible without a number.
+                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => pair.pct)
+                    .set(0.0);
                 continue;
             };
 
             let Some(candidates) = store.interface_candidates(dimension, floor).await else {
-                // 🚨 The store could not answer. Skip the whole tick rather than treating it as
+                // The store could not answer. Skip the whole tick rather than treating it as
                 // "nothing is busy": the recovery sweep below would otherwise resolve every open
                 // interface alert and send a recovery to PagerDuty for each, then re-fire them all
                 // when VictoriaMetrics came back.
                 metrics::counter!("yagra_interface_util_query_failures_total").increment(1);
                 tracing::warn!(
-                    metric,
+                    metric = pair.pct,
                     "interface-utilisation query did not answer; tick skipped"
                 );
                 continue;
             };
 
             // Speeds for exactly the candidate nodes — bounded by what crossed the floor, not by
-            // the fleet.
-            let nodes: Vec<Uuid> = candidates
-                .iter()
-                .map(|(n, _, _)| *n)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .collect();
-            let idents = match repo.interface_idents_for(&nodes).await {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::warn!(error = %e, metric, "reading interface speeds failed");
-                    continue;
+            // the fleet. Skipped entirely when only absolute rules are in force.
+            let speeds: BTreeMap<(Uuid, i32), Option<i64>> = if pct_can_fire {
+                let ids: Vec<Uuid> = candidates
+                    .iter()
+                    .map(|(n, _, _)| *n)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                match repo.interface_idents_for(&ids).await {
+                    Ok(m) => m.iter().map(|(k, v)| (*k, v.if_speed)).collect(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, metric = pair.pct, "reading interface speeds failed");
+                        continue;
+                    }
                 }
+            } else {
+                BTreeMap::new()
             };
-            let speeds: BTreeMap<(Uuid, i32), Option<i64>> =
-                idents.iter().map(|(k, v)| (*k, v.if_speed)).collect();
 
-            let (readings, skipped) = util::evaluate(&candidates, &speeds);
-            metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => metric)
-                .set(skipped as f64);
-            metrics::gauge!("yagra_interface_util_tracked", "metric" => metric)
-                .set(tracked.len() as f64);
+            let (readings, no_pct) = util::evaluate(&candidates, &speeds);
+            if pct_can_fire {
+                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => pair.pct)
+                    .set(no_pct as f64);
+            }
+            metrics::gauge!("yagra_interface_util_tracked", "metric" => pair.pct)
+                .set(tracked.count_for(pair.pct) as f64);
+            metrics::gauge!("yagra_interface_util_tracked", "metric" => pair.bps)
+                .set(tracked.count_for(pair.bps) as f64);
 
             let mut present = BTreeSet::new();
             let mut actions = Vec::new();
             for r in &readings {
                 present.insert((r.node, r.ifindex));
-                // 🚨 A node that is not committed-Ok is frozen, not observed. Feeding `Ok` would
+                // A node that is not committed-Ok is frozen, not observed. Feeding `Ok` would
                 // resolve a real congestion alert the moment the device went unreachable; feeding
                 // the reading would page about a link on a box that is already down.
                 if !alerts.node_is_ok(r.node) {
                     continue;
                 }
-                tracked.mark((r.node, r.ifindex, metric));
-                actions.extend(
-                    alerts.observe_interface_metric(r.node, r.ifindex, metric, r.pct, now_ms),
-                );
+                if let (true, Some(pct)) = (pct_can_fire, r.pct) {
+                    tracked.mark((r.node, r.ifindex, pair.pct));
+                    actions.extend(
+                        alerts.observe_interface_metric(r.node, r.ifindex, pair.pct, pct, now_ms),
+                    );
+                }
+                if bps_can_fire {
+                    tracked.mark((r.node, r.ifindex, pair.bps));
+                    actions.extend(
+                        alerts.observe_interface_metric(r.node, r.ifindex, pair.bps, r.bps, now_ms),
+                    );
+                }
             }
 
             // Anything tracked that is no longer above the floor has recovered: below the floor is
             // below every rule's bound by construction. Frozen nodes are skipped here too, for the
             // same reason they are skipped above.
-            for key in tracked.absent(metric, &present) {
-                let (node, ifindex, m) = key;
-                if !alerts.node_is_ok(node) {
+            //
+            // Not done for a metric that has a `below` rule, and the reason is the same inversion
+            // that `query_floor_bps` handles: the floor is zero there, so a port only leaves the
+            // candidate set by losing its series altogether — and calling that "0 bits/sec" would
+            // *fire* a `below` rule on a port nobody has heard from, which is a data gap being
+            // reported as a traffic level.
+            for metric in [pair.pct, pair.bps] {
+                let (can_fire, has_below) = if metric == pair.pct {
+                    (pct_can_fire, pct_demand.has_below)
+                } else {
+                    (bps_can_fire, bps_demand.has_below)
+                };
+                if !can_fire || has_below {
                     continue;
                 }
-                actions.extend(alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms));
+                for key in tracked.absent(metric, &present) {
+                    let (node, ifindex, m) = key;
+                    if !alerts.node_is_ok(node) {
+                        continue;
+                    }
+                    actions.extend(alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms));
+                }
             }
 
             for action in actions {
@@ -4248,6 +4317,41 @@ mod tests {
 
     /// This file's own source, for the structural assertion below.
     const SRC: &str = include_str!("main.rs");
+
+    /// The dimension table is positional, and getting it backwards is silent: the loop would
+    /// evaluate receive rules against transmit traffic and never fail anywhere.
+    #[test]
+    fn the_dimensions_match_their_metric_pairs() {
+        use crate::interface_util as util;
+        use store::InterfaceTopMetric;
+
+        assert_eq!(INTERFACE_DIMENSIONS.len(), util::DERIVED_PAIRS.len());
+        for (pair, dimension) in INTERFACE_DIMENSIONS {
+            let want = match dimension {
+                InterfaceTopMetric::InBps => {
+                    ("in", util::METRIC_IF_IN_UTIL_PCT, util::METRIC_IF_IN_BPS)
+                }
+                InterfaceTopMetric::OutBps => {
+                    ("out", util::METRIC_IF_OUT_UTIL_PCT, util::METRIC_IF_OUT_BPS)
+                }
+                // The loop reads one direction at a time; a combined or per-error dimension has
+                // no percentage to divide and no pair to observe.
+                InterfaceTopMetric::Throughput
+                | InterfaceTopMetric::Errors
+                | InterfaceTopMetric::Discards => {
+                    panic!("{dimension:?} is not a single direction")
+                }
+            };
+            assert_eq!(pair.pct, want.1, "{} percentage", want.0);
+            assert_eq!(pair.bps, want.2, "{} absolute rate", want.0);
+        }
+        // Both directions are present, and neither is listed twice.
+        let dims: std::collections::BTreeSet<&str> = INTERFACE_DIMENSIONS
+            .iter()
+            .map(|(pair, _)| pair.pct)
+            .collect();
+        assert_eq!(dims.len(), INTERFACE_DIMENSIONS.len());
+    }
 
     /// **A coverage transition is written to History, not only notified.**
     ///

@@ -180,6 +180,53 @@ impl ThresholdStore {
             .bind(set(f.direction.iter().map(|d| d.as_str())))
     }
 
+    /// Every rule that could conceivably reach one port — the input to
+    /// `alerts::matching_rules`, which then decides which of them actually do.
+    ///
+    /// Not `list_all()`: that is the engine's uncapped read of the whole table, and a browser
+    /// opening one port must not pull a fleet's node-level overrides across. Not `list_page`
+    /// either: its cap would silently drop rules, and "which rules govern this port" is a question
+    /// a prefix cannot answer.
+    ///
+    /// The predicate is the exact complement of what [`crate::alerts::threshold_applies`] can
+    /// reject cheaply. The four broad levels are taken whole because whether one matches depends
+    /// on the node's profile, tags and folder chain, which live in the engine's snapshot rather
+    /// than in this table; the two narrow levels are matched by their `scope_id`, which is this
+    /// table's own column. In practice the broad levels are per profile or per group and stay
+    /// small, while the ones that grow with the fleet are exactly the two that get filtered.
+    ///
+    /// ⚠️ The narrow clauses are string comparisons against the stored `scope_id` because that is
+    /// what the column holds — `<uuid>` for a node rule, `<uuid>:<ifindex>` for a port rule. Both
+    /// spellings come from `yagra_common`, never assembled here.
+    pub async fn candidates_for_interface(
+        &self,
+        node: uuid::Uuid,
+        ifindex: u32,
+    ) -> anyhow::Result<Vec<StoredThreshold>> {
+        let broad: Vec<String> = ScopeLevel::ALL
+            .iter()
+            .filter(|l| !matches!(l, ScopeLevel::Node | ScopeLevel::Interface))
+            .map(|l| l.as_str().to_owned())
+            .collect();
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM thresholds \
+             WHERE scope_level = ANY($1) \
+                OR (scope_level = $2 AND scope_id = $3) \
+                OR (scope_level = $4 AND scope_id = $5) \
+             ORDER BY {}, metric, scope_id",
+            Self::COLUMNS,
+            Self::scope_level_rank()
+        ))
+        .bind(broad)
+        .bind(ScopeLevel::Node.as_str())
+        .bind(node.to_string())
+        .bind(ScopeLevel::Interface.as_str())
+        .bind(yagra_common::interface_scope_id(node, ifindex))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Self::row_to_threshold).collect()
+    }
+
     fn row_to_threshold(row: sqlx::postgres::PgRow) -> anyhow::Result<StoredThreshold> {
         let dwell: i32 = row.try_get("dwell_samples")?;
         Ok(StoredThreshold {
@@ -482,10 +529,11 @@ mod tests {
 
     #[test]
     fn the_column_list_is_named_once_and_used_by_every_read() {
-        // Both reads build their SELECT from `COLUMNS`, so the positional `row_to_threshold`
-        // cannot drift from what was selected.
+        // Every read builds its SELECT from `COLUMNS`, so the positional `row_to_threshold`
+        // cannot drift from what was selected. Three of them: the engine's uncapped snapshot, the
+        // API's capped page, and the per-interface candidate set (ADR-076 決定 11).
         let src = production_source();
-        assert_eq!(src.matches("Self::COLUMNS").count(), 2);
+        assert_eq!(src.matches("Self::COLUMNS").count(), 3);
         assert_eq!(ThresholdStore::COLUMNS.matches(',').count() + 1, 8);
     }
 }

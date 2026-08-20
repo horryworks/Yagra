@@ -319,6 +319,23 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         lowered_to: None,
     },
     FoldedRead {
+        tool: "get_interface_thresholds",
+        // Single-branch, like `list_node_metrics` above: here rather than in `TOOL_RESULT_TYPES`
+        // because this table checks more for less — the permission is compared against the REST
+        // handler's own extractor, and the forbidden-key check walks the response schema in the
+        // OpenAPI document rather than whichever fields one hand-built instance happened to fill.
+        arg: "",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/interfaces/:ifindex/thresholds",
+        // ManageConfig, not View: a threshold decides when the fleet pages someone, so reading the
+        // ruleset is as sensitive as writing it — the same reasoning the whole thresholds domain
+        // carries, and the same permission `get_config`'s `thresholds` branch demands.
+        perm: Some(Permission::ManageConfig),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
         tool: "list_node_metrics",
         // Single-branch, like `run_rca`: the row is here rather than in `TOOL_RESULT_TYPES` because
         // this table checks more for less — the permission is compared against the REST handler's

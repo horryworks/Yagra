@@ -158,26 +158,20 @@ function ScopeIdField({
 export function ThresholdModal({
   mode,
   rule,
-  prefill,
   onClose,
   onSaved,
 }: {
   mode: 'add' | 'edit';
   rule?: StoredThreshold;
-  /** Starting values for an *add*, for a caller that already knows what the rule is about.
-   *
-   *  The Interfaces dock passes the port and a bandwidth metric, because there the target is what
-   *  the operator is already looking at. Ignored in edit mode, where the stored rule is the truth.
-   *  Applied once, at mount — the dialog is conditionally rendered, so closing it *is* the reset. */
-  prefill?: Partial<ThresholdForm>;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
-  const [form, setForm] = useState<ThresholdForm>(() => ({
-    ...thresholdFormFrom(rule),
-    ...(mode === 'add' ? prefill : undefined),
-  }));
+  // ⚠️ Held here, inside a conditionally-mounted component, so closing the dialog *is* the reset
+  // (ui-conventions "Modals"). It briefly took a `prefill` for the Interfaces dock; that caller
+  // now opens its own port-shaped dialog (ADR-076 増分 5), and a prop with no caller is a prop
+  // nothing keeps true.
+  const [form, setForm] = useState<ThresholdForm>(() => thresholdFormFrom(rule));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const set = <K extends keyof ThresholdForm>(key: K, value: ThresholdForm[K]) =>
@@ -271,7 +265,14 @@ export function ThresholdModal({
             <span className="modal-hint">{t('thresholds.livenessMetric')}</span>
           </>
         ) : (
-          <MetricPicker value={form.metric} onChange={(m) => set('metric', m)} />
+          <MetricPicker
+            value={form.metric}
+            onChange={(m) => set('metric', m)}
+            // A rule scoped to one port can only be about a metric that has a value per port. The
+            // engine passes a port number only for those, and an interface rule with none matches
+            // nothing — so the other 81 catalogue entries were offers of an inert rule.
+            onlyPerInterface={form.level === 'interface'}
+          />
         )}
       </div>
       <div className="modal-field">

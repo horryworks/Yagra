@@ -15,6 +15,30 @@
   line-height: 1.6;
 }
 
+/* The default view leaves port rules out (ADR-076 決定 12). One line above the toolbar says how
+   many and offers the way in — not a Card, because it is a statement about the current view rather
+   than a standing note about the screen, and a third bordered panel above the table would push the
+   rules themselves below the fold. */
+.thresholds-hidden {
+  margin: 0 0 var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+.thresholds-hidden .linklike {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent-color);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.thresholds-hidden .linklike:hover {
+  color: var(--accent-hover);
+}
+
 /* Compact warn/crit/dwell inputs (add modal). */
 .thresholds-num {
   width: 72px;

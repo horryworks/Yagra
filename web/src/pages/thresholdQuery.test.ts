@@ -11,7 +11,8 @@ import {
   writeFilterParams,
 } from '../lib/columnFilter';
 import { encodeCondition } from '../lib/filterCondition';
-import { queryFor, thresholdFilters } from './thresholdQuery';
+import { DEFAULT_SCOPE_LEVELS, queryFor, thresholdFilters } from './thresholdQuery';
+import { SCOPE_LEVELS } from '../types/api';
 
 const t = ((k: string) => k) as unknown as TFunction;
 const COLUMNS = specColumns(thresholdFilters(t));
@@ -22,8 +23,25 @@ const query = (over: Record<string, string> = {}) => queryFor(COLUMNS, { ...DEFA
 const read = (qs: string) => readFilterParams(COLUMNS, new URLSearchParams(qs));
 
 describe('queryFor', () => {
-  it('sends nothing at all when nothing is filtered', () => {
-    expect(query()).toEqual({ q: undefined, scope_level: undefined, direction: undefined });
+  it('asks for every scope level except interface when nothing is filtered', () => {
+    // The screen's default narrows (ADR-076 決定 12): port rules are per (node × port × metric),
+    // so one 48-port switch would contribute 96 rows to a list capped at 500 and bury the rules
+    // an operator came to read. The narrowing is a *request*, not a browser-side filter, or the
+    // cap would still be spent on the rows being hidden.
+    expect(query()).toEqual({
+      q: undefined,
+      scope_level: DEFAULT_SCOPE_LEVELS.join(','),
+      direction: undefined,
+    });
+    expect(DEFAULT_SCOPE_LEVELS).not.toContain('interface');
+    // Derived, not hand-listed: a seventh level joins the default view rather than being silently
+    // excluded by a list nobody revisits.
+    expect(DEFAULT_SCOPE_LEVELS).toHaveLength(SCOPE_LEVELS.length - 1);
+  });
+
+  it('sends nothing for a level column the operator opened up', () => {
+    // Clearing the selection means "every level", which is how the hidden port rules are reached.
+    expect(query({ scope_level: '' }).scope_level).toBeUndefined();
   });
 
   it('never sends an empty string, which the backend would reject', () => {

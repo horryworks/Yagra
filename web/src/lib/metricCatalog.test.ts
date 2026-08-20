@@ -101,6 +101,37 @@ describe('metricOptions', () => {
     expect(by('acme_widget_temp').perInterface).toBeUndefined();
   });
 
+  it('offers only per-port metrics when the rule is scoped to one interface', () => {
+    // An interface-scoped rule on a node-wide metric is structurally inert: the engine passes a
+    // port number only for a per-interface metric, and an interface rule with none matches
+    // nothing. So the picker offering one is an offer of a rule that saves, lists and never fires.
+    const names = metricOptions(CATALOG, LABELS, undefined, { onlyPerInterface: true }).map(
+      (o) => o.name,
+    );
+    expect(names).toContain('if_oper_status');
+    // The derived pair states its own dimension — the generated catalogue only knows about
+    // metrics that are *collected*, so it could never answer for them.
+    expect(names).toContain('if_in_util_pct');
+    expect(names).toContain('if_in_bps');
+    // Node-wide metrics and Yagra's own checks are gone…
+    expect(names).not.toContain('cisco_env_temp');
+    expect(names).not.toContain('icmp_rtt_ms');
+    // …and so is a metric whose dimension nobody can state. Guessing would be worse: this is how
+    // a chassis reading came to be reported per port (ADR-011). The typed-name row is the way in.
+    expect(names).not.toContain('acme_widget_temp');
+    // Nothing is filtered without the option — every other caller is unaffected.
+    expect(metricOptions(CATALOG, LABELS).map((o) => o.name)).toContain('cisco_env_temp');
+  });
+
+  it('keeps the value being edited even when the rule is port-scoped', () => {
+    // Same trap as below, and the filter must not spring it: a rule on a metric this list would
+    // not now offer has to stay editable, or reopening it blanks the control.
+    const names = metricOptions(CATALOG, LABELS, 'acme_widget_temp', {
+      onlyPerInterface: true,
+    }).map((o) => o.name);
+    expect(names).toContain('acme_widget_temp');
+  });
+
   it('keeps the value being edited even when the catalog no longer offers it', () => {
     // A control whose value is absent from its options renders blank, and the next save stores
     // something else — the trap the scope-level select already carries a comment about.

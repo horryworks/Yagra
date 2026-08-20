@@ -11697,6 +11697,84 @@
         }
       }
     },
+    "/api/v1/nodes/{node_id}/interfaces/{ifindex}/thresholds": {
+      "get": {
+        "tags": [
+          "thresholds"
+        ],
+        "summary": "The threshold rules that reach one port (ADR-076 決定 11).",
+        "description": "A port is governed by rules at six scope levels, and the narrow ones are usually not where the\ninteresting rule lives — a fleet-wide \"any link over 90%\" is a global rule, and a page that\nlisted only the port's own rules would show an empty list about a port that is alerting.\n\nRules come from PostgreSQL on every call rather than from the alert engine's snapshot, which\nrefreshes on the config generation: a rule saved a second ago is not in that snapshot, and the\noperator who just pressed Save is precisely the caller of this endpoint. The node's own\nmetadata (profile, tag values, folder chain) does come from the snapshot — it is what decides\nwhether a broad rule reaches this node, and it does not change under the operator's hand.",
+        "operationId": "list_interface_thresholds",
+        "parameters": [
+          {
+            "name": "node_id",
+            "in": "path",
+            "description": "Node id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "ifindex",
+            "in": "path",
+            "description": "SNMP ifIndex of the interface",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every rule that reaches this port, from any scope level, most specific first, each flagged with whether it is in force",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MatchingThreshold"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageConfig, or the node is outside the token's group scope",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Skeleton mode has no write side",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/nodes/{node_id}/maintenance-exemption": {
       "put": {
         "tags": [
@@ -26266,6 +26344,24 @@
           "token": {
             "type": "string",
             "description": "The bearer token for subsequent requests."
+          }
+        }
+      },
+      "MatchingThreshold": {
+        "type": "object",
+        "description": "One rule that reaches a port, and whether it is the one in force there.",
+        "required": [
+          "rule",
+          "in_force"
+        ],
+        "properties": {
+          "in_force": {
+            "type": "boolean",
+            "description": "Whether this rule sits at the **winning** scope level for its metric — the most specific\nlevel that reaches this port, and among folder-group rules only the nearest group in the\nchain (ADR-013 + ADR-075 決定 11).\n\nSeveral rules can carry `true` for one metric at once: the engine merges rules at the\nwinning level by keeping the more restrictive bound of each severity. So this means \"this\nrule contributes to the effective bound\", not \"this rule *is* the effective bound\"."
+          },
+          "rule": {
+            "$ref": "#/components/schemas/StoredThreshold",
+            "description": "The stored rule, in the same shape the rules list serves."
           }
         }
       },
