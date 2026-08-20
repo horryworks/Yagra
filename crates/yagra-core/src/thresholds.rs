@@ -18,9 +18,53 @@ pub struct StoredThreshold {
     // Serialized as `scope_level` so the GET response matches the POST body field name.
     #[serde(rename = "scope_level")]
     pub level: ScopeLevel,
-    pub scope_id: String,
+    /// Every profile, folder group, node or port this rule applies to — `scope_level` says which
+    /// of those they are. Empty for a `global` rule, which applies to every node.
+    //
+    // ⚠️ Replaces the single `scope_id` this used to carry, in the API response as well (ADR-078).
+    // The database COLUMN of that name is still written (see `ThresholdWrite::primary`) because a
+    // core predating migration 0096 resolves by it — but it is deliberately not a second field
+    // here. Two spellings of "which target" is the mirror `extensibility.md` §2 forbids, and the
+    // copy that would rot is the one a future resolver reaches for by habit: on a rule naming
+    // four profiles it answers about one of them, quietly covering a quarter of the fleet.
+    //
+    // (The two notes above are `//` on purpose: this type derives `ToSchema`, so a `///` line is
+    // published verbatim to every API client. The line that IS `///` is written for them.)
+    pub scope_ids: Vec<String>,
     #[serde(flatten)]
     pub rule: ThresholdRule,
+}
+
+/// The fields one save writes — the body of both [`ThresholdStore::create`] and
+/// [`ThresholdStore::update`].
+///
+/// A struct rather than the eight positional arguments those two used to take. `scope_ids` would
+/// have been the ninth, and both already carried `#[allow(clippy::too_many_arguments)]` — which is
+/// the design signal `coding-conventions.md` describes rather than a lint to silence. Two writers
+/// of one row is also how this repo has shipped a rule enforced on only one of them
+/// (`extensibility.md` §3), so they now share a shape as well as a validator.
+#[derive(Debug, Clone, Copy)]
+pub struct ThresholdWrite<'a> {
+    pub scope_level: &'a str,
+    /// Every target, already validated by the API edge. Empty for a `global` rule.
+    pub scope_ids: &'a [String],
+    pub metric: &'a str,
+    pub direction: &'a str,
+    pub warning: Option<f64>,
+    pub critical: Option<f64>,
+    pub dwell_samples: i32,
+}
+
+impl ThresholdWrite<'_> {
+    /// What goes in the legacy `scope_id` column: the first target, or the empty string.
+    ///
+    /// ⚠️ Written on every save even though nothing in this build reads it back for resolution.
+    /// It is what a core predating migration 0096 resolves the rule by, so leaving it empty would
+    /// turn a rollback into "the rule matches nothing" instead of "the rule matches its first
+    /// target" — inert versus narrowed, and only one of those is safe to discover late.
+    fn primary(&self) -> &str {
+        self.scope_ids.first().map_or("", String::as_str)
+    }
 }
 
 /// Read the stored token back into the enum.
@@ -70,7 +114,7 @@ impl ThresholdStore {
 
     /// Columns every read below selects, in the order [`Self::row_to_threshold`] expects.
     const COLUMNS: &'static str =
-        "id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples";
+        "id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, dwell_samples";
 
     /// **Every** threshold rule — the alert engine snapshots these to evaluate against.
     ///
@@ -211,8 +255,8 @@ impl ThresholdStore {
         let rows = sqlx::query(&format!(
             "SELECT {} FROM thresholds \
              WHERE scope_level = ANY($1) \
-                OR (scope_level = $2 AND scope_id = $3) \
-                OR (scope_level = $4 AND scope_id = $5) \
+                OR (scope_level = $2 AND $3 = ANY(scope_ids)) \
+                OR (scope_level = $4 AND $5 = ANY(scope_ids)) \
              ORDER BY {}, metric, scope_id",
             Self::COLUMNS,
             Self::scope_level_rank()
@@ -232,7 +276,19 @@ impl ThresholdStore {
         Ok(StoredThreshold {
             id: row.try_get("id")?,
             level: parse_level(&row.try_get::<String, _>("scope_level")?),
-            scope_id: row.try_get("scope_id")?,
+            // Migration 0096 backfilled every row that existed when it ran, so an empty array
+            // beside a populated `scope_id` can only be a row an OLDER core wrote afterwards —
+            // i.e. during a rollback window. Reading that as "no targets" would make the rule
+            // inert; reading it as one target is what the older core itself meant by it.
+            scope_ids: {
+                let ids: Vec<String> = row.try_get("scope_ids")?;
+                let primary: String = row.try_get("scope_id")?;
+                if ids.is_empty() && !primary.is_empty() {
+                    vec![primary]
+                } else {
+                    ids
+                }
+            },
             rule: ThresholdRule {
                 metric: row.try_get("metric")?,
                 direction: parse_direction(&row.try_get::<String, _>("direction")?),
@@ -244,31 +300,23 @@ impl ThresholdStore {
     }
 
     /// Create a threshold rule; returns its id.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn create(
-        &self,
-        scope_level: &str,
-        scope_id: &str,
-        metric: &str,
-        direction: &str,
-        warning: Option<f64>,
-        critical: Option<f64>,
-        dwell_samples: i32,
-    ) -> anyhow::Result<Uuid> {
+    pub async fn create(&self, w: ThresholdWrite<'_>) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO thresholds \
-             (id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+             (id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
+              dwell_samples) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
         )
         .bind(id)
-        .bind(scope_level)
-        .bind(scope_id)
-        .bind(metric)
-        .bind(direction)
-        .bind(warning)
-        .bind(critical)
-        .bind(dwell_samples.max(1))
+        .bind(w.scope_level)
+        .bind(w.primary())
+        .bind(w.scope_ids)
+        .bind(w.metric)
+        .bind(w.direction)
+        .bind(w.warning)
+        .bind(w.critical)
+        .bind(w.dwell_samples.max(1))
         .execute(&self.pool)
         .await?;
         Ok(id)
@@ -285,30 +333,20 @@ impl ThresholdStore {
     /// The `dwell_samples.max(1)` floor is applied here **as well as** in [`Self::create`]: an edit
     /// is a second write path to the same column, and a floor that only one writer applies is a
     /// floor the other one silently removes.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn update(
-        &self,
-        id: Uuid,
-        scope_level: &str,
-        scope_id: &str,
-        metric: &str,
-        direction: &str,
-        warning: Option<f64>,
-        critical: Option<f64>,
-        dwell_samples: i32,
-    ) -> anyhow::Result<bool> {
+    pub async fn update(&self, id: Uuid, w: ThresholdWrite<'_>) -> anyhow::Result<bool> {
         let res = sqlx::query(
-            "UPDATE thresholds SET scope_level = $2, scope_id = $3, metric = $4, direction = $5, \
-             warning = $6, critical = $7, dwell_samples = $8 WHERE id = $1",
+            "UPDATE thresholds SET scope_level = $2, scope_id = $3, scope_ids = $4, metric = $5, \
+             direction = $6, warning = $7, critical = $8, dwell_samples = $9 WHERE id = $1",
         )
         .bind(id)
-        .bind(scope_level)
-        .bind(scope_id)
-        .bind(metric)
-        .bind(direction)
-        .bind(warning)
-        .bind(critical)
-        .bind(dwell_samples.max(1))
+        .bind(w.scope_level)
+        .bind(w.primary())
+        .bind(w.scope_ids)
+        .bind(w.metric)
+        .bind(w.direction)
+        .bind(w.warning)
+        .bind(w.critical)
+        .bind(w.dwell_samples.max(1))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
@@ -422,8 +460,8 @@ mod tests {
             .expect("update exists")
             .1;
         let body = after.split_once("\n    }").map_or(after, |(b, _)| b);
-        let placeholders = (1..=8).filter(|n| body.contains(&format!("${n}"))).count();
-        assert_eq!(placeholders, 8, "{body}");
+        let placeholders = (1..=9).filter(|n| body.contains(&format!("${n}"))).count();
+        assert_eq!(placeholders, 9, "{body}");
         assert_eq!(
             body.matches(".bind(").count(),
             placeholders,
@@ -534,6 +572,6 @@ mod tests {
         // API's capped page, and the per-interface candidate set (ADR-076 決定 11).
         let src = production_source();
         assert_eq!(src.matches("Self::COLUMNS").count(), 3);
-        assert_eq!(ThresholdStore::COLUMNS.matches(',').count() + 1, 8);
+        assert_eq!(ThresholdStore::COLUMNS.matches(',').count() + 1, 9);
     }
 }

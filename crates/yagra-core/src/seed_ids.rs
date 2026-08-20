@@ -251,6 +251,30 @@ mod tests {
         );
     }
 
+    /// Migration `0097` re-points the vendor default thresholds by deleting offsets 4..=23 of
+    /// `DefaultThresholds` — as two hexadecimal literals, because SQL cannot call this enum.
+    ///
+    /// The pairing is the whole risk. A literal one digit off deletes the wrong rows: too low and
+    /// it takes out node-down or SNMP-down (which the re-seed then restores, so nothing looks
+    /// broken and the fleet simply stops paging until the next boot); too high and it leaves the
+    /// old `global` rows in place, where `ON CONFLICT DO NOTHING` makes them permanent.
+    #[test]
+    fn the_reseeded_threshold_offsets_are_the_ones_migration_0097_deletes() {
+        let sql = include_str!("../../../migrations/0097_reseed_vendor_thresholds.sql");
+        let first = SeedRange::DefaultThresholds.id(4).to_string();
+        let last = SeedRange::DefaultThresholds.id(23).to_string();
+        assert!(sql.contains(&first), "0097 does not name {first}");
+        assert!(sql.contains(&last), "0097 does not name {last}");
+        // And the rows it must NOT take: the four fleet-wide defaults below the range, and the
+        // first id above it. Naming them is what makes the bounds a range rather than a prefix.
+        for keep in [0usize, 1, 2, 3, 24] {
+            let id = SeedRange::DefaultThresholds.id(keep).to_string();
+            assert!(
+                !sql.contains(&id),
+                "0097 must not name {id} (offset {keep})"
+            );
+        }
+    }
     /// The same pairing for the seeded trap rules, which migration `0047` writes as literals.
     #[test]
     fn the_builtin_event_rule_ids_are_the_ones_migration_0047_inserts() {

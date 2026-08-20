@@ -16,6 +16,7 @@ import { LIVENESS_METRIC } from '../../lib/format';
 import { splitInterfaceScopeId } from '../../lib/interfaceScope';
 import {
   isThresholdReady,
+  scopeAcceptsMany,
   scopeIdKind,
   thresholdBody,
   thresholdFormFrom,
@@ -35,15 +36,21 @@ import { NodePicker } from '../NodePicker/NodePicker';
 import { Button } from '../ui/Button';
 import { Modal } from '../ui/Modal';
 import { Select, TextInput } from '../ui/Field';
+import { MultiSelectList } from '../ui/MultiSelectList';
 import { useEntityNames } from '../ui/EntityName';
 import { groupOptions } from '../../lib/nodeTree';
 
-/** The scope-id control for the level the operator has chosen.
+/** The target control for the level the operator has chosen.
  *
  *  Before ADR-075 増分 3 this was one free-text box for every level, and the id it wanted — a
  *  device profile's UUID — is printed nowhere in the WebUI, so creating a profile-scoped rule was
  *  not actually possible. A mistyped id is not an error either: the engine compares it and simply
  *  never matches, so the rule is created, listed, and silently evaluates for no node.
+ *
+ *  Since ADR-078 a rule may name SEVERAL targets, which is why the profile and folder-group
+ *  controls are `MultiSelectList` and the node one is a list of chips fed by the picker. The two
+ *  levels that stay single are the ones with no second thing to pick: an `interface` rule covers
+ *  one port and is created from that port's own screen, and the legacy tag scope is free text.
  *
  *  Which control belongs to which level is `scopeIdKind`'s answer, not a second `switch` here —
  *  the same answer decides whether Save may be pressed, and two copies would let the dialog show a
@@ -53,7 +60,7 @@ function ScopeIdField({
   onChange,
 }: {
   form: ThresholdForm;
-  onChange: (scopeId: string) => void;
+  onChange: (scopeIds: string[]) => void;
 }) {
   const { t } = useTranslation('alertsConfig');
   const kind = scopeIdKind(form.level);
@@ -70,6 +77,23 @@ function ScopeIdField({
   }, [kind]);
 
   const groupItems = useMemo(() => groupOptions(groups), [groups]);
+  const options = useMemo(
+    () =>
+      kind === 'profile'
+        ? profiles.map((p) => ({ value: p.id, label: p.name }))
+        : groupItems.map((g) => ({ value: g.id, label: g.label })),
+    [kind, profiles, groupItems],
+  );
+
+  // One target, or none. Every branch below reads the list rather than a scalar, so a level that
+  // is single today needs no second code path if it ever stops being.
+  const single = form.scopeIds[0] ?? '';
+  const toggle = (value: string) =>
+    onChange(
+      form.scopeIds.includes(value)
+        ? form.scopeIds.filter((s) => s !== value)
+        : [...form.scopeIds, value],
+    );
 
   if (kind === 'none') {
     return (
@@ -82,30 +106,46 @@ function ScopeIdField({
     <div className="modal-field">
       <label className="modal-field-label">{t('thresholds.addModal.scopeId')}</label>
       {kind === 'node' ? (
-        <NodePicker
-          value={form.scopeId || null}
-          valueLabel={form.scopeId ? nodeName(form.scopeId) : undefined}
-          onChange={(n) => onChange(n?.id ?? '')}
-          placeholder={t('thresholds.addModal.scopeIdPlaceholder.node')}
+        <>
+          {form.scopeIds.length > 0 && (
+            <ul className="thresholds-chips">
+              {form.scopeIds.map((id) => (
+                <li key={id} className="thresholds-chip">
+                  <span>{nodeName(id)}</span>
+                  <button
+                    type="button"
+                    onClick={() => onChange(form.scopeIds.filter((s) => s !== id))}
+                    aria-label={t('thresholds.addModal.removeTarget', { name: nodeName(id) })}
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Always null: the picker ADDS here rather than holding the selection, so picking a
+              second node cannot silently replace the first. The chips above are the selection. */}
+          <NodePicker
+            value={null}
+            onChange={(n) => {
+              if (n && !form.scopeIds.includes(n.id)) onChange([...form.scopeIds, n.id]);
+            }}
+            exclude={new Set(form.scopeIds)}
+            placeholder={t('thresholds.addModal.scopeIdPlaceholder.node')}
+          />
+        </>
+      ) : kind === 'profile' || kind === 'folderGroup' ? (
+        <MultiSelectList
+          options={options}
+          selected={form.scopeIds}
+          onToggle={toggle}
+          onClear={() => onChange([])}
+          label={t(
+            kind === 'profile'
+              ? 'thresholds.addModal.scopeIdPlaceholder.profile'
+              : 'thresholds.addModal.scopeIdPlaceholder.group_id',
+          )}
         />
-      ) : kind === 'profile' ? (
-        <Select value={form.scopeId} onChange={(e) => onChange(e.target.value)}>
-          <option value="">{t('thresholds.addModal.scopeIdPlaceholder.profile')}</option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </Select>
-      ) : kind === 'folderGroup' ? (
-        <Select value={form.scopeId} onChange={(e) => onChange(e.target.value)}>
-          <option value="">{t('thresholds.addModal.scopeIdPlaceholder.group_id')}</option>
-          {groupItems.map((g) => (
-            <option key={g.id} value={g.id}>
-              {g.label}
-            </option>
-          ))}
-        </Select>
       ) : kind === 'interface' ? (
         // One port of one node (ADR-076). Shown, not edited: this screen has no port picker —
         // a fleet-wide one does not exist — so a rule at this level is created from Node detail ▸
@@ -114,11 +154,11 @@ function ScopeIdField({
         <>
           <div className="thresholds-fixed mono">
             {(() => {
-              const [node, port] = splitInterfaceScopeId(form.scopeId);
-              return port === null ? form.scopeId : `${nodeName(node)} · #${port}`;
+              const [node, port] = splitInterfaceScopeId(single);
+              return port === null ? single : `${nodeName(node)} · #${port}`;
             })()}
           </div>
-          <input type="hidden" value={form.scopeId} readOnly />
+          <input type="hidden" value={single} readOnly />
         </>
       ) : (
         // The legacy tag scope. Free text because a tag value *is* free text, and no list of the
@@ -126,8 +166,8 @@ function ScopeIdField({
         <TextInput
           className="mono"
           placeholder={t('thresholds.addModal.scopeIdPlaceholder.group')}
-          value={form.scopeId}
-          onChange={(e) => onChange(e.target.value)}
+          value={single}
+          onChange={(e) => onChange(e.target.value ? [e.target.value] : [])}
         />
       )}
       <span className="modal-hint">
@@ -137,14 +177,16 @@ function ScopeIdField({
             ? t('thresholds.addModal.legacyTagHint')
             : kind === 'interface'
               ? t('thresholds.addModal.interfaceHint')
-              : t('thresholds.addModal.scopeIdHint', {
-                  noun: t(`thresholds.addModal.scopeIdNoun.${form.level}`),
-                })}
+              : t(
+                  scopeAcceptsMany(form.level)
+                    ? 'thresholds.addModal.scopeIdHintMany'
+                    : 'thresholds.addModal.scopeIdHint',
+                  { noun: t(`thresholds.addModal.scopeIdNoun.${form.level}`) },
+                )}
       </span>
     </div>
   );
 }
-
 /** Create or edit a threshold rule (focused-editing modal).
  *
  *  One dialog for both, the shape `EventRulesPage`'s `RuleModal` uses. Two would be two answers to
@@ -243,10 +285,10 @@ export function ThresholdModal({
         <Select
           value={form.level}
           onChange={(e) =>
-            // Clear the id with the level. Ids are not interchangeable across levels — a profile
-            // UUID left behind on a folder-group rule is a rule that matches nothing — and every
-            // control below is now a picker, so there is nothing an operator would want carried.
-            setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeId: '' }))
+            // Clear the targets with the level. Ids are not interchangeable across levels — a
+            // profile UUID left behind on a folder-group rule is a rule that matches nothing —
+            // and every control below is a picker, so nothing an operator would want is carried.
+            setForm((f) => ({ ...f, level: e.target.value as ScopeLevel, scopeIds: [] }))
           }
         >
           {levels.map((l) => (
@@ -256,7 +298,7 @@ export function ThresholdModal({
           ))}
         </Select>
       </div>
-      <ScopeIdField form={form} onChange={(scopeId) => set('scopeId', scopeId)} />
+      <ScopeIdField form={form} onChange={(scopeIds) => set('scopeIds', scopeIds)} />
       <div className="modal-field">
         <label className="modal-field-label">{t('thresholds.addModal.metric')}</label>
         {lockedMetric ? (

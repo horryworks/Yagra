@@ -55,6 +55,10 @@ function DeleteThresholdModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('alertsConfig');
+  // Its own resolver: this dialog is a separate component from the list, and the sentence it
+  // shows names the same targets the row does. A raw UUID on a destructive confirmation is the
+  // one place `no-raw-uuids-in-tables` matters most — the operator is being asked to be sure.
+  const { scopeName } = useEntityNames();
   return (
     <ConfirmDeleteModal
       title={t('thresholds.deleteModal.title')}
@@ -63,10 +67,10 @@ function DeleteThresholdModal({
       onClose={onClose}
       onDone={onDone}
     >
-      {/* A global rule has no scope id, and the shared sentence used to interpolate the empty
+      {/* A global rule has no target, and the shared sentence used to interpolate the empty
           string straight into "… for <mono></mono>?" — an empty pair of quotes where the target
           belongs, on a destructive confirmation. Two sentences rather than a placeholder that is
-          sometimes blank. */}
+          sometimes blank. Since ADR-078 the non-global sentence may name several, comma-joined. */}
       <Trans
         t={t}
         i18nKey={
@@ -77,7 +81,7 @@ function DeleteThresholdModal({
         values={{
           level: t(`thresholds.scopeLevel.${rule.scope_level}`),
           metric: rule.metric === LIVENESS_METRIC ? t('format:liveness') : rule.metric,
-          scope: rule.scope_id,
+          scope: rule.scope_ids.map((id) => scopeName(rule.scope_level, id)).join(', '),
         }}
         components={{ strong: <strong />, mono: <strong className="mono" /> }}
       />
@@ -115,6 +119,10 @@ export function ThresholdsPage() {
    *  is a screen that quietly reports a shorter ruleset than the deployment has. */
   const [portRuleTotal, setPortRuleTotal] = useState(0);
   const { scopeName } = useEntityNames();
+  // The whole target list, for the cell's `title`. Two names are drawn; this is what makes the
+  // other two readable rather than merely counted.
+  const scopeTitle = (row: StoredThreshold) =>
+    row.scope_ids.map((id) => scopeName(row.scope_level, id)).join(', ');
 
   const [sheet, setSheet] = useState(false);
 
@@ -145,22 +153,41 @@ export function ThresholdsPage() {
         header: t('thresholds.cols.scopeId'),
         width: '1.2fr',
         render: (row) =>
-          // A global rule has no id to resolve — the level column already says "every node", and
-          // `EntityName` on an empty id renders a bare em dash with no explanation of why.
-          row.scope_level === 'global' ? (
+          // A global rule has no target to resolve — the type column already says "every node",
+          // and `EntityName` on an empty id renders a bare em dash with no explanation of why.
+          row.scope_level === 'global' || row.scope_ids.length === 0 ? (
             <span className="muted" title={t('thresholds.scopeIdNone')}>
               —
             </span>
-          ) : row.scope_level === 'interface' ? (
-            // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's half —
-            // `EntityName` would offer the whole composed string as a copyable "id", which is not
-            // an id anything else accepts.
-            <EntityName
-              name={scopeName(row.scope_level, row.scope_id)}
-              id={splitInterfaceScopeId(row.scope_id)[0]}
-            />
           ) : (
-            <EntityName name={scopeName(row.scope_level, row.scope_id)} id={row.scope_id} />
+            // Since ADR-078 a rule may name several. Two are shown and the rest counted, because
+            // the column is one line: a Huawei rule names four profiles, and wrapping four names
+            // would make every other row on the screen taller to suit one of them. The `title`
+            // carries the whole list, so nothing is only-countable.
+            <span className="thresholds-scopes" title={scopeTitle(row)}>
+              {row.scope_ids.slice(0, 2).map((id, i) => (
+                <span key={id}>
+                  {i > 0 && <span className="muted">, </span>}
+                  {row.scope_level === 'interface' ? (
+                    // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's
+                    // half — `EntityName` would offer the whole composed string as a copyable
+                    // "id", which is not an id anything else accepts.
+                    <EntityName
+                      name={scopeName(row.scope_level, id)}
+                      id={splitInterfaceScopeId(id)[0]}
+                    />
+                  ) : (
+                    <EntityName name={scopeName(row.scope_level, id)} id={id} />
+                  )}
+                </span>
+              ))}
+              {row.scope_ids.length > 2 && (
+                <span className="muted">
+                  {' '}
+                  {t('thresholds.scopeMore', { count: row.scope_ids.length - 2 })}
+                </span>
+              )}
+            </span>
           ),
       },
       {

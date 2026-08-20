@@ -121,14 +121,14 @@
     "unavailable": "Threshold management is unavailable in skeleton mode.",
     "add": "+ Add rule",
     "cols": {
-      "scope": "Scope level",
+      "scope": "Scope type",
       "metric": "Metric",
       "direction": "Direction",
       "bounds": "Bounds",
       "dwell": "Breaches",
       "actions": "Actions",
       "meaning": "What it measures",
-      "scopeId": "Scope id"
+      "scopeId": "Scope"
     },
     "empty": "No threshold rules yet",
     "emptySub": "Add a metric threshold scoped to a profile, group, or node.",
@@ -151,8 +151,8 @@
     },
     "addModal": {
       "title": "Add threshold rule",
-      "scopeLevel": "Scope level",
-      "scopeId": "Scope id",
+      "scopeLevel": "Scope type",
+      "scopeId": "Scope",
       "scopeIdPlaceholder": {
         "profile": "Pick a device profile",
         "group": "node tag value (e.g. a site name)",
@@ -169,6 +169,8 @@
         "interface": "interface"
       },
       "scopeIdHint": "The {{noun}} this rule targets.",
+      "scopeIdHintMany": "Every {{noun}} this rule targets. Pick as many as apply — one rule, not one each.",
+      "removeTarget": "Remove {{name}}",
       "metric": "Metric",
       "metricPlaceholder": "metric (e.g. icmp_rtt_ms)",
       "direction": "Direction",
@@ -198,12 +200,14 @@
       "searchPlaceholder": "Search metric…",
       "searchAria": "Search threshold rules by metric",
       "allScopes": "All scopes",
-      "scopeAria": "Filter by scope level",
+      "scopeAria": "Filter by scope type",
       "allDirections": "Both directions",
       "directionAria": "Filter by direction"
     },
     "meaningUnknown": "Yagra has no description for this metric — see the Metric set that defines its collection item.",
-    "scopeIdNone": "This rule targets every node, so it has no scope id.",
+    "scopeIdNone": "This rule targets every node, so it has no scope.",
+    "scopeMore_one": "and 1 more",
+    "scopeMore_other": "and {{count}} more",
     "livenessMetric": "Reachability has no bounds — a node either answered or it did not — so only the breach count applies.",
     "editModal": {
       "title": "Edit threshold rule"

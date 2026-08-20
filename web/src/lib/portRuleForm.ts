@@ -198,7 +198,10 @@ export function portRuleToThreshold(
   const spec = PORT_SUBJECT_SPECS[f.subject];
   return {
     scope_level: 'interface',
-    scope_id: interfaceScopeId(nodeId, ifindex),
+    // A set of one. The edge still accepts the older single `scope_id`, but one spelling across
+    // the app means one thing to read — and an interface rule is capped at a single target
+    // server-side anyway (ADR-078 decision 3).
+    scope_ids: [interfaceScopeId(nodeId, ifindex)],
     metric: spec.metric(f.basis),
     direction: spec.direction,
     warning: spec.fixedBounds ? spec.fixedBounds.warning : boundOf(f, 'warning'),

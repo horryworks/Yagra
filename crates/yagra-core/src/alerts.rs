@@ -77,7 +77,7 @@ pub(crate) fn seeded_liveness_rule() -> StoredThreshold {
     StoredThreshold {
         id: uuid::Uuid::nil(),
         level: ScopeLevel::Global,
-        scope_id: String::new(),
+        scope_ids: Vec::new(),
         rule: yagra_common::ThresholdRule {
             metric: LIVENESS.to_owned(),
             direction: Direction::Below,
@@ -221,7 +221,7 @@ pub struct AlertConfig {
 #[derive(Debug, Clone, Default)]
 struct MetricRules {
     /// Rules whose scope cannot be reduced to a lookup key: `Global`, `Profile`, `Group` and
-    /// `FolderGroup` — plus any `Node`/`Interface` rule whose `scope_id` is not spelled the way the
+    /// `FolderGroup` — plus any `Node`/`Interface` rule any of whose targets is not spelled the way the
     /// keys below are built, so that `threshold_applies` keeps the last word on those.
     ///
     /// Small by construction: an operator writes these by hand, one per fleet / profile / tag /
@@ -237,7 +237,7 @@ struct MetricRules {
 ///
 /// 🚨 The position is load-bearing, not bookkeeping. [`resolve_effective`] takes `direction` from
 /// the **first** rule at the winning level, and the `thresholds` table has no unique constraint
-/// over `(scope_level, scope_id, metric)` — so two rules with opposite directions can sit at the
+/// over `(scope_level, scope_ids, metric)` — so two rules with opposite directions can sit at the
 /// same level, and which one wins depends on which comes first. Bucketing reorders them; `seq`
 /// puts them back. (That the answer depends on order at all is a pre-existing sharp edge; the goal
 /// here is not to widen it.)
@@ -253,26 +253,57 @@ impl MetricRules {
     /// The keys are built so a lookup gives **exactly** the answer [`threshold_applies`] would:
     ///
     /// * `Node` — keyed by the parsed UUID, but **only when it round-trips to the same string**.
-    ///   `threshold_applies` compares `t.scope_id == node.to_string()`, and `NodeId`'s `Display`
-    ///   delegates to `Uuid`'s, so the canonical hyphenated lowercase form is the only spelling
-    ///   that has ever matched. A braced, URN or upper-case id matches nothing today, so it goes to
-    ///   `broad` — where `threshold_applies` still says no — rather than being silently promoted
-    ///   into a rule that now fires.
+    ///   `threshold_applies` compares each target against `node.to_string()`, and `NodeId`'s
+    ///   `Display` delegates to `Uuid`'s, so the canonical hyphenated lowercase form is the only
+    ///   spelling that has ever matched. A braced, URN or upper-case id matches nothing today, so
+    ///   the rule goes to `broad` — where `threshold_applies` still says no — rather than being
+    ///   silently promoted into a rule that now fires.
+    ///
+    /// ⚠️ **All-or-nothing per rule, never per target** (ADR-078). A rule with one canonical
+    ///   target and one malformed one goes wholly to `broad`: filing the good half under a
+    ///   lookup key would leave the other half reachable only by the linear scan, so a lookup
+    ///   would answer with a subset of what `threshold_applies` says — which is exactly the
+    ///   disagreement the index is forbidden to introduce.
     /// * `Interface` — keyed by `parse_interface_scope_id`, which *is* the predicate
     ///   `threshold_applies` uses. An id it cannot parse matches nothing either way.
     fn insert(&mut self, seq: u32, t: StoredThreshold) {
         let e = Indexed { seq, t };
         match e.t.level {
-            ScopeLevel::Node => match Uuid::parse_str(&e.t.scope_id) {
-                Ok(id) if id.to_string() == e.t.scope_id => {
-                    self.by_node.entry(id).or_default().push(e);
+            // ADR-078: a rule names a set, so it is filed under EVERY key it can be looked up
+            // by. If any one target is not spelled the canonical way the whole rule goes to
+            // `broad` instead — splitting it would file half of it under a lookup key and leave
+            // the other half findable only by the linear scan, so a lookup would answer with a
+            // subset of what `threshold_applies` says. One bucket per rule, never per target.
+            ScopeLevel::Node => {
+                let keys: Option<Vec<Uuid>> =
+                    e.t.scope_ids
+                        .iter()
+                        .map(|s| Uuid::parse_str(s).ok().filter(|id| id.to_string() == *s))
+                        .collect();
+                match keys {
+                    Some(keys) if !keys.is_empty() => {
+                        for id in keys {
+                            self.by_node.entry(id).or_default().push(e.clone());
+                        }
+                    }
+                    _ => self.broad.push(e),
                 }
-                _ => self.broad.push(e),
-            },
-            ScopeLevel::Interface => match yagra_common::parse_interface_scope_id(&e.t.scope_id) {
-                Some(key) => self.by_port.entry(key).or_default().push(e),
-                None => self.broad.push(e),
-            },
+            }
+            ScopeLevel::Interface => {
+                let keys: Option<Vec<(Uuid, u32)>> =
+                    e.t.scope_ids
+                        .iter()
+                        .map(|s| yagra_common::parse_interface_scope_id(s))
+                        .collect();
+                match keys {
+                    Some(keys) if !keys.is_empty() => {
+                        for key in keys {
+                            self.by_port.entry(key).or_default().push(e.clone());
+                        }
+                    }
+                    _ => self.broad.push(e),
+                }
+            }
             // Listed rather than caught by `_` so a seventh level has to decide which bucket it
             // belongs in, instead of silently becoming a rule nothing can look up.
             ScopeLevel::Global
@@ -416,16 +447,21 @@ impl AlertConfig {
             }
             match t.level {
                 ScopeLevel::Node => {
-                    if let (Some(set), Ok(id)) = (nodes.as_mut(), Uuid::parse_str(&t.scope_id)) {
-                        set.insert(id);
+                    if let Some(set) = nodes.as_mut() {
+                        for id in t.scope_ids.iter().filter_map(|s| Uuid::parse_str(s).ok()) {
+                            set.insert(id);
+                        }
                     }
                 }
                 ScopeLevel::Interface => {
-                    if let (Some(set), Some((id, _))) = (
-                        nodes.as_mut(),
-                        yagra_common::parse_interface_scope_id(&t.scope_id),
-                    ) {
-                        set.insert(id);
+                    if let Some(set) = nodes.as_mut() {
+                        for (id, _) in t
+                            .scope_ids
+                            .iter()
+                            .filter_map(|s| yagra_common::parse_interface_scope_id(s))
+                        {
+                            set.insert(id);
+                        }
                     }
                 }
                 // Not enumerable without walking the fleet — and a rule scoped this broadly is one
@@ -505,13 +541,23 @@ pub(crate) fn threshold_applies(
     match t.level {
         // The fleet default (ADR-075). It matches a node with no profile and no tags too —
         // which is the whole reason it exists, since a profile-scoped default cannot reach
-        // one. `scope_id` is unread here; the API pins it to the empty string.
+        // one. `scope_ids` is unread here; the API pins it to the empty set.
         ScopeLevel::Global => true,
-        ScopeLevel::Node => t.scope_id == node.to_string(),
-        ScopeLevel::Profile => meta.and_then(|m| m.profile.as_deref()) == Some(t.scope_id.as_str()),
+        // ADR-078: a rule names a SET of targets, so every level below asks "does any of them
+        // match" rather than "does the one match". A set of one behaves exactly as before, which
+        // is what keeps every pre-078 rule resolving identically.
+        ScopeLevel::Node => {
+            let want = node.to_string();
+            t.scope_ids.contains(&want)
+        }
+        ScopeLevel::Profile => meta
+            .and_then(|m| m.profile.as_deref())
+            .is_some_and(|p| t.scope_ids.iter().any(|s| s == p)),
         // Tag values, deliberately — a `ScopeLevel::Group` threshold matches a node *tag*, not
         // the folder tree. See the `NodeMeta` docs for why the distinction is load-bearing.
-        ScopeLevel::Group => meta.is_some_and(|m| m.tag_groups.contains(&t.scope_id)),
+        ScopeLevel::Group => {
+            meta.is_some_and(|m| t.scope_ids.iter().any(|s| m.tag_groups.contains(s)))
+        }
         // The folder tree (ADR-022), inherited downwards: the chain holds the node's own group
         // and every group above it. A rule on a parent therefore covers everything inside it,
         // the same way a maintenance window on a folder group does.
@@ -519,7 +565,9 @@ pub(crate) fn threshold_applies(
         // One port of one node (ADR-076). Both halves must match, and a sample with no port
         // matches nothing here — an interface rule is never the fallback for a node check.
         ScopeLevel::Interface => ifindex.is_some_and(|idx| {
-            yagra_common::parse_interface_scope_id(&t.scope_id) == Some((node.as_uuid(), idx.0))
+            t.scope_ids
+                .iter()
+                .any(|s| yagra_common::parse_interface_scope_id(s) == Some((node.as_uuid(), idx.0)))
         }),
     }
 }
@@ -531,8 +579,15 @@ pub(crate) fn folder_depth(t: &StoredThreshold, meta: Option<&NodeMeta>) -> Opti
     if t.level != ScopeLevel::FolderGroup {
         return None;
     }
-    let want = Uuid::parse_str(&t.scope_id).ok()?;
-    meta?.folder_chain.iter().position(|g| *g == want)
+    // The NEAREST of the folders this rule names (ADR-078). A rule naming both a site and the
+    // rack inside it must count as the rack, or `nearest_folder_depth` would let a broader rule
+    // at the same level win purely because it happened to list the outer folder too.
+    let chain = &meta?.folder_chain;
+    t.scope_ids
+        .iter()
+        .filter_map(|s| Uuid::parse_str(s).ok())
+        .filter_map(|want| chain.iter().position(|g| *g == want))
+        .min()
 }
 
 /// The smallest depth any matched folder-group rule sits at, or `None` when there are none.
@@ -3184,7 +3239,7 @@ mod tests {
         StoredThreshold {
             id: Uuid::from_u128(u128::from(warning as u64) + 1),
             level: ScopeLevel::FolderGroup,
-            scope_id: group.to_string(),
+            scope_ids: vec![group.to_string()],
             rule: yagra_common::ThresholdRule {
                 metric: "cpu_util".into(),
                 direction: yagra_common::Direction::Above,
@@ -3280,7 +3335,7 @@ mod tests {
                 StoredThreshold {
                     id: Uuid::from_u128(0xf013),
                     level: ScopeLevel::Node,
-                    scope_id: node.to_string(),
+                    scope_ids: vec![node.to_string()],
                     rule: yagra_common::ThresholdRule {
                         metric: "cpu_util".into(),
                         direction: yagra_common::Direction::Above,
@@ -3324,7 +3379,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
-                scope_id: node.to_string(),
+                scope_ids: vec![node.to_string()],
                 rule: ThresholdRule {
                     metric: "icmp_rtt_ms".into(),
                     direction: Direction::Above,
@@ -3367,7 +3422,7 @@ mod tests {
         let rule = |level: ScopeLevel, scope_id: String, critical: f64| StoredThreshold {
             id: Uuid::new_v4(),
             level,
-            scope_id,
+            scope_ids: vec![scope_id],
             rule: ThresholdRule {
                 metric: "if_in_util_pct".into(),
                 direction: Direction::Above,
@@ -3439,7 +3494,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Interface,
-                scope_id: interface_scope_id(node.as_uuid(), 7),
+                scope_ids: vec![interface_scope_id(node.as_uuid(), 7)],
                 rule: ThresholdRule {
                     metric: "icmp_rtt_ms".into(),
                     direction: Direction::Above,
@@ -3598,7 +3653,7 @@ mod tests {
                 vec![StoredThreshold {
                     id: Uuid::nil(),
                     level: ScopeLevel::Node,
-                    scope_id: node.to_string(),
+                    scope_ids: vec![node.to_string()],
                     rule: ThresholdRule {
                         metric: "if_oper_status".into(),
                         // 1 = up, 2 = down: "not up" is `above 1.5`, not `below 0.5` — ifOperStatus
@@ -3688,7 +3743,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Global,
-                scope_id: String::new(),
+                scope_ids: Vec::new(),
                 rule: ThresholdRule {
                     metric: "huawei_cpu_usage".into(),
                     direction: Direction::Above,
@@ -3767,7 +3822,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Global,
-                scope_id: String::new(),
+                scope_ids: Vec::new(),
                 rule: ThresholdRule {
                     metric: "cisco_env_temp".into(),
                     direction: Direction::Above,
@@ -3810,7 +3865,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Global,
-                scope_id: String::new(),
+                scope_ids: Vec::new(),
                 rule: ThresholdRule {
                     metric: "juniper_temp".into(),
                     direction: Direction::Above,
@@ -3860,7 +3915,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Global,
-                scope_id: String::new(),
+                scope_ids: Vec::new(),
                 rule: ThresholdRule {
                     metric: "ups_charge_remaining_pct".into(),
                     direction: Direction::Below,
@@ -3924,7 +3979,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Global,
-                scope_id: String::new(),
+                scope_ids: Vec::new(),
                 rule: ThresholdRule {
                     metric: yagra_common::METRIC_SNMP_UP.into(),
                     direction: Direction::Below,
@@ -3979,7 +4034,7 @@ mod tests {
         let rule = |level: ScopeLevel, scope_id: String, metric: &str| StoredThreshold {
             id: Uuid::new_v4(),
             level,
-            scope_id,
+            scope_ids: vec![scope_id],
             rule: ThresholdRule {
                 metric: metric.into(),
                 direction: Direction::Above,
@@ -4059,7 +4114,7 @@ mod tests {
         let winners: Vec<&str> = folders
             .iter()
             .filter(|(_, f)| *f)
-            .map(|(t, _)| t.scope_id.as_str())
+            .map(|(t, _)| t.scope_ids[0].as_str())
             .collect();
         assert_eq!(winners, vec![child.to_string().as_str()]);
     }
@@ -4074,7 +4129,7 @@ mod tests {
         let rule = |level: ScopeLevel, scope_id: String| StoredThreshold {
             id: Uuid::new_v4(),
             level,
-            scope_id,
+            scope_ids: vec![scope_id],
             rule: ThresholdRule {
                 metric: "if_in_util_pct".into(),
                 direction: Direction::Above,
@@ -4123,7 +4178,7 @@ mod tests {
             StoredThreshold {
                 id: Uuid::new_v4(),
                 level,
-                scope_id,
+                scope_ids: vec![scope_id],
                 rule: ThresholdRule {
                     metric: "if_in_util_pct".into(),
                     direction: Direction::Above,
@@ -4187,7 +4242,7 @@ mod tests {
                 vec![StoredThreshold {
                     id: Uuid::new_v4(),
                     level: ScopeLevel::Node,
-                    scope_id: node.to_string(),
+                    scope_ids: vec![node.to_string()],
                     rule: ThresholdRule {
                         metric: "if_in_bps".into(),
                         direction,
@@ -4224,7 +4279,7 @@ mod tests {
                 vec![StoredThreshold {
                     id: Uuid::nil(),
                     level: ScopeLevel::Node,
-                    scope_id: node.to_string(),
+                    scope_ids: vec![node.to_string()],
                     rule: ThresholdRule {
                         metric: "if_in_util_pct".into(),
                         direction: Direction::Above,
@@ -4277,7 +4332,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
-                scope_id: node.to_string(),
+                scope_ids: vec![node.to_string()],
                 rule: ThresholdRule {
                     metric: "cisco_env_temp".into(),
                     direction: Direction::Above,
@@ -4341,7 +4396,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
-                scope_id: node.to_string(),
+                scope_ids: vec![node.to_string()],
                 rule: ThresholdRule {
                     metric: "if_util_pct".into(),
                     direction: Direction::Above,
@@ -4392,7 +4447,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
-                scope_id: node.to_string(),
+                scope_ids: vec![node.to_string()],
                 rule: ThresholdRule {
                     metric: "if_hc_in_octets".into(),
                     direction: Direction::Above,
@@ -4441,7 +4496,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
-                scope_id: node.to_string(),
+                scope_ids: vec![node.to_string()],
                 rule: ThresholdRule {
                     metric: "icmp_rtt_ms".into(),
                     direction: Direction::Above,
@@ -4521,7 +4576,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::nil(),
                 level: ScopeLevel::Node,
-                scope_id: node.to_string(),
+                scope_ids: vec![node.to_string()],
                 rule: ThresholdRule {
                     metric: "icmp_rtt_ms".into(),
                     direction: Direction::Above,
@@ -4630,7 +4685,7 @@ mod tests {
         let thresholds = vec![StoredThreshold {
             id: Uuid::nil(),
             level: ScopeLevel::Node,
-            scope_id: node.to_string(),
+            scope_ids: vec![node.to_string()],
             rule: ThresholdRule {
                 metric: "icmp_rtt_ms".into(),
                 direction: Direction::Above,
@@ -5195,7 +5250,128 @@ mod tests {
         StoredThreshold {
             id: Uuid::new_v4(),
             level,
-            scope_id: scope_id.to_string(),
+            scope_ids: vec![scope_id.to_string()],
+            rule: yagra_common::ThresholdRule {
+                metric: "cpu_util".to_string(),
+                direction: dir,
+                warning: None,
+                critical: Some(crit),
+                dwell_samples: 3,
+            },
+        }
+    }
+
+    /// ADR-078, the case the feature exists for: one rule covering the two Cisco IOS profiles.
+    ///
+    /// Both halves matter. Without the accepting side a resolver that matched nothing would pass
+    /// the rejection; without the rejecting side one that matched every profile would pass the
+    /// acceptance (`rejection-only tests pass when everything rejects`).
+    #[test]
+    fn a_profile_rule_naming_two_profiles_resolves_for_both_and_not_for_a_third() {
+        let ios_router = NodeId::from(Uuid::new_v4());
+        let catalyst = NodeId::from(Uuid::new_v4());
+        let juniper = NodeId::from(Uuid::new_v4());
+        let rule = rule_at_many(
+            ScopeLevel::Profile,
+            &[
+                "Cisco IOS/IOS-XE router",
+                "Cisco Catalyst switch (IOS/IOS-XE)",
+            ],
+            Direction::Above,
+            90.0,
+        );
+        let meta = |p: &str| NodeMeta {
+            profile: Some(p.to_string()),
+            ..NodeMeta::default()
+        };
+        let mut node_meta = HashMap::new();
+        node_meta.insert(ios_router, meta("Cisco IOS/IOS-XE router"));
+        node_meta.insert(catalyst, meta("Cisco Catalyst switch (IOS/IOS-XE)"));
+        node_meta.insert(juniper, meta("Juniper MX router"));
+        let config = AlertConfig::new(vec![rule], node_meta);
+        for who in [ios_router, catalyst] {
+            assert_eq!(
+                config
+                    .resolve(who, None, "cpu_util")
+                    .and_then(|e| e.critical),
+                Some(90.0),
+                "a named profile must resolve"
+            );
+        }
+        assert!(
+            config.resolve(juniper, None, "cpu_util").is_none(),
+            "a profile the rule does not name must resolve to nothing"
+        );
+    }
+
+    /// A rule naming an outer folder AND the folder inside it is judged by the inner one.
+    ///
+    /// The two rules here sit at the same `ScopeLevel`, so `resolve_effective` would merge them
+    /// most-restrictively (`above` keeps the lower bound, 70) if they were read as the same depth.
+    /// Only the nearest depth survives, so reading the pair as its INNER folder makes it override
+    /// outright — which is the answer an operator who scoped a rule to the rack expects.
+    #[test]
+    fn a_folder_rule_naming_an_outer_and_an_inner_group_is_judged_by_the_inner_one() {
+        let node = NodeId::from(Uuid::new_v4());
+        let outer = Uuid::new_v4();
+        let inner = Uuid::new_v4();
+        let broad = rule_at(
+            ScopeLevel::FolderGroup,
+            &outer.to_string(),
+            Direction::Above,
+            70.0,
+        );
+        let pair = rule_at_many(
+            ScopeLevel::FolderGroup,
+            &[&outer.to_string(), &inner.to_string()],
+            Direction::Above,
+            95.0,
+        );
+        let mut node_meta = HashMap::new();
+        node_meta.insert(
+            node,
+            NodeMeta {
+                folder_group: Some(inner),
+                folder_chain: vec![inner, outer],
+                ..NodeMeta::default()
+            },
+        );
+        let config = AlertConfig::new(vec![broad, pair], node_meta);
+        assert_eq!(
+            config
+                .resolve(node, None, "cpu_util")
+                .and_then(|e| e.critical),
+            Some(95.0),
+            "the pair-naming rule sits at the inner folder, so it overrides rather than merging"
+        );
+    }
+
+    /// The same rule expressed as one target behaves exactly as it did before ADR-078.
+    ///
+    /// The regression that matters: every rule already in a deployment is a set of one, so if the
+    /// set-shaped predicate answered differently for those, the upgrade would silently re-scope
+    /// the whole existing ruleset.
+    #[test]
+    fn a_single_target_rule_resolves_exactly_as_it_did_before() {
+        let node = NodeId::from(Uuid::new_v4());
+        let other = NodeId::from(Uuid::new_v4());
+        let rule = rule_at(ScopeLevel::Node, &node.to_string(), Direction::Above, 42.0);
+        let config = AlertConfig::new(vec![rule], HashMap::new());
+        assert_eq!(
+            config
+                .resolve(node, None, "cpu_util")
+                .and_then(|e| e.critical),
+            Some(42.0)
+        );
+        assert!(config.resolve(other, None, "cpu_util").is_none());
+    }
+
+    /// The same, naming several targets at once (ADR-078).
+    fn rule_at_many(level: ScopeLevel, ids: &[&str], dir: Direction, crit: f64) -> StoredThreshold {
+        StoredThreshold {
+            id: Uuid::new_v4(),
+            level,
+            scope_ids: ids.iter().map(|s| (*s).to_string()).collect(),
             rule: yagra_common::ThresholdRule {
                 metric: "cpu_util".to_string(),
                 direction: dir,
@@ -5284,6 +5460,47 @@ mod tests {
                 "not-a-scope-id",
                 Direction::Above,
                 6.0,
+            ),
+            // ── ADR-078: rules naming several targets at once ──────────────────────────
+            // Both nodes in one rule — it must be findable under BOTH lookup keys.
+            rule_at_many(
+                ScopeLevel::Node,
+                &[&node.to_string(), &other.to_string()],
+                Direction::Above,
+                64.0,
+            ),
+            // One good target and one that parses to nothing. The whole rule must fall to the
+            // linear scan: filing half of it would make a lookup answer with a subset.
+            rule_at_many(
+                ScopeLevel::Node,
+                &[&node.to_string(), "not-a-uuid"],
+                Direction::Above,
+                63.0,
+            ),
+            // Two ports of the same node, one of which nothing else in the corpus names.
+            rule_at_many(
+                ScopeLevel::Interface,
+                &[
+                    &format!("{}:7", node.as_uuid()),
+                    &format!("{}:9", node.as_uuid()),
+                ],
+                Direction::Above,
+                59.0,
+            ),
+            // Two profiles — the row the whole feature exists for.
+            rule_at_many(
+                ScopeLevel::Profile,
+                &["switch", "router"],
+                Direction::Above,
+                84.0,
+            ),
+            // An outer folder and an inner one in ONE rule: `folder_depth` must report the
+            // inner one, or this rule would beat a nearer rule purely by listing the outer.
+            rule_at_many(
+                ScopeLevel::FolderGroup,
+                &[&parent.to_string(), &child.to_string()],
+                Direction::Above,
+                69.0,
             ),
         ];
 
@@ -5467,7 +5684,7 @@ mod tests {
             vec![StoredThreshold {
                 id: Uuid::new_v4(),
                 level: ScopeLevel::Interface,
-                scope_id: format!("{}:7", node.as_uuid()),
+                scope_ids: vec![format!("{}:7", node.as_uuid())],
                 rule: yagra_common::ThresholdRule {
                     metric: "if_in_util_pct".to_string(),
                     direction: Direction::Above,
@@ -5548,7 +5765,7 @@ mod tests {
             let mut rules = vec![StoredThreshold {
                 id: Uuid::new_v4(),
                 level: ScopeLevel::Global,
-                scope_id: String::new(),
+                scope_ids: Vec::new(),
                 rule: yagra_common::ThresholdRule {
                     metric: "if_in_util_pct".to_string(),
                     direction: Direction::Above,
@@ -5561,7 +5778,11 @@ mod tests {
                 rules.push(StoredThreshold {
                     id: Uuid::new_v4(),
                     level: ScopeLevel::Interface,
-                    scope_id: format!("{}:{}", nodes[i % nodes.len()].as_uuid(), (i % PORTS) + 1),
+                    scope_ids: vec![format!(
+                        "{}:{}",
+                        nodes[i % nodes.len()].as_uuid(),
+                        (i % PORTS) + 1
+                    )],
                     rule: yagra_common::ThresholdRule {
                         metric: "if_in_util_pct".to_string(),
                         direction: Direction::Above,

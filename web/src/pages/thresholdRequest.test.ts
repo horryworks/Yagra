@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_DWELL,
   isThresholdReady,
+  scopeAcceptsMany,
   scopeIdKind,
   thresholdBody,
   thresholdFormFrom,
@@ -13,7 +14,7 @@ function rule(over: Partial<StoredThreshold> = {}): StoredThreshold {
   return {
     id: '00000000-0000-0000-0000-000000000001',
     scope_level: 'profile',
-    scope_id: '11111111-1111-1111-1111-111111111111',
+    scope_ids: ['11111111-1111-1111-1111-111111111111'],
     metric: 'icmp_rtt_ms',
     direction: 'above',
     warning: 100,
@@ -31,13 +32,22 @@ describe('thresholdFormFrom + thresholdBody', () => {
     for (const r of [
       rule(),
       rule({ scope_level: 'node', warning: null, critical: 0.5, dwell_samples: 2 }),
-      rule({ scope_level: 'group', scope_id: 'tokyo', direction: 'below', warning: 20 }),
-      rule({ scope_level: 'group_id', scope_id: '22222222-2222-2222-2222-222222222222' }),
-      rule({ scope_level: 'global', scope_id: '', metric: '__liveness__', warning: null, critical: null }),
+      rule({ scope_level: 'group', scope_ids: ['tokyo'], direction: 'below', warning: 20 }),
+      rule({ scope_level: 'group_id', scope_ids: ['22222222-2222-2222-2222-222222222222'] }),
+      rule({ scope_level: 'global', scope_ids: [], metric: '__liveness__', warning: null, critical: null }),
+      // ADR-078: several targets must survive the round trip too, in order — an edit that
+      // dropped or reordered them would re-scope a rule the operator only opened to read.
+      rule({
+        scope_level: 'profile',
+        scope_ids: [
+          '33333333-3333-3333-3333-333333333333',
+          '44444444-4444-4444-4444-444444444444',
+        ],
+      }),
     ]) {
       expect(thresholdBody(thresholdFormFrom(r))).toEqual({
         scope_level: r.scope_level,
-        scope_id: r.scope_id,
+        scope_ids: r.scope_ids,
         metric: r.metric,
         direction: r.direction,
         warning: r.warning ?? undefined,
@@ -70,24 +80,51 @@ describe('thresholdFormFrom + thresholdBody', () => {
     expect(thresholdBody({ ...thresholdFormFrom(), metric: 'x', dwell: '5' }).dwell_samples).toBe(5);
   });
 
-  it('pins a global rule to no scope id even when one was typed first', () => {
-    // The operator picks "profile", types an id, then switches to "every node". The stale id must
-    // not travel: two global rules differing only in a stray scope id both apply and look identical.
-    const f = { ...thresholdFormFrom(), level: 'global' as const, scopeId: 'left-over', metric: 'x' };
-    expect(thresholdBody(f).scope_id).toBe('');
-    // The receiving side: every other level keeps what was typed, trimmed. Without this the test
-    // above would also pass for a function that emptied every scope id.
+  it('pins a global rule to no targets even when some were picked first', () => {
+    // The operator picks "profile", ticks two, then switches to "every node". The stale targets
+    // must not travel: two global rules differing only in a stray target both apply and look
+    // identical in the list.
+    const f = {
+      ...thresholdFormFrom(),
+      level: 'global' as const,
+      scopeIds: ['left-over', 'and-another'],
+      metric: 'x',
+    };
+    expect(thresholdBody(f).scope_ids).toEqual([]);
+    // The receiving side: every other level keeps what was picked, trimmed, in order. Without
+    // this the assertion above would also pass for a function that emptied every target list.
     for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
-      expect(thresholdBody({ ...f, level, scopeId: '  keep-me  ' }).scope_id).toBe('keep-me');
+      expect(thresholdBody({ ...f, level, scopeIds: ['  keep-me  ', ' and-me '] }).scope_ids).toEqual([
+        'keep-me',
+        'and-me',
+      ]);
     }
+    // A blank entry is dropped rather than sent: the edge refuses an empty target, and the one
+    // that could produce one is the legacy tag box being cleared.
+    expect(thresholdBody({ ...f, level: 'group', scopeIds: ['a', '  ', 'b'] }).scope_ids).toEqual([
+      'a',
+      'b',
+    ]);
   });
 
-  it('lets a global rule be saved with no scope id, and refuses the others', () => {
-    const base = { ...thresholdFormFrom(), metric: 'icmp_rtt_ms', scopeId: '' };
+  it('says which levels accept more than one target', () => {
+    // ADR-078 決定 3. `interface` is single because a rule there covers one port and is created
+    // from that port's own screen; `group` is the legacy free-text scope. Driven from
+    // `SCOPE_LEVELS` so a new level has to decide rather than inherit whatever came last.
+    const many = SCOPE_LEVELS.filter((l) => scopeAcceptsMany(l));
+    expect(many).toEqual(['profile', 'group_id', 'node']);
+  });
+
+  it('lets a global rule be saved with no target, and refuses the others', () => {
+    const base = { ...thresholdFormFrom(), metric: 'icmp_rtt_ms', scopeIds: [] };
     expect(isThresholdReady({ ...base, level: 'global' })).toBe(true);
     for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
       expect(isThresholdReady({ ...base, level })).toBe(false);
-      expect(isThresholdReady({ ...base, level, scopeId: 'x' })).toBe(true);
+      expect(isThresholdReady({ ...base, level, scopeIds: ['x'] })).toBe(true);
+      // Several is ready too — the case the feature exists for.
+      expect(isThresholdReady({ ...base, level, scopeIds: ['x', 'y'] })).toBe(true);
+      // A list of nothing but blanks is not a list of targets.
+      expect(isThresholdReady({ ...base, level, scopeIds: ['  ', ''] })).toBe(false);
     }
     // A rule with no metric is never ready — including a global one, which the clause above would
     // otherwise wave through.
@@ -132,20 +169,25 @@ describe('thresholdFormFrom + thresholdBody', () => {
     };
     const node = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 
-    expect(
-      isThresholdReady({ ...base, level: 'interface', scopeId: `${node}:7` }),
-    ).toBe(true);
+    expect(isThresholdReady({ ...base, level: 'interface', scopeIds: [`${node}:7`] })).toBe(true);
     // Port 0 is a real ifIndex, so it must not read as "no port".
-    expect(
-      isThresholdReady({ ...base, level: 'interface', scopeId: `${node}:0` }),
-    ).toBe(true);
+    expect(isThresholdReady({ ...base, level: 'interface', scopeIds: [`${node}:0`] })).toBe(true);
 
     for (const bad of ['', node, `${node}:`, `${node}:x`, `${node}:-1`, 'not-a-uuid:7']) {
-      expect(isThresholdReady({ ...base, level: 'interface', scopeId: bad })).toBe(false);
+      expect(isThresholdReady({ ...base, level: 'interface', scopeIds: [bad] })).toBe(false);
     }
+    // Two ports in one rule is refused here as well as at the edge, so the button never enables
+    // on a shape the server will 400 (ADR-078 決定 3).
+    expect(
+      isThresholdReady({
+        ...base,
+        level: 'interface',
+        scopeIds: [`${node}:7`, `${node}:8`],
+      }),
+    ).toBe(false);
 
-    // The strictness is confined to this level: a node rule still only needs a non-empty id, so
-    // this did not quietly tighten every other level as well.
-    expect(isThresholdReady({ ...base, level: 'node', scopeId: 'anything' })).toBe(true);
+    // The strictness is confined to this level: a node rule still only needs a non-empty target,
+    // so this did not quietly tighten every other level as well.
+    expect(isThresholdReady({ ...base, level: 'node', scopeIds: ['anything'] })).toBe(true);
   });
 });

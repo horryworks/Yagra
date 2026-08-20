@@ -62,7 +62,7 @@
     "name": "Name",
     "namePlaceholder": "e.g. core switch firmware",
     "scope": "Scope",
-    "scopeLevel": "Scope level",
+    "scopeLevel": "Scope type",
     "lockedNode": "Node",
     "lockedGroup": "Folder group",
     "inclSubgroups": " (incl. subgroups)",

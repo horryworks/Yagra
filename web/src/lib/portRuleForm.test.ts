@@ -25,7 +25,7 @@ function stored(form: PortRuleForm): StoredThreshold {
   return {
     id: 'aaaaaaaa-0000-0000-0000-000000000001',
     scope_level: body.scope_level,
-    scope_id: body.scope_id,
+    scope_ids: body.scope_ids ?? [],
     metric: body.metric,
     direction: body.direction,
     warning: body.warning ?? null,
@@ -99,7 +99,7 @@ describe('portRuleForm', () => {
   it('targets the port it was opened from', () => {
     const body = portRuleToThreshold(newPortRuleForm(), NODE, IFINDEX);
     expect(body.scope_level).toBe('interface');
-    expect(body.scope_id).toBe(`${NODE}:${IFINDEX}`);
+    expect(body.scope_ids).toEqual([`${NODE}:${IFINDEX}`]);
   });
 
   it('refuses to read back a rule it cannot say in these words', () => {

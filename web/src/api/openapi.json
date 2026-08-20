@@ -30814,15 +30814,19 @@
             "required": [
               "id",
               "scope_level",
-              "scope_id"
+              "scope_ids"
             ],
             "properties": {
               "id": {
                 "type": "string",
                 "format": "uuid"
               },
-              "scope_id": {
-                "type": "string"
+              "scope_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Every profile, folder group, node or port this rule applies to — `scope_level` says which\nof those they are. Empty for a `global` rule, which applies to every node."
               },
               "scope_level": {
                 "$ref": "#/components/schemas/ScopeLevel"
@@ -31091,7 +31095,6 @@
         "description": "A threshold rule as the caller states it — the body of both `POST` and `PUT`.\n\nOne type for both, the shape `ProfileBody` already uses. Two would be two validators, and this\nrepo has paid for that: URL-check and DNS-check CRUD were two copies of one writer, so the \"a\nnode is exactly one kind\" rule shipped enforced on only one of them.",
         "required": [
           "scope_level",
-          "scope_id",
           "metric",
           "direction"
         ],
@@ -31117,7 +31120,21 @@
             "type": "string"
           },
           "scope_id": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The rule’s target when it has exactly one. Superseded by `scope_ids`, which wins if both\nare sent; still accepted so that a client written against the earlier shape keeps working."
+          },
+          "scope_ids": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Every profile, folder group or node the rule applies to — `scope_level` says which of those\nthey are. Omit it (or send an empty list) for a `global` rule, which applies to every node.\nAt most 32, no repeats; an `interface` rule names exactly one port."
           },
           "scope_level": {
             "type": "string"
@@ -31191,7 +31208,15 @@
             "type": "string"
           },
           "scope_id": {
-            "type": "string"
+            "type": "string",
+            "description": "The rule’s first target. Kept beside `scope_ids` so that a bundle written by a newer\ndeployment still imports into an older one."
+          },
+          "scope_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every target the rule applies to. Absent in a bundle written before rules could name more\nthan one, in which case `scope_id` is the whole answer."
           },
           "scope_level": {
             "type": "string"

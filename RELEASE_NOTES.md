@@ -12,6 +12,16 @@
 
 ### Breaking changes
 
+- **A threshold rule now carries a *list* of targets, and the API answers with `scope_ids`
+  instead of `scope_id`.** One rule can cover several profiles, folder groups or nodes — the
+  two Cisco IOS profiles, say, rather than one rule each. `GET /api/v1/thresholds`,
+  `GET /api/v1/nodes/{id}/interfaces/{ifindex}/thresholds` and the `get_config(kind=thresholds)`
+  MCP tool now return `scope_ids: string[]`; the single `scope_id` field is gone from those
+  responses. **Writes are unchanged for existing callers** — `POST`/`PUT` still accept
+  `scope_id` and treat it as a list of one, and `scope_ids` wins when both are sent. A rule may
+  name at most 32 targets, may not repeat one, and an `interface` rule still names exactly one
+  port. Stored rules are migrated in place and a `global` rule still names nothing.
+
 - **A threshold rule's `scope_id` is now validated.** `POST`/`PUT /api/v1/thresholds` used to
   accept any string, including an empty one — and an id that names nothing is not a rule that
   behaves oddly, it is a rule that is stored, listed, and silently matches no node at all. The
@@ -34,6 +44,31 @@
   same history rows), so open alerts and open PagerDuty/JSM incidents survive the upgrade.
 
 ### New Features
+
+- **Vendor alert rules are no longer labelled “every node”.** Twenty of the seeded defaults are
+  about one vendor's CPU, memory or temperature register, and they now sit on that vendor's
+  device profiles — `cisco_cpu_5min` on the five Cisco profiles that collect it, the Junos rules
+  on the three Juniper ones, and so on. They never fired anywhere else (a node that does not
+  collect the metric never evaluates the rule), but the rules list said they applied to the whole
+  fleet, twenty times, which made a thirty-row screen hard to read. Four rules stay fleet-wide,
+  because they genuinely are: node down, SNMP down, packet loss and round-trip time.
+  ⚠️ **One consequence:** a node on a profile *you* created no longer picks these up. Add a rule
+  at your own profile, or scope one to the folder group.
+
+- **A rule can be pointed at several profiles, folder groups or nodes at once.** The add/edit
+  dialog's scope control is a multi-select (a picker with chips, for nodes), and the rules list
+  shows the first two targets with a count for the rest. One rule to edit, not one per target.
+
+- **“Scope level” and “Scope id” are now “Scope type” and “Scope”.** The first holds a kind, not
+  a rank, and the second has shown human names rather than ids ever since the free-text box was
+  replaced by pickers. Alerts ▸ Metric alert rules and the maintenance-window form now use the
+  wording the scope picker elsewhere already had. Field names in the API are unchanged.
+
+- **The packet-loss and reachability rules now say how they divide the work.** Their descriptions
+  explain that partial loss means a degraded link on a node that is still answering, that 100%
+  loss is what the reachability rule raises a critical for, and that reachability is the only
+  rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device) or rolling its
+  alerts up under a failed parent.
 
 - **A new deployment now ships with 30 alert rules instead of 7.** Node down, SNMP down, packet
   loss and the URL/DNS rules were the whole of it, so CPU, memory, temperature, disk and UPS state
@@ -209,6 +244,11 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **The default Huawei memory rule alerted continuously on a healthy firewall.** Its warning
+  bound was 80% and the comparison is inclusive, so a device reporting exactly 80.0 — which the
+  measured one does — was in breach from the moment the rule shipped. It is now 85/95, in line
+  with how the CPU and temperature bounds beside it were chosen.
 
 - **A threshold rule on a metric that reports several rows per poll never fired.** Chassis
   readings — per-CPU load, per-sensor temperature, per-filesystem disk usage, per-string UPS

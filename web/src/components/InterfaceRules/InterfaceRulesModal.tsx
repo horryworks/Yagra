@@ -53,7 +53,13 @@ interface Props {
 
 /** Whether a rule is stored *on this port* — the only ones this dialog may edit. */
 function isOwnRule(row: MatchingThreshold, nodeId: string, ifindex: number): boolean {
-  return row.rule.scope_level === 'interface' && row.rule.scope_id === `${nodeId}:${ifindex}`;
+  // `includes`, not `[0] ===`: a rule may name several targets since ADR-078. An interface rule
+  // is capped at one server-side, so in practice this reads the single element — but asking the
+  // list is what keeps the answer right if that cap is ever lifted.
+  return (
+    row.rule.scope_level === 'interface' &&
+    row.rule.scope_ids.includes(`${nodeId}:${ifindex}`)
+  );
 }
 
 export function InterfaceRulesModal({ nodeId, ifindex, portLabel, speedBps, onClose }: Props) {

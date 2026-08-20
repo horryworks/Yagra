@@ -272,7 +272,15 @@ fn is_builtin_counter(metric: &str) -> bool {
 #[derive(Deserialize, utoipa::ToSchema)]
 pub(super) struct ThresholdBody {
     scope_level: String,
-    scope_id: String,
+    /// The rule’s target when it has exactly one. Superseded by `scope_ids`, which wins if both
+    /// are sent; still accepted so that a client written against the earlier shape keeps working.
+    #[serde(default)]
+    scope_id: Option<String>,
+    /// Every profile, folder group or node the rule applies to — `scope_level` says which of those
+    /// they are. Omit it (or send an empty list) for a `global` rule, which applies to every node.
+    /// At most 32, no repeats; an `interface` rule names exactly one port.
+    #[serde(default)]
+    scope_ids: Option<Vec<String>>,
     metric: String,
     direction: String,
     warning: Option<f64>,
@@ -280,11 +288,22 @@ pub(super) struct ThresholdBody {
     dwell_samples: Option<i32>,
 }
 
-/// A body that passed the checks that need no I/O, with `scope_id` already normalized.
+/// Most targets one rule may name (ADR-078 decision 3).
+///
+/// The largest built-in fan-out is four (the Huawei VRP profiles), so this is room rather than a
+/// constraint. It exists because [`crate::alerts::threshold_applies`] walks the set for every
+/// sample: an unbounded list is a per-poll cost an operator can set from a text field.
+/// ⚠️ Not measured — chosen as headroom over the built-ins. Someone wanting more targets than
+/// this wants a folder group, which is one target that grows on its own.
+const MAX_SCOPE_IDS: usize = 32;
+
+/// A body that passed the checks that need no I/O, with the target set already normalized.
 #[derive(Debug)]
 struct ParsedThreshold<'a> {
     scope_level: &'a str,
-    scope_id: &'a str,
+    /// Owned rather than borrowed: the set is *derived* from the body (either field may have
+    /// supplied it) rather than being one of its strings.
+    scope_ids: Vec<String>,
     direction: &'a str,
 }
 
@@ -324,54 +343,99 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
         ));
     };
     // A `global` rule targets the whole fleet, so it has nothing to point at (ADR-075). Pinning
-    // the id here rather than trusting the caller is what keeps `AlertConfig::applies` able to
-    // ignore the column for this level: two global rules that differed only in a stray scope id
+    // the set empty here rather than trusting the caller is what keeps `AlertConfig::applies`
+    // able to ignore it for this level: two global rules that differed only in a stray target
     // would both apply, look identical in the list, and be impossible to tell apart.
-    let scope_id = if level == ScopeLevel::Global {
-        ""
+    //
+    // `scope_ids` wins over `scope_id` when both arrive, and `scope_id` alone still works — it is
+    // what a caller written before ADR-078 sends, and refusing those would break the contract for
+    // no gain (the single-target case is exactly a set of one).
+    let scope_ids: Vec<String> = if level == ScopeLevel::Global {
+        Vec::new()
     } else {
-        body.scope_id.as_str()
+        match (&body.scope_ids, &body.scope_id) {
+            (Some(ids), _) => ids.iter().map(|s| s.trim().to_owned()).collect(),
+            (None, Some(one)) => vec![one.trim().to_owned()],
+            (None, None) => Vec::new(),
+        }
     };
+    if level != ScopeLevel::Global {
+        if scope_ids.is_empty() {
+            return Err(ApiError::bad_request(
+                "invalid_scope_id",
+                "a rule at this scope level must name at least one target",
+            ));
+        }
+        if scope_ids.len() > MAX_SCOPE_IDS {
+            return Err(ApiError::bad_request(
+                "invalid_scope_id",
+                format!("a rule may name at most {MAX_SCOPE_IDS} targets"),
+            ));
+        }
+        // A repeated target is not merely redundant: the rule would be listed as covering N
+        // things while covering N-1, which is the kind of quiet miscount an operator only finds
+        // when the one they thought they added never fires.
+        let mut seen = std::collections::BTreeSet::new();
+        if !scope_ids.iter().all(|s| seen.insert(s.as_str())) {
+            return Err(ApiError::bad_request(
+                "invalid_scope_id",
+                "the same target is named twice",
+            ));
+        }
+        // One port of one node. A fleet-wide port picker does not exist, so a rule at this level
+        // is created from the port being looked at (ADR-076 増分 5) and there is nothing that
+        // could have supplied a second one — accepting a set here would be a shape only a
+        // hand-written call can produce, with no screen able to show or edit it.
+        if level == ScopeLevel::Interface && scope_ids.len() != 1 {
+            return Err(ApiError::bad_request(
+                "invalid_scope_id",
+                "an interface rule names exactly one port",
+            ));
+        }
+    }
     // The id's *shape* is checked here, and was not before. An unparseable id is not a rule that
     // does something slightly wrong — `AlertConfig::applies` compares it against a uuid or a tag
     // and simply never matches, so the rule is created, listed, and silently evaluates for no
     // node at all (the `StoredThreshold` docs say so). Since ADR-075 増分 3 the WebUI picks these
     // from a list, so a malformed one now only arrives from a hand-written call.
-    match level {
-        ScopeLevel::Global => {}
-        ScopeLevel::Profile | ScopeLevel::FolderGroup | ScopeLevel::Node => {
-            if Uuid::parse_str(scope_id).is_err() {
-                return Err(ApiError::bad_request(
-                    "invalid_scope_id",
-                    "scope_id must be a uuid for the profile, group_id and node levels",
-                ));
+    for scope_id in &scope_ids {
+        let scope_id = scope_id.as_str();
+        match level {
+            ScopeLevel::Global => {}
+            ScopeLevel::Profile | ScopeLevel::FolderGroup | ScopeLevel::Node => {
+                if Uuid::parse_str(scope_id).is_err() {
+                    return Err(ApiError::bad_request(
+                        "invalid_scope_id",
+                        "scope_id must be a uuid for the profile, group_id and node levels",
+                    ));
+                }
             }
-        }
-        // One port of one node (ADR-076), spelled `<node-uuid>:<ifindex>`. Parsed through the one
-        // codec the alert engine's `applies` also uses, so "the API accepted it" and "the engine
-        // can match it" cannot come apart.
-        ScopeLevel::Interface => {
-            if yagra_common::parse_interface_scope_id(scope_id).is_none() {
-                return Err(ApiError::bad_request(
-                    "invalid_scope_id",
-                    "scope_id must be <node-uuid>:<ifindex> for the interface level",
-                ));
+            // One port of one node (ADR-076), spelled `<node-uuid>:<ifindex>`. Parsed through the one
+            // codec the alert engine's `applies` also uses, so "the API accepted it" and "the engine
+            // can match it" cannot come apart.
+            ScopeLevel::Interface => {
+                if yagra_common::parse_interface_scope_id(scope_id).is_none() {
+                    return Err(ApiError::bad_request(
+                        "invalid_scope_id",
+                        "scope_id must be <node-uuid>:<ifindex> for the interface level",
+                    ));
+                }
             }
-        }
-        // A tag value is free-form text, so only emptiness is checkable — and an empty one is the
-        // same silent no-op as a malformed uuid.
-        ScopeLevel::Group => {
-            if scope_id.trim().is_empty() {
-                return Err(ApiError::bad_request(
-                    "invalid_scope_id",
-                    "scope_id must name a node tag value for the group level",
-                ));
+            // A tag value is free-form text, so only emptiness is checkable — and an empty one is the
+            // same silent no-op as a malformed uuid.
+            ScopeLevel::Group => {
+                if scope_id.trim().is_empty() {
+                    return Err(ApiError::bad_request(
+                        "invalid_scope_id",
+                        "scope_id must name a node tag value for the group level",
+                    ));
+                }
             }
         }
     }
     Ok(ParsedThreshold {
         scope_level: &body.scope_level,
-        scope_id,
+        scope_ids,
         direction: &body.direction,
     })
 }
@@ -427,15 +491,15 @@ async fn create_threshold(
     reject_counter_metric(&admin, &body.metric, "create threshold").await?;
     let id = admin
         .thresholds
-        .create(
-            p.scope_level,
-            p.scope_id,
-            &body.metric,
-            p.direction,
-            body.warning,
-            body.critical,
-            body.dwell_samples.unwrap_or(3),
-        )
+        .create(crate::thresholds::ThresholdWrite {
+            scope_level: p.scope_level,
+            scope_ids: &p.scope_ids,
+            metric: &body.metric,
+            direction: p.direction,
+            warning: body.warning,
+            critical: body.critical,
+            dwell_samples: body.dwell_samples.unwrap_or(3),
+        })
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "create threshold", "failed to create threshold")
@@ -468,13 +532,15 @@ async fn update_threshold(
         .thresholds
         .update(
             id,
-            p.scope_level,
-            p.scope_id,
-            &body.metric,
-            p.direction,
-            body.warning,
-            body.critical,
-            body.dwell_samples.unwrap_or(3),
+            crate::thresholds::ThresholdWrite {
+                scope_level: p.scope_level,
+                scope_ids: &p.scope_ids,
+                metric: &body.metric,
+                direction: p.direction,
+                warning: body.warning,
+                critical: body.critical,
+                dwell_samples: body.dwell_samples.unwrap_or(3),
+            },
         )
         .await
         .map_err(|e| {
@@ -617,12 +683,29 @@ mod tests {
         assert!(!is_builtin_counter("icmp_rtt_ms"));
     }
 
+    /// A body naming one target through the **legacy** `scope_id` field, so every existing case
+    /// below keeps testing the pre-ADR-078 shape a client may still send.
     fn body(scope_level: &str, scope_id: &str, metric: &str, direction: &str) -> ThresholdBody {
         ThresholdBody {
             scope_level: scope_level.to_owned(),
-            scope_id: scope_id.to_owned(),
+            scope_id: Some(scope_id.to_owned()),
+            scope_ids: None,
             metric: metric.to_owned(),
             direction: direction.to_owned(),
+            warning: None,
+            critical: None,
+            dwell_samples: None,
+        }
+    }
+
+    /// A body naming a set through `scope_ids`, the shape the WebUI sends since ADR-078.
+    fn body_multi(scope_level: &str, ids: &[&str]) -> ThresholdBody {
+        ThresholdBody {
+            scope_level: scope_level.to_owned(),
+            scope_id: None,
+            scope_ids: Some(ids.iter().map(|s| (*s).to_owned()).collect()),
+            metric: "icmp_rtt_ms".to_owned(),
+            direction: "above".to_owned(),
             warning: None,
             critical: None,
             dwell_samples: None,
@@ -634,7 +717,7 @@ mod tests {
         // The pinning half: a stray id on a global rule would produce two rules that both apply to
         // every node, look identical in the list, and cannot be told apart.
         let b = body("global", "not-a-real-id", "icmp_rtt_ms", "above");
-        assert_eq!(parse_threshold_body(&b).unwrap().scope_id, "");
+        assert!(parse_threshold_body(&b).unwrap().scope_ids.is_empty());
         // The receiving half, and it is the one that makes the test mean something: a normalizer
         // that emptied every scope id would pass the assertion above while silently making every
         // profile/group/node rule fleet-wide.
@@ -647,7 +730,7 @@ mod tests {
         ] {
             let b = body(level, sent, "icmp_rtt_ms", "above");
             let p = parse_threshold_body(&b).unwrap();
-            assert_eq!(p.scope_id, sent, "{level}");
+            assert_eq!(p.scope_ids, vec![sent.to_owned()], "{level}");
             assert_eq!(p.scope_level, level);
         }
     }
@@ -717,6 +800,63 @@ mod tests {
             let counter = body.find("reject_counter_metric(").expect(handler);
             assert!(parse < counter, "{handler} must validate before it queries");
         }
+    }
+
+    /// ADR-078: a set of targets survives validation intact.
+    #[test]
+    fn a_multi_target_rule_keeps_every_target_it_was_given() {
+        let a = Uuid::from_u128(11).to_string();
+        let b = Uuid::from_u128(12).to_string();
+        let sent = body_multi("profile", &[&a, &b]);
+        let p = parse_threshold_body(&sent).unwrap();
+        assert_eq!(p.scope_ids, vec![a.clone(), b.clone()]);
+        // And the legacy single field still works, because that is what a caller written before
+        // ADR-078 sends. `scope_ids` winning when both arrive is the other half of that rule.
+        let mut legacy = body_multi("profile", &[&a]);
+        legacy.scope_ids = None;
+        legacy.scope_id = Some(b.clone());
+        assert_eq!(parse_threshold_body(&legacy).unwrap().scope_ids, vec![b]);
+    }
+
+    /// Every way a target set can be wrong — plus one that is right, so "refuse everything" fails.
+    #[test]
+    fn a_target_set_is_refused_when_empty_duplicated_over_the_cap_or_a_pair_of_ports() {
+        let id = Uuid::from_u128(13).to_string();
+        let refused = |b: &ThresholdBody| {
+            format!("{:?}", parse_threshold_body(b).unwrap_err()).contains("invalid_scope_id")
+        };
+
+        // Nothing named at a level that needs a target: the rule would be stored, listed, and
+        // match no node — the failure ADR-075 決定 12 closed for the single-id case.
+        assert!(refused(&body_multi("profile", &[])));
+
+        // The same target twice would list as covering two things while covering one.
+        assert!(refused(&body_multi("profile", &[&id, &id])));
+
+        // Over the cap. `threshold_applies` walks this set for every sample.
+        let many: Vec<String> = (0..=MAX_SCOPE_IDS)
+            .map(|i| Uuid::from_u128(100 + i as u128).to_string())
+            .collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(refused(&body_multi("profile", &refs)));
+
+        // Two ports in one rule. No screen can create or edit that shape, so accepting it would
+        // store a rule only a hand-written call could have made and nothing can show.
+        let ports = [
+            format!("{}:7", Uuid::from_u128(14)),
+            format!("{}:8", Uuid::from_u128(14)),
+        ];
+        assert!(refused(&body_multi(
+            "interface",
+            &[ports[0].as_str(), ports[1].as_str()]
+        )));
+
+        // The accepting side — without it every assertion above would pass on a validator that
+        // refused everything.
+        assert!(parse_threshold_body(&body_multi("profile", &[&id])).is_ok());
+        assert!(parse_threshold_body(&body_multi("interface", &[ports[0].as_str()])).is_ok());
+        // A `global` rule names nothing and is still fine — the emptiness check must not reach it.
+        assert!(parse_threshold_body(&body_multi("global", &[])).is_ok());
     }
 
     #[test]

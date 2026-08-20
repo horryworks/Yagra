@@ -17,6 +17,33 @@ import { BOOTSTRAP_OVERRIDES } from '../support/bootstrap';
 import { defaultBodyFor, type Json } from '../support/openapi';
 
 const PROFILE_RULE_METRIC = 'icmp_rtt_ms';
+const MULTI_RULE_METRIC = 'cisco_cpu_5min';
+
+/** Three profiles, cloned from the generated one.
+ *
+ *  The generator emits exactly one element per array schema — enough to show that a picker is
+ *  populated, not enough to show it can hold a second choice. Everything but `id` and `name`
+ *  still comes from the document, so a change to the Rust shape reaches this fixture. */
+function groupList(): Record<string, Json>[] {
+  const [template] = defaultBodyFor('/api/v1/node-groups') as Record<string, Json>[];
+  // All at the root: `groupOptions` walks a tree, and a clone that kept the generated
+  // `parent_id` would nest under a group that is not in the list and vanish from the picker.
+  return ['d4', 'e5', 'f6'].map((tag, i) => ({
+    ...template,
+    id: `00000000-0000-4000-8000-0000000000${tag}`,
+    parent_id: null,
+    name: `Test group ${i + 1}`,
+  }));
+}
+
+function profileList(): Record<string, Json>[] {
+  const [template] = defaultBodyFor('/api/v1/profiles') as Record<string, Json>[];
+  return ['a1', 'b2', 'c3'].map((tag, i) => ({
+    ...template,
+    id: `00000000-0000-4000-8000-0000000000${tag}`,
+    name: `Test profile ${i + 1}`,
+  }));
+}
 
 /** Two rules built from the generated `StoredThreshold`, so a change to the Rust shape reaches
  *  this fixture too: one fleet-wide reachability rule (no scope id, no bounds) and one
@@ -25,13 +52,14 @@ const PROFILE_RULE_METRIC = 'icmp_rtt_ms';
 function ruleset(): Json {
   const page = defaultBodyFor('/api/v1/thresholds') as Record<string, Json>;
   const [template] = page.items as Record<string, Json>[];
-  const [profile] = defaultBodyFor('/api/v1/profiles') as Record<string, Json>[];
+  const profiles = profileList();
+  const [profile] = profiles;
   const items = [
     {
       ...template,
       id: '00000000-0000-4000-8000-00000000f001',
       scope_level: 'global',
-      scope_id: '',
+      scope_ids: [],
       metric: '__liveness__',
       direction: 'below',
       warning: null,
@@ -42,19 +70,39 @@ function ruleset(): Json {
       ...template,
       id: '00000000-0000-4000-8000-00000000f002',
       scope_level: 'profile',
-      scope_id: profile.id,
+      scope_ids: [profile.id],
       metric: PROFILE_RULE_METRIC,
       direction: 'above',
       warning: 100,
       critical: 250,
       dwell_samples: 4,
     },
+    // ADR-078: a rule naming two profiles. Tier1 is the only place that can see what the cell
+    // does with a set — a unit test reaches the request, never the rendering.
+    {
+      ...template,
+      id: '00000000-0000-4000-8000-00000000f003',
+      scope_level: 'profile',
+      scope_ids: profiles.slice(0, 3).map((p) => p.id),
+      metric: MULTI_RULE_METRIC,
+      direction: 'above',
+      warning: 80,
+      critical: 90,
+      dwell_samples: 3,
+    },
   ];
   return { items, total: items.length, truncated: false } as unknown as Json;
 }
 
 test.use({
-  mockConfig: { overrides: { ...BOOTSTRAP_OVERRIDES, '/api/v1/thresholds': ruleset() } },
+  mockConfig: {
+    overrides: {
+      ...BOOTSTRAP_OVERRIDES,
+      '/api/v1/thresholds': ruleset(),
+      '/api/v1/profiles': profileList() as unknown as Json,
+      '/api/v1/node-groups': groupList() as unknown as Json,
+    },
+  },
 });
 
 test('the scope level and the scope id are two columns, each carrying its own value', async ({
@@ -62,15 +110,17 @@ test('the scope level and the scope id are two columns, each carrying its own va
 }) => {
   await page.goto('/alerts/rules');
   const headers = page.locator('.dt-head .dt-h');
-  await expect(headers.filter({ hasText: 'Scope level' })).toHaveCount(1);
-  await expect(headers.filter({ hasText: 'Scope id' })).toHaveCount(1);
+  await expect(headers.filter({ hasText: 'Scope type' })).toHaveCount(1);
+  // Exact: 'Scope' is a prefix of 'Scope type', so a substring filter matches both columns and
+  // would report success about the wrong one.
+  await expect(headers.filter({ hasText: /^Scope$/ })).toHaveCount(1);
 
   // Column order is what makes the cells addressable by index, and it is also the thing that
   // would silently change if someone reordered the array.
   const texts = await headers.allInnerTexts();
-  expect(texts.indexOf('Scope id')).toBe(texts.indexOf('Scope level') + 1);
-  const level = texts.indexOf('Scope level');
-  const scopeId = texts.indexOf('Scope id');
+  expect(texts.indexOf('Scope')).toBe(texts.indexOf('Scope type') + 1);
+  const level = texts.indexOf('Scope type');
+  const scopeId = texts.indexOf('Scope');
 
   const globalRow = page.locator('.dt-row').filter({ hasText: 'Reachability' }).first();
   await expect(globalRow.locator('.dt-cell').nth(level)).toContainText('every node');
@@ -87,6 +137,18 @@ test('the scope level and the scope id are two columns, each carrying its own va
   const target = profileRow.locator('.dt-cell').nth(scopeId);
   await expect(target).not.toHaveText('—');
   await expect(target.locator('.yt-entity-name')).toHaveCount(1);
+
+  // ADR-078: a rule naming three profiles draws two names and counts the rest. The count is the
+  // half a unit test cannot reach — and drawing all three would make every row on the screen as
+  // tall as the widest rule.
+  const multiRow = page.locator('.dt-row').filter({ hasText: MULTI_RULE_METRIC }).first();
+  const multi = multiRow.locator('.dt-cell').nth(scopeId);
+  await expect(multi.locator('.yt-entity-name')).toHaveCount(2);
+  await expect(multi).toContainText('and 1 more');
+  // The whole list is still reachable, on the cell's title — otherwise the third target would be
+  // countable and not nameable.
+  const title = await multi.locator('.thresholds-scopes').getAttribute('title');
+  expect(title?.split(', ')).toHaveLength(3);
 });
 
 test('the row actions are actually on screen when the row is hovered', async ({ page }) => {
@@ -117,7 +179,7 @@ test('the scope id is a picker, and which picker follows the level', async ({ pa
   // the WebUI, so a profile-scoped rule could not really be created. What Tier1 can see and a unit
   // test cannot: which *control* each level renders, and whether it has anything in it — an empty
   // `<select>` is still a `<select>`, and would be exactly what a failed profile load looks like.
-  const [profile] = defaultBodyFor('/api/v1/profiles') as Record<string, Json>[];
+  const [profile] = profileList();
   await page.goto('/alerts/rules');
   await page
     .locator('.dt-row')
@@ -127,31 +189,48 @@ test('the scope id is a picker, and which picker follows the level', async ({ pa
     .click();
 
   const dialog = page.getByRole('dialog');
-  const scope = dialog.locator('.modal-field').filter({ hasText: 'Scope id' });
-  const level = dialog.locator('.modal-field').filter({ hasText: 'Scope level' }).locator('select');
+  // Addressed by an EXACT label: 'Scope' is a prefix of 'Scope type', so a substring filter
+  // matches the level field too and every assertion below would be about the wrong control.
+  const scope = dialog
+    .locator('.modal-field')
+    .filter({ has: page.locator('.modal-field-label', { hasText: /^Scope$/ }) });
+  const level = dialog
+    .locator('.modal-field')
+    .filter({ has: page.locator('.modal-field-label', { hasText: 'Scope type' }) })
+    .locator('select');
 
-  // profile ⇒ a populated list, showing the profile's name and holding its id.
-  await expect(scope.locator('select')).toHaveCount(1);
-  expect(await scope.locator('select option').count()).toBeGreaterThan(1);
-  await expect(scope.locator('select')).toHaveValue(String(profile.id));
+  // profile ⇒ a populated multi-select (ADR-078), showing the profile's name, with the rule's
+  // own target already ticked. An empty listbox is still a listbox, which is what a failed
+  // profile load looks like — so the count and the checked state are both asserted.
+  await expect(scope.locator('[role="listbox"]')).toHaveCount(1);
+  expect(await scope.locator('[role="option"]').count()).toBeGreaterThan(1);
   await expect(scope).toContainText(String(profile.name));
+  await expect(scope.locator('[role="option"][aria-selected="true"]')).toHaveCount(1);
+
+  // Ticking a second one ADDS rather than replaces — the whole point of the change.
+  await scope.locator('[role="option"]').nth(1).click();
+  await expect(scope.locator('[role="option"][aria-selected="true"]')).toHaveCount(2);
 
   // folder group ⇒ the inventory tree, and the hint that says a rule inherits downwards.
   await level.selectOption('group_id');
-  await expect(scope.locator('select')).toHaveCount(1);
-  expect(await scope.locator('select option').count()).toBeGreaterThan(1);
+  await expect(scope.locator('[role="listbox"]')).toHaveCount(1);
+  expect(await scope.locator('[role="option"]').count()).toBeGreaterThan(1);
   await expect(scope).toContainText('every group inside it');
-  // Switching levels clears the id — a profile UUID left on a folder-group rule matches nothing.
-  await expect(scope.locator('select')).toHaveValue('');
+  // Switching levels clears the targets — profile UUIDs left on a folder-group rule match nothing.
+  await expect(scope.locator('[role="option"][aria-selected="true"]')).toHaveCount(0);
 
   // node ⇒ the typeahead, not a dropdown of the whole inventory.
   await level.selectOption('node');
-  await expect(scope.locator('select')).toHaveCount(0);
+  await expect(scope.locator('[role="listbox"]')).toHaveCount(0);
   await expect(scope.locator('.nodepick-trigger')).toHaveCount(1);
 
-  // every node ⇒ no id field at all.
+  // every node ⇒ no target field at all.
   await level.selectOption('global');
-  await expect(dialog.locator('.modal-field').filter({ hasText: 'Scope id' })).toHaveCount(0);
+  await expect(
+    dialog
+      .locator('.modal-field')
+      .filter({ has: page.locator('.modal-field-label', { hasText: /^Scope$/ }) }),
+  ).toHaveCount(0);
 
   // The legacy tag scope is not offered for a rule being pointed somewhere new.
   const offered = await level.locator('option').evaluateAll((os) =>

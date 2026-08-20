@@ -317,7 +317,16 @@ pub struct NodeRow {
 pub struct ThresholdRow {
     pub id: Uuid,
     pub scope_level: String,
+    /// The rule’s first target. Kept beside `scope_ids` so that a bundle written by a newer
+    /// deployment still imports into an older one.
     pub scope_id: String,
+    /// Every target the rule applies to. Absent in a bundle written before rules could name more
+    /// than one, in which case `scope_id` is the whole answer.
+    //
+    // `//` rather than `///` for the reasoning: this type derives `ToSchema` and its doc lines are
+    // published verbatim. ADR-078 is why both fields exist; the reader falls back when empty.
+    #[serde(default)]
+    pub scope_ids: Vec<String>,
     pub metric: String,
     pub direction: String,
     #[serde(default)]
@@ -764,7 +773,8 @@ impl ConfigBundleRepo {
 
         let mut thresholds = Vec::new();
         for row in sqlx::query(
-            "SELECT id, scope_level, scope_id, metric, direction, warning, critical, dwell_samples \
+            "SELECT id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
+                    dwell_samples \
              FROM thresholds ORDER BY metric, id",
         )
         .fetch_all(&mut *conn)
@@ -779,6 +789,7 @@ impl ConfigBundleRepo {
                 id,
                 scope_level: row.try_get("scope_level")?,
                 scope_id: row.try_get("scope_id")?,
+                scope_ids: row.try_get("scope_ids")?,
                 metric: row.try_get("metric")?,
                 direction: row.try_get("direction")?,
                 warning: row.try_get("warning")?,
@@ -1318,19 +1329,36 @@ impl ConfigBundleRepo {
                 c.skipped += 1;
                 continue;
             }
-            // `scope_id` is TEXT because the legacy `group` scope is a tag value, not a uuid. Only
-            // the levels that *are* uuids are validated; a tag scope has nothing to resolve
-            // against, and `global` has no id at all.
+            // A bundle written before ADR-078 carries only `scope_id`; one written after carries
+            // the set. Fall back rather than skip — an old bundle is the common import, not an
+            // error, and reading it as "no targets" would import a rule that matches nothing.
+            let targets: Vec<String> = if t.scope_ids.is_empty() {
+                if t.scope_id.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![t.scope_id.clone()]
+                }
+            } else {
+                t.scope_ids.clone()
+            };
+            // `scope_id`/`scope_ids` are TEXT because the legacy `group` scope is a tag value, not
+            // a uuid. Only the levels that *are* uuids are validated; a tag scope has nothing to
+            // resolve against, and `global` has no id at all.
+            //
+            // ⚠️ EVERY target is checked, not just the first: a rule that names four profiles of
+            // which one is missing would otherwise import as a rule that silently covers three,
+            // and the import report would say nothing happened.
             if matches!(t.scope_level.as_str(), "node" | "profile" | "group_id") {
-                let known =
-                    t.scope_id
-                        .parse::<Uuid>()
-                        .is_ok_and(|id| match t.scope_level.as_str() {
-                            "node" => node_ids.contains(&id),
-                            "group_id" => group_ids.contains(&id),
-                            _ => profile_ids.contains(&id),
-                        });
-                if !known {
+                let all_known = !targets.is_empty()
+                    && targets.iter().all(|s| {
+                        s.parse::<Uuid>()
+                            .is_ok_and(|id| match t.scope_level.as_str() {
+                                "node" => node_ids.contains(&id),
+                                "group_id" => group_ids.contains(&id),
+                                _ => profile_ids.contains(&id),
+                            })
+                    });
+                if !all_known {
                     notes.add(
                         "thresholds",
                         NoteCode::SkippedMissingReference,
@@ -1341,17 +1369,21 @@ impl ConfigBundleRepo {
                 }
             }
             sqlx::query(
-                "INSERT INTO thresholds (id, scope_level, scope_id, metric, direction, warning, \
-                                         critical, dwell_samples) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                "INSERT INTO thresholds (id, scope_level, scope_id, scope_ids, metric, direction, \
+                                         warning, critical, dwell_samples) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                  ON CONFLICT (id) DO UPDATE SET scope_level = EXCLUDED.scope_level, \
-                     scope_id = EXCLUDED.scope_id, metric = EXCLUDED.metric, \
+                     scope_id = EXCLUDED.scope_id, scope_ids = EXCLUDED.scope_ids, \
+                     metric = EXCLUDED.metric, \
                      direction = EXCLUDED.direction, warning = EXCLUDED.warning, \
                      critical = EXCLUDED.critical, dwell_samples = EXCLUDED.dwell_samples",
             )
             .bind(t.id)
             .bind(&t.scope_level)
-            .bind(&t.scope_id)
+            // The legacy column keeps the first target, for the same reason `ThresholdWrite`
+            // writes it: a core that predates ADR-078 resolves by it.
+            .bind(targets.first().map_or("", String::as_str))
+            .bind(&targets)
             .bind(&t.metric)
             .bind(&t.direction)
             .bind(t.warning)

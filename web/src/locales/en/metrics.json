@@ -12,7 +12,7 @@
     "derived": "Computed by Yagra"
   },
   "meaning": {
-    "__liveness__": "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies.",
+    "__liveness__": "Did the node answer its checks at all. Carries no bounds — a node either responded or it did not — so only the breach count applies. It is the only rule covering a monitor Yagra never pings (a URL, a DNS name, a Meraki device), and the only one whose alerts roll up under a failed parent instead of paging once per affected node.",
     "asa_current_connections": "Connections currently held by the ASA, one row per connection statistic the firewall reports (CISCO-FIREWALL-MIB).",
     "bgp_peer_admin_status": "Whether the BGP session is administratively started. 1 = stop, 2 = start. A peer down while this reads 2 is an unplanned outage.",
     "bgp_peer_state": "BGP session state. 1 = idle, 2 = connect, 3 = active, 4 = opensent, 5 = openconfirm, 6 = established. Only 6 is a working session, so the usual rule is below 6.",
@@ -62,7 +62,7 @@
     "huawei_usg_tcp_sessions": "TCP sessions currently held by the firewall.",
     "huawei_usg_total_sessions": "All sessions the firewall currently holds, across every protocol.",
     "huawei_usg_udp_sessions": "UDP sessions currently held by the firewall.",
-    "icmp_loss_pct": "Share of ICMP probes that got no reply, 0–100.",
+    "icmp_loss_pct": "Share of ICMP probes that got no reply, 0–100. A partial loss means the link is degraded but the node is still answering. 100% means it has stopped answering altogether, and that is what the Reachability rule raises a critical for — so this rule is about degradation, not about an outage.",
     "icmp_rtt_ms": "Round-trip time of the ICMP probe, in milliseconds.",
     "if_admin_status": "Whether the port is administratively enabled. 1 = up, 2 = down, 3 = testing. A port down while this reads 1 is unplanned; a port down while this reads 2 was shut deliberately.",
     "if_high_speed": "The port’s nominal bandwidth in Mbps (ifHighSpeed). 0 on a port that reports no speed, which is why it is worth alerting on: a link that renegotiated to 100 on a gigabit port shows up here.",

@@ -42,7 +42,7 @@ function portRules(): Json {
         ...rule,
         id: '00000000-0000-4000-8000-00000000e001',
         scope_level: 'interface',
-        scope_id: `${NODE_ID}:${IFINDEX}`,
+        scope_ids: [`${NODE_ID}:${IFINDEX}`],
         metric: 'if_in_util_pct',
         direction: 'above',
         warning: null,
@@ -56,7 +56,7 @@ function portRules(): Json {
         ...rule,
         id: '00000000-0000-4000-8000-00000000e002',
         scope_level: 'node',
-        scope_id: NODE_ID,
+        scope_ids: [NODE_ID],
         metric: 'if_out_util_pct',
         direction: 'above',
         warning: null,
@@ -139,7 +139,7 @@ test('adding a rule asks what to watch, never for a metric name', async ({ page 
   // The complaint this increment came from: the generic dialog offered 88 metrics, of which 7 can
   // carry a rule on a port. There is no metric control here at all.
   await expect(dialog.locator('.metricpick-trigger')).toHaveCount(0);
-  await expect(dialog).not.toContainText('Scope level');
+  await expect(dialog).not.toContainText('Scope type');
 
   const subject = dialog.locator('.modal-field').filter({ hasText: 'What to watch' }).locator('select');
   await expect(subject).toHaveValue('in_traffic');

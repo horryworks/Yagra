@@ -8777,7 +8777,11 @@ export interface components {
         StoredThreshold: components["schemas"]["ThresholdRule"] & {
             /** Format: uuid */
             id: string;
-            scope_id: string;
+            /**
+             * @description Every profile, folder group, node or port this rule applies to — `scope_level` says which
+             *     of those they are. Empty for a `global` rule, which applies to every node.
+             */
+            scope_ids: string[];
             scope_level: components["schemas"]["ScopeLevel"];
         };
         /** @description A stored maintenance window (API shape; times are RFC 3339 text at the edge). */
@@ -8903,7 +8907,17 @@ export interface components {
             /** Format: int32 */
             dwell_samples?: number | null;
             metric: string;
-            scope_id: string;
+            /**
+             * @description The rule’s target when it has exactly one. Superseded by `scope_ids`, which wins if both
+             *     are sent; still accepted so that a client written against the earlier shape keeps working.
+             */
+            scope_id?: string | null;
+            /**
+             * @description Every profile, folder group or node the rule applies to — `scope_level` says which of those
+             *     they are. Omit it (or send an empty list) for a `global` rule, which applies to every node.
+             *     At most 32, no repeats; an `interface` rule names exactly one port.
+             */
+            scope_ids?: string[] | null;
             scope_level: string;
             /** Format: double */
             warning?: number | null;
@@ -8935,7 +8949,16 @@ export interface components {
             /** Format: uuid */
             id: string;
             metric: string;
+            /**
+             * @description The rule’s first target. Kept beside `scope_ids` so that a bundle written by a newer
+             *     deployment still imports into an older one.
+             */
             scope_id: string;
+            /**
+             * @description Every target the rule applies to. Absent in a bundle written before rules could name more
+             *     than one, in which case `scope_id` is the whole answer.
+             */
+            scope_ids?: string[];
             scope_level: string;
             /** Format: double */
             warning?: number | null;

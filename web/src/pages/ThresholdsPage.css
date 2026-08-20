@@ -85,3 +85,48 @@ html[data-viewport='mobile'] .thresholds-meaning {
   color: var(--text-primary);
   font-size: var(--font-sm);
 }
+
+/* The Scope cell can name several targets since ADR-078, and the target picker in the dialog shows
+   the chosen nodes as chips. Both stay on one line: the cell because a four-profile rule must not
+   make every other row taller, the chips because the dialog is a fixed-width column. */
+.thresholds-scopes {
+  display: inline-block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thresholds-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--space-1) / 2);
+  margin: 0 0 var(--space-1);
+  padding: 0;
+  list-style: none;
+}
+
+.thresholds-chip {
+  align-items: center;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  display: inline-flex;
+  font-size: var(--font-sm);
+  gap: calc(var(--space-1) / 2);
+  padding: 2px var(--space-1);
+}
+
+.thresholds-chip button {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  font-size: var(--font-md);
+  line-height: 1;
+  padding: 0;
+}
+
+.thresholds-chip button:hover {
+  color: var(--status-critical);
+}
