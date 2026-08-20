@@ -107,6 +107,24 @@ html[data-viewport='mobile'] .thresholds-meaning {
   max-width: 100%;
 }
 
+/* 🚨 A name that does not fit wraps here instead of ending in an ellipsis. Measured: the longest
+   profile Yagra ships — "Cisco Catalyst switch (IOS/IOS-XE)", 34 characters — is wider than this
+   column on a 1280px window, and `.yt-entity-name` ellipses by default. Stacking the names while
+   letting each one be cut would leave the operator exactly where they started: unable to say which
+   Cisco profile the rule names. The row's height is already free, so spend it. Tier1 measures
+   `scrollWidth` against `clientWidth`, because the clipped text is in the DOM either way and
+   `toContainText` passes on both.
+
+   Three classes deep on purpose: the shared `.yt-entity-name` rule is one class, and page CSS is
+   bundled BEFORE the shared stylesheet — so a bare `.thresholds-scopes .yt-entity-name` tie would
+   be lost on load order. */
+.dt-row .thresholds-scopes .yt-entity-name,
+.dt-card .thresholds-scopes .yt-entity-name {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 /* The dialog's chips stay on one line: that column is fixed-width. */
 
 .thresholds-chips {

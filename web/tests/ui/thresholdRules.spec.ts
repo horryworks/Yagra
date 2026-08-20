@@ -18,6 +18,8 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 
 const PROFILE_RULE_METRIC = 'icmp_rtt_ms';
 const MULTI_RULE_METRIC = 'cisco_cpu_5min';
+/** The longest profile name Yagra ships (34 chars), used verbatim as a fixture name. */
+const LONG_PROFILE_NAME = 'Cisco Catalyst switch (IOS/IOS-XE)';
 
 /** Three profiles, cloned from the generated one.
  *
@@ -41,7 +43,7 @@ function profileList(): Record<string, Json>[] {
   return ['a1', 'b2', 'c3'].map((tag, i) => ({
     ...template,
     id: `00000000-0000-4000-8000-0000000000${tag}`,
-    name: `Test profile ${i + 1}`,
+    name: i === 2 ? LONG_PROFILE_NAME : `Test profile ${i + 1}`,
   }));
 }
 
@@ -165,6 +167,16 @@ test('the scope level and the scope id are two columns, each carrying its own va
   // …and a row whose cells are all one line is still exactly the standard height, so opting in
   // costs nothing to the 22 rules that name one target. (design-system §4.1: body rows are 44px.)
   expect(Math.round(singleBox!.height)).toBe(44);
+
+  // 🚨 The names are readable, not merely present. One fixture carries a real 34-character profile
+  // name, and the Scope column is narrower than that at 1280px — so without wrapping the line ends
+  // in an ellipsis and the operator is back to not knowing which Cisco profile this is, which is
+  // the complaint 増分 5 answers. `toContainText` cannot see this: the text is in the DOM either
+  // way. Compare what the box holds against what it shows.
+  const clipped = await multi.locator('.yt-entity-name').evaluateAll((els) =>
+    els.filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent),
+  );
+  expect(clipped).toEqual([]);
 });
 
 test('opting one table into auto row heights leaves the others at 44px', async ({ page }) => {
