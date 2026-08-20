@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.2.17 — alerting is yours to configure, and the threshold rules that never fired now do
+
 ### Breaking changes
 
 - **A threshold rule now carries a *list* of targets, and the API answers with `scope_ids`
