@@ -24,7 +24,12 @@ use uuid::Uuid;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]
-#[openapi(paths(list_mib_catalog, create_mib_entry, delete_mib_entry))]
+#[openapi(paths(
+    list_mib_catalog,
+    list_metric_meanings,
+    create_mib_entry,
+    delete_mib_entry
+))]
 pub(super) struct Doc;
 
 /// The MIB-catalog routes, merged into `/api/v1` by [`super::router`].
@@ -38,6 +43,60 @@ pub(super) fn routes() -> Router<ApiState> {
             "/api/v1/mib-catalog/:id",
             axum::routing::delete(delete_mib_entry),
         )
+        .route("/api/v1/metric-meanings", get(list_metric_meanings))
+}
+
+/// One metric and what it measures, in one sentence.
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub(crate) struct MetricMeaning {
+    /// Stable metric name — the same spelling a threshold rule's `metric` and a TSDB series use.
+    pub metric: String,
+    /// One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders
+    /// a translation of it, so the wording here and the wording on screen may differ by language,
+    /// never by content.
+    pub meaning: String,
+    /// Where the number comes from: `check` (one of Yagra's own probes), `derived` (computed per
+    /// port at evaluation time, and therefore present in **no** time series — asking
+    /// `query_metrics` for it returns nothing), or `collected` (read off a device by a metric set,
+    /// with its OID in `get_config(kind=mib_catalog)`).
+    pub source: String,
+}
+
+#[utoipa::path(
+    get, path = "/api/v1/metric-meanings", tag = "mib",
+    responses(
+        (status = 200, description = "Every metric Yagra can explain, sorted by metric name, each with where its number comes from. Static vocabulary — it does not depend on what this deployment collects", body = Vec<MetricMeaning>),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks read permission", body = super::error::ErrorBody),
+    ),
+)]
+/// What each metric measures — the dictionary behind a bare metric name (ADR-079 決定 4).
+///
+/// **No `Admin` extractor and no 503.** The table is compiled in, so this answers identically in
+/// skeleton mode and on a public dashboard; requiring the write side would refuse a question that
+/// needs no database.
+///
+/// ⚠️ **The WebUI does not call this**, and that is deliberate rather than an oversight. The screen
+/// needs the sentence in the operator's language and synchronously during render, so it reads the
+/// i18n bundle — whose English half is generated from the very same table. The documented consumers
+/// are the OpenAPI contract and the `get_config(kind=metric_meanings)` MCP tool, which is the whole
+/// reason the route exists: before it, "what does `icmp_loss_pct` measure" was a question the alert
+/// rules table answered and `/mcp` could not.
+async fn list_metric_meanings(_guard: RequireView) -> Json<Vec<MetricMeaning>> {
+    Json(metric_meanings())
+}
+
+/// The dictionary as the API serves it. Shared with the MCP tool so the two cannot come to disagree
+/// about which metrics are explained.
+pub(crate) fn metric_meanings() -> Vec<MetricMeaning> {
+    crate::metric_meaning::METRIC_MEANINGS
+        .iter()
+        .map(|(metric, meaning)| MetricMeaning {
+            metric: (*metric).to_owned(),
+            meaning: (*meaning).to_owned(),
+            source: crate::metric_meaning::metric_source(metric).to_owned(),
+        })
+        .collect()
 }
 
 /// Maximum entries returned by one list call.
@@ -276,6 +335,42 @@ mod tests {
                 "{method} {path}"
             );
         }
+    }
+
+    /// The metric dictionary answers **without a store**, and still behind the read guard.
+    ///
+    /// Every other read in this module answers `503` in skeleton mode because it takes `Admin`.
+    /// This one is a compiled-in table, so it answers `200` — which is the property that lets the
+    /// `get_config(kind=metric_meanings)` tool answer above the live-mode gate rather than
+    /// reporting "unavailable" where its REST twin returns a sentence. Pinned, because "it does
+    /// not need the database" is a claim two places now depend on and nothing else would notice
+    /// if someone added an `Admin` extractor here.
+    #[tokio::test]
+    async fn the_metric_dictionary_answers_without_a_store_but_not_without_a_reader() {
+        assert_eq!(
+            status_of(private_state(), "GET", "/api/v1/metric-meanings", None).await,
+            StatusCode::UNAUTHORIZED,
+            "a dictionary is not a reason to skip the read guard",
+        );
+        assert_eq!(
+            status_of(public_state(), "GET", "/api/v1/metric-meanings", None).await,
+            StatusCode::OK,
+            "skeleton mode has no write side, and this read does not need one",
+        );
+    }
+
+    /// The served dictionary is the table, whole — not a prefix, not a filtered view.
+    #[test]
+    fn the_served_dictionary_is_the_whole_table() {
+        let served = metric_meanings();
+        assert_eq!(served.len(), crate::metric_meaning::METRIC_MEANINGS.len());
+        // A floor, so a table that emptied itself could not pass the equality above.
+        assert!(served.len() > 50, "only {} metrics explained", served.len());
+        let liveness = served
+            .iter()
+            .find(|m| m.metric == crate::alerts::LIVENESS)
+            .expect("the reachability sentinel is explained — it is the one metric with no OID");
+        assert!(!liveness.meaning.is_empty());
     }
 
     #[test]

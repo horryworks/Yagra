@@ -87,8 +87,8 @@ pub(super) struct ThresholdQuery {
     limit: Option<i64>,
     /// Case-insensitive substring of the metric name.
     q: Option<String>,
-    /// Comma-separated scope levels (`global` | `profile` | `group` | `node`); empty or absent
-    /// means every level.
+    /// Comma-separated scope levels (`global` | `profile` | `group` | `group_id` | `node` |
+    /// `interface`); empty or absent means every level.
     scope_level: Option<String>,
     /// Comma-separated directions (`above` | `below`); empty or absent means both.
     direction: Option<String>,
@@ -111,16 +111,20 @@ async fn list_thresholds(
     admin: Admin,
 ) -> ApiResult<Json<ThresholdPage>> {
     let metric = normalize_search(q.q.as_deref());
+    // Both vocabularies rendered from the enums rather than written out. The level list said
+    // "global, profile, group or node" — four of six, unchanged since ADR-075 added `group_id`
+    // and ADR-076 added `interface` — so an operator who asked for a port rule was told that
+    // level did not exist (ADR-079).
     let levels = super::util::parse_set(
         "scope_level",
         q.scope_level.as_deref(),
-        "global, profile, group or node",
+        &super::util::token_list(yagra_common::ScopeLevel::ALL.iter().map(|l| l.as_str())),
         yagra_common::ScopeLevel::from_token,
     )?;
     let directions = super::util::parse_set(
         "direction",
         q.direction.as_deref(),
-        "above or below",
+        &super::util::token_list(yagra_common::Direction::ALL.iter().map(|d| d.as_str())),
         yagra_common::Direction::from_token,
     )?;
     Ok(Json(
@@ -144,11 +148,17 @@ async fn list_thresholds(
 /// the load-bearing half: a silently short ruleset reads as "these are all the rules", which is
 /// exactly the wrong belief to hold about alerting configuration.
 ///
-/// **The filter is deliberately not exposed on the MCP side.** `get_config(kind=thresholds)` is a
-/// configuration dump — its callers ask "what is the ruleset", not "show me the CPU ones" — so the
-/// filters are a UI narrowing rather than a question MCP cannot otherwise answer (ADR-042 asks for
-/// parity on *questions*, and records the reason when a read has no tool of its own). It still
-/// comes through this seam, so the cap and `truncated` can never differ between the two edges.
+/// **Both edges pass a filter, and the paragraph that used to stand here was wrong** (ADR-079).
+/// It said `get_config(kind=thresholds)` is a configuration dump whose callers ask "what is the
+/// ruleset" rather than "show me the CPU ones", making the filters a UI narrowing rather than a
+/// question MCP could not otherwise answer. Reading what the screen actually does refutes it:
+/// `ThresholdsPage` issues **three** calls per page load and only one is the visible page — the
+/// other two ask for a `total` (*is there any reachability rule* / *how many port rules are
+/// hidden*), which are questions, not slices, and `/mcp` could ask neither.
+///
+/// The cap is what turns that from awkward into wrong: the page is ordered **broadest scope**
+/// first, so a ruleset past 500 rows hides its node- and interface-level rules completely, and
+/// those are the ones that grow with the fleet.
 pub(crate) async fn threshold_page(
     admin: &super::AdminState,
     limit: Option<i64>,

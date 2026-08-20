@@ -57,6 +57,7 @@ mod logstore;
 mod maintenance;
 mod mcp;
 mod meraki;
+mod metric_meaning;
 mod mib;
 mod neighbors;
 mod notifications;

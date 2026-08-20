@@ -1559,6 +1559,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/metric-meanings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each metric measures — the dictionary behind a bare metric name (ADR-079 決定 4).
+         * @description **No `Admin` extractor and no 503.** The table is compiled in, so this answers identically in
+         *     skeleton mode and on a public dashboard; requiring the write side would refuse a question that
+         *     needs no database.
+         *
+         *     ⚠️ **The WebUI does not call this**, and that is deliberate rather than an oversight. The screen
+         *     needs the sentence in the operator's language and synchronously during render, so it reads the
+         *     i18n bundle — whose English half is generated from the very same table. The documented consumers
+         *     are the OpenAPI contract and the `get_config(kind=metric_meanings)` MCP tool, which is the whole
+         *     reason the route exists: before it, "what does `icmp_loss_pct` measure" was a question the alert
+         *     rules table answered and `/mcp` could not.
+         */
+        get: operations["list_metric_meanings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/metrics/interface-delta": {
         parameters: {
             query?: never;
@@ -6961,6 +6990,24 @@ export interface components {
          * @enum {string}
          */
         MetricKind: "gauge" | "counter";
+        /** @description One metric and what it measures, in one sentence. */
+        MetricMeaning: {
+            /**
+             * @description One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders
+             *     a translation of it, so the wording here and the wording on screen may differ by language,
+             *     never by content.
+             */
+            meaning: string;
+            /** @description Stable metric name — the same spelling a threshold rule's `metric` and a TSDB series use. */
+            metric: string;
+            /**
+             * @description Where the number comes from: `check` (one of Yagra's own probes), `derived` (computed per
+             *     port at evaluation time, and therefore present in **no** time series — asking
+             *     `query_metrics` for it returns nothing), or `collected` (read off a device by a metric set,
+             *     with its OID in `get_config(kind=mib_catalog)`).
+             */
+            source: string;
+        };
         /** @description One point of a time series: Unix-seconds timestamp and value. */
         MetricPoint: {
             /**
@@ -15824,6 +15871,44 @@ export interface operations {
             };
         };
     };
+    list_metric_meanings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every metric Yagra can explain, sorted by metric name, each with where its number comes from. Static vocabulary — it does not depend on what this deployment collects */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricMeaning"][];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks read permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
     interface_delta: {
         parameters: {
             query: {
@@ -23846,8 +23931,8 @@ export interface operations {
                 /** @description Case-insensitive substring of the metric name. */
                 q?: string;
                 /**
-                 * @description Comma-separated scope levels (`global` | `profile` | `group` | `node`); empty or absent
-                 *     means every level.
+                 * @description Comma-separated scope levels (`global` | `profile` | `group` | `group_id` | `node` |
+                 *     `interface`); empty or absent means every level.
                  */
                 scope_level?: string;
                 /** @description Comma-separated directions (`above` | `below`); empty or absent means both. */

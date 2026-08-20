@@ -7,7 +7,7 @@
 //! model picks worse from a longer list. That fold creates a problem the ADR did not anticipate:
 //! **the endpoints behind one tool do not share a permission.**
 //!
-//! The measured spread across the routes folded here is `View` ×28, `ManageConfig` ×10,
+//! The measured spread across the routes folded here is `View` ×29, `ManageConfig` ×12,
 //! `ManageSystem` ×6, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
 //! two that are deliberately unauthenticated over REST. Picking one permission for the whole tool
 //! fails in both directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
@@ -15,7 +15,7 @@
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
 //! anything else. ADR-042 decision 2 declined a `Permission` column on the 243-row ledger because
-//! nothing could check it; that reasoning holds there and not here — over these 49 rows the
+//! nothing could check it; that reasoning holds there and not here — over these 54 rows the
 //! permission is a value a test can compare against the REST handler's own extractor, and
 //! [`tests::every_folded_read_demands_what_its_rest_route_demands`] does exactly that.
 //!
@@ -383,10 +383,10 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
     },
     // ── get_config(kind=…) — ADR-042 I3b ─────────────────────────────────────
     //
-    // The configuration-read family, 28 routes behind one `kind`. This is the block that proves the
-    // module doc's point about permission: it spans `ManageConfig` ×10, `View` ×12,
+    // The configuration-read family, 30 routes behind one `kind`. This is the block that proves the
+    // module doc's point about permission: it spans `ManageConfig` ×11, `View` ×13,
     // `ManageSystem` ×4 and `ManageUsers` ×2, and one permission for the tool would either hand the
-    // identity-provider configuration to any viewer or refuse a viewer eleven reads the WebUI
+    // identity-provider configuration to any viewer or refuse a viewer thirteen reads the WebUI
     // already shows them.
     //
     // Order matches `ConfigKind::NAMES`, which matches the order the tool's description lists them,
@@ -508,6 +508,21 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         path: "/api/v1/mib-catalog",
         // `View`, not `ManageConfig`: the catalog is reference data the collection editor reads,
         // and the REST edge has always let any viewer browse it.
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_config",
+        arg: "metric_meanings",
+        method: "GET",
+        path: "/api/v1/metric-meanings",
+        // `View`, like the catalog beside it: a sentence explaining what a metric measures is
+        // reference material, not configuration. Note this is **not** the permission `thresholds`
+        // takes — reading the ruleset is `ManageConfig` because it decides when the fleet pages
+        // someone, while reading what `icmp_loss_pct` means decides nothing. One tool, two
+        // permissions, which is why `folded.rs` files them per branch.
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
@@ -756,6 +771,9 @@ pub(crate) fn permission_of(tool: &str, arg: &str) -> Option<Permission> {
 
 #[cfg(test)]
 mod tests {
+    /// The backtick the prose wraps a permission name in, as a char literal.
+    const TICK: char = '\u{60}';
+
     use super::*;
     use std::collections::BTreeSet;
 
@@ -1166,6 +1184,90 @@ mod tests {
                 f.arg
             );
         }
+    }
+
+    /// **The counts this file states in prose are the counts it has.**
+    ///
+    /// Three places restated the permission spread — this module's doc, the `get_config` block
+    /// comment, and a narrative comment in `route_table.rs` — and by ADR-079 all three disagreed
+    /// with the table and with each other. The ledger's copy said `ManageConfig` ×14 and had never
+    /// heard of `ManageSystem`; the block comment said 28 routes when there were 29.
+    ///
+    /// Nothing could have caught that: a comment is not compiled, and the route ledger's fourth
+    /// column only moves when a *route* appears. So the third copy was deleted and the two that
+    /// remain are pinned here. The format is fixed — a backticked permission name, a space, then
+    /// ×N — because a check that tolerates any phrasing checks nothing.
+    #[test]
+    fn the_prose_in_this_file_states_the_counts_the_table_actually_has() {
+        use std::collections::BTreeMap;
+        const SRC: &str = include_str!("folded.rs");
+
+        /// Every "backticked name ×N" claim in one region of the source.
+        fn claims(region: &str) -> BTreeMap<String, usize> {
+            let mut out = BTreeMap::new();
+            for (idx, _) in region.match_indices('×') {
+                let Some(name) = region[..idx]
+                    .trim_end()
+                    .strip_suffix(TICK)
+                    .and_then(|b| b.rsplit_once(TICK))
+                    .map(|(_, n)| n.to_owned())
+                else {
+                    continue;
+                };
+                let digits: String = region[idx..]
+                    .chars()
+                    .skip(1)
+                    .take_while(char::is_ascii_digit)
+                    .collect();
+                if let Ok(n) = digits.parse() {
+                    out.insert(name, n);
+                }
+            }
+            out
+        }
+
+        fn measured<'a>(rows: impl Iterator<Item = &'a FoldedRead>) -> BTreeMap<String, usize> {
+            let mut out = BTreeMap::new();
+            for row in rows {
+                if let Some(p) = row.perm {
+                    *out.entry(format!("{p:?}")).or_insert(0) += 1;
+                }
+            }
+            out
+        }
+
+        let head = SRC
+            .split("use yagra_common::Permission;")
+            .next()
+            .expect("the module doc precedes the imports");
+        assert_eq!(
+            claims(head),
+            measured(FOLDED_READS.iter()),
+            "the module doc's permission spread is not the table's"
+        );
+        assert!(
+            head.contains(&format!("over these {} rows", FOLDED_READS.len())),
+            "the module doc does not state the table's actual row count ({})",
+            FOLDED_READS.len()
+        );
+
+        let block = SRC
+            .split("// The configuration-read family,")
+            .nth(1)
+            .and_then(|b| b.split_once("FoldedRead {"))
+            .map(|(c, _)| c)
+            .expect("the get_config block carries its own comment");
+        let config_rows = || FOLDED_READS.iter().filter(|f| f.tool == "get_config");
+        assert_eq!(
+            claims(block),
+            measured(config_rows()),
+            "the get_config block comment's permission spread is not that block's"
+        );
+        assert!(
+            block.contains(&format!("{} routes behind one", config_rows().count())),
+            "the get_config block comment does not state its actual route count ({})",
+            config_rows().count()
+        );
     }
 
     #[test]

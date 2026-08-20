@@ -21,8 +21,8 @@ const LABELS = {
   // path and needs exercising too.
   meaning: (key: string) =>
     ({
-      'metrics:meaning.if_oper_status': 'Whether the port is up. 1 = up, 2 = down.',
-      'metrics:meaning.cisco_env_temp': 'A chassis temperature sensor reading in degrees Celsius.',
+      'metricMeanings:if_oper_status': 'Whether the port is up. 1 = up, 2 = down.',
+      'metricMeanings:cisco_env_temp': 'A chassis temperature sensor reading in degrees Celsius.',
     })[key] ?? '',
 };
 

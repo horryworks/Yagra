@@ -192,9 +192,14 @@ const NO_MCP_WRITE: Mcp = Exempt(
 // family is how a gap stops being visible as one.
 //
 // The warning it carried survives in `mcp/folded.rs`, which is where it now does work rather than
-// describing work: the permission is **not one value** across this family (`ManageConfig` ×14,
-// `View` ×12, `ManageUsers` ×2), and one permission for the whole tool would either hand the
-// identity-provider configuration to any viewer or refuse a viewer eleven reads the UI shows them.
+// describing work: the permission is **not one value** across this family, and one permission for
+// the whole tool would either hand the identity-provider configuration to any viewer or refuse a
+// viewer most of the reads the UI already shows them.
+//
+// ⚠️ **The spread was restated here too, and this copy had rotted furthest** — it said
+// `ManageConfig` ×14 and never mentioned `ManageSystem`, which four of the kinds have demanded
+// since ADR-057. The numbers now live in `folded.rs` alone, where a test compares them against
+// the table itself (ADR-079 決定 3). A third copy of a count is a third thing to forget.
 
 /// The four SSE streams. Recorded as a gap rather than an exemption on purpose — `/mcp` declares
 /// `enable_tools()` only, so there is no subscription transport, and that is a missing capability
@@ -746,6 +751,18 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_config"),
     ),
     ("PUT", "/api/v1/meraki/polling", ADMIN_CFG, NO_MCP_WRITE),
+    (
+        "GET",
+        "/api/v1/metric-meanings",
+        DEPLOY_WIDE,
+        // The dictionary behind a bare metric name (ADR-079 決定 4). ⚠️ **The WebUI does not call
+        // this** — it needs the sentence in the operator's language and during render, so it reads
+        // the i18n bundle, whose English half is generated from the same Rust table. That makes the
+        // OpenAPI document and this tool the documented consumers, which is the point: "what does
+        // `icmp_loss_pct` measure" is a column on the alert-rules table, and before this route
+        // `/mcp` had no way to ask it.
+        Tool("get_config"),
+    ),
     (
         "GET",
         "/api/v1/metrics/interface-delta",

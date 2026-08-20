@@ -148,8 +148,8 @@ import enRca from './locales/en/rca.json';
 import jaRca from './locales/ja/rca.json';
 import enAlertsConfig from './locales/en/alertsConfig.json';
 import jaAlertsConfig from './locales/ja/alertsConfig.json';
-import enMetrics from './locales/en/metrics.json';
-import jaMetrics from './locales/ja/metrics.json';
+import enMetricMeanings from './locales/en/metricMeanings.json';
+import jaMetricMeanings from './locales/ja/metricMeanings.json';
 import enSettingsForwarding from './locales/en/settings-forwarding.json';
 import jaSettingsForwarding from './locales/ja/settings-forwarding.json';
 import enTroubleshoot from './locales/en/troubleshoot.json';
@@ -231,20 +231,22 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     expectKeys('direction', locales, 'thresholds.direction.', DIRECTIONS);
   });
 
-  it('every explained metric has a meaning (metrics:meaning.*)', () => {
+  it('every explained metric has a meaning (metricMeanings:*)', () => {
     // The key is built at runtime from the metric name, so a member of `EXPLAINED_METRICS` with
-    // no strings renders a raw key — in BOTH locales, which parity passes. Two screens read it:
-    // the column an operator uses to find out what a rule is watching, and the picker they read
-    // *before* choosing. A raw key in either is worse than no text at all.
+    // no strings renders a raw key. Two screens read it: the column an operator uses to find out
+    // what a rule is watching, and the picker they read *before* choosing. A raw key in either is
+    // worse than no text at all.
     //
-    // ⚠️ **Most of that list is generated** (`web/src/api/metricCatalog.json`, written by
-    // `mib.rs::the_committed_metric_catalog_is_current`), so this is the test that fails when a
-    // metric is added on the Rust side and nobody writes the sentences. It is the only mechanical
-    // link between the two — nothing else notices.
+    // ⚠️ **What this test now checks is the Japanese half.** Since ADR-079 the sentences are
+    // owned by `crates/yagra-core/src/metric_meaning.rs` and the English file is generated from
+    // it, so `EXPLAINED_METRICS` *is* the English key list and that side cannot be short. The
+    // failure it still catches is the one parity never could: a metric explained in Rust and
+    // never translated, which would render the English sentence in a Japanese UI (i18next falls
+    // back) — readable, but not what the operator asked for.
     expectKeys(
       'metric meaning',
-      { en: enMetrics, ja: jaMetrics },
-      'meaning.',
+      { en: enMetricMeanings, ja: jaMetricMeanings },
+      '',
       EXPLAINED_METRICS,
     );
   });

@@ -57,6 +57,8 @@ import enRca from './locales/en/rca.json';
 import jaRca from './locales/ja/rca.json';
 import enMetrics from './locales/en/metrics.json';
 import jaMetrics from './locales/ja/metrics.json';
+import enMetricMeanings from './locales/en/metricMeanings.json';
+import jaMetricMeanings from './locales/ja/metricMeanings.json';
 
 type Json = Record<string, unknown>;
 
@@ -98,6 +100,7 @@ const NAMESPACES: Record<string, { en: Json; ja: Json }> = {
   'settings-upgrade': { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
   rca: { en: enRca, ja: jaRca },
   metrics: { en: enMetrics, ja: jaMetrics },
+  metricMeanings: { en: enMetricMeanings, ja: jaMetricMeanings },
 };
 
 describe('i18n mechanism', () => {

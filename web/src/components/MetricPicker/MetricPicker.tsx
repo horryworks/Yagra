@@ -82,7 +82,7 @@ export function MetricPicker({ value, onChange, id, onlyPerInterface }: Props) {
           derived: t('picker.derived'),
           standard: t('picker.standard'),
           liveness: tf('liveness'),
-          // The key already carries its namespace (`metrics:meaning.…`), so it resolves whichever
+          // The key already carries its namespace (`metricMeanings:…`), so it resolves whichever
           // namespace this component was mounted under.
           meaning: (key) => t(key, { defaultValue: '' }),
         },

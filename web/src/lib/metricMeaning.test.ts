@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   BUILTIN_METRICS,
   CHECK_METRICS,
+  DERIVED_METRICS,
   EXPLAINED_METRICS,
   builtinMetric,
   metricMeaningKey,
@@ -13,14 +14,14 @@ import { METRIC_PRESETS } from './suppression';
 describe('metricMeaningKey', () => {
   it('answers for every metric it claims to explain', () => {
     for (const m of EXPLAINED_METRICS) {
-      expect(metricMeaningKey(m)).toBe(`metrics:meaning.${m}`);
+      expect(metricMeaningKey(m)).toBe(`metricMeanings:${m}`);
     }
   });
 
   it('explains the liveness sentinel, which is the one an operator cannot look up anywhere else', () => {
     // It is not a series and has no collection item, so the rule table and the picker are the only
     // places it is ever described.
-    expect(metricMeaningKey(LIVENESS_METRIC)).toBe(`metrics:meaning.${LIVENESS_METRIC}`);
+    expect(metricMeaningKey(LIVENESS_METRIC)).toBe(`metricMeanings:${LIVENESS_METRIC}`);
   });
 
   it('says nothing rather than something empty about a metric it does not know', () => {
@@ -40,6 +41,21 @@ describe('metricMeaningKey', () => {
     // The array is iterated by the i18n coverage test; a duplicate would pass every check while
     // hiding that the two halves overlap.
     expect(new Set(EXPLAINED_METRICS).size).toBe(EXPLAINED_METRICS.length);
+  });
+
+  it('explains every metric the picker groups under a heading', () => {
+    // `CHECK_METRICS` and `DERIVED_METRICS` are a WebUI concern — they decide which heading a
+    // name appears under — but the sentences are owned by Rust since ADR-079. If the two lists
+    // drift, the picker offers a name under a heading with an em dash where its explanation
+    // should be, which is precisely the state the picker exists to prevent (a threshold on
+    // `bgp_peer_state` is `above 3` or `below 3` depending on a fact no OID carries).
+    //
+    // A subset relation rather than equality: the explained set is much larger, because it also
+    // covers every gauge in the collection catalogue.
+    const ungrouped = [...CHECK_METRICS, ...DERIVED_METRICS].filter(
+      (m) => !EXPLAINED_METRICS.includes(m),
+    );
+    expect(ungrouped).toEqual([]);
   });
 });
 

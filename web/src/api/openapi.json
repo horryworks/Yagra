@@ -8069,6 +8069,51 @@
         }
       }
     },
+    "/api/v1/metric-meanings": {
+      "get": {
+        "tags": [
+          "mib"
+        ],
+        "summary": "What each metric measures — the dictionary behind a bare metric name (ADR-079 決定 4).",
+        "description": "**No `Admin` extractor and no 503.** The table is compiled in, so this answers identically in\nskeleton mode and on a public dashboard; requiring the write side would refuse a question that\nneeds no database.\n\n⚠️ **The WebUI does not call this**, and that is deliberate rather than an oversight. The screen\nneeds the sentence in the operator's language and synchronously during render, so it reads the\ni18n bundle — whose English half is generated from the very same table. The documented consumers\nare the OpenAPI contract and the `get_config(kind=metric_meanings)` MCP tool, which is the whole\nreason the route exists: before it, \"what does `icmp_loss_pct` measure\" was a question the alert\nrules table answered and `/mcp` could not.",
+        "operationId": "list_metric_meanings",
+        "responses": {
+          "200": {
+            "description": "Every metric Yagra can explain, sorted by metric name, each with where its number comes from. Static vocabulary — it does not depend on what this deployment collects",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MetricMeaning"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks read permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/metrics/interface-delta": {
       "get": {
         "tags": [
@@ -18157,7 +18202,7 @@
           {
             "name": "scope_level",
             "in": "query",
-            "description": "Comma-separated scope levels (`global` | `profile` | `group` | `node`); empty or absent\nmeans every level.",
+            "description": "Comma-separated scope levels (`global` | `profile` | `group` | `group_id` | `node` |\n`interface`); empty or absent means every level.",
             "required": false,
             "schema": {
               "type": "string"
@@ -26789,6 +26834,29 @@
           "gauge",
           "counter"
         ]
+      },
+      "MetricMeaning": {
+        "type": "object",
+        "description": "One metric and what it measures, in one sentence.",
+        "required": [
+          "metric",
+          "meaning",
+          "source"
+        ],
+        "properties": {
+          "meaning": {
+            "type": "string",
+            "description": "One sentence, in English. English is canonical (`crate::metric_meaning`); the WebUI renders\na translation of it, so the wording here and the wording on screen may differ by language,\nnever by content."
+          },
+          "metric": {
+            "type": "string",
+            "description": "Stable metric name — the same spelling a threshold rule's `metric` and a TSDB series use."
+          },
+          "source": {
+            "type": "string",
+            "description": "Where the number comes from: `check` (one of Yagra's own probes), `derived` (computed per\nport at evaluation time, and therefore present in **no** time series — asking\n`query_metrics` for it returns nothing), or `collected` (read off a device by a metric set,\nwith its OID in `get_config(kind=mib_catalog)`)."
+          }
+        }
       },
       "MetricPoint": {
         "type": "object",

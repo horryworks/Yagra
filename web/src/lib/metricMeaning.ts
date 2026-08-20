@@ -23,17 +23,30 @@
 //
 // A `.ts` file on purpose: Vitest runs `environment: 'node'` and never executes `.tsx`, so a lookup
 // written inside the page component is a lookup nothing tests (`testing.md`).
+//
+// **The sentences themselves moved to Rust (ADR-079 決定 4).** They used to live only in
+// `locales/{en,ja}/metrics.json`, which made them something the WebUI knew and `/mcp` did not —
+// the alert-rule table has a "What it measures" column and an MCP client reading the same
+// ruleset got a bare metric name. English is now canonical in
+// `crates/yagra-core/src/metric_meaning.rs`, `locales/en/metricMeanings.json` is generated from
+// it, and `locales/ja/metricMeanings.json` is the translation. Nothing here is hand-kept in step
+// with Rust: the explained set below is read straight off the generated file.
 
 import { LIVENESS_METRIC } from './format';
 import builtinCatalog from '../api/metricCatalog.json';
+import enMetricMeanings from '../locales/en/metricMeanings.json';
 
 /**
  * Metrics Yagra's own checks emit — the reachability probes and the URL / DNS / Meraki monitors.
  *
- * Hand-written, and it has to be: these names are constants and literals scattered across
- * `yagra-common`, `yagra-transport` and the poller, with **no catalog on the Rust side** to
- * generate from. They have no `mib_catalog` row either, which is exactly why they need listing —
+ * These names are constants and literals scattered across `yagra-common`, `yagra-transport` and
+ * the poller, and they have no `mib_catalog` row, which is exactly why they need listing —
  * nothing else knows they exist.
+ *
+ * ⚠️ **This list is now duplicated in Rust** (`metric_meaning::CHECK_METRICS`), where it makes
+ * the sentence table checkable. It survives here because the picker's *grouping* is a WebUI
+ * concern — "Yagra’s own checks" is a heading, not a fact about the backend — and a test pins it
+ * to be a subset of the generated meanings, so the two cannot come to disagree about a name.
  */
 export const CHECK_METRICS = [
   LIVENESS_METRIC,
@@ -108,23 +121,24 @@ export function builtinMetric(metric: string): BuiltinMetric | undefined {
  * `i18nEnumKeys.test.ts` can demand a string for each in **both** locales.
  *
  * That test is the whole point of the array: the key is built at runtime
- * (`` t(`metrics:meaning.${metric}`) ``), so a member with no strings renders a raw key in *both*
+ * (`` t(`metricMeanings:${metric}`) ``), so a member with no strings renders a raw key in *both*
  * languages — which EN/JA parity passes, because both are equally missing it
- * (`extensibility.md` §4). Deriving the second half from the generated catalog is what makes
- * adding a metric in Rust fail a WebUI test until the sentences are written.
+ * (`extensibility.md` §4). English can no longer be the missing half (it is generated), so what
+ * this now guards is the Japanese translation of a metric Rust has just started explaining.
  *
- * **Gauges only**, and derived rather than listed. A counter can carry no threshold rule (a fixed
- * bound cannot be evaluated against a monotonic value, ADR-012), so the picker never offers one and
- * the rule table can never show one — a sentence written for `if_hc_in_octets` is a sentence nobody
- * can reach, and an unread string is what drifts. That is the same reasoning the scope-id
- * placeholder check already applies to the `global` level. A counter falls back to its catalog
- * facts like any other unexplained name.
+ * **Gauges only**, and *derived in Rust* rather than listed. A counter can carry no threshold rule
+ * (a fixed bound cannot be evaluated against a monotonic value, ADR-012), so the picker never
+ * offers one and the rule table can never show one — a sentence written for `if_hc_in_octets` is a
+ * sentence nobody can reach, and an unread string is what drifts. A counter falls back to its
+ * catalog facts like any other unexplained name.
+ *
+ * Reading the keys off the generated file rather than recomputing the union here is what makes
+ * "add a template in Rust, forget the sentence" a **Rust** test failure
+ * (`every_metric_a_rule_can_name_has_a_sentence_and_no_others_do`) instead of a silently missing
+ * column. `metricMeaning.test.ts` still checks the union from this side, which now compares two
+ * generated artefacts against each other rather than a hand-list against itself.
  */
-export const EXPLAINED_METRICS: readonly string[] = [
-  ...CHECK_METRICS,
-  ...DERIVED_METRICS,
-  ...BUILTIN_METRICS.filter((m) => m.metric_kind === 'gauge').map((m) => m.metric_name),
-];
+export const EXPLAINED_METRICS: readonly string[] = Object.keys(enMetricMeanings);
 
 const EXPLAINED = new Set<string>(EXPLAINED_METRICS);
 
@@ -135,7 +149,11 @@ const EXPLAINED = new Set<string>(EXPLAINED_METRICS);
  * this device" — would fill the column with words that carry no information. The callers do
  * something better with the `null` than a sentence could: the table shows an em dash, and the
  * picker shows the catalog facts (which metric set, which OID) it does have.
+ *
+ * A namespace of its own rather than `metrics:meaning.*`: the English half is a generated build
+ * output and the `picker.*` strings beside it are hand-written, so sharing one file would mean
+ * the generator either clobbering hand-written text or having to merge into it.
  */
 export function metricMeaningKey(metric: string): string | null {
-  return EXPLAINED.has(metric) ? `metrics:meaning.${metric}` : null;
+  return EXPLAINED.has(metric) ? `metricMeanings:${metric}` : null;
 }

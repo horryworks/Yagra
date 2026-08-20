@@ -45,6 +45,29 @@
 
 ### New Features
 
+- **The MCP `get_config(kind=thresholds)` tool takes the same filters the API does.** It used to
+  accept only `limit`, so an AI client got the first 500 rules and nothing else — and because the
+  list is ordered broadest-scope-first, a deployment with more rules than that hid its per-node
+  and per-port rules from `/mcp` entirely. `search` (metric-name substring), `scope_level` and
+  `direction` are now accepted, comma-separated, with an unknown value refused rather than
+  dropped. This closes two questions the WebUI answers and MCP could not: *is there any
+  reachability rule at all* and *how many port-level rules are there* — the screen asks both by
+  filtering and reading `total`.
+
+- **New endpoint `GET /api/v1/metric-meanings`, reachable over MCP as
+  `get_config(kind=metric_meanings)` — what each metric actually measures, one sentence each.**
+  The alert-rules table has always had a "What it measures" column, but those sentences lived
+  only in the WebUI's translation files, so an MCP client reading the same ruleset saw a bare
+  metric name. All 97 are now served (View permission; it consults no store, so it answers in
+  skeleton mode too). English is the source of truth in the backend and the WebUI's English
+  strings are generated from it, which is what keeps the two wordings from drifting.
+
+- **`get_config`'s tool description now explains how to read a threshold rule.** Scope precedence
+  across the six levels, that `scope_ids` holds a different kind of id at each one, that
+  `dwell_samples` counts samples rather than seconds, that `__liveness__` is a sentinel rather
+  than a collected metric, and that a `truncated` reply has kept the *broadest* rules — so the way
+  to reach the rest is to narrow, not to raise `limit`.
+
 - **A node's System (SNMP) readings are charts now, not a list of numbers.** The strip at the
   bottom of a node's Overview showed each node-level metric as a bare current value — a
   temperature of 60 with no way to tell a device that has been at 60 all week from one that was
@@ -254,6 +277,13 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **The MCP `get_config` tool advertised the wrong permission for four of its kinds.** Its
+  description — published verbatim to every AI client — said everything not otherwise listed
+  needs `manage-config`, while `notification_channels`, `routing_rules`, `forward_destinations`
+  and `llm` have required `manage-system` since the roles were split. It also under-counted the
+  kinds it accepts. Both are corrected, and both are now checked against the code rather than
+  restated in prose.
 
 - **Device health's SETUP RATE showed a since-boot total captioned "/s".** On a Huawei USG it read
   `18,190,268/s` and drew a straight rising line, which looks like a working chart rather than a

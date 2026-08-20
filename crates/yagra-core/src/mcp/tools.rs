@@ -2566,26 +2566,54 @@ impl YagraMcp {
     #[tool(
         description = "Read Yagra's own configuration — what it is set up to monitor, alert on, \
                        notify and forward, and how. `kind` is one of: **alerting/notification** — \
-                       thresholds (`limit` 1–500), event_rules, event_sources, \
+                       thresholds (the metric alert rules; `limit` 1–500, narrowed by `search` / \
+                       `scope_level` / `direction`), event_rules, event_sources, \
                        notification_channels, routing_rules; **collection** — profiles, \
                        profile_templates (needs `profile_id`), collection_templates, \
                        template_items (needs `template_id`), node_collection (one node's collected \
                        metrics — needs `node_id`; `resolved=true` for the effective set the poller \
                        actually uses), classification_rules, mib_catalog (`search` filters, \
-                       `limit` 1–2000, default 100); **per-node checks** — url_check, dns_check \
-                       (both need `node_id`); **discovery** — discovery_candidates (`limit` 1–50, \
-                       default 10), discovery_scan (needs `scan_id`), discovery_scans (the sweeps \
-                       this core is holding, newest first, `limit` 1–50, default 20 — this is how \
-                       to find a `scan_id`); **Meraki** — meraki_orgs, \
-                       meraki_networks (needs `org_id`), meraki_polling; **forwarding** — \
-                       forward_destinations; **reports** — report_definitions, report_schedules; \
-                       **deployment settings** — retention, adjacency_settings, llm, roles, oidc, \
-                       ldap. Kinds require different permissions: oidc and ldap need manage-users; \
-                       mib_catalog, url_check, dns_check, discovery_candidates, the three meraki \
-                       kinds, the two report kinds, retention, adjacency_settings and roles need \
-                       view; the rest need manage-config. This reads configuration only — no tool \
-                       changes it. No stored secret is returned: url_check reports whether a \
-                       credential is bound, not which one."
+                       `limit` 1–2000, default 100), metric_meanings (one sentence per metric, \
+                       plus whether it is a `check`, `derived` or `collected` number — \
+                       the dictionary behind a bare metric name); **per-node checks** — \
+                       url_check, dns_check (both need `node_id`); **discovery** — \
+                       discovery_candidates (`limit` 1–50, default 10), discovery_scan (needs \
+                       `scan_id`), discovery_scans (the sweeps this core is holding, newest \
+                       first, `limit` 1–50, default 20 — this is how to find a `scan_id`); \
+                       **Meraki** — meraki_orgs, meraki_networks (needs `org_id`), \
+                       meraki_polling; **forwarding** — forward_destinations; **reports** — \
+                       report_definitions, report_schedules; **deployment settings** — retention, \
+                       adjacency_settings, llm, roles, oidc, ldap. \
+                       **Reading kind=thresholds.** A rule is `{scope_level, scope_ids, metric, \
+                       direction, warning, critical, dwell_samples}` and fires when `metric` \
+                       crosses a bound in `direction` for `dwell_samples` consecutive samples — a \
+                       count of samples, never seconds. `warning` or `critical` may be null; one \
+                       bound is a one-sided rule, not a broken one. `scope_level` is one of six, \
+                       broadest first: `global` (every node, `scope_ids` empty), `profile`, \
+                       `group` (a node **tag value**), `group_id` (a folder group, inherited by \
+                       everything inside it), `node`, `interface`. **`scope_ids` holds a \
+                       different kind of id at each level** — profile UUIDs, tag strings, \
+                       folder-group UUIDs, node UUIDs, or `<node-uuid>:<ifindex>` for one port — \
+                       so resolve them with get_config(kind=profiles), list_node_groups or \
+                       list_nodes rather than assuming a UUID. The narrowest level that reaches a \
+                       target wins, and rules at that level merge by keeping the more restrictive \
+                       bound of each severity. `metric` is `__liveness__` for the reachability \
+                       rule, a sentinel rather than a collected metric; `if_in_util_pct` / \
+                       `if_out_util_pct` / `if_in_bps` / `if_out_bps` are derived per port and \
+                       exist in no time series. The reply carries `total` (rules matching the \
+                       filter, ignoring the cap) and `truncated` — and when `truncated` is true \
+                       the rows you have are the **broadest** ones, so narrow with `scope_level` \
+                       rather than raising `limit`. For one port's effective rules use \
+                       get_interface_thresholds; for what a metric measures use \
+                       kind=metric_meanings. \
+                       Kinds require different permissions: oidc and ldap need manage-users; \
+                       notification_channels, routing_rules, forward_destinations and llm need \
+                       manage-system; mib_catalog, metric_meanings, url_check, dns_check, \
+                       discovery_candidates, the three meraki kinds, the two report kinds, \
+                       retention, adjacency_settings and roles need view; the rest need \
+                       manage-config. This reads configuration only — no tool changes it. No \
+                       stored secret is returned: url_check reports whether a credential is \
+                       bound, not which one."
     )]
     async fn get_config(
         &self,
@@ -2655,17 +2683,29 @@ impl YagraMcp {
                 id
             }
         };
-        // `id` is `Uuid::nil()` for the 21 kinds that need none, and every arm that reads it is one
+        // `id` is `Uuid::nil()` for the 23 kinds that need none, and every arm that reads it is one
         // `required_id` just validated — so there is no unwrap here and no second copy of the fact.
+        // Answered above the live-mode gate, because it looks nothing up: the dictionary is
+        // compiled in, and `GET /api/v1/metric-meanings` takes no `Admin` extractor for the same
+        // reason. A tool that reported "unavailable" where its REST twin answers would be the two
+        // surfaces disagreeing about a question neither has to consult a store to settle.
+        if kind == ConfigKind::MetricMeanings {
+            return ok_json(TOOL, &crate::api::mib::metric_meanings());
+        }
         let Some(a) = self.state.admin.as_ref() else {
             return tool_unavailable(TOOL, "reading configuration requires live mode");
         };
         match kind {
             // ── alerting / notification ──────────────────────────────────────
             ConfigKind::Thresholds => {
-                // No filter: `get_config` is a configuration dump, and its callers ask for the
-                // ruleset rather than a slice of it — see `threshold_page` for the reasoning.
-                match crate::api::thresholds::threshold_page(a, p.limit, &Default::default()).await
+                // Narrowed by the same three filters the REST edge accepts, through the same
+                // helper and the same enum vocabulary — see `threshold_filter_of` for why the
+                // earlier "no filter" reasoning did not survive reading the screen's own calls.
+                let filter = match threshold_filter_of(&p) {
+                    Ok(f) => f,
+                    Err(e) => return tool_api_error(TOOL, &e),
+                };
+                match crate::api::thresholds::threshold_page(a, p.limit, &filter.as_filter()).await
                 {
                     Ok(page) => ok_json(TOOL, &page),
                     Err(e) => tool_api_error(TOOL, &e),
@@ -2716,6 +2756,11 @@ impl YagraMcp {
                 Ok(list) => ok_json(TOOL, &list),
                 Err(e) => tool_error(TOOL, "list classification rules", &e),
             },
+            // Unreachable: answered above the live-mode gate. Written out anyway because the
+            // match is exhaustive on purpose — that is what makes a new kind impossible to
+            // forget — and because `unreachable!()` would put a panic here that only an edit to
+            // the guard above could reach. Both call the one function in `api::mib`.
+            ConfigKind::MetricMeanings => ok_json(TOOL, &crate::api::mib::metric_meanings()),
             ConfigKind::MibCatalog => {
                 // Default 100 where REST defaults to the 2000 cap: a model asking about one OID
                 // does not want the whole catalog in its context, and `search` is the narrowing
@@ -3237,6 +3282,7 @@ enum ConfigKind {
     NodeCollection,
     ClassificationRules,
     MibCatalog,
+    MetricMeanings,
     UrlCheck,
     DnsCheck,
     DiscoveryCandidates,
@@ -3278,6 +3324,7 @@ impl ConfigKind {
         "node_collection",
         "classification_rules",
         "mib_catalog",
+        "metric_meanings",
         "url_check",
         "dns_check",
         "discovery_candidates",
@@ -3314,6 +3361,7 @@ impl ConfigKind {
             "node_collection" => Self::NodeCollection,
             "classification_rules" => Self::ClassificationRules,
             "mib_catalog" => Self::MibCatalog,
+            "metric_meanings" => Self::MetricMeanings,
             "url_check" => Self::UrlCheck,
             "dns_check" => Self::DnsCheck,
             "discovery_candidates" => Self::DiscoveryCandidates,
@@ -3356,6 +3404,7 @@ impl ConfigKind {
             | Self::CollectionTemplates
             | Self::ClassificationRules
             | Self::MibCatalog
+            | Self::MetricMeanings
             | Self::DiscoveryCandidates
             | Self::DiscoveryScans
             | Self::MerakiOrgs
@@ -3387,6 +3436,7 @@ impl ConfigKind {
             Self::NodeCollection => "node_collection",
             Self::ClassificationRules => "classification_rules",
             Self::MibCatalog => "mib_catalog",
+            Self::MetricMeanings => "metric_meanings",
             Self::UrlCheck => "url_check",
             Self::DnsCheck => "dns_check",
             Self::DiscoveryCandidates => "discovery_candidates",
@@ -3418,7 +3468,7 @@ struct FleetSummaryParams {
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 struct ConfigParams {
-    /// Which configuration to read. Required; see the tool description for the 28 values.
+    /// Which configuration to read. Required; see the tool description for the 30 values.
     kind: String,
     /// The node (kind=node_collection | url_check | dns_check).
     node_id: Option<Uuid>,
@@ -3433,11 +3483,77 @@ struct ConfigParams {
     /// Return the effective set the poller collects rather than the node's own overrides
     /// (kind=node_collection; default false).
     resolved: Option<bool>,
-    /// Case-insensitive substring over metric name / OID / vendor (kind=mib_catalog).
+    /// Case-insensitive substring: over metric name / OID / vendor (kind=mib_catalog), or over
+    /// the metric name alone (kind=thresholds).
     search: Option<String>,
+    /// Comma-separated scope levels to keep (kind=thresholds): `global`, `profile`, `group`,
+    /// `group_id`, `node`, `interface`. Absent or empty means every level.
+    scope_level: Option<String>,
+    /// Comma-separated directions to keep (kind=thresholds): `above`, `below`. Absent or empty
+    /// means both.
+    direction: Option<String>,
     /// Row cap (kind=thresholds 1–500 default 500; mib_catalog 1–2000 default 100;
     /// discovery_candidates 1–50 default 10).
     limit: Option<i64>,
+}
+
+/// The owned halves of a [`crate::thresholds::ThresholdFilter`], parsed from one `get_config` call.
+///
+/// An owning struct because `ThresholdFilter` borrows all three of its fields — building one inline
+/// would borrow from temporaries that die at the end of the expression.
+#[derive(Debug, Default, PartialEq)]
+struct ThresholdFilterOwned {
+    metric: Option<String>,
+    levels: Vec<yagra_common::ScopeLevel>,
+    directions: Vec<yagra_common::Direction>,
+}
+
+impl ThresholdFilterOwned {
+    fn as_filter(&self) -> crate::thresholds::ThresholdFilter<'_> {
+        crate::thresholds::ThresholdFilter {
+            metric: self.metric.as_deref(),
+            level: &self.levels,
+            direction: &self.directions,
+        }
+    }
+}
+
+/// Parse `get_config(kind=thresholds)`'s three filters, in the REST edge's vocabulary (ADR-079 決定 1).
+///
+/// **This replaced `&Default::default()`, and the reason the old comment gave was factually wrong.**
+/// It said `get_config` is a configuration dump whose callers ask for the ruleset rather than a slice
+/// of it, so the filters were a UI narrowing. Reading what the screen actually does refutes that:
+/// `ThresholdsPage` issues **three** `GET /thresholds` per page load and only one of them is the
+/// visible page. The other two ask for a `total` — *is there any reachability rule at all* and *how
+/// many port-level rules are hidden* — which are questions, not slices, and an MCP client could not
+/// ask either one.
+///
+/// The cap makes it worse rather than merely awkward: `ThresholdStore::list_page` orders
+/// **broadest scope first**, so a ruleset past 500 rows hides its node- and interface-level rules
+/// completely, and those are exactly the ones that grow with the fleet.
+///
+/// Split out as a plain function over the params so it can be tested without a live `AdminState` —
+/// the tool wrapper is unreachable from tests (no way to fabricate a `RequestContext`).
+fn threshold_filter_of(p: &ConfigParams) -> Result<ThresholdFilterOwned, ApiError> {
+    // Both vocabularies are rendered from the enums rather than written out, through the same
+    // helper the REST edge uses. Its hand-written copy had rotted to "global, profile, group or
+    // node" — four of the six levels, unchanged since ADR-075 added `group_id` and ADR-076 added
+    // `interface` — and a second hand-written list here would have rotted the same way (ADR-079).
+    Ok(ThresholdFilterOwned {
+        metric: crate::api::util::normalize_search(p.search.as_deref()),
+        levels: crate::api::util::parse_set(
+            "scope_level",
+            p.scope_level.as_deref(),
+            &crate::api::util::token_list(yagra_common::ScopeLevel::ALL.iter().map(|l| l.as_str())),
+            yagra_common::ScopeLevel::from_token,
+        )?,
+        directions: crate::api::util::parse_set(
+            "direction",
+            p.direction.as_deref(),
+            &crate::api::util::token_list(yagra_common::Direction::ALL.iter().map(|d| d.as_str())),
+            yagra_common::Direction::from_token,
+        )?,
+    })
 }
 
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
@@ -4256,6 +4372,273 @@ mod tests {
         );
     }
 
+    /// The description names every `kind` the tool accepts, and says how many there are correctly.
+    ///
+    /// The count half is the one that had already rotted: the parameter doc said "28 values" while
+    /// `NAMES` held 29, because ADR-068 added `discovery_scans` and touched neither string. A
+    /// number in prose beside a list is a second copy of the list's length, so it is derived here
+    /// rather than trusted.
+    ///
+    /// ⚠️ **The name check is substring-based and therefore one-directional.** `discovery_scan` is
+    /// a substring of `discovery_scans`, so a description naming only the plural would still pass
+    /// for the singular. It catches an omitted kind, not a mis-stated one.
+    #[test]
+    fn the_config_description_names_every_kind_it_accepts() {
+        let description = crate::api::route_table::declared_mcp_tool_description("get_config")
+            .expect("get_config declares a description");
+        let missing: Vec<&&str> = ConfigKind::NAMES
+            .iter()
+            .filter(|n| !description.contains(**n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "get_config accepts kinds its description never names, so a client has no way to know \
+             they exist: {missing:?}"
+        );
+
+        const SRC: &str = include_str!("tools.rs");
+        let stated: usize = SRC
+            .split("see the tool description for the ")
+            .nth(1)
+            .expect("the kind parameter states how many values there are")
+            .split(' ')
+            .next()
+            .expect("a number follows")
+            .parse()
+            .expect("the stated count is a number");
+        assert_eq!(
+            stated,
+            ConfigKind::NAMES.len(),
+            "the kind parameter's doc says {stated} values and ConfigKind::NAMES has {}",
+            ConfigKind::NAMES.len()
+        );
+    }
+
+    /// The description names **every permission any of its kinds can demand**.
+    ///
+    /// This is the check that would have caught the sentence as it stood: it said "the rest need
+    /// manage-config" while `notification_channels`, `routing_rules`, `forward_destinations` and
+    /// `llm` had demanded `ManageSystem` since ADR-057 split the roles. A description is published
+    /// to every client **verbatim**, so a wrong one is not a documentation defect — it is a model
+    /// confidently telling an operator that a Viewer token will read their notification channels.
+    ///
+    /// The labels come from `folded::required_permission`, the same lookup the tool itself uses at
+    /// call time, so this compares the prose against the enforcement rather than against a second
+    /// hand-written list. The search is confined to the permissions sentence, so a label cannot be
+    /// satisfied by an unrelated word elsewhere in forty lines of prose.
+    #[test]
+    fn the_config_description_names_every_permission_it_can_demand() {
+        let description = crate::api::route_table::declared_mcp_tool_description("get_config")
+            .expect("get_config declares a description");
+        let sentence = description
+            .split("Kinds require different permissions:")
+            .nth(1)
+            .expect("the description explains the permissions");
+
+        let mut demanded: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for name in ConfigKind::NAMES {
+            let kind = ConfigKind::parse(name).expect("every NAME parses");
+            demanded.insert(permission_label(crate::mcp::folded::required_permission(
+                "get_config",
+                kind.arg(),
+            )));
+        }
+        // A floor, so a broken lookup that returned one permission for everything could not pass
+        // by naming only that one.
+        assert!(
+            demanded.len() >= 4,
+            "only {} distinct permissions found across the kinds — the lookup drifted",
+            demanded.len()
+        );
+
+        let missing: Vec<&String> = demanded
+            .iter()
+            .filter(|l| !sentence.contains(l.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "get_config demands permissions its description never mentions, so a client cannot \
+             tell which kinds its token can read: {missing:?}"
+        );
+    }
+
+    /// Every dimension `ThresholdFilter` declares is reachable from `get_config(kind=thresholds)`,
+    /// and each parameter moves **only** its own dimension (ADR-079 決定 1).
+    ///
+    /// The behavioural half is the point. A source scan can say `p.scope_level` appears somewhere
+    /// in the initializer; it cannot say the value arrives in the right field. This drives the
+    /// parser and compares the whole result, so swapping two `parse_set` calls — which compiles,
+    /// runs, and answers a different question — fails here.
+    ///
+    /// ⚠️ **It still cannot say the filter narrows the SQL.** `ThresholdFilter` is handed to
+    /// `ThresholdStore::list_page`, which needs PostgreSQL. The proof that the predicate is
+    /// evaluated rather than ignored is `above` + `below` summing to the unfiltered `total` on a
+    /// real deployment (ADR-053's rule: a check that cannot separate "ignored" from "applied"
+    /// proves neither).
+    #[test]
+    fn every_threshold_filter_dimension_is_reachable_from_get_config() {
+        const SRC: &str = include_str!("../thresholds.rs");
+        let declared: Vec<&str> = SRC
+            .split("pub struct ThresholdFilter<'a> {")
+            .nth(1)
+            .expect("ThresholdFilter is declared in thresholds.rs")
+            .lines()
+            .take_while(|l| !l.starts_with('}'))
+            .map(str::trim)
+            .filter_map(|l| l.strip_prefix("pub "))
+            .filter_map(|l| l.split(':').next())
+            .collect();
+        assert_eq!(
+            declared,
+            ["metric", "level", "direction"],
+            "ThresholdFilter gained or lost a dimension — decide whether get_config should offer              it, then update this test and the tool's description"
+        );
+
+        // Absent means unfiltered on every axis. This is the case the cap makes load-bearing: an
+        // accidentally-narrowing default would silently shrink the ruleset a client believes is whole.
+        assert_eq!(
+            threshold_filter_of(&ConfigParams::default()).expect("no filter parses"),
+            ThresholdFilterOwned::default()
+        );
+
+        let metric = threshold_filter_of(&ConfigParams {
+            search: Some("  cpu  ".into()),
+            ..Default::default()
+        })
+        .expect("a metric term parses");
+        assert_eq!(
+            metric,
+            ThresholdFilterOwned {
+                metric: Some("cpu".into()),
+                levels: vec![],
+                directions: vec![],
+            },
+            "search must trim and must move nothing but the metric term"
+        );
+
+        let level = threshold_filter_of(&ConfigParams {
+            scope_level: Some("node,interface".into()),
+            ..Default::default()
+        })
+        .expect("a level set parses");
+        assert_eq!(
+            level,
+            ThresholdFilterOwned {
+                metric: None,
+                levels: vec![
+                    yagra_common::ScopeLevel::Node,
+                    yagra_common::ScopeLevel::Interface
+                ],
+                directions: vec![],
+            },
+            "scope_level must move nothing but the level set, in the order given"
+        );
+
+        let direction = threshold_filter_of(&ConfigParams {
+            direction: Some("below".into()),
+            ..Default::default()
+        })
+        .expect("a direction parses");
+        assert_eq!(
+            direction,
+            ThresholdFilterOwned {
+                metric: None,
+                levels: vec![],
+                directions: vec![yagra_common::Direction::Below],
+            },
+            "direction must move nothing but the direction set"
+        );
+    }
+
+    /// The filter accepts every token its enums define, and refuses everything else.
+    ///
+    /// **Both halves, because either alone is worthless.** A tool that refused every token would
+    /// pass a rejection-only test; a tool that accepted every string would pass an
+    /// acceptance-only one. The refusals below are also chosen to be *near misses* — `groupid`
+    /// against the real `group_id`, `interfaces` against `interface` — so a substring or
+    /// prefix match could not pass either.
+    #[test]
+    fn the_threshold_filter_takes_the_enums_vocabulary_and_nothing_else() {
+        for level in yagra_common::ScopeLevel::ALL {
+            let parsed = threshold_filter_of(&ConfigParams {
+                scope_level: Some(level.as_str().into()),
+                ..Default::default()
+            })
+            .unwrap_or_else(|_| panic!("{} is a level the store writes", level.as_str()));
+            assert_eq!(parsed.levels, vec![level]);
+        }
+        for direction in yagra_common::Direction::ALL {
+            let parsed = threshold_filter_of(&ConfigParams {
+                direction: Some(direction.as_str().into()),
+                ..Default::default()
+            })
+            .unwrap_or_else(|_| panic!("{} is a direction the store writes", direction.as_str()));
+            assert_eq!(parsed.directions, vec![direction]);
+        }
+
+        // The whole set at once, spelled from the enum, must also be accepted — a per-token loop
+        // would still pass if the splitter dropped everything after the first comma.
+        let every_level: String = yagra_common::ScopeLevel::ALL
+            .iter()
+            .map(|l| l.as_str())
+            .collect::<Vec<_>>()
+            .join(",");
+        assert_eq!(
+            threshold_filter_of(&ConfigParams {
+                scope_level: Some(every_level),
+                ..Default::default()
+            })
+            .expect("the full level set parses")
+            .levels,
+            yagra_common::ScopeLevel::ALL.to_vec()
+        );
+
+        // An **empty** token is not in this list on purpose: `split_set` drops it, so `scope_level=`
+        // and a trailing comma both mean unfiltered — the spelling the WebUI sends while clearing a
+        // filter. Pinned below rather than left to chance, because the alternative (a set holding
+        // one empty string) would match nothing and read as "no rules exist".
+        assert_eq!(
+            threshold_filter_of(&ConfigParams {
+                scope_level: Some("node,".into()),
+                ..Default::default()
+            })
+            .expect("a trailing comma is not an error")
+            .levels,
+            vec![yagra_common::ScopeLevel::Node]
+        );
+        assert_eq!(
+            threshold_filter_of(&ConfigParams {
+                scope_level: Some(String::new()),
+                direction: Some(String::new()),
+                ..Default::default()
+            })
+            .expect("an empty set is not an error"),
+            ThresholdFilterOwned::default(),
+            "an empty filter must mean unfiltered, exactly as omitting it does"
+        );
+
+        for bad in ["groupid", "interfaces", "Global", "scope_leval"] {
+            let err = threshold_filter_of(&ConfigParams {
+                scope_level: Some(format!("node,{bad}")),
+                ..Default::default()
+            })
+            .expect_err("an unknown level must be refused, never dropped");
+            assert_eq!(
+                err.status(),
+                StatusCode::BAD_REQUEST,
+                "a bad filter must reach the client as bad_params, not as an internal error"
+            );
+        }
+        for bad in ["sideways", "abov", "Above"] {
+            let err = threshold_filter_of(&ConfigParams {
+                direction: Some(bad.into()),
+                ..Default::default()
+            })
+            .expect_err("an unknown direction must be refused, never dropped");
+            assert_eq!(err.status(), StatusCode::BAD_REQUEST);
+        }
+    }
+
     /// Every filter dimension a shared REST/MCP seam declares is actually passed by the tool.
     ///
     /// **This is the half the compiler cannot see.** A seam struct like
@@ -4290,6 +4673,13 @@ mod tests {
             /// `(seam field, the tool's parameter name)`
             renamed: &'static [(&'static str, &'static str)],
         }
+        // ⚠️ `crate::thresholds::ThresholdFilter` is deliberately **not** here, and its absence is
+        // what let `get_config(kind=thresholds)` pass `&Default::default()` unnoticed until
+        // ADR-079. It does not fit this harness — three fields against the `>= 5` floor that keeps
+        // a broken parser from passing, and the tool builds it in two steps (params → owned →
+        // borrowed) rather than one literal. It is guarded behaviourally instead, by
+        // `every_threshold_filter_dimension_is_reachable_from_get_config` below, which is the
+        // stronger check: it asserts each parameter moves its own dimension and no other.
         let seams = [
             Seam {
                 src: ALERTS,
@@ -5449,7 +5839,7 @@ mod tests {
         }
         assert_eq!(
             ConfigKind::NAMES.len(),
-            29,
+            30,
             "the advertised kind list changed; check the description and folded.rs together"
         );
     }

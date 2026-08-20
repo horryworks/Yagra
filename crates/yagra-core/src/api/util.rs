@@ -92,6 +92,22 @@ pub(crate) fn split_set(raw: Option<&str>) -> Vec<String> {
 /// audit, thresholds and findings each gained set parameters (ADR-053 Inc.4b), a second copy would
 /// have been four chances to differ from Events on the empty-string case, the cap, or whether an
 /// unknown token is rejected or dropped — and the *dropped* spelling is the one that fails silently.
+/// `a, b or c` — the human half of a rejection message, built from the enum that defines the set.
+///
+/// Beside [`parse_set`] for the reason that helper is here: the spelling is the contract. Both
+/// edges hand the same sentence to a caller who names a value outside the set, and a hand-written
+/// one rots the moment the enum grows — `list_thresholds` said "global, profile, group or node"
+/// for as long as `ScopeLevel` had six variants, so an operator asking for a folder-group or
+/// port rule was told, wrongly, that no such level existed.
+pub(crate) fn token_list<'a>(tokens: impl Iterator<Item = &'a str>) -> String {
+    let all: Vec<&'a str> = tokens.collect();
+    match all.split_last() {
+        None => String::new(),
+        Some((last, [])) => (*last).to_owned(),
+        Some((last, head)) => format!("{} or {last}", head.join(", ")),
+    }
+}
+
 pub(crate) fn parse_set<T>(
     field: &str,
     raw: Option<&str>,
