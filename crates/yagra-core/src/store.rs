@@ -55,6 +55,22 @@ pub enum InterfaceTopMetric {
     Discards,
 }
 
+impl InterfaceTopMetric {
+    /// Every dimension. Exists so a test can check a property across all of them — a new variant
+    /// then has to satisfy it rather than being quietly excluded.
+    ///
+    /// `#[cfg(test)]` because that is its whole purpose; an `#[allow(dead_code)]` would say the
+    /// same thing less honestly, and would keep saying it after a real caller appeared.
+    #[cfg(test)]
+    pub const ALL: [Self; 5] = [
+        Self::Throughput,
+        Self::InBps,
+        Self::OutBps,
+        Self::Errors,
+        Self::Discards,
+    ];
+}
+
 /// Direction for the interface rate-delta (traffic spikes vs drops).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeltaDirection {
@@ -198,10 +214,17 @@ pub trait MetricStore: Send + Sync {
     /// recovery to PagerDuty, and re-fire on the way back — a notification storm produced by the
     /// monitoring system's own infrastructure, which `monitoring-conventions.md` classes as a bug.
     /// Do not "tidy" this signature to match its neighbours.
+    ///
+    /// `nodes` narrows the query to those nodes' ports. `None` means the whole fleet — what a rule
+    /// scoped too broadly to enumerate (global / profile / tag / folder) asks for. `Some(&[])`
+    /// means nothing is covered, and the answer is empty rather than absent. An implementation
+    /// that cannot narrow may ignore it: the result is then a superset, and the caller resolves
+    /// each port's rules anyway.
     async fn interface_candidates(
         &self,
         metric: InterfaceTopMetric,
         floor_bps: f64,
+        nodes: Option<&[Uuid]>,
     ) -> Option<Vec<(Uuid, i32, f64)>>;
 
     /// The node ids that have reported **any of** `metrics` within the trailing `within_secs`
@@ -401,6 +424,7 @@ impl MetricStore for InMemorySink {
         &self,
         _metric: InterfaceTopMetric,
         _floor_bps: f64,
+        _nodes: Option<&[Uuid]>,
     ) -> Option<Vec<(Uuid, i32, f64)>> {
         // `Some(empty)`, not `None`: this sink *did* answer, and its answer is that nothing is
         // above the floor. `None` would mean "the store is unreachable", which would make a
@@ -717,18 +741,28 @@ const INTERFACE_RATE_LOOKBACK_SECS: u64 = 300;
 /// rates share `(node,ifindex)` labels, so vector addition aligns per interface. Octet rates are
 /// scaled ×8 to bits/sec.
 fn interface_expr(metric: InterfaceTopMetric) -> String {
+    interface_expr_scoped(metric, "")
+}
+
+/// [`interface_expr`] with a label selector spliced into every series name.
+///
+/// `sel` is either empty (the whole fleet) or a brace-wrapped matcher such as `{node=~"a|b|c"}`.
+/// It goes on the **series**, not around the finished expression: a selector applied outside
+/// `rate()` would filter the result *after* VictoriaMetrics had evaluated every series, which is
+/// precisely the cost this exists to avoid.
+fn interface_expr_scoped(metric: InterfaceTopMetric, sel: &str) -> String {
     let w = INTERFACE_RATE_LOOKBACK_SECS;
     match metric {
         InterfaceTopMetric::Throughput => {
-            format!("(rate(if_hc_in_octets[{w}s]) + rate(if_hc_out_octets[{w}s])) * 8")
+            format!("(rate(if_hc_in_octets{sel}[{w}s]) + rate(if_hc_out_octets{sel}[{w}s])) * 8")
         }
-        InterfaceTopMetric::InBps => format!("rate(if_hc_in_octets[{w}s]) * 8"),
-        InterfaceTopMetric::OutBps => format!("rate(if_hc_out_octets[{w}s]) * 8"),
+        InterfaceTopMetric::InBps => format!("rate(if_hc_in_octets{sel}[{w}s]) * 8"),
+        InterfaceTopMetric::OutBps => format!("rate(if_hc_out_octets{sel}[{w}s]) * 8"),
         InterfaceTopMetric::Errors => {
-            format!("(rate(if_in_errors[{w}s]) + rate(if_out_errors[{w}s]))")
+            format!("(rate(if_in_errors{sel}[{w}s]) + rate(if_out_errors{sel}[{w}s]))")
         }
         InterfaceTopMetric::Discards => {
-            format!("(rate(if_in_discards[{w}s]) + rate(if_out_discards[{w}s]))")
+            format!("(rate(if_in_discards{sel}[{w}s]) + rate(if_out_discards{sel}[{w}s]))")
         }
     }
 }
@@ -757,13 +791,19 @@ fn topk_interface_query(metric: InterfaceTopMetric, agg: TopAgg, limit: usize) -
 /// reached — the caller computes it from the slowest covered link, so a value under it cannot
 /// breach any rule.
 ///
-/// ⚠️ **The floor bounds the transfer, it does not bound it *well*.** It is set by the slowest
-/// covered link, so one 64 kbps circuit with a 70% rule puts the floor at `45 kbps and essentially
-/// every series passes it. Do not describe this as "the query is bounded"; what actually bounds a
-/// normal deployment is that the caller builds the selector from the rules in force, and only
-/// falls back to the whole fleet when a rule is scoped broadly enough to mean it.
-fn interface_candidates_query(metric: InterfaceTopMetric, floor_bps: f64) -> String {
-    let expr = interface_expr(metric);
+/// 🚨 **The floor does not bound the work, and this doc used to say it did.** Measured 2026-08-20
+/// against a 400k-port store: `seriesFetched` is *identical* at every floor. Raising the floor
+/// until the answer was empty still cost 8.3 s, against 11.6 s for floor zero — the floor removes
+/// rows from the answer, never series from the scan. It is a **correctness** device (it admits no
+/// false negatives) and nothing else.
+///
+/// ⚠️ This paragraph previously read "what actually bounds a normal deployment is that the caller
+/// builds the selector from the rules in force". **That was never implemented** — the function
+/// took no node set, so a rule on a single port queried the whole fleet. It is implemented now
+/// (increment 6c) via `sel`. The lesson worth keeping: a doc describing an intended design reads
+/// exactly like a doc describing a shipped one.
+fn interface_candidates_query(metric: InterfaceTopMetric, floor_bps: f64, sel: &str) -> String {
+    let expr = interface_expr_scoped(metric, sel);
     let w = INTERFACE_RATE_LOOKBACK_SECS;
     // `last_over_time` over a subquery, exactly as `TopAgg::Now` does: an SNMP poll is jittered, so
     // an instant read of `rate()` lands between samples often enough to matter.
@@ -771,6 +811,70 @@ fn interface_candidates_query(metric: InterfaceTopMetric, floor_bps: f64) -> Str
     // `max by` collapses any duplicate series for one port before the comparison, so a port cannot
     // appear twice in the candidate set and be observed twice in one tick.
     format!("max by (node,ifindex) ({instant}) >= {floor_bps}")
+}
+
+/// VictoriaMetrics' own query-length ceiling, which it names in its refusal.
+///
+/// **Measured, not remembered** (2026-08-20, v1.148.0, default flags): 200 UUIDs plus separators
+/// is a 7,499-byte query and answers; 400 is 14,899 and answers; 500 is 18,599 and is refused with
+/// `422 too long query; mustn't exceed -search.maxQueryLen=16384`.
+const VM_MAX_QUERY_LEN: usize = 16_384;
+
+/// The most times one [`interface_expr_scoped`] expression writes the selector.
+///
+/// 🚨 Not cosmetic: `Throughput`, `Errors` and `Discards` each name **two** series, so their
+/// selector is written twice and a budget computed per-selector buys half what it looks like. The
+/// first version of this got it wrong and produced a 16,495-byte query — one the server refuses,
+/// which the caller reads as "no answer" and turns into a skipped tick.
+/// `no_expression_repeats_the_selector_more_than_the_budget_assumes` pins it.
+const MAX_SELECTOR_REPEATS: usize = 2;
+
+/// Bytes of node selector one candidate query may carry.
+///
+/// The server's ceiling, halved (the rest of the expression costs ~150 bytes, and a deployment may
+/// have tuned the flag *down*), then divided by how many times the expression repeats it.
+///
+/// ⚠️ The budget is in **bytes, not nodes**, because `-search.maxQueryLen` is a byte limit an
+/// operator can change; counting nodes would silently mean something different if the id spelling
+/// ever changed.
+const CANDIDATE_MAX_SELECTOR_BYTES: usize = VM_MAX_QUERY_LEN / 2 / MAX_SELECTOR_REPEATS;
+
+/// The most queries one `interface_candidates` call may issue before giving up on narrowing.
+///
+/// ⚠️ **This one is not measured.** It is a judgement about how much of a 60-second tick may be
+/// spent on one dimension. With the budget above it buys roughly 2,700 nodes, past which the
+/// covered set is a large fraction of most fleets anyway and one fleet-wide query is the simpler
+/// bargain. Revisit it with a number rather than a feeling.
+const CANDIDATE_MAX_BATCHES: usize = 25;
+
+/// Split `nodes` into label selectors small enough for VictoriaMetrics to accept.
+///
+/// `None` = the set needs more than [`CANDIDATE_MAX_BATCHES`] queries, so the caller should fall
+/// back to one fleet-wide query rather than issuing an unbounded number of them.
+fn candidate_selectors(nodes: &[Uuid]) -> Option<Vec<String>> {
+    // A hyphenated UUID is 36 bytes; the `|` that joins it to the next is the 37th.
+    const PER_ID: usize = 37;
+    let per_batch = (CANDIDATE_MAX_SELECTOR_BYTES / PER_ID).max(1);
+    let batches = nodes.len().div_ceil(per_batch);
+    if batches > CANDIDATE_MAX_BATCHES {
+        return None;
+    }
+    Some(
+        nodes
+            .chunks(per_batch)
+            .map(|chunk| {
+                let ids = chunk
+                    .iter()
+                    .map(Uuid::to_string)
+                    .collect::<Vec<_>>()
+                    .join("|");
+                // Node label values are UUIDs (`[0-9a-f-]`, regex-safe) and VictoriaMetrics anchors
+                // `=~` fully, so the alternation matches exactly this set — the same reasoning
+                // `fresh_node_ids_scoped` relies on.
+                format!("{{node=~\"{ids}\"}}")
+            })
+            .collect(),
+    )
 }
 
 /// Fleet interface rate-delta PromQL: per `(node,ifindex)`, total throughput now minus the rate
@@ -1203,47 +1307,80 @@ impl MetricStore for VmStore {
         &self,
         metric: InterfaceTopMetric,
         floor_bps: f64,
+        nodes: Option<&[Uuid]>,
     ) -> Option<Vec<(Uuid, i32, f64)>> {
+        let selectors = match nodes {
+            // Not enumerable: some rule is scoped broadly enough to mean the whole fleet.
+            None => vec![String::new()],
+            // Nothing is covered. The store *did* answer, with nothing. Falling through would
+            // build `{node=~""}`, which is not "no nodes" to VictoriaMetrics.
+            Some([]) => return Some(Vec::new()),
+            Some(ids) => candidate_selectors(ids).unwrap_or_else(|| {
+                // Not silent. Falling back to the whole fleet is exactly the slow path this
+                // increment exists to avoid, and an operator whose rules quietly stopped being
+                // narrowed would have no way to find out. The counter is the durable signal.
+                metrics::counter!("yagra_interface_candidate_unscoped_total").increment(1);
+                tracing::debug!(
+                    nodes = ids.len(),
+                    max_batches = CANDIDATE_MAX_BATCHES,
+                    "too many scoped nodes to name; querying interface candidates fleet-wide"
+                );
+                vec![String::new()]
+            }),
+        };
         let url = format!("{}/api/v1/query", self.base);
-        let resp = match self
-            .http
-            .get(&url)
-            .query(&[("query", interface_candidates_query(metric, floor_bps))])
-            .send()
-            .await
-        {
-            Ok(resp) => resp,
-            Err(e) => {
-                // `None`, not an empty vector — see the trait doc. Treating a transport failure as
-                // "nothing is busy" would resolve every interface alert in the fleet.
-                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate query failed");
+        let mut all = Vec::new();
+        // 🚨 Every `return None` below abandons the **whole** call, not just this batch, and that
+        // is deliberate. The caller reads "absent from the candidate set" as "below its bound", so
+        // returning the batches that did come back would resolve every interface alert on the
+        // nodes whose batch failed, then re-fire them on the next tick. A partial answer here is
+        // worse than no answer.
+        for sel in &selectors {
+            let resp = match self
+                .http
+                .get(&url)
+                .query(&[("query", interface_candidates_query(metric, floor_bps, sel))])
+                .send()
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // `None`, not an empty vector — see the trait doc. Treating a transport failure
+                    // as "nothing is busy" would resolve every interface alert in the fleet.
+                    tracing::warn!(error = %e, "VictoriaMetrics interface-candidate query failed");
+                    return None;
+                }
+            };
+            // A non-2xx is just as much a non-answer as a dropped connection: VictoriaMetrics
+            // reports a malformed query as 4xx with a JSON body that parses fine and carries no
+            // `result`, so checking the status is what stops a bad query reading as a quiet fleet.
+            if !resp.status().is_success() {
+                tracing::warn!(
+                    status = %resp.status(),
+                    "VictoriaMetrics refused the interface-candidate query"
+                );
                 return None;
             }
-        };
-        // A non-2xx is just as much a non-answer as a dropped connection: VictoriaMetrics reports
-        // a malformed query as 4xx with a JSON body that parses fine and carries no `result`, so
-        // checking the status is what stops a bad query from reading as a quiet fleet.
-        if !resp.status().is_success() {
-            tracing::warn!(
-                status = %resp.status(),
-                "VictoriaMetrics refused the interface-candidate query"
-            );
-            return None;
-        }
-        let json = match resp.json::<serde_json::Value>().await {
-            Ok(json) => json,
-            Err(e) => {
-                tracing::warn!(error = %e, "VictoriaMetrics interface-candidate response was not JSON");
+            let json = match resp.json::<serde_json::Value>().await {
+                Ok(json) => json,
+                Err(e) => {
+                    tracing::warn!(error = %e, "VictoriaMetrics interface-candidate response was not JSON");
+                    return None;
+                }
+            };
+            // VictoriaMetrics reports a query-time error in the body with `status: "error"` and
+            // HTTP 200 in some configurations, so the envelope is checked too.
+            if json.get("status").and_then(|v| v.as_str()) != Some("success") {
+                tracing::warn!(
+                    "VictoriaMetrics interface-candidate query returned a non-success body"
+                );
                 return None;
             }
-        };
-        // VictoriaMetrics reports a query-time error in the body with `status: "error"` and HTTP
-        // 200 in some configurations, so the envelope is checked too.
-        if json.get("status").and_then(|v| v.as_str()) != Some("success") {
-            tracing::warn!("VictoriaMetrics interface-candidate query returned a non-success body");
-            return None;
+            // Batches are disjoint by construction (one node is in exactly one chunk), so the
+            // concatenation cannot double-count a port.
+            all.extend(parse_top_interfaces(&json));
         }
-        Some(parse_top_interfaces(&json))
+        Some(all)
     }
 
     async fn fresh_node_ids(&self, metrics: &[&str], within_secs: u64) -> Vec<Uuid> {
@@ -1960,5 +2097,126 @@ mod tests {
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
         assert_eq!(dedup_ids([a, b, a, a].into_iter()), vec![a, b]);
+    }
+    // ── ADR-076 increment 6c: naming the nodes the rules cover ──────────────────────────────
+
+    #[test]
+    fn the_candidate_query_names_the_scoped_nodes_and_nothing_else_changes() {
+        // A string regression, because this query is assembled by `format!` and nothing else
+        // checks what VictoriaMetrics is actually asked. The unscoped form must stay byte-for-byte
+        // what shipped before increment 6c, or the fleet-wide path changes meaning silently.
+        let fleet = interface_candidates_query(InterfaceTopMetric::InBps, 900_000_000.0, "");
+        assert_eq!(
+            fleet,
+            "max by (node,ifindex) (last_over_time((rate(if_hc_in_octets[300s]) * 8)[1800s:300s])) >= 900000000"
+        );
+
+        let a = Uuid::nil();
+        let sel = candidate_selectors(&[a]).expect("one node fits in one batch");
+        assert_eq!(sel.len(), 1);
+        let scoped = interface_candidates_query(InterfaceTopMetric::InBps, 0.0, &sel[0]);
+        // The selector sits on the SERIES, inside `rate()`. Outside it, VictoriaMetrics would
+        // evaluate every series first and filter after — the exact cost this exists to remove.
+        assert!(
+            scoped.contains(&format!("rate(if_hc_in_octets{{node=~\"{a}\"}}[300s])")),
+            "selector must be inside rate(): {scoped}"
+        );
+        assert!(!scoped.contains("rate(if_hc_in_octets[300s])"));
+
+        // Throughput names two series, and both must carry the selector — missing one would query
+        // the whole fleet for half the expression and silently undo the narrowing.
+        let both = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &sel[0]);
+        assert_eq!(
+            both.matches("node=~").count(),
+            2,
+            "both series need the selector: {both}"
+        );
+    }
+
+    #[test]
+    fn selectors_are_split_at_the_byte_budget_not_at_a_node_count() {
+        let per_batch = CANDIDATE_MAX_SELECTOR_BYTES / 37;
+        let ids: Vec<Uuid> = (0..per_batch as u128).map(Uuid::from_u128).collect();
+
+        // Exactly one batch's worth is one batch.
+        let one = candidate_selectors(&ids).expect("within the cap");
+        assert_eq!(one.len(), 1);
+        // 🚨 And it really fits: the whole query must stay under the server's limit, which
+        // VictoriaMetrics reports as `-search.maxQueryLen=16384` (measured 2026-08-20 — 500 nodes
+        // is refused with a 422). This is the assertion that would catch someone raising
+        // CANDIDATE_MAX_SELECTOR_BYTES past what the server accepts.
+        // The widest dimension, because the budget has to hold for the expression that repeats
+        // the selector most — not for the one the watch loop happens to use today.
+        let q = interface_candidates_query(InterfaceTopMetric::Throughput, 0.0, &one[0]);
+        assert!(
+            q.len() < VM_MAX_QUERY_LEN,
+            "query is {} bytes, over the server's {VM_MAX_QUERY_LEN}",
+            q.len()
+        );
+
+        // One more node is one more batch.
+        let mut plus = ids.clone();
+        plus.push(Uuid::from_u128(u128::MAX));
+        assert_eq!(
+            candidate_selectors(&plus)
+                .expect("still within the cap")
+                .len(),
+            2
+        );
+
+        // Every id lands in exactly one batch — batches must partition, not overlap, or a port
+        // would be observed twice in one tick.
+        let joined: String = candidate_selectors(&plus).unwrap().join("");
+        for id in &plus {
+            assert_eq!(
+                joined.matches(&id.to_string()).count(),
+                1,
+                "{id} must appear in exactly one batch"
+            );
+        }
+    }
+
+    #[test]
+    fn no_expression_repeats_the_selector_more_than_the_budget_assumes() {
+        // `CANDIDATE_MAX_SELECTOR_BYTES` is divided by `MAX_SELECTOR_REPEATS`; if a dimension ever
+        // names three series, every batch silently grows past what the server accepts and the
+        // whole tick starts being refused. Checked over `ALL`, so a new variant has to face it.
+        let mut worst = 0;
+        for m in InterfaceTopMetric::ALL {
+            let n = interface_expr_scoped(m, "{SELECTOR}")
+                .matches("{SELECTOR}")
+                .count();
+            assert!(
+                n <= MAX_SELECTOR_REPEATS,
+                "{m:?} writes the selector {n} times, over MAX_SELECTOR_REPEATS"
+            );
+            worst = worst.max(n);
+        }
+        // And the constant is not stale-high: something really does write it twice, so halving the
+        // budget is buying real headroom rather than throwing it away.
+        assert_eq!(worst, MAX_SELECTOR_REPEATS);
+    }
+
+    #[test]
+    fn too_many_nodes_to_batch_asks_for_the_whole_fleet_instead() {
+        // The give-up case: past the batch cap the caller falls back to one fleet-wide query
+        // rather than issuing an unbounded number of them.
+        let per_batch = CANDIDATE_MAX_SELECTOR_BYTES / 37;
+        let too_many: Vec<Uuid> = (0..(per_batch * CANDIDATE_MAX_BATCHES + 1) as u128)
+            .map(Uuid::from_u128)
+            .collect();
+        assert!(candidate_selectors(&too_many).is_none());
+
+        // ...and one node under the cap still narrows. A test that only proves the refusal would
+        // pass just as well if `candidate_selectors` returned `None` for everything.
+        let just_under: Vec<Uuid> = (0..(per_batch * CANDIDATE_MAX_BATCHES) as u128)
+            .map(Uuid::from_u128)
+            .collect();
+        assert_eq!(
+            candidate_selectors(&just_under)
+                .expect("exactly at the cap must still narrow")
+                .len(),
+            CANDIDATE_MAX_BATCHES
+        );
     }
 }

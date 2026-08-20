@@ -170,7 +170,10 @@ pub struct AlertConfig {
     /// Thresholds bucketed by metric name so per-sample resolution scans only the rules for that
     /// one metric, not the fleet's entire threshold set (S19). Built once at construction; a poll
     /// with M samples then costs O(rules-for-those-M-metrics), not O(all thresholds) × M.
-    by_metric: HashMap<String, Vec<StoredThreshold>>,
+    ///
+    /// Since ADR-076 increment 6 each bucket is itself indexed — see [`MetricRules`], which is
+    /// what stops one metric's bucket being scanned in full for every port.
+    by_metric: HashMap<String, MetricRules>,
     node_meta: HashMap<NodeId, NodeMeta>,
     topology: Topology,
     /// Nodes currently inside an active maintenance window (resolved at refresh time).
@@ -200,14 +203,131 @@ pub struct AlertConfig {
     per_interface: BTreeSet<String>,
 }
 
+/// One metric's rules, split by how narrowly each can be addressed (ADR-076 increment 6).
+///
+/// Bucketing by metric alone still made [`AlertConfig::resolve`] scan **every rule on that metric**
+/// for **every** `(node, port)` it was asked about — a cost linear in a number the operator
+/// controls. One 48-port switch carries 96 port rules, so a hundred switches is 9,600, and
+/// measured 2026-08-20 that is **27 ns per (port × rule)**: a tick evaluating 100k candidate ports
+/// spent 26 seconds of its 60-second budget inside this one function, per direction. The same
+/// `resolve` also serves the ordinary poll path (one call per sample per port), where at fleet
+/// scale it is called far more often than the interface watch calls it.
+///
+/// 🚨 **The index does not decide whether a rule applies.** [`threshold_applies`] still runs over
+/// every candidate the buckets yield; they only shorten the list. Two answers to "does this rule
+/// apply" is precisely the drift `extensibility.md` §2 exists for, and
+/// `the_indexed_resolve_agrees_with_the_reference_implementation` is the test that pins the
+/// buckets to the predicate.
+#[derive(Debug, Clone, Default)]
+struct MetricRules {
+    /// Rules whose scope cannot be reduced to a lookup key: `Global`, `Profile`, `Group` and
+    /// `FolderGroup` — plus any `Node`/`Interface` rule whose `scope_id` is not spelled the way the
+    /// keys below are built, so that `threshold_applies` keeps the last word on those.
+    ///
+    /// Small by construction: an operator writes these by hand, one per fleet / profile / tag /
+    /// folder. This is the only bucket a resolve still scans linearly.
+    broad: Vec<Indexed>,
+    /// `ScopeLevel::Node` rules, keyed by the node they name.
+    by_node: HashMap<Uuid, Vec<Indexed>>,
+    /// `ScopeLevel::Interface` rules, keyed by the exact port they name.
+    by_port: HashMap<(Uuid, u32), Vec<Indexed>>,
+}
+
+/// A rule plus its position in the config's original order.
+///
+/// 🚨 The position is load-bearing, not bookkeeping. [`resolve_effective`] takes `direction` from
+/// the **first** rule at the winning level, and the `thresholds` table has no unique constraint
+/// over `(scope_level, scope_id, metric)` — so two rules with opposite directions can sit at the
+/// same level, and which one wins depends on which comes first. Bucketing reorders them; `seq`
+/// puts them back. (That the answer depends on order at all is a pre-existing sharp edge; the goal
+/// here is not to widen it.)
+#[derive(Debug, Clone)]
+struct Indexed {
+    seq: u32,
+    t: StoredThreshold,
+}
+
+impl MetricRules {
+    /// File one rule into the bucket that can find it again.
+    ///
+    /// The keys are built so a lookup gives **exactly** the answer [`threshold_applies`] would:
+    ///
+    /// * `Node` — keyed by the parsed UUID, but **only when it round-trips to the same string**.
+    ///   `threshold_applies` compares `t.scope_id == node.to_string()`, and `NodeId`'s `Display`
+    ///   delegates to `Uuid`'s, so the canonical hyphenated lowercase form is the only spelling
+    ///   that has ever matched. A braced, URN or upper-case id matches nothing today, so it goes to
+    ///   `broad` — where `threshold_applies` still says no — rather than being silently promoted
+    ///   into a rule that now fires.
+    /// * `Interface` — keyed by `parse_interface_scope_id`, which *is* the predicate
+    ///   `threshold_applies` uses. An id it cannot parse matches nothing either way.
+    fn insert(&mut self, seq: u32, t: StoredThreshold) {
+        let e = Indexed { seq, t };
+        match e.t.level {
+            ScopeLevel::Node => match Uuid::parse_str(&e.t.scope_id) {
+                Ok(id) if id.to_string() == e.t.scope_id => {
+                    self.by_node.entry(id).or_default().push(e);
+                }
+                _ => self.broad.push(e),
+            },
+            ScopeLevel::Interface => match yagra_common::parse_interface_scope_id(&e.t.scope_id) {
+                Some(key) => self.by_port.entry(key).or_default().push(e),
+                None => self.broad.push(e),
+            },
+            // Listed rather than caught by `_` so a seventh level has to decide which bucket it
+            // belongs in, instead of silently becoming a rule nothing can look up.
+            ScopeLevel::Global
+            | ScopeLevel::Profile
+            | ScopeLevel::Group
+            | ScopeLevel::FolderGroup => self.broad.push(e),
+        }
+    }
+
+    /// Every rule on this metric, in the config's original order — for callers that need the whole
+    /// set rather than one node's slice (query planning, not per-port resolution). Once per tick,
+    /// so the sort is not on any hot path.
+    fn all(&self) -> Vec<&StoredThreshold> {
+        let mut all: Vec<&Indexed> = self
+            .broad
+            .iter()
+            .chain(self.by_node.values().flatten())
+            .chain(self.by_port.values().flatten())
+            .collect();
+        all.sort_unstable_by_key(|e| e.seq);
+        all.into_iter().map(|e| &e.t).collect()
+    }
+
+    /// The rules that could possibly match this `(node, port)` — the whole point of the split.
+    /// Returned in the config's original order, for the reason on [`Indexed::seq`].
+    fn candidates(&self, node: NodeId, ifindex: Option<IfIndex>) -> Vec<&Indexed> {
+        let mut out: Vec<&Indexed> = self.broad.iter().collect();
+        if let Some(v) = self.by_node.get(&node.as_uuid()) {
+            out.extend(v);
+        }
+        // A sample with no port cannot match an interface rule — the same thing
+        // `threshold_applies` says, expressed as "do not even look".
+        if let Some(v) = ifindex.and_then(|i| self.by_port.get(&(node.as_uuid(), i.0))) {
+            out.extend(v);
+        }
+        out.sort_unstable_by_key(|e| e.seq);
+        out
+    }
+}
+
 impl AlertConfig {
     /// Build a config from the stored thresholds and node metadata (no dependency edges;
     /// add them with [`Self::with_topology`]).
     #[must_use]
     pub fn new(thresholds: Vec<StoredThreshold>, node_meta: HashMap<NodeId, NodeMeta>) -> Self {
-        let mut by_metric: HashMap<String, Vec<StoredThreshold>> = HashMap::new();
-        for t in thresholds {
-            by_metric.entry(t.rule.metric.clone()).or_default().push(t);
+        let mut by_metric: HashMap<String, MetricRules> = HashMap::new();
+        for (seq, t) in thresholds.into_iter().enumerate() {
+            // `seq` is the position in the caller's list, which is the order every resolve must
+            // see the rules in — see [`Indexed`]. Saturating is unreachable (it would need 4
+            // billion rules) and is spelled out rather than cast, so it cannot wrap silently.
+            let seq = u32::try_from(seq).unwrap_or(u32::MAX);
+            by_metric
+                .entry(t.rule.metric.clone())
+                .or_default()
+                .insert(seq, t);
         }
         Self {
             by_metric,
@@ -267,7 +387,7 @@ impl AlertConfig {
     /// ports something does.
     #[must_use]
     pub fn interface_rule_coverage(&self, metric: &str) -> RuleCoverage {
-        let Some(rules) = self.by_metric.get(metric) else {
+        let Some(rules) = self.by_metric.get(metric).map(MetricRules::all) else {
             // An empty node set, not `Default` — `RuleCoverage::default()` leaves `nodes` at
             // `None`, which means **the whole fleet**, the opposite of what "nobody wrote a rule
             // for this metric" should say. Harmless while every caller checks `lowest_bound`
@@ -341,10 +461,14 @@ impl AlertConfig {
         ifindex: Option<IfIndex>,
         metric: &str,
     ) -> Option<EffectiveThreshold> {
-        let candidates = self.by_metric.get(metric)?;
+        let rules = self.by_metric.get(metric)?;
         let meta = self.node_meta.get(&node);
-        let matched: Vec<&StoredThreshold> = candidates
-            .iter()
+        // `candidates` narrows by scope key; `threshold_applies` still decides. Keeping both means
+        // the predicate has exactly one definition and the index is only ever an optimisation.
+        let matched: Vec<&StoredThreshold> = rules
+            .candidates(node, ifindex)
+            .into_iter()
+            .map(|e| &e.t)
             .filter(|t| threshold_applies(t, node, ifindex, meta))
             .collect();
         // A folder-group rule can match the node's own group *and* any group above it, so several
@@ -1298,8 +1422,12 @@ impl AlertManager {
     /// runs. A copy would be a second place alert quality is decided, and the copy is the one that
     /// gets a fix late.
     ///
-    /// Returns no action when no rule resolves for this port — the metric is computed for every
-    /// candidate, and computing it is much cheaper than asking whether it is wanted.
+    /// `None` means **no rule is in force on this port for this metric** — distinct from
+    /// `Some(vec![])`, which means a rule looked and nothing changed. The metric is computed for
+    /// every candidate the store returns, because computing it is far cheaper than asking whether
+    /// it is wanted; the distinction is what lets the caller stop *remembering* the ports nobody
+    /// wrote a rule for (ADR-076 increment 6d). Before it, `TrackedChecks` grew to every busy port
+    /// in the fleet — and, since that set has no other way to shrink, stayed there.
     ///
     /// # What the caller must decide before calling
     ///
@@ -1318,7 +1446,7 @@ impl AlertManager {
         metric: &'static str,
         value: f64,
         at_unix_ms: i64,
-    ) -> Vec<NotifyAction> {
+    ) -> Option<Vec<NotifyAction>> {
         let (eff, in_maintenance) = {
             let config = self.config.read().expect("config rwlock poisoned");
             (
@@ -1326,15 +1454,15 @@ impl AlertManager {
                 config.maintenance.contains(&node),
             )
         };
-        let Some(eff) = eff else {
-            return Vec::new();
-        };
+        // `None`, not an empty vector: the caller distinguishes "nobody is watching this port"
+        // from "somebody is watching and nothing happened".
+        let eff = eff?;
         let raw = if in_maintenance {
             NodeState::Maintenance
         } else {
             eff.evaluate(value)
         };
-        self.process_check(
+        Some(self.process_check(
             node,
             raw,
             at_unix_ms,
@@ -1352,7 +1480,7 @@ impl AlertManager {
                 }),
                 ifindex: Some(ifindex),
             },
-        )
+        ))
     }
 
     /// What the interface-threshold rules in force for `metric` cover — the evaluator plans its
@@ -4631,6 +4759,452 @@ mod tests {
                 !n.summary.contains("node "),
                 "a pool must not be described as a node: {:?}",
                 n.summary
+            );
+        }
+    }
+    // ── ADR-076 increment 6b: the rule index ────────────────────────────────────────────────
+
+    /// The **reference implementation**: `AlertConfig::resolve`'s body exactly as it stood before
+    /// the rules were indexed, working from the flat per-metric list in its original order.
+    ///
+    /// 🚨 **Do not "improve" this.** Its whole value is being the slow, obvious version — the one
+    /// that scans every rule and asks `threshold_applies` about each. If it is ever optimised to
+    /// resemble the indexed implementation, the differential test below stops comparing two
+    /// things and starts comparing one thing to itself.
+    fn resolve_reference(
+        candidates: &[StoredThreshold],
+        node: NodeId,
+        ifindex: Option<IfIndex>,
+        meta: Option<&NodeMeta>,
+    ) -> Option<EffectiveThreshold> {
+        let matched: Vec<&StoredThreshold> = candidates
+            .iter()
+            .filter(|t| threshold_applies(t, node, ifindex, meta))
+            .collect();
+        let nearest = nearest_folder_depth(&matched, meta);
+        let scoped: Vec<ScopedThreshold> = matched
+            .into_iter()
+            .filter(|t| t.level != ScopeLevel::FolderGroup || folder_depth(t, meta) == nearest)
+            .map(|t| ScopedThreshold::new(t.level, t.rule.clone()))
+            .collect();
+        resolve_effective(&scoped)
+    }
+
+    fn rule_at(level: ScopeLevel, scope_id: &str, dir: Direction, crit: f64) -> StoredThreshold {
+        StoredThreshold {
+            id: Uuid::new_v4(),
+            level,
+            scope_id: scope_id.to_string(),
+            rule: yagra_common::ThresholdRule {
+                metric: "cpu_util".to_string(),
+                direction: dir,
+                warning: None,
+                critical: Some(crit),
+                dwell_samples: 3,
+            },
+        }
+    }
+
+    #[test]
+    fn the_indexed_resolve_agrees_with_the_reference_implementation() {
+        // The corpus is hand-built rather than random so each row names the case it covers, and a
+        // failure says which one broke. Every row is a rule on the SAME metric, because that is
+        // the bucket the index splits.
+        let node = NodeId::from(Uuid::new_v4());
+        let other = NodeId::from(Uuid::new_v4());
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+
+        let rules = vec![
+            rule_at(ScopeLevel::Global, "", Direction::Above, 90.0),
+            rule_at(ScopeLevel::Profile, "switch", Direction::Above, 85.0),
+            rule_at(ScopeLevel::Group, "prod", Direction::Above, 80.0),
+            // Two folder-group rules at different depths — only the nearest may survive.
+            rule_at(
+                ScopeLevel::FolderGroup,
+                &parent.to_string(),
+                Direction::Above,
+                75.0,
+            ),
+            rule_at(
+                ScopeLevel::FolderGroup,
+                &child.to_string(),
+                Direction::Above,
+                70.0,
+            ),
+            // This node, and another one that must never be picked up.
+            rule_at(ScopeLevel::Node, &node.to_string(), Direction::Above, 65.0),
+            rule_at(ScopeLevel::Node, &other.to_string(), Direction::Above, 10.0),
+            // 🚨 Two rules at the SAME level with OPPOSITE directions. `resolve_effective` takes
+            // `direction` from the first, so this is the row that fails if `seq` is dropped.
+            rule_at(ScopeLevel::Node, &node.to_string(), Direction::Below, 5.0),
+            // A node scope_id that is a real UUID but not the canonical spelling — matched nothing
+            // before the index and must still match nothing.
+            rule_at(
+                ScopeLevel::Node,
+                &format!("{{{}}}", node.as_uuid()),
+                Direction::Above,
+                1.0,
+            ),
+            rule_at(
+                ScopeLevel::Node,
+                &node.to_string().to_uppercase(),
+                Direction::Above,
+                2.0,
+            ),
+            // Ports: this node's port 7, this node's port 8, another node's port 7.
+            rule_at(
+                ScopeLevel::Interface,
+                &format!("{}:7", node.as_uuid()),
+                Direction::Above,
+                60.0,
+            ),
+            rule_at(
+                ScopeLevel::Interface,
+                &format!("{}:8", node.as_uuid()),
+                Direction::Above,
+                55.0,
+            ),
+            rule_at(
+                ScopeLevel::Interface,
+                &format!("{}:7", other.as_uuid()),
+                Direction::Above,
+                3.0,
+            ),
+            // Unparseable port scope ids — `+7` is the one `parse_interface_scope_id` refuses.
+            rule_at(
+                ScopeLevel::Interface,
+                &format!("{}:+7", node.as_uuid()),
+                Direction::Above,
+                4.0,
+            ),
+            rule_at(
+                ScopeLevel::Interface,
+                "not-a-scope-id",
+                Direction::Above,
+                6.0,
+            ),
+        ];
+
+        let deep = NodeMeta {
+            profile: Some("switch".to_string()),
+            tag_groups: ["prod".to_string()].into_iter().collect(),
+            folder_group: Some(child),
+            folder_chain: vec![child, parent],
+        };
+        let shallow = NodeMeta {
+            profile: Some("router".to_string()),
+            folder_chain: vec![parent],
+            ..NodeMeta::default()
+        };
+
+        // Every combination of "which rules are loaded" × "who is asking" × "about which port".
+        let subsets: Vec<Vec<StoredThreshold>> = vec![
+            Vec::new(),
+            rules.clone(),
+            rules.iter().skip(1).cloned().collect(),
+            rules
+                .iter()
+                .filter(|t| t.level == ScopeLevel::Interface)
+                .cloned()
+                .collect(),
+            rules
+                .iter()
+                .filter(|t| t.level == ScopeLevel::Node)
+                .cloned()
+                .collect(),
+            rules.iter().rev().cloned().collect(),
+        ];
+        let metas: Vec<(&str, Option<NodeMeta>)> = vec![
+            ("deep", Some(deep)),
+            ("shallow", Some(shallow)),
+            ("bare", Some(NodeMeta::default())),
+            // A node the config has never heard of — `node_meta.get` returns None.
+            ("absent", None),
+        ];
+        let ports = [None, Some(IfIndex(7)), Some(IfIndex(8)), Some(IfIndex(9))];
+
+        let mut compared = 0usize;
+        let mut answered = 0usize;
+        for subset in &subsets {
+            for (meta_name, meta) in &metas {
+                let mut node_meta = HashMap::new();
+                if let Some(m) = meta {
+                    node_meta.insert(node, m.clone());
+                }
+                let config = AlertConfig::new(subset.clone(), node_meta);
+                for who in [node, other] {
+                    for port in ports {
+                        let want = resolve_reference(subset, who, port, config.node_meta.get(&who));
+                        let got = config.resolve(who, port, "cpu_util");
+                        assert_eq!(
+                            got,
+                            want,
+                            "indexed resolve disagreed: subset of {} rules, meta={meta_name}, \
+                             port={port:?}, node={}",
+                            subset.len(),
+                            if who == node {
+                                "the one with rules"
+                            } else {
+                                "the other"
+                            }
+                        );
+                        compared += 1;
+                        if got.is_some() {
+                            answered += 1;
+                        }
+                    }
+                }
+            }
+        }
+        // 🚨 The counts are the load-bearing half. A differential test where BOTH sides return
+        // `None` everywhere agrees perfectly and proves nothing — the same trap as a suite made
+        // only of rejection cases.
+        assert!(
+            compared > 150,
+            "only {compared} comparisons — the corpus shrank"
+        );
+        assert!(
+            answered > 40,
+            "only {answered} of {compared} comparisons resolved to a rule; a corpus that never \
+             matches would agree no matter what the index did"
+        );
+    }
+
+    #[test]
+    fn the_index_files_each_rule_where_a_lookup_can_find_it() {
+        let node = NodeId::from(Uuid::new_v4());
+        let group = Uuid::new_v4();
+        let config = AlertConfig::new(
+            vec![
+                rule_at(ScopeLevel::Global, "", Direction::Above, 1.0),
+                rule_at(ScopeLevel::Profile, "switch", Direction::Above, 2.0),
+                rule_at(ScopeLevel::Group, "prod", Direction::Above, 3.0),
+                rule_at(
+                    ScopeLevel::FolderGroup,
+                    &group.to_string(),
+                    Direction::Above,
+                    4.0,
+                ),
+                rule_at(ScopeLevel::Node, &node.to_string(), Direction::Above, 5.0),
+                rule_at(
+                    ScopeLevel::Interface,
+                    &format!("{}:7", node.as_uuid()),
+                    Direction::Above,
+                    6.0,
+                ),
+            ],
+            HashMap::new(),
+        );
+        let m = config.by_metric.get("cpu_util").expect("the metric bucket");
+        // The four levels that cannot be reduced to a key are the only ones scanned linearly.
+        assert_eq!(
+            m.broad.len(),
+            4,
+            "broad should hold exactly global/profile/group/folder"
+        );
+        assert_eq!(m.by_node.len(), 1);
+        assert!(m.by_node.contains_key(&node.as_uuid()));
+        assert_eq!(m.by_port.len(), 1);
+        assert!(m.by_port.contains_key(&(node.as_uuid(), 7)));
+        // `all()` must still see everything, in the original order.
+        assert_eq!(m.all().len(), 6);
+        let bounds: Vec<Option<f64>> = m.all().iter().map(|t| t.rule.critical).collect();
+        assert_eq!(
+            bounds,
+            vec![
+                Some(1.0),
+                Some(2.0),
+                Some(3.0),
+                Some(4.0),
+                Some(5.0),
+                Some(6.0)
+            ],
+            "all() must return the config's original order, not the bucket order"
+        );
+    }
+
+    #[test]
+    fn a_scope_id_the_keys_cannot_be_built_from_stays_in_the_broad_bucket() {
+        // The equivalence the index rests on: a rule the lookup key cannot represent must fall
+        // back to `threshold_applies`, not be dropped and not be promoted. Both of these matched
+        // nothing before ADR-076 increment 6, and must still match nothing.
+        let node = NodeId::from(Uuid::new_v4());
+        let config = AlertConfig::new(
+            vec![
+                rule_at(
+                    ScopeLevel::Node,
+                    &format!("{{{}}}", node.as_uuid()),
+                    Direction::Above,
+                    1.0,
+                ),
+                rule_at(
+                    ScopeLevel::Interface,
+                    &format!("{}:+7", node.as_uuid()),
+                    Direction::Above,
+                    2.0,
+                ),
+            ],
+            HashMap::new(),
+        );
+        let m = config.by_metric.get("cpu_util").expect("the metric bucket");
+        assert_eq!(m.broad.len(), 2, "neither id can key a bucket");
+        assert!(m.by_node.is_empty());
+        assert!(m.by_port.is_empty());
+        // And they still resolve to nothing, which is what they did before.
+        assert!(config.resolve(node, None, "cpu_util").is_none());
+        assert!(config.resolve(node, Some(IfIndex(7)), "cpu_util").is_none());
+    }
+
+    #[test]
+    fn an_indexed_port_rule_still_fires() {
+        // 🚨 The acceptance case. Every other test here checks that something does NOT match, and
+        // a suite of only-rejections passes just as happily when the index drops everything.
+        let node = NodeId::from(Uuid::new_v4());
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::new_v4(),
+                level: ScopeLevel::Interface,
+                scope_id: format!("{}:7", node.as_uuid()),
+                rule: yagra_common::ThresholdRule {
+                    metric: "if_in_util_pct".to_string(),
+                    direction: Direction::Above,
+                    warning: None,
+                    critical: Some(90.0),
+                    dwell_samples: 1,
+                },
+            }],
+            HashMap::new(),
+        ));
+        // The port that has the rule breaches it.
+        let actions = mgr
+            .observe_interface_metric(node, IfIndex(7), "if_in_util_pct", 95.0, 1_000)
+            .expect("a rule is in force on this port");
+        assert!(
+            actions.iter().any(
+                |a| matches!(a, NotifyAction::Fire(alert) if alert.severity == Severity::Critical)
+            ),
+            "an indexed interface rule must still raise: {actions:?}"
+        );
+        // The port next door has no rule and must resolve to nothing at all.
+        assert!(
+            mgr.observe_interface_metric(node, IfIndex(8), "if_in_util_pct", 99.0, 1_000)
+                .is_none(),
+            "port 8 has no rule, so nothing should be observed for it"
+        );
+    }
+    /// **A benchmark, not a guard** — `#[ignore]`d because a timing assertion on a shared CI box is
+    /// a flaky test, and a flaky test gets deleted. Run it by hand when this path changes:
+    ///
+    /// ```text
+    /// cargo test --profile ci-fast -p yagra-core --bin yagra-core \
+    ///     one_interface_watch_tick_scales_with_rules -- --ignored --nocapture
+    /// ```
+    ///
+    /// What it measures: one direction of one `run_interface_utilization_watch` tick, i.e. one
+    /// `observe_interface_metric` per candidate port, against a config holding N rules on that
+    /// metric. Correctness is the differential test's job; this only says how much it costs.
+    ///
+    /// **Baseline — before the rule index (2026-08-20, Ryzen 9 8945HS, `ci-fast`, 24,000 ports):**
+    ///
+    /// | rules | per port | total |
+    /// |---|---|---|
+    /// | 1 | 653 ns | 15.7 ms |
+    /// | 101 | 3.3 µs | 79.3 ms |
+    /// | 1,001 | 28.0 µs | 671.7 ms |
+    /// | 10,001 | 271.2 µs | 6.5 s |
+    ///
+    /// Perfectly linear in rules × ports — ~27 ns per (port × rule). A hundred 48-port switches is
+    /// 9,600 port rules, so the 10,001 row is not a hypothetical.
+    ///
+    /// **After the rule index — same machine, same harness, same day:**
+    ///
+    /// | rules | per port | total |
+    /// |---|---|---|
+    /// | 1 | 665 ns | 16.0 ms |
+    /// | 101 | 726 ns | 17.4 ms |
+    /// | 1,001 | 693 ns | 16.6 ms |
+    /// | 10,001 | 693 ns | **16.6 ms** |
+    ///
+    /// Flat in the rule count, and 391× faster at the 10,001 row. What is left is the ~665 ns/port
+    /// floor, which is `process_check`'s own bookkeeping (two mutexes and the dwell window) — not
+    /// rule resolution. Anyone attacking this path next should attack that, not the lookup.
+    #[test]
+    #[ignore = "benchmark: run by hand with --ignored --nocapture"]
+    fn one_interface_watch_tick_scales_with_rules() {
+        const NODES: usize = 500;
+        const PORTS: usize = 48;
+
+        println!("\n=== one direction of one watch tick, every port resolving ===");
+        for n_rules in [0usize, 100, 1_000, 10_000] {
+            let nodes: Vec<NodeId> = (0..NODES).map(|_| NodeId::from(Uuid::new_v4())).collect();
+            let meta: HashMap<NodeId, NodeMeta> =
+                nodes.iter().map(|n| (*n, NodeMeta::default())).collect();
+
+            // One global rule so every port resolves to *something* — the expensive path. An early
+            // `None` would flatter the numbers by skipping the work being measured.
+            let mut rules = vec![StoredThreshold {
+                id: Uuid::new_v4(),
+                level: ScopeLevel::Global,
+                scope_id: String::new(),
+                rule: yagra_common::ThresholdRule {
+                    metric: "if_in_util_pct".to_string(),
+                    direction: Direction::Above,
+                    warning: Some(70.0),
+                    critical: Some(90.0),
+                    dwell_samples: 3,
+                },
+            }];
+            for i in 0..n_rules {
+                rules.push(StoredThreshold {
+                    id: Uuid::new_v4(),
+                    level: ScopeLevel::Interface,
+                    scope_id: format!("{}:{}", nodes[i % nodes.len()].as_uuid(), (i % PORTS) + 1),
+                    rule: yagra_common::ThresholdRule {
+                        metric: "if_in_util_pct".to_string(),
+                        direction: Direction::Above,
+                        warning: Some(70.0),
+                        critical: Some(90.0),
+                        dwell_samples: 3,
+                    },
+                });
+            }
+
+            let mgr = AlertManager::new();
+            mgr.set_config(AlertConfig::new(rules, meta));
+
+            let t0 = std::time::Instant::now();
+            let mut observed = 0usize;
+            for node in &nodes {
+                for p in 1..=PORTS {
+                    if mgr
+                        .observe_interface_metric(
+                            *node,
+                            IfIndex(p as u32),
+                            "if_in_util_pct",
+                            42.0,
+                            0,
+                        )
+                        .is_some()
+                    {
+                        observed += 1;
+                    }
+                }
+            }
+            let el = t0.elapsed();
+            let ports = NODES * PORTS;
+            println!(
+                "rules={:<7} ports={:<8} elapsed={:>9.1?}  per_port={:>8.1?}  observed={observed}",
+                n_rules + 1,
+                ports,
+                el,
+                el / u32::try_from(ports).unwrap_or(1),
+            );
+            // Not a timing assertion — just proof the loop did the work rather than short-circuiting.
+            assert_eq!(
+                observed, ports,
+                "every port must resolve, or the number means nothing"
             );
         }
     }

@@ -210,8 +210,22 @@ pub struct TrackedChecks {
 
 impl TrackedChecks {
     /// Note that a check was fed this tick.
+    ///
+    /// ⚠️ Call this **after** the observation, not before: the caller only knows a rule was in
+    /// force from `observe_interface_metric` returning `Some` (ADR-076 increment 6d). Marking
+    /// first tracked every port above the floor fleet-wide, including nodes nobody had written a
+    /// rule for.
     pub fn mark(&mut self, key: CheckKey) {
         self.seen.insert(key);
+    }
+
+    /// Stop tracking a check — the rule it belonged to is gone.
+    ///
+    /// 🚨 This is the **only** way the set shrinks. Without it `seen` is a high-water mark rather
+    /// than a live set: every key ever marked stays forever, and the recovery sweep walks all of
+    /// them on every tick for the life of the process.
+    pub fn forget(&mut self, key: &CheckKey) {
+        self.seen.remove(key);
     }
 
     /// The tracked checks for `metric` that are **not** in `present` — the ports that were busy
@@ -522,5 +536,32 @@ mod tests {
         // receive-side alert, which is the whole point of two metrics.
         let none: BTreeSet<(NodeId, IfIndex)> = BTreeSet::new();
         assert_eq!(tracked.absent(METRIC_IF_OUT_UTIL_PCT, &none).len(), 1);
+    }
+    #[test]
+    fn a_forgotten_check_leaves_the_tracked_set() {
+        // 🚨 Before increment 6d there was no `forget` at all, so `seen` was a high-water mark:
+        // every port ever above the floor stayed in it, and the recovery sweep asked about all of
+        // them on every tick for the life of the process. The sweep now drops a key whose rule has
+        // gone. This test is the only thing that says the set can shrink.
+        let node = NodeId::from(Uuid::new_v4());
+        let key = (node, IfIndex(7), METRIC_IF_IN_UTIL_PCT);
+        let none: BTreeSet<(NodeId, IfIndex)> = BTreeSet::new();
+
+        let mut tracked = TrackedChecks::default();
+        tracked.mark(key);
+        // Marked and not present ⇒ the sweep would ask about it.
+        assert_eq!(tracked.absent(METRIC_IF_IN_UTIL_PCT, &none), vec![key]);
+        assert_eq!(tracked.count_for(METRIC_IF_IN_UTIL_PCT), 1);
+
+        tracked.forget(&key);
+        assert!(tracked.absent(METRIC_IF_IN_UTIL_PCT, &none).is_empty());
+        assert_eq!(tracked.count_for(METRIC_IF_IN_UTIL_PCT), 0);
+
+        // And forgetting is per key, not per metric or per node: a sibling port must survive.
+        let sibling = (node, IfIndex(8), METRIC_IF_IN_UTIL_PCT);
+        tracked.mark(key);
+        tracked.mark(sibling);
+        tracked.forget(&key);
+        assert_eq!(tracked.absent(METRIC_IF_IN_UTIL_PCT, &none), vec![sibling]);
     }
 }

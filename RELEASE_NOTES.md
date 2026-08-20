@@ -151,6 +151,19 @@
 
 ### Improvements
 
+- **Interface threshold alerting no longer slows down as the fleet or the ruleset grows.** Three
+  measured problems, all invisible in a small deployment and all of the kind that stops alerting
+  rather than merely slowing it — when the evaluator's query overruns its 60-second tick, that
+  minute is discarded and nothing fires. (1) Resolving a rule for one port scanned *every* rule on
+  that metric, so cost grew with rules × ports: a hundred 48-port switches is 9,600 port rules, and
+  one tick over 24,000 ports took 6.5 s before and 16.6 ms after. The same path serves ordinary
+  polling, so every node's samples resolve faster too. (2) The query that finds busy ports named no
+  nodes, so a rule on a single port still scanned every port in the fleet; it now names the nodes
+  the rules cover, in batches, falling back to a fleet-wide query only when there are too many to
+  name. (3) The speed lookup behind percentage rules read the whole `interfaces` table twice a
+  minute; a new index makes it a single-row read. No configuration changes, and no rule behaves
+  differently.
+
 - **Alerts ▸ Metric alert rules no longer shows port rules by default.** A port rule is per (node ×
   port × metric), so one 48-port switch contributes 96 rows for the two traffic directions alone,
   against a list capped at 500 — enough to bury every other rule and then push the cap. The screen

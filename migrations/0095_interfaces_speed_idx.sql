@@ -1,0 +1,35 @@
+-- 0095_interfaces_speed_idx — the interface-threshold evaluator's speed floor reads `min(if_speed)`.
+--
+-- reversible: index work only. Nothing is narrowed, no column an older binary selects is removed,
+-- and an N-1 core simply plans the same query without this index, exactly as it does today. No
+-- `schema_compat` floor is owed (0078): the oldest bootable core does not move.
+--
+-- Why. `run_interface_utilization_watch` asks `NodeRepo::slowest_interface_speed_bps` for the floor
+-- of its candidate query, once per direction per 60s tick. When any rule is scoped broadly enough
+-- that its nodes cannot be enumerated (global / profile / tag / folder), that call has no
+-- `node_id = ANY(...)` to lean on and reads the whole table. Measured 2026-08-20 on a 2.4M-row
+-- table (50k nodes x 48 ports) built to match this one: **parallel seq scan, 383 MB read,
+-- 743-1003 ms** — twice a minute, evicting the table through shared_buffers each time. With this
+-- index the same query is an **Index Only Scan of 4 buffers, 0.31 ms**. The node-scoped branch was
+-- already fine (21 ms via the primary key) and is unaffected.
+--
+-- Why partial, and why this exact predicate. The index is only useful if the planner can prove the
+-- query's WHERE implies the index's, so the two are kept byte-identical to
+-- `slowest_interface_speed_bps`. `u32::MAX` is the "too fast to express" marker of the 32-bit gauge
+-- rather than a rate (ADR-063 decision 7), and `0` means "did not answer" — excluding both from the
+-- index means the leading entry *is* the answer. Keeping it partial also keeps the rows that carry
+-- neither value out of the index entirely, which is most of the write traffic on a fleet whose
+-- agents do not implement the speed OIDs.
+--
+-- ⚠️ The write cost is not zero, and is smaller than it looks. `upsert_interfaces_batch` rewrites
+-- every polled port's row on every metadata walk, but `if_speed` almost never changes, so those
+-- updates stay HOT (heap-only) and touch no index at all. A non-HOT update — a full page — now
+-- maintains two indexes instead of one. Accepted: the read it removes runs unconditionally twice a
+-- minute, while this cost is paid only by page-splitting updates.
+--
+-- Not CONCURRENTLY: sqlx runs each migration inside a transaction and no migration in this tree uses
+-- `-- no-transaction`; 0082 records the same decision. The cost is a brief write lock proportional
+-- to table size — a few seconds at 2.4M rows, during an upgrade, while nothing is polling.
+
+CREATE INDEX interfaces_speed_idx ON interfaces (if_speed)
+    WHERE if_speed > 0 AND if_speed <> 4294967295;

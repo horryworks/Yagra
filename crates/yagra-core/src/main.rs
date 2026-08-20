@@ -2533,7 +2533,11 @@ async fn run_interface_utilization_watch(
                 continue;
             };
 
-            let Some(candidates) = store.interface_candidates(dimension, floor).await else {
+            // `scoped` is the union of both families' node sets — computed above for the speed
+            // floor and, until increment 6c, thrown away afterwards. `None` here means the same
+            // thing it means there: a rule is scoped too broadly to enumerate, so ask the fleet.
+            let scope: Option<&[Uuid]> = nodes.is_some().then_some(scoped.as_slice());
+            let Some(candidates) = store.interface_candidates(dimension, floor, scope).await else {
                 // The store could not answer. Skip the whole tick rather than treating it as
                 // "nothing is busy": the recovery sweep below would otherwise resolve every open
                 // interface alert and send a recovery to PagerDuty for each, then re-fire them all
@@ -2586,17 +2590,26 @@ async fn run_interface_utilization_watch(
                 if !alerts.node_is_ok(r.node) {
                     continue;
                 }
+                // ⚠️ The mark comes *after* the observation, and that ordering is the point
+                // (ADR-076 increment 6d). Marking first tracked every port above the floor —
+                // fleet-wide, including nodes nobody wrote a rule for — and since `TrackedChecks`
+                // never shrank, the recovery sweep then walked that set on every subsequent tick
+                // forever. `None` means no rule resolved: nothing to remember, nothing to recover.
                 if let (true, Some(pct)) = (pct_can_fire, r.pct) {
-                    tracked.mark((r.node, r.ifindex, pair.pct));
-                    actions.extend(
-                        alerts.observe_interface_metric(r.node, r.ifindex, pair.pct, pct, now_ms),
-                    );
+                    if let Some(a) =
+                        alerts.observe_interface_metric(r.node, r.ifindex, pair.pct, pct, now_ms)
+                    {
+                        tracked.mark((r.node, r.ifindex, pair.pct));
+                        actions.extend(a);
+                    }
                 }
                 if bps_can_fire {
-                    tracked.mark((r.node, r.ifindex, pair.bps));
-                    actions.extend(
-                        alerts.observe_interface_metric(r.node, r.ifindex, pair.bps, r.bps, now_ms),
-                    );
+                    if let Some(a) =
+                        alerts.observe_interface_metric(r.node, r.ifindex, pair.bps, r.bps, now_ms)
+                    {
+                        tracked.mark((r.node, r.ifindex, pair.bps));
+                        actions.extend(a);
+                    }
                 }
             }
 
@@ -2623,7 +2636,14 @@ async fn run_interface_utilization_watch(
                     if !alerts.node_is_ok(node) {
                         continue;
                     }
-                    actions.extend(alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms));
+                    match alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms) {
+                        Some(a) => actions.extend(a),
+                        // The rule was deleted between the mark and now. Drop the key instead of
+                        // asking about it every tick for the life of the process — any alert it
+                        // left open is resolved by the config refresh, not by claiming the traffic
+                        // fell to zero.
+                        None => tracked.forget(&key),
+                    }
                 }
             }
 
@@ -4753,6 +4773,7 @@ mod tests {
             &self,
             _m: store::InterfaceTopMetric,
             _floor_bps: f64,
+            _nodes: Option<&[Uuid]>,
         ) -> Option<Vec<(Uuid, i32, f64)>> {
             // Answers, with nothing — the read paths are not what this fake exercises.
             Some(Vec::new())
