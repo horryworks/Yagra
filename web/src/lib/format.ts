@@ -351,6 +351,25 @@ export const KNOWN_SCALARS = new Set<string>([
   'meraki_uplink_status',
 ]);
 
+/** How a scalar metric is named: a localized label when Yagra knows it, else its raw metric name
+ *  (which renders mono, being OID-ish). Split out of [`scalarDisplay`] because the Overview's
+ *  metric cards need the name without having a value to render yet. */
+export function scalarLabel(metric: string): { label: string; known: boolean } {
+  const known = KNOWN_SCALARS.has(metric);
+  return { label: known ? i18n.t(`format:scalar.${metric}`) : metric, known };
+}
+
+/** The formatter for a scalar whose **stored number is not the number to show**, or `undefined`
+ *  when the raw value is the value.
+ *
+ *  One entry today: SNMP TimeTicks are hundredths of a second, so `337326072` is `1mo 9d 02:09`.
+ *  Exported rather than inlined into [`scalarDisplay`] because the Overview's metric card needs the
+ *  same rule for its headline and its hover readout — and a second copy of "which metrics need
+ *  converting" is exactly the mirror that rots. */
+export function scalarValueFormat(metric: string): ((v: number) => string) | undefined {
+  return metric === 'snmp_sys_uptime_ticks' ? formatUptimeTicks : undefined;
+}
+
 /** A known scalar gets a localized label + formatted value (and renders in the UI font, not mono);
  *  an unknown one keeps its raw OID-ish metric name + numeric value (mono). */
 export function scalarDisplay(metric: string, value: number): {
@@ -358,10 +377,9 @@ export function scalarDisplay(metric: string, value: number): {
   value: string;
   known: boolean;
 } {
-  const known = KNOWN_SCALARS.has(metric);
-  const label = known ? i18n.t(`format:scalar.${metric}`) : metric;
-  const display = metric === 'snmp_sys_uptime_ticks' ? formatUptimeTicks(value) : String(value);
-  return { label, value: display, known };
+  const { label, known } = scalarLabel(metric);
+  const fmt = scalarValueFormat(metric);
+  return { label, value: fmt ? fmt(value) : String(value), known };
 }
 
 /** Whole-number count with locale thousands separators (e.g. 12840 → "12,840"), or `—` for a

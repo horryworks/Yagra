@@ -8,9 +8,12 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  claimedMetrics,
   hasAnyHealth,
+  lastValue,
   MEM_SPECS,
   METRIC_CARDS,
+  overviewScalarCards,
   resolveCard,
   resolveHealth,
   resolveMem,
@@ -30,6 +33,8 @@ const entry = (metric: string, over: Partial<NodeMetricEntry> = {}): NodeMetricE
 const table = (metric: string): NodeMetricEntry => entry(metric, { dimension: 'entity' });
 /** A node-level source. */
 const scalar = (metric: string): NodeMetricEntry => entry(metric);
+/** A node-level counter — the shape that made `SETUP RATE` print an odometer as a rate. */
+const counter = (metric: string): NodeMetricEntry => entry(metric, { metric_kind: 'counter' });
 
 describe('METRIC_CARDS registry', () => {
   it('has a unique id and at least one candidate per card', () => {
@@ -76,11 +81,42 @@ describe('resolveCard', () => {
   it('aggregates node-wide for per-entity sources and not for node-level ones', () => {
     // A per-entity metric has one series per row (per-CPU, per-VDOM, per-context); without `max`
     // the read would return an arbitrary row. A node-level metric is already one series.
-    expect(resolveCard([table('a')], ['a'])).toEqual({ metric: 'a', agg: 'max' });
-    expect(resolveCard([scalar('a')], ['a'])).toEqual({ metric: 'a', agg: undefined });
-    // Interface-dimensioned sources aggregate too — none is a card candidate today, but the rule
-    // has to be "node-level or not", not "entity or not", or a future one silently reads one port.
-    expect(resolveCard([entry('a', { dimension: 'interface' })], ['a'])?.agg).toBe('max');
+    expect(resolveCard([table('a')], ['a'])).toEqual({
+      metric: 'a',
+      read: { kind: 'aggregate' },
+      chart: { kind: 'aggregate' },
+    });
+    expect(resolveCard([scalar('a')], ['a'])).toEqual({
+      metric: 'a',
+      read: { kind: 'latest' },
+      chart: { kind: 'range' },
+    });
+  });
+
+  it('charts a counter as a rate and refuses to read its stored value', () => {
+    // The regression this file exists for since ADR-046 Inc.6. `resolveCard` used to derive its
+    // whole plan from `dimension`, so a counter candidate resolved to a plain range over the
+    // stored odometer — which the `setupRate` card then labelled "/s". On the real firewall that
+    // printed 18,190,268/s for a device opening a few sessions a second, as a straight rising
+    // line that looks exactly like a working chart. `read: none` is the other half: there is no
+    // current value to fetch, so the headline has to come from the rate series.
+    expect(resolveCard([counter('a')], ['a'])).toEqual({
+      metric: 'a',
+      read: { kind: 'none' },
+      chart: { kind: 'rate' },
+    });
+  });
+
+  it('skips a candidate it cannot draw and lets the next one win', () => {
+    // Two cells of `metricView` have no query behind them. A per-entity counter would have to be
+    // differentiated per row and then collapsed, and a folded multi-index table's rows cannot be
+    // named; a per-interface metric belongs to the Interfaces tab, which shows every row by name.
+    // Returning either would produce a headline over a permanently empty chart.
+    expect(resolveCard([entry('a', { metric_kind: 'counter', dimension: 'entity' })], ['a'])).toBeNull();
+    expect(resolveCard([entry('a', { dimension: 'interface' })], ['a'])).toBeNull();
+    expect(
+      resolveCard([entry('a', { dimension: 'interface' }), scalar('b')], ['a', 'b'])?.metric,
+    ).toBe('b');
   });
 
   it('resolves to null when the node has none of the candidates', () => {
@@ -141,8 +177,79 @@ describe('resolveHealth', () => {
     const vpn = METRIC_CARDS.find((c) => c.id === 'vpnTunnels')!;
     const health = resolveHealth([table(cpu.candidates[0]), scalar(vpn.candidates[0])]);
     expect(health.cards.cpu?.metric).toBe(cpu.candidates[0]);
-    expect(health.cards.vpnTunnels?.agg).toBeUndefined();
+    expect(health.cards.vpnTunnels?.read).toEqual({ kind: 'latest' });
     expect(health.cards.sessions).toBeNull();
     expect(health.mem).toBeNull();
+  });
+});
+
+describe('claimedMetrics', () => {
+  it('counts the memory pair, which no card names as its own metric', () => {
+    // MEMORY is derived from `*_total` + `*_free`; neither is a `cards[*].metric`, so counting the
+    // card map alone would leave both raw byte gauges free to reappear as their own cards directly
+    // under the card that is made of them.
+    const mem = MEM_SPECS[0];
+    const claimed = claimedMetrics(resolveHealth(mem.metrics.map(table)));
+    for (const m of mem.metrics) expect(claimed.has(m)).toBe(true);
+  });
+
+  it('names the candidate that actually resolved, not the whole candidate list', () => {
+    const cpu = METRIC_CARDS.find((c) => c.id === 'cpu')!;
+    const [first, second] = cpu.candidates;
+    const claimed = claimedMetrics(resolveHealth([table(second)]));
+    expect(claimed.has(second)).toBe(true);
+    expect(claimed.has(first)).toBe(false);
+  });
+});
+
+describe('overviewScalarCards', () => {
+  it('subtracts what Device health already draws', () => {
+    const cpu = METRIC_CARDS.find((c) => c.id === 'cpu')!;
+    const items = [table(cpu.candidates[0]), scalar('icmp_rtt_ms'), ...MEM_SPECS[0].metrics.map(table)];
+    const names = overviewScalarCards(items, resolveHealth(items)).map((c) => c.metric);
+    // The CPU gauge and both memory inputs are charted above; only the leftover is a card here.
+    expect(names).toEqual(['icmp_rtt_ms']);
+  });
+
+  it('carries each metric its own read and chart, so the card never picks', () => {
+    const items = [scalar('a'), table('b')];
+    expect(overviewScalarCards(items, resolveHealth(items))).toEqual([
+      { metric: 'a', read: { kind: 'latest' }, chart: { kind: 'range' } },
+      { metric: 'b', read: { kind: 'aggregate' }, chart: { kind: 'aggregate' } },
+    ]);
+  });
+
+  it('drops counters and per-interface metrics, as the Overview always has', () => {
+    // Not new in Inc.6 — `overviewScalars` has always refused these. Pinned here because this is
+    // now the predicate the section renders from, and widening it would put eight octet counters
+    // above the fold on every switch.
+    const items = [
+      counter('c'),
+      entry('i', { dimension: 'interface' }),
+      entry('silent', { status: 'no_data', series_count: 0 }),
+      scalar('keep'),
+    ];
+    expect(overviewScalarCards(items, resolveHealth(items)).map((c) => c.metric)).toEqual(['keep']);
+  });
+
+  it('subtracts nothing while Device health is still resolving', () => {
+    // The caller does not render in this state; if it did, drawing the unsubtracted set first would
+    // flash the duplicates for one frame.
+    const cpu = METRIC_CARDS.find((c) => c.id === 'cpu')!;
+    const items = [table(cpu.candidates[0])];
+    expect(overviewScalarCards(items, null).map((c) => c.metric)).toEqual([cpu.candidates[0]]);
+  });
+});
+
+describe('lastValue', () => {
+  it('takes the last real sample — a counter card has no other headline', () => {
+    expect(lastValue([1, 2, 3])).toBe(3);
+    expect(lastValue([])).toBeNull();
+    // VictoriaMetrics answers a gap-free array, but a rate over a window with no second sample
+    // can still produce NaN — which would render as "NaN/s" rather than as "no reading".
+    expect(lastValue([1, Number.NaN])).toBe(1);
+    expect(lastValue([Number.NaN])).toBeNull();
+    // Zero is a reading, not a missing one. A quiet firewall's setup rate is 0/s.
+    expect(lastValue([5, 0])).toBe(0);
   });
 });

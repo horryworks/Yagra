@@ -45,6 +45,16 @@
 
 ### New Features
 
+- **A node's System (SNMP) readings are charts now, not a list of numbers.** The strip at the
+  bottom of a node's Overview showed each node-level metric as a bare current value — a
+  temperature of 60 with no way to tell a device that has been at 60 all week from one that was
+  at 40 an hour ago. Each is now a card with its current value, a one-line explanation of what it
+  measures, and a trend over the window Device health's range picker already selects. The history
+  was always there; it was one tab away with nothing pointing at it. Metrics Device health is
+  already charting (CPU, memory, sessions) are left out rather than drawn twice, and the section
+  says so. Nothing changed about which metrics appear: counters and per-interface metrics are
+  still reached from the Collection and Interfaces tabs.
+
 - **Vendor alert rules are no longer labelled “every node”.** Twenty of the seeded defaults are
   about one vendor's CPU, memory or temperature register, and they now sit on that vendor's
   device profiles — `cisco_cpu_5min` on the five Cisco profiles that collect it, the Junos rules
@@ -244,6 +254,18 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **Device health's SETUP RATE showed a since-boot total captioned "/s".** On a Huawei USG it read
+  `18,190,268/s` and drew a straight rising line, which looks like a working chart rather than a
+  wrong one. The card resolved its metric from the metric's *dimension* alone and never asked
+  whether it was a counter, so `huawei_usg_session_total` — an odometer — was plotted raw instead
+  of being served through `rate()`. Every Device-health card now derives its query the same way
+  the Collection tab and the dashboard's metric widget do, and a counter's headline comes from its
+  rate series. A card whose only candidate cannot be charted at all is no longer offered.
+
+- **The System (SNMP) readings never refreshed.** They were fetched once when the tab opened and
+  then stayed frozen, however long the page was left open, while every section around them
+  updated on the usual 15-second tick.
 
 - **The default Huawei memory rule alerted continuously on a healthy firewall.** Its warning
   bound was 80% and the comparison is inclusive, so a device reporting exactly 80.0 — which the

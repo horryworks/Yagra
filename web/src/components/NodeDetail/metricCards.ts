@@ -10,10 +10,21 @@
 // So the set of cards is a list, the resolution is one function over that list, and the guards are
 // computed from its result. Adding a gauge is one entry here plus its two locale strings.
 //
+// Since ADR-046 Inc.6 it decides for the section *below* Device health too. The node's remaining
+// node-level metrics are drawn as the same card, and `overviewScalarCards` is what keeps the two
+// sections from showing the same measurement twice — subtracting what Device health already
+// claimed, including the two inputs of the derived memory card.
+//
 // This is a `.ts` file on purpose: Vitest runs `environment: 'node'` with
 // `include: ['src/**/*.test.ts']`, so logic left in the `.tsx` is logic nothing tests.
 
 import type { MemId } from '../../lib/format';
+import {
+  overviewScalars,
+  viewOf,
+  type MetricChartQuery,
+  type MetricRead,
+} from '../../lib/metricInventory';
 import type { NodeMetricEntry } from '../../types/api';
 
 /** How a card's values read, which decides both the headline format and the chart's Y axis. */
@@ -93,14 +104,28 @@ export const METRIC_CARDS = [
 
 export type MetricCardId = (typeof METRIC_CARDS)[number]['id'];
 
-/** A card resolved against a node's metric inventory: which metric to read, and how. */
+/**
+ * A card resolved against a node's metric inventory: which metric to read, and how to read it.
+ *
+ * `read` and `chart` come from [`metricView`] rather than from this module. They were an `agg?:
+ * 'max'` flag derived from `dimension` alone, which is how the `setupRate` card ended up drawing
+ * `huawei_usg_session_total` — a **counter** — as a raw range and printing its since-boot total
+ * (18,190,268) as a per-second rate. `dimension` decides whether the rows collapse; only
+ * `metric_kind` decides whether the stored value is a measurement or an odometer reading, and
+ * nothing here was asking (ADR-046 Inc.6 決定 L; the accident itself is ADR-012's).
+ */
 export interface ResolvedMetric {
   metric: string;
   /**
-   * `max` for per-entity sources, collapsing rows (per-CPU, per-VDOM, per-context) to one
-   * node-level value at query time; absent for node-level sources, which already are one series.
+   * How to read the current value. `none` for a counter — its stored value is an odometer, so the
+   * headline comes from the last point of the rate series instead.
    */
-  agg?: 'max';
+  read: MetricRead;
+  /**
+   * How to chart it. Never `none` or `interfaces`: [`resolveCard`] refuses a candidate it cannot
+   * draw rather than producing a card with an empty chart under it.
+   */
+  chart: MetricChartQuery;
 }
 
 /**
@@ -122,9 +147,16 @@ export function resolveCard(
     const it = items.find((i) => i.metric === metric);
     // `no_data` entries are configured but silent — offering a card for one draws an empty chart
     // under a headline dash, which reads as a broken widget rather than as a quiet device.
-    if (it && it.status !== 'no_data') {
-      return { metric, agg: it.dimension === 'none' ? undefined : 'max' };
-    }
+    if (!it || it.status === 'no_data') continue;
+    const { read, chart } = viewOf(it);
+    // A candidate this surface cannot draw is not a card, and the next candidate down is free to
+    // win. Two cells of the table land here: a per-entity counter has no query at all (it would
+    // have to be differentiated per row and then collapsed, and a folded multi-index table's rows
+    // cannot be named), and a per-interface one belongs to the Interfaces tab, which shows every
+    // row by name. Falling through rather than returning a drawable-looking card is the point —
+    // the alternative is a headline over a permanently empty chart.
+    if (chart.kind === 'none' || chart.kind === 'interfaces') continue;
+    return { metric, read, chart };
   }
   return null;
 }
@@ -192,4 +224,71 @@ export function resolveHealth(items: readonly NodeMetricEntry[]): ResolvedHealth
 /** Whether a node has anything at all to show in Device health. */
 export function hasAnyHealth(h: ResolvedHealth): boolean {
   return h.mem != null || METRIC_CARDS.some((s) => h.cards[s.id] != null);
+}
+
+/**
+ * Every metric [`resolveHealth`] has already claimed, so the generic section below can subtract it.
+ *
+ * ⚠️ **The memory inputs count.** `MEMORY` is derived from a pair (`*_total` + `*_free`) that
+ * never appears as a card's `metric`, so counting `cards` alone leaves both raw byte gauges free to
+ * reappear underneath the card that is made of them.
+ */
+export function claimedMetrics(h: ResolvedHealth): Set<string> {
+  const out = new Set<string>();
+  for (const spec of METRIC_CARDS) {
+    const r = h.cards[spec.id];
+    if (r) out.add(r.metric);
+  }
+  if (h.mem) for (const m of h.mem.metrics) out.add(m);
+  return out;
+}
+
+/** One card in the generic node-level section: which metric, and how it must be read and drawn. */
+export interface ScalarCard {
+  metric: string;
+  read: MetricRead;
+  chart: MetricChartQuery;
+}
+
+/**
+ * The node-level metrics the Overview draws as generic cards, in inventory order.
+ *
+ * `overviewScalars` decides what belongs on the Overview at all (no counters — they have no
+ * glanceable value; no per-interface metrics — eight octet counters above the fold on every switch
+ * is what 決定 1's "don't degrade the common case" forbids). This adds the second rule: **anything
+ * Device health is already drawing is dropped.** A number beside a chart of the same metric was
+ * harmless; two charts of it, stacked, read as a second measurement that happens to always agree.
+ *
+ * `health === null` means Device health has not resolved yet. Nothing is subtracted then, and the
+ * caller should not render — drawing the unsubtracted set first would flash the duplicates.
+ */
+export function overviewScalarCards(
+  entries: readonly NodeMetricEntry[],
+  health: ResolvedHealth | null,
+): ScalarCard[] {
+  const claimed = health ? claimedMetrics(health) : new Set<string>();
+  return overviewScalars(entries)
+    .filter((e) => !claimed.has(e.metric))
+    .map((e) => ({ metric: e.metric, ...viewOf(e) }))
+    // The same refusal `resolveCard` applies. Unreachable while `overviewScalars` drops counters
+    // and per-interface metrics — kept so that widening *that* predicate cannot silently produce a
+    // card with no query behind it, which is the failure this file's whole shape exists to prevent.
+    .filter((c) => c.chart.kind !== 'none' && c.chart.kind !== 'interfaces');
+}
+
+/**
+ * The last real sample in a series, or `null`.
+ *
+ * This is how a **counter** card gets its headline. `getNodeMetric` would answer with the stored
+ * value, which for a counter is the odometer — the reading that made `SETUP RATE` print
+ * `18,190,268/s` on a firewall doing a few new sessions a second. There is no "latest rate"
+ * endpoint and there should not be one: the rate is defined by the window it was derived over, so
+ * the series that was already fetched for the chart is the only thing that knows it.
+ */
+export function lastValue(values: readonly number[]): number | null {
+  for (let i = values.length - 1; i >= 0; i--) {
+    const v = values[i];
+    if (Number.isFinite(v)) return v;
+  }
+  return null;
 }

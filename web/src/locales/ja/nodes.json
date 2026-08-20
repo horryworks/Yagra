@@ -255,6 +255,7 @@
     "vpnTunnels": "VPN トンネル",
     "noHistory": "履歴はまだありません…",
     "systemSnmp": "システム (SNMP)",
+    "systemSnmpNote": "デバイスヘルスに出ていないメトリクスです。",
     "dnsMonitor": "DNS 監視",
     "systemResolver": "システムリゾルバ",
     "resolution": "名前解決",

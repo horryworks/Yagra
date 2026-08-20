@@ -260,6 +260,15 @@
   margin-bottom: 9px;
 }
 
+/* One line under a section title saying what the section deliberately leaves out. Sits above the
+   grid, not inside a card, so it reads as a property of the section (ADR-055 R2's shape, applied to
+   a section rather than a page). */
+.nd-section-note {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  margin: -4px 0 10px;
+}
+
 .nd-section-head {
   display: flex;
   align-items: center;
@@ -421,6 +430,32 @@ html[data-viewport='mobile'] .nd-extract-row {
   font-weight: var(--weight-medium);
 }
 
+/* A generic card labels itself with the raw metric name. The curated label rules (uppercase +
+   letter-spacing) turn `huawei_usg_half_open_sessions` into something that wraps in a 240px grid
+   cell, and an identifier belongs in the mono face anyway (`ui-conventions.md`). */
+.nd-health-metric-label.mono {
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One line under a generic card's label saying what the metric measures. Two lines maximum: the
+   catalogue sentences run to about 100 characters and an uncapped block would make one card in the
+   grid twice the height of its neighbours. */
+.nd-health-metric-meaning {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+  margin: -4px 0 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
 .nd-health-metric-value {
   font-size: var(--font-5xl);
   font-weight: var(--weight-medium);
@@ -444,32 +479,6 @@ html[data-viewport='mobile'] .nd-extract-row {
 .nd-url-status-line {
   font-size: var(--font-sm);
   font-variant-numeric: tabular-nums;
-}
-
-.nd-scalars {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.nd-scalar {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: var(--font-sm);
-}
-
-.nd-scalar-name {
-  color: var(--text-secondary);
-  font-size: var(--font-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.nd-scalar-value {
-  font-weight: var(--weight-medium);
 }
 
 /* ---------------- Interfaces (Direction C: in-row sparklines + bottom dock) ----------------

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Overview tab of the unified node detail. The compact core (per the redesign) is an "ICMP RTT ·
 // last 30 min" sparkline + a two-column facts grid. Below it sit the richer, relocated sections —
-// Active alerts, Device health (CPU/Mem), System (SNMP) scalars — each of which self-hides when the
+// Active alerts, Device health (CPU/Mem), System (SNMP) metric cards — each of which self-hides when the
 // node has no such data, so a simple ICMP-only node shows just sparkline + facts, while a fully
 // monitored device shows everything. Nothing from the old detail page is dropped, only restyled.
 
@@ -21,7 +21,8 @@ import {
   httpStatusLabel,
   httpStatusTone,
   pointsToSeries,
-  scalarDisplay,
+  scalarLabel,
+  scalarValueFormat,
   severityColorVar,
   stateLabel,
 } from '../../lib/format';
@@ -38,17 +39,20 @@ import type {
 import { MetricChart } from '../MetricChart/MetricChart';
 import {
   hasAnyHealth,
+  lastValue,
   METRIC_CARDS,
+  overviewScalarCards,
   resolveHealth,
-  type MetricCardSpec,
+  type MetricScale,
   type ResolvedHealth,
   type ResolvedMem,
   type ResolvedMetric,
+  type ScalarCard,
 } from './metricCards';
 import { formatKb, memPctSeries } from './overviewMetrics';
 import { overviewShowsIcmp, visibleFactRows, type FactRow } from './overviewFacts';
-import { overviewScalars, viewOf } from '../../lib/metricInventory';
 import { fetchNodeMetrics } from '../../lib/metricInventoryCache';
+import { metricMeaningKey } from '../../lib/metricMeaning';
 import { certTone, httpToneVar } from './healthTone';
 import { extractMetricKey, formatExtractedValue, metricsFromKey } from './urlExtracts';
 import { RangeControl, resolveRange, type Range } from './RangeControl';
@@ -678,7 +682,15 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
           const resolved = health.cards[spec.id];
           return (
             resolved && (
-              <MetricCard key={spec.id} nodeId={nodeId} spec={spec} resolved={resolved} range={range} />
+              <MetricCard
+                key={spec.id}
+                nodeId={nodeId}
+                label={t(spec.labelKey)}
+                scale={spec.scale}
+                unit={'unit' in spec ? spec.unit : undefined}
+                resolved={resolved}
+                range={range}
+              />
             )
           );
         })}
@@ -688,21 +700,46 @@ function DeviceHealth({ nodeId }: { nodeId: string }) {
   );
 }
 
-/** One Device-health gauge: current value + a trend chart over the selected window, reading
- *  node-wide (`max`) for table sources.
+/** One metric card: current value + a trend chart over the selected window.
+ *
+ *  Used by both sections on this tab — the curated Device-health gauges above, and the node's
+ *  remaining node-level metrics below. One component rather than two because they differ only in
+ *  where the label comes from: a curated card has a translated name, a generic one shows its raw
+ *  metric name with the catalogue's one-line explanation under it.
  *
  *  The two scales were two components that differed only in how a number is rendered. A `percent`
  *  card pins the Y axis to 0–100 so a CPU hovering at 40% doesn't fill the chart; a `count` card
  *  auto-fits, since session counts vary by orders of magnitude per device, and its axis uses compact
- *  SI suffixes ("12.8k") while the headline and hover show the full count ("12,840"). */
+ *  SI suffixes ("12.8k") while the headline and hover show the full count ("12,840"). Generic cards
+ *  are always `count`: nothing in the API says a metric is a percentage (ADR-046 決定 6 declined a
+ *  unit column and Inc.6 did not reopen it), and guessing from the name gets `huawei_cpu_usage`
+ *  wrong.
+ *
+ *  ⚠️ **How it reads is `resolved`'s decision, never this component's.** `read`/`chart` come from
+ *  `metricView`; a counter is charted as a rate and its headline is taken from that series' last
+ *  sample, because its stored value is an odometer. */
 function MetricCard({
   nodeId,
-  spec,
+  label,
+  labelMono,
+  meaning,
+  scale,
+  unit,
+  format,
   resolved,
   range,
 }: {
   nodeId: string;
-  spec: MetricCardSpec;
+  label: string;
+  /** The label is a raw metric name, so render it mono and un-uppercased. */
+  labelMono?: boolean;
+  /** One line saying what the metric measures, under the label. */
+  meaning?: string | null;
+  scale: MetricScale;
+  /** Appended to the headline and hover value — `/s` for a rate. */
+  unit?: string;
+  /** Overrides the headline and hover formatter (SNMP TimeTicks are not a count). */
+  format?: (v: number) => string;
   resolved: ResolvedMetric;
   range: Range;
 }) {
@@ -714,21 +751,39 @@ function MetricCard({
   });
   const [win, setWin] = useState<[number, number] | null>(null);
   const tick = useRefreshTick();
-  const { metric, agg } = resolved;
+  const { metric } = resolved;
+  const readKind = resolved.read.kind;
+  const chartKind = resolved.chart.kind;
 
   useEffect(() => {
     let cancelled = false;
     const load = () => {
       const { from, to } = resolveRange(range);
-      void Promise.allSettled([
-        api.getNodeMetric(nodeId, metric, agg ? { agg } : undefined),
-        api.getNodeMetricRange(nodeId, metric, { from, to, ...(agg ? { agg } : {}) }),
-      ]).then(([v, r]) => {
+      const points = api
+        .getNodeMetricRange(nodeId, metric, {
+          from,
+          to,
+          ...(chartKind === 'rate' ? { rate: true } : {}),
+          ...(chartKind === 'aggregate' ? { agg: 'max' as const } : {}),
+        })
+        .then((r) => r.points)
+        .catch(() => [] as MetricPoint[]);
+      // A counter has no readable current value — `getNodeMetric` would answer with the odometer,
+      // which is what printed a since-boot session total as "/s". Its headline comes from the rate
+      // series below instead, so there is nothing to ask for here.
+      const latest =
+        readKind === 'none'
+          ? Promise.resolve(null)
+          : api
+              .getNodeMetric(nodeId, metric, readKind === 'aggregate' ? { agg: 'max' } : undefined)
+              .then((r) => r.value as number | null)
+              // 404 is the documented answer for "no reading yet", not an error to surface.
+              .catch(() => null);
+      void Promise.all([points, latest]).then(([pts, v]) => {
         if (cancelled) return;
-        setValue(v.status === 'fulfilled' ? v.value.value : null);
-        setSeries(
-          r.status === 'fulfilled' ? pointsToSeries(r.value.points) : { timestamps: [], values: [] },
-        );
+        const next = pointsToSeries(pts);
+        setSeries(next);
+        setValue(readKind === 'none' ? lastValue(next.values) : v);
         setWin([from, to]);
       });
     };
@@ -736,16 +791,17 @@ function MetricCard({
     return () => {
       cancelled = true;
     };
-  }, [nodeId, metric, agg, range, tick]);
+  }, [nodeId, metric, readKind, chartKind, range, tick]);
 
-  const pct = spec.scale === 'percent';
-  const fmt = (v: number) => (pct ? formatUtil(v) : `${formatCount(v)}${spec.unit ?? ''}`);
+  const pct = scale === 'percent';
+  const fmt = format ?? ((v: number) => (pct ? formatUtil(v) : `${formatCount(v)}${unit ?? ''}`));
   return (
     <div className="nd-health-metric">
       <div className="nd-health-metric-head">
-        <span className="nd-health-metric-label">{t(spec.labelKey)}</span>
+        <span className={`nd-health-metric-label${labelMono ? ' mono' : ''}`}>{label}</span>
         <span className="nd-health-metric-value">{value == null ? '—' : fmt(value)}</span>
       </div>
+      {meaning ? <p className="nd-health-metric-meaning">{meaning}</p> : null}
       {series.timestamps.length > 0 ? (
         <MetricChart
           title=""
@@ -858,60 +914,63 @@ function MemHealth({
   );
 }
 
-/** Latest values of the node's node-level metrics. Hidden when the node has none (e.g. an
- *  ICMP-only node), so it never shows an empty section.
+/** The node's remaining node-level metrics, each as a card with its own trend chart. Hidden when
+ *  there are none (e.g. an ICMP-only node), so it never shows an empty section.
  *
  *  Sourced from the metric inventory, which is what lets this show metrics no collection set
  *  contains — the neighbour count, the URL/DNS monitor gauges, values extracted from a monitored
- *  JSON response — and lets a viewer see it at all. `overviewScalars` decides what belongs here:
- *  counters have no glanceable value, and per-interface metrics have their own tab. */
+ *  JSON response — and lets a viewer see it at all. `overviewScalarCards` decides what belongs
+ *  here: counters have no glanceable value, per-interface metrics have their own tab, and anything
+ *  Device health already draws is subtracted so the same measurement is not charted twice.
+ *
+ *  This was a `name: value` strip until ADR-046 Inc.6. The values were true and useless — an
+ *  operator looking at `60` cannot tell a temperature that has been 60 all week from one that was
+ *  40 an hour ago, and the history existed the whole time, one tab away, with nothing pointing at
+ *  it. The window is the shared one (`useRangeStore`), so Device health's range picker drives both
+ *  sections and there is no second control.
+ *
+ *  Note both effects here read the inventory through `fetchNodeMetrics`, which dedupes — this and
+ *  `DeviceHealth` make one request between them. */
 function SnmpScalars({ nodeId }: { nodeId: string }) {
   const { t } = useTranslation('nodes');
-  const [readings, setReadings] = useState<{ name: string; value: number }[] | null>(null);
+  const [cards, setCards] = useState<ScalarCard[] | null>(null);
+  const range = useRangeStore((s) => s.range);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      // An empty inventory (skeleton mode, or the node is gone) means nothing to probe; the section
-      // hides itself below.
-      const shown = overviewScalars(await fetchNodeMetrics(nodeId));
-      // Fetch every reading concurrently (was a per-metric await waterfall — a dozen serial
-      // round-trips on open and on each poll). Order is preserved; a metric with no reading yet is
-      // simply dropped. Matches the sibling loaders (UrlHealth/CpuHealth/…).
-      const results = await Promise.allSettled(
-        shown.map((e) =>
-          api.getNodeMetric(
-            nodeId,
-            e.metric,
-            viewOf(e).read.kind === 'aggregate' ? { agg: 'max' } : undefined,
-          ),
-        ),
-      );
-      const out: { name: string; value: number }[] = [];
-      results.forEach((res, i) => {
-        if (res.status === 'fulfilled') {
-          out.push({ name: shown[i].metric, value: res.value.value });
-        }
-      });
-      if (!cancelled) setReadings(out);
+      // An empty inventory (skeleton mode, or the node is gone) yields no cards; the section hides
+      // itself below. `resolveHealth` over the same items is what the subtraction needs — it is the
+      // only thing that knows which candidate each curated card actually landed on.
+      const items = await fetchNodeMetrics(nodeId);
+      if (!cancelled) setCards(overviewScalarCards(items, resolveHealth(items)));
     })();
     return () => {
       cancelled = true;
     };
   }, [nodeId]);
 
-  if (!readings || readings.length === 0) return null;
+  if (!cards || cards.length === 0) return null;
   return (
     <section>
       <div className="nd-section-t">{t('overview.systemSnmp')}</div>
-      <div className="nd-scalars">
-        {readings.map((r) => {
-          const d = scalarDisplay(r.name, r.value);
+      <p className="nd-section-note">{t('overview.systemSnmpNote')}</p>
+      <div className="nd-health-metrics">
+        {cards.map((c) => {
+          const { label, known } = scalarLabel(c.metric);
+          const meaning = metricMeaningKey(c.metric);
           return (
-            <div className="nd-scalar" key={r.name}>
-              <span className={`nd-scalar-name${d.known ? '' : ' mono'}`}>{d.label}</span>
-              <span className={`nd-scalar-value${d.known ? '' : ' mono'}`}>{d.value}</span>
-            </div>
+            <MetricCard
+              key={c.metric}
+              nodeId={nodeId}
+              label={label}
+              labelMono={!known}
+              meaning={meaning ? t(meaning) : null}
+              scale="count"
+              format={scalarValueFormat(c.metric)}
+              resolved={c}
+              range={range}
+            />
           );
         })}
       </div>

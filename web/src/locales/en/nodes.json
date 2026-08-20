@@ -255,6 +255,7 @@
     "vpnTunnels": "VPN tunnels",
     "noHistory": "No history yet…",
     "systemSnmp": "System (SNMP)",
+    "systemSnmpNote": "Metrics not already shown in Device health.",
     "dnsMonitor": "DNS monitor",
     "systemResolver": "system resolver",
     "resolution": "Resolution",
