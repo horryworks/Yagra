@@ -37,7 +37,7 @@ use yagra_alert::CheckState;
 use yagra_alert::{
     Alert, Breach, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy, Subject,
 };
-use yagra_bus::{CheckOutcome, PollResult};
+use yagra_bus::{CheckOutcome, PollResult, Sample};
 use yagra_common::{
     is_ssrf_blocked, resolve_effective, CheckId, Direction, EffectiveThreshold, IfIndex,
     MetricKind, NodeId, NodeState, ScopeLevel, ScopedThreshold, Severity,
@@ -722,6 +722,22 @@ fn resolve_key<'a>(
 /// `check_id(node, metric)` keeps returning exactly the bytes it always did: ADR-075 decision 2
 /// hangs dependency-suppression selection and the PagerDuty/JSM dedup key off that value, and an
 /// open external incident that stops matching is one nothing will ever close.
+/// Whether `candidate` sits further into breach than `incumbent` for a rule read in `direction`.
+///
+/// ⚠️ **The direction is load-bearing, and the product already carries the note that says why.**
+/// `query_metrics` collapses an `entity` metric to its maximum, and its own response admits the
+/// consequence: for a metric where low is the fault (an optical receive level) the maximum is the
+/// *healthiest* series rather than the worst. Folding a `below` rule with `max` would therefore
+/// report the coolest sensor, the fullest battery and the idlest CPU — and alert on none of them.
+///
+/// NaN never displaces an incumbent: both comparisons are false for it, so the first sample stands.
+fn is_worse(direction: Direction, candidate: f64, incumbent: f64) -> bool {
+    match direction {
+        Direction::Above => candidate > incumbent,
+        Direction::Below => candidate < incumbent,
+    }
+}
+
 pub(crate) fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -> CheckId {
     subject_check_id(&Subject::Node(node), &format!("{metric}@{ifindex}"))
 }
@@ -1000,56 +1016,63 @@ impl AlertManager {
             },
         ));
 
-        // Threshold checks per sample (only metrics with a resolved threshold alert). Every sample
-        // is still fed through `process_check` individually — the memo above dedupes the *lookup*,
-        // never the observation, so the dwell window sees exactly the sample count it did before.
+        // Threshold checks per sample. Two shapes, and the split is ADR-077 decision 1.
+        //
+        // A **per-interface** metric gets one check per port (ADR-076), so each sample is observed
+        // on a dwell window of its own. Everything else shares one node-wide check — including a
+        // table walk whose rows are CPUs, sensors, filesystems, PSUs or battery lines — so this
+        // result's samples for it are folded to a **single** observation before the state machine
+        // sees any of them.
+        //
+        // Without the fold, a metric arriving N times per poll pushed N observations into one dwell
+        // window, and it failed in both directions: one bad row among good ones had its candidate
+        // reset by the very next sample and could never reach the dwell (`huawei_cpu_usage` arrives
+        // 15 times, `juniper_cpu_1min` 53 — those rules were **inert**), while N bad rows satisfied
+        // a 3-sample dwell inside a single poll. That is exactly the ADR-076 bug, on the rows
+        // ADR-076 did not split.
+        //
+        // ⚠️ The memo above is still keyed per (metric, port) and is read, not rebuilt: folding
+        // changes how many times a resolved threshold is *observed*, never how it resolves.
+        let mut folded: Vec<(&str, &Sample, &EffectiveThreshold)> = Vec::new();
         for sample in &result.samples {
             let key = resolve_key(&sample.metric, sample.ifindex, &per_if_metrics);
-            let eff = resolved
+            let Some(eff) = resolved
                 .iter()
                 .find(|(k, _)| *k == key)
-                .and_then(|(_, eff)| eff.as_ref());
-            if let Some(eff) = eff {
-                let ifindex = key.1;
-                let check = match ifindex {
-                    Some(idx) => interface_check_id(node, idx, &sample.metric),
-                    None => check_id(node, &sample.metric),
-                };
-                let raw = if in_maintenance {
-                    NodeState::Maintenance
-                } else if sample.kind == MetricKind::Counter {
-                    // A raw monotonic counter has no meaningful fixed bound: `above` latches
-                    // permanently once crossed and `below` fires across every reboot's counter
-                    // reset — rates are derived at query time instead (ADR-012). Creation now
-                    // rejects counter metrics; observing `Ok` here (rather than skipping) lets
-                    // a rule that predates that rejection drain its latched alert through the
-                    // normal recovery path.
-                    NodeState::Ok
-                } else {
-                    eff.evaluate(sample.value)
-                };
-                let eval = ThresholdEval {
-                    value: sample.value,
-                    direction: eff.direction,
-                    warning: eff.warning,
-                    critical: eff.critical,
-                };
-                actions.extend(self.process_check(
+                .and_then(|(_, eff)| eff.as_ref())
+            else {
+                continue;
+            };
+            match key.1 {
+                // One port, one check, one observation (ADR-076).
+                Some(idx) => actions.extend(self.observe_threshold_sample(
                     node,
-                    raw,
                     result.at_unix_ms,
-                    CheckSpec {
-                        check,
-                        metric: &sample.metric,
-                        dwell: eff.dwell_samples,
-                        is_liveness: false,
-                        // A threshold check exists only because a rule resolved for it.
-                        alerting: true,
-                        eval: Some(eval),
-                        ifindex,
-                    },
-                ));
+                    in_maintenance,
+                    sample,
+                    eff,
+                    Some(idx),
+                )),
+                // Node-wide: keep the worst sample **in this rule's own direction**, observe below.
+                None => match folded.iter_mut().find(|(m, _, _)| *m == sample.metric) {
+                    Some(slot) => {
+                        if is_worse(eff.direction, sample.value, slot.1.value) {
+                            slot.1 = sample;
+                        }
+                    }
+                    None => folded.push((sample.metric.as_str(), sample, eff)),
+                },
             }
+        }
+        for (_, sample, eff) in folded {
+            actions.extend(self.observe_threshold_sample(
+                node,
+                result.at_unix_ms,
+                in_maintenance,
+                sample,
+                eff,
+                None,
+            ));
         }
 
         // Push an incremental node-state event only when the rolled-up display state actually moved
@@ -1068,6 +1091,61 @@ impl AlertManager {
     /// committed transition. `is_liveness` checks also update the per-node committed-state
     /// map and apply dependency suppression (root-cause attribution) on a problem
     /// transition.
+    /// Feed one already-resolved sample through the state machine as a threshold check.
+    ///
+    /// Shared by both shapes in [`Self::observe`] — a port's own check and a node-wide folded one —
+    /// since they differ only in which id the check carries. Written once so the counter rule, the
+    /// maintenance substitution and the [`ThresholdEval`] that describes the breach cannot drift
+    /// between them.
+    fn observe_threshold_sample(
+        &self,
+        node: NodeId,
+        at_unix_ms: i64,
+        in_maintenance: bool,
+        sample: &Sample,
+        eff: &EffectiveThreshold,
+        ifindex: Option<IfIndex>,
+    ) -> Vec<NotifyAction> {
+        let check = match ifindex {
+            Some(idx) => interface_check_id(node, idx, &sample.metric),
+            None => check_id(node, &sample.metric),
+        };
+        let raw = if in_maintenance {
+            NodeState::Maintenance
+        } else if sample.kind == MetricKind::Counter {
+            // A raw monotonic counter has no meaningful fixed bound: `above` latches
+            // permanently once crossed and `below` fires across every reboot's counter
+            // reset — rates are derived at query time instead (ADR-012). Creation now
+            // rejects counter metrics; observing `Ok` here (rather than skipping) lets
+            // a rule that predates that rejection drain its latched alert through the
+            // normal recovery path.
+            NodeState::Ok
+        } else {
+            eff.evaluate(sample.value)
+        };
+        let eval = ThresholdEval {
+            value: sample.value,
+            direction: eff.direction,
+            warning: eff.warning,
+            critical: eff.critical,
+        };
+        self.process_check(
+            node,
+            raw,
+            at_unix_ms,
+            CheckSpec {
+                check,
+                metric: &sample.metric,
+                dwell: eff.dwell_samples,
+                is_liveness: false,
+                // A threshold check exists only because a rule resolved for it.
+                alerting: true,
+                eval: Some(eval),
+                ifindex,
+            },
+        )
+    }
+
     fn process_check(
         &self,
         node: NodeId,
@@ -3584,6 +3662,306 @@ mod tests {
         assert!(mgr.active_alerts().is_empty());
     }
 
+    // ── ADR-077: node-wide metrics with several rows per poll ──────────────────────────────
+    //
+    // These use `Sample::interface` **without** `with_per_interface`, which is exactly what an
+    // `entity` metric is: a table walk puts the row's last OID sub-identifier into the `ifindex`
+    // label, but the catalogue does not call the metric per-interface, so the rows are CPUs,
+    // sensors or battery lines rather than ports (ADR-011). All of them share one node-wide check.
+
+    /// The ADR-077 regression, and the mirror of
+    /// `one_breaching_port_among_many_fires_exactly_one_alert`.
+    ///
+    /// Before the fold, one hot CPU among fourteen idle ones had its dwell candidate reset by the
+    /// very next sample in the same poll, so a 3-sample rule **never fired at all** —
+    /// `huawei_cpu_usage` arrives 15 times per poll and `juniper_cpu_1min` 53 times.
+    #[test]
+    fn one_breaching_row_among_many_fires_after_the_dwell() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Global,
+                scope_id: String::new(),
+                rule: ThresholdRule {
+                    metric: "huawei_cpu_usage".into(),
+                    direction: Direction::Above,
+                    warning: Some(80.0),
+                    critical: Some(90.0),
+                    dwell_samples: 3,
+                },
+            }],
+            meta,
+        ));
+
+        // 15 rows; row 4 is hot, the rest idle. Three polls — exactly the dwell.
+        let mut fired = Vec::new();
+        for (poll, at) in [0_i64, 1_000, 2_000].into_iter().enumerate() {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = (1..=15)
+                .map(|idx| {
+                    let v = if idx == 4 { 95.0 } else { 10.0 };
+                    Sample::interface("huawei_cpu_usage", IfIndex(idx), v, MetricKind::Gauge)
+                })
+                .collect();
+            let actions = mgr.observe(&res);
+            if poll < 2 {
+                assert!(
+                    actions.is_empty(),
+                    "poll {poll} must not satisfy a three-sample dwell yet"
+                );
+            }
+            fired.extend(actions);
+        }
+
+        // Exactly one alert — not one per row, and not none.
+        assert_eq!(fired.len(), 1, "one hot row must raise exactly one alert");
+        let NotifyAction::Fire(alert) = &fired[0] else {
+            panic!("expected a fire, got {:?}", fired[0]);
+        };
+        assert_eq!(alert.metric, "huawei_cpu_usage");
+        assert_eq!(alert.severity, Severity::Critical);
+        // The check stays the node-wide id: folding changes how often a check is observed, never
+        // which check it is. A per-row id would be a new identity no open alert could close.
+        assert_eq!(alert.check, check_id(node, "huawei_cpu_usage"));
+        assert_eq!(alert.ifindex, None);
+        // The breach reports the row that actually breached, not whichever arrived last.
+        assert_eq!(alert.breach.as_ref().map(|b| b.value), Some(95.0));
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        // The hot row cooling resolves it, once.
+        for at in [3_000_i64, 4_000, 5_000] {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = (1..=15)
+                .map(|idx| {
+                    Sample::interface("huawei_cpu_usage", IfIndex(idx), 10.0, MetricKind::Gauge)
+                })
+                .collect();
+            fired.extend(mgr.observe(&res));
+        }
+        assert_eq!(fired.len(), 2, "recovery must resolve exactly once");
+        assert!(matches!(fired[1], NotifyAction::Resolve(_)));
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// The accepting half's opposite: a healthy fleet of rows stays silent.
+    ///
+    /// On its own this proves nothing — an engine that refused every sample would also pass it —
+    /// which is why it sits beside the tests above and below that demand a fire.
+    #[test]
+    fn every_row_healthy_raises_nothing() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Global,
+                scope_id: String::new(),
+                rule: ThresholdRule {
+                    metric: "cisco_env_temp".into(),
+                    direction: Direction::Above,
+                    warning: Some(70.0),
+                    critical: Some(80.0),
+                    dwell_samples: 2,
+                },
+            }],
+            meta,
+        ));
+
+        for at in [0_i64, 1_000, 2_000, 3_000] {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = (1..=3)
+                .map(|idx| {
+                    Sample::interface("cisco_env_temp", IfIndex(idx), 54.0, MetricKind::Gauge)
+                })
+                .collect();
+            assert!(mgr.observe(&res).is_empty());
+        }
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// The other direction of the same bug: N breaching rows must not satisfy an N-sample dwell
+    /// inside **one** poll.
+    ///
+    /// Before the fold a 3-sample rule on a metric with three or more rows fired on the first poll,
+    /// which is the dwell silently becoming "three rows" instead of "three polls" — the opposite
+    /// failure to the inert one, and just as wrong.
+    #[test]
+    fn every_row_breaching_still_needs_the_whole_dwell() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Global,
+                scope_id: String::new(),
+                rule: ThresholdRule {
+                    metric: "juniper_temp".into(),
+                    direction: Direction::Above,
+                    warning: Some(70.0),
+                    critical: Some(80.0),
+                    dwell_samples: 3,
+                },
+            }],
+            meta,
+        ));
+
+        let poll = |at: i64| {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = (1..=12)
+                .map(|idx| Sample::interface("juniper_temp", IfIndex(idx), 85.0, MetricKind::Gauge))
+                .collect();
+            res
+        };
+
+        assert!(
+            mgr.observe(&poll(0)).is_empty(),
+            "twelve breaching rows in one poll are one observation, not twelve"
+        );
+        assert!(mgr.observe(&poll(1_000)).is_empty());
+        let fired = mgr.observe(&poll(2_000));
+        assert_eq!(fired.len(), 1, "the third poll completes the dwell");
+        assert!(matches!(fired[0], NotifyAction::Fire(_)));
+    }
+
+    /// A `below` rule must fold to the **minimum**, and this is the test that catches folding with
+    /// `max` — which is what the rest of the product does.
+    ///
+    /// `query_metrics` collapses an entity metric to its maximum and its own response says the
+    /// consequence out loud: where low is the fault, the maximum is the *healthiest* series. A UPS
+    /// with one string at 15% and two at 80/90% is in trouble; folded with `max` it reports 90 and
+    /// alerts on nothing.
+    #[test]
+    fn a_below_rule_folds_to_the_worst_row_not_the_healthiest() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Global,
+                scope_id: String::new(),
+                rule: ThresholdRule {
+                    metric: "ups_charge_remaining_pct".into(),
+                    direction: Direction::Below,
+                    warning: Some(50.0),
+                    critical: Some(20.0),
+                    dwell_samples: 2,
+                },
+            }],
+            meta,
+        ));
+
+        // The depleted row is deliberately **first**, so "the last sample wins" also fails here.
+        let poll = |at: i64| {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = [15.0, 80.0, 90.0]
+                .into_iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    Sample::interface(
+                        "ups_charge_remaining_pct",
+                        IfIndex(i as u32 + 1),
+                        v,
+                        MetricKind::Gauge,
+                    )
+                })
+                .collect();
+            res
+        };
+
+        assert!(mgr.observe(&poll(0)).is_empty());
+        let fired = mgr.observe(&poll(1_000));
+        assert_eq!(fired.len(), 1, "the depleted row must fire");
+        let NotifyAction::Fire(alert) = &fired[0] else {
+            panic!("expected a fire, got {:?}", fired[0]);
+        };
+        assert_eq!(alert.severity, Severity::Critical);
+        assert_eq!(
+            alert.breach.as_ref().map(|b| b.value),
+            Some(15.0),
+            "folding a below rule with max would report 90.0 and alert on nothing"
+        );
+    }
+
+    /// The regression that matters most: a metric with exactly one series must behave as it did
+    /// before ADR-077, byte for byte.
+    ///
+    /// Every rule that shipped before this change — `snmp_up`, `icmp_loss_pct`, `http_up`, the
+    /// three ADR-075 defaults — is single-series, so "the fold is transparent when there is nothing
+    /// to fold" is what keeps an upgrade from changing how an existing fleet pages.
+    #[test]
+    fn a_single_series_metric_is_unchanged_by_the_fold() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Global,
+                scope_id: String::new(),
+                rule: ThresholdRule {
+                    metric: yagra_common::METRIC_SNMP_UP.into(),
+                    direction: Direction::Below,
+                    warning: None,
+                    critical: Some(0.5),
+                    dwell_samples: 2,
+                },
+            }],
+            meta,
+        ));
+
+        let poll = |at: i64, up: f64| {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = vec![Sample::gauge(yagra_common::METRIC_SNMP_UP, up)];
+            res
+        };
+
+        assert!(
+            mgr.observe(&poll(0, 0.0)).is_empty(),
+            "one sample, one dwell step"
+        );
+        let fired = mgr.observe(&poll(1_000, 0.0));
+        assert_eq!(fired.len(), 1);
+        let NotifyAction::Fire(alert) = &fired[0] else {
+            panic!("expected a fire, got {:?}", fired[0]);
+        };
+        assert_eq!(alert.check, check_id(node, yagra_common::METRIC_SNMP_UP));
+        assert_eq!(alert.ifindex, None);
+        assert_eq!(alert.breach.as_ref().map(|b| b.value), Some(0.0));
+
+        // And it recovers on the same cadence.
+        assert!(mgr.observe(&poll(2_000, 1.0)).is_empty());
+        let back = mgr.observe(&poll(3_000, 1.0));
+        assert_eq!(back.len(), 1);
+        assert!(matches!(back[0], NotifyAction::Resolve(_)));
+    }
+
     /// `matching_rules` is what the port's rule list is built from, so its two jobs are separate:
     /// which rules *reach* the port at all (across six scope levels), and which of those are in
     /// force. Getting the first wrong shows an empty list about a port that is alerting; getting
@@ -3911,14 +4289,25 @@ mod tests {
             meta,
         ));
 
-        // Two "rows" breaching in one poll satisfies a two-sample dwell only if they share one
-        // window — which is exactly the node-level behaviour this asserts is preserved.
-        let mut res = result(node, CheckOutcome::Reachable, 0);
-        res.samples = vec![
-            Sample::interface("cisco_env_temp", IfIndex(17), 80.0, MetricKind::Gauge),
-            Sample::interface("cisco_env_temp", IfIndex(18), 81.0, MetricKind::Gauge),
-        ];
-        let actions = mgr.observe(&res);
+        // Two "rows" breaching in one poll are ONE observation, not two (ADR-077). They share a
+        // check, so they share a dwell window — and a two-sample dwell therefore means two polls.
+        // This assertion used to read the other way: it demanded that two rows satisfy the dwell
+        // inside a single poll, which is the bug ADR-077 names (the dwell quietly becoming "two
+        // rows" instead of "two polls"). What the test is really for — that a chassis row key does
+        // not split the check — is unchanged and still asserted below.
+        let poll = |at: i64| {
+            let mut res = result(node, CheckOutcome::Reachable, at);
+            res.samples = vec![
+                Sample::interface("cisco_env_temp", IfIndex(17), 80.0, MetricKind::Gauge),
+                Sample::interface("cisco_env_temp", IfIndex(18), 81.0, MetricKind::Gauge),
+            ];
+            res
+        };
+        assert!(
+            mgr.observe(&poll(0)).is_empty(),
+            "two chassis rows in one poll are one observation, not two"
+        );
+        let actions = mgr.observe(&poll(1_000));
         assert_eq!(actions.len(), 1, "chassis rows share one check");
         let NotifyAction::Fire(alert) = &actions[0] else {
             panic!("expected a fire");
@@ -3927,13 +4316,20 @@ mod tests {
         assert_eq!(alert.check, check_id(node, "cisco_env_temp"));
     }
 
+    /// One metric's repeated samples in a single poll are **one** observation (ADR-077).
+    ///
+    /// This test used to assert the opposite, and its own comment explained why: `observe` memoizes
+    /// the *resolution* per metric name, and deduplicating the observations too "would quietly turn
+    /// a three-sample dwell into a three-*poll* dwell". That reasoning was inverted. A three-sample
+    /// dwell was always meant to mean "the problem persisted across three polls"; counting rows
+    /// made it mean "three rows breached at once", so a 48-port table satisfied any dwell instantly
+    /// while a single bad row among good ones satisfied none of them, ever.
+    ///
+    /// The property the old test protected — that the memo must not collapse *distinct* checks —
+    /// is still covered, by the per-port tests: ADR-076 gives each port its own check and therefore
+    /// its own dwell window, which is where per-sample counting actually belongs.
     #[test]
-    fn repeated_samples_of_one_metric_each_advance_the_dwell() {
-        // An SNMP table poll emits the same metric name once per interface, so one result can carry
-        // a hundred `if_util_pct` samples. `observe` memoizes the *resolution* per distinct metric
-        // name — one config read, one threshold resolve, one `check_id` — but every sample must
-        // still be observed. Deduplicating the observations too would quietly turn a three-sample
-        // dwell into a three-*poll* dwell, delaying every threshold alert by minutes.
+    fn repeated_samples_of_one_metric_are_a_single_observation() {
         use yagra_bus::Sample;
         use yagra_common::{Direction, ThresholdRule};
 
@@ -3957,23 +4353,28 @@ mod tests {
             meta,
         ));
 
-        // Two breaching rows in one result: two observations, one short of the dwell.
-        let mut two_rows = result(node, CheckOutcome::Reachable, 0);
-        two_rows.samples = vec![
+        // Three breaching rows in ONE result: one observation, nowhere near a three-sample dwell.
+        let mut three_rows = result(node, CheckOutcome::Reachable, 0);
+        three_rows.samples = vec![
             Sample::gauge("if_util_pct", 95.0),
             Sample::gauge("if_util_pct", 97.0),
+            Sample::gauge("if_util_pct", 99.0),
         ];
         assert!(
-            mgr.observe(&two_rows).is_empty(),
-            "two samples must not satisfy a three-sample dwell"
+            mgr.observe(&three_rows).is_empty(),
+            "three rows in one poll are one observation, not three"
         );
 
-        // The third breaching row commits — samples are counted, not distinct metric names.
-        let mut one_row = result(node, CheckOutcome::Reachable, 1_000);
-        one_row.samples = vec![Sample::gauge("if_util_pct", 99.0)];
+        // Two more polls complete the dwell — three polls, as the rule reads.
+        let mut second = result(node, CheckOutcome::Reachable, 1_000);
+        second.samples = vec![Sample::gauge("if_util_pct", 96.0)];
+        assert!(mgr.observe(&second).is_empty());
+
+        let mut third = result(node, CheckOutcome::Reachable, 2_000);
+        third.samples = vec![Sample::gauge("if_util_pct", 98.0)];
         assert!(
-            matches!(mgr.observe(&one_row).as_slice(), [NotifyAction::Fire(_)]),
-            "the third sample of the metric commits the transition"
+            matches!(mgr.observe(&third).as_slice(), [NotifyAction::Fire(_)]),
+            "the third poll of the metric commits the transition"
         );
     }
 

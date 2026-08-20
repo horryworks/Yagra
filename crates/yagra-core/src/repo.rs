@@ -2031,9 +2031,13 @@ impl NodeRepo {
                     Some(7.0),
                     1i32,
                 ),
-                // ADR-047 Inc.2. Seeded — unlike `http_response_time_ms`, which has no defensible
-                // default — because this is a 0/1 gauge whose only sane bound is the same 0.5, and
-                // because a content rule an operator configured must alert without a second step.
+                // ADR-047 Inc.2. Seeded because this is a 0/1 gauge whose only sane bound is the
+                // same 0.5, and because a content rule an operator configured must alert without
+                // a second step.
+                //
+                // (This note used to contrast with `http_response_time_ms`, "which has no
+                // defensible default". ADR-077 decision 4 gave it one — a deliberately loose
+                // 3000 ms — so the contrast is gone; see the row below.)
                 //
                 // It is inert until someone configures a rule: the poller emits this metric only
                 // for a monitor that carries one, so adding the row to an existing deployment
@@ -2048,6 +2052,25 @@ impl NodeRepo {
                     "below",
                     None::<f64>,
                     Some(0.5),
+                    2i32,
+                ),
+                // ADR-077 decision 4. This REVERSES the note above: response time was deliberately
+                // left unseeded because it "varies far too much between environments", and the
+                // measurement is what changed the judgement rather than the fact. Two sites polled
+                // from the same place differed by 180 ms at the median (Google ~390 ms, another
+                // ~570 ms), so a *tight* default is still impossible — but the observed maximum was
+                // 685 ms, and 3000 ms sits four times outside that spread. A web page taking three
+                // seconds is wrong in any environment.
+                //
+                // Warning only, and no critical: a site that is actually down fires `http_up` at
+                // critical, and two criticals for one outage is the notification storm this
+                // project treats as a bug.
+                (
+                    3usize,
+                    "http_response_time_ms",
+                    "above",
+                    Some(3000.0),
+                    None,
                     2i32,
                 ),
             ];
@@ -2079,15 +2102,25 @@ impl NodeRepo {
         //    `http_up`; seeds are ON CONFLICT DO NOTHING, so getting it wrong needs a corrective
         //    migration rather than an edit here.
         //
-        //    `dns_resolve_ms` is emitted as a graphable gauge but deliberately gets NO seeded
-        //    threshold: resolver latency varies far too much between environments for a default.
+        //    `dns_resolve_ms` DOES have a seeded threshold since ADR-077 decision 4, and it is a
+        //    reversal: this comment used to say resolver latency "varies far too much between
+        //    environments for a default". The spread is real (measured 5–45 ms here) — what
+        //    changed is that a bound twenty times outside it, 1000 ms, sits beyond the spread
+        //    rather than inside it. Warning only; `dns_up` is what pages when a name is dead.
         //
         //    Reserved stable-id ranges: every one of them is declared in `crate::seed_ids`, which
         //    is also what migration 0020's range-DELETEs are tested against.
         if let Some(&dns_profile_id) = profile_id_by_name.get("DNS name resolution") {
             let scope_id = dns_profile_id.to_string();
             // (offset, metric, direction, warning, critical, dwell_samples)
-            let defaults = [(0usize, "dns_up", "below", None::<f64>, Some(0.5), 2i32)];
+            let defaults = [
+                (0usize, "dns_up", "below", None::<f64>, Some(0.5), 2i32),
+                // ADR-077 decision 4, the DNS half — see the URL profile above for the argument.
+                // Measured resolution on this deployment ran 5–45 ms, so 1000 ms is twenty times
+                // outside the observed spread. A name taking a second to resolve is wrong
+                // anywhere. Warning only: a name that does not resolve fires `dns_up` at critical.
+                (1usize, "dns_resolve_ms", "above", Some(1000.0), None, 2i32),
+            ];
             for (offset, metric, direction, warning, critical, dwell) in defaults {
                 sqlx::query(
                     "INSERT INTO thresholds \
@@ -2146,6 +2179,90 @@ impl NodeRepo {
                 // reachability rule's job, and two criticals for one outage is a notification
                 // storm, which this project treats as a bug rather than a feature.
                 (2, "icmp_loss_pct", "above", Some(20.0), None, 3),
+                // ── ADR-077: the rest of the fleet defaults ────────────────────────────────
+                //
+                // Appended, never inserted: the id is derived from the offset and the INSERT is
+                // ON CONFLICT DO NOTHING, so reusing one would shadow an operator's edited row.
+                //
+                // Every one of these is `global` on purpose. A vendor metric's NAME already names
+                // the profile that collects it (`cisco_cpu_5min` reaches only Cisco profiles), so
+                // moving the row to the profile scope changes which nodes fire not at all — while
+                // losing the nodes a profile-scoped rule cannot reach: a node with no profile, and
+                // a node on a profile the operator created. That is the ADR-075 decision 1
+                // argument, and it still holds.
+                //
+                // ⚠️ Bounds were chosen against measured fleet values (ADR-077 decision 5), not
+                // from the MIB alone. Where a metric could not be measured the ADR says so.
+
+                // Degradation short of an outage. Warning only: a node that has gone away pages
+                // through the reachability rule, and two criticals for one outage is a storm.
+                (3, "icmp_rtt_ms", "above", Some(500.0), None, 3),
+                // Linux CPU. ⚠️ This is the IDLE percentage, so it reads `below` — the one metric
+                // in this table where up is healthy.
+                (4, "ucd_cpu_idle_pct", "below", Some(20.0), Some(10.0), 3),
+                (5, "ucd_disk_used_pct", "above", Some(85.0), Some(95.0), 2),
+                // Cisco. Temperature bounds sit at 70/80 because the measured fleet maximum was
+                // 54°C; 65 would have left six degrees of headroom on a device already at 59.
+                (6, "cisco_cpu_5min", "above", Some(80.0), Some(90.0), 3),
+                (7, "cisco_env_temp", "above", Some(70.0), Some(80.0), 2),
+                (8, "cisco_temp_c", "above", Some(70.0), Some(80.0), 2),
+                (9, "nxos_cpu_util", "above", Some(80.0), Some(90.0), 3),
+                (10, "nxos_mem_util", "above", Some(80.0), Some(90.0), 3),
+                // Juniper. Buffer utilisation runs high in normal operation, so it starts at 85.
+                (11, "juniper_cpu_1min", "above", Some(80.0), Some(90.0), 3),
+                (
+                    12,
+                    "juniper_buffer_util",
+                    "above",
+                    Some(85.0),
+                    Some(95.0),
+                    3,
+                ),
+                (13, "juniper_temp", "above", Some(70.0), Some(80.0), 2),
+                // Huawei. The measured 59°C on a live USG is what set the temperature bounds here.
+                (14, "huawei_cpu_usage", "above", Some(80.0), Some(90.0), 3),
+                (15, "huawei_mem_usage", "above", Some(80.0), Some(90.0), 3),
+                (16, "huawei_temp", "above", Some(70.0), Some(80.0), 2),
+                // FortiGate. Memory warns at 75, earlier than the rest: FortiOS enters conserve
+                // mode at 80% and starts dropping sessions, so warning at 80 warns too late.
+                (17, "fortinet_cpu_usage", "above", Some(80.0), Some(90.0), 3),
+                (18, "fortinet_mem_usage", "above", Some(75.0), Some(85.0), 3),
+                (
+                    19,
+                    "panos_session_util_pct",
+                    "above",
+                    Some(80.0),
+                    Some(90.0),
+                    3,
+                ),
+                // UPS. Charge and runtime read `below`; battery status is an enum where
+                // 1=unknown 2=normal 3=low 4=depleted, so "worse than normal" is above 2.5 — and
+                // 1 (unknown) sits below the bound rather than tripping it.
+                (
+                    20,
+                    "ups_charge_remaining_pct",
+                    "below",
+                    Some(50.0),
+                    Some(20.0),
+                    2,
+                ),
+                (
+                    21,
+                    "ups_minutes_remaining",
+                    "below",
+                    Some(30.0),
+                    Some(10.0),
+                    2,
+                ),
+                (22, "ups_battery_status", "above", None, Some(2.5), 1),
+                (
+                    23,
+                    "ups_output_load_pct",
+                    "above",
+                    Some(80.0),
+                    Some(95.0),
+                    2,
+                ),
             ];
             for (offset, metric, direction, warning, critical, dwell) in defaults {
                 sqlx::query(

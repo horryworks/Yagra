@@ -35,6 +35,29 @@
 
 ### New Features
 
+- **A new deployment now ships with 30 alert rules instead of 7.** Node down, SNMP down, packet
+  loss and the URL/DNS rules were the whole of it, so CPU, memory, temperature, disk and UPS state
+  only ever alerted if an operator wrote each rule by hand. The seeded set now covers round-trip
+  time, Linux CPU and disk, Cisco IOS/IOS-XE, Nexus, Junos, Huawei VRP, FortiOS and PAN-OS CPU,
+  memory and temperature, and the four UPS readings — 23 more rules, every one of them an ordinary
+  row that can be edited, re-scoped or deleted. Bounds were chosen against measured values from a
+  real fleet rather than from the MIBs alone, and where a metric could not be measured the ADR
+  says which ones. Existing deployments get the new rules on the next start; they are seeded with
+  `ON CONFLICT DO NOTHING`, so a rule you have already edited is left exactly as you left it.
+  - **Almost all of them are scoped to every node, on purpose.** A vendor metric's *name* already
+    names the profile that collects it, so scoping `cisco_cpu_5min` to the Cisco profile would
+    change which nodes fire not at all — while losing the nodes a profile-scoped rule cannot
+    reach, namely a node with no profile and a node on a profile you created yourself.
+  - **Two exceptions get a profile, because that is the only place their value can be decided**:
+    URL response time (warn at 3 s) and DNS resolution time (warn at 1 s). Both were previously
+    left unseeded as varying too much between environments. The spread is real, so these are
+    deliberately loose — four to twenty times outside the values measured here — and warning-only,
+    since a site or name that is actually down already pages through `http_up` / `dns_up`.
+  - Metrics deliberately **not** given a default include chassis fan and power state (the enum
+    cannot distinguish an empty bay from a failed unit without range bounds), generic
+    `hrProcessorLoad` (per-core, so one busy core would alert on a healthy host), entity sensor
+    values (the unit differs per row) and every counter (unchanged, and still rejected on create).
+
 - **Alert rules for a port are created, listed and edited from the port.** Node detail ▸ Interfaces
   ▸ a port now opens the rules that govern it, with a count on the button so the fact that
   something is watching it does not have to be discovered by clicking. The list is every rule that
@@ -186,6 +209,20 @@
   check’s name, and a collected metric spelled that way would land on the same check state.
 
 ### Bug Fixes
+
+- **A threshold rule on a metric that reports several rows per poll never fired.** Chassis
+  readings — per-CPU load, per-sensor temperature, per-filesystem disk usage, per-string UPS
+  charge — arrive many times in one poll under a single metric name, and all of those readings
+  fed one dwell window. One hot CPU among fourteen idle ones therefore had its dwell reset by the
+  very next reading and **could never reach the breach count at all**, so the rule was inert
+  rather than merely coarse; `huawei_cpu_usage` arrives 15 times per poll and `juniper_cpu_1min`
+  53. The same defect ran the other way too: when every reading breached, a three-breach rule was
+  satisfied inside a *single* poll, quietly turning "three polls" into "three rows". A poll's
+  readings for one metric are now a single observation, taken from the worst row **in the rule's
+  own direction** — the highest for an `above` rule, the lowest for a `below` one, so a rule
+  watching for a low battery is no longer answered with the healthiest cell. Alert identity is
+  unchanged, so anything already open stays open. This is the same defect ADR-076 fixed for
+  switch ports, on the rows that fix did not cover.
 
 - **A `below` threshold rule on an interface metric never fired.** The evaluator asks the metrics
   store for the ports **above** a floor, which is correct for "alert when traffic is high" and
