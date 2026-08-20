@@ -1715,7 +1715,26 @@ impl AlertManager {
         };
         orphans
             .into_iter()
-            .filter_map(|check| self.resolve_event_alert(check))
+            .filter_map(|check| {
+                // 🚨 Drop the dwell/flap bookkeeping along with the alert, or the check goes
+                // permanently silent. Resolving only the alert leaves the state machine committed
+                // at `Warning` while nothing is active, so a rule recreated on the same port
+                // observes `Warning → Warning`, sees no transition, and **never fires again** for
+                // the life of the process.
+                //
+                // Found on the test server, not by the unit test that shipped with this sweep: the
+                // alert closed on deletion, the rule was recreated at 1%, the port sat at 6.7% for
+                // eight minutes and nothing happened. The test only asserted the sweep was
+                // idempotent — which it was, on a check that could no longer do anything.
+                //
+                // Removing the entry rather than resetting it is the honest form: the rule that
+                // set this check's dwell is gone, so its window carries no meaning to preserve.
+                self.states
+                    .lock()
+                    .expect("states mutex poisoned")
+                    .remove(&check);
+                self.resolve_event_alert(check)
+            })
             .collect()
     }
 
@@ -6078,6 +6097,21 @@ mod tests {
         assert!(
             mgr.resolve_orphaned_interface_alerts().is_empty(),
             "the sweep runs every 60s for the life of the process; it must be idempotent"
+        );
+
+        // 🚨 And the port must be able to alert again. This assertion is here because the first
+        // version of this test stopped at "idempotent" — which a check that can no longer do
+        // anything also satisfies. Closing the alert without dropping the state machine left it
+        // committed at `Warning`, so a recreated rule saw `Warning → Warning`, no transition, and
+        // the port went silent for the life of the process. Found on the test server: rule
+        // recreated at 1%, port at 6.7%, nothing for eight minutes.
+        mgr.set_config(cfg(vec![port_rule(node, idx, 1.0)], meta_for(node)));
+        let acts = mgr
+            .observe_interface_metric(node, idx, "if_in_util_pct", 8.19, 3)
+            .expect("the recreated rule is in force");
+        assert!(
+            acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))),
+            "a port whose rule was deleted and recreated must alert again, got {acts:?}"
         );
     }
 
