@@ -10,6 +10,30 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **A bandwidth alert on a port now clears.** Once an interface utilisation or throughput alert
+  fired, nothing could resolve it. The alert itself pushed the node's rolled-up state to
+  `warning`, and the loop that both raises and clears those alerts skips any node that is not
+  `ok` — so it stopped looking at the node it had just alerted on. Lowering the traffic, raising
+  the threshold and editing the rule all had no effect; only restarting the core cleared it. The
+  loop now asks for the node's **liveness** state, which an alert does not change.
+- **A node carrying any other alert is no longer excluded from bandwidth alerting.** Same cause:
+  a high-CPU or high-latency alert froze interface evaluation for that whole node, silently.
+- **A maintenance window now silences port alerts too.** The same gate stopped the window
+  substitution from ever reaching an interface check, so opening a window cleared a node's own
+  alerts but left its port alerts open.
+- **Deleting a port threshold rule now closes any alert it left open.** Nothing visited a derived
+  per-interface check once its rule was gone, so the alert stayed active in the UI — and open in
+  any external tool its dedup key had reached — until the core restarted.
+- **A failed threshold read no longer resolves every alert in the fleet.** When the database read
+  behind the alert configuration failed, the refresh installed an empty rule set, which every
+  check read as "this rule was deleted": all open threshold alerts resolved, a recovery was sent
+  for each, and they re-fired once the next refresh succeeded. A failed rebuild now keeps the
+  previous configuration and is counted by `yagra_alert_config_load_failures_total`. The cost is
+  that a configuration change can take an extra refresh cycle to apply while the database is
+  unhealthy.
+
 ## v0.2.17 — alerting is yours to configure, and the threshold rules that never fired now do
 
 ### Breaking changes

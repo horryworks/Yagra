@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use uuid::Uuid;
-use yagra_common::{IfIndex, MetricKind, NodeId};
+use yagra_common::{IfIndex, MetricKind, NodeId, NodeState};
 
 /// Derived metric: receive utilisation as a percentage of the port's own speed.
 pub const METRIC_IF_IN_UTIL_PCT: &str = "if_in_util_pct";
@@ -78,6 +78,43 @@ pub fn derived_metric_kind(metric: &str) -> Option<MetricKind> {
     DERIVED_INTERFACE_METRICS
         .contains(&metric)
         .then_some(MetricKind::Gauge)
+}
+
+/// The interned name for a derived interface metric, or `None` for anything else.
+///
+/// Maps a name that arrived as a `String` — off an `Alert`, out of the database — back to the
+/// `&'static str` that [`CheckKey`] and the threshold lookup are keyed by. Derived from
+/// [`DERIVED_INTERFACE_METRICS`] rather than a hand-written `match`, so a fifth derived metric is
+/// covered by adding it to that one list.
+#[must_use]
+pub fn derived_metric_name(metric: &str) -> Option<&'static str> {
+    DERIVED_INTERFACE_METRICS.into_iter().find(|m| *m == metric)
+}
+
+/// Whether the evaluator may feed this node's ports an observation, given its **liveness** state.
+///
+/// The rule ADR-076 decision 3 wrote down is "freeze while the node is not `Ok`", and the intent was
+/// always liveness: an unreachable device must keep its port alerts open and honest while its own
+/// liveness alert does the paging, and a device in an `Unknown` state must not add "utilisation
+/// unknown" noise on top of the outage.
+///
+/// 🚨 **What is passed in must be the liveness state, never the display roll-up.** The first
+/// implementation asked `AlertManager::node_state`, which is the worse of liveness *and every active
+/// alert on the node* — so a port alert made its own node read as `Warning`, the evaluator stopped
+/// looking at that node, and nothing could resolve the alert afterwards at any traffic level or any
+/// threshold (ADR-076 増分 7). This takes a bare state rather than an `AlertManager` precisely so the
+/// mistake can only live at the call site.
+///
+/// `Maintenance` is let **through**, not frozen — decision 3's other half. Inside a window the
+/// evaluator feeds `Maintenance`, so an open port alert resolves the way a node-level one does;
+/// freezing here made port alerts the only kind a maintenance window could not silence.
+///
+/// `None` — never observed — is frozen: a node the engine has no opinion about is one whose liveness
+/// has not been established, and raising a congestion alert about a device that may not be there is
+/// the wrong way round.
+#[must_use]
+pub fn may_observe_ports(liveness: Option<NodeState>) -> bool {
+    matches!(liveness, Some(NodeState::Ok) | Some(NodeState::Maintenance))
 }
 
 /// How often the evaluator ticks.
@@ -563,5 +600,46 @@ mod tests {
         tracked.mark(sibling);
         tracked.forget(&key);
         assert_eq!(tracked.absent(METRIC_IF_IN_UTIL_PCT, &none), vec![sibling]);
+    }
+
+    /// The whole state table, because the gate is one line at two call sites and the interesting
+    /// half is what it *rejects*.
+    #[test]
+    fn the_freeze_gate_answers_for_every_liveness_state() {
+        assert!(may_observe_ports(Some(NodeState::Ok)));
+        // A window must not freeze the loop, or an open port alert can never be silenced by one.
+        assert!(may_observe_ports(Some(NodeState::Maintenance)));
+
+        // The device is not there, or we could not run the check: keep the port alert open and
+        // honest and let the node's own liveness alert do the paging.
+        assert!(!may_observe_ports(Some(NodeState::Unreachable)));
+        assert!(!may_observe_ports(Some(NodeState::Unknown)));
+        // Never observed is "no opinion", not "fine".
+        assert!(!may_observe_ports(None));
+
+        // Those four plus `None` are the whole domain: the liveness map is written only from a
+        // reachability outcome (`Reachable`/`Unreachable`/`Error`) or a maintenance substitution,
+        // so it never holds `Warning` or `Critical`. They are pinned as frozen anyway — the
+        // conservative answer — so that a caller regressing to the display roll-up produces a
+        // visibly wrong monitoring gap rather than a silently different rule.
+        assert!(!may_observe_ports(Some(NodeState::Warning)));
+        assert!(!may_observe_ports(Some(NodeState::Critical)));
+    }
+
+    /// The interning that lets a runtime `String` off an `Alert` become a `CheckKey`.
+    #[test]
+    fn only_the_four_derived_names_intern() {
+        for m in DERIVED_INTERFACE_METRICS {
+            // The `&'static str` is what matters: `CheckKey` is keyed by it, so a `String` here
+            // would not compile at the call site.
+            let interned: &'static str = derived_metric_name(m).expect("a derived metric interns");
+            assert_eq!(interned, m);
+        }
+        // A collected per-interface metric belongs to the poll path, not to this module's sweep.
+        assert_eq!(derived_metric_name("if_oper_status"), None);
+        assert_eq!(derived_metric_name("icmp_rtt_ms"), None);
+        assert_eq!(derived_metric_name(""), None);
+        // Not a prefix match: a longer name starting with a derived one is a different metric.
+        assert_eq!(derived_metric_name("if_in_util_pct_avg"), None);
     }
 }

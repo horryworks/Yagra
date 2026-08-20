@@ -1564,11 +1564,17 @@ impl AlertManager {
     ///
     /// # What the caller must decide before calling
     ///
-    /// 🚨 **A node that is not committed-`Ok` must not be observed at all** — not `Ok` (which would
+    /// 🚨 **A node whose liveness is not `Ok` must not be observed at all** — not `Ok` (which would
     /// resolve a real congestion alert the moment the device went unreachable) and not `Unknown`
     /// (a problem state, which would raise "utilisation unknown" noise on top of the outage the
     /// liveness check is already paging about). Freezing is what leaves the port's alert open and
-    /// honest while the node's own alert does the paging. [`Self::node_state`] is the question.
+    /// honest while the node's own alert does the paging.
+    ///
+    /// [`Self::node_liveness`] is the question, read through
+    /// [`crate::interface_util::may_observe_ports`] — **never [`Self::node_state`]**, which folds in
+    /// the very alert this call is about to raise and therefore freezes the evaluator on its own
+    /// output (ADR-076 増分 7). A maintenance window is let through rather than frozen, because the
+    /// substitution below is exactly what a window is supposed to do to an open port alert.
     ///
     /// Maintenance is handled here rather than by the caller, because `observe` handles it here too
     /// and the two must not disagree about what a window means.
@@ -1650,14 +1656,67 @@ impl AlertManager {
         matching_rules(rules, node, ifindex, config.node_meta.get(&node))
     }
 
-    /// Whether a node's committed state is `Ok` — the gate the interface evaluator freezes on.
+    /// A node's committed **liveness** state — what its liveness check settled on, with no alert
+    /// rolled into it. `None` when the engine has never observed the node, which every caller must
+    /// treat as "we have no opinion", not as "fine".
     ///
-    /// `None` (never observed) counts as **not** `Ok`: a node the engine has no opinion about is one
-    /// whose liveness has not been established, and raising a congestion alert about a device that
-    /// may not be there is the wrong way round.
+    /// 🚨 **This is not [`Self::node_state`], and confusing the two is the bug ADR-076 増分 7 had to
+    /// fix.** `node_state` is the *display* roll-up: the worse of liveness and every active alert on
+    /// the node. The interface evaluator gated on it, so the instant a port alert fired the node
+    /// stopped reading as `Ok` — and the evaluator, which is also the only thing that can ever
+    /// resolve that alert, skipped the node from then on. **A port alert froze its own evaluator**,
+    /// and on real hardware nothing ever cleared: 12 fires and 0 resolves in one day.
+    ///
+    /// Ask this when the question is "is the device there". Ask `node_state` only when the question
+    /// is "what colour is this row".
     #[must_use]
-    pub fn node_is_ok(&self, node: NodeId) -> bool {
-        self.node_state(node) == Some(NodeState::Ok)
+    pub fn node_liveness(&self, node: NodeId) -> Option<NodeState> {
+        self.live
+            .lock()
+            .expect("live mutex poisoned")
+            .get(&node)
+            .copied()
+    }
+
+    /// Resolve every active **derived** per-interface alert whose rule no longer resolves.
+    ///
+    /// The poll path already closes a stranded alert when its rule is deleted ([`Self::observe`]'s
+    /// `!alerting` branch), but it can only close checks it visits — and it never visits
+    /// `metric@ifindex` for a derived metric, because nothing polls `if_in_util_pct`. Without this
+    /// sweep, deleting a port rule left its alert open in the UI and its incident open in whatever
+    /// external tool the dedup key reached, for the life of the process.
+    ///
+    /// **Derived metrics only.** A *collected* per-interface metric (`if_oper_status@7`) does arrive
+    /// on the poll path, so it already has an owner; touching it here would give one alert two
+    /// closers racing each other.
+    ///
+    /// 🚨 **Safe only because a failed config load no longer degrades to "no rules" (ADR-080).**
+    /// Before that, "the rule was deleted" and "the ruleset could not be read" were the same
+    /// observation, and this sweep would have resolved every port alert in the fleet — sending a
+    /// recovery for each — on any database blip. Do not reorder those two changes.
+    pub fn resolve_orphaned_interface_alerts(&self) -> Vec<NotifyAction> {
+        // Collect under the locks, resolve outside them: `resolve_event_alert` takes `active`
+        // itself. The order taken here is config → active, the same as `process_check`.
+        let orphans: Vec<CheckId> = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            let active = self.active.lock().expect("alerts mutex poisoned");
+            active
+                .values()
+                .filter_map(|a| {
+                    let node = a.node()?;
+                    let ifindex = a.ifindex?;
+                    let metric = crate::interface_util::derived_metric_name(&a.metric)?;
+                    config
+                        .resolve(node, Some(ifindex), metric)
+                        .is_none()
+                        .then_some(a.check)
+                })
+                .collect()
+        };
+        orphans
+            .into_iter()
+            .filter_map(|check| self.resolve_event_alert(check))
+            .collect()
     }
 
     /// Resolve a pool's coverage alert. `None` if it was not active.
@@ -5829,5 +5888,239 @@ mod tests {
                 "every port must resolve, or the number means nothing"
             );
         }
+    }
+
+    // ---- ADR-076 増分 7: the freeze gate and the orphan sweep -------------------------------
+
+    fn meta_for(node: NodeId) -> HashMap<NodeId, NodeMeta> {
+        let mut m = HashMap::new();
+        m.insert(node, NodeMeta::default());
+        m
+    }
+
+    /// A port-scoped `if_in_util_pct above <warning>` rule, dwell 1.
+    fn port_rule(node: NodeId, idx: IfIndex, warning: f64) -> StoredThreshold {
+        use yagra_common::{Direction, ThresholdRule};
+        StoredThreshold {
+            id: Uuid::nil(),
+            level: ScopeLevel::Interface,
+            scope_ids: vec![format!("{node}:{}", idx.0)],
+            rule: ThresholdRule {
+                metric: "if_in_util_pct".into(),
+                direction: Direction::Above,
+                warning: Some(warning),
+                critical: Some(90.0),
+                dwell_samples: 1,
+            },
+        }
+    }
+
+    /// The gate `run_interface_utilization_watch` applies, assembled from its two halves so a test
+    /// asks exactly the question the loop asks.
+    fn may_observe(mgr: &AlertManager, node: NodeId) -> bool {
+        crate::interface_util::may_observe_ports(mgr.node_liveness(node))
+    }
+
+    /// 🚨 The bug ADR-076 増分 7 fixes, in the smallest form that shows it.
+    ///
+    /// Before the fix the last assertion failed. The gate read `node_state` — the display roll-up,
+    /// which folds in every active alert on the node — so the instant a port alert fired, the
+    /// evaluator stopped visiting that node. Since the same evaluator is the only thing that can
+    /// resolve a port alert, nothing ever cleared: on the test server, 12 fires and 0 resolves in
+    /// one day, at any traffic level and any threshold.
+    #[test]
+    fn a_port_alert_does_not_freeze_its_own_evaluator() {
+        let mgr = manager();
+        let node = NodeId::new();
+        let idx = IfIndex(7);
+        mgr.set_config(cfg(vec![port_rule(node, idx, 1.0)], meta_for(node)));
+
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        assert!(may_observe(&mgr, node), "a reachable node starts un-frozen");
+
+        let acts = mgr
+            .observe_interface_metric(node, idx, "if_in_util_pct", 8.19, 1)
+            .expect("a rule is in force");
+        assert!(acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))));
+
+        // The roll-up moves, and that is correct — it is what the Nodes page paints.
+        assert_eq!(mgr.node_state(node), Some(NodeState::Warning));
+        // Liveness does not, and liveness is what the evaluator must ask.
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Ok));
+        assert!(
+            may_observe(&mgr, node),
+            "the port alert froze the only loop that can ever resolve it"
+        );
+    }
+
+    /// The same trap reached from the other side: any alert at all used to freeze bandwidth
+    /// evaluation for the whole node, so a router carrying a latency alert was silently
+    /// unmonitored for congestion.
+    #[test]
+    fn an_unrelated_alert_does_not_freeze_the_interface_evaluator() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdRule};
+
+        let mgr = manager();
+        let node = NodeId::new();
+        mgr.set_config(cfg(
+            vec![StoredThreshold {
+                id: Uuid::nil(),
+                level: ScopeLevel::Node,
+                scope_ids: vec![node.to_string()],
+                rule: ThresholdRule {
+                    metric: "icmp_rtt_ms".into(),
+                    direction: Direction::Above,
+                    warning: Some(50.0),
+                    critical: None,
+                    dwell_samples: 1,
+                },
+            }],
+            meta_for(node),
+        ));
+
+        let mut slow = result(node, CheckOutcome::Reachable, 0);
+        slow.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        let _ = mgr.observe(&slow);
+
+        assert_eq!(mgr.node_state(node), Some(NodeState::Warning));
+        assert!(
+            may_observe(&mgr, node),
+            "a latency alert must not stop bandwidth being evaluated on the same node"
+        );
+    }
+
+    /// The rejecting half. Without it, "the gate now accepts everything" would pass every test
+    /// above — and accepting an unreachable node is the failure decision 3 wrote the gate for.
+    #[test]
+    fn an_unreachable_node_is_still_frozen() {
+        let mgr = manager();
+        let node = NodeId::new();
+        for i in 0..DEFAULT_LIVENESS_DWELL {
+            let _ = mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
+        }
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Unreachable));
+        assert!(
+            !may_observe(&mgr, node),
+            "feeding a down device its ports would page about a link on a box already down"
+        );
+    }
+
+    /// A node the engine has never observed has no opinion behind it, which is not the same as
+    /// "fine".
+    #[test]
+    fn a_never_observed_node_is_frozen() {
+        let mgr = manager();
+        let node = NodeId::new();
+        assert_eq!(mgr.node_liveness(node), None);
+        assert!(!may_observe(&mgr, node));
+    }
+
+    /// Decision 3's other half, which the old gate also blocked: inside a maintenance window the
+    /// evaluator must keep observing, so an open port alert resolves the way a node-level one
+    /// does. Before this, a port alert was the only kind a window could not silence.
+    #[test]
+    fn a_window_reaches_a_port_alert_because_maintenance_is_not_frozen() {
+        let mgr = manager();
+        let node = NodeId::new();
+        let idx = IfIndex(7);
+        mgr.set_config(cfg(vec![port_rule(node, idx, 1.0)], meta_for(node)));
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let acts = mgr
+            .observe_interface_metric(node, idx, "if_in_util_pct", 8.19, 1)
+            .expect("a rule is in force");
+        assert!(acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))));
+
+        let mut window = BTreeSet::new();
+        window.insert(node);
+        mgr.set_config(
+            cfg(vec![port_rule(node, idx, 1.0)], meta_for(node)).with_maintenance(window),
+        );
+        for i in 0..DEFAULT_LIVENESS_DWELL {
+            let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 100 + i64::from(i)));
+        }
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Maintenance));
+        assert!(may_observe(&mgr, node), "a window must not freeze the loop");
+
+        let acts = mgr
+            .observe_interface_metric(node, idx, "if_in_util_pct", 8.19, 200)
+            .expect("the rule is still there");
+        assert!(acts.iter().any(|a| matches!(a, NotifyAction::Resolve(_))));
+        assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// Deleting a port rule must close its alert. The poll path cannot do it: that branch only
+    /// visits checks something polls, and nothing polls `if_in_util_pct`.
+    #[test]
+    fn the_orphan_sweep_closes_a_port_alert_whose_rule_was_deleted() {
+        let mgr = manager();
+        let node = NodeId::new();
+        let idx = IfIndex(7);
+        mgr.set_config(cfg(vec![port_rule(node, idx, 1.0)], meta_for(node)));
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let acts = mgr
+            .observe_interface_metric(node, idx, "if_in_util_pct", 8.19, 1)
+            .expect("a rule is in force");
+        assert!(acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))));
+
+        // The accepting half, and it is load-bearing: a sweep that resolved everything would pass
+        // the rest of this test.
+        assert!(
+            mgr.resolve_orphaned_interface_alerts().is_empty(),
+            "a rule that still exists is not an orphan"
+        );
+
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        let swept = mgr.resolve_orphaned_interface_alerts();
+        assert_eq!(swept.len(), 1);
+        assert!(matches!(swept[0], NotifyAction::Resolve(_)));
+        assert!(mgr.active_alerts().is_empty());
+        assert!(
+            mgr.resolve_orphaned_interface_alerts().is_empty(),
+            "the sweep runs every 60s for the life of the process; it must be idempotent"
+        );
+    }
+
+    /// A *collected* per-interface metric arrives on the poll path, so that path already closes it
+    /// when its rule goes. Two closers on one alert is a race, not a belt and braces.
+    #[test]
+    fn the_orphan_sweep_leaves_collected_port_alerts_to_the_poll_path() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, MetricKind, ThresholdRule};
+
+        let mgr = manager();
+        let node = NodeId::new();
+        let idx = IfIndex(7);
+        let rule = StoredThreshold {
+            id: Uuid::nil(),
+            level: ScopeLevel::Interface,
+            scope_ids: vec![format!("{node}:{}", idx.0)],
+            rule: ThresholdRule {
+                metric: "if_oper_status".into(),
+                direction: Direction::Below,
+                warning: None,
+                critical: Some(0.5),
+                dwell_samples: 1,
+            },
+        };
+        let per_if: BTreeSet<String> = ["if_oper_status".to_owned()].into_iter().collect();
+        mgr.set_config(cfg(vec![rule], meta_for(node)).with_per_interface(per_if.clone()));
+
+        let mut down = result(node, CheckOutcome::Reachable, 0);
+        down.samples = vec![Sample::interface(
+            "if_oper_status",
+            idx,
+            0.0,
+            MetricKind::Gauge,
+        )];
+        let _ = mgr.observe(&down);
+        assert_eq!(mgr.active_alerts().len(), 1);
+
+        mgr.set_config(cfg(Vec::new(), meta_for(node)).with_per_interface(per_if));
+        assert!(
+            mgr.resolve_orphaned_interface_alerts().is_empty(),
+            "the poll path owns this one"
+        );
+        assert_eq!(mgr.active_alerts().len(), 1);
     }
 }

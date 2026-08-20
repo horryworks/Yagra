@@ -644,9 +644,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         l3: l3_repo.clone(),
         nodes: repo.clone(),
     };
-    alerts.set_config(
-        load_alert_config(&repo, &thresholds, &maintenance, &group_repo, &topo_sources).await,
-    );
+    // A failed priming load leaves the engine with its empty starting config rather than
+    // installing a degraded one (ADR-080 決定 3). Nothing is active at boot, so an empty ruleset
+    // cannot resolve anything; the leader's 30s refresh installs the real one. Refusing to start
+    // would be worse — a transient query failure right after migrations would take monitoring down.
+    match load_alert_config(&repo, &thresholds, &maintenance, &group_repo, &topo_sources).await {
+        Ok(config) => alerts.set_config(config),
+        Err(e) => {
+            metrics::counter!("yagra_alert_config_load_failures_total").increment(1);
+            tracing::error!(error = %e, "priming the alert config failed; retrying on the refresh loop");
+        }
+    }
 
     // Notification templates (ADR-039) interpolate node names, groups and profiles, none of which
     // an `Alert` carries. Wired once, here, because it needs the write side; a skeleton-mode core
@@ -1971,12 +1979,23 @@ async fn run_alert_config_refresh(
         let generation = config_gen::current();
         let base_changed = cached_base.as_ref().map(|(g, _)| *g) != Some(generation);
         if base_changed {
-            cached_base = Some((
-                generation,
-                load_alert_config_base(&repo, &thresholds, &group_repo, &topo_sources).await,
-            ));
+            // 🚨 A failed rebuild installs nothing (ADR-080 決定 2). `cached_base` keeps its old
+            // generation, so the next cycle sees the same mismatch and reads again — the retry is
+            // the loop itself. Installing a partial base instead is what made a single database
+            // blip resolve every open threshold alert in the fleet and page a recovery for each.
+            match load_alert_config_base(&repo, &thresholds, &group_repo, &topo_sources).await {
+                Ok(base) => cached_base = Some((generation, base)),
+                Err(e) => {
+                    metrics::counter!("yagra_alert_config_load_failures_total").increment(1);
+                    tracing::warn!(error = %e, "rebuilding the alert config failed; keeping the previous one");
+                    continue;
+                }
+            }
         }
-        let base = &cached_base.as_ref().expect("alert base set above").1;
+        // Only reachable before the first successful build, and only when that build failed.
+        let Some((_, base)) = cached_base.as_ref() else {
+            continue;
+        };
         // A release from inherited suppression is sized to the coverage in force when it is
         // granted, and coverage can stop sooner than it said it would. Re-derive them before
         // resolving: an orphaned release is not just a marker on a quiet row, it is a node the
@@ -2477,6 +2496,29 @@ async fn run_interface_utilization_watch(
         tokio::time::sleep(util::WATCH_TICK).await;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
+        // One action list per tick, drained once at the bottom. The orphan sweep below runs even
+        // when no dimension does (a deleted rule is exactly the case where nothing can fire), so
+        // the dispatch cannot live inside the dimension loop the way it used to.
+        let mut actions = Vec::new();
+
+        // Close the port alerts whose rule was deleted. The poll path's `!alerting` branch does
+        // this for every check it visits, but it never visits a derived per-interface check —
+        // nothing polls `if_in_util_pct` — so before this, deleting a port rule stranded its alert
+        // for the life of the process (ADR-076 増分 7 決定 14).
+        for action in alerts.resolve_orphaned_interface_alerts() {
+            // Stop asking about a port nobody has a rule for. `TrackedChecks` has no other way to
+            // shrink (増分 6d), and the recovery sweep below is skipped entirely when a metric has
+            // no rule left — so without this the key would outlive the rule forever.
+            if let crate::alerts::NotifyAction::Resolve(a) = &action {
+                if let (Some(node), Some(idx), Some(m)) =
+                    (a.node(), a.ifindex, util::derived_metric_name(&a.metric))
+                {
+                    tracked.forget(&(node, idx, m));
+                }
+            }
+            actions.push(action);
+        }
+
         for (pair, dimension) in INTERFACE_DIMENSIONS {
             let pct_cov = alerts.interface_rule_coverage(pair.pct);
             let bps_cov = alerts.interface_rule_coverage(pair.bps);
@@ -2582,13 +2624,17 @@ async fn run_interface_utilization_watch(
                 .set(tracked.count_for(pair.bps) as f64);
 
             let mut present = BTreeSet::new();
-            let mut actions = Vec::new();
             for r in &readings {
                 present.insert((r.node, r.ifindex));
-                // A node that is not committed-Ok is frozen, not observed. Feeding `Ok` would
+                // A node whose *liveness* is not Ok is frozen, not observed. Feeding `Ok` would
                 // resolve a real congestion alert the moment the device went unreachable; feeding
                 // the reading would page about a link on a box that is already down.
-                if !alerts.node_is_ok(r.node) {
+                //
+                // 🚨 Liveness, never the display roll-up: the roll-up folds in this port's own
+                // alert, so gating on it froze the evaluator on its own output and the alert could
+                // never clear (ADR-076 増分 7 決定 13). A maintenance window is let through, so an
+                // open port alert resolves inside one the way a node-level alert does.
+                if !util::may_observe_ports(alerts.node_liveness(r.node)) {
                     continue;
                 }
                 // ⚠️ The mark comes *after* the observation, and that ordering is the point
@@ -2634,29 +2680,33 @@ async fn run_interface_utilization_watch(
                 }
                 for key in tracked.absent(metric, &present) {
                     let (node, ifindex, m) = key;
-                    if !alerts.node_is_ok(node) {
+                    if !util::may_observe_ports(alerts.node_liveness(node)) {
                         continue;
                     }
                     match alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms) {
                         Some(a) => actions.extend(a),
                         // The rule was deleted between the mark and now. Drop the key instead of
-                        // asking about it every tick for the life of the process — any alert it
-                        // left open is resolved by the config refresh, not by claiming the traffic
-                        // fell to zero.
+                        // asking about it every tick for the life of the process; any alert it left
+                        // open was already closed by the orphan sweep at the top of this tick — not
+                        // by claiming the traffic fell to zero.
                         None => tracked.forget(&key),
                     }
                 }
             }
+        }
 
-            for action in actions {
-                if let Some(alert) = coverage_alert_of(&action) {
-                    let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
-                    if let Err(e) = history.record(alert, resolved).await {
-                        tracing::warn!(error = %e, "recording an interface-utilisation transition failed");
-                    }
+        // One drain per tick, for every dimension and for the orphan sweep. History first, then
+        // the notifier: Increment 1 wired this loop to the notifier alone and the alerts paged with
+        // no row behind them, so `a_transition_from_the_interface_watch_reaches_the_history_store`
+        // pins both calls to this function's body.
+        for action in actions {
+            if let Some(alert) = coverage_alert_of(&action) {
+                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
+                if let Err(e) = history.record(alert, resolved).await {
+                    tracing::warn!(error = %e, "recording an interface-utilisation transition failed");
                 }
-                notifier.handle(action).await;
             }
+            notifier.handle(action).await;
         }
     }
 }
@@ -4029,50 +4079,59 @@ struct AlertConfigBase {
 }
 
 /// Load the config-derived alert base (thresholds + node-meta + dependency topology).
+///
+/// 🚨 **Every read here propagates its error; none of them degrades to an empty value** (ADR-080).
+/// Each one used to have its own `unwrap_or`, each justified as "the narrowing failure, so it is
+/// safe" — and every one of those justifications was wrong in the same way. Narrowing does not mean
+/// "no alert fires that would not have fired anyway" once alerts are *open*: a check whose rule
+/// stops resolving is a check with no rule, and `AlertManager::observe`'s `!alerting` branch closes
+/// every alert on it. So one failed `list_all()` resolved the whole fleet's threshold alerts, sent a
+/// recovery for each, and re-fired them all thirty seconds later.
+///
+/// One rule, no list of which reads are "critical": **if anything failed, the caller keeps the
+/// config it already has.** A list of exceptions is a thing that rots; a single `?` is not.
+///
+/// The one deliberate exception is [`NodeRepo::get_topology_mode`], which keeps its own fallback —
+/// and for the opposite reason: it degrades to the mode that *changes nothing* (`Manual`), so it
+/// cannot silence or redirect anything. Read its doc comment before copying the pattern.
 async fn load_alert_config_base(
     repo: &NodeRepo,
     thresholds: &ThresholdStore,
     groups: &groups::GroupRepo,
     topo: &topology_projection::TopologySources,
-) -> AlertConfigBase {
-    let rules = thresholds.list_all().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "failed to load thresholds");
-        Vec::new()
-    });
-    let nodes = repo.list_nodes().await.unwrap_or_default();
-    // Folder-pool inheritance (0054). Degrading to `empty()` resolves every node to its own pool
-    // or `default`, which narrows what a scoped operator can see rather than widening it.
-    let pools = match groups.pool_rows().await {
-        Ok(rows) => poolres::PoolResolver::build(rows),
-        Err(e) => {
-            tracing::warn!(error = %e, "loading folder pools failed; scoping pool alerts without inheritance");
-            poolres::PoolResolver::empty()
-        }
-    };
+) -> anyhow::Result<AlertConfigBase> {
+    let rules = thresholds
+        .list_all()
+        .await
+        .map_err(|e| anyhow::anyhow!("load thresholds: {e}"))?;
+    let nodes = repo
+        .list_nodes()
+        .await
+        .map_err(|e| anyhow::anyhow!("load nodes: {e}"))?;
+    // Folder-pool inheritance (0054).
+    let pools = poolres::PoolResolver::build(
+        groups
+            .pool_rows()
+            .await
+            .map_err(|e| anyhow::anyhow!("load folder pools: {e}"))?,
+    );
     // Folder-group threshold scope (ADR-075 増分 3): a rule on a group covers every group inside
     // it, so each node needs its group plus every group above it. Read the edges once — the walk
-    // is per-node and `group_ancestors` is a linear scan of this slice. Degrading to an empty
-    // list makes folder-group rules match nothing, which is the narrowing failure (no rule fires
-    // that would not have fired anyway) rather than the fail-open one.
-    let group_edges = groups.edges().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "loading group edges failed; folder-group thresholds will not resolve");
-        Vec::new()
-    });
+    // is per-node and `group_ancestors` is a linear scan of this slice.
+    let group_edges = groups
+        .edges()
+        .await
+        .map_err(|e| anyhow::anyhow!("load group edges: {e}"))?;
     // Which metrics are per-interface (ADR-076). Built from the collection catalogue, never from
     // whether a sample carries an `ifindex` label — that label is a row key, so a chassis reading
     // would otherwise be split into one bogus check per "port" (ADR-011).
     //
     // The repo is constructed here rather than threaded through `LeaderTasks`: it is a handle on
     // the pool `repo` already owns, and this runs only when the config generation advances.
-    // Degrading to an empty set restores the pre-ADR-076 behaviour (every port shares the node's
-    // check), which under-fires rather than over-fires — the safe direction for a failed load.
     let per_interface = crate::collection::CollectionRepo::new(repo.pool())
         .per_interface_metric_names()
         .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(error = %e, "loading per-interface metric names failed; interface thresholds will share one check per node");
-            std::collections::BTreeSet::new()
-        });
+        .map_err(|e| anyhow::anyhow!("load per-interface metric names: {e}"))?;
     let mut meta = HashMap::new();
     let mut pool_groups: HashMap<String, std::collections::BTreeSet<Uuid>> = HashMap::new();
     for node in &nodes {
@@ -4111,14 +4170,14 @@ async fn load_alert_config_base(
         topology_projection::manual_topology(&nodes)
     };
 
-    AlertConfigBase {
+    Ok(AlertConfigBase {
         rules,
         nodes,
         meta,
         pool_groups,
         topology,
         per_interface,
-    }
+    })
 }
 
 /// Resolve the set of nodes currently inside an active maintenance window. Time-dependent (window
@@ -4204,14 +4263,14 @@ async fn load_alert_config(
     maintenance: &MaintenanceRepo,
     groups: &groups::GroupRepo,
     topo: &topology_projection::TopologySources,
-) -> AlertConfig {
-    let base = load_alert_config_base(repo, thresholds, groups, topo).await;
+) -> anyhow::Result<AlertConfig> {
+    let base = load_alert_config_base(repo, thresholds, groups, topo).await?;
     let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
-    AlertConfig::new(base.rules, base.meta)
+    Ok(AlertConfig::new(base.rules, base.meta)
         .with_topology(base.topology)
         .with_maintenance(in_maintenance)
         .with_pool_groups(base.pool_groups)
-        .with_per_interface(base.per_interface)
+        .with_per_interface(base.per_interface))
 }
 
 /// Load the unexpired mutes into the notifier (check ids recomputed from names here). A
@@ -5062,5 +5121,74 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap().bytes, 0);
         assert_eq!(rx.try_recv().unwrap().bytes, 1);
         assert!(rx.try_recv().is_err(), "only the accepted rows are queued");
+    }
+
+    /// The interface watch must record to History as well as notify — the same property
+    /// `a_pool_coverage_transition_reaches_the_history_store` pins for the pool watch, and for the
+    /// same reason: Increment 1 wired that loop to the notifier alone, the alerts paged, and
+    /// History stayed empty with every gauge and log line looking correct.
+    ///
+    /// Structural because the loop body is a 60-second tick around VictoriaMetrics, PostgreSQL and
+    /// a notifier. It also guards the ADR-076 増分 7 refactor that moved the drain out of the
+    /// per-dimension loop so the orphan sweep could share it: a drain that ended up outside this
+    /// function would still compile.
+    #[test]
+    fn a_transition_from_the_interface_watch_reaches_the_history_store() {
+        let production = SRC
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        let watch = production
+            .split("async fn run_interface_utilization_watch")
+            .nth(1)
+            .expect("the watch loop exists");
+        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        assert!(
+            body.contains("history.record("),
+            "the interface watch notifies without recording — the alert pages and History stays \
+             empty"
+        );
+        assert!(
+            body.contains("notifier.handle("),
+            "…and it must still notify"
+        );
+        assert!(
+            body.contains("resolve_orphaned_interface_alerts()"),
+            "without the sweep, deleting a port rule strands its alert for the life of the process"
+        );
+    }
+
+    /// 🚨 ADR-080: a failed read must not become an empty value here.
+    ///
+    /// Every load in this function used to carry its own `unwrap_or`, each justified as "the
+    /// narrowing failure, so it is safe". They were all wrong the same way: narrowing is *not*
+    /// harmless once alerts are open, because a check whose rule stops resolving is a check with no
+    /// rule, and `AlertManager::observe` closes every alert on one of those. A single failed
+    /// threshold read therefore resolved the whole fleet's alerts and paged a recovery for each.
+    ///
+    /// This is the only permanent guard: the failure needs a sick database to reproduce, so no
+    /// behavioural test can stand in for it. The needle is assembled at runtime — a literal would
+    /// match this test's own source and pass forever.
+    #[test]
+    fn the_alert_config_base_never_degrades_a_failed_load_to_an_empty_one() {
+        let production = SRC
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        let f = production
+            .split("async fn load_alert_config_base")
+            .nth(1)
+            .expect("the loader exists");
+        let body = &f[..f.find("\n}\n").map_or(f.len(), |i| i + 2)];
+        let needle = format!("unwrap{}or", "_");
+        assert!(
+            !body.contains(needle.as_str()),
+            "a read in load_alert_config_base degrades to an empty value again; an empty ruleset \
+             is indistinguishable from `every rule was deleted` and resolves the fleet"
+        );
+        assert!(
+            body.contains("-> anyhow::Result<AlertConfigBase>"),
+            "the loader must be able to fail, or the caller cannot keep the previous config"
+        );
     }
 }
