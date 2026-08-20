@@ -19,17 +19,30 @@ import type { StoredThreshold } from '../types/api';
 const NODE = '11111111-2222-3333-4444-555555555555';
 const IFINDEX = 7;
 
-/** A stored rule as the API serves it, from a body this form produced. */
+/** The row the server would store and hand back for `form`.
+ *
+ *  ⚠️ `direction`/`warning`/`critical` are **derived from the four bounds** here, exactly as
+ *  `StoredThreshold::new` derives them (ADR-081). Copying them off the request body instead would
+ *  build a row the API cannot produce — and since the body no longer carries the legacy pair, it
+ *  would build one with no bounds at all, so every round trip below would compare two empty forms
+ *  and pass. */
 function stored(form: PortRuleForm): StoredThreshold {
   const body = portRuleToThreshold(form, NODE, IFINDEX);
+  const hasAbove = body.warning_above != null || body.critical_above != null;
+  const hasBelow = body.warning_below != null || body.critical_below != null;
+  const direction = hasAbove || !hasBelow ? 'above' : 'below';
   return {
     id: 'aaaaaaaa-0000-0000-0000-000000000001',
     scope_level: body.scope_level,
     scope_ids: body.scope_ids ?? [],
     metric: body.metric,
-    direction: body.direction,
-    warning: body.warning ?? null,
-    critical: body.critical ?? null,
+    direction,
+    warning: (direction === 'below' ? body.warning_below : body.warning_above) ?? null,
+    critical: (direction === 'below' ? body.critical_below : body.critical_above) ?? null,
+    warning_below: body.warning_below ?? null,
+    critical_below: body.critical_below ?? null,
+    warning_above: body.warning_above ?? null,
+    critical_above: body.critical_above ?? null,
     dwell_samples: body.dwell_samples ?? 3,
   } as StoredThreshold;
 }
@@ -63,8 +76,8 @@ describe('portRuleForm', () => {
     const body = portRuleToThreshold(newPortRuleForm('link_state'), NODE, IFINDEX);
     expect(body.metric).toBe('if_oper_status');
     expect(body.direction).toBe('above');
-    expect(body.critical).toBe(1.5);
-    expect(body.warning).toBeUndefined();
+    expect(body.critical_above).toBe(1.5);
+    expect(body.warning_above).toBeUndefined();
     // Every value ifOperStatus can report other than `up` breaches it, and `up` does not.
     for (const v of [2, 3, 4, 5, 6, 7]) expect(v > 1.5).toBe(true);
     expect(1 > 1.5).toBe(false);
@@ -81,7 +94,7 @@ describe('portRuleForm', () => {
     };
     const body = portRuleToThreshold(form, NODE, IFINDEX);
     expect(body.metric).toBe('if_in_bps');
-    expect(body.critical).toBe(800_000_000);
+    expect(body.critical_above).toBe(800_000_000);
     const back = portRuleFrom(stored(form));
     expect(back?.critical).toBe('800');
     expect(back?.unit).toBe('Mbps');
@@ -171,8 +184,8 @@ describe('portRuleForm', () => {
 
   it('sends an untyped bound as absent, never as zero', () => {
     const body = portRuleToThreshold({ ...newPortRuleForm(), warning: '  ' }, NODE, IFINDEX);
-    expect(body.warning).toBeUndefined();
+    expect(body.warning_above).toBeUndefined();
     // `Number('')` is 0, and an `above 0` warning fires on every sample forever.
-    expect(body.critical).toBe(90);
+    expect(body.critical_above).toBe(90);
   });
 });

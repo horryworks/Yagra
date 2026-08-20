@@ -15,6 +15,7 @@
 // One module for both modes on purpose. Two would be two answers to "what does this form send",
 // and the add path and the edit path would drift the way every mirror in this repo has.
 
+import { LIVENESS_METRIC } from '../lib/format';
 import { isInterfaceScopeId } from '../lib/interfaceScope';
 import type { Direction, ScopeLevel, StoredThreshold, ThresholdInput } from '../types/api';
 
@@ -26,9 +27,14 @@ export interface ThresholdForm {
    *  and exactly one for an `interface` rule. */
   scopeIds: string[];
   metric: string;
-  direction: Direction;
-  warning: string;
-  critical: string;
+  /** The four bounds (ADR-081). There is deliberately **no** `direction` field any more: which way
+   *  the rule faces is decided by which of these the operator filled in, so the form cannot hold a
+   *  direction that disagrees with its own numbers — the state that let a rule be saved facing one
+   *  way while its bounds faced the other. Filling a `Below` and an `Above` alerts outside a band. */
+  warningBelow: string;
+  criticalBelow: string;
+  warningAbove: string;
+  criticalAbove: string;
   dwell: string;
 }
 
@@ -64,9 +70,10 @@ export function thresholdFormFrom(rule?: StoredThreshold): ThresholdForm {
       level: 'profile',
       scopeIds: [],
       metric: '',
-      direction: 'above',
-      warning: '',
-      critical: '',
+      warningBelow: '',
+      criticalBelow: '',
+      warningAbove: '',
+      criticalAbove: '',
       dwell: String(DEFAULT_DWELL),
     };
   }
@@ -76,9 +83,13 @@ export function thresholdFormFrom(rule?: StoredThreshold): ThresholdForm {
     // it came from is the one the page is still rendering behind the modal.
     scopeIds: [...rule.scope_ids],
     metric: rule.metric,
-    direction: rule.direction,
-    warning: numberText(rule.warning),
-    critical: numberText(rule.critical),
+    // The four bounds are read directly. The row still carries `direction`/`warning`/`critical`
+    // for clients written before ADR-081, and reading *those* is what would lose a band rule's
+    // second side on every edit — they describe the primary side only.
+    warningBelow: numberText(rule.warning_below),
+    criticalBelow: numberText(rule.critical_below),
+    warningAbove: numberText(rule.warning_above),
+    criticalAbove: numberText(rule.critical_above),
     dwell: String(rule.dwell_samples),
   };
 }
@@ -119,18 +130,31 @@ export function scopeAcceptsMany(level: ScopeLevel): boolean {
   return kind === 'profile' || kind === 'folderGroup' || kind === 'node';
 }
 
+/** Whether the rule names at least one bound.
+ *
+ *  A rule with none is stored, listed, and never fires — the server refuses one since ADR-081, and
+ *  this is the half that keeps the operator from getting a 400 for boxes they can see are empty.
+ *  Liveness is the exception on both sides: it asks "did the node answer", so bound-less is its
+ *  correct shape rather than an unfinished form. */
+export function hasAnyBound(f: ThresholdForm): boolean {
+  return [f.warningBelow, f.criticalBelow, f.warningAbove, f.criticalAbove].some(
+    (s) => optionalNumber(s) !== undefined,
+  );
+}
+
 /** Whether the form can be submitted.
  *
  *  A `global` rule needs no target — it applies to every node — so demanding one would make the
  *  level unusable. Every other level needs at least one, because a rule with no target matches
  *  nothing and would be stored, listed, and silently inert (the server refuses one since ADR-075
  *  増分 3; this is the half that keeps the operator from getting a 400 for a field they can see is
- *  empty).
+ *  empty). Since ADR-081 the same is true of the bounds — see [`hasAnyBound`].
  *
  *  ⚠️ The server's cap of 32 targets is deliberately **not** mirrored here. A number repeated in
  *  two languages is a number that drifts, and the 400 the edge returns names it. */
 export function isThresholdReady(f: ThresholdForm): boolean {
   if (f.metric.trim() === '') return false;
+  if (f.metric.trim() !== LIVENESS_METRIC && !hasAnyBound(f)) return false;
   const kind = scopeIdKind(f.level);
   if (kind === 'none') return true;
   const targets = f.scopeIds.map((s) => s.trim()).filter(Boolean);
@@ -150,9 +174,27 @@ export function thresholdBody(f: ThresholdForm): ThresholdInput {
     // identical in the list, and be impossible to tell apart.
     scope_ids: scopeIdKind(f.level) === 'none' ? [] : f.scopeIds.map((s) => s.trim()).filter(Boolean),
     metric: f.metric.trim(),
-    direction: f.direction,
-    warning: optionalNumber(f.warning),
-    critical: optionalNumber(f.critical),
+    // `direction` is still required by the wire — a client written before ADR-081 sends it, so the
+    // edge still reads it — but it is *derived* here rather than held in the form. The server
+    // ignores it whenever any of the four bounds is present, and recomputes what it stores in the
+    // legacy column from the bounds themselves; sending the derived value keeps the body coherent
+    // for anything that reads it without the four.
+    direction: derivedDirection(f),
+    warning_below: optionalNumber(f.warningBelow),
+    critical_below: optionalNumber(f.criticalBelow),
+    warning_above: optionalNumber(f.warningAbove),
+    critical_above: optionalNumber(f.criticalAbove),
     dwell_samples: optionalNumber(f.dwell) ?? DEFAULT_DWELL,
   };
+}
+
+/** The primary side, matching `ThresholdBounds::direction` on the server: `above` unless the rule
+ *  bounds only the downward side. Not a field the operator sets — it is a reading of the numbers
+ *  they typed. */
+export function derivedDirection(f: ThresholdForm): Direction {
+  const hasAbove =
+    optionalNumber(f.warningAbove) !== undefined || optionalNumber(f.criticalAbove) !== undefined;
+  const hasBelow =
+    optionalNumber(f.warningBelow) !== undefined || optionalNumber(f.criticalBelow) !== undefined;
+  return hasAbove || !hasBelow ? 'above' : 'below';
 }

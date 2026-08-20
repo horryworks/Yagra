@@ -110,9 +110,14 @@ export const PORT_SUBJECT_SPECS: Record<PortRuleSubject, PortSubjectSpec> = {
     fixedBounds: { critical: 1.5 },
     cadence: 'polls',
   },
-  // Optical levels are read downwards: a receive level falling is the failure. The upper bound of
-  // the vendor's window cannot be expressed at all yet — a rule carries one direction, and the
-  // range form is still deferred (ADR-062 決定 8 / Issue #66).
+  // Optical levels are read downwards: a receive level falling is the failure.
+  //
+  // ⚠️ Since ADR-081 a rule **can** carry the vendor's whole window — a `*_below` and an `*_above`
+  // on one rule — but not from *this* form, which is organised by subject and gives each subject
+  // one direction. The full window is written from Alerts ▸ Metric alert rules, and a rule that
+  // has one is deliberately not adopted back into this dialog (`portRuleFrom` returns null for a
+  // direction that disagrees with the subject), so reopening a port cannot silently drop the side
+  // this form has no box for. Extending the subject model to two-sided bounds is its own change.
   optical_rx: {
     hasBasis: false,
     metric: () => 'if_rx_power_dbm',
@@ -203,11 +208,34 @@ export function portRuleToThreshold(
     // server-side anyway (ADR-078 decision 3).
     scope_ids: [interfaceScopeId(nodeId, ifindex)],
     metric: spec.metric(f.basis),
+    // ADR-081: the bounds travel on the side the subject reads in, and `direction` goes along as
+    // the derived primary side. Sending only the legacy pair would work — the edge folds it — but
+    // then this writer and the general dialog would state the same rule in two different shapes,
+    // and the one that rots is the one nobody edits.
     direction: spec.direction,
-    warning: spec.fixedBounds ? spec.fixedBounds.warning : boundOf(f, 'warning'),
-    critical: spec.fixedBounds ? spec.fixedBounds.critical : boundOf(f, 'critical'),
+    ...sideBounds(
+      spec.direction,
+      spec.fixedBounds ? spec.fixedBounds.warning : boundOf(f, 'warning'),
+      spec.fixedBounds ? spec.fixedBounds.critical : boundOf(f, 'critical'),
+    ),
     dwell_samples: optionalNumber(f.dwell) ?? DEFAULT_DWELL,
   };
+}
+
+/** Place a one-sided pair of bounds on the side it reads in — the TS twin of
+ *  `ThresholdBounds::from_legacy`. The other side stays absent, which is what makes this a
+ *  one-sided rule rather than a band with half its numbers missing. */
+function sideBounds(
+  direction: Direction,
+  warning: number | undefined,
+  critical: number | undefined,
+): Pick<
+  ThresholdInput,
+  'warning_below' | 'critical_below' | 'warning_above' | 'critical_above'
+> {
+  return direction === 'below'
+    ? { warning_below: warning, critical_below: critical }
+    : { warning_above: warning, critical_above: critical };
 }
 
 /** Every (subject, basis) pair, as the metric it stores. Built from the specs so it cannot drift. */
@@ -245,6 +273,12 @@ export function portRuleFrom(rule: StoredThreshold): PortRuleForm | null {
   // A rule whose direction disagrees with the subject is not this subject: `if_rx_power_dbm above`
   // is a legitimate rule (a receive level too *high* also damages optics) that this form has no
   // way to express, so it stays a metric-name rule rather than being flipped on save.
+  //
+  // ⚠️ Since ADR-081 this also catches a **band** rule, and that is the behaviour that matters:
+  // a band reports its primary side as `above`, so an `optical_rx` band lands here and is refused.
+  // Adopting it would show the operator two boxes for a rule that has four, and saving would drop
+  // the pair this form cannot see. Refusing is what keeps the general dialog the only editor of a
+  // rule this one cannot fully represent.
   if (rule.direction !== spec.direction) return null;
   if (spec.fixedBounds) {
     // Link state has no bounds to show, so the stored ones must be the ones it writes — otherwise

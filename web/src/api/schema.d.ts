@@ -7570,7 +7570,7 @@ export interface components {
          *     rules imports without error and the operator finds out during an incident.
          * @enum {string}
          */
-        NoteCode: "skipped_builtin" | "skipped_missing_reference" | "reference_dropped" | "secret_dropped_imported_disabled" | "webhook_token_reset" | "schedule_next_run_recomputed";
+        NoteCode: "skipped_builtin" | "skipped_missing_reference" | "reference_dropped" | "secret_dropped_imported_disabled" | "webhook_token_reset" | "schedule_next_run_recomputed" | "skipped_invalid_value";
         /**
          * @description Which point in an alert's life produced this notification.
          *
@@ -8822,6 +8822,17 @@ export interface components {
         };
         /** @description A stored threshold rule with its scope and id (id is for the API; the engine ignores it). */
         StoredThreshold: components["schemas"]["ThresholdRule"] & {
+            /**
+             * Format: double
+             * @description The primary side’s critical bound. See `direction`.
+             */
+            critical?: number | null;
+            /**
+             * @description Which way this rule’s `warning`/`critical` face. Superseded by the four bounds on the rule
+             *     itself, which describe both sides; on a rule bounding both, this names the **primary side
+             *     only** and describes half of what the rule does.
+             */
+            direction: components["schemas"]["Direction"];
             /** Format: uuid */
             id: string;
             /**
@@ -8830,6 +8841,11 @@ export interface components {
              */
             scope_ids: string[];
             scope_level: components["schemas"]["ScopeLevel"];
+            /**
+             * Format: double
+             * @description The primary side’s warning bound. See `direction`.
+             */
+            warning?: number | null;
         };
         /** @description A stored maintenance window (API shape; times are RFC 3339 text at the edge). */
         StoredWindow: {
@@ -8948,8 +8964,26 @@ export interface components {
          *     node is exactly one kind" rule shipped enforced on only one of them.
          */
         ThresholdBody: {
-            /** Format: double */
+            /**
+             * Format: double
+             * @description The primary side’s critical bound, read through `direction`. See the four bounds below.
+             */
             critical?: number | null;
+            /**
+             * Format: double
+             * @description Value at/above which the node is `Critical`.
+             */
+            critical_above?: number | null;
+            /**
+             * Format: double
+             * @description Value at/below which the node is `Critical`.
+             */
+            critical_below?: number | null;
+            /**
+             * @description Which way the rule’s `warning`/`critical` bounds trip. Superseded by the four
+             *     `*_below`/`*_above` bounds, which win if any of them is sent; still accepted so that a
+             *     client written against the earlier shape keeps working.
+             */
             direction: string;
             /** Format: int32 */
             dwell_samples?: number | null;
@@ -8966,8 +9000,22 @@ export interface components {
              */
             scope_ids?: string[] | null;
             scope_level: string;
-            /** Format: double */
+            /**
+             * Format: double
+             * @description The primary side’s warning bound, read through `direction`. See the four bounds below.
+             */
             warning?: number | null;
+            /**
+             * Format: double
+             * @description Value at/above which the node is `Warning`.
+             */
+            warning_above?: number | null;
+            /**
+             * Format: double
+             * @description Value at/below which the node is `Warning`. Send this and `warning_above` together to
+             *     alert outside a band — a dark optical link **and** an overdriven one, from one rule.
+             */
+            warning_below?: number | null;
         };
         /**
          * @description A capped page of threshold rules.
@@ -8990,6 +9038,10 @@ export interface components {
         ThresholdRow: {
             /** Format: double */
             critical?: number | null;
+            /** Format: double */
+            critical_above?: number | null;
+            /** Format: double */
+            critical_below?: number | null;
             direction: string;
             /** Format: int32 */
             dwell_samples: number;
@@ -9009,16 +9061,27 @@ export interface components {
             scope_level: string;
             /** Format: double */
             warning?: number | null;
+            /** Format: double */
+            warning_above?: number | null;
+            /**
+             * Format: double
+             * @description The four bounds a rule can name (ADR-081). Absent in a bundle written before ranges existed,
+             *     in which case `direction` + `warning` + `critical` is the whole answer.
+             */
+            warning_below?: number | null;
         };
         /** @description A threshold rule for a single metric. */
         ThresholdRule: {
             /**
              * Format: double
-             * @description Value at/over which the node is `Critical`. `None` = no critical level.
+             * @description Value at/above which the node is `Critical`. `None` = no upper critical bound.
              */
-            critical?: number | null;
-            /** @description Which direction trips the threshold. */
-            direction: components["schemas"]["Direction"];
+            critical_above?: number | null;
+            /**
+             * Format: double
+             * @description Value at/below which the node is `Critical`. `None` = no lower critical bound.
+             */
+            critical_below?: number | null;
             /**
              * Format: int32
              * @description Hysteresis: consecutive samples the breach must hold before transitioning,
@@ -9029,9 +9092,14 @@ export interface components {
             metric: string;
             /**
              * Format: double
-             * @description Value at/over which the node is `Warning`. `None` = no warning level.
+             * @description Value at/above which the node is `Warning`. `None` = no upper warning bound.
              */
-            warning?: number | null;
+            warning_above?: number | null;
+            /**
+             * Format: double
+             * @description Value at/below which the node is `Warning`. `None` = no lower warning bound.
+             */
+            warning_below?: number | null;
         };
         /**
          * @description Fleet aggregate ingress and egress, aligned onto one shared timestamp axis.

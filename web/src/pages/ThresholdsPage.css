@@ -50,6 +50,34 @@
   gap: 6px;
 }
 
+/* One side of the band (ADR-081): a label naming the direction, then its warning and critical
+   boxes. Two of these stack, and filling both is what makes the rule alert outside a band.
+   The label column is fixed so the two rows' inputs line up under each other — a ragged left edge
+   reads as two unrelated controls rather than as two halves of one bound. */
+.thresholds-bound-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.thresholds-bound-side {
+  flex: 0 0 auto;
+  width: 132px;
+  color: var(--text-secondary);
+  font-size: var(--font-sm);
+}
+
+/* Stacked on a phone: 132px of label plus two number boxes does not fit, and shrinking the label
+   is what turns "Alert at or below" into a truncated string that reads as the opposite rule. */
+html[data-viewport='mobile'] .thresholds-bound-row {
+  flex-wrap: wrap;
+}
+
+html[data-viewport='mobile'] .thresholds-bound-side {
+  width: 100%;
+}
+
 /* The "no reachability rule" warning. Same shape as the explainer card above it, in the warning
    colour: it is not an error (the operator may have meant it) but it must not read as prose. */
 .thresholds-warn-card {

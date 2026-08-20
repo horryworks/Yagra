@@ -99,7 +99,7 @@ pub use severity::Severity;
 pub use state::NodeState;
 pub use thresholds::{
     interface_scope_id, parse_interface_scope_id, resolve_effective, Direction, EffectiveThreshold,
-    ScopeLevel, ScopedThreshold, ThresholdRule,
+    ScopeLevel, ScopedThreshold, ThresholdBounds, ThresholdRule,
 };
 pub use topology::{
     DerivedLink, LinkDirection, LinkOverride, LinkOverrideAction, LinkSource, TopologyLinkSummary,

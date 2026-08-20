@@ -695,7 +695,9 @@ impl YagraMcp {
                        most specific level that reaches this port wins, and among folder-group \
                        rules only the nearest group in the chain. Several rules can be in force \
                        for one metric at once, in which case the engine keeps the more \
-                       restrictive bound of each severity — so `in_force` means the rule \
+                       restrictive bound of each severity **on each side of the band \
+                       independently** — the higher lower bound and the lower upper bound, since \
+                       those are the ones that trip first. So `in_force` means the rule \
                        contributes, not that it alone decides. Metrics reading `if_in_util_pct` \
                        / `if_out_util_pct` are a percentage of the port's own speed and cannot be \
                        evaluated at all where that speed is unknown; `if_in_bps` / `if_out_bps` \
@@ -2585,10 +2587,16 @@ impl YagraMcp {
                        report_definitions, report_schedules; **deployment settings** — retention, \
                        adjacency_settings, llm, roles, oidc, ldap. \
                        **Reading kind=thresholds.** A rule is `{scope_level, scope_ids, metric, \
-                       direction, warning, critical, dwell_samples}` and fires when `metric` \
-                       crosses a bound in `direction` for `dwell_samples` consecutive samples — a \
-                       count of samples, never seconds. `warning` or `critical` may be null; one \
-                       bound is a one-sided rule, not a broken one. `scope_level` is one of six, \
+                       warning_below, critical_below, warning_above, critical_above, \
+                       dwell_samples}` and fires when `metric` crosses any bound it names for \
+                       `dwell_samples` consecutive samples — a count of samples, never seconds. \
+                       Any bound may be null; a rule naming one is one-sided, not broken, and a \
+                       rule naming a `_below` and an `_above` alerts **outside a band** (a dark \
+                       optical link and an overdriven one, from one rule). It reports `direction`, \
+                       `warning` and `critical` as well: those are the rule's **primary side** \
+                       only, kept for clients written before bands existed. On a band rule they \
+                       describe half of it — read the four bounds, not these three. `scope_level` \
+                       is one of six, \
                        broadest first: `global` (every node, `scope_ids` empty), `profile`, \
                        `group` (a node **tag value**), `group_id` (a folder group, inherited by \
                        everything inside it), `node`, `interface`. **`scope_ids` holds a \
@@ -3490,7 +3498,9 @@ struct ConfigParams {
     /// `group_id`, `node`, `interface`. Absent or empty means every level.
     scope_level: Option<String>,
     /// Comma-separated directions to keep (kind=thresholds): `above`, `below`. Absent or empty
-    /// means both.
+    /// means both. A rule bounding **both** sides matches either value, so asking for `below`
+    /// returns every rule that can fire as a value drops — including band rules whose reported
+    /// `direction` says `above`.
     direction: Option<String>,
     /// Row cap (kind=thresholds 1–500 default 500; mib_catalog 1–2000 default 100;
     /// discovery_candidates 1–50 default 10).

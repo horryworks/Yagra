@@ -25,8 +25,6 @@ import {
 } from '../../pages/thresholdRequest';
 import {
   CREATABLE_SCOPE_LEVELS,
-  DIRECTIONS,
-  type Direction,
   type NodeGroup,
   type ProfileSummary,
   type ScopeLevel,
@@ -318,40 +316,50 @@ export function ThresholdModal({
           />
         )}
       </div>
-      <div className="modal-field">
-        <label className="modal-field-label">{t('thresholds.addModal.direction')}</label>
-        <Select
-          value={form.direction}
-          onChange={(e) => set('direction', e.target.value as Direction)}
-        >
-          {DIRECTIONS.map((d) => (
-            <option key={d} value={d}>
-              {t(`thresholds.direction.${d}`)}
-            </option>
-          ))}
-        </Select>
-      </div>
+      {/* ADR-081: there is no direction selector. The rule faces whichever way the operator filled
+          in, and filling both rows alerts outside a band — a dark optical link *and* an overdriven
+          one, from one rule. A selector beside the numbers was a second statement of the same fact,
+          and the two could disagree: the form let a rule be saved saying `above` with bounds that
+          only made sense downward, which stored, listed, and never fired. */}
       <div className="modal-field">
         <label className="modal-field-label">
           {noBounds ? t('thresholds.addModal.dwellOnly') : t('thresholds.addModal.boundsDwell')}
         </label>
-        <div className="thresholds-bounds">
-          {!noBounds && (
-            <>
+        {!noBounds && (
+          <>
+            <div className="thresholds-bound-row">
+              <span className="thresholds-bound-side">{t('thresholds.addModal.belowSide')}</span>
               <TextInput
                 className="thresholds-num"
                 placeholder={t('thresholds.addModal.warnPlaceholder')}
-                value={form.warning}
-                onChange={(e) => set('warning', e.target.value)}
+                value={form.warningBelow}
+                onChange={(e) => set('warningBelow', e.target.value)}
               />
               <TextInput
                 className="thresholds-num"
                 placeholder={t('thresholds.addModal.critPlaceholder')}
-                value={form.critical}
-                onChange={(e) => set('critical', e.target.value)}
+                value={form.criticalBelow}
+                onChange={(e) => set('criticalBelow', e.target.value)}
               />
-            </>
-          )}
+            </div>
+            <div className="thresholds-bound-row">
+              <span className="thresholds-bound-side">{t('thresholds.addModal.aboveSide')}</span>
+              <TextInput
+                className="thresholds-num"
+                placeholder={t('thresholds.addModal.warnPlaceholder')}
+                value={form.warningAbove}
+                onChange={(e) => set('warningAbove', e.target.value)}
+              />
+              <TextInput
+                className="thresholds-num"
+                placeholder={t('thresholds.addModal.critPlaceholder')}
+                value={form.criticalAbove}
+                onChange={(e) => set('criticalAbove', e.target.value)}
+              />
+            </div>
+          </>
+        )}
+        <div className="thresholds-bounds">
           <TextInput
             className="thresholds-num"
             placeholder={t('thresholds.addModal.dwellPlaceholder')}

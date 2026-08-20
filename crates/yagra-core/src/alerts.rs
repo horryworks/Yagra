@@ -74,18 +74,16 @@ pub(crate) const DEFAULT_LIVENESS_DWELL: u32 = 3;
 /// to disagree with what `repo.rs` actually seeds.
 #[cfg(test)]
 pub(crate) fn seeded_liveness_rule() -> StoredThreshold {
-    StoredThreshold {
-        id: uuid::Uuid::nil(),
-        level: ScopeLevel::Global,
-        scope_ids: Vec::new(),
-        rule: yagra_common::ThresholdRule {
-            metric: LIVENESS.to_owned(),
-            direction: Direction::Below,
-            warning: None,
-            critical: None,
-            dwell_samples: DEFAULT_LIVENESS_DWELL,
-        },
-    }
+    StoredThreshold::new(
+        uuid::Uuid::nil(),
+        ScopeLevel::Global,
+        Vec::new(),
+        yagra_common::ThresholdRule::new(
+            LIVENESS,
+            yagra_common::ThresholdBounds::below(None, None),
+            DEFAULT_LIVENESS_DWELL,
+        ),
+    )
 }
 
 /// Flapping detection window and threshold.
@@ -433,16 +431,19 @@ impl AlertConfig {
         let mut has_below = false;
         let mut nodes: Option<BTreeSet<Uuid>> = Some(BTreeSet::new());
         for t in rules {
-            // The lowest bound of either severity: whichever trips first is what the floor must
-            // not exclude. A rule with neither bound cannot fire and contributes nothing.
-            let mut can_fire = false;
-            for bound in [t.rule.warning, t.rule.critical].into_iter().flatten() {
-                lowest_bound = Some(lowest_bound.map_or(bound, |b: f64| b.min(bound)));
-                can_fire = true;
+            // The lowest bound named on **either side** of the band: whichever trips first is what
+            // the floor must not exclude. A rule with no bound at all cannot fire and contributes
+            // nothing. Since ADR-081 one rule can name up to four, so this spans them rather than
+            // reading the primary side's two — reading only the primary side would leave the floor
+            // above a bound that does fire, and the ports it excludes are never evaluated.
+            let bounds = t.rule.bounds();
+            if let Some(lowest) = bounds.lowest_bound() {
+                lowest_bound = Some(lowest_bound.map_or(lowest, |b: f64| b.min(lowest)));
             }
-            // Only a rule that can actually fire gets to widen the query. A `below` rule with
-            // neither bound would otherwise force every port through the floorless path forever.
-            if can_fire && t.rule.direction == Direction::Below {
+            // Only a rule that can actually fire gets to widen the query, and a range rule widens
+            // it as soon as *either* of its lower bounds is set. A rule with no bound would
+            // otherwise force every port through the floorless path forever.
+            if bounds.has_below() {
                 has_below = true;
             }
             match t.level {
@@ -759,6 +760,16 @@ fn resolve_key<'a>(
     (metric, port)
 }
 
+// The fold comparison that used to live here is now `EffectiveThreshold::is_worse`, beside the
+// bounds it reads (ADR-081) — a band has no single "further into breach" to measure along, so the
+// answer stopped being a function of one `Direction`.
+//
+// ⚠️ **Why any of this is direction-aware at all, kept here because the product carries the note:**
+// `query_metrics` collapses an `entity` metric to its maximum, and its own response admits the
+// consequence — for a metric where low is the fault (an optical receive level) the maximum is the
+// *healthiest* series rather than the worst. Folding a `below` rule with `max` would report the
+// coolest sensor, the fullest battery and the idlest CPU, and alert on none of them.
+
 /// Deterministic check id for one **port's** metric on a node (ADR-076 decision 1).
 ///
 /// Before this existed, every interface's sample of one metric advanced the *same* check: on a
@@ -777,22 +788,6 @@ fn resolve_key<'a>(
 /// `check_id(node, metric)` keeps returning exactly the bytes it always did: ADR-075 decision 2
 /// hangs dependency-suppression selection and the PagerDuty/JSM dedup key off that value, and an
 /// open external incident that stops matching is one nothing will ever close.
-/// Whether `candidate` sits further into breach than `incumbent` for a rule read in `direction`.
-///
-/// ⚠️ **The direction is load-bearing, and the product already carries the note that says why.**
-/// `query_metrics` collapses an `entity` metric to its maximum, and its own response admits the
-/// consequence: for a metric where low is the fault (an optical receive level) the maximum is the
-/// *healthiest* series rather than the worst. Folding a `below` rule with `max` would therefore
-/// report the coolest sensor, the fullest battery and the idlest CPU — and alert on none of them.
-///
-/// NaN never displaces an incumbent: both comparisons are false for it, so the first sample stands.
-fn is_worse(direction: Direction, candidate: f64, incumbent: f64) -> bool {
-    match direction {
-        Direction::Above => candidate > incumbent,
-        Direction::Below => candidate < incumbent,
-    }
-}
-
 pub(crate) fn interface_check_id(node: NodeId, ifindex: IfIndex, metric: &str) -> CheckId {
     subject_check_id(&Subject::Node(node), &format!("{metric}@{ifindex}"))
 }
@@ -1111,7 +1106,7 @@ impl AlertManager {
                 // Node-wide: keep the worst sample **in this rule's own direction**, observe below.
                 None => match folded.iter_mut().find(|(m, _, _)| *m == sample.metric) {
                     Some(slot) => {
-                        if is_worse(eff.direction, sample.value, slot.1.value) {
+                        if eff.is_worse(sample.value, slot.1.value) {
                             slot.1 = sample;
                         }
                     }
@@ -1178,11 +1173,14 @@ impl AlertManager {
         } else {
             eff.evaluate(sample.value)
         };
+        // The side the operator is told about. For a band rule this is the primary side, which is
+        // not necessarily the side that just tripped — a genuine narrowing, and the reason the
+        // breach detail is worth revisiting when a screen wants to say *which* bound was crossed.
         let eval = ThresholdEval {
             value: sample.value,
-            direction: eff.direction,
-            warning: eff.warning,
-            critical: eff.critical,
+            direction: eff.direction(),
+            warning: eff.warning(),
+            critical: eff.critical(),
         };
         self.process_check(
             node,
@@ -1613,9 +1611,9 @@ impl AlertManager {
                 alerting: true,
                 eval: Some(ThresholdEval {
                     value,
-                    direction: eff.direction,
-                    warning: eff.warning,
-                    critical: eff.critical,
+                    direction: eff.direction(),
+                    warning: eff.warning(),
+                    critical: eff.critical(),
                 }),
                 ifindex: Some(ifindex),
             },
@@ -2898,6 +2896,7 @@ mod tests {
     use super::*;
     use uuid::Uuid;
     use yagra_common::NodeId;
+    use yagra_common::ThresholdBounds;
 
     /// The fleet-default liveness rule every deployment is seeded with (ADR-075, `repo.rs`).
     ///
@@ -3314,18 +3313,16 @@ mod tests {
     }
 
     fn folder_rule(group: Uuid, warning: f64) -> StoredThreshold {
-        StoredThreshold {
-            id: Uuid::from_u128(u128::from(warning as u64) + 1),
-            level: ScopeLevel::FolderGroup,
-            scope_ids: vec![group.to_string()],
-            rule: yagra_common::ThresholdRule {
-                metric: "cpu_util".into(),
-                direction: yagra_common::Direction::Above,
-                warning: Some(warning),
-                critical: None,
-                dwell_samples: 1,
-            },
-        }
+        StoredThreshold::new(
+            Uuid::from_u128(u128::from(warning as u64) + 1),
+            ScopeLevel::FolderGroup,
+            vec![group.to_string()],
+            yagra_common::ThresholdRule::new(
+                "cpu_util",
+                yagra_common::ThresholdBounds::above(Some(warning), None),
+                1,
+            ),
+        )
     }
 
     fn in_folder(node: NodeId, chain: Vec<Uuid>) -> HashMap<NodeId, NodeMeta> {
@@ -3351,7 +3348,7 @@ mod tests {
         let unrelated = Uuid::from_u128(0xf003);
         let meta = in_folder(node, vec![own, parent]);
 
-        let warn = |c: AlertConfig| c.resolve(node, None, "cpu_util").and_then(|e| e.warning);
+        let warn = |c: AlertConfig| c.resolve(node, None, "cpu_util").and_then(|e| e.warning());
         // The node's own group.
         assert_eq!(
             warn(cfg(vec![folder_rule(own, 10.0)], meta.clone())),
@@ -3369,7 +3366,7 @@ mod tests {
         assert_eq!(
             orphan
                 .resolve(node, None, "cpu_util")
-                .and_then(|e| e.warning),
+                .and_then(|e| e.warning()),
             None
         );
     }
@@ -3389,7 +3386,7 @@ mod tests {
             meta.clone(),
         );
         assert_eq!(
-            c.resolve(node, None, "cpu_util").and_then(|e| e.warning),
+            c.resolve(node, None, "cpu_util").and_then(|e| e.warning()),
             Some(90.0),
             "the node's own group must beat its parent"
         );
@@ -3401,7 +3398,7 @@ mod tests {
             meta.clone(),
         );
         assert_eq!(
-            c.resolve(node, None, "cpu_util").and_then(|e| e.warning),
+            c.resolve(node, None, "cpu_util").and_then(|e| e.warning()),
             Some(60.0),
             "same depth ⇒ strictest wins"
         );
@@ -3410,23 +3407,21 @@ mod tests {
         let c = cfg(
             vec![
                 folder_rule(own, 90.0),
-                StoredThreshold {
-                    id: Uuid::from_u128(0xf013),
-                    level: ScopeLevel::Node,
-                    scope_ids: vec![node.to_string()],
-                    rule: yagra_common::ThresholdRule {
-                        metric: "cpu_util".into(),
-                        direction: yagra_common::Direction::Above,
-                        warning: Some(99.0),
-                        critical: None,
-                        dwell_samples: 1,
-                    },
-                },
+                StoredThreshold::new(
+                    Uuid::from_u128(0xf013),
+                    ScopeLevel::Node,
+                    vec![node.to_string()],
+                    yagra_common::ThresholdRule::new(
+                        "cpu_util",
+                        yagra_common::ThresholdBounds::above(Some(99.0), None),
+                        1,
+                    ),
+                ),
             ],
             meta,
         );
         assert_eq!(
-            c.resolve(node, None, "cpu_util").and_then(|e| e.warning),
+            c.resolve(node, None, "cpu_util").and_then(|e| e.warning()),
             Some(99.0)
         );
     }
@@ -3446,7 +3441,7 @@ mod tests {
     #[test]
     fn node_threshold_breach_fires_metric_alert() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
@@ -3454,18 +3449,16 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "icmp_rtt_ms".into(),
-                    direction: Direction::Above,
-                    warning: Some(50.0),
-                    critical: Some(100.0),
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "icmp_rtt_ms",
+                    ThresholdBounds::above(Some(50.0), Some(100.0)),
+                    1,
+                ),
+            )],
             meta,
         ));
 
@@ -3490,24 +3483,26 @@ mod tests {
     #[test]
     fn an_interface_rule_wins_on_its_port_and_nowhere_else() {
         use yagra_bus::Sample;
-        use yagra_common::{interface_scope_id, Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{
+            interface_scope_id, IfIndex, MetricKind, ThresholdBounds, ThresholdRule,
+        };
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
 
-        let rule = |level: ScopeLevel, scope_id: String, critical: f64| StoredThreshold {
-            id: Uuid::new_v4(),
-            level,
-            scope_ids: vec![scope_id],
-            rule: ThresholdRule {
-                metric: "if_in_util_pct".into(),
-                direction: Direction::Above,
-                warning: None,
-                critical: Some(critical),
-                dwell_samples: 1,
-            },
+        let rule = |level: ScopeLevel, scope_id: String, critical: f64| {
+            StoredThreshold::new(
+                Uuid::new_v4(),
+                level,
+                vec![scope_id],
+                ThresholdRule::new(
+                    "if_in_util_pct",
+                    ThresholdBounds::above(None, Some(critical)),
+                    1,
+                ),
+            )
         };
         mgr.set_config(
             cfg(
@@ -3560,7 +3555,7 @@ mod tests {
     #[test]
     fn an_interface_rule_never_applies_to_a_node_level_check() {
         use yagra_bus::Sample;
-        use yagra_common::{interface_scope_id, Direction, ThresholdRule};
+        use yagra_common::{interface_scope_id, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
@@ -3569,18 +3564,12 @@ mod tests {
         // The metric is deliberately absent from the per-interface set, so its samples resolve
         // with no port — the interface rule then has nothing to match against.
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Interface,
-                scope_ids: vec![interface_scope_id(node.as_uuid(), 7)],
-                rule: ThresholdRule {
-                    metric: "icmp_rtt_ms".into(),
-                    direction: Direction::Above,
-                    warning: None,
-                    critical: Some(1.0),
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Interface,
+                vec![interface_scope_id(node.as_uuid(), 7)],
+                ThresholdRule::new("icmp_rtt_ms", ThresholdBounds::above(None, Some(1.0)), 1),
+            )],
             meta,
         ));
 
@@ -3720,7 +3709,7 @@ mod tests {
     #[test]
     fn one_breaching_port_among_many_fires_exactly_one_alert() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
@@ -3728,20 +3717,18 @@ mod tests {
         meta.insert(node, NodeMeta::default());
         mgr.set_config(
             cfg(
-                vec![StoredThreshold {
-                    id: Uuid::nil(),
-                    level: ScopeLevel::Node,
-                    scope_ids: vec![node.to_string()],
-                    rule: ThresholdRule {
-                        metric: "if_oper_status".into(),
+                vec![StoredThreshold::new(
+                    Uuid::nil(),
+                    ScopeLevel::Node,
+                    vec![node.to_string()],
+                    ThresholdRule::new(
+                        "if_oper_status",
                         // 1 = up, 2 = down: "not up" is `above 1.5`, not `below 0.5` — ifOperStatus
                         // never reports 0, so a `below` rule on it can never fire at all.
-                        direction: Direction::Above,
-                        warning: None,
-                        critical: Some(1.5),
-                        dwell_samples: 3,
-                    },
-                }],
+                        ThresholdBounds::above(None, Some(1.5)),
+                        3,
+                    ),
+                )],
                 meta,
             )
             .with_per_interface(["if_oper_status".to_owned()].into_iter().collect()),
@@ -3811,25 +3798,23 @@ mod tests {
     #[test]
     fn one_breaching_row_among_many_fires_after_the_dwell() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Global,
-                scope_ids: Vec::new(),
-                rule: ThresholdRule {
-                    metric: "huawei_cpu_usage".into(),
-                    direction: Direction::Above,
-                    warning: Some(80.0),
-                    critical: Some(90.0),
-                    dwell_samples: 3,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(
+                    "huawei_cpu_usage",
+                    ThresholdBounds::above(Some(80.0), Some(90.0)),
+                    3,
+                ),
+            )],
             meta,
         ));
 
@@ -3890,25 +3875,23 @@ mod tests {
     #[test]
     fn every_row_healthy_raises_nothing() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Global,
-                scope_ids: Vec::new(),
-                rule: ThresholdRule {
-                    metric: "cisco_env_temp".into(),
-                    direction: Direction::Above,
-                    warning: Some(70.0),
-                    critical: Some(80.0),
-                    dwell_samples: 2,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(
+                    "cisco_env_temp",
+                    ThresholdBounds::above(Some(70.0), Some(80.0)),
+                    2,
+                ),
+            )],
             meta,
         ));
 
@@ -3933,25 +3916,23 @@ mod tests {
     #[test]
     fn every_row_breaching_still_needs_the_whole_dwell() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Global,
-                scope_ids: Vec::new(),
-                rule: ThresholdRule {
-                    metric: "juniper_temp".into(),
-                    direction: Direction::Above,
-                    warning: Some(70.0),
-                    critical: Some(80.0),
-                    dwell_samples: 3,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(
+                    "juniper_temp",
+                    ThresholdBounds::above(Some(70.0), Some(80.0)),
+                    3,
+                ),
+            )],
             meta,
         ));
 
@@ -3983,25 +3964,23 @@ mod tests {
     #[test]
     fn a_below_rule_folds_to_the_worst_row_not_the_healthiest() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Global,
-                scope_ids: Vec::new(),
-                rule: ThresholdRule {
-                    metric: "ups_charge_remaining_pct".into(),
-                    direction: Direction::Below,
-                    warning: Some(50.0),
-                    critical: Some(20.0),
-                    dwell_samples: 2,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(
+                    "ups_charge_remaining_pct",
+                    ThresholdBounds::below(Some(50.0), Some(20.0)),
+                    2,
+                ),
+            )],
             meta,
         ));
 
@@ -4047,25 +4026,23 @@ mod tests {
     #[test]
     fn a_single_series_metric_is_unchanged_by_the_fold() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Global,
-                scope_ids: Vec::new(),
-                rule: ThresholdRule {
-                    metric: yagra_common::METRIC_SNMP_UP.into(),
-                    direction: Direction::Below,
-                    warning: None,
-                    critical: Some(0.5),
-                    dwell_samples: 2,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Global,
+                Vec::new(),
+                ThresholdRule::new(
+                    yagra_common::METRIC_SNMP_UP,
+                    ThresholdBounds::below(None, Some(0.5)),
+                    2,
+                ),
+            )],
             meta,
         ));
 
@@ -4101,7 +4078,7 @@ mod tests {
     /// the second wrong tells the operator the wrong rule is the one to edit.
     #[test]
     fn matching_rules_lists_every_level_and_marks_the_winner() {
-        use yagra_common::{Direction, IfIndex, ThresholdRule};
+        use yagra_common::{IfIndex, ThresholdRule};
 
         let node = NodeId::new();
         let other = NodeId::new();
@@ -4109,17 +4086,13 @@ mod tests {
         let parent = Uuid::new_v4();
         let child = Uuid::new_v4();
 
-        let rule = |level: ScopeLevel, scope_id: String, metric: &str| StoredThreshold {
-            id: Uuid::new_v4(),
-            level,
-            scope_ids: vec![scope_id],
-            rule: ThresholdRule {
-                metric: metric.into(),
-                direction: Direction::Above,
-                warning: None,
-                critical: Some(90.0),
-                dwell_samples: 3,
-            },
+        let rule = |level: ScopeLevel, scope_id: String, metric: &str| {
+            StoredThreshold::new(
+                Uuid::new_v4(),
+                level,
+                vec![scope_id],
+                ThresholdRule::new(metric, ThresholdBounds::above(None, Some(90.0)), 3),
+            )
         };
         let rules = vec![
             rule(ScopeLevel::Global, String::new(), "if_in_util_pct"),
@@ -4201,20 +4174,20 @@ mod tests {
     /// refreshed yet. It must still get an honest answer rather than an empty one.
     #[test]
     fn a_node_with_no_metadata_still_matches_the_levels_that_do_not_need_it() {
-        use yagra_common::{Direction, IfIndex, ThresholdRule};
+        use yagra_common::{IfIndex, ThresholdRule};
 
         let node = NodeId::new();
-        let rule = |level: ScopeLevel, scope_id: String| StoredThreshold {
-            id: Uuid::new_v4(),
-            level,
-            scope_ids: vec![scope_id],
-            rule: ThresholdRule {
-                metric: "if_in_util_pct".into(),
-                direction: Direction::Above,
-                warning: None,
-                critical: Some(90.0),
-                dwell_samples: 3,
-            },
+        let rule = |level: ScopeLevel, scope_id: String| {
+            StoredThreshold::new(
+                Uuid::new_v4(),
+                level,
+                vec![scope_id],
+                ThresholdRule::new(
+                    "if_in_util_pct",
+                    ThresholdBounds::above(None, Some(90.0)),
+                    3,
+                ),
+            )
         };
         let rules = vec![
             rule(ScopeLevel::Global, String::new()),
@@ -4248,23 +4221,17 @@ mod tests {
     /// whether any rule reads downwards, and whether the nodes can be enumerated at all.
     #[test]
     fn interface_rule_coverage_reports_the_lowest_bound_and_the_nodes() {
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let a = NodeId::new();
         let b = NodeId::new();
         let rule = |level: ScopeLevel, scope_id: String, crit: Option<f64>, warn: Option<f64>| {
-            StoredThreshold {
-                id: Uuid::new_v4(),
+            StoredThreshold::new(
+                Uuid::new_v4(),
                 level,
-                scope_ids: vec![scope_id],
-                rule: ThresholdRule {
-                    metric: "if_in_util_pct".into(),
-                    direction: Direction::Above,
-                    warning: warn,
-                    critical: crit,
-                    dwell_samples: 3,
-                },
-            }
+                vec![scope_id],
+                ThresholdRule::new("if_in_util_pct", ThresholdBounds::above(warn, crit), 3),
+            )
         };
         let cov = AlertConfig::new(
             vec![
@@ -4317,18 +4284,16 @@ mod tests {
         let node = NodeId::new();
         let with = |direction: Direction, crit: Option<f64>| {
             AlertConfig::new(
-                vec![StoredThreshold {
-                    id: Uuid::new_v4(),
-                    level: ScopeLevel::Node,
-                    scope_ids: vec![node.to_string()],
-                    rule: ThresholdRule {
-                        metric: "if_in_bps".into(),
-                        direction,
-                        warning: None,
-                        critical: crit,
-                        dwell_samples: 3,
-                    },
-                }],
+                vec![StoredThreshold::new(
+                    Uuid::new_v4(),
+                    ScopeLevel::Node,
+                    vec![node.to_string()],
+                    ThresholdRule::new(
+                        "if_in_bps",
+                        ThresholdBounds::from_legacy(direction, None, crit),
+                        3,
+                    ),
+                )],
                 HashMap::new(),
             )
             .interface_rule_coverage("if_in_bps")
@@ -4346,7 +4311,7 @@ mod tests {
     #[test]
     fn two_ports_on_one_node_are_two_independent_checks() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
@@ -4354,18 +4319,16 @@ mod tests {
         meta.insert(node, NodeMeta::default());
         mgr.set_config(
             cfg(
-                vec![StoredThreshold {
-                    id: Uuid::nil(),
-                    level: ScopeLevel::Node,
-                    scope_ids: vec![node.to_string()],
-                    rule: ThresholdRule {
-                        metric: "if_in_util_pct".into(),
-                        direction: Direction::Above,
-                        warning: None,
-                        critical: Some(90.0),
-                        dwell_samples: 2,
-                    },
-                }],
+                vec![StoredThreshold::new(
+                    Uuid::nil(),
+                    ScopeLevel::Node,
+                    vec![node.to_string()],
+                    ThresholdRule::new(
+                        "if_in_util_pct",
+                        ThresholdBounds::above(None, Some(90.0)),
+                        2,
+                    ),
+                )],
                 meta,
             )
             .with_per_interface(["if_in_util_pct".to_owned()].into_iter().collect()),
@@ -4398,7 +4361,7 @@ mod tests {
     #[test]
     fn a_row_key_that_is_not_a_port_does_not_split_the_check() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, IfIndex, MetricKind, ThresholdRule};
+        use yagra_common::{IfIndex, MetricKind, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
@@ -4407,18 +4370,16 @@ mod tests {
         // Note the empty per-interface set: the catalogue says this metric is chassis-wide, so the
         // ifindex on its samples is an entPhysicalIndex or a CPU number, not a port.
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "cisco_env_temp".into(),
-                    direction: Direction::Above,
-                    warning: None,
-                    critical: Some(70.0),
-                    dwell_samples: 2,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "cisco_env_temp",
+                    ThresholdBounds::above(None, Some(70.0)),
+                    2,
+                ),
+            )],
             meta,
         ));
 
@@ -4464,25 +4425,19 @@ mod tests {
     #[test]
     fn repeated_samples_of_one_metric_are_a_single_observation() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "if_util_pct".into(),
-                    direction: Direction::Above,
-                    warning: None,
-                    critical: Some(90.0),
-                    dwell_samples: 3,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new("if_util_pct", ThresholdBounds::above(None, Some(90.0)), 3),
+            )],
             meta,
         ));
 
@@ -4514,7 +4469,7 @@ mod tests {
     #[test]
     fn counter_sample_never_fires_and_drains_a_latched_alert() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let node = NodeId::new();
         let mgr = manager();
@@ -4522,18 +4477,16 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "if_hc_in_octets".into(),
-                    direction: Direction::Above,
-                    warning: None,
-                    critical: Some(1000.0),
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "if_hc_in_octets",
+                    ThresholdBounds::above(None, Some(1000.0)),
+                    1,
+                ),
+            )],
             meta,
         ));
 
@@ -4571,18 +4524,16 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "icmp_rtt_ms".into(),
-                    direction: Direction::Above,
-                    warning: Some(50.0),
-                    critical: Some(100.0),
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "icmp_rtt_ms",
+                    ThresholdBounds::above(Some(50.0), Some(100.0)),
+                    1,
+                ),
+            )],
             meta,
         ));
 
@@ -4631,7 +4582,7 @@ mod tests {
     #[test]
     fn node_states_reflect_liveness_and_threshold_rollup() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let mgr = manager();
         let node = NodeId::new();
@@ -4651,18 +4602,16 @@ mod tests {
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "icmp_rtt_ms".into(),
-                    direction: Direction::Above,
-                    warning: Some(50.0),
-                    critical: Some(100.0),
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "icmp_rtt_ms",
+                    ThresholdBounds::above(Some(50.0), Some(100.0)),
+                    1,
+                ),
+            )],
             meta,
         ));
         let mut high = result(node, CheckOutcome::Reachable, 1);
@@ -4755,23 +4704,21 @@ mod tests {
     #[test]
     fn maintenance_suppresses_threshold_alerts_too() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let node = NodeId::new();
         let mut meta = HashMap::new();
         meta.insert(node, NodeMeta::default());
-        let thresholds = vec![StoredThreshold {
-            id: Uuid::nil(),
-            level: ScopeLevel::Node,
-            scope_ids: vec![node.to_string()],
-            rule: ThresholdRule {
-                metric: "icmp_rtt_ms".into(),
-                direction: Direction::Above,
-                warning: Some(50.0),
-                critical: Some(100.0),
-                dwell_samples: 1,
-            },
-        }];
+        let thresholds = vec![StoredThreshold::new(
+            Uuid::nil(),
+            ScopeLevel::Node,
+            vec![node.to_string()],
+            ThresholdRule::new(
+                "icmp_rtt_ms",
+                ThresholdBounds::above(Some(50.0), Some(100.0)),
+                1,
+            ),
+        )];
 
         let mgr = manager();
         let mut maintenance = BTreeSet::new();
@@ -5325,18 +5272,16 @@ mod tests {
     }
 
     fn rule_at(level: ScopeLevel, scope_id: &str, dir: Direction, crit: f64) -> StoredThreshold {
-        StoredThreshold {
-            id: Uuid::new_v4(),
+        StoredThreshold::new(
+            Uuid::new_v4(),
             level,
-            scope_ids: vec![scope_id.to_string()],
-            rule: yagra_common::ThresholdRule {
-                metric: "cpu_util".to_string(),
-                direction: dir,
-                warning: None,
-                critical: Some(crit),
-                dwell_samples: 3,
-            },
-        }
+            vec![scope_id.to_string()],
+            yagra_common::ThresholdRule::new(
+                "cpu_util",
+                yagra_common::ThresholdBounds::from_legacy(dir, None, Some(crit)),
+                3,
+            ),
+        )
     }
 
     /// ADR-078, the case the feature exists for: one rule covering the two Cisco IOS profiles.
@@ -5371,7 +5316,7 @@ mod tests {
             assert_eq!(
                 config
                     .resolve(who, None, "cpu_util")
-                    .and_then(|e| e.critical),
+                    .and_then(|e| e.critical()),
                 Some(90.0),
                 "a named profile must resolve"
             );
@@ -5418,7 +5363,7 @@ mod tests {
         assert_eq!(
             config
                 .resolve(node, None, "cpu_util")
-                .and_then(|e| e.critical),
+                .and_then(|e| e.critical()),
             Some(95.0),
             "the pair-naming rule sits at the inner folder, so it overrides rather than merging"
         );
@@ -5438,7 +5383,7 @@ mod tests {
         assert_eq!(
             config
                 .resolve(node, None, "cpu_util")
-                .and_then(|e| e.critical),
+                .and_then(|e| e.critical()),
             Some(42.0)
         );
         assert!(config.resolve(other, None, "cpu_util").is_none());
@@ -5446,18 +5391,16 @@ mod tests {
 
     /// The same, naming several targets at once (ADR-078).
     fn rule_at_many(level: ScopeLevel, ids: &[&str], dir: Direction, crit: f64) -> StoredThreshold {
-        StoredThreshold {
-            id: Uuid::new_v4(),
+        StoredThreshold::new(
+            Uuid::new_v4(),
             level,
-            scope_ids: ids.iter().map(|s| (*s).to_string()).collect(),
-            rule: yagra_common::ThresholdRule {
-                metric: "cpu_util".to_string(),
-                direction: dir,
-                warning: None,
-                critical: Some(crit),
-                dwell_samples: 3,
-            },
-        }
+            ids.iter().map(|s| (*s).to_string()).collect(),
+            yagra_common::ThresholdRule::new(
+                "cpu_util",
+                yagra_common::ThresholdBounds::from_legacy(dir, None, Some(crit)),
+                3,
+            ),
+        )
     }
 
     #[test]
@@ -5705,7 +5648,7 @@ mod tests {
         assert!(m.by_port.contains_key(&(node.as_uuid(), 7)));
         // `all()` must still see everything, in the original order.
         assert_eq!(m.all().len(), 6);
-        let bounds: Vec<Option<f64>> = m.all().iter().map(|t| t.rule.critical).collect();
+        let bounds: Vec<Option<f64>> = m.all().iter().map(|t| t.rule.critical()).collect();
         assert_eq!(
             bounds,
             vec![
@@ -5759,18 +5702,16 @@ mod tests {
         let node = NodeId::from(Uuid::new_v4());
         let mgr = AlertManager::new();
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::new_v4(),
-                level: ScopeLevel::Interface,
-                scope_ids: vec![format!("{}:7", node.as_uuid())],
-                rule: yagra_common::ThresholdRule {
-                    metric: "if_in_util_pct".to_string(),
-                    direction: Direction::Above,
-                    warning: None,
-                    critical: Some(90.0),
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::new_v4(),
+                ScopeLevel::Interface,
+                vec![format!("{}:7", node.as_uuid())],
+                yagra_common::ThresholdRule::new(
+                    "if_in_util_pct",
+                    yagra_common::ThresholdBounds::above(None, Some(90.0)),
+                    1,
+                ),
+            )],
             HashMap::new(),
         ));
         // The port that has the rule breaches it.
@@ -5840,35 +5781,31 @@ mod tests {
 
             // One global rule so every port resolves to *something* — the expensive path. An early
             // `None` would flatter the numbers by skipping the work being measured.
-            let mut rules = vec![StoredThreshold {
-                id: Uuid::new_v4(),
-                level: ScopeLevel::Global,
-                scope_ids: Vec::new(),
-                rule: yagra_common::ThresholdRule {
-                    metric: "if_in_util_pct".to_string(),
-                    direction: Direction::Above,
-                    warning: Some(70.0),
-                    critical: Some(90.0),
-                    dwell_samples: 3,
-                },
-            }];
+            let mut rules = vec![StoredThreshold::new(
+                Uuid::new_v4(),
+                ScopeLevel::Global,
+                Vec::new(),
+                yagra_common::ThresholdRule::new(
+                    "if_in_util_pct",
+                    yagra_common::ThresholdBounds::above(Some(70.0), Some(90.0)),
+                    3,
+                ),
+            )];
             for i in 0..n_rules {
-                rules.push(StoredThreshold {
-                    id: Uuid::new_v4(),
-                    level: ScopeLevel::Interface,
-                    scope_ids: vec![format!(
+                rules.push(StoredThreshold::new(
+                    Uuid::new_v4(),
+                    ScopeLevel::Interface,
+                    vec![format!(
                         "{}:{}",
                         nodes[i % nodes.len()].as_uuid(),
                         (i % PORTS) + 1
                     )],
-                    rule: yagra_common::ThresholdRule {
-                        metric: "if_in_util_pct".to_string(),
-                        direction: Direction::Above,
-                        warning: Some(70.0),
-                        critical: Some(90.0),
-                        dwell_samples: 3,
-                    },
-                });
+                    yagra_common::ThresholdRule::new(
+                        "if_in_util_pct",
+                        yagra_common::ThresholdBounds::above(Some(70.0), Some(90.0)),
+                        3,
+                    ),
+                ));
             }
 
             let mgr = AlertManager::new();
@@ -5919,19 +5856,17 @@ mod tests {
 
     /// A port-scoped `if_in_util_pct above <warning>` rule, dwell 1.
     fn port_rule(node: NodeId, idx: IfIndex, warning: f64) -> StoredThreshold {
-        use yagra_common::{Direction, ThresholdRule};
-        StoredThreshold {
-            id: Uuid::nil(),
-            level: ScopeLevel::Interface,
-            scope_ids: vec![format!("{node}:{}", idx.0)],
-            rule: ThresholdRule {
-                metric: "if_in_util_pct".into(),
-                direction: Direction::Above,
-                warning: Some(warning),
-                critical: Some(90.0),
-                dwell_samples: 1,
-            },
-        }
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+        StoredThreshold::new(
+            Uuid::nil(),
+            ScopeLevel::Interface,
+            vec![format!("{node}:{}", idx.0)],
+            ThresholdRule::new(
+                "if_in_util_pct",
+                ThresholdBounds::above(Some(warning), Some(90.0)),
+                1,
+            ),
+        )
     }
 
     /// The gate `run_interface_utilization_watch` applies, assembled from its two halves so a test
@@ -5978,23 +5913,17 @@ mod tests {
     #[test]
     fn an_unrelated_alert_does_not_freeze_the_interface_evaluator() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, ThresholdRule};
+        use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let mgr = manager();
         let node = NodeId::new();
         mgr.set_config(cfg(
-            vec![StoredThreshold {
-                id: Uuid::nil(),
-                level: ScopeLevel::Node,
-                scope_ids: vec![node.to_string()],
-                rule: ThresholdRule {
-                    metric: "icmp_rtt_ms".into(),
-                    direction: Direction::Above,
-                    warning: Some(50.0),
-                    critical: None,
-                    dwell_samples: 1,
-                },
-            }],
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new("icmp_rtt_ms", ThresholdBounds::above(Some(50.0), None), 1),
+            )],
             meta_for(node),
         ));
 
@@ -6120,23 +6049,17 @@ mod tests {
     #[test]
     fn the_orphan_sweep_leaves_collected_port_alerts_to_the_poll_path() {
         use yagra_bus::Sample;
-        use yagra_common::{Direction, MetricKind, ThresholdRule};
+        use yagra_common::{MetricKind, ThresholdRule};
 
         let mgr = manager();
         let node = NodeId::new();
         let idx = IfIndex(7);
-        let rule = StoredThreshold {
-            id: Uuid::nil(),
-            level: ScopeLevel::Interface,
-            scope_ids: vec![format!("{node}:{}", idx.0)],
-            rule: ThresholdRule {
-                metric: "if_oper_status".into(),
-                direction: Direction::Below,
-                warning: None,
-                critical: Some(0.5),
-                dwell_samples: 1,
-            },
-        };
+        let rule = StoredThreshold::new(
+            Uuid::nil(),
+            ScopeLevel::Interface,
+            vec![format!("{node}:{}", idx.0)],
+            ThresholdRule::new("if_oper_status", ThresholdBounds::below(None, Some(0.5)), 1),
+        );
         let per_if: BTreeSet<String> = ["if_oper_status".to_owned()].into_iter().collect();
         mgr.set_config(cfg(vec![rule], meta_for(node)).with_per_interface(per_if.clone()));
 

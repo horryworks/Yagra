@@ -27998,7 +27998,8 @@
           "reference_dropped",
           "secret_dropped_imported_disabled",
           "webhook_token_reset",
-          "schedule_next_run_recomputed"
+          "schedule_next_run_recomputed",
+          "skipped_invalid_value"
         ]
       },
       "NotifyEvent": {
@@ -30882,9 +30883,22 @@
             "required": [
               "id",
               "scope_level",
-              "scope_ids"
+              "scope_ids",
+              "direction"
             ],
             "properties": {
+              "critical": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double",
+                "description": "The primary side’s critical bound. See `direction`."
+              },
+              "direction": {
+                "$ref": "#/components/schemas/Direction",
+                "description": "Which way this rule’s `warning`/`critical` face. Superseded by the four bounds on the rule\nitself, which describe both sides; on a rule bounding both, this names the **primary side\nonly** and describes half of what the rule does."
+              },
               "id": {
                 "type": "string",
                 "format": "uuid"
@@ -30898,6 +30912,14 @@
               },
               "scope_level": {
                 "$ref": "#/components/schemas/ScopeLevel"
+              },
+              "warning": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double",
+                "description": "The primary side’s warning bound. See `direction`."
               }
             }
           }
@@ -31172,10 +31194,28 @@
               "number",
               "null"
             ],
-            "format": "double"
+            "format": "double",
+            "description": "The primary side’s critical bound, read through `direction`. See the four bounds below."
+          },
+          "critical_above": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value at/above which the node is `Critical`."
+          },
+          "critical_below": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value at/below which the node is `Critical`."
           },
           "direction": {
-            "type": "string"
+            "type": "string",
+            "description": "Which way the rule’s `warning`/`critical` bounds trip. Superseded by the four\n`*_below`/`*_above` bounds, which win if any of them is sent; still accepted so that a\nclient written against the earlier shape keeps working."
           },
           "dwell_samples": {
             "type": [
@@ -31212,7 +31252,24 @@
               "number",
               "null"
             ],
-            "format": "double"
+            "format": "double",
+            "description": "The primary side’s warning bound, read through `direction`. See the four bounds below."
+          },
+          "warning_above": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value at/above which the node is `Warning`."
+          },
+          "warning_below": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value at/below which the node is `Warning`. Send this and `warning_above` together to\nalert outside a band — a dark optical link **and** an overdriven one, from one rule."
           }
         }
       },
@@ -31261,6 +31318,20 @@
             ],
             "format": "double"
           },
+          "critical_above": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "critical_below": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
           "direction": {
             "type": "string"
           },
@@ -31295,6 +31366,21 @@
               "null"
             ],
             "format": "double"
+          },
+          "warning_above": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "warning_below": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "The four bounds a rule can name (ADR-081). Absent in a bundle written before ranges existed,\nin which case `direction` + `warning` + `critical` is the whole answer."
           }
         }
       },
@@ -31303,21 +31389,24 @@
         "description": "A threshold rule for a single metric.",
         "required": [
           "metric",
-          "direction",
           "dwell_samples"
         ],
         "properties": {
-          "critical": {
+          "critical_above": {
             "type": [
               "number",
               "null"
             ],
             "format": "double",
-            "description": "Value at/over which the node is `Critical`. `None` = no critical level."
+            "description": "Value at/above which the node is `Critical`. `None` = no upper critical bound."
           },
-          "direction": {
-            "$ref": "#/components/schemas/Direction",
-            "description": "Which direction trips the threshold."
+          "critical_below": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value at/below which the node is `Critical`. `None` = no lower critical bound."
           },
           "dwell_samples": {
             "type": "integer",
@@ -31329,13 +31418,21 @@
             "type": "string",
             "description": "Stable metric name this rule applies to (e.g. `cpu_util`)."
           },
-          "warning": {
+          "warning_above": {
             "type": [
               "number",
               "null"
             ],
             "format": "double",
-            "description": "Value at/over which the node is `Warning`. `None` = no warning level."
+            "description": "Value at/above which the node is `Warning`. `None` = no upper warning bound."
+          },
+          "warning_below": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Value at/below which the node is `Warning`. `None` = no lower warning bound."
           }
         }
       },

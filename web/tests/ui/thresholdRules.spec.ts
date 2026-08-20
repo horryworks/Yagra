@@ -18,6 +18,8 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 
 const PROFILE_RULE_METRIC = 'icmp_rtt_ms';
 const MULTI_RULE_METRIC = 'cisco_cpu_5min';
+/** A rule bounding both sides — the shape ADR-081 added. */
+const BAND_RULE_METRIC = 'if_rx_power_dbm';
 /** The longest profile name Yagra ships (34 chars), used verbatim as a fixture name. */
 const LONG_PROFILE_NAME = 'Cisco Catalyst switch (IOS/IOS-XE)';
 
@@ -66,6 +68,10 @@ function ruleset(): Json {
       direction: 'below',
       warning: null,
       critical: null,
+      warning_below: null,
+      critical_below: null,
+      warning_above: null,
+      critical_above: null,
       dwell_samples: 3,
     },
     {
@@ -77,6 +83,10 @@ function ruleset(): Json {
       direction: 'above',
       warning: 100,
       critical: 250,
+      warning_below: null,
+      critical_below: null,
+      warning_above: 100,
+      critical_above: 250,
       dwell_samples: 4,
     },
     // ADR-078: a rule naming two profiles. Tier1 is the only place that can see what the cell
@@ -90,6 +100,29 @@ function ruleset(): Json {
       direction: 'above',
       warning: 80,
       critical: 90,
+      warning_below: null,
+      critical_below: null,
+      warning_above: 80,
+      critical_above: 90,
+      dwell_samples: 3,
+    },
+    // ADR-081: a rule bounding BOTH sides. Tier1 is the only place that can see what the table
+    // and the dialog do with one — a unit test reaches the request and the form state, never the
+    // rendering. Its `direction` is `above` (the primary side), which is exactly the value the
+    // Direction cell must not print for it.
+    {
+      ...template,
+      id: '00000000-0000-4000-8000-00000000f004',
+      scope_level: 'node',
+      scope_ids: ['00000000-0000-4000-8000-0000000000a1'],
+      metric: BAND_RULE_METRIC,
+      direction: 'above',
+      warning: -5,
+      critical: -3,
+      warning_below: -18,
+      critical_below: -20,
+      warning_above: -5,
+      critical_above: -3,
       dwell_samples: 3,
     },
   ];
@@ -288,15 +321,32 @@ test('a rule opens for editing with its own values, and reachability offers no b
 
   const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('Edit threshold rule');
-  // Prefilled from the row, not from the add form's defaults. `warn`/`crit`/`breaches` are the
-  // three compact boxes in that order; asserting the values is what proves the round trip is
-  // wired, since an empty dialog would also "open".
+  // Prefilled from the row, not from the add form's defaults. Since ADR-081 the boxes are
+  // below-warn / below-crit / above-warn / above-crit / breaches, in that order; asserting the
+  // values is what proves the round trip is wired, since an empty dialog would also "open".
+  // ⚠️ This rule is one-sided (`above`), so the two `below` boxes must be EMPTY — a form that
+  // filled them from the legacy `warning`/`critical` would turn every existing rule into a band
+  // on the next save, and every assertion about the other two would still pass.
   const nums = dialog.locator('.thresholds-num');
-  await expect(nums).toHaveCount(3);
-  await expect(nums.nth(0)).toHaveValue('100');
-  await expect(nums.nth(1)).toHaveValue('250');
-  await expect(nums.nth(2)).toHaveValue('4');
+  await expect(nums).toHaveCount(5);
+  await expect(nums.nth(0)).toHaveValue('');
+  await expect(nums.nth(1)).toHaveValue('');
+  await expect(nums.nth(2)).toHaveValue('100');
+  await expect(nums.nth(3)).toHaveValue('250');
+  await expect(nums.nth(4)).toHaveValue('4');
   await dialog.getByRole('button', { name: 'Cancel' }).click();
+
+  // A band rule opens with all four, which the one-direction form could not have held.
+  const bandRow = page.locator('.dt-row').filter({ hasText: BAND_RULE_METRIC }).first();
+  await bandRow.getByRole('button', { name: 'Edit' }).click();
+  const band = page.getByRole('dialog');
+  const bandNums = band.locator('.thresholds-num');
+  await expect(bandNums).toHaveCount(5);
+  await expect(bandNums.nth(0)).toHaveValue('-18');
+  await expect(bandNums.nth(1)).toHaveValue('-20');
+  await expect(bandNums.nth(2)).toHaveValue('-5');
+  await expect(bandNums.nth(3)).toHaveValue('-3');
+  await band.getByRole('button', { name: 'Cancel' }).click();
 
   const globalRow = page.locator('.dt-row').filter({ hasText: 'Reachability' }).first();
   await globalRow.getByRole('button', { name: 'Edit' }).click();

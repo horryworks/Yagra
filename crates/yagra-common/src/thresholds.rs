@@ -60,6 +60,184 @@ impl Direction {
     }
 }
 
+/// The bounds one rule names, and the only place a breach is decided (ADR-081).
+///
+/// **Two rays, not one.** A value breaches when it falls to/below a `*_below` bound **or** rises
+/// to/above an `*_above` bound. That is "outside the band" — the shape an optical receive level
+/// needs, where both a dark link and an overdriven one are faults, and which the single
+/// `Direction` this replaces could only ever express half of.
+///
+/// ⚠️ **The inside of the band is deliberately not expressible.** A union of two rays is the
+/// complement of one interval, so "abnormal between 3 and 4" cannot be written. A metric that
+/// wants that is usually an enum encoded as a number (`ciscoEnvMonState`), which wants set
+/// membership rather than ordered comparison — a different feature, and ADR-081 says so rather
+/// than half-solving it here.
+///
+/// Carries no `Serialize`/`ToSchema` on purpose: it is the shared *logic* over the four bounds,
+/// while the wire shape lives on [`ThresholdRule`] and [`EffectiveThreshold`], which hold the four
+/// as flat fields so the JSON the API already publishes stays flat.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ThresholdBounds {
+    /// Value at/below which the state is `Warning`.
+    pub warning_below: Option<f64>,
+    /// Value at/below which the state is `Critical`.
+    pub critical_below: Option<f64>,
+    /// Value at/above which the state is `Warning`.
+    pub warning_above: Option<f64>,
+    /// Value at/above which the state is `Critical`.
+    pub critical_above: Option<f64>,
+}
+
+impl ThresholdBounds {
+    /// Bounds that trip on the way up only — the shape every pre-ADR-081 `above` rule had.
+    #[must_use]
+    pub const fn above(warning: Option<f64>, critical: Option<f64>) -> Self {
+        Self {
+            warning_below: None,
+            critical_below: None,
+            warning_above: warning,
+            critical_above: critical,
+        }
+    }
+
+    /// Bounds that trip on the way down only — the shape every pre-ADR-081 `below` rule had.
+    #[must_use]
+    pub const fn below(warning: Option<f64>, critical: Option<f64>) -> Self {
+        Self {
+            warning_below: warning,
+            critical_below: critical,
+            warning_above: None,
+            critical_above: None,
+        }
+    }
+
+    /// Read the pre-ADR-081 triple back into the four.
+    ///
+    /// The **only** conversion from the old shape, and it is reached from exactly two places: the
+    /// database read and the config-bundle import. Keeping it to one function is what stops the
+    /// old triple from becoming a second, quietly diverging statement of what a rule means.
+    #[must_use]
+    pub const fn from_legacy(
+        direction: Direction,
+        warning: Option<f64>,
+        critical: Option<f64>,
+    ) -> Self {
+        match direction {
+            Direction::Above => Self::above(warning, critical),
+            Direction::Below => Self::below(warning, critical),
+        }
+    }
+
+    /// Whether any bound trips on the way down.
+    #[must_use]
+    pub const fn has_below(&self) -> bool {
+        self.warning_below.is_some() || self.critical_below.is_some()
+    }
+
+    /// Whether any bound trips on the way up.
+    #[must_use]
+    pub const fn has_above(&self) -> bool {
+        self.warning_above.is_some() || self.critical_above.is_some()
+    }
+
+    /// A rule with no bound at all cannot fire. Worth naming: such a rule is stored, listed and
+    /// silently inert, which is the failure ADR-081 exists to stop rather than to reproduce.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        !self.has_below() && !self.has_above()
+    }
+
+    /// The **primary side**, for the API field, the legacy database column and the fold order.
+    ///
+    /// ⚠️ When both sides are set this answers `Above`, and that choice is arbitrary. It decides
+    /// what an N-1 core enforces after a rollback — half of a range rule rather than none of it.
+    /// Acceptable because a range rule can only have been written on a core that supports ranges,
+    /// so seeing half of it is a rollback window rather than a steady state; a rule naming one
+    /// side keeps that side exactly, which is the case a rollback actually meets.
+    #[must_use]
+    pub const fn direction(&self) -> Direction {
+        if self.has_above() || !self.has_below() {
+            Direction::Above
+        } else {
+            Direction::Below
+        }
+    }
+
+    /// The primary side's warning bound — what the legacy `warning` column and API field carry.
+    #[must_use]
+    pub const fn warning(&self) -> Option<f64> {
+        match self.direction() {
+            Direction::Above => self.warning_above,
+            Direction::Below => self.warning_below,
+        }
+    }
+
+    /// The primary side's critical bound — what the legacy `critical` column and API field carry.
+    #[must_use]
+    pub const fn critical(&self) -> Option<f64> {
+        match self.direction() {
+            Direction::Above => self.critical_above,
+            Direction::Below => self.critical_below,
+        }
+    }
+
+    /// The smallest bound named on any side, for the interface evaluator's speed floor.
+    #[must_use]
+    pub fn lowest_bound(&self) -> Option<f64> {
+        [
+            self.warning_below,
+            self.critical_below,
+            self.warning_above,
+            self.critical_above,
+        ]
+        .into_iter()
+        .flatten()
+        .fold(None, |acc: Option<f64>, b| {
+            Some(acc.map_or(b, |a: f64| a.min(b)))
+        })
+    }
+
+    /// Classify one value. `Critical` beats `Warning`, and either side can raise either.
+    #[must_use]
+    pub fn evaluate(&self, value: f64) -> NodeState {
+        if matches!(self.critical_below, Some(c) if value <= c)
+            || matches!(self.critical_above, Some(c) if value >= c)
+        {
+            return NodeState::Critical;
+        }
+        if matches!(self.warning_below, Some(w) if value <= w)
+            || matches!(self.warning_above, Some(w) if value >= w)
+        {
+            return NodeState::Warning;
+        }
+        NodeState::Ok
+    }
+
+    /// Combine two rules' bounds, keeping the more restrictive on **each side separately**.
+    ///
+    /// 🚨 "More restrictive" points opposite ways on the two sides — a lower upper bound trips
+    /// earlier, a *higher* lower bound trips earlier — and that is not a new judgement:
+    /// [`Direction::more_restrictive`] already knows it. Each side is folded under its own
+    /// direction, so this adds no rule of its own.
+    #[must_use]
+    pub fn restrictive_with(self, other: Self) -> Self {
+        Self {
+            warning_below: restrictive(self.warning_below, other.warning_below, Direction::Below),
+            critical_below: restrictive(
+                self.critical_below,
+                other.critical_below,
+                Direction::Below,
+            ),
+            warning_above: restrictive(self.warning_above, other.warning_above, Direction::Above),
+            critical_above: restrictive(
+                self.critical_above,
+                other.critical_above,
+                Direction::Above,
+            ),
+        }
+    }
+}
+
 /// Matches `Severity` and `NodeState`. Direction was the one shared enum without it, which is part
 /// of why its carriers reached for a `String` field instead of the type.
 impl fmt::Display for Direction {
@@ -197,15 +375,71 @@ pub fn parse_interface_scope_id(s: &str) -> Option<(uuid::Uuid, u32)> {
 pub struct ThresholdRule {
     /// Stable metric name this rule applies to (e.g. `cpu_util`).
     pub metric: String,
-    /// Which direction trips the threshold.
-    pub direction: Direction,
-    /// Value at/over which the node is `Warning`. `None` = no warning level.
-    pub warning: Option<f64>,
-    /// Value at/over which the node is `Critical`. `None` = no critical level.
-    pub critical: Option<f64>,
+    /// Value at/below which the node is `Warning`. `None` = no lower warning bound.
+    #[serde(default)]
+    pub warning_below: Option<f64>,
+    /// Value at/below which the node is `Critical`. `None` = no lower critical bound.
+    #[serde(default)]
+    pub critical_below: Option<f64>,
+    /// Value at/above which the node is `Warning`. `None` = no upper warning bound.
+    #[serde(default)]
+    pub warning_above: Option<f64>,
+    /// Value at/above which the node is `Critical`. `None` = no upper critical bound.
+    #[serde(default)]
+    pub critical_above: Option<f64>,
     /// Hysteresis: consecutive samples the breach must hold before transitioning,
     /// to damp oscillation at the threshold. `0`/`1` = transition immediately.
     pub dwell_samples: u32,
+}
+
+impl ThresholdRule {
+    /// Build a rule from its metric, bounds and dwell.
+    ///
+    /// ⚠️ The `direction` / `warning` / `critical` this type used to carry are **not** fields any
+    /// more, they are [`Self::bounds`] accessors. That is the whole point of ADR-081: a struct
+    /// literal could set the old triple and the new four to different things, and this repo has
+    /// shipped exactly that kind of divergence before (`extensibility.md` §2). One carrier, and
+    /// the compiler visits every construction site because the field set changed.
+    #[must_use]
+    pub fn new(metric: impl Into<String>, bounds: ThresholdBounds, dwell_samples: u32) -> Self {
+        Self {
+            metric: metric.into(),
+            warning_below: bounds.warning_below,
+            critical_below: bounds.critical_below,
+            warning_above: bounds.warning_above,
+            critical_above: bounds.critical_above,
+            dwell_samples,
+        }
+    }
+
+    /// The four bounds as one value — where every breach decision is made.
+    #[must_use]
+    pub const fn bounds(&self) -> ThresholdBounds {
+        ThresholdBounds {
+            warning_below: self.warning_below,
+            critical_below: self.critical_below,
+            warning_above: self.warning_above,
+            critical_above: self.critical_above,
+        }
+    }
+
+    /// The primary side. See [`ThresholdBounds::direction`] for why a range rule answers `Above`.
+    #[must_use]
+    pub const fn direction(&self) -> Direction {
+        self.bounds().direction()
+    }
+
+    /// The primary side's warning bound — the legacy column and API field.
+    #[must_use]
+    pub const fn warning(&self) -> Option<f64> {
+        self.bounds().warning()
+    }
+
+    /// The primary side's critical bound — the legacy column and API field.
+    #[must_use]
+    pub const fn critical(&self) -> Option<f64> {
+        self.bounds().critical()
+    }
 }
 
 /// A [`ThresholdRule`] tagged with the scope it came from, for resolution.
@@ -230,36 +464,93 @@ impl ScopedThreshold {
 pub struct EffectiveThreshold {
     /// Metric this applies to.
     pub metric: String,
-    /// Breach direction.
-    pub direction: Direction,
-    /// Effective warning bound, if any.
-    pub warning: Option<f64>,
-    /// Effective critical bound, if any.
-    pub critical: Option<f64>,
+    /// Effective lower warning bound, if any.
+    pub warning_below: Option<f64>,
+    /// Effective lower critical bound, if any.
+    pub critical_below: Option<f64>,
+    /// Effective upper warning bound, if any.
+    pub warning_above: Option<f64>,
+    /// Effective upper critical bound, if any.
+    pub critical_above: Option<f64>,
     /// Effective dwell (hysteresis) in consecutive samples.
     pub dwell_samples: u32,
 }
 
 impl EffectiveThreshold {
+    /// The four resolved bounds as one value.
+    #[must_use]
+    pub const fn bounds(&self) -> ThresholdBounds {
+        ThresholdBounds {
+            warning_below: self.warning_below,
+            critical_below: self.critical_below,
+            warning_above: self.warning_above,
+            critical_above: self.critical_above,
+        }
+    }
+
+    /// The primary side. See [`ThresholdBounds::direction`] for why a range rule answers `Above`.
+    #[must_use]
+    pub const fn direction(&self) -> Direction {
+        self.bounds().direction()
+    }
+
+    /// The primary side's resolved warning bound.
+    #[must_use]
+    pub const fn warning(&self) -> Option<f64> {
+        self.bounds().warning()
+    }
+
+    /// The primary side's resolved critical bound.
+    #[must_use]
+    pub const fn critical(&self) -> Option<f64> {
+        self.bounds().critical()
+    }
+
     /// Classify a single value, ignoring hysteresis (the alert engine applies dwell
     /// across samples). Returns `Critical`, `Warning`, or `Ok`.
     #[must_use]
     pub fn evaluate(&self, value: f64) -> NodeState {
-        let breaches = |bound: f64| match self.direction {
-            Direction::Above => value >= bound,
-            Direction::Below => value <= bound,
-        };
-        if let Some(c) = self.critical {
-            if breaches(c) {
-                return NodeState::Critical;
-            }
+        self.bounds().evaluate(value)
+    }
+
+    /// Whether `candidate` sits further into breach than `incumbent` for these bounds.
+    ///
+    /// 🚨 **Severity first, then the primary side** — and the order matters because a range rule
+    /// has no single "further" to measure along. Two samples outside opposite ends of the band are
+    /// both breaches; asking which is *more* below is meaningless when one of them is above.
+    /// Comparing the classification first answers that, and falls back to the old directional
+    /// comparison only to break a tie.
+    ///
+    /// For a rule naming one side this is **byte-identical to the comparison it replaces**:
+    /// severity is monotone along that side, so it can only agree, and the tie-break restores the
+    /// original answer wherever it does not decide. NaN never displaces an incumbent — it
+    /// evaluates `Ok` and loses every comparison, so the first sample stands.
+    #[must_use]
+    pub fn is_worse(&self, candidate: f64, incumbent: f64) -> bool {
+        let bounds = self.bounds();
+        let (a, b) = (bounds.evaluate(candidate), bounds.evaluate(incumbent));
+        if a != b {
+            return state_rank(a) > state_rank(b);
         }
-        if let Some(w) = self.warning {
-            if breaches(w) {
-                return NodeState::Warning;
-            }
+        match bounds.direction() {
+            Direction::Above => candidate > incumbent,
+            Direction::Below => candidate < incumbent,
         }
-        NodeState::Ok
+    }
+}
+
+/// Severity order for [`EffectiveThreshold::is_worse`].
+///
+/// Exhaustive rather than `_ => 0`, per the repo's ban on wildcards over a domain enum: `evaluate`
+/// only ever returns three of the six, but a seventh state added later must be *decided about*
+/// here rather than silently ranked as healthy.
+const fn state_rank(state: NodeState) -> u8 {
+    match state {
+        NodeState::Critical => 2,
+        NodeState::Warning => 1,
+        // Not classifications `evaluate` produces. They reach this only if a caller folds samples
+        // under a state the state machine owns, where "no breach" is the honest rank.
+        NodeState::Ok | NodeState::Unknown | NodeState::Unreachable | NodeState::Maintenance => 0,
     }
 }
 
@@ -274,28 +565,29 @@ impl EffectiveThreshold {
 #[must_use]
 pub fn resolve_effective(rules: &[ScopedThreshold]) -> Option<EffectiveThreshold> {
     let winning_level = rules.iter().map(|r| r.level).max()?;
-    let mut winners = rules.iter().filter(|r| r.level == winning_level).peekable();
+    let winners = rules.iter().filter(|r| r.level == winning_level);
 
-    // Direction is assumed consistent per metric; take it from the first winner.
-    let direction = winners.peek().expect("max() found a level").rule.direction;
-
-    let mut warning: Option<f64> = None;
-    let mut critical: Option<f64> = None;
+    // ADR-081: no direction is read off the first winner any more. Before ranges existed this
+    // function took `direction` from whichever rule happened to be first in the index and folded
+    // every other winner's bounds under it — so a rule written the other way round had its bounds
+    // compared the wrong way and vanished, while still being stored and listed. Each side now
+    // folds under its own direction and neither can swallow the other.
+    let mut bounds = ThresholdBounds::default();
     let mut dwell: u32 = 0;
     let mut metric = String::new();
 
     for ScopedThreshold { rule, .. } in winners {
         metric = rule.metric.clone();
-        warning = restrictive(warning, rule.warning, direction);
-        critical = restrictive(critical, rule.critical, direction);
+        bounds = bounds.restrictive_with(rule.bounds());
         dwell = dwell.max(rule.dwell_samples);
     }
 
     Some(EffectiveThreshold {
         metric,
-        direction,
-        warning,
-        critical,
+        warning_below: bounds.warning_below,
+        critical_below: bounds.critical_below,
+        warning_above: bounds.warning_above,
+        critical_above: bounds.critical_above,
         dwell_samples: dwell,
     })
 }
@@ -400,14 +692,27 @@ mod tests {
     fn rule(level: ScopeLevel, warning: f64, critical: f64) -> ScopedThreshold {
         ScopedThreshold::new(
             level,
-            ThresholdRule {
-                metric: "cpu_util".into(),
-                direction: Direction::Above,
-                warning: Some(warning),
-                critical: Some(critical),
-                dwell_samples: 3,
-            },
+            ThresholdRule::new(
+                "cpu_util",
+                ThresholdBounds::above(Some(warning), Some(critical)),
+                3,
+            ),
         )
+    }
+
+    fn bounded(level: ScopeLevel, bounds: ThresholdBounds) -> ScopedThreshold {
+        ScopedThreshold::new(level, ThresholdRule::new("rx_dbm", bounds, 3))
+    }
+
+    fn effective(metric: &str, bounds: ThresholdBounds, dwell: u32) -> EffectiveThreshold {
+        EffectiveThreshold {
+            metric: metric.into(),
+            warning_below: bounds.warning_below,
+            critical_below: bounds.critical_below,
+            warning_above: bounds.warning_above,
+            critical_above: bounds.critical_above,
+            dwell_samples: dwell,
+        }
     }
 
     #[test]
@@ -419,8 +724,8 @@ mod tests {
             rule(ScopeLevel::Node, 60.0, 85.0),
         ];
         let eff = resolve_effective(&rules).unwrap();
-        assert_eq!(eff.warning, Some(60.0));
-        assert_eq!(eff.critical, Some(85.0));
+        assert_eq!(eff.warning(), Some(60.0));
+        assert_eq!(eff.critical(), Some(85.0));
     }
 
     #[test]
@@ -433,11 +738,11 @@ mod tests {
             rule(ScopeLevel::Profile, 80.0, 95.0),
         ])
         .unwrap();
-        assert_eq!(eff.warning, Some(80.0), "profile beats global");
+        assert_eq!(eff.warning(), Some(80.0), "profile beats global");
 
         let alone = resolve_effective(&[rule(ScopeLevel::Global, 90.0, 99.0)]).unwrap();
-        assert_eq!(alone.warning, Some(90.0));
-        assert_eq!(alone.critical, Some(99.0));
+        assert_eq!(alone.warning(), Some(90.0));
+        assert_eq!(alone.critical(), Some(99.0));
     }
     #[test]
     fn same_level_tiebreak_takes_most_restrictive_above() {
@@ -447,8 +752,8 @@ mod tests {
             rule(ScopeLevel::Group, 65.0, 92.0),
         ];
         let eff = resolve_effective(&rules).unwrap();
-        assert_eq!(eff.warning, Some(65.0)); // stricter warning
-        assert_eq!(eff.critical, Some(90.0)); // stricter critical
+        assert_eq!(eff.warning(), Some(65.0)); // stricter warning
+        assert_eq!(eff.critical(), Some(90.0)); // stricter critical
     }
 
     #[test]
@@ -457,57 +762,37 @@ mod tests {
         let mk = |w: f64, c: f64| {
             ScopedThreshold::new(
                 ScopeLevel::Group,
-                ThresholdRule {
-                    metric: "free_mem".into(),
-                    direction: Direction::Below,
-                    warning: Some(w),
-                    critical: Some(c),
-                    dwell_samples: 1,
-                },
+                ThresholdRule::new("free_mem", ThresholdBounds::below(Some(w), Some(c)), 1),
             )
         };
         let eff = resolve_effective(&[mk(20.0, 10.0), mk(25.0, 8.0)]).unwrap();
-        assert_eq!(eff.warning, Some(25.0));
-        assert_eq!(eff.critical, Some(10.0));
+        assert_eq!(eff.warning(), Some(25.0));
+        assert_eq!(eff.critical(), Some(10.0));
     }
 
     #[test]
     fn present_bound_beats_missing() {
         let with = ScopedThreshold::new(
             ScopeLevel::Node,
-            ThresholdRule {
-                metric: "cpu_util".into(),
-                direction: Direction::Above,
-                warning: Some(70.0),
-                critical: None,
-                dwell_samples: 2,
-            },
+            ThresholdRule::new("cpu_util", ThresholdBounds::above(Some(70.0), None), 2),
         );
         let without = ScopedThreshold::new(
             ScopeLevel::Node,
-            ThresholdRule {
-                metric: "cpu_util".into(),
-                direction: Direction::Above,
-                warning: None,
-                critical: Some(90.0),
-                dwell_samples: 5,
-            },
+            ThresholdRule::new("cpu_util", ThresholdBounds::above(None, Some(90.0)), 5),
         );
         let eff = resolve_effective(&[with, without]).unwrap();
-        assert_eq!(eff.warning, Some(70.0));
-        assert_eq!(eff.critical, Some(90.0));
+        assert_eq!(eff.warning(), Some(70.0));
+        assert_eq!(eff.critical(), Some(90.0));
         assert_eq!(eff.dwell_samples, 5); // longest dwell wins
     }
 
     #[test]
     fn evaluate_classifies_above() {
-        let eff = EffectiveThreshold {
-            metric: "cpu_util".into(),
-            direction: Direction::Above,
-            warning: Some(70.0),
-            critical: Some(90.0),
-            dwell_samples: 3,
-        };
+        let eff = effective(
+            "cpu_util",
+            ThresholdBounds::above(Some(70.0), Some(90.0)),
+            3,
+        );
         assert_eq!(eff.evaluate(50.0), NodeState::Ok);
         assert_eq!(eff.evaluate(70.0), NodeState::Warning);
         assert_eq!(eff.evaluate(95.0), NodeState::Critical);
@@ -515,13 +800,11 @@ mod tests {
 
     #[test]
     fn evaluate_classifies_below() {
-        let eff = EffectiveThreshold {
-            metric: "free_mem".into(),
-            direction: Direction::Below,
-            warning: Some(25.0),
-            critical: Some(10.0),
-            dwell_samples: 1,
-        };
+        let eff = effective(
+            "free_mem",
+            ThresholdBounds::below(Some(25.0), Some(10.0)),
+            1,
+        );
         assert_eq!(eff.evaluate(40.0), NodeState::Ok);
         assert_eq!(eff.evaluate(20.0), NodeState::Warning);
         assert_eq!(eff.evaluate(5.0), NodeState::Critical);
@@ -532,13 +815,7 @@ mod tests {
         // `http_up` is a 0/1 gauge. Because "below" is inclusive (`value <= bound`), the default
         // bound must sit between the states (0.5) — a bound of 1.0 would mis-fire on the healthy
         // value 1. Regression guard for the "URL monitor permanently Critical" bug.
-        let eff = EffectiveThreshold {
-            metric: "http_up".into(),
-            direction: Direction::Below,
-            warning: None,
-            critical: Some(0.5),
-            dwell_samples: 2,
-        };
+        let eff = effective("http_up", ThresholdBounds::below(None, Some(0.5)), 2);
         assert_eq!(eff.evaluate(1.0), NodeState::Ok); // up + status OK
         assert_eq!(eff.evaluate(0.0), NodeState::Critical); // down / wrong status
     }
@@ -546,5 +823,167 @@ mod tests {
     #[test]
     fn empty_resolves_to_none() {
         assert_eq!(resolve_effective(&[]), None);
+    }
+
+    // ---- ADR-081: the four bounds ----
+
+    #[test]
+    fn a_band_rule_trips_on_either_side_and_is_ok_between() {
+        // An optical receive level: dark below -20 dBm, overdriven above -3 dBm.
+        let eff = effective(
+            "rx_dbm",
+            ThresholdBounds {
+                warning_below: Some(-18.0),
+                critical_below: Some(-20.0),
+                warning_above: Some(-5.0),
+                critical_above: Some(-3.0),
+            },
+            3,
+        );
+        assert_eq!(eff.evaluate(-25.0), NodeState::Critical, "dark");
+        assert_eq!(eff.evaluate(-19.0), NodeState::Warning, "dimming");
+        assert_eq!(eff.evaluate(-12.0), NodeState::Ok, "inside the band");
+        assert_eq!(eff.evaluate(-4.0), NodeState::Warning, "getting hot");
+        assert_eq!(eff.evaluate(-1.0), NodeState::Critical, "overdriven");
+    }
+
+    #[test]
+    fn one_sided_rules_keep_their_side_and_report_it() {
+        let up = effective("cpu_util", ThresholdBounds::above(Some(70.0), None), 1);
+        assert_eq!(up.direction(), Direction::Above);
+        assert_eq!(up.warning(), Some(70.0));
+        assert_eq!(
+            up.evaluate(10.0),
+            NodeState::Ok,
+            "a low value is not a breach"
+        );
+
+        let down = effective("free_mem", ThresholdBounds::below(Some(20.0), None), 1);
+        assert_eq!(down.direction(), Direction::Below);
+        assert_eq!(down.warning(), Some(20.0));
+        assert_eq!(
+            down.evaluate(99.0),
+            NodeState::Ok,
+            "a high value is not a breach"
+        );
+    }
+
+    #[test]
+    fn restrictive_reverses_per_side_at_the_same_level() {
+        // 🚨 The case ADR-081 exists for. Two rules at ONE level, each naming both sides:
+        // the winner is the *higher* lower bound and the *lower* upper bound — opposite
+        // directions, resolved in a single pass. Before ADR-081 the second rule's bounds were
+        // folded under the first rule's direction and one side was silently discarded.
+        let wide = ThresholdBounds {
+            warning_below: Some(-18.0),
+            critical_below: Some(-22.0),
+            warning_above: Some(-4.0),
+            critical_above: Some(-2.0),
+        };
+        let narrow = ThresholdBounds {
+            warning_below: Some(-16.0), // stricter: trips earlier on the way down
+            critical_below: Some(-20.0),
+            warning_above: Some(-6.0), // stricter: trips earlier on the way up
+            critical_above: Some(-3.0),
+        };
+        let eff = resolve_effective(&[
+            bounded(ScopeLevel::Group, wide),
+            bounded(ScopeLevel::Group, narrow),
+        ])
+        .unwrap();
+        assert_eq!(eff.warning_below, Some(-16.0));
+        assert_eq!(eff.critical_below, Some(-20.0));
+        assert_eq!(eff.warning_above, Some(-6.0));
+        assert_eq!(eff.critical_above, Some(-3.0));
+    }
+
+    #[test]
+    fn opposite_facing_rules_at_one_level_both_survive() {
+        // The defect ADR-081 names: an operator writes "below 10" and "above 90" as two rules
+        // because one rule could not hold both. The second used to be folded under the first's
+        // direction and vanish. Now each side keeps its own.
+        let eff = resolve_effective(&[
+            bounded(ScopeLevel::Node, ThresholdBounds::below(None, Some(10.0))),
+            bounded(ScopeLevel::Node, ThresholdBounds::above(None, Some(90.0))),
+        ])
+        .unwrap();
+        assert_eq!(eff.critical_below, Some(10.0));
+        assert_eq!(eff.critical_above, Some(90.0));
+        assert_eq!(eff.evaluate(5.0), NodeState::Critical);
+        assert_eq!(eff.evaluate(50.0), NodeState::Ok);
+        assert_eq!(eff.evaluate(95.0), NodeState::Critical);
+    }
+
+    #[test]
+    fn is_worse_ranks_by_severity_then_by_the_primary_side() {
+        // A band rule has no single "further into breach", so severity decides first.
+        let band = effective(
+            "rx_dbm",
+            ThresholdBounds {
+                warning_below: Some(-18.0),
+                critical_below: Some(-20.0),
+                warning_above: Some(-5.0),
+                critical_above: Some(-3.0),
+            },
+            1,
+        );
+        assert!(
+            band.is_worse(-25.0, -4.0),
+            "critical beats warning, downward"
+        );
+        assert!(band.is_worse(-1.0, -19.0), "critical beats warning, upward");
+        assert!(!band.is_worse(-12.0, -19.0), "ok never displaces a warning");
+
+        // One-sided rules keep the comparison they always had.
+        let up = effective(
+            "cpu_util",
+            ThresholdBounds::above(Some(70.0), Some(90.0)),
+            1,
+        );
+        assert!(up.is_worse(95.0, 92.0), "further above wins a critical tie");
+        assert!(!up.is_worse(92.0, 95.0));
+        let down = effective(
+            "free_mem",
+            ThresholdBounds::below(Some(25.0), Some(10.0)),
+            1,
+        );
+        assert!(down.is_worse(2.0, 5.0), "further below wins a critical tie");
+        assert!(!down.is_worse(5.0, 2.0));
+    }
+
+    #[test]
+    fn nan_never_displaces_an_incumbent() {
+        let up = effective("cpu_util", ThresholdBounds::above(Some(70.0), None), 1);
+        assert!(!up.is_worse(f64::NAN, 80.0));
+    }
+
+    #[test]
+    fn from_legacy_round_trips_through_the_primary_side() {
+        // The rollback contract: whatever an older core wrote as (direction, warning, critical)
+        // must read back as exactly that, and a one-sided rule must report the same triple back.
+        for direction in Direction::ALL {
+            let bounds = ThresholdBounds::from_legacy(direction, Some(30.0), Some(40.0));
+            assert_eq!(bounds.direction(), direction);
+            assert_eq!(bounds.warning(), Some(30.0));
+            assert_eq!(bounds.critical(), Some(40.0));
+        }
+        // A rule with no bound at all still answers a direction rather than panicking, and says
+        // it cannot fire.
+        let empty = ThresholdBounds::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.direction(), Direction::Above);
+        assert_eq!(empty.evaluate(0.0), NodeState::Ok);
+    }
+
+    #[test]
+    fn lowest_bound_spans_both_sides() {
+        let band = ThresholdBounds {
+            warning_below: Some(-18.0),
+            critical_below: Some(-20.0),
+            warning_above: Some(-5.0),
+            critical_above: Some(-3.0),
+        };
+        assert_eq!(band.lowest_bound(), Some(-20.0));
+        assert_eq!(ThresholdBounds::default().lowest_bound(), None);
     }
 }

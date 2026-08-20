@@ -22,6 +22,7 @@ import type { StoredThreshold } from '../types/api';
 import { LIVENESS_METRIC } from '../lib/format';
 import { metricMeaningKey } from '../lib/metricMeaning';
 import { boundText } from '../lib/portRuleForm';
+import { boundSides } from '../lib/thresholdBounds';
 import { ThresholdModal } from '../components/ThresholdModal/ThresholdModal';
 import { splitInterfaceScopeId } from '../lib/interfaceScope';
 import { PageHeader } from '../components/ui/PageHeader';
@@ -249,29 +250,46 @@ export function ThresholdsPage() {
         key: 'direction',
         header: t('thresholds.cols.direction'),
         width: '92px',
+        // ⚠️ A rule bounding both sides reports `above` — the primary side (ADR-081) — so printing
+        // that token would tell the operator the rule watches one direction when it watches two.
+        // The cell asks the bounds instead.
         render: (row) => (
-          <span className="muted">{t(`thresholds.direction.${row.direction}`)}</span>
+          <span className="muted">
+            {t(
+              boundSides(row) === 'both'
+                ? 'thresholds.direction.range'
+                : `thresholds.direction.${row.direction}`,
+            )}
+          </span>
         ),
       },
       {
         key: 'bounds',
         header: t('thresholds.cols.bounds'),
-        width: '150px',
+        width: '230px',
+        // Every bound the rule names, each carrying the side it reads in — up to four since
+        // ADR-081. Rendering `warning`/`critical` here instead would show half of a band rule,
+        // with nothing on the row to say a half is what it was.
         render: (row) => (
           <span className="thresholds-bounds">
             {/* Read in the metric's own unit. An absolute interface rate is stored in bits per
                 second (ADR-076 決定 9), so the raw value here was `800000000` — a number whose
                 digits an operator has to count. */}
-            {row.warning != null && (
-              <Badge tone="warning">
-                {t('thresholds.warnShort')} {boundText(row.metric, row.warning)}
-              </Badge>
-            )}
-            {row.critical != null && (
-              <Badge tone="critical">
-                {t('thresholds.critShort')} {boundText(row.metric, row.critical)}
-              </Badge>
-            )}
+            {(
+              [
+                ['warning', '≤', row.warning_below],
+                ['critical', '≤', row.critical_below],
+                ['warning', '≥', row.warning_above],
+                ['critical', '≥', row.critical_above],
+              ] as const
+            )
+              .filter(([, , v]) => v != null)
+              .map(([tone, cmp, v]) => (
+                <Badge key={`${tone}${cmp}`} tone={tone}>
+                  {t(tone === 'warning' ? 'thresholds.warnShort' : 'thresholds.critShort')} {cmp}
+                  {boundText(row.metric, v as number)}
+                </Badge>
+              ))}
           </span>
         ),
       },

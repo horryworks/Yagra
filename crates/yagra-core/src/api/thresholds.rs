@@ -23,7 +23,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
-use yagra_common::{Direction, IfIndex, NodeId, ScopeLevel};
+use yagra_common::{Direction, IfIndex, NodeId, ScopeLevel, ThresholdBounds};
 
 /// Maximum rules returned by one list call. Matches the poller drill-down's cap: enough that no
 /// real hand-authored ruleset is ever truncated, small enough that a fleet-scale accident is a
@@ -292,9 +292,27 @@ pub(super) struct ThresholdBody {
     #[serde(default)]
     scope_ids: Option<Vec<String>>,
     metric: String,
+    /// Which way the rule’s `warning`/`critical` bounds trip. Superseded by the four
+    /// `*_below`/`*_above` bounds, which win if any of them is sent; still accepted so that a
+    /// client written against the earlier shape keeps working.
     direction: String,
+    /// The primary side’s warning bound, read through `direction`. See the four bounds below.
     warning: Option<f64>,
+    /// The primary side’s critical bound, read through `direction`. See the four bounds below.
     critical: Option<f64>,
+    /// Value at/below which the node is `Warning`. Send this and `warning_above` together to
+    /// alert outside a band — a dark optical link **and** an overdriven one, from one rule.
+    #[serde(default)]
+    warning_below: Option<f64>,
+    /// Value at/below which the node is `Critical`.
+    #[serde(default)]
+    critical_below: Option<f64>,
+    /// Value at/above which the node is `Warning`.
+    #[serde(default)]
+    warning_above: Option<f64>,
+    /// Value at/above which the node is `Critical`.
+    #[serde(default)]
+    critical_above: Option<f64>,
     dwell_samples: Option<i32>,
 }
 
@@ -314,7 +332,8 @@ struct ParsedThreshold<'a> {
     /// Owned rather than borrowed: the set is *derived* from the body (either field may have
     /// supplied it) rather than being one of its strings.
     scope_ids: Vec<String>,
-    direction: &'a str,
+    /// The four bounds, already folded from whichever shape the body used (ADR-081).
+    bounds: ThresholdBounds,
 }
 
 /// The synchronous half of validating a rule — shared by create and update.
@@ -343,7 +362,7 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
         ));
     };
     // Same reasoning as the level above: two tokens, one enum that already knows them.
-    let Some(_) = Direction::from_token(&body.direction) else {
+    let Some(direction) = Direction::from_token(&body.direction) else {
         return Err(ApiError::bad_request(
             "invalid_threshold",
             format!(
@@ -352,6 +371,7 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
             ),
         ));
     };
+    let bounds = parse_bounds(body, direction)?;
     // A `global` rule targets the whole fleet, so it has nothing to point at (ADR-075). Pinning
     // the set empty here rather than trusting the caller is what keeps `AlertConfig::applies`
     // able to ignore it for this level: two global rules that differed only in a stray target
@@ -446,8 +466,136 @@ fn parse_threshold_body(body: &ThresholdBody) -> ApiResult<ParsedThreshold<'_>> 
     Ok(ParsedThreshold {
         scope_level: &body.scope_level,
         scope_ids,
-        direction: &body.direction,
+        bounds,
     })
+}
+
+/// Fold whichever shape the body used into the four bounds, and refuse the ones that cannot mean
+/// anything (ADR-081).
+///
+/// Two shapes are accepted on purpose. A client written before ADR-081 sends
+/// `direction` + `warning` + `critical`; one written after sends any of the four bounds. When both
+/// arrive the four win — they are the more expressive statement, and silently merging them with a
+/// `direction` that contradicts them is how a rule ends up meaning neither thing.
+fn parse_bounds(body: &ThresholdBody, direction: Direction) -> ApiResult<ThresholdBounds> {
+    let explicit = ThresholdBounds {
+        warning_below: body.warning_below,
+        critical_below: body.critical_below,
+        warning_above: body.warning_above,
+        critical_above: body.critical_above,
+    };
+    let bounds = if explicit.is_empty() {
+        ThresholdBounds::from_legacy(direction, body.warning, body.critical)
+    } else {
+        explicit
+    };
+
+    // A rule with no bound is stored, listed, and silently inert — the exact shape ADR-081 exists
+    // to stop. It was always creatable (a body with both bounds null) and was always refused
+    // nowhere; refusing it here is the half of ADR-081 that needs no new column.
+    //
+    // 🚨 **Except for liveness, where bound-less is the correct shape and not an accident.**
+    // `__liveness__` asks "did the node answer", not "is a number out of range" — the engine
+    // decides it from the poll outcome and never calls `evaluate` on it, which is why `repo.rs`
+    // seeds it with both bounds null. ADR-075 made that row retunable, per-scope overridable and
+    // deletable, so an operator editing its dwell posts exactly this body; refusing it would break
+    // the one rule the whole fleet's paging hangs off. It is the only bound-less rule in the
+    // built-in set (`snmp_up` carries `critical 0.5`), so this is one named exemption rather than
+    // a category.
+    if bounds.is_empty() && body.metric != crate::alerts::LIVENESS {
+        return Err(ApiError::bad_request(
+            "invalid_threshold",
+            "a rule must name at least one bound",
+        ));
+    }
+
+    // The band must have an inside. `warning_below >= warning_above` means every value breaches
+    // from one side or the other, so the rule is permanently in alarm — which reads to the
+    // operator as a broken metric rather than as a rule they mis-typed.
+    for (below, above, which) in [
+        (bounds.warning_below, bounds.warning_above, "warning"),
+        (bounds.critical_below, bounds.critical_above, "critical"),
+        (
+            bounds.critical_below,
+            bounds.warning_above,
+            "critical_below/warning_above",
+        ),
+        (
+            bounds.warning_below,
+            bounds.critical_above,
+            "warning_below/critical_above",
+        ),
+    ] {
+        if let (Some(lo), Some(hi)) = (below, above) {
+            if lo >= hi {
+                return Err(ApiError::bad_request(
+                    "invalid_threshold",
+                    format!(
+                        "{which}: the lower bound ({lo}) must be below the upper bound ({hi}), \
+                         or every value breaches"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Within one side, `warning` must trip no later than `critical`, or the warning is
+    // unreachable: `evaluate` tests critical first, so a warning that sits further into breach
+    // than its own critical can never be the answer. Not checked before ADR-081 either — the
+    // difference is that four bounds make it two ways to get wrong instead of one.
+    if let (Some(w), Some(c)) = (bounds.warning_above, bounds.critical_above) {
+        if w > c {
+            return Err(ApiError::bad_request(
+                "invalid_threshold",
+                format!("warning_above ({w}) must not be above critical_above ({c})"),
+            ));
+        }
+    }
+    if let (Some(w), Some(c)) = (bounds.warning_below, bounds.critical_below) {
+        if w < c {
+            return Err(ApiError::bad_request(
+                "invalid_threshold",
+                format!("warning_below ({w}) must not be below critical_below ({c})"),
+            ));
+        }
+    }
+    Ok(bounds)
+}
+
+/// Refuse a second rule for the same metric at the same scope (ADR-081 decision 4).
+///
+/// The rule this protects is `api-conventions`' own: a rule that exists and does nothing is worse
+/// than one that was refused, because the operator has been told it is in place. Before ranges,
+/// writing "below 10" and "above 90" as two rules at one scope was the *only* way to express a
+/// band, and one of the two silently lost. Now one rule holds both, so the second is a mistake
+/// rather than a workaround — and 409 says so at the moment it is made, naming the rule to edit.
+async fn reject_duplicate_rule(
+    admin: &super::AdminState,
+    parsed: &ParsedThreshold<'_>,
+    metric: &str,
+    exclude: Option<Uuid>,
+) -> ApiResult<()> {
+    let existing = admin
+        .thresholds
+        .find_duplicate(parsed.scope_level, &parsed.scope_ids, metric, exclude)
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "check duplicate threshold",
+                "failed to check for an existing rule",
+            )
+        })?;
+    if let Some(id) = existing {
+        return Err(ApiError::conflict(
+            "duplicate_threshold",
+            format!(
+                "a rule for {metric} already exists at this scope ({id}). One rule can bound both \
+                 sides — edit that one instead of adding a second"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Whether `metric` may not carry a threshold because its samples only ever increase.
@@ -499,15 +647,14 @@ async fn create_threshold(
 ) -> ApiResult<(StatusCode, Json<CreatedId>)> {
     let p = parse_threshold_body(&body)?;
     reject_counter_metric(&admin, &body.metric, "create threshold").await?;
+    reject_duplicate_rule(&admin, &p, &body.metric, None).await?;
     let id = admin
         .thresholds
         .create(crate::thresholds::ThresholdWrite {
             scope_level: p.scope_level,
             scope_ids: &p.scope_ids,
             metric: &body.metric,
-            direction: p.direction,
-            warning: body.warning,
-            critical: body.critical,
+            bounds: p.bounds,
             dwell_samples: body.dwell_samples.unwrap_or(3),
         })
         .await
@@ -538,6 +685,7 @@ async fn update_threshold(
 ) -> ApiResult<StatusCode> {
     let p = parse_threshold_body(&body)?;
     reject_counter_metric(&admin, &body.metric, "update threshold").await?;
+    reject_duplicate_rule(&admin, &p, &body.metric, Some(id)).await?;
     let updated = admin
         .thresholds
         .update(
@@ -546,9 +694,7 @@ async fn update_threshold(
                 scope_level: p.scope_level,
                 scope_ids: &p.scope_ids,
                 metric: &body.metric,
-                direction: p.direction,
-                warning: body.warning,
-                critical: body.critical,
+                bounds: p.bounds,
                 dwell_samples: body.dwell_samples.unwrap_or(3),
             },
         )
@@ -702,8 +848,15 @@ mod tests {
             scope_ids: None,
             metric: metric.to_owned(),
             direction: direction.to_owned(),
+            // ⚠️ Both bounds were `None` until ADR-081, which now refuses a rule that names none —
+            // so these bodies would fail on the *bounds* check and never reach the scope checks
+            // they exist to exercise. One critical bound keeps every case below about scope.
             warning: None,
-            critical: None,
+            critical: Some(1.0),
+            warning_below: None,
+            critical_below: None,
+            warning_above: None,
+            critical_above: None,
             dwell_samples: None,
         }
     }
@@ -717,7 +870,11 @@ mod tests {
             metric: "icmp_rtt_ms".to_owned(),
             direction: "above".to_owned(),
             warning: None,
-            critical: None,
+            critical: Some(1.0),
+            warning_below: None,
+            critical_below: None,
+            warning_above: None,
+            critical_above: None,
             dwell_samples: None,
         }
     }

@@ -9,17 +9,33 @@ import {
   thresholdFormFrom,
 } from './thresholdRequest';
 import { SCOPE_LEVELS, type ScopeLevel, type StoredThreshold } from '../types/api';
+import { LIVENESS_METRIC } from '../lib/format';
 
+/** A row shaped the way the server actually sends one since ADR-081.
+ *
+ *  The four bounds are **derived from `direction`/`warning`/`critical`** here, mirroring
+ *  `ThresholdBounds::from_legacy`, so every case below still reads as "an above rule at 100/250"
+ *  while carrying the shape the API returns. Writing only the legacy triple would build a fixture
+ *  no endpoint produces, and the round-trip test would then be checking a row that cannot arrive. */
 function rule(over: Partial<StoredThreshold> = {}): StoredThreshold {
-  return {
+  const base = {
     id: '00000000-0000-0000-0000-000000000001',
-    scope_level: 'profile',
+    scope_level: 'profile' as ScopeLevel,
     scope_ids: ['11111111-1111-1111-1111-111111111111'],
     metric: 'icmp_rtt_ms',
-    direction: 'above',
-    warning: 100,
-    critical: 250,
+    direction: 'above' as const,
+    warning: 100 as number | null,
+    critical: 250 as number | null,
     dwell_samples: 3,
+    ...over,
+  };
+  const down = base.direction === 'below';
+  return {
+    ...base,
+    warning_below: down ? base.warning : null,
+    critical_below: down ? base.critical : null,
+    warning_above: down ? null : base.warning,
+    critical_above: down ? null : base.critical,
     ...over,
   };
 }
@@ -44,28 +60,71 @@ describe('thresholdFormFrom + thresholdBody', () => {
           '44444444-4444-4444-4444-444444444444',
         ],
       }),
+      // ADR-081: a band rule must survive too. This is the case the old form structurally could
+      // not hold — one `direction` field meant opening it and saving dropped a side.
+      rule({
+        metric: 'rx_dbm',
+        warning_below: -18,
+        critical_below: -20,
+        warning_above: -5,
+        critical_above: -3,
+      }),
     ]) {
       expect(thresholdBody(thresholdFormFrom(r))).toEqual({
         scope_level: r.scope_level,
         scope_ids: r.scope_ids,
         metric: r.metric,
         direction: r.direction,
-        warning: r.warning ?? undefined,
-        critical: r.critical ?? undefined,
+        warning_below: r.warning_below ?? undefined,
+        critical_below: r.critical_below ?? undefined,
+        warning_above: r.warning_above ?? undefined,
+        critical_above: r.critical_above ?? undefined,
         dwell_samples: r.dwell_samples,
       });
     }
+  });
+
+  it('derives the direction from the bounds rather than carrying one', () => {
+    // The defect ADR-081 removes: the form used to hold a `direction` beside the numbers, so it
+    // could be saved saying `above` with bounds that only made sense downward — stored, listed,
+    // and never fired. There is no field to disagree with now.
+    const f = thresholdFormFrom();
+    expect(thresholdBody({ ...f, metric: 'x', criticalBelow: '10' }).direction).toBe('below');
+    expect(thresholdBody({ ...f, metric: 'x', criticalAbove: '90' }).direction).toBe('above');
+    // A band reports its primary side, matching `ThresholdBounds::direction` on the server.
+    expect(
+      thresholdBody({ ...f, metric: 'x', criticalBelow: '10', criticalAbove: '90' }).direction,
+    ).toBe('above');
+  });
+
+  it('will not submit a rule that names no bound, except liveness', () => {
+    // A rule with no bound is stored, listed, and never fires. The server refuses one since
+    // ADR-081; this keeps the button from enabling on a body it will 400. Liveness is the one
+    // exemption on both sides — it asks whether the node answered, not whether a number is out of
+    // range — and the two sides must name the same exception or the dialog and the edge disagree.
+    const base = { ...thresholdFormFrom(), scopeIds: ['11111111-1111-1111-1111-111111111111'] };
+    expect(isThresholdReady({ ...base, metric: 'cpu_util' })).toBe(false);
+    expect(isThresholdReady({ ...base, metric: 'cpu_util', criticalAbove: '90' })).toBe(true);
+    expect(isThresholdReady({ ...base, metric: 'cpu_util', warningBelow: '5' })).toBe(true);
+    expect(isThresholdReady({ ...base, metric: LIVENESS_METRIC })).toBe(true);
   });
 
   it('sends an empty bound as absent, never as zero', () => {
     // `Number('')` is 0. A warning bound of 0 on an `above` rule never fires and on a `below` rule
     // fires on every sample, so the difference between `undefined` and `0` here is the difference
     // between "no warning" and "a permanent one".
-    const body = thresholdBody({ ...thresholdFormFrom(), metric: 'cpu_util', warning: '', critical: '  ' });
-    expect(body.warning).toBeUndefined();
-    expect(body.critical).toBeUndefined();
+    const body = thresholdBody({
+      ...thresholdFormFrom(),
+      metric: 'cpu_util',
+      warningAbove: '',
+      criticalAbove: '  ',
+    });
+    expect(body.warning_above).toBeUndefined();
+    expect(body.critical_above).toBeUndefined();
     // A real zero still travels — 0 is a legitimate bound (`snmp_up below 0.5` has a sibling shape).
-    expect(thresholdBody({ ...thresholdFormFrom(), metric: 'x', warning: '0' }).warning).toBe(0);
+    expect(
+      thresholdBody({ ...thresholdFormFrom(), metric: 'x', warningAbove: '0' }).warning_above,
+    ).toBe(0);
   });
 
   it('falls back to the default breach count rather than sending nothing', () => {
@@ -116,7 +175,14 @@ describe('thresholdFormFrom + thresholdBody', () => {
   });
 
   it('lets a global rule be saved with no target, and refuses the others', () => {
-    const base = { ...thresholdFormFrom(), metric: 'icmp_rtt_ms', scopeIds: [] };
+    // A bound is set so this stays a test about *targets*: since ADR-081 a rule with none is
+    // refused, and without one every case below would be false for the wrong reason.
+    const base = {
+      ...thresholdFormFrom(),
+      metric: 'icmp_rtt_ms',
+      criticalAbove: '250',
+      scopeIds: [],
+    };
     expect(isThresholdReady({ ...base, level: 'global' })).toBe(true);
     for (const level of ['profile', 'group', 'group_id', 'node'] as const) {
       expect(isThresholdReady({ ...base, level })).toBe(false);
@@ -162,9 +228,10 @@ describe('thresholdFormFrom + thresholdBody', () => {
     // have judged is a worse form than a disabled button.
     const base = {
       metric: 'if_in_util_pct',
-      direction: 'above' as const,
-      warning: '',
-      critical: '90',
+      warningBelow: '',
+      criticalBelow: '',
+      warningAbove: '',
+      criticalAbove: '90',
       dwell: '3',
     };
     const node = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';

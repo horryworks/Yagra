@@ -147,7 +147,8 @@
     },
     "direction": {
       "above": "above",
-      "below": "below"
+      "below": "below",
+      "range": "Range"
     },
     "addModal": {
       "title": "Add threshold rule",
@@ -175,11 +176,13 @@
       "metricPlaceholder": "metric (e.g. icmp_rtt_ms)",
       "direction": "Direction",
       "boundsDwell": "Bounds & breaches",
+      "belowSide": "Alert at or below",
+      "aboveSide": "Alert at or above",
       "warnPlaceholder": "warn",
       "critPlaceholder": "crit",
       "dwellPlaceholder": "breaches",
       "dwellTitle": "Consecutive breaches: readings that must cross the bound in a row before the alert fires",
-      "boundsHint": "Warn / crit / breaches are optional. Breaches is how many consecutive readings must cross the bound before the alert fires — higher values suppress flapping (rapid on/off alerts).",
+      "boundsHint": "Fill either row, or both. Filling both alerts outside a band — a value that drops too low OR climbs too high, from one rule. Every bound is optional. Breaches is how many consecutive readings must cross a bound before the alert fires; higher values suppress flapping (rapid on/off alerts).",
       "add": "Add rule",
       "dwellOnly": "Breaches",
       "folderGroupHint": "Applies to this group and every group inside it. A rule on a group further in wins over this one.",

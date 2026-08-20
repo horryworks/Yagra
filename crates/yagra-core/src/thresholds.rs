@@ -9,7 +9,7 @@
 use serde::Serialize;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
-use yagra_common::{Direction, ScopeLevel, ThresholdRule};
+use yagra_common::{Direction, ScopeLevel, ThresholdBounds, ThresholdRule};
 
 /// A stored threshold rule with its scope and id (id is for the API; the engine ignores it).
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -31,8 +31,45 @@ pub struct StoredThreshold {
     // (The two notes above are `//` on purpose: this type derives `ToSchema`, so a `///` line is
     // published verbatim to every API client. The line that IS `///` is written for them.)
     pub scope_ids: Vec<String>,
+    /// Which way this rule’s `warning`/`critical` face. Superseded by the four bounds on the rule
+    /// itself, which describe both sides; on a rule bounding both, this names the **primary side
+    /// only** and describes half of what the rule does.
+    //
+    // ⚠️ These three are on `StoredThreshold` rather than on `ThresholdRule`, where they used to
+    // be fields, because ADR-081 made them *derived*: the four bounds are the truth and these are
+    // a reading of them. Keeping them as fields would let a literal set the two to different
+    // things — the divergence `extensibility.md` §2 is about, and the one that made a rule get
+    // stored facing one way while its bounds faced the other. They are written out here so the
+    // published JSON keeps every key it had; dropping them would have been a breaking change to
+    // every client, which is the opposite of what this ADR's N-1 story promises.
+    pub direction: yagra_common::Direction,
+    /// The primary side’s warning bound. See `direction`.
+    pub warning: Option<f64>,
+    /// The primary side’s critical bound. See `direction`.
+    pub critical: Option<f64>,
     #[serde(flatten)]
     pub rule: ThresholdRule,
+}
+
+impl StoredThreshold {
+    /// Build a row, deriving the legacy triple from the rule's bounds.
+    ///
+    /// The only way to make one, so `direction`/`warning`/`critical` cannot be set to something the
+    /// bounds do not say. A struct literal could, and a row describing a rule the engine does not
+    /// run is precisely the failure ADR-081 is about.
+    #[must_use]
+    pub fn new(id: Uuid, level: ScopeLevel, scope_ids: Vec<String>, rule: ThresholdRule) -> Self {
+        let bounds = rule.bounds();
+        Self {
+            id,
+            level,
+            scope_ids,
+            direction: bounds.direction(),
+            warning: bounds.warning(),
+            critical: bounds.critical(),
+            rule,
+        }
+    }
 }
 
 /// The fields one save writes — the body of both [`ThresholdStore::create`] and
@@ -49,9 +86,13 @@ pub struct ThresholdWrite<'a> {
     /// Every target, already validated by the API edge. Empty for a `global` rule.
     pub scope_ids: &'a [String],
     pub metric: &'a str,
-    pub direction: &'a str,
-    pub warning: Option<f64>,
-    pub critical: Option<f64>,
+    /// The four bounds — the truth this row is written from (ADR-081).
+    ///
+    /// ⚠️ `direction`, `warning` and `critical` are **not** fields here. They are still written to
+    /// their columns, but derived from these bounds at the moment of the write rather than passed
+    /// in beside them: two carriers of one fact is how a row gets stored saying `above` while its
+    /// bounds face down, and nothing downstream could tell which half to believe.
+    pub bounds: ThresholdBounds,
     pub dwell_samples: i32,
 }
 
@@ -64,6 +105,20 @@ impl ThresholdWrite<'_> {
     /// target" — inert versus narrowed, and only one of those is safe to discover late.
     fn primary(&self) -> &str {
         self.scope_ids.first().map_or("", String::as_str)
+    }
+
+    /// What goes in the legacy `direction`/`warning`/`critical` columns: the rule's primary side.
+    ///
+    /// ⚠️ Written on every save even though this build resolves from the four bounds. It is what a
+    /// core predating migration 0098 evaluates the rule by, so leaving them null would turn a
+    /// rollback into "the rule never fires" instead of "the rule watches one side of the band" —
+    /// inert versus narrowed, and only one of those is safe to discover late.
+    const fn legacy(&self) -> (&'static str, Option<f64>, Option<f64>) {
+        (
+            self.bounds.direction().as_str(),
+            self.bounds.warning(),
+            self.bounds.critical(),
+        )
     }
 }
 
@@ -79,11 +134,44 @@ fn parse_level(s: &str) -> ScopeLevel {
     ScopeLevel::from_token(s).unwrap_or(ScopeLevel::Profile)
 }
 
-fn parse_direction(s: &str) -> Direction {
-    match s {
-        "below" => Direction::Below,
-        _ => Direction::Above,
+/// The four bounds of one row, falling back to the pre-ADR-081 triple when they are all null.
+///
+/// ⚠️ The fallback is not belt-and-braces, it is the **rollback path**. Migration 0098 backfilled
+/// every row that existed when it ran, so four nulls beside a populated `warning`/`critical` can
+/// only be a row an OLDER core wrote afterwards — during a rollback window, when that core knew
+/// nothing about these columns. Reading it as "no bounds" would make the rule stored, listed and
+/// silently inert, which is exactly the failure ADR-081 exists to remove; reading it through
+/// `from_legacy` is what the older core itself meant by the row. Same reasoning as `scope_ids`
+/// above, and the same shape.
+fn read_bounds(row: &sqlx::postgres::PgRow) -> anyhow::Result<ThresholdBounds> {
+    let bounds = ThresholdBounds {
+        warning_below: row.try_get("warning_below")?,
+        critical_below: row.try_get("critical_below")?,
+        warning_above: row.try_get("warning_above")?,
+        critical_above: row.try_get("critical_above")?,
+    };
+    if !bounds.is_empty() {
+        return Ok(bounds);
     }
+    Ok(ThresholdBounds::from_legacy(
+        parse_direction(&row.try_get::<String, _>("direction")?),
+        row.try_get("warning")?,
+        row.try_get("critical")?,
+    ))
+}
+
+/// Read the stored direction token back into the enum.
+///
+/// ⚠️ Goes through [`Direction::from_token`] for the same reason [`parse_level`] does, and it took
+/// until ADR-081 to notice that the lesson written five lines above had not been applied five lines
+/// below. The `_ => Direction::Above` this replaces mapped **every** unrecognised token to `above`,
+/// including a mis-cased `Below` — and the config-bundle import path binds this column as raw text
+/// with no CHECK constraint behind it, so `snmp_up below 0.5` arriving as `"Below"` became
+/// `above 0.5` and paged for every healthy device. `above` is still the fallback (it is what the
+/// column's writers have always produced), but it is now one named default rather than a match arm
+/// that swallows whatever it is handed.
+fn parse_direction(s: &str) -> Direction {
+    Direction::from_token(s).unwrap_or(Direction::Above)
 }
 
 /// What narrows a page of the ruleset. Every field is optional; all of them are ANDed.
@@ -113,8 +201,9 @@ impl ThresholdStore {
     }
 
     /// Columns every read below selects, in the order [`Self::row_to_threshold`] expects.
-    const COLUMNS: &'static str =
-        "id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, dwell_samples";
+    const COLUMNS: &'static str = "id, scope_level, scope_id, scope_ids, metric, direction, \
+         warning, critical, warning_below, critical_below, warning_above, critical_above, \
+         dwell_samples";
 
     /// **Every** threshold rule — the alert engine snapshots these to evaluate against.
     ///
@@ -136,9 +225,23 @@ impl ThresholdStore {
     /// open: the operator sees more rules than they asked for, which reads as a wrong answer about
     /// what pages the fleet. One const also keeps the count query and the page query asking the
     /// same question, so "500 of 3,200" cannot count a different set from the one it is showing.
+    /// ⚠️ The direction clause asks about the **bounds**, not only the legacy `direction` column
+    /// (ADR-081). A rule bounding both sides stores `above` there — it is the primary side — so
+    /// `direction=below` used to miss it, and the caller who asked "show me the rules that fire
+    /// when a value drops" would be shown a shorter list than the truth. That is the worst answer
+    /// available for an alerting filter: complete-looking and short.
+    ///
+    /// The legacy column is still ORed in, which makes this strictly a **widening**: every row
+    /// that matched before still matches. It has to be — a row an N-1 core wrote during a rollback
+    /// window has all four bounds null, and so does a liveness rule, whose direction is a fact
+    /// about the check rather than about a number.
     const FILTER_WHERE: &'static str = "($1::text IS NULL OR metric ILIKE '%' || $1 || '%') \
          AND ($2::text[] IS NULL OR scope_level = ANY($2)) \
-         AND ($3::text[] IS NULL OR direction = ANY($3))";
+         AND ($3::text[] IS NULL OR direction = ANY($3) \
+              OR ('above' = ANY($3) \
+                  AND (warning_above IS NOT NULL OR critical_above IS NOT NULL)) \
+              OR ('below' = ANY($3) \
+                  AND (warning_below IS NOT NULL OR critical_below IS NOT NULL)))";
 
     /// `CASE scope_level WHEN … END` ranking the levels broadest-first, **built from
     /// [`ScopeLevel::ALL`]** rather than written out.
@@ -273,14 +376,18 @@ impl ThresholdStore {
 
     fn row_to_threshold(row: sqlx::postgres::PgRow) -> anyhow::Result<StoredThreshold> {
         let dwell: i32 = row.try_get("dwell_samples")?;
-        Ok(StoredThreshold {
-            id: row.try_get("id")?,
-            level: parse_level(&row.try_get::<String, _>("scope_level")?),
+        // Derived from the bounds, never read from the row's own legacy columns: the row carries
+        // both, and the bounds are the ones the engine evaluates. Reporting the column instead
+        // would let the API describe a rule the engine does not run.
+        let bounds = read_bounds(&row)?;
+        Ok(StoredThreshold::new(
+            row.try_get("id")?,
+            parse_level(&row.try_get::<String, _>("scope_level")?),
             // Migration 0096 backfilled every row that existed when it ran, so an empty array
             // beside a populated `scope_id` can only be a row an OLDER core wrote afterwards —
             // i.e. during a rollback window. Reading that as "no targets" would make the rule
             // inert; reading it as one target is what the older core itself meant by it.
-            scope_ids: {
+            {
                 let ids: Vec<String> = row.try_get("scope_ids")?;
                 let primary: String = row.try_get("scope_id")?;
                 if ids.is_empty() && !primary.is_empty() {
@@ -289,33 +396,36 @@ impl ThresholdStore {
                     ids
                 }
             },
-            rule: ThresholdRule {
-                metric: row.try_get("metric")?,
-                direction: parse_direction(&row.try_get::<String, _>("direction")?),
-                warning: row.try_get("warning")?,
-                critical: row.try_get("critical")?,
-                dwell_samples: u32::try_from(dwell).unwrap_or(1),
-            },
-        })
+            ThresholdRule::new(
+                row.try_get::<String, _>("metric")?,
+                bounds,
+                u32::try_from(dwell).unwrap_or(1),
+            ),
+        ))
     }
 
     /// Create a threshold rule; returns its id.
     pub async fn create(&self, w: ThresholdWrite<'_>) -> anyhow::Result<Uuid> {
         let id = Uuid::new_v4();
+        let (direction, warning, critical) = w.legacy();
         sqlx::query(
             "INSERT INTO thresholds \
              (id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
-              dwell_samples) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+              warning_below, critical_below, warning_above, critical_above, dwell_samples) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind(id)
         .bind(w.scope_level)
         .bind(w.primary())
         .bind(w.scope_ids)
         .bind(w.metric)
-        .bind(w.direction)
-        .bind(w.warning)
-        .bind(w.critical)
+        .bind(direction)
+        .bind(warning)
+        .bind(critical)
+        .bind(w.bounds.warning_below)
+        .bind(w.bounds.critical_below)
+        .bind(w.bounds.warning_above)
+        .bind(w.bounds.critical_above)
         .bind(w.dwell_samples.max(1))
         .execute(&self.pool)
         .await?;
@@ -334,22 +444,70 @@ impl ThresholdStore {
     /// is a second write path to the same column, and a floor that only one writer applies is a
     /// floor the other one silently removes.
     pub async fn update(&self, id: Uuid, w: ThresholdWrite<'_>) -> anyhow::Result<bool> {
+        let (direction, warning, critical) = w.legacy();
         let res = sqlx::query(
             "UPDATE thresholds SET scope_level = $2, scope_id = $3, scope_ids = $4, metric = $5, \
-             direction = $6, warning = $7, critical = $8, dwell_samples = $9 WHERE id = $1",
+             direction = $6, warning = $7, critical = $8, warning_below = $9, \
+             critical_below = $10, warning_above = $11, critical_above = $12, \
+             dwell_samples = $13 WHERE id = $1",
         )
         .bind(id)
         .bind(w.scope_level)
         .bind(w.primary())
         .bind(w.scope_ids)
         .bind(w.metric)
-        .bind(w.direction)
-        .bind(w.warning)
-        .bind(w.critical)
+        .bind(direction)
+        .bind(warning)
+        .bind(critical)
+        .bind(w.bounds.warning_below)
+        .bind(w.bounds.critical_below)
+        .bind(w.bounds.warning_above)
+        .bind(w.bounds.critical_above)
         .bind(w.dwell_samples.max(1))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+
+    /// The id of an existing rule with the same scope and metric, if there is one (ADR-081).
+    ///
+    /// 🚨 What a second such rule used to do: it was stored, listed, and never evaluated.
+    /// `resolve_effective` merged every winner at the most-specific level under **one** direction —
+    /// taken from whichever row the index happened to yield first — so a rule facing the other way
+    /// had its bounds compared the wrong way round and disappeared. Since ADR-081 a single rule can
+    /// bound both sides, so the second row has no reason to exist and is refused instead.
+    ///
+    /// ⚠️ **The refusal lives here rather than in a `UNIQUE` constraint, deliberately.** A
+    /// constraint cannot be added to a table that already holds duplicates: the migration fails,
+    /// and a migration that fails is a core that will not start. Measured on the test deployment
+    /// 2026-08-21: 0 duplicate groups over 33 rules — one deployment, which is not a proof about
+    /// every deployment. So existing duplicates keep resolving exactly as they do today (badly, and
+    /// visibly, once one of them is edited) and no new one can be created.
+    ///
+    /// `scope_ids` compares as an ordered array, matching how the API stores it: the edge already
+    /// refuses a repeated target, but it does not sort, so two rules naming the same two profiles
+    /// in opposite orders are not caught here. That is the narrow miss this accepts — both rules
+    /// still resolve, and the pair is far rarer than the accidental second rule this is for.
+    pub async fn find_duplicate(
+        &self,
+        scope_level: &str,
+        scope_ids: &[String],
+        metric: &str,
+        exclude: Option<Uuid>,
+    ) -> anyhow::Result<Option<Uuid>> {
+        let row = sqlx::query(
+            "SELECT id FROM thresholds \
+             WHERE scope_level = $1 AND scope_ids = $2 AND metric = $3 \
+               AND ($4::uuid IS NULL OR id <> $4) \
+             LIMIT 1",
+        )
+        .bind(scope_level)
+        .bind(scope_ids)
+        .bind(metric)
+        .bind(exclude)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|r| r.try_get("id")).transpose().map_err(Into::into)
     }
 
     /// Delete a threshold rule. Returns whether a row was removed.
@@ -460,8 +618,15 @@ mod tests {
             .expect("update exists")
             .1;
         let body = after.split_once("\n    }").map_or(after, |(b, _)| b);
-        let placeholders = (1..=9).filter(|n| body.contains(&format!("${n}"))).count();
-        assert_eq!(placeholders, 9, "{body}");
+        // Derived from `COLUMNS` rather than written out: `update` sets every column but the id
+        // and then names the id in the `WHERE`, so the count is exactly the column count. Writing
+        // the number here instead is what made this test need editing for ADR-081 rather than
+        // simply passing — a pin that has to be re-pinned by hand tells you less each time.
+        let columns = ThresholdStore::COLUMNS.matches(", ").count() + 1;
+        let placeholders = (1..=columns)
+            .filter(|n| body.contains(&format!("${n}")))
+            .count();
+        assert_eq!(placeholders, columns, "{body}");
         assert_eq!(
             body.matches(".bind(").count(),
             placeholders,
@@ -572,6 +737,9 @@ mod tests {
         // API's capped page, and the per-interface candidate set (ADR-076 決定 11).
         let src = production_source();
         assert_eq!(src.matches("Self::COLUMNS").count(), 3);
-        assert_eq!(ThresholdStore::COLUMNS.matches(',').count() + 1, 9);
+        // 13 since ADR-081 added the four bounds. Deliberately a written-out number: this is the
+        // one assertion whose whole job is to make someone confirm the column set changed on
+        // purpose, so deriving it from `COLUMNS` would make it assert nothing.
+        assert_eq!(ThresholdStore::COLUMNS.matches(", ").count() + 1, 13);
     }
 }

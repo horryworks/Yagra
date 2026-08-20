@@ -145,6 +145,9 @@ pub enum NoteCode {
     WebhookTokenReset,
     /// A schedule's next firing instant was recomputed from its cadence rather than carried.
     ScheduleNextRunRecomputed,
+    /// A row was not imported because one of its values is outside the vocabulary that field
+    /// accepts. The bundle was written by hand or by a different product.
+    SkippedInvalidValue,
 }
 
 impl NoteCode {
@@ -155,13 +158,14 @@ impl NoteCode {
     /// second copy with no reader. What it is for is the one thing the derive cannot check, that
     /// each variant's token is distinct and survives a round trip.
     #[cfg(test)]
-    const ALL: [NoteCode; 6] = [
+    const ALL: [NoteCode; 7] = [
         NoteCode::SkippedBuiltin,
         NoteCode::SkippedMissingReference,
         NoteCode::ReferenceDropped,
         NoteCode::SecretDroppedImportedDisabled,
         NoteCode::WebhookTokenReset,
         NoteCode::ScheduleNextRunRecomputed,
+        NoteCode::SkippedInvalidValue,
     ];
 }
 
@@ -333,6 +337,20 @@ pub struct ThresholdRow {
     pub warning: Option<f64>,
     #[serde(default)]
     pub critical: Option<f64>,
+    /// The four bounds a rule can name (ADR-081). Absent in a bundle written before ranges existed,
+    /// in which case `direction` + `warning` + `critical` is the whole answer.
+    //
+    // `//` for the reasoning, as above: this type derives `ToSchema`. The importer folds these
+    // through `ThresholdBounds::from_legacy` when they are all absent, so an old bundle imports
+    // unchanged and a new one imports both sides.
+    #[serde(default)]
+    pub warning_below: Option<f64>,
+    #[serde(default)]
+    pub critical_below: Option<f64>,
+    #[serde(default)]
+    pub warning_above: Option<f64>,
+    #[serde(default)]
+    pub critical_above: Option<f64>,
     pub dwell_samples: i32,
 }
 
@@ -774,7 +792,7 @@ impl ConfigBundleRepo {
         let mut thresholds = Vec::new();
         for row in sqlx::query(
             "SELECT id, scope_level, scope_id, scope_ids, metric, direction, warning, critical, \
-                    dwell_samples \
+                    warning_below, critical_below, warning_above, critical_above, dwell_samples \
              FROM thresholds ORDER BY metric, id",
         )
         .fetch_all(&mut *conn)
@@ -794,6 +812,10 @@ impl ConfigBundleRepo {
                 direction: row.try_get("direction")?,
                 warning: row.try_get("warning")?,
                 critical: row.try_get("critical")?,
+                warning_below: row.try_get("warning_below")?,
+                critical_below: row.try_get("critical_below")?,
+                warning_above: row.try_get("warning_above")?,
+                critical_above: row.try_get("critical_above")?,
                 dwell_samples: row.try_get("dwell_samples")?,
             });
         }
@@ -1341,6 +1363,53 @@ impl ConfigBundleRepo {
             } else {
                 t.scope_ids.clone()
             };
+            // 🚨 The vocabulary is checked here, and until ADR-081 it was not checked anywhere on
+            // this path. `scope_level` and `direction` are TEXT columns with no CHECK constraint,
+            // this importer bound them straight through, and the reader turns an unrecognised token
+            // into a named default: an unknown level reads as `profile` (a rule that matches no
+            // node and is silently inert), and an unknown direction reads as `above`. A bundle
+            // carrying `"Below"` — one capital, from a hand edit or another product — therefore
+            // imported `snmp_up below 0.5` as `above 0.5`, which pages for **every healthy device**.
+            // The API edge has always parsed both through `from_token`; a second writer of the same
+            // rows enforcing neither is the shape `extensibility.md` §3 names.
+            let (Some(_), Some(direction)) = (
+                yagra_common::ScopeLevel::from_token(&t.scope_level),
+                yagra_common::Direction::from_token(&t.direction),
+            ) else {
+                notes.add(
+                    "thresholds",
+                    NoteCode::SkippedInvalidValue,
+                    Some("scope_level/direction"),
+                );
+                c.skipped += 1;
+                continue;
+            };
+            // ADR-081: the four bounds are the truth. An older bundle carries none of them, and
+            // folds through the one conversion the database read also uses — so "what an old
+            // bundle meant" is decided in one place rather than two.
+            let mut bounds = yagra_common::ThresholdBounds {
+                warning_below: t.warning_below,
+                critical_below: t.critical_below,
+                warning_above: t.warning_above,
+                critical_above: t.critical_above,
+            };
+            if bounds.is_empty() {
+                bounds =
+                    yagra_common::ThresholdBounds::from_legacy(direction, t.warning, t.critical);
+            }
+            // A rule with no bound at all is stored, listed and never fires. Importing one would
+            // put a rule on the operator's screen that does nothing, which is the failure ADR-081
+            // exists to remove rather than to import.
+            //
+            // 🚨 Liveness is the exception, for the reason `api/thresholds.rs` spells out:
+            // `__liveness__` is decided from the poll outcome rather than from a value, so a
+            // bound-less row is its correct shape. A per-scope liveness override is a rule an
+            // operator can legitimately have created and therefore legitimately export.
+            if bounds.is_empty() && t.metric != crate::alerts::LIVENESS {
+                notes.add("thresholds", NoteCode::SkippedInvalidValue, Some("bounds"));
+                c.skipped += 1;
+                continue;
+            }
             // `scope_id`/`scope_ids` are TEXT because the legacy `group` scope is a tag value, not
             // a uuid. Only the levels that *are* uuids are validated; a tag scope has nothing to
             // resolve against, and `global` has no id at all.
@@ -1370,13 +1439,19 @@ impl ConfigBundleRepo {
             }
             sqlx::query(
                 "INSERT INTO thresholds (id, scope_level, scope_id, scope_ids, metric, direction, \
-                                         warning, critical, dwell_samples) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                                         warning, critical, warning_below, critical_below, \
+                                         warning_above, critical_above, dwell_samples) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
                  ON CONFLICT (id) DO UPDATE SET scope_level = EXCLUDED.scope_level, \
                      scope_id = EXCLUDED.scope_id, scope_ids = EXCLUDED.scope_ids, \
                      metric = EXCLUDED.metric, \
                      direction = EXCLUDED.direction, warning = EXCLUDED.warning, \
-                     critical = EXCLUDED.critical, dwell_samples = EXCLUDED.dwell_samples",
+                     critical = EXCLUDED.critical, \
+                     warning_below = EXCLUDED.warning_below, \
+                     critical_below = EXCLUDED.critical_below, \
+                     warning_above = EXCLUDED.warning_above, \
+                     critical_above = EXCLUDED.critical_above, \
+                     dwell_samples = EXCLUDED.dwell_samples",
             )
             .bind(t.id)
             .bind(&t.scope_level)
@@ -1385,9 +1460,16 @@ impl ConfigBundleRepo {
             .bind(targets.first().map_or("", String::as_str))
             .bind(&targets)
             .bind(&t.metric)
-            .bind(&t.direction)
-            .bind(t.warning)
-            .bind(t.critical)
+            // The legacy triple is derived from the bounds rather than copied from the bundle, for
+            // the same reason `ThresholdWrite::legacy` derives it: a row saying `above` beside
+            // bounds that face down leaves nothing able to say which half to believe.
+            .bind(bounds.direction().as_str())
+            .bind(bounds.warning())
+            .bind(bounds.critical())
+            .bind(bounds.warning_below)
+            .bind(bounds.critical_below)
+            .bind(bounds.warning_above)
+            .bind(bounds.critical_above)
             .bind(t.dwell_samples)
             .execute(&mut *tx)
             .await?;

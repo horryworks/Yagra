@@ -10,8 +10,44 @@
 
 ## Unreleased
 
+### New Features
+
+- **One threshold rule can now bound a metric on both sides.** A rule carries
+  `warning_below` / `critical_below` / `warning_above` / `critical_above`, so "alert when the
+  optical receive level falls below -20 dBm **or** rises above -3 dBm" is one rule instead of two.
+  Alerts ▸ Metric alert rules shows two rows of boxes — *alert at or below* and *alert at or
+  above* — and the direction selector is gone: which way a rule faces is read from the numbers.
+  Filling only one row is a one-sided rule exactly as before.
+
+### Improvements
+
+- **A second rule for the same metric at the same scope is now refused with 409.** Before ranges
+  existed, writing "below 10" and "above 90" as two rules at one scope was the only way to
+  express a band — and the second one was stored, listed, and never evaluated, because rule
+  resolution merged every rule at the winning scope under a single direction. One rule holds both
+  sides now, and the duplicate is refused at the moment it is created rather than going quietly
+  inert. Existing duplicates are left alone.
+- **A rule that names no bound at all is refused.** It could be created, and it could never fire.
+  Reachability (`__liveness__`) is the deliberate exception — it asks whether the node answered,
+  not whether a number is out of range.
+- **`?direction=below` now returns rules that bound a metric from below even when they also
+  bound it from above.** The filter reads the bounds rather than the rule's reported primary
+  side, on `GET /api/v1/thresholds` and the `get_config(kind=thresholds)` MCP tool alike.
+  Nothing that matched before stops matching.
+- **The configuration bundle now validates `scope_level` and `direction` on import.** Neither
+  column has a database constraint and the importer bound them straight through, so a bundle
+  carrying `"Below"` — one capital, from a hand edit — imported as `above` and inverted the
+  rule. Such a row is now skipped with a `skipped_invalid_value` note instead.
+
 ### Bug Fixes
 
+- **A threshold rule facing the opposite way to its neighbour no longer disappears.** Where two
+  rules at the same scope named opposite directions, one had its bounds compared the wrong way
+  round during resolution and stopped contributing. Each side is now resolved under its own
+  direction, and "the more restrictive bound wins" is applied per side — the higher lower bound
+  and the lower upper bound.
+- **An unrecognised `direction` in the database no longer silently reads as `above`.** It goes
+  through the same parse the API edge uses.
 - **A bandwidth alert on a port now clears.** Once an interface utilisation or throughput alert
   fired, nothing could resolve it. The alert itself pushed the node's rolled-up state to
   `warning`, and the loop that both raises and clears those alerts skips any node that is not
