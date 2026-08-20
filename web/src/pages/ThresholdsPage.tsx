@@ -89,6 +89,13 @@ function DeleteThresholdModal({
   );
 }
 
+/** How many targets the Scope cell draws before it falls back to counting (ADR-078 増分 5).
+ *
+ *  The API accepts 32 (`MAX_SCOPE_IDS`), and a row that long would be a screenful on its own. The
+ *  seeded maximum is 5 — `cisco_cpu_5min`, which every Cisco health template publishes — so this
+ *  only ever engages on a rule an operator built by hand. ⚠️ 8 is a judgement, not a measurement. */
+const MAX_SCOPE_LINES = 8;
+
 export function ThresholdsPage() {
   const { t } = useTranslation('alertsConfig');
   const canConfig = useCan('manage_config');
@@ -151,7 +158,9 @@ export function ThresholdsPage() {
         // see `thresholdQuery.ts`. The API has no `scope_id` parameter to push it into.
         key: 'scope_id',
         header: t('thresholds.cols.scopeId'),
-        width: '1.2fr',
+        // Wider since 増分 5, taken from the meaning column: stacking makes each line short, and
+        // the width is what decides whether a profile name ends in an ellipsis at 1280px.
+        width: '1.6fr',
         render: (row) =>
           // A global rule has no target to resolve — the type column already says "every node",
           // and `EntityName` on an empty id renders a bare em dash with no explanation of why.
@@ -160,31 +169,33 @@ export function ThresholdsPage() {
               —
             </span>
           ) : (
-            // Since ADR-078 a rule may name several. Two are shown and the rest counted, because
-            // the column is one line: a Huawei rule names four profiles, and wrapping four names
-            // would make every other row on the screen taller to suit one of them. The `title`
-            // carries the whole list, so nothing is only-countable.
+            // Since ADR-078 a rule may name several, and 増分 5 draws them ALL, one per line, with
+            // the row growing to suit (`autoRowHeight` below).
+            //
+            // 🚨 Two were drawn and the rest counted until an operator reported that the column
+            // says nothing at all. The cell was one line and narrower than a single profile name
+            // at most window widths, so the second name fell past the ellipsis — and so did the
+            // "and N more" standing behind it. A five-profile rule and a one-profile rule rendered
+            // identically, and the only way to tell them apart was a hover title, which a touch
+            // device does not have.
             <span className="thresholds-scopes" title={scopeTitle(row)}>
-              {row.scope_ids.slice(0, 2).map((id, i) => (
-                <span key={id}>
-                  {i > 0 && <span className="muted">, </span>}
-                  {row.scope_level === 'interface' ? (
-                    // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's
-                    // half — `EntityName` would offer the whole composed string as a copyable
-                    // "id", which is not an id anything else accepts.
-                    <EntityName
-                      name={scopeName(row.scope_level, id)}
-                      id={splitInterfaceScopeId(id)[0]}
-                    />
-                  ) : (
-                    <EntityName name={scopeName(row.scope_level, id)} id={id} />
-                  )}
-                </span>
-              ))}
-              {row.scope_ids.length > 2 && (
+              {row.scope_ids.slice(0, MAX_SCOPE_LINES).map((id) =>
+                row.scope_level === 'interface' ? (
+                  // The id is `<node-uuid>:<ifindex>`, so the hover title has to be the node's
+                  // half — `EntityName` would offer the whole composed string as a copyable
+                  // "id", which is not an id anything else accepts.
+                  <EntityName
+                    key={id}
+                    name={scopeName(row.scope_level, id)}
+                    id={splitInterfaceScopeId(id)[0]}
+                  />
+                ) : (
+                  <EntityName key={id} name={scopeName(row.scope_level, id)} id={id} />
+                ),
+              )}
+              {row.scope_ids.length > MAX_SCOPE_LINES && (
                 <span className="muted">
-                  {' '}
-                  {t('thresholds.scopeMore', { count: row.scope_ids.length - 2 })}
+                  {t('thresholds.scopeMore', { count: row.scope_ids.length - MAX_SCOPE_LINES })}
                 </span>
               )}
             </span>
@@ -211,7 +222,7 @@ export function ThresholdsPage() {
         // it watches. Not filterable — it is derived from the metric, which has its own filter.
         key: 'meaning',
         header: t('thresholds.cols.meaning'),
-        width: '2fr',
+        width: '1.6fr',
         render: (row) => {
           const key = metricMeaningKey(row.metric);
           // Rows are a fixed 44px, so the text is one line with an ellipsis. `title` carries the
@@ -418,6 +429,9 @@ export function ThresholdsPage() {
           <DataTable
             rows={rows}
             columns={columns}
+            // The Scope cell stacks one line per target, so a row is as tall as its rule is broad
+            // (ADR-078 増分 5). This is the only table that asks for it — see the prop's warning.
+            autoRowHeight
             filters={filters}
             onFiltersChange={setFilters}
             rowKey={(r) => r.id}

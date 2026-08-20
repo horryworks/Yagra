@@ -86,16 +86,28 @@ html[data-viewport='mobile'] .thresholds-meaning {
   font-size: var(--font-sm);
 }
 
-/* The Scope cell can name several targets since ADR-078, and the target picker in the dialog shows
-   the chosen nodes as chips. Both stay on one line: the cell because a four-profile rule must not
-   make every other row taller, the chips because the dialog is a fixed-width column. */
+/* The Scope cell names every target a rule has, one per line (ADR-078 増分 5). The row grows to
+   suit — the table opts into `autoRowHeight`, so five profiles make a five-line row.
+
+   A flex column rather than block children, because the children are `EntityName`s and that
+   component is `inline-flex` (name + a copy button that appears on hover). As flex items they
+   blockify and each takes its own line without this file having to know their internals.
+
+   No `align-items`: the default stretch is what makes each item the width of the cell, which is
+   in turn what lets a too-long name ellipse inside `.yt-entity-name`. With `flex-start` an
+   over-long name would size to its own text and be clipped by the cell with no ellipsis to say so.
+
+   The inherited `white-space: nowrap` from `.dt-cell > *` is left alone deliberately — it keeps
+   each individual name on one line, which is exactly the intent now that the lines are separate. */
 .thresholds-scopes {
-  display: inline-block;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  max-width: 100%;
 }
+
+/* The dialog's chips stay on one line: that column is fixed-width. */
 
 .thresholds-chips {
   display: flex;

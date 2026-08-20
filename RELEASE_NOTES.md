@@ -90,7 +90,10 @@
 
 - **A rule can be pointed at several profiles, folder groups or nodes at once.** The add/edit
   dialog's scope control is a multi-select (a picker with chips, for nodes), and the rules list
-  shows the first two targets with a count for the rest. One rule to edit, not one per target.
+  names every target, one per line, with the row growing to suit. One rule to edit, not one per
+  target. (The list drew two names and counted the rest until the column turned out to be narrower
+  than a single profile name — so the second name *and* the count behind it both fell past the
+  ellipsis, and a five-profile rule was indistinguishable from a one-profile rule.)
 
 - **“Scope level” and “Scope id” are now “Scope type” and “Scope”.** The first holds a kind, not
   a rank, and the second has shown human names rather than ids ever since the free-text box was

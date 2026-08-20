@@ -120,6 +120,27 @@
   cursor: pointer;
 }
 
+/* A row whose height follows its content (`autoRowHeight`, ADR-078 増分 5). The 44px above becomes
+   a floor rather than a promise, so a row whose cells are all one line is pixel-identical to a
+   fixed one and only a stacked cell grows.
+
+   `align-items: start` is the half that makes a tall row readable: with the inherited `center`,
+   a one-line Metric beside a five-line Scope floats at the third line and the table can no longer
+   be scanned across. Top-aligned, the first line of every column lines up.
+
+   The vertical padding lives here rather than on `.dt-cell` so it is stated once, and 7px is
+   measured rather than chosen: the tallest thing in an otherwise one-line row is the 29px row
+   action button, and 7 + 29 + 7 = 43 lands *under* the 44px floor. A single-line row is therefore
+   decided by the floor and not by this rule, which is what keeps it identical to a fixed row —
+   Tier1 measures the 44 here and on a table that never opts in. At 11px it came out 51px and the
+   whole screen drifted away from the other thirty. */
+.dt-row-auto {
+  height: auto;
+  min-height: 44px;
+  align-items: start;
+  padding-block: 7px;
+}
+
 /* Disabled / inactive row (`rowClass`). Same value as `.ytable-row.is-muted`, and deliberately
    opacity-only: anything that changed the row's box would desynchronise the virtualizer's fixed
    size estimate from the rendered height. */

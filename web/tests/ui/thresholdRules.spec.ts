@@ -138,17 +138,45 @@ test('the scope level and the scope id are two columns, each carrying its own va
   await expect(target).not.toHaveText('—');
   await expect(target.locator('.yt-entity-name')).toHaveCount(1);
 
-  // ADR-078: a rule naming three profiles draws two names and counts the rest. The count is the
-  // half a unit test cannot reach — and drawing all three would make every row on the screen as
-  // tall as the widest rule.
+  // ADR-078 増分 5: a rule naming three profiles draws all three, one per line, and the row grows.
+  // Two were drawn and the rest counted until an operator reported that the column tells you
+  // nothing — the second name and the "and N more" behind it both sat past the ellipsis.
   const multiRow = page.locator('.dt-row').filter({ hasText: MULTI_RULE_METRIC }).first();
   const multi = multiRow.locator('.dt-cell').nth(scopeId);
-  await expect(multi.locator('.yt-entity-name')).toHaveCount(2);
-  await expect(multi).toContainText('and 1 more');
-  // The whole list is still reachable, on the cell's title — otherwise the third target would be
-  // countable and not nameable.
+  await expect(multi.locator('.yt-entity-name')).toHaveCount(3);
+  await expect(multi).not.toContainText('more');
+  // Stacked, not comma-joined: three distinct baselines. A count of three would also be satisfied
+  // by three names on one line, which is the layout this replaced.
+  const tops = await multi
+    .locator('.yt-entity-name')
+    .evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+  expect(new Set(tops).size).toBe(3);
+  // The whole list is still on the cell's title — the overflow fallback for one over-long name,
+  // and the only place targets past `MAX_SCOPE_LINES` are nameable.
   const title = await multi.locator('.thresholds-scopes').getAttribute('title');
   expect(title?.split(', ')).toHaveLength(3);
+
+  // 🚨 The row actually grew. Without `autoRowHeight` the cell would render all three names into
+  // a box the virtualizer has already decided is 44px tall, and the extra two would be clipped —
+  // which `isVisible()` and `toHaveCount()` both report as fine. Height is the only witness.
+  const multiBox = await multiRow.boundingBox();
+  const singleBox = await profileRow.boundingBox();
+  expect(multiBox!.height).toBeGreaterThan(singleBox!.height * 2);
+  // …and a row whose cells are all one line is still exactly the standard height, so opting in
+  // costs nothing to the 22 rules that name one target. (design-system §4.1: body rows are 44px.)
+  expect(Math.round(singleBox!.height)).toBe(44);
+});
+
+test('opting one table into auto row heights leaves the others at 44px', async ({ page }) => {
+  // The counterweight to the test above. `autoRowHeight` changes `DataTable` — the component under
+  // all 30 list screens — and the failure it risks is not on the screen that asked for it: a row
+  // that stops being 44px anywhere else desynchronises the virtualizer from what it drew, and rows
+  // overlap. Events is a plain table that never opts in.
+  await page.goto('/events');
+  const row = page.locator('.dt-row').first();
+  await expect(row).toBeVisible();
+  expect(Math.round((await row.boundingBox())!.height)).toBe(44);
+  await expect(row).not.toHaveClass(/dt-row-auto/);
 });
 
 test('the row actions are actually on screen when the row is hovered', async ({ page }) => {

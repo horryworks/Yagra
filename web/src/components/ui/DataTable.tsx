@@ -103,6 +103,18 @@ interface Props<T> {
    *  reserving its expanded height until the cache is dropped. This value changing is what triggers
    *  that. One key rather than a set because both callers open exactly one row at a time. */
   expandedKey?: string | null;
+  /** Let each row be as tall as its content instead of the standard 44px (ADR-078 増分 5).
+   *
+   *  For a table where one cell names a *variable number* of things — the alert-rule Scope column
+   *  lists every profile a rule targets, one per line — a fixed row is a truncation rule in
+   *  disguise: the names past the first are ellipsed away, and so is the "and N more" that was
+   *  supposed to admit it. Opt in and the column can stack.
+   *
+   *  ⚠️ **This switches the desktop body to *measured* heights**, the same path cards and
+   *  `expanded` already take: 44px stops being a promise the virtualizer relies on and becomes
+   *  the pre-measurement estimate. Do not pass it to a table whose rows are uniform — the fixed
+   *  path is cheaper, and it is what the data-table standard asks for (design-system §4.1). */
+  autoRowHeight?: boolean;
 }
 
 const ROW_PX = 44; // comfortable-dense row height (matches the v2 .ytable standard)
@@ -127,6 +139,7 @@ export function DataTable<T>({
   onFilterOpen,
   expanded,
   expandedKey,
+  autoRowHeight,
 }: Props<T>) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -151,10 +164,11 @@ export function DataTable<T>({
   // from the columns. Desktop is byte-for-byte its previous grid self.
   const cardMode = useViewportMode() === 'mobile';
 
-  // Heights are measured whenever they can vary — mobile cards always, and an expandable table
-  // because the open row is several times a closed one. Elsewhere the fixed 44px estimate stands,
-  // so the existing tables keep the cheaper path. `estimateSize` stays 44 either way: it is the
-  // pre-measurement guess that keeps the initial scrollbar sane, not the final height.
+  // Heights are measured whenever they can vary — mobile cards always, an expandable table because
+  // the open row is several times a closed one, and an `autoRowHeight` table because one of its
+  // cells stacks. Elsewhere the fixed 44px estimate stands, so the existing tables keep the cheaper
+  // path. `estimateSize` stays 44 either way: it is the pre-measurement guess that keeps the
+  // initial scrollbar sane, not the final height.
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => scrollRef.current,
@@ -290,13 +304,27 @@ export function DataTable<T>({
                   {c.render(row)}
                 </div>
               ));
-              const rowCls = ['dt-row', onRowClick ? 'clickable' : '', rowClass?.(row) ?? '']
+              const rowCls = [
+                'dt-row',
+                // 🚨 The 44px in `.dt-row` is the virtualizer's position arithmetic, not a
+                // decoration — a taller cell without this class overflows into the next row
+                // rather than pushing it down.
+                autoRowHeight ? 'dt-row-auto' : '',
+                onRowClick ? 'clickable' : '',
+                rowClass?.(row) ?? '',
+              ]
                 .filter(Boolean)
                 .join(' ');
               if (!expanded) {
+                // `data-index` + the measuring ref only when the caller asked for auto heights:
+                // react-virtual reads the attribute to know which index it just measured, and a
+                // fixed-size table must not report heights at all or every row would be measured
+                // on every scroll frame for an answer that is already known.
                 return (
                   <div
                     key={rowKey(row)}
+                    data-index={autoRowHeight ? vi.index : undefined}
+                    ref={autoRowHeight ? virtualizer.measureElement : undefined}
                     className={rowCls}
                     style={{
                       gridTemplateColumns: template,
