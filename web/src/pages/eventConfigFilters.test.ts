@@ -11,6 +11,7 @@ import { eventRuleFilters, eventSourceFilters } from './eventConfigFilters';
 import { specColumns, type ColumnFilterSpec, type FilterState } from '../lib/columnFilter';
 import { buildPredicate } from '../lib/filterPredicate';
 import { encodeCondition } from '../lib/filterCondition';
+import { severityLabel } from '../lib/format';
 
 const t = ((k: string) => k) as unknown as Parameters<typeof eventSourceFilters>[0];
 const term = (s: string) => encodeCondition({ term: s, mode: 'contains', not: false });
@@ -106,6 +107,23 @@ describe('event sources', () => {
 });
 
 describe('event rules', () => {
+  // 🚨 The severity dropdown must name the severities the way the rest of the app does.
+  //
+  // It built its own key — `t('severity.critical')` — and this module is called with `t` bound to
+  // `alertsConfig`, whose top level has no `severity` block. So the filter listed
+  // `severity.critical` beside a badge in the same column reading `Critical`. EN/JA parity cannot
+  // catch that: the key is missing from both locales equally, so parity passes.
+  //
+  // This is not a tautology even though the implementation now calls `severityLabel`, because the
+  // `t` above is a fake that returns its key verbatim. A revert to the built key produces
+  // `severity.critical` here while `severityLabel` produces the locale string, and the two differ.
+  it('names the severities the way the rest of the app names them', () => {
+    const spec = ruleSpecs.severity as Extract<ColumnFilterSpec<EventRule>, { kind: 'enum' }>;
+    const labels = spec.options.map((o) => o.label);
+    expect(labels).toEqual(['info', 'warning', 'critical'].map((v) => severityLabel(v as never)));
+    expect(labels.some((l) => l.startsWith('severity.'))).toBe(false);
+  });
+
   it('shows everything when nothing is set', () => {
     expect(keeps(ruleSpecs, rule(), {})).toBe(true);
   });
