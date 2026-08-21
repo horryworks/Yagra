@@ -24,11 +24,12 @@ use std::sync::Arc;
 use std::time::Duration;
 use uuid::Uuid;
 use yagra_bus::{
-    DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, OpticalProbe, PollJob, SnmpArpCheck,
-    SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMauCheck, SnmpMetaColumn,
-    SnmpNeighborCheck, SnmpNeighborColumn, SnmpOpticalCheck, SnmpRouteProbe, SnmpRoutingCheck,
-    SnmpRoutingColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check, SnmpV3L3Check, SnmpV3MauCheck,
-    SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck, SnmpV3TableCheck, SyncBus,
+    CheckSpec, DnsCheck, HttpCheck, IcmpCheck, JobSpec, NatsBus, OpticalProbe, PollJob,
+    SnmpArpCheck, SnmpArpColumn, SnmpCheck, SnmpColumn, SnmpL3Check, SnmpL3Column, SnmpMauCheck,
+    SnmpMetaColumn, SnmpNeighborCheck, SnmpNeighborColumn, SnmpOpticalCheck, SnmpRouteProbe,
+    SnmpRoutingCheck, SnmpRoutingColumn, SnmpTableCheck, SnmpV3ArpCheck, SnmpV3Check,
+    SnmpV3L3Check, SnmpV3MauCheck, SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck,
+    SnmpV3TableCheck, SyncBus,
 };
 use yagra_common::{
     builtin_arp_columns, builtin_interface_meta_columns, builtin_l3_columns,
@@ -77,45 +78,6 @@ const SNMP_TIMEOUT_MS: u32 = 2000;
 #[must_use]
 pub fn build_icmp_job(node: &Node, check: IcmpCheck, interval_secs: u32, job_id: Uuid) -> PollJob {
     PollJob::icmp(job_id, node.id, node.address, check, interval_secs)
-}
-
-/// Build an SNMP v2c scalar poll job targeting a node's management address.
-#[must_use]
-pub fn build_snmp_job(node: &Node, check: SnmpCheck, interval_secs: u32, job_id: Uuid) -> PollJob {
-    PollJob::snmp(job_id, node.id, node.address, check, interval_secs)
-}
-
-/// Build an SNMP v2c table-walk poll job targeting a node's management address.
-#[must_use]
-pub fn build_snmp_table_job(
-    node: &Node,
-    check: SnmpTableCheck,
-    interval_secs: u32,
-    job_id: Uuid,
-) -> PollJob {
-    PollJob::snmp_table(job_id, node.id, node.address, check, interval_secs)
-}
-
-/// Build an SNMP v3 (USM) scalar poll job targeting a node's management address.
-#[must_use]
-pub fn build_snmp_v3_job(
-    node: &Node,
-    check: SnmpV3Check,
-    interval_secs: u32,
-    job_id: Uuid,
-) -> PollJob {
-    PollJob::snmp_v3(job_id, node.id, node.address, check, interval_secs)
-}
-
-/// Build an SNMP v3 (USM) table-walk poll job targeting a node's management address.
-#[must_use]
-pub fn build_snmp_v3_table_job(
-    node: &Node,
-    check: SnmpV3TableCheck,
-    interval_secs: u32,
-    job_id: Uuid,
-) -> PollJob {
-    PollJob::snmp_v3_table(job_id, node.id, node.address, check, interval_secs)
 }
 
 /// Map a stored [`UrlCheckConfig`] into the bus [`HttpCheck`]. Auth is not inlined yet (MVP probe
@@ -728,6 +690,218 @@ fn hint_admits(hint: Option<&HashSet<Uuid>>, node: Uuid) -> bool {
     hint.is_none_or(|ids| ids.contains(&node))
 }
 
+/// A check ready to become a job, carrying the job-kind label that must travel with it.
+///
+/// The label is operator-visible — [`publish`] writes it into the `dispatch.poll_job` tracing
+/// span and into the warn line a failed publish emits — so it is returned *with* the spec rather
+/// than written at the `jobs.push` call, where the two could drift apart (ADR-084 Inc.3).
+type LabelledSpec = (CheckSpec, &'static str);
+
+/// The half of [`assemble_node_jobs`] that differs between SNMP v2c and v3.
+///
+/// That function used to carry sixteen blocks — eight per authentication scheme, structurally
+/// identical, differing only in which builder they called, which [`CheckSpec`] variant they wrapped,
+/// and the job-kind label. Adding an SNMP check kind meant writing the block twice, and the two
+/// copies had nothing keeping them in step (ADR-084 Inc.3).
+///
+/// 🚨 **Each method returns its label beside its spec, and that pairing is the point.** The sixteen
+/// labels reach an operator: [`publish`] puts them in the `dispatch.poll_job` tracing span and in
+/// the warn line a failed publish emits, and a test branches on `kind.contains("mau")`. They used to
+/// be written at the `jobs.push` call, one line away from the builder that chose the variant, so the
+/// spelling and the spec could drift apart in silence. Returned together, they cannot.
+///
+/// ⚠️ **Do not "simplify" the labels into a computed `"snmp_v3_" + suffix`.** They are the strings an
+/// operator greps for; both spellings must survive verbatim, and `kind.contains("mau")` matches either
+/// one, so a test would not notice if only one did.
+trait SnmpJobSource {
+    /// Scalar and table checks, which share one walk of the collection set — hence one method
+    /// returning both rather than two that would resolve the set twice.
+    fn scalar_and_table(
+        &self,
+        items: &[CollectionItem],
+        timeout_ms: u32,
+    ) -> (Option<LabelledSpec>, Option<LabelledSpec>);
+    /// The optical-power probe, if any collection item asks for one.
+    fn optical(&self, items: &[CollectionItem], timeout_ms: u32) -> Option<LabelledSpec>;
+    /// The CDP/LLDP neighbour walk (ADR-038).
+    fn neighbors(&self, timeout_ms: u32) -> LabelledSpec;
+    /// The MAU/ENTITY media-type walk (ADR-063).
+    fn media(&self, timeout_ms: u32) -> LabelledSpec;
+    /// The interface-address walk (ADR-043).
+    fn l3(&self, timeout_ms: u32) -> LabelledSpec;
+    /// The ARP/neighbour-cache walk.
+    fn arp(&self, timeout_ms: u32) -> LabelledSpec;
+    /// The routing-adjacency walk, probing this node's assigned targets (ADR-043 Inc.4).
+    fn routing(&self, targets: &[std::net::IpAddr], timeout_ms: u32) -> LabelledSpec;
+}
+
+/// SNMP v2c: the credential is a community string.
+struct V2c<'a>(&'a str);
+
+/// SNMP v3 (USM): the credential is a decrypted secret document.
+struct V3<'a>(&'a SnmpV3Secret);
+
+impl SnmpJobSource for V2c<'_> {
+    fn scalar_and_table(
+        &self,
+        items: &[CollectionItem],
+        timeout_ms: u32,
+    ) -> (Option<LabelledSpec>, Option<LabelledSpec>) {
+        let (scalar, table) = build_snmp_checks(self.0, items, timeout_ms);
+        (
+            scalar.map(|c| (CheckSpec::Snmp(c), "snmp")),
+            table.map(|c| (CheckSpec::SnmpTable(c), "snmp_table")),
+        )
+    }
+    fn optical(&self, items: &[CollectionItem], timeout_ms: u32) -> Option<LabelledSpec> {
+        build_snmp_optical_check(self.0, items, timeout_ms)
+            .map(|c| (CheckSpec::SnmpOptical(c), "snmp_optical"))
+    }
+    fn neighbors(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpNeighbors(build_snmp_neighbor_check(self.0, timeout_ms)),
+            "snmp_neighbors",
+        )
+    }
+    fn media(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpMau(build_snmp_mau_check(self.0, timeout_ms)),
+            "snmp_mau",
+        )
+    }
+    fn l3(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpL3(build_snmp_l3_check(self.0, timeout_ms)),
+            "snmp_l3",
+        )
+    }
+    fn arp(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpArp(build_snmp_arp_check(self.0, timeout_ms)),
+            "snmp_arp",
+        )
+    }
+    fn routing(&self, targets: &[std::net::IpAddr], timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpRouting(build_snmp_routing_check(self.0, targets, timeout_ms)),
+            "snmp_routing",
+        )
+    }
+}
+
+impl SnmpJobSource for V3<'_> {
+    fn scalar_and_table(
+        &self,
+        items: &[CollectionItem],
+        timeout_ms: u32,
+    ) -> (Option<LabelledSpec>, Option<LabelledSpec>) {
+        (
+            build_snmp_v3_check(self.0, items, timeout_ms)
+                .map(|c| (CheckSpec::SnmpV3(c), "snmp_v3")),
+            build_snmp_v3_table_check(self.0, items, timeout_ms)
+                .map(|c| (CheckSpec::SnmpV3Table(c), "snmp_v3_table")),
+        )
+    }
+    fn optical(&self, items: &[CollectionItem], timeout_ms: u32) -> Option<LabelledSpec> {
+        build_snmp_v3_optical_check(self.0, items, timeout_ms)
+            .map(|c| (CheckSpec::SnmpV3Optical(c), "snmp_v3_optical"))
+    }
+    fn neighbors(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpV3Neighbors(build_snmp_v3_neighbor_check(self.0, timeout_ms)),
+            "snmp_v3_neighbors",
+        )
+    }
+    fn media(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpV3Mau(build_snmp_v3_mau_check(self.0, timeout_ms)),
+            "snmp_v3_mau",
+        )
+    }
+    fn l3(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpV3L3(build_snmp_v3_l3_check(self.0, timeout_ms)),
+            "snmp_v3_l3",
+        )
+    }
+    fn arp(&self, timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpV3Arp(build_snmp_v3_arp_check(self.0, timeout_ms)),
+            "snmp_v3_arp",
+        )
+    }
+    fn routing(&self, targets: &[std::net::IpAddr], timeout_ms: u32) -> LabelledSpec {
+        (
+            CheckSpec::SnmpV3Routing(build_snmp_v3_routing_check(self.0, targets, timeout_ms)),
+            "snmp_v3_routing",
+        )
+    }
+}
+
+/// Append a node's SNMP jobs, whichever authentication scheme it uses.
+///
+/// Generic rather than `&dyn` so each arm monomorphises to what it used to be written as by
+/// hand — this is a de-duplication, not a new indirection at dispatch time.
+fn push_snmp_jobs<S: SnmpJobSource>(
+    src: &S,
+    node: &Node,
+    items: &[CollectionItem],
+    interval_secs: u32,
+    neighbors: &AdjacencyPolicy,
+    jobs: &mut Vec<(PollJob, &'static str)>,
+) {
+    let job = |(spec, kind): LabelledSpec, secs: u32| {
+        (
+            PollJob::for_spec(Uuid::new_v4(), node.id, node.address, spec, secs),
+            kind,
+        )
+    };
+
+    let (scalar, table) = src.scalar_and_table(items, SNMP_TIMEOUT_MS);
+    if let Some(spec) = scalar {
+        // Identity probing rides the scalar job only: it is the one that already does a GET, so
+        // asking for sysDescr.0 alongside costs no extra round trip.
+        let (mut j, kind) = job(spec, interval_secs);
+        j.probe_identity = node.vendor.is_none();
+        jobs.push((j, kind));
+    }
+    if let Some(spec) = table {
+        jobs.push(job(spec, interval_secs));
+    }
+    // Optical rides `interval_secs`, not a slow adjacency cadence: optical power drifts
+    // continuously with temperature and age, and it shares a time axis with throughput in the
+    // interface dock (ADR-062).
+    if let Some(spec) = src.optical(items, SNMP_TIMEOUT_MS) {
+        jobs.push(job(spec, interval_secs));
+    }
+    if neighbors.neighbors_enabled {
+        jobs.push(job(
+            src.neighbors(SNMP_TIMEOUT_MS),
+            neighbors.neighbors_interval_secs,
+        ));
+    }
+    // Media rides the slow cadence, unlike optical above: a port's medium changes when someone
+    // swaps a module, not continuously (ADR-063 Inc.2).
+    if neighbors.media_enabled {
+        jobs.push(job(
+            src.media(SNMP_TIMEOUT_MS),
+            neighbors.media_interval_secs,
+        ));
+    }
+    if neighbors.l3_enabled {
+        jobs.push(job(src.l3(SNMP_TIMEOUT_MS), neighbors.l3_interval_secs));
+    }
+    if neighbors.arp_enabled {
+        jobs.push(job(src.arp(SNMP_TIMEOUT_MS), neighbors.arp_interval_secs));
+    }
+    if neighbors.routing_enabled {
+        jobs.push(job(
+            src.routing(neighbors.routing_plan.targets_for(node.id), SNMP_TIMEOUT_MS),
+            neighbors.routing_interval_secs,
+        ));
+    }
+}
+
 /// Assemble every poll job for one node from its already-resolved SNMP auth + collection set:
 /// an ICMP liveness job always, plus the SNMP scalar/table (v2c) or scalar (v3) jobs the set
 /// calls for. Each job is tagged with a short kind label for logging. Pure (no I/O) — the async
@@ -769,165 +943,26 @@ pub fn assemble_node_jobs(
         None => {}
     }
     let mut jobs = Vec::new();
-    let probe_identity = node.vendor.is_none();
     match auth {
         Some(SnmpAuth::V2c(community)) => {
-            let (scalar, table) = build_snmp_checks(community, items, SNMP_TIMEOUT_MS);
-            if let Some(check) = scalar {
-                let mut job = build_snmp_job(node, check, interval_secs, Uuid::new_v4());
-                job.probe_identity = probe_identity;
-                jobs.push((job, "snmp"));
-            }
-            if let Some(check) = table {
-                let job = build_snmp_table_job(node, check, interval_secs, Uuid::new_v4());
-                jobs.push((job, "snmp_table"));
-            }
-            // Optical rides `interval_secs`, not a slow adjacency cadence: optical power drifts
-            // continuously with temperature and age, and it shares a time axis with throughput in
-            // the interface dock (ADR-062).
-            if let Some(check) = build_snmp_optical_check(community, items, SNMP_TIMEOUT_MS) {
-                let job = PollJob::snmp_optical(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    check,
-                    interval_secs,
-                );
-                jobs.push((job, "snmp_optical"));
-            }
-            if neighbors.neighbors_enabled {
-                let job = PollJob::snmp_neighbors(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_neighbor_check(community, SNMP_TIMEOUT_MS),
-                    neighbors.neighbors_interval_secs,
-                );
-                jobs.push((job, "snmp_neighbors"));
-            }
-            // Media rides the slow cadence, unlike optical above: a port's medium changes when
-            // someone swaps a module, not continuously (ADR-063 Inc.2).
-            if neighbors.media_enabled {
-                let job = PollJob::snmp_mau(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_mau_check(community, SNMP_TIMEOUT_MS),
-                    neighbors.media_interval_secs,
-                );
-                jobs.push((job, "snmp_mau"));
-            }
-            if neighbors.l3_enabled {
-                let job = PollJob::snmp_l3(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_l3_check(community, SNMP_TIMEOUT_MS),
-                    neighbors.l3_interval_secs,
-                );
-                jobs.push((job, "snmp_l3"));
-            }
-            if neighbors.arp_enabled {
-                let job = PollJob::snmp_arp(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_arp_check(community, SNMP_TIMEOUT_MS),
-                    neighbors.arp_interval_secs,
-                );
-                jobs.push((job, "snmp_arp"));
-            }
-            if neighbors.routing_enabled {
-                let job = PollJob::snmp_routing(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_routing_check(
-                        community,
-                        neighbors.routing_plan.targets_for(node.id),
-                        SNMP_TIMEOUT_MS,
-                    ),
-                    neighbors.routing_interval_secs,
-                );
-                jobs.push((job, "snmp_routing"));
-            }
+            push_snmp_jobs(
+                &V2c(community),
+                node,
+                items,
+                interval_secs,
+                neighbors,
+                &mut jobs,
+            );
         }
         Some(SnmpAuth::V3(secret)) => {
-            if let Some(check) = build_snmp_v3_check(secret, items, SNMP_TIMEOUT_MS) {
-                let mut job = build_snmp_v3_job(node, check, interval_secs, Uuid::new_v4());
-                job.probe_identity = probe_identity;
-                jobs.push((job, "snmp_v3"));
-            }
-            if let Some(check) = build_snmp_v3_table_check(secret, items, SNMP_TIMEOUT_MS) {
-                let job = build_snmp_v3_table_job(node, check, interval_secs, Uuid::new_v4());
-                jobs.push((job, "snmp_v3_table"));
-            }
-            // See the v2c arm: optical rides the metric interval, not the adjacency cadence.
-            if let Some(check) = build_snmp_v3_optical_check(secret, items, SNMP_TIMEOUT_MS) {
-                let job = PollJob::snmp_v3_optical(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    check,
-                    interval_secs,
-                );
-                jobs.push((job, "snmp_v3_optical"));
-            }
-            if neighbors.neighbors_enabled {
-                let job = PollJob::snmp_v3_neighbors(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_v3_neighbor_check(secret, SNMP_TIMEOUT_MS),
-                    neighbors.neighbors_interval_secs,
-                );
-                jobs.push((job, "snmp_v3_neighbors"));
-            }
-            // See the v2c arm: media rides the slow cadence, not the metric interval.
-            if neighbors.media_enabled {
-                let job = PollJob::snmp_v3_mau(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_v3_mau_check(secret, SNMP_TIMEOUT_MS),
-                    neighbors.media_interval_secs,
-                );
-                jobs.push((job, "snmp_v3_mau"));
-            }
-            if neighbors.l3_enabled {
-                let job = PollJob::snmp_v3_l3(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_v3_l3_check(secret, SNMP_TIMEOUT_MS),
-                    neighbors.l3_interval_secs,
-                );
-                jobs.push((job, "snmp_v3_l3"));
-            }
-            if neighbors.arp_enabled {
-                let job = PollJob::snmp_v3_arp(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_v3_arp_check(secret, SNMP_TIMEOUT_MS),
-                    neighbors.arp_interval_secs,
-                );
-                jobs.push((job, "snmp_v3_arp"));
-            }
-            if neighbors.routing_enabled {
-                let job = PollJob::snmp_v3_routing(
-                    Uuid::new_v4(),
-                    node.id,
-                    node.address,
-                    build_snmp_v3_routing_check(
-                        secret,
-                        neighbors.routing_plan.targets_for(node.id),
-                        SNMP_TIMEOUT_MS,
-                    ),
-                    neighbors.routing_interval_secs,
-                );
-                jobs.push((job, "snmp_v3_routing"));
-            }
+            push_snmp_jobs(
+                &V3(secret),
+                node,
+                items,
+                interval_secs,
+                neighbors,
+                &mut jobs,
+            );
         }
         None => {}
     }
@@ -2000,7 +2035,7 @@ mod tests {
             columns: Vec::new(),
             timeout_ms: 2000,
         };
-        let job = build_snmp_job(&node, check, 60, Uuid::nil());
+        let job = PollJob::snmp(Uuid::nil(), node.id, node.address, check, 60);
         assert_eq!(job.target, addr);
         assert!(matches!(job.check, CheckSpec::Snmp(_)));
     }
@@ -2019,7 +2054,7 @@ mod tests {
             meta_columns: Vec::new(),
             timeout_ms: 2000,
         };
-        let job = build_snmp_table_job(&node, check, 60, Uuid::nil());
+        let job = PollJob::snmp_table(Uuid::nil(), node.id, node.address, check, 60);
         assert_eq!(job.target, addr);
         assert!(matches!(job.check, CheckSpec::SnmpTable(_)));
     }
@@ -2260,7 +2295,7 @@ mod tests {
             CollectionKind::Scalar,
         )];
         let check = build_snmp_v3_check(&v3_secret(), &items, 2000).unwrap();
-        let job = build_snmp_v3_job(&node, check, 60, Uuid::nil());
+        let job = PollJob::snmp_v3(Uuid::nil(), node.id, node.address, check, 60);
         assert_eq!(job.target, addr);
         assert!(matches!(job.check, CheckSpec::SnmpV3(_)));
     }
@@ -2272,6 +2307,103 @@ mod tests {
     /// The kinds present in an assembled job list (order-independent assertions).
     fn kinds(jobs: &[(PollJob, &'static str)]) -> Vec<&'static str> {
         jobs.iter().map(|(_, k)| *k).collect()
+    }
+
+    /// 🚨 The sixteen job-kind labels, pinned verbatim, for both authentication schemes.
+    ///
+    /// ADR-084 Inc.3 replaced sixteen hand-written blocks with one shared body and a per-scheme
+    /// [`SnmpJobSource`]. The labels moved with them, and they are **operator-visible**:
+    /// [`publish`] writes each one into the `dispatch.poll_job` tracing span and into the warn
+    /// line a failed publish emits. Nothing else in the suite would notice a respelling —
+    /// `assemble_v3_node_yields_the_v3_job_set` and its v2c twin check the `CheckSpec` variants,
+    /// and the cadence test branches on `kind.contains("mau")`, which matches **both** spellings
+    /// and so cannot tell them apart.
+    ///
+    /// Also pins the two sets to each other: every v2c label has a v3 counterpart spelled by
+    /// inserting `_v3` after `snmp`. That is the relation, not a licence to compute one from the
+    /// other — the strings stay written out, here and at the impls.
+    #[test]
+    fn every_snmp_job_kind_keeps_its_exact_label_under_both_auth_schemes() {
+        let items = [
+            item(
+                "snmp_sys_uptime_ticks",
+                "1.3.6.1.2.1.1.3.0",
+                CollectionKind::Scalar,
+            ),
+            item(
+                "if_hc_in_octets",
+                "1.3.6.1.2.1.31.1.1.1.6",
+                CollectionKind::Table,
+            ),
+            optical_item(METRIC_IF_RX_POWER_DBM, OpticalFlavor::Huawei),
+        ];
+        // Everything on, so every one of the eight kinds is issued.
+        let policy = AdjacencyPolicy {
+            neighbors_enabled: true,
+            l3_enabled: true,
+            arp_enabled: true,
+            routing_enabled: true,
+            media_enabled: true,
+            ..AdjacencyPolicy::default()
+        };
+        let labels = |auth: &SnmpAuth| {
+            let mut k = kinds(&assemble_node_jobs(
+                &node("sw"),
+                Some(auth),
+                &items,
+                None,
+                30,
+                &policy,
+            ));
+            k.sort_unstable();
+            k
+        };
+
+        assert_eq!(
+            labels(&SnmpAuth::V2c("public".to_owned())),
+            vec![
+                "icmp",
+                "snmp",
+                "snmp_arp",
+                "snmp_l3",
+                "snmp_mau",
+                "snmp_neighbors",
+                "snmp_optical",
+                "snmp_routing",
+                "snmp_table",
+            ]
+        );
+        assert_eq!(
+            labels(&SnmpAuth::V3(v3_secret())),
+            vec![
+                "icmp",
+                "snmp_v3",
+                "snmp_v3_arp",
+                "snmp_v3_l3",
+                "snmp_v3_mau",
+                "snmp_v3_neighbors",
+                "snmp_v3_optical",
+                "snmp_v3_routing",
+                "snmp_v3_table",
+            ]
+        );
+
+        // The two sets are the same eight kinds under two spellings — a v3 label that lost its
+        // marker, or a v2c label that grew one, breaks this without breaking either list above.
+        let v2c: Vec<String> = labels(&SnmpAuth::V2c("public".to_owned()))
+            .into_iter()
+            .filter(|k| *k != "icmp")
+            .map(|k| k.replacen("snmp", "snmp_v3", 1))
+            .collect();
+        let mut v3: Vec<String> = labels(&SnmpAuth::V3(v3_secret()))
+            .into_iter()
+            .filter(|k| *k != "icmp")
+            .map(str::to_owned)
+            .collect();
+        v3.sort();
+        let mut v2c = v2c;
+        v2c.sort();
+        assert_eq!(v2c, v3, "each v2c kind must have the `_v3` counterpart");
     }
 
     #[test]
