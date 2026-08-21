@@ -195,12 +195,42 @@ mod tests {
     use tower::ServiceExt;
     use yagra_common::{Principal, Role, Scope};
 
-    fn get(path: &str, token: Option<&str>) -> Request<Body> {
-        let mut b = Request::builder().uri(path).method("GET");
+    /// Every route this module serves, with a body for the ones that take one.
+    ///
+    /// Driven from one list so a new route cannot be added without appearing in the permission
+    /// tests below. `POST /settings/tls/regenerate` was served for two releases with **no**
+    /// permission test at all: the read had one and the import had one, and the third route sat
+    /// between two tests that each looked like they covered it.
+    const ROUTES: &[(&str, &str, Option<&str>)] = &[
+        ("GET", "/api/v1/settings/tls", None),
+        (
+            "PUT",
+            "/api/v1/settings/tls",
+            Some(r#"{"certificate":"x","private_key":"y"}"#),
+        ),
+        (
+            "POST",
+            "/api/v1/settings/tls/regenerate",
+            Some(r#"{"names":[]}"#),
+        ),
+    ];
+
+    fn request(method: &str, path: &str, body: Option<&str>, token: Option<&str>) -> Request<Body> {
+        let mut b = Request::builder().uri(path).method(method);
         if let Some(t) = token {
             b = b.header("authorization", format!("Bearer {t}"));
         }
-        b.body(Body::empty()).expect("request")
+        match body {
+            Some(json) => b
+                .header("content-type", "application/json")
+                .body(Body::from(json.to_string()))
+                .expect("request"),
+            None => b.body(Body::empty()).expect("request"),
+        }
+    }
+
+    fn get(path: &str, token: Option<&str>) -> Request<Body> {
+        request("GET", path, None, token)
     }
 
     // Authorization before availability, and closed even on a public dashboard: `public_dashboard`
@@ -217,44 +247,39 @@ mod tests {
         }
     }
 
+    /// The read is exactly as privileged as the writes — which is what lets the screen gate itself.
+    ///
+    /// `TlsSettingsPage` draws no `useCan` and does not need one: when the read is refused it
+    /// renders `LoadBlockNotice` **instead of** the whole page, so the import and regenerate
+    /// controls are never mounted for a caller who could not use them (ADR-056 decision 2 —
+    /// replacing the pane rather than checking each button).
+    ///
+    /// 🚨 That design has an unstated precondition, and this test is it: **the GET must demand what
+    /// the writes demand.** Loosening the read to `RequireView` so an operator can see the expiry
+    /// date would compile, pass every other test, and put a live `Import certificate` button in
+    /// front of every viewer. Certificate expiry is a monitoring question and is answered by
+    /// `get_system_health`, not by opening this.
     #[tokio::test]
-    async fn only_manage_config_may_read_or_change_the_certificate() {
+    async fn no_role_below_admin_may_read_or_change_the_certificate() {
         for role in [Role::Viewer, Role::Operator] {
-            let st = private_state();
-            let token =
-                st.sessions
-                    .issue(uuid::Uuid::new_v4(), Principal::new(role, Scope::All), "u");
-            let app = super::super::router(st);
-            let res = app
-                .oneshot(get("/api/v1/settings/tls", Some(&token)))
-                .await
-                .expect("response");
-            assert_eq!(
-                res.status(),
-                StatusCode::FORBIDDEN,
-                "{role:?} must be 403, not 401 — the two have to stay distinguishable"
-            );
+            for (method, uri, body) in ROUTES {
+                let st = private_state();
+                let token =
+                    st.sessions
+                        .issue(uuid::Uuid::new_v4(), Principal::new(role, Scope::All), "u");
+                let app = super::super::router(st);
+                let res = app
+                    .oneshot(request(method, uri, *body, Some(&token)))
+                    .await
+                    .expect("response");
+                assert_eq!(
+                    res.status(),
+                    StatusCode::FORBIDDEN,
+                    "{role:?} on {method} {uri} must be 403, not 401 — the two have to stay \
+                     distinguishable"
+                );
+            }
         }
-    }
-
-    #[tokio::test]
-    async fn the_import_endpoint_is_gated_the_same_as_the_read() {
-        let st = private_state();
-        let token = st.sessions.issue(
-            uuid::Uuid::new_v4(),
-            Principal::new(Role::Operator, Scope::All),
-            "op",
-        );
-        let app = super::super::router(st);
-        let req = Request::builder()
-            .uri("/api/v1/settings/tls")
-            .method("PUT")
-            .header("authorization", format!("Bearer {token}"))
-            .header("content-type", "application/json")
-            .body(Body::from(r#"{"certificate":"x","private_key":"y"}"#))
-            .expect("request");
-        let res = app.oneshot(req).await.expect("response");
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
     }
 
     // Skeleton mode has no certificate store, so an *authorized* admin gets the typed 503 — which is

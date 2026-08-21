@@ -1508,7 +1508,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         "/api/v1/system/upgrade",
         Global(
             "describes the deployment itself — which binary is running and how much schema it \
-             carries — not monitored-node data, and it demands ManageConfig, whose holder is \
+             carries — not monitored-node data, and it demands ManageSystem, whose holder is \
              unscoped by construction (ADR-014)",
         ),
         Tool("get_system_health"),

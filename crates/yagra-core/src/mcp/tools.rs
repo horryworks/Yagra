@@ -2165,7 +2165,7 @@ impl YagraMcp {
                        commit and build profile, not just the version — how much schema is \
                        applied, and whether this deployment could still be taken back to an \
                        earlier release). Sections require different permissions: most need view, \
-                       forwarding and upgrade need manage-config, credentials needs \
+                       forwarding and upgrade need manage-system, credentials needs \
                        manage-credentials."
     )]
     async fn get_system_health(
@@ -4434,43 +4434,22 @@ mod tests {
     /// to every client **verbatim**, so a wrong one is not a documentation defect — it is a model
     /// confidently telling an operator that a Viewer token will read their notification channels.
     ///
-    /// The labels come from `folded::required_permission`, the same lookup the tool itself uses at
-    /// call time, so this compares the prose against the enforcement rather than against a second
-    /// hand-written list. The search is confined to the permissions sentence, so a label cannot be
-    /// satisfied by an unrelated word elsewhere in forty lines of prose.
+    /// The mechanics live in [`a_description_names_exactly_the_permissions_it_demands`], shared with
+    /// the `get_system_health` twin: the labels come from `folded::required_permission`, the same
+    /// lookup the tool itself uses at call time, so this compares the prose against the enforcement
+    /// rather than against a second hand-written list.
     #[test]
     fn the_config_description_names_every_permission_it_can_demand() {
-        let description = crate::api::route_table::declared_mcp_tool_description("get_config")
-            .expect("get_config declares a description");
-        let sentence = description
-            .split("Kinds require different permissions:")
-            .nth(1)
-            .expect("the description explains the permissions");
-
-        let mut demanded: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-        for name in ConfigKind::NAMES {
-            let kind = ConfigKind::parse(name).expect("every NAME parses");
-            demanded.insert(permission_label(crate::mcp::folded::required_permission(
-                "get_config",
-                kind.arg(),
-            )));
-        }
-        // A floor, so a broken lookup that returned one permission for everything could not pass
-        // by naming only that one.
-        assert!(
-            demanded.len() >= 4,
-            "only {} distinct permissions found across the kinds — the lookup drifted",
-            demanded.len()
-        );
-
-        let missing: Vec<&String> = demanded
+        let args: Vec<&str> = ConfigKind::NAMES
             .iter()
-            .filter(|l| !sentence.contains(l.as_str()))
+            .map(|n| ConfigKind::parse(n).expect("every NAME parses").arg())
             .collect();
-        assert!(
-            missing.is_empty(),
-            "get_config demands permissions its description never mentions, so a client cannot \
-             tell which kinds its token can read: {missing:?}"
+        a_description_names_exactly_the_permissions_it_demands(
+            "get_config",
+            "Kinds require different permissions:",
+            &args,
+            // manage-users / manage-system / view / manage-config.
+            4,
         );
     }
 
@@ -5823,6 +5802,95 @@ mod tests {
             unlisted.is_err(),
             "a section with no folded row must fail loudly, which is why the set-equality test above \
              has to catch it at build time instead"
+        );
+    }
+
+    /// The published permission names match the permissions the arguments actually demand.
+    ///
+    /// Shared by the `get_config` and `get_system_health` guards so the two cannot drift into
+    /// checking different things — the defect this exists for is a description that stopped
+    /// matching its own table, and a second, subtly weaker copy of the check would be that same
+    /// defect one level up.
+    ///
+    /// 🚨 These sentences are handed **verbatim to AI clients**. A wrong permission name is not a
+    /// comment that rots quietly: a model reads it, tells an operator to grant `manage-config`, the
+    /// operator grants it, and the call is still refused for lacking `manage-system`.
+    fn a_description_names_exactly_the_permissions_it_demands(
+        tool: &str,
+        marker: &str,
+        args: &[&str],
+        distinct_floor: usize,
+    ) {
+        let description = crate::api::route_table::declared_mcp_tool_description(tool)
+            .unwrap_or_else(|| panic!("{tool} declares a description"));
+        let sentence = description
+            .split(marker)
+            .nth(1)
+            .unwrap_or_else(|| panic!("{tool}'s description explains the permissions"))
+            .to_string();
+
+        let demanded: std::collections::BTreeSet<String> = args
+            .iter()
+            .map(|a| permission_label(crate::mcp::folded::required_permission(tool, a)))
+            .collect();
+        // A floor, so a broken lookup that returned one permission for everything could not pass by
+        // naming only that one.
+        assert!(
+            demanded.len() >= distinct_floor,
+            "only {} distinct permissions found across {tool}'s arguments — the lookup drifted",
+            demanded.len()
+        );
+
+        let missing: Vec<&String> = demanded
+            .iter()
+            .filter(|l| !sentence.contains(l.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{tool} demands permissions its description never mentions, so a client cannot tell \
+             which arguments its token can read: {missing:?}"
+        );
+
+        // The other direction: a name left behind after the code moved. `manage-config` sat in
+        // `get_system_health`'s text for two `ManageSystem` sections, which sends an operator to
+        // grant the wrong permission just as surely as saying nothing at all would.
+        //
+        // ⚠️ Substring matching is enough only while no demanded label is a substring of an
+        // undemanded one — `view` inside `view-audit` is the pair to watch. Neither sentence names
+        // `view-audit` today. If that changes, the fix is to match on word boundaries, not to drop
+        // the check.
+        let surplus: Vec<String> = Permission::ALL
+            .iter()
+            .map(|p| permission_label(*p))
+            .filter(|l| !demanded.contains(l) && sentence.contains(l.as_str()))
+            .collect();
+        assert!(
+            surplus.is_empty(),
+            "{tool}'s description names permissions it never demands, so an operator granting what \
+             it says would still be refused: {surplus:?}"
+        );
+    }
+
+    /// The `get_system_health` twin of
+    /// [`the_config_description_names_every_permission_it_can_demand`].
+    ///
+    /// `get_config` has had that guard since ADR-042 and its description is right. This fold — the
+    /// older and larger of the two — had no guard, and named `manage-config` for two `ManageSystem`
+    /// sections (`forwarding`, `upgrade`) until 2026-08-21. The two defects are the same one a
+    /// level apart: [`every_health_section_has_a_folded_row_and_vice_versa`] pins that a row
+    /// **exists**, this pins that the published text **says what the row says**.
+    #[test]
+    fn the_health_description_names_every_permission_it_can_demand() {
+        let args: Vec<&str> = HealthSection::NAMES
+            .iter()
+            .map(|n| HealthSection::parse(n).expect("every NAME parses").arg())
+            .collect();
+        a_description_names_exactly_the_permissions_it_demands(
+            "get_system_health",
+            "Sections require different permissions:",
+            &args,
+            // view / manage-system / manage-credentials.
+            3,
         );
     }
 

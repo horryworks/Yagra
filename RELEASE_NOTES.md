@@ -46,6 +46,13 @@
 
 ### Bug Fixes
 
+- **The MCP `get_system_health` tool advertised the wrong permission for two of its sections.**
+  Its published description said the `forwarding` and `upgrade` sections need `manage-config`;
+  they have needed `manage-system` since the roles were split. The enforcement was always right,
+  so the effect was on advice rather than access: an AI client reading the description told the
+  operator to grant the wrong privilege, and the call was still refused afterwards. The text now
+  matches what the tool demands, and a test compares the two.
+
 - **An alert from a two-sided rule named the wrong bound.** A rule bounding a metric on both
   sides is filed under `above`, and the alert published that side's numbers whichever side the
   value had actually crossed — so a receive level of 0.909 that tripped "at or below 1.0" went

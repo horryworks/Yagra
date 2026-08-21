@@ -195,7 +195,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "forwarding",
         method: "GET",
         path: "/api/v1/forwarding/status",
-        // The one `ManageConfig` member of this family. It names every collector the deployment
+        // The one `ManageSystem` member of this family. It names every collector the deployment
         // tees to, which is closer to the forwarding configuration than to a health counter.
         perm: Some(Permission::ManageSystem),
         inventory_ids_ok: None,
@@ -217,7 +217,7 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "upgrade",
         method: "GET",
         path: "/api/v1/system/upgrade",
-        // The second `ManageConfig` member of this family, for the same reason as `forwarding`: it
+        // The second `ManageSystem` member of this family, for the same reason as `forwarding`: it
         // answers with build provenance and — once the updater sidecar lands — the registry, the
         // resolved digests and the store images the target compose pins. That is the deployment's
         // configuration, not a health counter (ADR-050 decision 13).

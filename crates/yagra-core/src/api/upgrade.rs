@@ -860,6 +860,14 @@ mod tests {
 
     /// 403, not 401 — the two have to stay distinguishable, or an operator cannot tell "sign in"
     /// from "your role cannot do this".
+    ///
+    /// 🚨 It covers the **GET** as well, and that is not incidental: `UpgradePage` draws no
+    /// `useCan`, because a refused read makes it render `LoadBlockNotice` instead of the whole
+    /// screen, so `Upgrade now` and `Upload bundle` are never mounted for a caller who could not
+    /// press them (ADR-056 decision 2). Loosening this read — "let an operator see which version
+    /// is running" is the plausible request — would put those controls in front of them. The
+    /// version alone is already readable: `GET /api/v1/version` needs nothing, and
+    /// `get_system_health(section=version)` serves it over MCP.
     #[tokio::test]
     async fn neither_viewer_nor_operator_may_reach_the_upgrade_surface() {
         for role in [Role::Viewer, Role::Operator] {
