@@ -21,6 +21,11 @@
 
 ### Improvements
 
+- **The MCP `get_active_alerts` tool now refuses an unrecognised `min_severity` instead of
+  ignoring it.** The value was ranked by a string comparison that scored anything it did not
+  recognise below `info`, so `min_severity: "fatal"` matched every alert and the caller read the
+  unfiltered list as the answer to a narrowed question. It is now parsed, and `info`, `warning`
+  and `critical` are the accepted values — the three the tool description has always advertised.
 - **A second rule for the same metric at the same scope is now refused with 409.** Before ranges
   existed, writing "below 10" and "above 90" as two rules at one scope was the only way to
   express a band — and the second one was stored, listed, and never evaluated, because rule

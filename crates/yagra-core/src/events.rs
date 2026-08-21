@@ -1402,7 +1402,12 @@ impl EventRepo {
                             count,
                         }
                     }
-                    _ => EventStatBucket {
+                    // The two groupings whose SQL `key` is already the display value. Named rather
+                    // than wildcarded: a fifth grouping needing a resolved `label` (the way `trap`
+                    // needs its MIB name) or a `node_id` (the way `source` does) would land here
+                    // and render as a bare key — a plausible-looking value, so nothing would look
+                    // broken enough to investigate.
+                    EventStatGroup::Kind | EventStatGroup::Action => EventStatBucket {
                         key: row.try_get("key")?,
                         label: None,
                         node_id: None,

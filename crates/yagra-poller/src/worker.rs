@@ -437,9 +437,31 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                     // answer was absent or negative" is a threshold concern. So NXDOMAIN /
                     // SERVFAIL / REFUSED stay Reachable with dns_up = 0 (the seeded critical
                     // threshold fires), while a timeout — no answer at all — is Unreachable.
+                    //
+                    // 🚨 Listed variant by variant on purpose. This value drives the **liveness
+                    // state machine** (`alerts.rs::observe` folds every `outcome` into the dwell
+                    // window), so a wildcard here decides for a failure mode nobody has thought
+                    // about yet — and it decided `Reachable`, i.e. "the device is up". A new
+                    // transport-level variant (connection refused, network unreachable, TLS
+                    // failure on DoT) is exactly the kind that would land there, and it would
+                    // cancel a real outage ICMP had already found. Adding a `DnsFailure` variant
+                    // must be a compile error here, not a silent default.
                     let outcome = match chain.failure {
+                        // No answer arrived at all — the only thing that says nothing is there.
                         Some(DnsFailure::Timeout) => CheckOutcome::Unreachable,
-                        _ => CheckOutcome::Reachable,
+                        // Something answered, so the resolver is alive. What it said is the
+                        // `dns_up` threshold's problem, not liveness'.
+                        None
+                        | Some(
+                            DnsFailure::NxDomain
+                            | DnsFailure::NoData
+                            | DnsFailure::ServFail
+                            | DnsFailure::Refused
+                            | DnsFailure::OtherRcode { .. }
+                            | DnsFailure::LoopDetected { .. }
+                            | DnsFailure::DepthExceeded { .. }
+                            | DnsFailure::Malformed,
+                        ) => CheckOutcome::Reachable,
                     };
                     let mut r = result(job, at_unix_ms, outcome, samples);
                     r.dns_chain = Some(chain);

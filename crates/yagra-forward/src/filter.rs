@@ -650,6 +650,17 @@ impl CompiledCondition {
     }
 }
 
+// A predicate belonging to a *different* `ValueType` than the evaluator it reaches is listed by
+// name in each of the three functions below rather than swept up by a `_ =>`.
+//
+// `compile`'s `(value_type, op)` table only ever pairs a field with the predicates its own type
+// accepts, so those arms are unreachable today — but "unreachable" is a property of that table,
+// enforced nowhere. A wildcard would hide a **new** predicate the table starts producing and an
+// evaluator has no case for: the condition would quietly stop matching, and on a `FilterMode::All`
+// filter that means the message stops being forwarded, with nothing logged.
+//
+// `false` is the right value either way — a forwarding filter that cannot decide must not forward —
+// so what the lists buy is the compile error, not the behaviour.
 fn eval_text(pred: &Predicate, datum: Option<&str>) -> bool {
     match pred {
         Predicate::TextEq(x) => datum.is_some_and(|s| s == x),
@@ -660,8 +671,15 @@ fn eval_text(pred: &Predicate, datum: Option<&str>) -> bool {
         Predicate::Prefix(x) => datum.is_some_and(|s| s.starts_with(x.as_str())),
         Predicate::Regex(re) => datum.is_some_and(|s| re.is_match(s)),
         Predicate::NotRegex(re) => datum.is_none_or(|s| !re.is_match(s)),
-        // Unreachable: `compile` only pairs text fields with the predicates above.
-        _ => false,
+        Predicate::NumEq(_)
+        | Predicate::NumNe(_)
+        | Predicate::NumLte(_)
+        | Predicate::NumGte(_)
+        | Predicate::NumIn(_)
+        | Predicate::IpEq(_)
+        | Predicate::IpNe(_)
+        | Predicate::InCidr(_)
+        | Predicate::NotInCidr(_) => false,
     }
 }
 
@@ -672,7 +690,18 @@ fn eval_num(pred: &Predicate, datum: Option<i64>) -> bool {
         Predicate::NumLte(x) => datum.is_some_and(|n| n <= *x),
         Predicate::NumGte(x) => datum.is_some_and(|n| n >= *x),
         Predicate::NumIn(xs) => datum.is_some_and(|n| xs.contains(&n)),
-        _ => false,
+        Predicate::TextEq(_)
+        | Predicate::TextNe(_)
+        | Predicate::TextIn(_)
+        | Predicate::Contains(_)
+        | Predicate::NotContains(_)
+        | Predicate::Prefix(_)
+        | Predicate::Regex(_)
+        | Predicate::NotRegex(_)
+        | Predicate::IpEq(_)
+        | Predicate::IpNe(_)
+        | Predicate::InCidr(_)
+        | Predicate::NotInCidr(_) => false,
     }
 }
 
@@ -682,7 +711,45 @@ fn eval_ip(pred: &Predicate, datum: Option<IpAddr>) -> bool {
         Predicate::IpNe(x) => datum.is_none_or(|ip| ip != *x),
         Predicate::InCidr(nets) => datum.is_some_and(|ip| nets.iter().any(|n| n.contains(ip))),
         Predicate::NotInCidr(nets) => datum.is_none_or(|ip| !nets.iter().any(|n| n.contains(ip))),
-        _ => false,
+        Predicate::TextEq(_)
+        | Predicate::TextNe(_)
+        | Predicate::TextIn(_)
+        | Predicate::Contains(_)
+        | Predicate::NotContains(_)
+        | Predicate::Prefix(_)
+        | Predicate::Regex(_)
+        | Predicate::NotRegex(_)
+        | Predicate::NumEq(_)
+        | Predicate::NumNe(_)
+        | Predicate::NumLte(_)
+        | Predicate::NumGte(_)
+        | Predicate::NumIn(_) => false,
+    }
+}
+
+/// Whether a predicate reads as "**none** of them", which inverts how a multi-valued field folds.
+///
+/// Exhaustive on purpose, and this is the arm that would have hurt most: a `_ =>` here does not
+/// merely drop a new predicate, it silently files it as **positive**. A future `NotPrefix` would
+/// then forward exactly the traps an operator wrote the rule to exclude.
+const fn is_negated(pred: &Predicate) -> bool {
+    match pred {
+        Predicate::NotContains(_) | Predicate::NotRegex(_) => true,
+        Predicate::TextEq(_)
+        | Predicate::TextNe(_)
+        | Predicate::TextIn(_)
+        | Predicate::Contains(_)
+        | Predicate::Prefix(_)
+        | Predicate::Regex(_)
+        | Predicate::NumEq(_)
+        | Predicate::NumNe(_)
+        | Predicate::NumLte(_)
+        | Predicate::NumGte(_)
+        | Predicate::NumIn(_)
+        | Predicate::IpEq(_)
+        | Predicate::IpNe(_)
+        | Predicate::InCidr(_)
+        | Predicate::NotInCidr(_) => false,
     }
 }
 
@@ -700,16 +767,30 @@ fn eval_multi(pred: &Predicate, varbinds: &[(String, String)]) -> bool {
             Predicate::Contains(x) | Predicate::NotContains(x) => buf.contains(x.as_str()),
             Predicate::Prefix(x) => buf.starts_with(x.as_str()),
             Predicate::Regex(re) | Predicate::NotRegex(re) => re.is_match(&buf),
-            _ => false,
+            // `ValueType::Multi` accepts only the five operators above; see the note by
+            // `eval_text` for why the rest are named instead of wildcarded.
+            Predicate::TextEq(_)
+            | Predicate::TextNe(_)
+            | Predicate::TextIn(_)
+            | Predicate::NumEq(_)
+            | Predicate::NumNe(_)
+            | Predicate::NumLte(_)
+            | Predicate::NumGte(_)
+            | Predicate::NumIn(_)
+            | Predicate::IpEq(_)
+            | Predicate::IpNe(_)
+            | Predicate::InCidr(_)
+            | Predicate::NotInCidr(_) => false,
         };
         if hit {
             any = true;
             break;
         }
     }
-    match pred {
-        Predicate::NotContains(_) | Predicate::NotRegex(_) => !any,
-        _ => any,
+    if is_negated(pred) {
+        !any
+    } else {
+        any
     }
 }
 

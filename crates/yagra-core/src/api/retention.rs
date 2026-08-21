@@ -138,10 +138,31 @@ pub(crate) async fn retention_policy(st: &ApiState, admin: &super::AdminState) -
         .iter()
         .map(|&subject| {
             let row = subject.row();
+            // Listed variant by variant, like `store_configured` below it. Only a store that
+            // enforces its own retention has anything to report; every other row's window is a
+            // `DELETE` Yagra runs, so there is nothing to ask. A wildcard here would answer
+            // "unknown" for a **new** store-enforced subject, which reads on the Settings screen
+            // as "we could not reach the store" rather than as "nobody wired this up".
             let store_reported = match subject {
                 Subject::Metrics => metrics_reported.clone(),
                 Subject::EventLogStore => logs_reported.clone(),
-                _ => None,
+                // ⚠️ ClickHouse's TTL is declared by Yagra rather than probed back, so this row's
+                // configured value is already the authority. If that ever changes, this is the
+                // arm to fill in.
+                Subject::FlowRecords
+                | Subject::AlertHistory
+                | Subject::NodeStateSnapshots
+                | Subject::DnsChainChanges
+                | Subject::NeighborChanges
+                | Subject::L3Changes
+                | Subject::EventsMatched
+                | Subject::EventsUnmatched
+                | Subject::MonitoringGaps
+                | Subject::ReportRuns
+                | Subject::AnalysisRuns
+                | Subject::RcaReports
+                | Subject::Interfaces
+                | Subject::AuditLog => None,
             };
             RetentionRow {
                 subject: subject.as_str().to_owned(),

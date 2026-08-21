@@ -365,6 +365,14 @@ async fn create_maintenance_window(
                 })?;
                 super::scope::require_visible_group(&scope, gid)?;
             }
+            // Reached by `profile` and `group` (a tag), both of which name a *class* of node with
+            // no honestly-bounded version for a scoped caller.
+            //
+            // The wildcard stays because `scope_level` is a `String`, but it is not the guard: a
+            // fifth `WINDOW_SCOPE_LEVELS` entry landing here would not leak anything — refusing is
+            // the safe direction — it would silently become un-openable for every scoped account
+            // while this message claimed a reason that was not the real one.
+            // `the_scope_check_decides_every_window_scope_level` fails the build instead.
             _ => {
                 return Err(ApiError::forbidden_code(
                     "scope_unsupported",
@@ -1025,6 +1033,30 @@ pub(crate) async fn visible_exemptions(
 
 #[cfg(test)]
 mod tests {
+    /// Every scope level a window may be created at has a decision in the group-scope check.
+    ///
+    /// That check matches on a `String`, so it ends in a wildcard that cannot be removed — and a
+    /// wildcard over a token list is the shape this repo keeps paying for. Pinning the list here
+    /// is the substitute: adding a fifth level fails this test, which is the moment to decide
+    /// whether a scoped caller may open one, rather than discovering months later that they
+    /// silently cannot.
+    ///
+    /// ⚠️ Do not "fix" a failure by editing the array below. Add the arm first.
+    #[test]
+    fn the_scope_check_decides_every_window_scope_level() {
+        // The two the check resolves to a concrete target, and the two it refuses outright.
+        let resolved = ["node", "group_id"];
+        let refused = ["profile", "group"];
+        let mut decided: Vec<&str> = resolved.iter().chain(refused.iter()).copied().collect();
+        decided.sort_unstable();
+        let mut levels = super::WINDOW_SCOPE_LEVELS.to_vec();
+        levels.sort_unstable();
+        assert_eq!(
+            levels, decided,
+            "a window scope level exists that the group-scope check has no arm for"
+        );
+    }
+
     use super::*;
     use crate::api::router;
     use crate::api::tests_support::{private_state, public_state};

@@ -394,8 +394,19 @@ impl YagraMcp {
             alerts.retain(|a| a.subject.is_node(nid));
         }
         if let Some(min) = p.min_severity.as_deref() {
-            let min_rank = severity_rank(min);
-            alerts.retain(|a| severity_rank(a.severity.as_str()) >= min_rank);
+            // `Severity` is `Ord` low→high and `a.severity` already *is* one, so this compares the
+            // values instead of ranking their spellings. The rank helper this replaces took a
+            // `&str` with a `_ => 0` fallback: an unparseable `min_severity` scored below `info`,
+            // so the filter matched everything and the model reasoned from a full list believing
+            // it had been narrowed. Refusing names the three valid values, the way `ack_alert`
+            // already does with the same parser.
+            let Some(min) = parse_severity(min) else {
+                return tool_bad_params(
+                    "get_active_alerts",
+                    "`min_severity` must be info, warning, or critical",
+                );
+            };
+            alerts.retain(|a| a.severity >= min);
         }
         alerts.sort_by_key(|a| std::cmp::Reverse(a.at_unix_ms));
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
@@ -4307,15 +4318,6 @@ fn tool_forbidden(tool: &str, reason: &str) -> Result<CallToolResult, McpError> 
     Err(McpError::invalid_request(reason.to_string(), None))
 }
 
-/// Rank a severity string for the `min_severity` filter (unknown ⇒ lowest).
-fn severity_rank(sev: &str) -> u8 {
-    match sev {
-        "critical" => 2,
-        "warning" => 1,
-        _ => 0,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4931,11 +4933,16 @@ mod tests {
         assert_eq!(parse_severity(""), None);
     }
 
+    /// The ordering `min_severity` filters by, read off the type rather than off a rank table.
+    ///
+    /// `severity_rank(&str)` used to sit here with a `_ => 0` arm, so "nonsense" ranked equal to
+    /// `info` and the filter silently matched everything. `Severity` is `Ord` already; the only
+    /// thing the helper added was a second, weaker copy of that order.
     #[test]
-    fn severity_rank_orders_and_defaults_unknown_lowest() {
-        assert!(severity_rank("critical") > severity_rank("warning"));
-        assert!(severity_rank("warning") > severity_rank("info"));
-        assert_eq!(severity_rank("nonsense"), severity_rank("info"));
+    fn severity_orders_low_to_high_and_an_unknown_token_is_not_a_severity() {
+        assert!(Severity::Critical > Severity::Warning);
+        assert!(Severity::Warning > Severity::Info);
+        assert_eq!(parse_severity("nonsense"), None);
     }
 
     // The two RFC 3339 parsing tests that were here moved with the code they covered:
@@ -5234,6 +5241,37 @@ mod tests {
             .await
             .expect("ok");
         assert!(json_of(&r).as_array().unwrap().is_empty());
+    }
+
+    /// An unparseable `min_severity` is refused, and a valid one is not.
+    ///
+    /// The acceptance half comes first on purpose: a rejection-only test passes just as well on a
+    /// tool that refuses *every* `min_severity`, which would be a worse bug than the one being
+    /// fixed. Before this, the value went through a `severity_rank(&str)` with a `_ => 0` arm, so
+    /// `"fatal"` scored below `info`, the filter matched everything, and the model was handed the
+    /// unfiltered list as though it were the answer to a narrowed question.
+    #[tokio::test]
+    async fn an_unparseable_min_severity_is_refused_where_a_valid_one_is_accepted() {
+        let params = |min: &str| ActiveAlertsParams {
+            node_id: None,
+            min_severity: Some(min.to_owned()),
+            limit: None,
+        };
+        for good in ["info", "warning", "critical", "  CRITICAL "] {
+            mcp()
+                .active_alerts_in(params(good), &unrestricted())
+                .await
+                .unwrap_or_else(|e| panic!("{good} must be accepted, got {e}"));
+        }
+        for bad in ["fatal", "", "warn", "2"] {
+            assert!(
+                mcp()
+                    .active_alerts_in(params(bad), &unrestricted())
+                    .await
+                    .is_err(),
+                "{bad} must be refused rather than silently widening the filter"
+            );
+        }
     }
 
     /// Every tool whose backing tier is absent answers "unavailable" rather than erroring or, worse,
@@ -5737,6 +5775,54 @@ mod tests {
             HealthSection::NAMES.len(),
             14,
             "the advertised section list changed; check the description and folded.rs together"
+        );
+    }
+
+    /// The biconditional the reachability guard cannot express — the `get_system_health` twin of
+    /// [`every_config_kind_has_a_folded_row_and_vice_versa`].
+    ///
+    /// `folded::every_folded_branch_is_reachable_from_its_tool` is a bare substring search over this
+    /// file, so a section whose `arg` is a word already quoted somewhere here would pass with no row
+    /// at all — and this family is full of them: `credentials`, `forwarding`, `version`, `hosts` and
+    /// `deployment` are all present as literals for other reasons.
+    ///
+    /// 🚨 A section with no row does not fail a test and does not fail to compile. It reaches
+    /// production and **panics on the first call**, because `folded::required_permission` resolves
+    /// the permission by looking the pair up in this table and `unwrap_or_else(|| panic!(…))` when
+    /// it is absent. `ConfigKind` has had this guard since ADR-042 I3b; `HealthSection` — the older
+    /// and larger of the two folds — did not.
+    #[test]
+    fn every_health_section_has_a_folded_row_and_vice_versa() {
+        let rows: std::collections::BTreeSet<&str> = crate::mcp::folded::FOLDED_READS
+            .iter()
+            .filter(|f| f.tool == "get_system_health")
+            .map(|f| f.arg)
+            .collect();
+        let sections: std::collections::BTreeSet<&str> =
+            HealthSection::NAMES.iter().copied().collect();
+        assert_eq!(
+            rows, sections,
+            "the `get_system_health` folded rows and its advertised sections disagree"
+        );
+    }
+
+    /// The panic that makes the test above load-bearing, demonstrated rather than asserted about.
+    ///
+    /// A rejection-only test would pass on a `required_permission` that panicked for everything, so
+    /// the acceptance case comes first: every advertised section resolves, and only then does an
+    /// unknown one blow up.
+    #[test]
+    fn an_unlisted_section_panics_where_a_listed_one_resolves() {
+        for name in HealthSection::NAMES {
+            let _ = crate::mcp::folded::required_permission("get_system_health", name);
+        }
+        let unlisted = std::panic::catch_unwind(|| {
+            crate::mcp::folded::required_permission("get_system_health", "storage_pressure")
+        });
+        assert!(
+            unlisted.is_err(),
+            "a section with no folded row must fail loudly, which is why the set-equality test above \
+             has to catch it at build time instead"
         );
     }
 
