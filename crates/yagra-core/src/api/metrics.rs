@@ -562,7 +562,7 @@ async fn get_node_metric_range(
 /// an earlier version those arrays are empty for every window predating that upgrade while the bps
 /// arrays are populated.
 //
-// ⚠️ The optical paragraph above is said twice. `mcp/tools.rs`'s `get_interface_series`
+// ⚠️ The optical paragraph above is said twice. `mcp/tools/system.rs`'s `get_interface_series`
 // `description` repeats it, because this doc comment reaches OpenAPI readers and that string
 // reaches MCP clients — two audiences, no shared channel. Nothing compares them (they are prose),
 // so change both or neither. ADR-062 Inc.5 names this as a weak mitigation rather than a fix.
@@ -589,7 +589,7 @@ pub(crate) struct InterfaceSeries {
 ///
 /// Two of them do, for unrelated reasons: `mcp/dto.rs`'s forbidden-key canary (which only sees the
 /// fields an instance actually fills, so a partial one would exempt the rest) and
-/// `mcp/tools.rs`'s check that the tool description names every series it returns. Both want "the
+/// `mcp/tools/guards.rs`'s check that the tool description names every series it returns. Both want "the
 /// current shape of this struct", and a struct literal written out twice is a struct literal that
 /// will be extended once.
 ///

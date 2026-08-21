@@ -31,7 +31,7 @@ const MAX_ERROR_CHARS: usize = 200;
 ///
 /// The `schema` is the tool's JSON Schema exactly as `rmcp` derived it — `ToolRouter::list_all()`
 /// hands it over without a session, so there is no second description of a tool's arguments to keep
-/// in step with `mcp/tools.rs`.
+/// in step with the `mcp/tools/` surface.
 #[derive(Debug, Clone)]
 pub struct ToolDef {
     pub name: String,

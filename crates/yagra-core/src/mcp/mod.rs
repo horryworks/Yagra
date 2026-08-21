@@ -16,7 +16,7 @@
 //! enforcement. Each tool now resolves the caller's scope from the identity below
 //! ([`tools::YagraMcp::scope_of`]) and applies the same rule its REST counterpart does. Note what
 //! that trade means: a tool that forgets to ask now fails **open**, where before it could not,
-//! which is why `tools.rs` pins "every tool takes a `RequestContext`" with a test — taking one is
+//! which is why `tools/guards.rs` pins "every tool takes a `RequestContext`" with a test — taking one is
 //! the only way a tool body can reach the caller at all.
 //!
 //! The authenticated principal is propagated to tool bodies as an [`McpIdentity`] in the request
@@ -34,7 +34,7 @@ pub(crate) mod folded;
 #[cfg(test)]
 pub(crate) mod tool_source;
 // `pub(crate)` since ADR-028 WS-G: the RCA agent calls the tool bodies in-process, which is the
-// reuse `tools.rs`'s module doc has promised since Increment 1. It reaches `*_in(params, &NodeScope)`
+// reuse `tools/mod.rs`'s doc has promised since Increment 1. It reaches `*_in(params, &NodeScope)`
 // and `YagraMcp::tool_router()`, never `ToolRouter::call` — rmcp's `RequestContext` needs a `Peer`
 // whose constructor is crate-private, so there is no way to fabricate a session and no reason to.
 pub(crate) mod tools;
@@ -223,10 +223,10 @@ async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity,
     // A group-scoped principal is admitted (ADR-028 WS-F). This used to be refused here, because
     // the tools returned unfiltered data and admitting one would have handed it the fleet — the
     // refusal was the whole enforcement. Every tool now resolves the caller's scope from this
-    // identity (`tools.rs::scope_of`) and filters, so the gate that replaced it is per tool.
+    // identity (`tools/mod.rs::scope_of`) and filters, so the gate that replaced it is per tool.
     //
     // ⚠️ Which means a tool that forgets to ask fails **open** now, where it could not before.
-    // `mcp/tools.rs` has a test asserting every `#[tool]` takes a `RequestContext`, since taking
+    // `mcp/tools/guards.rs` has a test asserting every `#[tool]` takes a `RequestContext`, since taking
     // one is the only way a body can reach the scope at all.
     Ok(McpIdentity { principal, actor })
 }
@@ -247,7 +247,7 @@ mod tests {
     ///
     /// That string is handed to every client at `initialize` and read as the specification of this
     /// surface, but it is prose: sixteen tool names were hard-coded in it with nothing pinning them
-    /// to `tools.rs`, so a rename or a removal would have shipped a wrong instruction to every AI
+    /// to the `tools/` surface, so a rename or a removal would have shipped a wrong instruction to every AI
     /// client with no test failing. A model told to "use get_neighbors" for a tool that no longer
     /// exists does not fall back gracefully — it calls it, fails, and reasons from the failure.
     ///

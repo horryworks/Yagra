@@ -116,7 +116,7 @@ use Scoping::{Global, GroupFiltered, NodeScoped, PostFiltered, Refused};
 /// `PUT`/`POST`/`DELETE` takes [`NO_MCP_WRITE`] and moves on — its `GET` counterpart does not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Mcp {
-    /// An `#[tool]` in `mcp/tools.rs` answers this. The string is the **tool name**, which rmcp
+    /// An `#[tool]` under `mcp/tools/` answers this. The string is the **tool name**, which rmcp
     /// derives from the `async fn` name (no `name =` override exists today);
     /// `every_named_mcp_tool_exists` checks it against that source.
     ///
@@ -1643,13 +1643,13 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
 ];
 
-/// Every `#[tool]` name `mcp/tools.rs` declares.
+/// Every `#[tool]` name the `mcp/tools/` surface declares.
 ///
 /// Source-text, like `openapi.rs`'s body guard and `registered_handlers` below, and partial in the
 /// same deliberate way: an attribute shape this cannot parse is skipped rather than failed, and the
 /// callers assert a floor so "the parser stopped matching" cannot pass for "all clear".
 ///
-/// Note the trick this does **not** need: `tools.rs::every_tool_takes_a_request_context` assembles
+/// Note the trick this does **not** need: `mcp/tools/guards.rs::every_tool_takes_a_request_context` assembles
 /// its needles at runtime because it reads its own file, where a literal would match itself and pass
 /// forever. This reads a different file, so a literal is correct here — copying the workaround would
 /// be cargo-culting a fix for a problem this code does not have.
@@ -1688,7 +1688,7 @@ pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
     }
     // The floor lives **inside** the function, not only in the test below it, so that every caller
     // inherits it (ADR-086). The caller that needs it most is
-    // `mcp/tools.rs::every_tool_wrapper_declares_its_own_name`, which asserts its own count equals
+    // `mcp/tools/guards.rs::every_tool_wrapper_declares_its_own_name`, which asserts its own count equals
     // this one — and both counts are derived from the same source text, so a surface read only in
     // part shrinks both sides and they go on agreeing. A floor on one side is what turns that from
     // a silent pass into a failure. 36 tools are declared today; 34 is a floor, so removing a tool
@@ -2071,7 +2071,7 @@ mod tests {
 
     /// Tools with no REST counterpart, and why.
     ///
-    /// This lives here rather than in `tools.rs` on purpose: "which surface answers what" is this
+    /// This lives here rather than under `mcp/tools/` on purpose: "which surface answers what" is this
     /// file's subject, and a second list over there would be a second ledger.
     const MCP_ONLY_TOOLS: &[(&str, &str)] = &[(
         "flow_fanout",
@@ -2126,7 +2126,7 @@ mod tests {
         );
         assert!(
             missing.is_empty(),
-            "the ledger names a tool that mcp/tools.rs does not declare:\n  {}",
+            "the ledger names a tool the mcp/tools/ surface does not declare:\n  {}",
             missing.join("\n  ")
         );
     }
@@ -2165,7 +2165,7 @@ mod tests {
         for (name, reason) in MCP_ONLY_TOOLS {
             assert!(
                 tools.contains(*name),
-                "MCP_ONLY_TOOLS names `{name}`, which mcp/tools.rs no longer declares"
+                "MCP_ONLY_TOOLS names `{name}`, which the mcp/tools/ surface no longer declares"
             );
             assert!(
                 reason.trim().len() >= 20,

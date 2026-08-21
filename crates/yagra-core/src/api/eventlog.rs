@@ -104,7 +104,7 @@ fn text_cond(
 /// ⚠️ **This struct is the REST/MCP parity seam.** `search_events_in` fills it field by field, so a
 /// dimension added here is a compile error there until the MCP tool takes it too — which is what
 /// makes ADR-042's read-parity mechanical for events rather than a thing to remember.
-/// `mcp/tools.rs::every_shared_filter_seam_is_passed_through_whole` covers the half the compiler
+/// `mcp/tools/guards.rs::every_shared_filter_seam_is_passed_through_whole` covers the half the compiler
 /// cannot see: that the MCP tool's *parameters* offer the dimension at all, rather than hard-coding
 /// it to `None`.
 #[derive(Default)]
@@ -945,7 +945,7 @@ mod tests {
     // `the_mcp_event_search_takes_every_dimension_the_rest_edge_takes` used to live here. It was
     // the second hand-written copy of "the tool passes every field the seam declares", and ADR-053
     // Inc.4b would have made it the fifth. It is now one table-driven test over all four seams —
-    // `mcp/tools.rs::every_shared_filter_seam_is_passed_through_whole` — which also derives the
+    // `mcp/tools/guards.rs::every_shared_filter_seam_is_passed_through_whole` — which also derives the
     // field list from each struct instead of restating it, so a new dimension is covered without
     // anyone remembering to add it.
 

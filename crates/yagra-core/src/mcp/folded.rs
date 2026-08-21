@@ -1356,7 +1356,7 @@ mod tests {
         for f in FOLDED_READS.iter().filter(|f| !f.arg.is_empty()) {
             assert!(
                 tools_src.contains(&format!("\"{}\"", f.arg)),
-                "folded branch `{}`/`{}` appears in no arm of tools.rs — a caller naming it would \
+                "folded branch `{}`/`{}` appears in no arm under mcp/tools/ — a caller naming it would \
                  be told it is unknown while this table says it exists",
                 f.tool,
                 f.arg

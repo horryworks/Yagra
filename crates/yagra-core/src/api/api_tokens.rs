@@ -122,7 +122,7 @@ fn validate_create<'a>(
     // enforced one: a token carrying it would have been silently unrestricted over REST and
     // refused outright by `/mcp`, which is a credential whose meaning depended on where you
     // pointed it. Both surfaces filter by it now, so the refusal has been lifted rather than
-    // relaxed — see `api/scope.rs` and `mcp/tools.rs::scope_of`.
+    // relaxed — see `api/scope.rs` and `mcp/tools/mod.rs::scope_of`.
     //
     // The token's own scope is what it gets; it is deliberately **not** intersected with the
     // owner's. The role is capped at the owner's (`ApiTokenStore::verify`) because a role is a

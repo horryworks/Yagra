@@ -97,7 +97,7 @@ impl AgentTools {
     ///
     /// The schemas come from rmcp's own router — `ToolRouter::list_all()` needs no session, no
     /// `Peer` and no transport — so there is exactly one description of each tool's arguments and
-    /// it is the one `mcp/tools.rs` derived. A hand-written second copy here is the mirror
+    /// it is the one `mcp/tools/mod.rs` derived. A hand-written second copy here is the mirror
     /// `extensibility.md` §2 says to avoid creating.
     pub(crate) fn schemas(&self) -> Vec<ToolDef> {
         let published = self.mcp.published_tools();

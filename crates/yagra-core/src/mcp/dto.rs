@@ -1313,7 +1313,7 @@ mod tests {
     /// turned that into a failure. Keep that assertion, and keep it above the loop.
     fn call_sites(src: &str, fname: &str) -> Vec<String> {
         // `const TOOL: &str = "` — assembled rather than written, so this stays safe if the helper
-        // is ever pointed at a file that contains it (this one does not; `dto.rs` reads `tools.rs`).
+        // is ever pointed at a file that contains it (this one does not; `dto.rs` reads the `mcp/tools/` surface).
         let const_decl = format!("const {}: &str = {}", "TOOL", '"');
         let needle = format!("{fname}(");
         let mut out: Vec<String> = Vec::new();
@@ -1400,7 +1400,7 @@ mod tests {
 
     /// **Every `ok_json` call site names a type the canary instantiates.**
     ///
-    /// Reads `tools.rs` for the call sites rather than the tool declarations, because the risk is
+    /// Reads the `mcp/tools/` surface for the call sites rather than the tool declarations, because the risk is
     /// specifically about *what a tool serializes* — a tool can exist without returning a shared
     /// type, and the write tools do.
     #[test]
@@ -1408,7 +1408,7 @@ mod tests {
         let tools_src = crate::mcp::tool_source::tool_surface();
         let tools_src = tools_src.as_str();
         let dto_src = include_str!("dto.rs");
-        // `tools.rs` is a different file, so a literal needle is safe here; the canary-body needles
+        // The surface is other files, so a literal needle is safe here; the canary-body needles
         // below read this file and are assembled at runtime for the usual reason.
         //
         // The tool name is read *after skipping whitespace*, not straight after the paren. The

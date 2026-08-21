@@ -331,7 +331,7 @@ async fn list_alert_history(
 /// `eventlog::EventFilterInput` plays for events: a dimension added here is a compile error in
 /// `mcp/tools.rs` until the tool takes it too. What the compiler still cannot see is whether the
 /// tool *offers* the dimension as a parameter or hard-codes it to `None` — that half is covered by
-/// `mcp/tools.rs::every_shared_filter_seam_is_passed_through_whole`, which reads this struct's own
+/// `mcp/tools/guards.rs::every_shared_filter_seam_is_passed_through_whole`, which reads this struct's own
 /// field list rather than a copy of it.
 ///
 /// `severity` and `state` are comma-separated text on both surfaces rather than enums. REST could

@@ -100,7 +100,7 @@ impl AuditAction {
     /// every LDAP and OIDC sign-in from a filter whose whole purpose is to find sign-ins.
     ///
     /// ⚠️ **`mcp` exists because `/mcp` does not pass through `audit_mw`.** A tool that acts records
-    /// its own row as `mcp.<tool> key=value` (`mcp/tools.rs::record_audit`), so without this variant
+    /// its own row as `mcp.<tool> key=value` (`mcp/tools/support.rs::record_audit`), so without this variant
     /// "what did the assistant do" is a question the log answers and the filter cannot ask.
     #[must_use]
     pub fn sql_prefix(self) -> &'static str {
@@ -570,7 +570,7 @@ mod tests {
     fn every_action_filter_names_a_shape_the_writers_produce() {
         // `LIKE prefix || '%'` is `starts_with` — so this table is the query, run in Rust. The rows
         // are real strings the writers emit: `api/mod.rs::audit_mw` formats "{method} {path}",
-        // `api/session.rs` writes the `auth.login*` family, and `mcp/tools.rs::record_audit` writes
+        // `api/session.rs` writes the `auth.login*` family, and `mcp/tools/support.rs::record_audit` writes
         // "mcp.<tool> key=value".
         let cases: &[(&str, Option<AuditAction>)] = &[
             ("POST /api/v1/nodes", Some(AuditAction::Post)),
