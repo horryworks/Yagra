@@ -85,22 +85,31 @@ impl YagraMcp {
         Parameters(p): Parameters<FleetSummaryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        let kind = match fleet_summary_kind(p.kind.as_deref()) {
-            Some(k) => k,
-            None => {
-                return tool_bad_params(
-                    "get_fleet_summary",
-                    &format!(
-                        "unknown kind {:?}; must be summary or coverage",
-                        p.kind.unwrap_or_default()
-                    ),
-                )
-            }
+        let Some(kind) = fleet_summary_kind(p.kind.as_deref()) else {
+            return bad_fleet_summary_kind(p.kind.as_deref());
         };
         match self.scope_of(&ctx).await {
-            Ok(scope) if kind == FleetSummaryKind::Coverage => self.fleet_coverage_in(&scope).await,
-            Ok(scope) => self.fleet_summary_in(&scope).await,
+            Ok(scope) => self.fleet_summary_dispatch(kind, &scope).await,
             Err(e) => tool_api_error("get_fleet_summary", &e),
+        }
+    }
+
+    /// Route a resolved [`FleetSummaryKind`] to the branch that answers it (ADR-085 Inc.1).
+    ///
+    /// One exhaustive match rather than one per door. There are two doors into every tool body —
+    /// the `#[tool]` wrapper above and [`Self::call_in`], the in-process entry ADR-029's RCA agent
+    /// uses — and this branch was written out at both. The wrapper's copy ended in a catch-all
+    /// (`Ok(scope) =>`), so a third kind would have been served the summary there while
+    /// `call_in`'s exhaustive copy refused to compile: the compiler would have caught half of it,
+    /// which is the worst of the two outcomes because the half it catches looks like the whole.
+    async fn fleet_summary_dispatch(
+        &self,
+        kind: FleetSummaryKind,
+        scope: &NodeScope,
+    ) -> Result<CallToolResult, McpError> {
+        match kind {
+            FleetSummaryKind::Summary => self.fleet_summary_in(scope).await,
+            FleetSummaryKind::Coverage => self.fleet_coverage_in(scope).await,
         }
     }
 
@@ -2174,14 +2183,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let Some(section) = HealthSection::parse(&p.section) else {
-            return tool_bad_params(
-                "get_system_health",
-                &format!(
-                    "unknown section {:?}; must be one of: {}",
-                    p.section,
-                    HealthSection::NAMES.join(", ")
-                ),
-            );
+            return bad_health_section(&p.section);
         };
         // Resolve → authorize → scope → availability. The permission check sits above every store
         // lookup so a caller who may not read a section cannot infer, from a 403-vs-unavailable,
@@ -2640,14 +2642,7 @@ impl YagraMcp {
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         let Some(kind) = ConfigKind::parse(&p.kind) else {
-            return tool_bad_params(
-                "get_config",
-                &format!(
-                    "unknown kind {:?}; must be one of: {}",
-                    p.kind,
-                    ConfigKind::NAMES.join(", ")
-                ),
-            );
+            return bad_config_kind(&p.kind);
         };
         // Resolve → authorize → scope → availability, as `get_system_health` does and for the same
         // reason: the permission check sits above every store lookup so a caller who may not read a
@@ -2940,9 +2935,8 @@ impl YagraMcp {
             "get_fleet_summary" => {
                 let p = p!(FleetSummaryParams);
                 match fleet_summary_kind(p.kind.as_deref()) {
-                    Some(FleetSummaryKind::Summary) => self.fleet_summary_in(scope).await,
-                    Some(FleetSummaryKind::Coverage) => self.fleet_coverage_in(scope).await,
-                    None => tool_bad_params(name, "`kind` must be summary or coverage"),
+                    Some(kind) => self.fleet_summary_dispatch(kind, scope).await,
+                    None => bad_fleet_summary_kind(p.kind.as_deref()),
                 }
             }
             "list_nodes" => self.list_nodes_in(p!(ListNodesParams), scope).await,
@@ -2992,28 +2986,14 @@ impl YagraMcp {
                 let p = p!(SystemHealthParams);
                 match HealthSection::parse(&p.section) {
                     Some(section) => self.system_health_in(section, p, scope).await,
-                    None => tool_bad_params(
-                        name,
-                        &format!(
-                            "unknown section {:?}; must be one of: {}",
-                            p.section,
-                            HealthSection::NAMES.join(", ")
-                        ),
-                    ),
+                    None => bad_health_section(&p.section),
                 }
             }
             "get_config" => {
                 let p = p!(ConfigParams);
                 match ConfigKind::parse(&p.kind) {
                     Some(kind) => self.config_in(kind, p, scope).await,
-                    None => tool_bad_params(
-                        name,
-                        &format!(
-                            "unknown kind {:?}; must be one of: {}",
-                            p.kind,
-                            ConfigKind::NAMES.join(", ")
-                        ),
-                    ),
+                    None => bad_config_kind(&p.kind),
                 }
             }
             // Not "every tool minus a few": the caller's allow-list decides what reaches here, and
@@ -3167,6 +3147,27 @@ fn fleet_summary_kind(kind: Option<&str>) -> Option<FleetSummaryKind> {
     }
 }
 
+/// The refusal for a `kind` [`fleet_summary_kind`] does not serve (ADR-085 Inc.1).
+///
+/// **Written once because there are two doors into every tool body** — the `#[tool]` wrapper and
+/// [`YagraMcp::call_in`], the in-process entry ADR-029's RCA agent uses — and these two had
+/// already drifted: the wrapper named the value it rejected, `call_in` did not. This text is a
+/// specification a model reasons from, so a caller that gets a *different* explanation depending on
+/// which door it came through cannot learn the rule from either. The wrapper's wording is the one
+/// kept: naming the bad value is what lets a model correct itself in one turn.
+///
+/// Its siblings [`bad_health_section`] and [`bad_config_kind`] exist for the same reason. Those
+/// two had not drifted yet — they were two verbatim copies, which is the state a drift starts from.
+fn bad_fleet_summary_kind(kind: Option<&str>) -> Result<CallToolResult, McpError> {
+    tool_bad_params(
+        "get_fleet_summary",
+        &format!(
+            "unknown kind {:?}; must be summary or coverage",
+            kind.unwrap_or_default()
+        ),
+    )
+}
+
 /// Which self-health question `get_system_health` was asked (ADR-042 I3a).
 ///
 /// Split out of the tool body so the folding decision is testable without a `RequestContext`, the
@@ -3248,6 +3249,22 @@ impl HealthSection {
             Self::Upgrade => "upgrade",
         }
     }
+}
+
+/// The refusal for a `section` [`HealthSection::parse`] does not serve — see
+/// [`bad_fleet_summary_kind`] for why this is one function and not two.
+///
+/// It hands back [`HealthSection::NAMES`] rather than saying only "unknown": a model that is told
+/// the vocabulary retries correctly, where one that is only told it was wrong guesses again.
+fn bad_health_section(section: &str) -> Result<CallToolResult, McpError> {
+    tool_bad_params(
+        "get_system_health",
+        &format!(
+            "unknown section {:?}; must be one of: {}",
+            section,
+            HealthSection::NAMES.join(", ")
+        ),
+    )
 }
 
 /// The id a [`ConfigKind`] needs, and which parameter carries it.
@@ -3475,6 +3492,20 @@ impl ConfigKind {
             Self::Ldap => "ldap",
         }
     }
+}
+
+/// The refusal for a `kind` [`ConfigKind::parse`] does not serve — see [`bad_fleet_summary_kind`]
+/// for why this is one function and not two, and [`bad_health_section`] for why it lists the
+/// vocabulary.
+fn bad_config_kind(kind: &str) -> Result<CallToolResult, McpError> {
+    tool_bad_params(
+        "get_config",
+        &format!(
+            "unknown kind {:?}; must be one of: {}",
+            kind,
+            ConfigKind::NAMES.join(", ")
+        ),
+    )
 }
 
 // ── Tool parameter structs (schemas derived for `tools/list`) ─────────────────────────────────────

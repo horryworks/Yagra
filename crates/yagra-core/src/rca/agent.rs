@@ -379,6 +379,60 @@ mod tests {
         assert!(out.contains("query_metrics"), "{out}");
     }
 
+    /// **Every allow-listed tool has an arm in the in-process dispatcher** (ADR-085 Inc.1).
+    ///
+    /// [`AGENT_TOOLS`] and `YagraMcp::call_in`'s `match` are two lists of the same tool names, and
+    /// until now nothing compared them. [`every_agent_tool_exists`] checks the allow-list against
+    /// the *declarations* — which a rename breaks loudly — but the dispatcher is a third list, and
+    /// a name added here with no arm there compiles, passes every existing test, and hands the
+    /// model `no in-process tool named "x"` the first time it asks. Same shape as the
+    /// `HealthSection` panic ADR-042 I3a closed: a list that must agree with another list, failing
+    /// only at run time.
+    ///
+    /// Driven through [`AgentTools::call`] rather than `call_in` directly, because that is the
+    /// path the model takes — the allow-list and the branch-permission check sit in front of it,
+    /// and a tool reachable only when those are skipped is not reachable.
+    ///
+    /// Empty arguments on purpose: a tool that needs one answers "you did not give me an id",
+    /// which is a real answer from a real arm. The only thing asserted is that the *dispatcher*
+    /// recognised the name.
+    #[tokio::test]
+    async fn every_agent_tool_has_an_in_process_arm() {
+        const UNKNOWN: &str = "no in-process tool named";
+        let tools = AgentTools::new(crate::api::tests_support::private_state());
+        let mut checked = 0usize;
+        for name in AGENT_TOOLS {
+            let out = tools
+                .call(name, serde_json::json!({}), &NodeScope::All)
+                .await;
+            assert!(
+                !out.contains(UNKNOWN),
+                "`{name}` is on the agent's allow-list but has no arm in `call_in`; the \n                 model would be offered a tool it cannot call. Answer was: {out}"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked,
+            AGENT_TOOLS.len(),
+            "the loop did not visit every allow-listed tool"
+        );
+
+        // The load-bearing half. Everything above passes just as well against a dispatcher that
+        // never produces this refusal at all — so prove the needle fires. `call_in` is driven
+        // directly here because the allow-list would refuse an unknown name before the dispatcher
+        // ever saw it, which is the correct behaviour and the wrong thing to test.
+        let mcp = crate::mcp::YagraMcp::new(crate::api::tests_support::private_state());
+        let refused = mcp
+            .call_in("get_the_weather", serde_json::json!({}), &NodeScope::All)
+            .await
+            .expect_err("a name the dispatcher does not know must be refused");
+        assert!(
+            refused.message.contains(UNKNOWN),
+            "the needle this test searches for is not what an unknown name actually produces: {}",
+            refused.message
+        );
+    }
+
     /// The schemas are rmcp's own, reachable with no session — the fact WS-G turned out to rest on.
     #[test]
     fn the_tool_schemas_come_from_the_router_without_a_session() {
