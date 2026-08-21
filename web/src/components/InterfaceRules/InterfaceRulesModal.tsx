@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 import { api, errMsg } from '../../services/api';
 import { useCan } from '../../store';
 import { formatBps } from '../../lib/format';
+import { interfaceScopeId } from '../../lib/interfaceScope';
 import {
   PORT_RULE_BASES,
   PORT_RULE_SUBJECTS,
@@ -58,7 +59,7 @@ function isOwnRule(row: MatchingThreshold, nodeId: string, ifindex: number): boo
   // list is what keeps the answer right if that cap is ever lifted.
   return (
     row.rule.scope_level === 'interface' &&
-    row.rule.scope_ids.includes(`${nodeId}:${ifindex}`)
+    row.rule.scope_ids.includes(interfaceScopeId(nodeId, ifindex))
   );
 }
 

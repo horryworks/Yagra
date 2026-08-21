@@ -46,6 +46,15 @@
 
 ### Bug Fixes
 
+- **Alerts > Event rules showed `severity.critical` in its Severity filter instead of `Critical`.**
+  The dropdown built its label from a key that screen's namespace does not carry, so the filter
+  named the severities differently from the badges in the column it filters. It now resolves them
+  the same way the other three severity filters do.
+- **An `info` severity was grey on Alerts > Routing and blue on Alerts > Event rules.** The two
+  neighbouring screens kept their own colour maps. Grey was also what Routing gives a rule with no
+  severity at all, so a rule routing only informational alerts looked like a rule routing
+  everything. Both screens now use one map, and `info` reads as `info` on each.
+
 - **The MCP `get_system_health` tool advertised the wrong permission for two of its sections.**
   Its published description said the `forwarding` and `upgrade` sections need `manage-config`;
   they have needed `manage-system` since the roles were split. The enforcement was always right,

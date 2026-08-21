@@ -8,6 +8,7 @@
 
 import i18n from '../i18n';
 import { intlLocale } from './locale';
+import type { Tone } from '../components/ui/Badge';
 import type { MetricPoint, NodeState, Severity } from '../types/api';
 
 /** Split time-series points into the parallel `[timestamps, values]` uPlot wants. */
@@ -77,6 +78,21 @@ export function severityRank(severity: Severity): number {
 export function severityLabel(severity: Severity): string {
   return i18n.t(`format:severity.${severity}`);
 }
+
+/** Severity -> `Badge` tone, beside the label and the color var that answer the same question
+ *  for the other two channels.
+ *
+ *  Shared because the two screens that render a severity badge kept their own maps and had
+ *  already disagreed: Event rules used `info`, Routing used `neutral`, and they sit next to each
+ *  other in the same nav section. `info` wins — `badge-info` resolves to `--severity-info`, the
+ *  same token `severityColorVar` returns, so the badge and the chart agree about what an
+ *  informational alert looks like. `neutral` was also the tone Routing gives a rule with **no**
+ *  severity, which made a rule routing only info indistinguishable from one routing everything. */
+export const SEVERITY_TONE: Record<Severity, Tone> = {
+  critical: 'critical',
+  warning: 'warning',
+  info: 'info',
+};
 
 /** Format a Unix-ms timestamp as a local date-time string in the active interface language's
  *  locale (pass `locale` to override). Zone is always the browser's local zone. */

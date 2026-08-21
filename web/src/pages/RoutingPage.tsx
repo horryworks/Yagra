@@ -35,18 +35,12 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { channelFilters, routingRuleFilters } from './routingFilters';
 import { TrashIcon, PowerIcon, EditIcon } from '../components/ui/icons';
-import { severityLabel } from '../lib/format';
+import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import { ChannelTemplateModal } from './ChannelTemplateModal';
 import { hasTemplate } from './channelTemplate';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 import './RoutingPage.css';
-
-const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'neutral'> = {
-  critical: 'critical',
-  warning: 'warning',
-  info: 'neutral',
-};
 
 /** Inline status (dot + label) shared by channels and rules. */
 function EnabledStatus({ enabled }: { enabled: boolean }) {

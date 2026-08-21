@@ -24,16 +24,10 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { eventRuleFilters } from './eventConfigFilters';
 import { EditIcon, TrashIcon, PowerIcon } from '../components/ui/icons';
-import { severityLabel } from '../lib/format';
+import { SEVERITY_TONE, severityLabel } from '../lib/format';
 import './EventRulesPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
-
-const SEVERITY_TONE: Record<Severity, 'critical' | 'warning' | 'info'> = {
-  critical: 'critical',
-  warning: 'warning',
-  info: 'info',
-};
 
 function SeverityBadge({ value }: { value: Severity }) {
   return <Badge tone={SEVERITY_TONE[value]}>{severityLabel(value)}</Badge>;

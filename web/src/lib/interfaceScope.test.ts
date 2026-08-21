@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { readFileSync, readdirSync } from 'node:fs';
+import { join, sep } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { interfaceScopeId, isInterfaceScopeId, splitInterfaceScopeId } from './interfaceScope';
 
@@ -46,5 +48,60 @@ describe('interface scope ids (ADR-076)', () => {
     // A uuid contains no colon, so this only matters for malformed input — but splitting on the
     // last one would hand back a node id with a colon in it, which resolves to nothing at all.
     expect(splitInterfaceScopeId(`${NODE}:7:9`)).toEqual([NODE, null]);
+  });
+});
+
+/**
+ * Nothing but a builder composes `<node>:<ifindex>` by hand.
+ *
+ * The mirror this module warns about at the top has no mechanical link to Rust, so the only defence
+ * against a fourth spelling is that there are exactly two, both of them functions whose whole job is
+ * to be the one spelling. `InterfaceRulesModal` had composed its own — it read `scope_ids` and
+ * compared against a literal — which is precisely the failure the module doc describes: a rule that
+ * is stored, listed, and matches no port.
+ *
+ * The two allowed entries are *builders*, not exemptions. Adding a third means writing why the
+ * concept it names is not one of these two.
+ */
+describe('the composite has exactly two builders', () => {
+  // Assembled from fragments so this file cannot match itself — the trap `permissions.test.ts` and
+  // `reports.rs::the_run_state_sql_is_built_from_the_enum` both document.
+  const COMPOSITE = new RegExp(
+    ['[$][{][A-Za-z0-9_.]*', 'node', '_?id[}]:[$][{][A-Za-z0-9_.]*', 'if', '_?index[}]'].join(''),
+    'i',
+  );
+
+  /** Each builder, and the concept it owns. They share a format and nothing else: change the wire
+   *  contract and `interfaceScopeId` moves; change how the traffic widget keys its React rows and
+   *  `linkId` moves. Folding them together would make a server-side format change silently rewrite
+   *  a client-side key. */
+  const BUILDERS = [
+    'src/lib/interfaceScope.ts', // the `scope_id` an interface-scoped threshold rule is stored under
+    'src/dashboard/widgets/interfaceTraffic.ts', // `linkId` — a React key and a fetch dependency
+  ];
+
+  function tsFiles(dir: string, out: string[] = []): string[] {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.isDirectory()) tsFiles(p, out);
+      else if (/\.tsx?$/.test(e.name)) out.push(p);
+    }
+    return out;
+  }
+
+  const SRC = join(__dirname, '..');
+  const files = tsFiles(SRC);
+
+  it('reads the sources it thinks it is reading', () => {
+    // Without this a wrong path makes the assertion below vacuously true, which looks like success.
+    expect(files.length).toBeGreaterThan(400);
+  });
+
+  it('finds no third spelling', () => {
+    const offenders = files
+      .filter((f) => COMPOSITE.test(readFileSync(f, 'utf8')))
+      .map((f) => 'src/' + f.slice(SRC.length + 1).split(sep).join('/'))
+      .sort();
+    expect(offenders).toEqual([...BUILDERS].sort());
   });
 });

@@ -44,7 +44,13 @@ type AssertEqual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : ne
  *  that `i18nEnumKeys.test.ts` is about to demand EN/JA strings for the new variant.
  *
  *  `GROUP_TYPES` is deliberately absent: Rust serializes `group_type` as a bare `String`, so the
- *  document has no union to pin it to. See its declaration below. */
+ *  document has no union to pin it to. See its declaration below.
+ *
+ *  ⚠️ **Being listed here is the only thing that pins one.** Eleven arrays were missing, and three
+ *  of them — `UserKind`, `OidcProviderKind`, `TokenSurface` — carried a doc comment reading
+ *  `Pinned to schemas.X`, which is exactly the state a reader cannot detect: the sentence says the
+ *  guard exists and there is no guard. If you write that sentence, add the property in the same
+ *  commit. */
 const schemaEnumPins: {
   Severity: AssertEqual<Severity, components['schemas']['Severity']>;
   Role: AssertEqual<Role, components['schemas']['Role']>;
@@ -67,6 +73,17 @@ const schemaEnumPins: {
   AuditAction: AssertEqual<AuditAction, components['schemas']['AuditAction']>;
   AuditStatusClass: AssertEqual<AuditStatusClass, components['schemas']['AuditStatusClass']>;
   ChannelKind: AssertEqual<ChannelKind, components['schemas']['ChannelKind']>;
+  UserKind: AssertEqual<UserKind, components['schemas']['UserKind']>;
+  OidcProviderKind: AssertEqual<OidcProviderKind, components['schemas']['OidcProviderKind']>;
+  TokenSurface: AssertEqual<TokenSurface, components['schemas']['TokenSurface']>;
+  NeighborProto: AssertEqual<NeighborProto, components['schemas']['NeighborProto']>;
+  NeighborCapability: AssertEqual<NeighborCapability, components['schemas']['NeighborCapability']>;
+  LinkSource: AssertEqual<LinkSource, components['schemas']['LinkSource']>;
+  LinkOverrideAction: AssertEqual<LinkOverrideAction, components['schemas']['LinkOverrideAction']>;
+  LinkDirection: AssertEqual<LinkDirection, components['schemas']['LinkDirection']>;
+  TopologyMode: AssertEqual<TopologyMode, components['schemas']['TopologyMode']>;
+  RcaConfidence: AssertEqual<RcaConfidence, components['schemas']['RcaConfidence']>;
+  TlsCertSource: AssertEqual<TlsCertSource, components['schemas']['TlsCertSource']>;
 } = {
   Severity: true,
   Role: true,
@@ -89,6 +106,17 @@ const schemaEnumPins: {
   AuditAction: true,
   AuditStatusClass: true,
   ChannelKind: true,
+  UserKind: true,
+  OidcProviderKind: true,
+  TokenSurface: true,
+  NeighborProto: true,
+  NeighborCapability: true,
+  LinkSource: true,
+  LinkOverrideAction: true,
+  LinkDirection: true,
+  TopologyMode: true,
+  RcaConfidence: true,
+  TlsCertSource: true,
 };
 void schemaEnumPins;
 

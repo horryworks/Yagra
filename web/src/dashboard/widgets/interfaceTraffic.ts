@@ -103,7 +103,7 @@ export function readTrafficSettings(settings: WidgetSettings | undefined): Traff
     // `Number.isInteger` rejects '7', 7.5, NaN and Infinity in one go. ifIndex 0 is not a valid
     // SNMP interface index, so a falsy-but-integer 0 is dropped too.
     if (!nodeId || typeof ifindex !== 'number' || !Number.isInteger(ifindex) || ifindex <= 0) continue;
-    const key = `${nodeId}:${ifindex}`;
+    const key = linkId({ nodeId, ifindex });
     if (seen.has(key)) continue;
     seen.add(key);
     links.push({ nodeId, nodeName: str(rec.nodeName), ifindex, ifName: str(rec.ifName) });

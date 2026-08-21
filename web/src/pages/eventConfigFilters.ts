@@ -12,7 +12,8 @@
 
 import type { TFunction } from 'i18next';
 import type { ColumnFilterSpec } from '../lib/columnFilter';
-import type { EventRule, EventSource } from '../types/api';
+import { severityLabel } from '../lib/format';
+import type { EventRule, EventSource, Severity } from '../types/api';
 
 /**
  * The enabled/disabled column, shared by all three screens.
@@ -74,7 +75,7 @@ export function eventSourceFilters(
 /** Alerts ▸ Event rules. */
 export function eventRuleFilters(
   t: TFunction,
-  severities: readonly string[],
+  severities: readonly Severity[],
   scopeLabel: (r: EventRule) => string,
 ): Record<string, ColumnFilterSpec<EventRule>> {
   return {
@@ -85,9 +86,14 @@ export function eventRuleFilters(
       containsSemantics: 'substring',
       placeholder: t('eventRules.cols.name'),
     },
+    // `severityLabel`, not a key built here: this module is called with `t` bound to
+    // `alertsConfig`, whose top level has no `severity` block, so the dropdown rendered the raw
+    // key `severity.critical` beside a badge in the same column reading `Critical`. EN/JA parity
+    // cannot catch that — the key is missing from both locales equally. The other three severity
+    // filters (active alerts, history, routing) already resolve it through `format:`.
     severity: {
       kind: 'enum',
-      options: severities.map((s) => ({ value: s, label: t(`severity.${s}`) })),
+      options: severities.map((s) => ({ value: s, label: severityLabel(s) })),
       readValue: (r) => r.severity,
       allLabel: t('eventRules.filter.allSeverities'),
       counts: 'client',
