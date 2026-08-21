@@ -17,9 +17,12 @@ export function relTime(ms: number | null | undefined): string {
   return i18n.t('format:relative.day', { count: Math.floor(d / 86_400_000) });
 }
 
-/** A job's `params` is opaque JSON: the backend stores what the launcher sent and never reads it,
- *  so the document types it `unknown`. This is the WebUI reading back its own document — every
- *  field is still checked before use, and a blob of another shape yields the defaults. */
+/** A job's `params` is typed `unknown` because the contract describes it as an untyped object,
+ *  not because its content is arbitrary: the backend stores what `JobParams::to_json` builds from
+ *  the *validated* request — `window_secs`, `baseline_secs`, `sensitivity`, `depth`, `family`,
+ *  `notify` — and reads those six keys back to replay a scheduled run. The launcher's own body
+ *  never reaches the column. Every field is still checked before use, because a row written by an
+ *  older build may be missing one; a blob of another shape yields the defaults. */
 function paramFields(params: unknown): Record<string, unknown> {
   return typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
 }
