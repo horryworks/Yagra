@@ -936,117 +936,13 @@ mod tests {
         };
         assert_no_forbidden_keys(&serde_json::to_value(&alert).unwrap(), "Alert");
 
-        // Served straight from the REST layer's DTO — the canary follows the type, so a field
-        // added to `TopologyPage` for the WebUI is checked before it reaches an AI client too.
-        let topo = crate::api::topology::TopologyPage {
-            nodes: vec![crate::api::topology::TopologyNode {
-                id: node.id.0,
-                name: "edge-router-1".to_owned(),
-                parent_id: None,
-                state: NodeState::Ok,
-                root_cause: None,
-            }],
-            next_cursor: None,
-        };
-        assert_no_forbidden_keys(&serde_json::to_value(&topo).unwrap(), "TopologyPage");
-
-        // The other shape `get_topology` can return (`kind=links`, ADR-043). Also served straight
-        // from the REST DTO, so it needs its own instance — a folded tool's every branch is a
-        // separate result type as far as this canary is concerned.
-        let links = crate::api::topology::TopologyLinkPage {
-            links: vec![crate::api::topology::TopologyLink {
-                id: 1,
-                a_node: Some(node.id.0),
-                b_node: Some(uuid::Uuid::nil()),
-                a_ifindex: Some(8),
-                b_ifindex: None,
-                a_if_name: Some("GigabitEthernet0/1".to_owned()),
-                b_if_name: None,
-                sources: vec![yagra_common::LinkSource::L3Subnet],
-                source: yagra_common::LinkSource::L3Subnet,
-                subnet: Some("192.168.1.0/24".to_owned()),
-                forced_parent: None,
-                first_seen: "2026-08-04T00:00:00Z".to_owned(),
-                last_seen: "2026-08-04T01:00:00Z".to_owned(),
-            }],
-            next_cursor: None,
-            summary: yagra_common::TopologyLinkSummary::default(),
-            total_links: 1,
-            derived_at: Some("2026-08-04T01:00:00Z".to_owned()),
-        };
-        assert_no_forbidden_keys(&serde_json::to_value(&links).unwrap(), "TopologyLinkPage");
-
-        // `kind=overrides` and `kind=shadow` (ADR-043 I2) — the folded tool's remaining branches.
-        let ovr = crate::api::topology::LinkOverrideList {
-            overrides: vec![crate::api::topology::LinkOverrideRow {
-                id: uuid::Uuid::nil(),
-                a_node: node.id.0,
-                b_node: uuid::Uuid::nil(),
-                action: yagra_common::LinkOverrideAction::Direction,
-                direction: Some(yagra_common::LinkDirection::AParent),
-                note: Some("core switch is upstream".to_owned()),
-                created_by: Some("admin".to_owned()),
-                created_at: "2026-08-04T01:00:00Z".to_owned(),
-            }],
-        };
-        assert_no_forbidden_keys(&serde_json::to_value(&ovr).unwrap(), "LinkOverrideList");
-
-        // `list_discovered_endpoints` (ADR-043 I3). Served straight from the REST DTO, so it is the
-        // half of the canary that had already gone wrong once — and this shape is worth checking
-        // twice over: it is the only tool result built from data a *device* volunteered about hosts
-        // nobody registered, and it names a router and a port beside each address.
-        let endpoints = crate::api::discovery::DiscoveredEndpointPage {
-            endpoints: vec![crate::api::discovery::DiscoveredEndpointRow {
-                id: uuid::Uuid::nil(),
-                ip: "192.168.1.50".to_owned(),
-                mac: Some("aa:bb:cc:dd:ee:ff".to_owned()),
-                via_node: Some(node.id.0),
-                via_ifindex: Some(8),
-                first_seen: "2026-08-04T00:00:00Z".to_owned(),
-                last_seen: "2026-08-04T01:00:00Z".to_owned(),
-                promoted_node_id: None,
-            }],
-            next: Some(crate::api::discovery::DiscoveredEndpointCursor {
-                last_seen: "2026-08-04T01:00:00Z".to_owned(),
-                id: uuid::Uuid::nil(),
-            }),
-            summary: crate::api::discovery::DiscoveredEndpointSummary {
-                observed_total: 41,
-                nodes_reporting: 2,
-                truncated_nodes: 0,
-            },
-        };
-        assert_no_forbidden_keys(
-            &serde_json::to_value(&endpoints).unwrap(),
-            "DiscoveredEndpointPage",
-        );
-
-        let shadow = crate::api::topology::TopologyShadow {
-            mode: crate::topology_mode::TopologyMode::Shadow,
-            manual_edges: 1,
-            derived_edges: 2,
-            only_in_manual: vec![crate::api::topology::ShadowEdge {
-                child: node.id.0,
-                parent: uuid::Uuid::nil(),
-            }],
-            only_in_derived: vec![],
-            would_suppress: vec![crate::api::topology::ShadowAlert {
-                node_id: node.id.0,
-                root_cause: Some(uuid::Uuid::nil()),
-            }],
-            would_unsuppress: vec![],
-            anchors: vec![uuid::Uuid::nil()],
-            // `pool` is an `INVENTORY_NOISE_KEYS` word, but these are *pool names in a list*, not a
-            // key naming which poller owns a node — the field this canary is guarding against is a
-            // node's `pool`, and the distinction is why the check is per-key rather than per-word.
-            unresolved_pools: vec!["default".to_owned()],
-            unresolved_pollers: vec!["edge-1".to_owned()],
-            mode_since: Some("2026-08-03T00:00:00Z".to_owned()),
-            covered_nodes: 1,
-            total_nodes: 2,
-            opted_out: vec![],
-        };
-        assert_no_forbidden_keys(&serde_json::to_value(&shadow).unwrap(), "TopologyShadow");
+        // `get_topology`'s four branches and `list_discovered_endpoints` stood here, one
+        // hand-built instance each. ADR-085 Inc.3 moved them to `folded::FOLDED_READS`, where
+        // `every_folded_result_is_free_of_forbidden_keys` walks their response schema instead —
+        // every field of every nested type, rather than the fields these samples happened to set.
+        // The discovered-endpoint shape is the one that most wanted the stronger check: it is the
+        // only tool result built from what a *device* volunteered about hosts nobody registered,
+        // and it names a router and a port beside each address.
 
         let series = MetricSeriesDto {
             node_id: node.id.0,
@@ -1144,36 +1040,12 @@ mod tests {
         );
         assert_inventory_dto_is_clean(&event_json, "Event");
 
-        // ADR-042 I1. The three metric shapes are the REST types served directly (the
-        // `TopologyPage` move) — they are already clean, so a parallel DTO would only add drift.
-        // The instance lives in `api::metrics` because a second test wants the same "every field
-        // populated" shape — see `canary_interface_series` (ADR-062 Inc.5).
-        let iface_series = crate::api::metrics::canary_interface_series();
-        assert_no_forbidden_keys(
-            &serde_json::to_value(&iface_series).unwrap(),
-            "InterfaceSeries",
-        );
-
-        let throughput = crate::api::metrics::ThroughputRange {
-            timestamps: vec![0],
-            in_bps: vec![Some(1.0)],
-            out_bps: vec![Some(2.0)],
-        };
-        assert_no_forbidden_keys(
-            &serde_json::to_value(&throughput).unwrap(),
-            "ThroughputRange",
-        );
-
-        let top_nodes = crate::api::util::Ranked {
-            entries: vec![crate::api::metrics::TopEntry {
-                node_id: node.id.0,
-                name: "edge-router-1".to_owned(),
-                value: 42.0,
-            }],
-            partial: false,
-        };
-        assert_no_forbidden_keys(&serde_json::to_value(&top_nodes).unwrap(), "RankedTopEntry");
-
+        // ADR-042 I1. A REST type served directly, clean as it stands, so a parallel DTO would
+        // only add drift. Two siblings stood here — the topology page and the interface series —
+        // and both moved to `folded::FOLDED_READS` in ADR-085 Inc.3, where the walk reads their
+        // schema instead of this sample. `top_interfaces` did not: it answers two REST routes
+        // (`interface-top` and `interface-delta`) with no argument naming which, so it has no
+        // branch key to file rows under.
         let top_ifaces = crate::api::util::Ranked {
             entries: vec![crate::api::metrics::InterfaceTopEntry {
                 node_id: node.id.0,
@@ -1311,77 +1183,6 @@ mod tests {
             &serde_json::to_value(&suppressions).unwrap(),
             "Suppressions",
         );
-
-        let alert_ranking = crate::api::util::Ranked {
-            entries: vec![crate::api::alerts::AlertNodeCount {
-                node_id: node.id.0,
-                name: "edge-router-1".to_owned(),
-                count: 9,
-            }],
-            partial: false,
-        };
-        assert_no_forbidden_keys(
-            &serde_json::to_value(&alert_ranking).unwrap(),
-            "RankedAlertNodeCount",
-        );
-
-        let transitions = vec![crate::api::alerts::AlertTransition {
-            node_id: node.id.0,
-            name: "edge-router-1".to_owned(),
-            state: NodeState::Unreachable,
-            severity: yagra_common::Severity::Critical,
-            resolved: false,
-            at_unix_ms: 0,
-        }];
-        assert_no_forbidden_keys(
-            &serde_json::to_value(&transitions).unwrap(),
-            "AlertTransition",
-        );
-
-        let calendar = vec![crate::api::alerts::CalendarBucket {
-            dow: 1,
-            hour: 3,
-            count: 4,
-        }];
-        assert_no_forbidden_keys(&serde_json::to_value(&calendar).unwrap(), "CalendarBucket");
-
-        let schedules = vec![crate::analysis::AnalysisSchedule {
-            id: uuid::Uuid::new_v4(),
-            tool: "anomaly".to_owned(),
-            scope_kind: "node".to_owned(),
-            scope_id: Some(node.id.0),
-            scope_label: "edge-router-1".to_owned(),
-            params: serde_json::json!({}),
-            frequency: crate::cadence::Cadence::Daily,
-            day_of_week: None,
-            day_of_month: None,
-            at_hour: 3,
-            at_minute: 0,
-            enabled: true,
-            next_run_ms: 0,
-            last_run_ms: None,
-            last_status: None,
-        }];
-        assert_no_forbidden_keys(
-            &serde_json::to_value(&schedules).unwrap(),
-            "AnalysisSchedule",
-        );
-
-        let saved = vec![crate::analysis::SavedFinding {
-            id: uuid::Uuid::new_v4(),
-            job_id: uuid::Uuid::new_v4(),
-            tool: "anomaly".to_owned(),
-            score: 0.9,
-            severity: "crit".to_owned(),
-            node_id: Some(node.id.0),
-            node_name: "edge-router-1".to_owned(),
-            metric: "icmp_rtt_ms".to_owned(),
-            kind: "spike".to_owned(),
-            when_label: "last hour".to_owned(),
-            duration: "12m".to_owned(),
-            at: "1970-01-01T00:00:00Z".to_owned(),
-        }];
-        assert_no_forbidden_keys(&serde_json::to_value(&saved).unwrap(), "SavedFinding");
     }
 
     /// **Every DTO in this module is covered by the canary above.**
@@ -1455,33 +1256,18 @@ mod tests {
     /// A tool may hold **several** rows: `alert_trends` and `list_analyses` fold endpoints whose
     /// row type differs by `kind`, so each shape it can return needs its own coverage.
     const TOOL_RESULT_TYPES: &[(&str, &str)] = &[
-        ("get_fleet_summary", "FleetSummary"),
         ("list_nodes", "NodeSummary"),
         ("get_node_status", "NodeStatus"),
         ("get_active_alerts", "Alert"),
         ("get_alert_history", "AlertHistory"),
         ("query_metrics", "MetricSeries"),
-        ("get_interface_series", "InterfaceSeries"),
-        ("top_metrics", "RankedTopEntry"),
         ("top_interfaces", "RankedInterfaceTopEntry"),
-        ("fleet_throughput", "ThroughputRange"),
         ("list_node_groups", "NodeGroup"),
-        ("get_topology", "TopologyPage"),
-        ("get_topology", "TopologyLinkPage"),
-        ("get_topology", "LinkOverrideList"),
-        ("get_topology", "TopologyShadow"),
-        ("list_discovered_endpoints", "DiscoveredEndpointPage"),
         ("top_flows", "FlowRows"),
         ("flow_fanout", "FlowFanout"),
-        ("list_analyses", "AnalysisJob"),
-        ("list_analyses", "AnalysisSchedule"),
         ("search_events", "Event"),
         ("poll_now", "PollNowResult"),
         ("list_suppressions", "Suppressions"),
-        ("alert_trends", "RankedAlertNodeCount"),
-        ("alert_trends", "AlertTransition"),
-        ("alert_trends", "CalendarBucket"),
-        ("search_analysis_findings", "SavedFinding"),
     ];
 
     /// Tools whose result is a `serde_json::json!` object built in the tool body. There is no
@@ -1557,6 +1343,53 @@ mod tests {
             }
         }
         out
+    }
+
+    /// **No tool is covered by both tables** (ADR-085 Inc.3).
+    ///
+    /// [`every_typed_tool_result_is_canaried`] skips any tool with a row in `FOLDED_READS`, because
+    /// the schema walk over there checks the same thing and checks it harder. So a tool listed in
+    /// both is a `TOOL_RESULT_TYPES` row **nothing reads** — and, worse, an instance in the canary
+    /// that exists only to satisfy a claim no longer being made. A row nobody reads is the kind
+    /// that goes on asserting something after it stops being true.
+    ///
+    /// This is not hypothetical: `("get_fleet_summary", "FleetSummary")` had been dead since
+    /// ADR-042 I3a folded that tool's `coverage` branch, and was removed by the increment that
+    /// added this test. Nothing had noticed, because being covered twice looks exactly like being
+    /// covered once from either side.
+    #[test]
+    fn no_tool_is_covered_by_both_the_folded_table_and_the_instance_canary() {
+        let folded: std::collections::BTreeSet<&str> = crate::mcp::folded::FOLDED_READS
+            .iter()
+            .map(|f| f.tool)
+            .collect();
+        let both: Vec<&str> = TOOL_RESULT_TYPES
+            .iter()
+            .map(|(t, _)| *t)
+            .filter(|t| folded.contains(t))
+            .collect();
+        assert!(
+            both.is_empty(),
+            "{both:?} appear in both TOOL_RESULT_TYPES and FOLDED_READS. The canary skips a folded \
+             tool, so those rows are read by nothing — drop them, and drop the instances they \
+             claim, or the canary keeps carrying values for a check that no longer runs"
+        );
+        // …and the same rule for the inline list, which the canary skips for a different reason.
+        let inline: Vec<&str> = TOOLS_WITH_INLINE_RESULTS
+            .iter()
+            .map(|(t, _)| *t)
+            .filter(|t| folded.contains(t))
+            .collect();
+        assert!(
+            inline.is_empty(),
+            "{inline:?} are folded, so saying they build their result inline explains nothing that \
+             is still checked"
+        );
+        // The load-bearing half: both lists must be non-empty, or "no overlap" is vacuous.
+        assert!(
+            !TOOL_RESULT_TYPES.is_empty() && !folded.is_empty(),
+            "one of the two tables is empty; this test proves nothing"
+        );
     }
 
     /// **Every `ok_json` call site names a type the canary instantiates.**

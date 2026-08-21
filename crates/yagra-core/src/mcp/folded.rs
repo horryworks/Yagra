@@ -7,7 +7,7 @@
 //! model picks worse from a longer list. That fold creates a problem the ADR did not anticipate:
 //! **the endpoints behind one tool do not share a permission.**
 //!
-//! The measured spread across the routes folded here is `View` ×29, `ManageConfig` ×12,
+//! The measured spread across the routes folded here is `View` ×43, `ManageConfig` ×12,
 //! `ManageSystem` ×6, `ManageUsers` ×2, `ManageCredentials` ×1, `ViewAudit` ×1, `AckAlerts` ×1, and
 //! two that are deliberately unauthenticated over REST. Picking one permission for the whole tool
 //! fails in both directions: a loose choice hands the forwarding topology or the audit log to any viewer, and a
@@ -15,9 +15,16 @@
 //!
 //! So the permission is **data**, one row per branch, and the tool looks it up before it looks at
 //! anything else. ADR-042 decision 2 declined a `Permission` column on the 243-row ledger because
-//! nothing could check it; that reasoning holds there and not here — over these 54 rows the
+//! nothing could check it; that reasoning holds there and not here — over these 68 rows the
 //! permission is a value a test can compare against the REST handler's own extractor, and
 //! [`tests::every_folded_read_demands_what_its_rest_route_demands`] does exactly that.
+//!
+//! Fourteen of these rows arrived late (ADR-085 Inc.3). They were covered the other way — a row
+//! in `dto.rs::TOOL_RESULT_TYPES` plus a hand-built instance in the forbidden-key canary — which
+//! checks strictly less, because an instance only exposes the fields that instance happened to
+//! populate. Moving them here asked a question the instances could not: both `list_analyses`
+//! branches return a `params` blob the contract describes as `{}`, and neither sample had shown
+//! it. See [`JOB_KNOBS_ONLY`] for the answer.
 //!
 //! The same table drives three more checks, so one edit keeps four things honest:
 //! [`tests::every_folded_read_is_claimed_by_its_ledger_line`] (the route exists and the ledger
@@ -89,6 +96,24 @@ pub(crate) struct FoldedRead {
 const POOL_IS_THE_ANSWER: Option<&'static str> = Some(
     "the question this branch answers is which poller owns the work, so the pool is the answer \
      rather than inventory noise",
+);
+
+/// The `params` exemption, shared by the two `list_analyses` branches.
+///
+/// Both columns are written by one function — `JobParams::to_json` — from exactly six validated
+/// fields: `window_secs`, `baseline_secs`, `sensitivity` (numbers), `depth`, `family` (short
+/// enumerated words) and `notify` (a bool). The launcher request never reaches the column; it is
+/// parsed into `JobParams` at the API edge first, so there is no free-text key to carry anything.
+///
+/// **The hand-built instance this replaced could not have found that question**, which is the
+/// argument for the migration in one example: an instance exposes the keys the sample populated,
+/// so an undeclared blob looks like whatever it was filled with. The walk asked.
+///
+/// Not given a `#[schema(value_type = …)]` instead, which would be the stronger fix: the only type
+/// describing these knobs is `JobParams`, and it has eleven fields where `to_json` emits six.
+/// Naming it would publish a shape the column does not have.
+const JOB_KNOBS_ONLY: Option<&str> = Some(
+    "the six-key object JobParams::to_json builds - three numbers, two enumerated words and a      bool, with no free-text key and no credential anywhere on the path",
 );
 
 /// Every folded branch ADR-042 I3a and I3b ship. **This is also each increment's inventory** — the
@@ -376,6 +401,158 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         arg: "coverage",
         method: "GET",
         path: "/api/v1/fleet/coverage",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    // ── ADR-085 Inc.3: tools that were carried by a hand-built instance instead ──
+    //
+    // These eleven reads always mirrored a REST route and returned that route's own type. They
+    // were covered the other way — a row in `dto.rs::TOOL_RESULT_TYPES` plus an instance in the
+    // forbidden-key canary — which checks strictly less: an instance only exposes the fields that
+    // instance happened to populate, where the walk below follows the response schema through
+    // every field of every nested type. `run_rca`'s stored evidence carried `pool` past an
+    // instance and was caught by the walk, which is the whole argument in one example.
+    //
+    // Moving them here also deletes sixteen hand-built values from a 514-line test function. That
+    // is the smaller half of the win and the reason it is worth saying which half is which: the
+    // point is the coverage, not the line count.
+    FoldedRead {
+        tool: "get_topology",
+        arg: "dependency",
+        method: "GET",
+        path: "/api/v1/topology",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_topology",
+        arg: "links",
+        method: "GET",
+        path: "/api/v1/topology/links",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_topology",
+        arg: "overrides",
+        method: "GET",
+        path: "/api/v1/topology/link-overrides",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_topology",
+        arg: "shadow",
+        method: "GET",
+        path: "/api/v1/topology/shadow",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "alert_trends",
+        arg: "top_nodes",
+        method: "GET",
+        path: "/api/v1/alerts/top-nodes",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "alert_trends",
+        arg: "transitions",
+        method: "GET",
+        path: "/api/v1/alerts/transitions",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "alert_trends",
+        arg: "calendar",
+        method: "GET",
+        path: "/api/v1/alerts/calendar",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "list_analyses",
+        arg: "runs",
+        method: "GET",
+        path: "/api/v1/analysis/jobs",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: JOB_KNOBS_ONLY,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "list_analyses",
+        arg: "schedules",
+        method: "GET",
+        path: "/api/v1/analysis/schedules",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: JOB_KNOBS_ONLY,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "get_interface_series",
+        arg: "",
+        method: "GET",
+        path: "/api/v1/nodes/:node_id/interfaces/:ifindex/series",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "fleet_throughput",
+        arg: "",
+        method: "GET",
+        path: "/api/v1/metrics/throughput-range",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "list_discovered_endpoints",
+        arg: "",
+        method: "GET",
+        path: "/api/v1/discovered-endpoints",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "search_analysis_findings",
+        arg: "",
+        method: "GET",
+        path: "/api/v1/analysis/findings",
+        perm: Some(Permission::View),
+        inventory_ids_ok: None,
+        opaque_ok: None,
+        lowered_to: None,
+    },
+    FoldedRead {
+        tool: "top_metrics",
+        arg: "",
+        method: "GET",
+        path: "/api/v1/metrics/top",
         perm: Some(Permission::View),
         inventory_ids_ok: None,
         opaque_ok: None,
