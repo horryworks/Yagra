@@ -85,12 +85,13 @@ impl YagraMcp {
         Parameters(p): Parameters<FleetSummaryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_fleet_summary";
         let Some(kind) = fleet_summary_kind(p.kind.as_deref()) else {
             return bad_fleet_summary_kind(p.kind.as_deref());
         };
         match self.scope_of(&ctx).await {
             Ok(scope) => self.fleet_summary_dispatch(kind, &scope).await,
-            Err(e) => tool_api_error("get_fleet_summary", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -118,16 +119,18 @@ impl YagraMcp {
     /// a model that starts here should not have to know a second tool name to find out that a
     /// third of the answer is stale.
     async fn fleet_coverage_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_fleet_summary";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("get_fleet_summary", "coverage requires live mode");
+            return tool_unavailable(TOOL, "coverage requires live mode");
         };
         match crate::api::fleet::coverage(&self.state, admin, scope).await {
-            Ok(c) => ok_json("get_fleet_summary", &c),
-            Err(e) => tool_api_error("get_fleet_summary", &e),
+            Ok(c) => ok_json(TOOL, &c),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
     async fn fleet_summary_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_fleet_summary";
         // Same tally as `GET /api/v1/fleet/summary`. This used to be a second implementation that
         // inserted only the states it had observed, so an AI client reading `states["warning"]`
         // got a missing key where the WebUI got a zero — the kind of difference that only shows up
@@ -160,7 +163,7 @@ impl YagraMcp {
             flow_tier_enabled: self.state.flows.is_some(),
             log_tier_enabled: self.state.logs.is_some(),
         };
-        ok_json("get_fleet_summary", &dto)
+        ok_json(TOOL, &dto)
     }
 
     #[tool(
@@ -178,9 +181,10 @@ impl YagraMcp {
         Parameters(p): Parameters<ListNodesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_nodes";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.list_nodes_in(p, &scope).await,
-            Err(e) => tool_api_error("list_nodes", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -189,6 +193,7 @@ impl YagraMcp {
         p: ListNodesParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_nodes";
         let limit = p.limit.unwrap_or(50).clamp(1, 100);
         // Parsed through the REST edge's own function, not a copy of it. Rejected, never ignored:
         // an unrecognised token dropped here would widen the answer, and a model that asked for the
@@ -202,7 +207,7 @@ impl YagraMcp {
             p.pool.as_deref(),
         ) {
             Ok(f) => f,
-            Err(e) => return tool_api_error("list_nodes", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         // The scope goes into the query as the same indexed `group_id = ANY(…)` predicate the REST
         // list uses — `NodeListing` takes a `GroupFilter` on every method precisely so no call site
@@ -221,14 +226,14 @@ impl YagraMcp {
             .await
             {
                 Ok((nodes, _truncated)) => Ok(nodes),
-                Err(e) => return tool_api_error("list_nodes", &e),
+                Err(e) => return tool_api_error(TOOL, &e),
             }
         } else {
             self.state.nodes.list_page(groups, None, limit).await
         };
         let nodes = match nodes {
             Ok(n) => n,
-            Err(e) => return tool_error("list_nodes", "list nodes", &e),
+            Err(e) => return tool_error(TOOL, "list nodes", &e),
         };
         // The same state resolution the REST list uses, including its recent-RTT fallback for a
         // node the alert engine has not observed yet. Reading `node_states()` directly — which is
@@ -258,7 +263,7 @@ impl YagraMcp {
                 )
             })
             .collect();
-        ok_json("list_nodes", &out)
+        ok_json(TOOL, &out)
     }
 
     #[tool(
@@ -301,9 +306,10 @@ impl YagraMcp {
         Parameters(p): Parameters<NodeIdParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_node_status";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.node_status_in(p, &scope).await,
-            Err(e) => tool_api_error("get_node_status", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -312,19 +318,20 @@ impl YagraMcp {
         p: NodeIdParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_node_status";
         // Out of scope answers exactly what a nonexistent id answers, deliberately: a distinct
         // "not allowed" would confirm the node exists, which is the enumeration oracle
         // `scope::require_visible_node` avoids on the REST side.
         if !scope.allows_node(&self.state, NodeId::from(p.node_id)) {
-            return tool_unavailable("get_node_status", "no node with that id");
+            return tool_unavailable(TOOL, "no node with that id");
         }
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("get_node_status", "node detail requires live mode");
+            return tool_unavailable(TOOL, "node detail requires live mode");
         };
         let node = match admin.repo.get_node(p.node_id).await {
             Ok(Some(n)) => n,
-            Ok(None) => return tool_unavailable("get_node_status", "no node with that id"),
-            Err(e) => return tool_error("get_node_status", "load node", &e),
+            Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
+            Err(e) => return tool_error(TOOL, "load node", &e),
         };
         let nid = NodeId::from(p.node_id);
         // Same fallback as `list_nodes` above and as the REST detail view: the engine's opinion, or
@@ -370,7 +377,7 @@ impl YagraMcp {
                 })
                 .collect(),
         };
-        ok_json("get_node_status", &dto)
+        ok_json(TOOL, &dto)
     }
 
     #[tool(
@@ -383,9 +390,10 @@ impl YagraMcp {
         Parameters(p): Parameters<ActiveAlertsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_active_alerts";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.active_alerts_in(p, &scope).await,
-            Err(e) => tool_api_error("get_active_alerts", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -394,6 +402,7 @@ impl YagraMcp {
         p: ActiveAlertsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_active_alerts";
         let mut alerts = self.state.alerts.active_alerts();
         // Filtered before the severity cut and the truncation, so a scoped caller's `limit` is
         // spent on rows they can see rather than on rows that are about to be dropped.
@@ -410,10 +419,7 @@ impl YagraMcp {
             // it had been narrowed. Refusing names the three valid values, the way `ack_alert`
             // already does with the same parser.
             let Some(min) = parse_severity(min) else {
-                return tool_bad_params(
-                    "get_active_alerts",
-                    "`min_severity` must be info, warning, or critical",
-                );
+                return tool_bad_params(TOOL, "`min_severity` must be info, warning, or critical");
             };
             alerts.retain(|a| a.severity >= min);
         }
@@ -430,7 +436,7 @@ impl YagraMcp {
                 AlertDto::from_alert(a, name)
             })
             .collect();
-        ok_json("get_active_alerts", &out)
+        ok_json(TOOL, &out)
     }
 
     #[tool(
@@ -450,9 +456,10 @@ impl YagraMcp {
         Parameters(p): Parameters<AlertHistoryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_alert_history";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.alert_history_in(p, &scope).await,
-            Err(e) => tool_api_error("get_alert_history", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -461,8 +468,9 @@ impl YagraMcp {
         p: AlertHistoryParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_alert_history";
         if self.state.history.is_none() {
-            return tool_unavailable("get_alert_history", "alert history requires live mode");
+            return tool_unavailable(TOOL, "alert history requires live mode");
         }
         // The whole page function is the shared seam — parsing, the scope checks on `node_id` /
         // `group_id`, the store call and the post-filter — so this surface cannot validate more
@@ -486,7 +494,7 @@ impl YagraMcp {
         };
         let rows = match crate::api::alerts::history_page(&self.state, scope, input).await {
             Ok(r) => r,
-            Err(e) => return tool_api_error("get_alert_history", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         let names = self
             .resolve_names(scope, rows.iter().filter_map(|r| r.node))
@@ -495,7 +503,7 @@ impl YagraMcp {
             .iter()
             .map(|r| AlertHistoryDto::from_row(r, r.node.and_then(|n| names.get(&n).cloned())))
             .collect();
-        ok_json("get_alert_history", &out)
+        ok_json(TOOL, &out)
     }
 
     #[tool(
@@ -516,9 +524,10 @@ impl YagraMcp {
         Parameters(p): Parameters<QueryMetricsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "query_metrics";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.query_metrics_in(p, &scope).await,
-            Err(e) => tool_api_error("query_metrics", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -527,15 +536,16 @@ impl YagraMcp {
         p: QueryMetricsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "query_metrics";
         // Inside the split, not in the wrapper: a metric name is interpolated into a TSDB query, and
         // the in-process caller (ADR-028 WS-G) needs the same edge validation the session one gets.
         if !crate::api::is_valid_metric_name(&p.metric) {
-            return tool_bad_params("query_metrics", "invalid metric name");
+            return tool_bad_params(TOOL, "invalid metric name");
         }
         // A series is node data. The TSDB has never heard of groups, so this is the only place the
         // question can be asked — and it is the same "no node with that id" a miss gets.
         if !scope.allows_node(&self.state, NodeId::from(p.node_id)) {
-            return tool_unavailable("query_metrics", "no node with that id");
+            return tool_unavailable(TOOL, "no node with that id");
         }
         // How many series share this name on this node, and what they are. Without this the node
         // selector matches every one of them and the store answers with the FIRST — an arbitrary
@@ -563,7 +573,7 @@ impl YagraMcp {
             let e = entry
                 .as_ref()
                 .expect("Refuse is only reachable with an entry");
-            return tool_bad_params("query_metrics", &no_node_level_answer(&p.metric, e));
+            return tool_bad_params(TOOL, &no_node_level_answer(&p.metric, e));
         }
 
         let key = SeriesKey::node(NodeId::from(p.node_id), p.metric.clone());
@@ -606,7 +616,7 @@ impl YagraMcp {
             // query to serve it with. Refusing beats quietly rating one arbitrary series.
             "rate" if agg => {
                 return tool_bad_params(
-                    "query_metrics",
+                    TOOL,
                     &format!(
                         "{} is a gauge with several series on this node; `rate` has no node-level \
                          meaning here. Use mode=range for the node maximum over time.",
@@ -618,7 +628,7 @@ impl YagraMcp {
                 let to = p.to.unwrap_or_else(|| Utc::now().timestamp());
                 let from = p.from.unwrap_or(to - DEFAULT_WINDOW_SECS);
                 if from >= to {
-                    return tool_bad_params("query_metrics", "`from` must be earlier than `to`");
+                    return tool_bad_params(TOOL, "`from` must be earlier than `to`");
                 }
                 let step = crate::api::clamp_range_step(from, to, p.step.unwrap_or(60), 1);
                 let points = if mode == "rate" {
@@ -643,9 +653,9 @@ impl YagraMcp {
                     note,
                 }
             }
-            _ => return tool_bad_params("query_metrics", "`mode` must be latest, range, or rate"),
+            _ => return tool_bad_params(TOOL, "`mode` must be latest, range, or rate"),
         };
-        ok_json("query_metrics", &dto)
+        ok_json(TOOL, &dto)
     }
 
     #[tool(
@@ -805,9 +815,10 @@ impl YagraMcp {
         Parameters(p): Parameters<InterfaceSeriesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_interface_series";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.interface_series_in(p, &scope).await,
-            Err(e) => tool_api_error("get_interface_series", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -816,15 +827,14 @@ impl YagraMcp {
         p: InterfaceSeriesParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(deny) =
-            deny_invisible_node(&self.state, scope, "get_interface_series", p.node_id)
-        {
+        const TOOL: &str = "get_interface_series";
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
             return deny;
         }
         let to = p.to.unwrap_or_else(|| Utc::now().timestamp());
         let from = p.from.unwrap_or(to - DEFAULT_WINDOW_SECS);
         if from >= to {
-            return tool_bad_params("get_interface_series", "`from` must be earlier than `to`");
+            return tool_bad_params(TOOL, "`from` must be earlier than `to`");
         }
         // The eight metric names, the step/lookback rule and the ×8 bytes→bits scaling all live in
         // `api::metrics` — reproducing them here would mean this surface silently answering a
@@ -838,7 +848,7 @@ impl YagraMcp {
             p.step,
         )
         .await;
-        ok_json("get_interface_series", &series)
+        ok_json(TOOL, &series)
     }
 
     #[tool(
@@ -853,9 +863,10 @@ impl YagraMcp {
         Parameters(p): Parameters<TopMetricsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "top_metrics";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.top_metrics_in(p, &scope).await,
-            Err(e) => tool_api_error("top_metrics", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -864,6 +875,7 @@ impl YagraMcp {
         p: TopMetricsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "top_metrics";
         // `ranked_nodes` validates the metric before it reaches the PromQL selector. That check is
         // the reason this is not inlined: it is the same injection boundary the REST edge has, now
         // reachable from a second surface.
@@ -876,8 +888,8 @@ impl YagraMcp {
         )
         .await
         {
-            Ok(ranked) => ok_json("top_metrics", &ranked),
-            Err(e) => tool_api_error("top_metrics", &e),
+            Ok(ranked) => ok_json(TOOL, &ranked),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -894,9 +906,10 @@ impl YagraMcp {
         Parameters(p): Parameters<TopInterfacesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "top_interfaces";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.top_interfaces_in(p, &scope).await,
-            Err(e) => tool_api_error("top_interfaces", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -905,6 +918,7 @@ impl YagraMcp {
         p: TopInterfacesParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "top_interfaces";
         use crate::api::metrics::InterfaceRanking;
         // Two REST endpoints folded behind one vocabulary, because a row is the same thing in both
         // cases: an interface. Splitting on `kind` instead would have made `metric` mean two
@@ -916,25 +930,25 @@ impl YagraMcp {
                     &p.rank_by["delta_".len()..],
                 ) {
                     Ok(d) => d,
-                    Err(e) => return tool_api_error("top_interfaces", &e),
+                    Err(e) => return tool_api_error(TOOL, &e),
                 };
                 InterfaceRanking::delta(direction, p.window_secs)
             }
             metric => {
                 let m = match crate::api::metrics::parse_interface_metric(metric) {
                     Ok(m) => m,
-                    Err(e) => return tool_api_error("top_interfaces", &e),
+                    Err(e) => return tool_api_error(TOOL, &e),
                 };
                 let agg = match crate::api::metrics::parse_top_agg(p.agg.as_deref()) {
                     Ok(a) => a,
-                    Err(e) => return tool_api_error("top_interfaces", &e),
+                    Err(e) => return tool_api_error(TOOL, &e),
                 };
                 InterfaceRanking::Metric(m, agg)
             }
         };
         let ranked =
             crate::api::metrics::ranked_interfaces(&self.state, scope, rank, p.limit).await;
-        ok_json("top_interfaces", &ranked)
+        ok_json(TOOL, &ranked)
     }
 
     #[tool(
@@ -948,9 +962,10 @@ impl YagraMcp {
         Parameters(p): Parameters<FleetThroughputParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "fleet_throughput";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.fleet_throughput_in(p, &scope).await,
-            Err(e) => tool_api_error("fleet_throughput", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -959,12 +974,13 @@ impl YagraMcp {
         p: FleetThroughputParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "fleet_throughput";
         // The refusal lives inside `fleet_throughput`, so this tool cannot serve the fleet's numbers
         // to a scoped caller by forgetting to ask.
         match crate::api::metrics::fleet_throughput(&self.state, scope, p.from, p.to, p.step).await
         {
-            Ok(range) => ok_json("fleet_throughput", &range),
-            Err(e) => tool_api_error("fleet_throughput", &e),
+            Ok(range) => ok_json(TOOL, &range),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -982,9 +998,10 @@ impl YagraMcp {
         Parameters(p): Parameters<NeighborsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_neighbors";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.neighbors_in(p, &scope).await,
-            Err(e) => tool_api_error("get_neighbors", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -993,20 +1010,21 @@ impl YagraMcp {
         p: NeighborsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_neighbors";
         // Scope first, availability second — the same order the REST guards run in. Reversed, a
         // scoped caller learns from the error which nodes exist.
-        if let Some(deny) = deny_invisible_node(&self.state, scope, "get_neighbors", p.node_id) {
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, p.node_id) {
             return deny;
         }
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("get_neighbors", "neighbours require live mode");
+            return tool_unavailable(TOOL, "neighbours require live mode");
         };
         let cursor = match crate::api::neighbors::parse_history_cursor(
             p.before_at.as_deref(),
             p.before_id,
         ) {
             Ok(c) => c,
-            Err(e) => return tool_api_error("get_neighbors", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         // Current and history are one question, so this returns both rather than branching on a
         // mode param — a result whose shape depends on an argument is harder for a model than two
@@ -1016,7 +1034,7 @@ impl YagraMcp {
             // 404 here means "never walked", which `tool_api_error` renders as an availability note
             // rather than an error. Inventing an empty set instead would assert the device has no
             // neighbours, which is a different and false claim.
-            Err(e) => return tool_api_error("get_neighbors", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         let history = match crate::api::neighbors::neighbor_history(
             admin,
@@ -1027,10 +1045,10 @@ impl YagraMcp {
         .await
         {
             Ok(h) => h,
-            Err(e) => return tool_api_error("get_neighbors", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         ok_json_value(
-            "get_neighbors",
+            TOOL,
             serde_json::json!({ "current": current, "history": history }),
         )
     }
@@ -1054,9 +1072,10 @@ impl YagraMcp {
         Parameters(p): Parameters<DiscoveredEndpointsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_discovered_endpoints";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.discovered_endpoints_in(p, &scope).await,
-            Err(e) => tool_api_error("list_discovered_endpoints", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1065,18 +1084,16 @@ impl YagraMcp {
         p: DiscoveredEndpointsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_discovered_endpoints";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable(
-                "list_discovered_endpoints",
-                "endpoint discovery requires live mode",
-            );
+            return tool_unavailable(TOOL, "endpoint discovery requires live mode");
         };
         let cursor = match crate::api::discovery::endpoint_cursor(
             p.before_last_seen.as_deref(),
             p.before_id,
         ) {
             Ok(c) => c,
-            Err(e) => return tool_api_error("list_discovered_endpoints", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         // The scope reaches the SQL rather than being applied here: the rows carry an address and no
         // node id, so the only thing that bounds them is the *observing* node's group, and that join
@@ -1091,8 +1108,8 @@ impl YagraMcp {
         )
         .await
         {
-            Ok(page) => ok_json("list_discovered_endpoints", &page),
-            Err(e) => tool_api_error("list_discovered_endpoints", &e),
+            Ok(page) => ok_json(TOOL, &page),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1110,9 +1127,10 @@ impl YagraMcp {
         Parameters(p): Parameters<ListNodeGroupsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_node_groups";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.list_node_groups_in(p, &scope).await,
-            Err(e) => tool_api_error("list_node_groups", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1121,33 +1139,34 @@ impl YagraMcp {
         p: ListNodeGroupsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_node_groups";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("list_node_groups", "node groups require live mode");
+            return tool_unavailable(TOOL, "node groups require live mode");
         };
         // `visible_groups` keeps the caller's subtree *and* the ancestors above it. This DTO carries
         // `parent_id`, so a filter that dropped the ancestors would leave every visible root
         // pointing at a group that is not in the list.
         let groups = match crate::api::groups::visible_groups(admin, scope).await {
             Ok(g) => g,
-            Err(e) => return tool_api_error("list_node_groups", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         if !p.include_state.unwrap_or(false) {
             let out: Vec<crate::mcp::dto::NodeGroupDto> =
                 groups.iter().map(NodeGroupDto::from_summary).collect();
-            return ok_json("list_node_groups", &out);
+            return ok_json(TOOL, &out);
         }
         // The rollup the site-matrix widget reads, joined onto the tree rather than served as a
         // second bare `group_id → counts` map: a model given the map alone has no names to attach
         // the numbers to, and would have to call this tool again to get them.
         let rollup = match crate::api::fleet::group_summary(&self.state, scope).await {
             Ok(s) => s,
-            Err(e) => return tool_api_error("list_node_groups", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         let out: Vec<crate::mcp::dto::NodeGroupDto> = groups
             .iter()
             .map(|g| NodeGroupDto::from_summary(g).with_state(rollup.groups.get(&g.id)))
             .collect();
-        ok_json("list_node_groups", &out)
+        ok_json(TOOL, &out)
     }
 
     #[tool(
@@ -1164,15 +1183,17 @@ impl YagraMcp {
         &self,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_suppressions";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.list_suppressions_in(&scope).await,
-            Err(e) => tool_api_error("list_suppressions", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
     async fn list_suppressions_in(&self, scope: &NodeScope) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_suppressions";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("list_suppressions", "suppression state requires live mode");
+            return tool_unavailable(TOOL, "suppression state requires live mode");
         };
         // Both lists filter on the row's own target, and a window scoped to a profile or a tag is
         // hidden from a scoped caller entirely — the shared seams carry that, so this surface
@@ -1180,21 +1201,21 @@ impl YagraMcp {
         let windows =
             match crate::api::maintenance::visible_windows(&self.state, scope, admin).await {
                 Ok(w) => w,
-                Err(e) => return tool_api_error("list_suppressions", &e),
+                Err(e) => return tool_api_error(TOOL, &e),
             };
         let mutes = match crate::api::maintenance::visible_mutes(&self.state, scope, admin).await {
             Ok(m) => m,
-            Err(e) => return tool_api_error("list_suppressions", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         // The negative half. Without it a released node reads as suppressed, which is the wrong
         // way round for a tool whose whole point is telling a quiet fleet from a silenced one.
         let exemptions =
             match crate::api::maintenance::visible_exemptions(&self.state, scope, admin).await {
                 Ok(x) => x,
-                Err(e) => return tool_api_error("list_suppressions", &e),
+                Err(e) => return tool_api_error(TOOL, &e),
             };
         ok_json(
-            "list_suppressions",
+            TOOL,
             &crate::mcp::dto::SuppressionsDto {
                 maintenance_windows: windows,
                 mutes,
@@ -1218,9 +1239,10 @@ impl YagraMcp {
         Parameters(p): Parameters<AlertTrendsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "alert_trends";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.alert_trends_in(p, &scope).await,
-            Err(e) => tool_api_error("alert_trends", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1229,6 +1251,7 @@ impl YagraMcp {
         p: AlertTrendsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "alert_trends";
         // Three endpoints behind one `kind`, following `top_flows`: the row type varies, but the
         // parameters mean the same thing in every branch (a window and a count), so there is no
         // argument whose meaning another argument changes — which is what made folding the metric
@@ -1243,24 +1266,24 @@ impl YagraMcp {
                 )
                 .await
                 {
-                    Ok(ranked) => ok_json("alert_trends", &ranked),
-                    Err(e) => tool_api_error("alert_trends", &e),
+                    Ok(ranked) => ok_json(TOOL, &ranked),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             "transitions" => {
                 match crate::api::alerts::recent_transitions(&self.state, scope, p.limit).await {
-                    Ok(rows) => ok_json("alert_trends", &rows),
-                    Err(e) => tool_api_error("alert_trends", &e),
+                    Ok(rows) => ok_json(TOOL, &rows),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             "calendar" => {
                 match crate::api::alerts::alert_calendar_buckets(&self.state, scope, p.days).await {
-                    Ok(rows) => ok_json("alert_trends", &rows),
-                    Err(e) => tool_api_error("alert_trends", &e),
+                    Ok(rows) => ok_json(TOOL, &rows),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             other => tool_bad_params(
-                "alert_trends",
+                TOOL,
                 &format!("unknown kind {other:?}; must be top_nodes, transitions or calendar"),
             ),
         }
@@ -1283,9 +1306,10 @@ impl YagraMcp {
         Parameters(p): Parameters<SearchFindingsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "search_analysis_findings";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.search_analysis_findings_in(p, &scope).await,
-            Err(e) => tool_api_error("search_analysis_findings", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1294,6 +1318,7 @@ impl YagraMcp {
         p: SearchFindingsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "search_analysis_findings";
         // The seam validates the tool/severity vocabularies and the cursor, and scope-checks a
         // named node or group, *before* it looks at availability — so a filter naming a node the
         // caller cannot see reads as "no such node" rather than as an empty result set.
@@ -1312,8 +1337,8 @@ impl YagraMcp {
             limit: p.limit,
         };
         match crate::api::analysis::search_saved_findings(&self.state, scope, q).await {
-            Ok(rows) => ok_json("search_analysis_findings", &rows),
-            Err(e) => tool_api_error("search_analysis_findings", &e),
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1340,9 +1365,10 @@ impl YagraMcp {
         Parameters(p): Parameters<TopologyParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_topology";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.topology_in(p, &scope).await,
-            Err(e) => tool_api_error("get_topology", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1351,8 +1377,9 @@ impl YagraMcp {
         p: TopologyParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_topology";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("get_topology", "topology requires live mode");
+            return tool_unavailable(TOOL, "topology requires live mode");
         };
         // Same assembly as the REST handlers; only the page bound differs, because an AI client
         // wants a handful of edges where the graph view wants the fleet.
@@ -1363,7 +1390,7 @@ impl YagraMcp {
                     Some(Ok(id)) => Some(id),
                     Some(Err(_)) => {
                         return tool_bad_params(
-                            "get_topology",
+                            TOOL,
                             "`after` must be a node UUID when kind is dependency",
                         )
                     }
@@ -1372,40 +1399,37 @@ impl YagraMcp {
                 match crate::api::topology::topology_page(&self.state, admin, scope, after, limit)
                     .await
                 {
-                    Ok(page) => ok_json("get_topology", &page),
-                    Err(e) => tool_api_error("get_topology", &e),
+                    Ok(page) => ok_json(TOOL, &page),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             TopologyKind::Links => {
                 let after = match p.after.as_deref().map(str::parse::<i64>) {
                     Some(Ok(id)) => Some(id),
                     Some(Err(_)) => {
-                        return tool_bad_params(
-                            "get_topology",
-                            "`after` must be a number when kind is links",
-                        )
+                        return tool_bad_params(TOOL, "`after` must be a number when kind is links")
                     }
                     None => None,
                 };
                 match crate::api::topology::topology_link_page(admin, scope, after, limit).await {
-                    Ok(page) => ok_json("get_topology", &page),
-                    Err(e) => tool_api_error("get_topology", &e),
+                    Ok(page) => ok_json(TOOL, &page),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             TopologyKind::Overrides => {
                 match crate::api::topology::link_override_list(&self.state, admin, scope).await {
-                    Ok(list) => ok_json("get_topology", &list),
-                    Err(e) => tool_api_error("get_topology", &e),
+                    Ok(list) => ok_json(TOOL, &list),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             TopologyKind::Shadow => {
                 match crate::api::topology::topology_shadow(&self.state, admin, scope).await {
-                    Ok(s) => ok_json("get_topology", &s),
-                    Err(e) => tool_api_error("get_topology", &e),
+                    Ok(s) => ok_json(TOOL, &s),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             TopologyKind::Unknown => tool_bad_params(
-                "get_topology",
+                TOOL,
                 "`kind` must be one of: dependency, links, overrides, shadow",
             ),
         }
@@ -1427,9 +1451,10 @@ impl YagraMcp {
         Parameters(p): Parameters<TopFlowsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "top_flows";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.top_flows_in(p, &scope).await,
-            Err(e) => tool_api_error("top_flows", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1438,9 +1463,10 @@ impl YagraMcp {
         p: TopFlowsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "top_flows";
         match p.node_id {
             Some(node_id) => {
-                if let Some(deny) = deny_invisible_node(&self.state, scope, "top_flows", node_id) {
+                if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, node_id) {
                     return deny;
                 }
             }
@@ -1452,7 +1478,7 @@ impl YagraMcp {
             // the availability note becomes an oracle for the deployment's configuration.
             None => {
                 if let Err(e) = crate::api::flow::fleet_flow_is_unattributed(scope) {
-                    return tool_api_error("top_flows", &e);
+                    return tool_api_error(TOOL, &e);
                 }
             }
         }
@@ -1461,7 +1487,7 @@ impl YagraMcp {
         // limit clamp.
         let agg = match crate::api::flow::FlowAgg::parse(p.kind.as_deref().unwrap_or("talkers")) {
             Ok(a) => a,
-            Err(e) => return tool_api_error("top_flows", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         let dir = if p.dir.as_deref() == Some("src") {
             AsDir::Src
@@ -1469,8 +1495,8 @@ impl YagraMcp {
             AsDir::Dst
         };
         match crate::api::flow::flow_agg_rows(&self.state, &flow_query_from(&p), dir, agg).await {
-            Ok(rows) => ok_json("top_flows", &rows),
-            Err(e) => tool_api_error("top_flows", &e),
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1488,9 +1514,10 @@ impl YagraMcp {
         Parameters(p): Parameters<TopFlowsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "flow_fanout";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.flow_fanout_in(p, &scope).await,
-            Err(e) => tool_api_error("flow_fanout", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1499,6 +1526,7 @@ impl YagraMcp {
         p: TopFlowsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "flow_fanout";
         // Node-scoped only, deliberately. `FlowQuery.node_id` makes a fleet-wide form structurally
         // possible, but `fanout_by_src` groups by source, so across exporters a flow seen twice is
         // counted twice and "distinct destinations contacted" inflates by an amount nobody can
@@ -1506,20 +1534,20 @@ impl YagraMcp {
         // be an MCP-only capability with a known correctness caveat.
         let Some(node_id) = p.node_id else {
             return tool_bad_params(
-                "flow_fanout",
+                TOOL,
                 "`node_id` is required: fan-out is counted per source, so a fleet-wide form would \
                  double-count any flow two exporters both saw. Query one exporter at a time.",
             );
         };
-        if let Some(deny) = deny_invisible_node(&self.state, scope, "flow_fanout", node_id) {
+        if let Some(deny) = deny_invisible_node(&self.state, scope, TOOL, node_id) {
             return deny;
         }
         let Some(flows) = self.state.flows.as_ref() else {
-            return tool_unavailable("flow_fanout", "flow tier not enabled on this core");
+            return tool_unavailable(TOOL, "flow tier not enabled on this core");
         };
         match flows.fanout_by_src(&flow_query_from(&p)).await {
-            Ok(rows) => ok_json("flow_fanout", &rows),
-            Err(e) => tool_error("flow_fanout", "query flow fan-out", &e),
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_error(TOOL, "query flow fan-out", &e),
         }
     }
 
@@ -1544,19 +1572,20 @@ impl YagraMcp {
         Parameters(p): Parameters<RunAnalysisParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "run_analysis";
         // Operator and up, matching `POST /api/v1/analysis/jobs`. An analysis reads what a Viewer
         // could already query, so this gate is not about disclosure — it is that launching one is
         // incident-response work with a real compute cost, and the two surfaces must agree on who
         // may do it. They did not: this was `View` while REST was admin-only.
         let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
-            return tool_forbidden("run_analysis", "this token lacks ack-alerts permission");
+            return tool_forbidden(TOOL, "this token lacks ack-alerts permission");
         };
         let visible = match self.scope_of(&ctx).await {
             Ok(s) => s,
-            Err(e) => return tool_api_error("run_analysis", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("run_analysis", "analysis requires live mode");
+            return tool_unavailable(TOOL, "analysis requires live mode");
         };
         let scope = p.scope.as_deref().unwrap_or("all");
         // The same launch-target rule as `POST /api/v1/analysis/jobs`: a run's findings are read
@@ -1566,7 +1595,7 @@ impl YagraMcp {
         if let Err(e) =
             crate::api::analysis::require_launchable_scope(&self.state, &visible, scope, p.scope_id)
         {
-            return tool_api_error("run_analysis", &e);
+            return tool_api_error(TOOL, &e);
         }
         // A readable label for the runs list (mirrors the WebUI's launch drawer).
         let scope_label = match (scope, p.scope_id) {
@@ -1616,7 +1645,7 @@ impl YagraMcp {
             Ok(j) => j,
             // 429 (capacity/rate) arrives here as a *successful* unavailable-with-reason result so
             // the model retries rather than treating a transient refusal as a hard failure.
-            Err(e) => return tool_api_error("run_analysis", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         // Block-poll until the job reaches a terminal state or the wait budget is spent.
         let deadline = Instant::now() + ANALYSIS_MAX_WAIT;
@@ -1631,19 +1660,17 @@ impl YagraMcp {
                             "note": "analysis still running after the wait budget; \
                                      call get_analysis_findings with job.id to fetch results",
                         });
-                        return ok_json_value("run_analysis", body);
+                        return ok_json_value(TOOL, body);
                     }
                     tokio::time::sleep(ANALYSIS_POLL).await;
                 }
-                Ok(None) => {
-                    return tool_unavailable("run_analysis", "job vanished before completion")
-                }
-                Err(e) => return tool_error("run_analysis", "poll analysis", &e),
+                Ok(None) => return tool_unavailable(TOOL, "job vanished before completion"),
+                Err(e) => return tool_error(TOOL, "poll analysis", &e),
             }
         };
         match crate::api::analysis::report(admin, final_job.id).await {
-            Ok(r) => ok_json_value("run_analysis", self.scoped_report_body(&visible, r)),
-            Err(e) => tool_api_error("run_analysis", &e),
+            Ok(r) => ok_json_value(TOOL, self.scoped_report_body(&visible, r)),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1657,9 +1684,10 @@ impl YagraMcp {
         Parameters(p): Parameters<AnalysisJobIdParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_analysis_findings";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.analysis_findings_in(p, &scope).await,
-            Err(e) => tool_api_error("get_analysis_findings", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1668,22 +1696,20 @@ impl YagraMcp {
         p: AnalysisJobIdParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_analysis_findings";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("get_analysis_findings", "analysis requires live mode");
+            return tool_unavailable(TOOL, "analysis requires live mode");
         };
         let report = match crate::api::analysis::report(admin, p.job_id).await {
             Ok(r) => r,
-            Err(e) => return tool_api_error("get_analysis_findings", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         // The run row is the unit of visibility — somebody else's fleet-wide run is not readable
         // just because its id was guessed or came from a shared transcript.
         if let Err(e) = crate::api::analysis::require_visible_job(&self.state, scope, &report.job) {
-            return tool_api_error("get_analysis_findings", &e);
+            return tool_api_error(TOOL, &e);
         }
-        ok_json_value(
-            "get_analysis_findings",
-            self.scoped_report_body(scope, report),
-        )
+        ok_json_value(TOOL, self.scoped_report_body(scope, report))
     }
 
     #[tool(
@@ -1698,9 +1724,10 @@ impl YagraMcp {
         Parameters(p): Parameters<ListAnalysesParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_analyses";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.list_analyses_in(p, &scope).await,
-            Err(e) => tool_api_error("list_analyses", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1709,6 +1736,7 @@ impl YagraMcp {
         p: ListAnalysesParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "list_analyses";
         // Folded onto the runs list rather than given its own tool: both answer "what analysis is
         // there", both are post-filtered on the row's own target, and a schedule is what a run will
         // be. The `limit` only applies to runs, which is why it is documented that way.
@@ -1716,19 +1744,19 @@ impl YagraMcp {
             "runs" => {}
             "schedules" => {
                 return match crate::api::analysis::visible_schedules(&self.state, scope).await {
-                    Ok(rows) => ok_json("list_analyses", &rows),
-                    Err(e) => tool_api_error("list_analyses", &e),
+                    Ok(rows) => ok_json(TOOL, &rows),
+                    Err(e) => tool_api_error(TOOL, &e),
                 };
             }
             other => {
                 return tool_bad_params(
-                    "list_analyses",
+                    TOOL,
                     &format!("unknown kind {other:?}; must be runs or schedules"),
                 );
             }
         }
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("list_analyses", "analysis requires live mode");
+            return tool_unavailable(TOOL, "analysis requires live mode");
         };
         // A smaller page than the REST default (50): an AI client reads the runs list to orient,
         // not to render a table.
@@ -1737,7 +1765,7 @@ impl YagraMcp {
         // reading the rows rather than by re-asking. The seam is shared so the cap cannot differ.
         let jobs = match admin.analysis.list(limit, &Default::default()).await {
             Ok(js) => js,
-            Err(e) => return tool_error("list_analyses", "list analyses", &e),
+            Err(e) => return tool_error(TOOL, "list analyses", &e),
         };
         // Post-filtered on each run's own target, matching `GET /api/v1/analysis/jobs`. A short
         // page is correct: this is "recent activity", not a cursor-paged collection.
@@ -1746,7 +1774,7 @@ impl YagraMcp {
             .filter(|j| scope.allows_target(&self.state, crate::api::analysis::row_target(j)))
             .map(AnalysisJobDto::from_job)
             .collect();
-        ok_json("list_analyses", &out)
+        ok_json(TOOL, &out)
     }
 
     #[tool(
@@ -1766,9 +1794,10 @@ impl YagraMcp {
         Parameters(p): Parameters<EventSearchParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "search_events";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.search_events_in(p, &scope).await,
-            Err(e) => tool_api_error("search_events", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1777,8 +1806,9 @@ impl YagraMcp {
         p: EventSearchParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "search_events";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("search_events", "event search requires live mode");
+            return tool_unavailable(TOOL, "event search requires live mode");
         };
         // Same validation edge as `GET /api/v1/events`. This was a second copy, and the copies had
         // drifted on the term-length cap: the REST edge capped it and this one did not, so the
@@ -1803,7 +1833,7 @@ impl YagraMcp {
                 src_not: p.src_not.unwrap_or(false),
             }) {
                 Ok(f) => f,
-                Err(e) => return tool_api_error("search_events", &e),
+                Err(e) => return tool_api_error(TOOL, &e),
             };
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
         // Same store routing too, including resolving a node-name term to ids so the name never
@@ -1811,7 +1841,7 @@ impl YagraMcp {
         let rows =
             match crate::api::eventlog::search(&self.state, admin, scope, &filter, limit).await {
                 Ok(r) => r,
-                Err(e) => return tool_api_error("search_events", &e),
+                Err(e) => return tool_api_error(TOOL, &e),
             };
         let names = self
             .resolve_names(scope, rows.iter().filter_map(|r| r.node_id))
@@ -1820,7 +1850,7 @@ impl YagraMcp {
             .iter()
             .map(|r| EventDto::from_row(r, r.node_id.and_then(|id| names.get(&id).cloned())))
             .collect();
-        ok_json("search_events", &out)
+        ok_json(TOOL, &out)
     }
 
     #[tool(
@@ -1834,9 +1864,10 @@ impl YagraMcp {
         Parameters(p): Parameters<EventStatsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "event_stats";
         match self.scope_of(&ctx).await {
             Ok(scope) => self.event_stats_in(p, &scope).await,
-            Err(e) => tool_api_error("event_stats", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -1845,8 +1876,9 @@ impl YagraMcp {
         p: EventStatsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "event_stats";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("event_stats", "event stats requires live mode");
+            return tool_unavailable(TOOL, "event stats requires live mode");
         };
         let to_s = p.to.unwrap_or_else(|| Utc::now().timestamp());
         let from_s = p.from.unwrap_or(to_s - 86_400);
@@ -1872,7 +1904,7 @@ impl YagraMcp {
         .await
         {
             Ok(b) => b,
-            Err(e) => return tool_error("event_stats", "event volume", &e),
+            Err(e) => return tool_error(TOOL, "event volume", &e),
         };
         // Both of the per-node views carry a `node_id`, so the scope filter runs here rather than
         // in the store — unlike `GET /api/v1/events/stats`, whose grouped counts arrive already
@@ -1953,7 +1985,7 @@ impl YagraMcp {
             "unmatched_signatures": unmatched,
             "note": note,
         });
-        ok_json_value("event_stats", body)
+        ok_json_value(TOOL, body)
     }
 
     #[tool(
@@ -1967,19 +1999,17 @@ impl YagraMcp {
         Parameters(p): Parameters<AckAlertParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "ack_alert";
         let Some(identity) = authed_for(&ctx, Permission::AckAlerts) else {
-            return tool_forbidden("ack_alert", "this token lacks ack-alerts permission");
+            return tool_forbidden(TOOL, "this token lacks ack-alerts permission");
         };
         // A write is scoped like a read, and this one is also a read: the 200/404 difference would
         // otherwise tell a scoped caller whether an invisible node currently has that alert.
-        if let Some(deny) = self
-            .deny_invisible_node_ctx(&ctx, "ack_alert", p.node_id)
-            .await
-        {
+        if let Some(deny) = self.deny_invisible_node_ctx(&ctx, TOOL, p.node_id).await {
             return deny;
         }
         let Some(severity) = parse_severity(&p.severity) else {
-            return tool_bad_params("ack_alert", "`severity` must be info, warning, or critical");
+            return tool_bad_params(TOOL, "`severity` must be info, warning, or critical");
         };
         let acked = p.acked.unwrap_or(true);
         // `apply_ack` persists *and* broadcasts. Both surfaces used to do the two steps
@@ -2001,7 +2031,7 @@ impl YagraMcp {
         if let Err(e) =
             crate::api::alerts::apply_ack(&self.state, &subject, p.check_id, severity, view).await
         {
-            return tool_api_error("ack_alert", &e);
+            return tool_api_error(TOOL, &e);
         }
         let verb = if acked {
             "ack_alert"
@@ -2021,7 +2051,7 @@ impl YagraMcp {
         )
         .await;
         ok_json_value(
-            "ack_alert",
+            TOOL,
             serde_json::json!({ "acked": acked, "node_id": p.node_id, "check_id": p.check_id }),
         )
     }
@@ -2037,20 +2067,15 @@ impl YagraMcp {
         Parameters(p): Parameters<OpenMaintenanceParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "open_maintenance";
         let Some(identity) = authed_for(&ctx, Permission::ManageMaintenance) else {
-            return tool_forbidden(
-                "open_maintenance",
-                "this token lacks manage-maintenance permission",
-            );
+            return tool_forbidden(TOOL, "this token lacks manage-maintenance permission");
         };
-        if let Some(deny) = self
-            .deny_invisible_node_ctx(&ctx, "open_maintenance", p.node_id)
-            .await
-        {
+        if let Some(deny) = self.deny_invisible_node_ctx(&ctx, TOOL, p.node_id).await {
             return deny;
         }
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("open_maintenance", "maintenance requires live mode");
+            return tool_unavailable(TOOL, "maintenance requires live mode");
         };
         // Explicit bounds go through the same parse + ordering check as the REST edge; a window
         // that ends before it starts is stored happily and suppresses nothing, so the operator
@@ -2058,7 +2083,7 @@ impl YagraMcp {
         let (starts, ends) = match (p.starts_at.as_deref(), p.ends_at.as_deref()) {
             (Some(s), Some(e)) => match crate::api::maintenance::window_bounds(s, e) {
                 Ok(pair) => pair,
-                Err(err) => return tool_api_error("open_maintenance", &err),
+                Err(err) => return tool_api_error(TOOL, &err),
             },
             // This surface's own convenience: "mute it for an hour" without composing timestamps.
             // The duration is clamped, so the ordering check below can only pass — it runs anyway
@@ -2068,21 +2093,21 @@ impl YagraMcp {
                 let now = Utc::now();
                 let pair = (now, now + chrono::Duration::minutes(mins));
                 if let Err(err) = crate::api::maintenance::check_order(pair.0, pair.1) {
-                    return tool_api_error("open_maintenance", &err);
+                    return tool_api_error(TOOL, &err);
                 }
                 pair
             }
             _ => {
                 return tool_bad_params(
-                    "open_maintenance",
+                    TOOL,
                     "provide both starts_at and ends_at, or neither (use duration_mins)",
                 )
             }
         };
         let node = match admin.repo.get_node(p.node_id).await {
             Ok(Some(n)) => n,
-            Ok(None) => return tool_unavailable("open_maintenance", "no node with that id"),
-            Err(e) => return tool_error("open_maintenance", "load node", &e),
+            Ok(None) => return tool_unavailable(TOOL, "no node with that id"),
+            Err(e) => return tool_error(TOOL, "load node", &e),
         };
         let name = p
             .name
@@ -2102,7 +2127,7 @@ impl YagraMcp {
                 )
                 .await;
                 ok_json_value(
-                    "open_maintenance",
+                    TOOL,
                     serde_json::json!({
                         "created": true,
                         "window_id": id,
@@ -2112,7 +2137,7 @@ impl YagraMcp {
                     }),
                 )
             }
-            Err(e) => tool_error("open_maintenance", "create maintenance window", &e),
+            Err(e) => tool_error(TOOL, "create maintenance window", &e),
         }
     }
 
@@ -2125,28 +2150,26 @@ impl YagraMcp {
         Parameters(p): Parameters<NodeIdParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "poll_now";
         let Some(identity) = authed_for(&ctx, Permission::ManageConfig) else {
-            return tool_forbidden("poll_now", "this token lacks manage-config permission");
+            return tool_forbidden(TOOL, "this token lacks manage-config permission");
         };
         // Belt-and-braces: `ManageConfig` is Admin, and an Admin cannot hold a group scope
         // (`auth.rs::ADMIN_IS_UNSCOPED`), so this can only ever pass today. It is here so the tool
         // does not depend on that invariant holding somewhere else — the check is one line, and
         // "a permission that happens to imply unscoped" is not a property to build on silently.
-        if let Some(deny) = self
-            .deny_invisible_node_ctx(&ctx, "poll_now", p.node_id)
-            .await
-        {
+        if let Some(deny) = self.deny_invisible_node_ctx(&ctx, TOOL, p.node_id).await {
             return deny;
         }
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("poll_now", "poll requires live mode");
+            return tool_unavailable(TOOL, "poll requires live mode");
         };
         // Same dispatch as `POST /api/v1/nodes/:id/poll`, including resolving the node's effective
         // pool (own > folder > default) — a manual poll published to the wrong pool's subject has
         // no poller listening for it, and that is not a mistake worth being able to make twice.
         let result = match crate::api::nodes::poll_now(admin, p.node_id).await {
             Ok(r) => r,
-            Err(e) => return tool_api_error("poll_now", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         record_audit(
             &self.state,
@@ -2155,7 +2178,7 @@ impl YagraMcp {
             202,
         )
         .await;
-        ok_json("poll_now", &result)
+        ok_json(TOOL, &result)
     }
 
     #[tool(
@@ -2182,18 +2205,19 @@ impl YagraMcp {
         Parameters(p): Parameters<SystemHealthParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_system_health";
         let Some(section) = HealthSection::parse(&p.section) else {
             return bad_health_section(&p.section);
         };
         // Resolve → authorize → scope → availability. The permission check sits above every store
         // lookup so a caller who may not read a section cannot infer, from a 403-vs-unavailable,
         // whether this deployment has that subsystem configured at all.
-        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_system_health", section.arg()) {
+        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, section.arg()) {
             return deny;
         }
         let scope = match self.scope_of(&ctx).await {
             Ok(s) => s,
-            Err(e) => return tool_api_error("get_system_health", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         self.system_health_in(section, p, &scope).await
     }
@@ -2333,12 +2357,13 @@ impl YagraMcp {
         Parameters(p): Parameters<StateHistoryParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(deny) = self.deny_unless_permitted(&ctx, "fleet_state_history", "") {
+        const TOOL: &str = "fleet_state_history";
+        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, "") {
             return deny;
         }
         match self.scope_of(&ctx).await {
             Ok(scope) => self.state_history_in(p, &scope).await,
-            Err(e) => tool_api_error("fleet_state_history", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -2347,13 +2372,14 @@ impl YagraMcp {
         p: StateHistoryParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "fleet_state_history";
         let Some(admin) = self.state.admin.as_ref() else {
-            return tool_unavailable("fleet_state_history", "state history requires live mode");
+            return tool_unavailable(TOOL, "state history requires live mode");
         };
         // The refusal lives inside the seam, so it cannot be forgotten here.
         match crate::api::fleet::state_history(admin, scope, p.from, p.to).await {
-            Ok(h) => ok_json("fleet_state_history", &h),
-            Err(e) => tool_api_error("fleet_state_history", &e),
+            Ok(h) => ok_json(TOOL, &h),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -2371,13 +2397,14 @@ impl YagraMcp {
         Parameters(p): Parameters<ReportRunsParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_report_runs";
         let arg = if p.run_id.is_some() { "detail" } else { "list" };
-        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_report_runs", arg) {
+        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, arg) {
             return deny;
         }
         match self.scope_of(&ctx).await {
             Ok(scope) => self.report_runs_in(p, &scope).await,
-            Err(e) => tool_api_error("get_report_runs", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -2386,11 +2413,12 @@ impl YagraMcp {
         p: ReportRunsParams,
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_report_runs";
         match p.run_id {
             Some(id) => {
                 match crate::api::reports::report_run_detail(&self.state, scope, id).await {
-                    Ok(r) => ok_json("get_report_runs", &r),
-                    Err(e) => tool_api_error("get_report_runs", &e),
+                    Ok(r) => ok_json(TOOL, &r),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
             None => {
@@ -2400,11 +2428,11 @@ impl YagraMcp {
                     p.since.as_deref(),
                 ) {
                     Ok(f) => f,
-                    Err(e) => return tool_api_error("get_report_runs", &e),
+                    Err(e) => return tool_api_error(TOOL, &e),
                 };
                 match crate::api::reports::report_runs(&self.state, scope, p.limit, &filter).await {
-                    Ok(rows) => ok_json("get_report_runs", &rows),
-                    Err(e) => tool_api_error("get_report_runs", &e),
+                    Ok(rows) => ok_json(TOOL, &rows),
+                    Err(e) => tool_api_error(TOOL, &e),
                 }
             }
         }
@@ -2426,13 +2454,15 @@ impl YagraMcp {
         Parameters(p): Parameters<AuditParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
-        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_audit", "") {
+        const TOOL: &str = "get_audit";
+        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, "") {
             return deny;
         }
         self.audit_in(p).await
     }
 
     async fn audit_in(&self, p: AuditParams) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_audit";
         // Availability is checked **here** rather than left to `audit_page`, and the two surfaces
         // therefore order the two failures differently: REST answers 400 for a malformed filter on
         // a deployment with no log, this answers "unavailable" first. That is deliberate and
@@ -2440,7 +2470,7 @@ impl YagraMcp {
         // stops asking, whereas a 400 about a cursor invites it to retry with a different cursor
         // forever. `the_audit_tool_reports_a_missing_write_side_rather_than_an_empty_log` pins it.
         if self.state.admin.is_none() {
-            return tool_unavailable("get_audit", "the audit log requires live mode");
+            return tool_unavailable(TOOL, "the audit log requires live mode");
         }
         // An unparseable cursor is a 400 here as it is over REST, never a silent jump back to the
         // newest page — a client walking the log would otherwise loop forever on page one. The
@@ -2456,8 +2486,8 @@ impl YagraMcp {
             status: p.status.as_deref(),
         };
         match crate::api::audit::audit_page(&self.state, input).await {
-            Ok(rows) => ok_json("get_audit", &rows),
-            Err(e) => tool_api_error("get_audit", &e),
+            Ok(rows) => ok_json(TOOL, &rows),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -2472,17 +2502,18 @@ impl YagraMcp {
         Parameters(p): Parameters<DnsChainParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_dns_chain";
         let arg = if p.history.unwrap_or(false) {
             "history"
         } else {
             "current"
         };
-        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_dns_chain", arg) {
+        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, arg) {
             return deny;
         }
         match self.scope_of(&ctx).await {
             Ok(scope) => self.dns_chain_in(p, &scope).await,
-            Err(e) => tool_api_error("get_dns_chain", &e),
+            Err(e) => tool_api_error(TOOL, &e),
         }
     }
 
@@ -2641,6 +2672,7 @@ impl YagraMcp {
         Parameters(p): Parameters<ConfigParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "get_config";
         let Some(kind) = ConfigKind::parse(&p.kind) else {
             return bad_config_kind(&p.kind);
         };
@@ -2648,12 +2680,12 @@ impl YagraMcp {
         // reason: the permission check sits above every store lookup so a caller who may not read a
         // kind cannot infer, from a 403-vs-unavailable, whether this deployment has that subsystem
         // configured at all.
-        if let Some(deny) = self.deny_unless_permitted(&ctx, "get_config", kind.arg()) {
+        if let Some(deny) = self.deny_unless_permitted(&ctx, TOOL, kind.arg()) {
             return deny;
         }
         let scope = match self.scope_of(&ctx).await {
             Ok(s) => s,
-            Err(e) => return tool_api_error("get_config", &e),
+            Err(e) => return tool_api_error(TOOL, &e),
         };
         self.config_in(kind, p, &scope).await
     }
@@ -2665,7 +2697,6 @@ impl YagraMcp {
         scope: &NodeScope,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "get_config";
-
         // Required-id and scope both run **above** the availability check, which is the ordering
         // `get_system_health` documents and the reason this prelude exists rather than a guard per
         // arm: a caller who cannot see a node must get the same answer whether or not this
@@ -4873,6 +4904,139 @@ mod tests {
 
     fn json_of(r: &CallToolResult) -> Value {
         serde_json::from_str(&text_of(r)).expect("tool result body is JSON")
+    }
+
+    /// **Every tool name written in this file is a tool that exists** (ADR-085 Inc.2).
+    ///
+    /// A tool's name is derived from its `async fn`, and then written out again by hand wherever a
+    /// body records a metric or refuses. There were 179 such sites before this increment and only
+    /// the `ok_json` ones were checked by anything — `every_typed_tool_result_is_canaried` reads
+    /// them to find the result type. The other ~120 reach [`record_tool`], which puts the string
+    /// into a **Prometheus label** (`yagra_mcp_tool_calls_total{tool="…"}`) and a `tracing` field.
+    /// A typo there mints a series for a tool that does not exist: it compiles, it passes every
+    /// test, and it is invisible on screen. Nothing was wrong when this was written — all 179 were
+    /// correct — so this is the guard the next edit needs, not a repair of the last one.
+    ///
+    /// Two spellings are checked, because the increment deliberately left both:
+    ///   1. `const TOOL` — one per function that talks about a tool (68 of them),
+    ///   2. a literal still passed straight to a helper — the three `bad_*` refusals, used once
+    ///      each in a function named after its tool, where a constant would be noise.
+    ///
+    /// ⚠️ **What this cannot catch: a function naming a *different real* tool.** It checks the set
+    /// of names, not the assignment. The wrapper half is exact — see the sibling assertion below —
+    /// but a `*_in` body has no mechanical link back to its tool, so `list_nodes_in` declaring
+    /// `get_node_status` would pass here. Said out loud rather than left implied, the way
+    /// `openapi.rs::every_documented_body_is_the_type_its_handler_returns` states its own
+    /// partiality: a guard whose blind spot is undocumented gets trusted for what it never did.
+    #[test]
+    fn every_tool_name_written_here_is_a_tool_that_exists() {
+        // Needles assembled at runtime: this test reads its own file, so a literal one would match
+        // itself and the test would describe nothing.
+        let src = include_str!("tools.rs");
+        let surface = src
+            .split(&format!("#[{}(test)]", "cfg"))
+            .next()
+            .expect("the surface ends where the test module begins");
+        let declared = crate::api::route_table::declared_mcp_tools();
+
+        let mut names: Vec<(String, &str)> = Vec::new();
+        let const_needle = format!("const {}: &str = {}", "TOOL", '"');
+        for chunk in surface.split(&const_needle).skip(1) {
+            names.push((
+                chunk.chars().take_while(|c| *c != '"').collect(),
+                "const TOOL",
+            ));
+        }
+        for helper in [
+            "ok_json_value",
+            "ok_json",
+            "tool_api_error",
+            "tool_bad_params",
+            "tool_error",
+            "tool_unavailable",
+            "tool_forbidden",
+        ] {
+            for name in call_sites_of(surface, helper) {
+                names.push((name, "a literal argument"));
+            }
+        }
+
+        for (name, how) in &names {
+            assert!(
+                declared.contains(name),
+                "`{name}` is written here as {how} but names no tool. It would be recorded as a \
+                 Prometheus label and read as a tool that exists; the tools that do exist are: {}",
+                declared.iter().cloned().collect::<Vec<_>>().join(", ")
+            );
+        }
+
+        // The load-bearing half. Every assertion above is vacuously true if the parse stops
+        // matching, and a source-text parser stops matching for reasons as small as rustfmt
+        // rewrapping a line — so "found nothing" must fail rather than pass (ADR-083's lesson,
+        // where mis-pointing a `.split()` went quietly green).
+        assert!(
+            names.len() >= 65,
+            "only found {} tool names in this file; the parser drifted and this test now checks \
+             almost nothing",
+            names.len()
+        );
+    }
+
+    /// …and each `#[tool]` wrapper names **itself** (ADR-085 Inc.2).
+    ///
+    /// This is the half its sibling cannot do: rmcp derives the published tool name from the
+    /// `async fn`, so for a wrapper the correct constant is knowable and a mismatch is a real
+    /// mistake rather than an unverifiable choice. It is also where a copy-pasted wrapper goes
+    /// wrong — the block below the one you copied keeps the name of the block above.
+    #[test]
+    fn every_tool_wrapper_declares_its_own_name() {
+        let src = include_str!("tools.rs");
+        let attr = format!("#[{}(", "tool");
+        let const_needle = format!("const {}: &str = {}", "TOOL", '"');
+        let mut checked = 0;
+        for chunk in src.split(&attr).skip(1) {
+            let Some((_, after)) = chunk.split_once("async fn ") else {
+                continue;
+            };
+            let name = after.split('(').next().unwrap_or("?").trim();
+            let declared = after
+                .split_once(&const_needle)
+                .map(|(_, rest)| rest.chars().take_while(|c| *c != '"').collect::<String>())
+                .unwrap_or_default();
+            assert_eq!(
+                declared, name,
+                "the `{name}` tool declares its name as {declared:?}; every metric and refusal in \
+                 its body would be filed under the wrong tool"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked,
+            crate::api::route_table::declared_mcp_tools().len(),
+            "the parser did not visit every declared tool"
+        );
+    }
+
+    /// The tool names passed as a literal first argument to `fname(` in `src`.
+    ///
+    /// A near-twin of `dto.rs`'s `call_sites`, and deliberately not shared with it: that one
+    /// **deduplicates**, because it answers "which tools serialize a type" and a floor over it
+    /// counts distinct tools. This one must not, because its floor counts *sites* — the thing that
+    /// tells you the parser is still matching. Unifying them would make one of the two floors mean
+    /// something other than what its message says.
+    fn call_sites_of(src: &str, fname: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for chunk in src.split(&format!("{fname}(")).skip(1) {
+            let rest = chunk.trim_start();
+            let Some(inner) = rest.strip_prefix('"') else {
+                continue;
+            };
+            let name: String = inner.chars().take_while(|c| *c != '"').collect();
+            if !name.is_empty() {
+                out.push(name);
+            }
+        }
+        out
     }
 
     // ── The WS-F guard ──────────────────────────────────────────────────────────────────────────

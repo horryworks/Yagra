@@ -1512,16 +1512,46 @@ mod tests {
     /// The distinct tool names passed as the first argument to `fname(` in `src`.
     ///
     /// Tolerates the call being wrapped across lines, which a literal `fname("` needle does not —
-    /// see the note in [`every_typed_tool_result_is_canaried`]. Anything that is not
-    /// `fname(<whitespace>"…"` is skipped rather than guessed at.
+    /// see the note in [`every_typed_tool_result_is_canaried`]. Anything that is neither
+    /// `fname(<whitespace>"…"` nor `fname(<whitespace>TOOL` is skipped rather than guessed at.
+    ///
+    /// **It follows `const TOOL` because ADR-085 Inc.2 moved the name there** — a tool body used to
+    /// spell its own name at every call site, and now declares it once at the top and passes the
+    /// constant. Resolving it by taking the nearest preceding declaration is exact rather than a
+    /// heuristic: a `const` is function-scoped, so a body using `TOOL` without declaring one does
+    /// not compile, and every declaration is its function's first statement.
+    ///
+    /// 🚨 **That increment broke this guard and only its floor noticed.** After the conversion the
+    /// literal needle matched nothing, so the loop below had no sites to check and the whole
+    /// canary would have passed while verifying nothing — `assert!(sites.len() >= 22)` is what
+    /// turned that into a failure. Keep that assertion, and keep it above the loop.
     fn call_sites(src: &str, fname: &str) -> Vec<String> {
+        // `const TOOL: &str = "` — assembled rather than written, so this stays safe if the helper
+        // is ever pointed at a file that contains it (this one does not; `dto.rs` reads `tools.rs`).
+        let const_decl = format!("const {}: &str = {}", "TOOL", '"');
+        let needle = format!("{fname}(");
         let mut out: Vec<String> = Vec::new();
-        for chunk in src.split(&format!("{fname}(")).skip(1) {
-            let rest = chunk.trim_start();
-            let Some(inner) = rest.strip_prefix('"') else {
+        let mut at = 0usize;
+        while let Some(rel) = src[at..].find(&needle) {
+            let start = at + rel + needle.len();
+            at = start;
+            let rest = src[start..].trim_start();
+            let name: String = if let Some(inner) = rest.strip_prefix('"') {
+                inner.chars().take_while(|c| *c != '"').collect()
+            } else if rest
+                .strip_prefix("TOOL")
+                .is_some_and(|t| !t.starts_with(|c: char| c.is_alphanumeric() || c == '_'))
+            {
+                match src[..start].rfind(&const_decl) {
+                    Some(k) => src[k + const_decl.len()..]
+                        .chars()
+                        .take_while(|c| *c != '"')
+                        .collect(),
+                    None => continue,
+                }
+            } else {
                 continue;
             };
-            let name: String = inner.chars().take_while(|c| *c != '"').collect();
             if !name.is_empty() && !out.contains(&name) {
                 out.push(name);
             }
