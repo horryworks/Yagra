@@ -41,6 +41,24 @@ pub const KIND_SNMP_V3: &str = "snmp_v3";
 /// (`SnmpV3Check`): `security_level` ∈ noauth|auth|authpriv; protocols are lowercase
 /// tokens (`sha256`, `aes128`, …). Validated at the API edge on create and parsed again
 /// at schedule time — never logged.
+///
+/// # Why this is still its own struct after ADR-084
+///
+/// ADR-084 folded eleven copies of these six fields into [`yagra_common::SnmpV3Auth`], and this is
+/// the **one copy deliberately left standing**. The others were all in-flight shapes — a job on
+/// the bus, parameters handed to a walker — where the only contract is "core wrote it, a poller
+/// reads it back". This one is a **storage** shape: it is what a credential decrypts to, so its
+/// deserializer is the last thing between an encrypted blob written by some earlier version and a
+/// scheduler that will poll with the result. Folding it would put the at-rest format and the
+/// on-the-wire format on one type, and a change made for one reason would then land on the other.
+/// The failure mode is not symmetric either: get the wire wrong and one rollout stumbles; get this
+/// wrong and **every v3 credential stops parsing, so every v3 node silently stops being polled**.
+///
+/// It also carries validation the wire shape must not have — [`Self::parse`] refuses a document
+/// whose `security_level` does not match the keys present. A bus check has to accept whatever an
+/// N-1 core sent; a stored credential does not.
+///
+/// So the copy stays, and [`Self::auth`] is the single crossing point between the two.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SnmpV3Secret {
     pub user: String,
@@ -56,6 +74,37 @@ pub struct SnmpV3Secret {
 }
 
 impl SnmpV3Secret {
+    /// The USM credentials this document carries, in the shape the bus and the transport speak.
+    ///
+    /// The **only** place the stored form crosses into the wire form (ADR-084). Before it existed
+    /// the same six-line copy sat in each of the eight `build_snmp_v3_*_check` builders, so adding
+    /// a USM field meant editing eight call sites that no compiler compared with each other.
+    ///
+    /// Clones: the caller owns a job it is about to publish, and this type is behind a shared
+    /// handle. ⚠️ **The result holds plaintext passphrases — never log it.**
+    #[must_use]
+    pub fn auth(&self) -> yagra_common::SnmpV3Auth {
+        // Destructured, not field-accessed: a seventh field on either side has to be routed here
+        // by hand rather than silently dropped on the way to the poller — which would present as
+        // "v3 polling authenticates with the wrong parameters", with every test green.
+        let Self {
+            user,
+            security_level,
+            auth_protocol,
+            auth_key,
+            priv_protocol,
+            priv_key,
+        } = self;
+        yagra_common::SnmpV3Auth {
+            user: user.clone(),
+            security_level: security_level.clone(),
+            auth_protocol: auth_protocol.clone(),
+            auth_key: auth_key.clone(),
+            priv_protocol: priv_protocol.clone(),
+            priv_key: priv_key.clone(),
+        }
+    }
+
     /// Parse and structurally validate a v3 secret document. `Err` carries a static
     /// description only — never any field content.
     pub fn parse(bytes: &[u8]) -> Result<Self, &'static str> {

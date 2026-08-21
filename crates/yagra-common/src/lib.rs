@@ -27,6 +27,7 @@ pub mod profile;
 mod rbac;
 pub mod routing;
 pub mod severity;
+pub mod snmp_auth;
 pub mod state;
 pub mod thresholds;
 pub mod topology;
@@ -96,6 +97,7 @@ pub use routing::{
     MAX_ROUTING_ADJACENCIES_PER_NODE, MAX_ROUTING_WALK_ROWS, METRIC_SNMP_ROUTING_ADJACENCY_COUNT,
 };
 pub use severity::Severity;
+pub use snmp_auth::SnmpV3Auth;
 pub use state::NodeState;
 pub use thresholds::{
     interface_scope_id, parse_interface_scope_id, resolve_effective, Direction, EffectiveThreshold,

@@ -273,17 +273,13 @@ pub struct MerakiUplink {
     pub name: String,
 }
 
-/// SNMPv3 USM parameters (resolved/decrypted by core and inlined into the job). Keys are
-/// the auth/priv passphrases. `security_level` is `noauth` / `auth` / `authpriv`.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct SnmpV3Params {
-    pub user: String,
-    pub security_level: String,
-    pub auth_protocol: Option<String>,
-    pub auth_key: Option<String>,
-    pub priv_protocol: Option<String>,
-    pub priv_key: Option<String>,
-}
+/// SNMPv3 USM parameters (resolved/decrypted by core and inlined into the job).
+///
+/// The name stays, the type does not: since ADR-084 this is [`yagra_common::SnmpV3Auth`], the one
+/// definition the bus checks also carry. Keeping the local alias means every `SnmpV3Params` here
+/// and in the poller reads the same as before, while `SnmpWalker::V3(check.auth.clone())` needs no
+/// conversion — the walker and the job now speak the same type rather than two identical ones.
+pub use yagra_common::SnmpV3Auth as SnmpV3Params;
 
 /// Errors performing device I/O.
 #[derive(Debug, Error)]

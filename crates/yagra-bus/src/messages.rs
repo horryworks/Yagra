@@ -32,6 +32,7 @@ use yagra_common::{
     ArpColumn, ArpSummary, DnsChain, DnsRecordType, Duplex, ExpectedStatus, HostSample, HttpAuth,
     HttpMethod, IfIndex, InterfaceField, L3Column, L3Snapshot, MerakiTier, MetricKind,
     NeighborColumn, NeighborSet, NodeId, OpticalFlavor, RoutingColumn, RoutingSnapshot, SeriesKey,
+    SnmpV3Auth,
 };
 
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it attaches the original
@@ -152,6 +153,40 @@ pub struct PollJob {
 }
 
 impl PollJob {
+    /// The one place a [`PollJob`] literal is written (ADR-084).
+    ///
+    /// Every named constructor below delegates here. Before that they each spelled out all
+    /// eight fields, so adding a ninth meant nineteen edits that no compiler compared with one
+    /// another — and the two non-obvious defaults (`credential_ref: None`, `probe_identity:
+    /// false`) were repeated nineteen times with nothing saying they had to agree. The callers
+    /// that need a different value set it on the returned job, which is what the scheduler
+    /// already does for `probe_identity`.
+    ///
+    /// **The named constructors were kept rather than replaced by this one.** Folding the call
+    /// sites onto `for_spec` would have made `PollJob::snmp_mau(…, check, …)` into
+    /// `PollJob::for_spec(…, CheckSpec::SnmpArp(check), …)` — a spelling in which naming the
+    /// wrong variant compiles. A job carrying the wrong spec does not fail; the node quietly
+    /// stops being polled for that check, which is the shape of a bug this repo has already
+    /// shipped twice. The name is the type check, so the names stay.
+    #[must_use]
+    pub fn for_spec(
+        job_id: Uuid,
+        node_id: NodeId,
+        target: IpAddr,
+        check: CheckSpec,
+        interval_secs: u32,
+    ) -> Self {
+        Self {
+            job_id,
+            node_id,
+            target,
+            check,
+            interval_secs,
+            credential_ref: None,
+            probe_identity: false,
+            trace_context: TraceContext::new(),
+        }
+    }
     /// A new ICMP poll job for `node` at `target`.
     #[must_use]
     pub fn icmp(
@@ -161,16 +196,13 @@ impl PollJob {
         check: IcmpCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::Icmp(check),
+            CheckSpec::Icmp(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new SNMP v2c poll job for `node` at `target`.
@@ -182,16 +214,13 @@ impl PollJob {
         check: SnmpCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::Snmp(check),
+            CheckSpec::Snmp(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new SNMP v3 poll job for `node` at `target`.
@@ -203,16 +232,13 @@ impl PollJob {
         check: SnmpV3Check,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3(check),
+            CheckSpec::SnmpV3(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new SNMP v2c table-walk poll job for `node` at `target`.
@@ -224,16 +250,13 @@ impl PollJob {
         check: SnmpTableCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpTable(check),
+            CheckSpec::SnmpTable(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new SNMP v3 (USM) table-walk poll job for `node` at `target` — the v3 analogue of
@@ -246,16 +269,13 @@ impl PollJob {
         check: SnmpV3TableCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3Table(check),
+            CheckSpec::SnmpV3Table(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new HTTP/HTTPS URL-monitor poll job for `node`. The real request target is the
@@ -268,16 +288,13 @@ impl PollJob {
         check: HttpCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::Http(check),
+            CheckSpec::Http(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new DNS name-resolution poll job for `node` (ADR-033). The real target is the resolver in
@@ -291,16 +308,13 @@ impl PollJob {
         check: DnsCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::Dns(check),
+            CheckSpec::Dns(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v2c CDP/LLDP neighbour-walk job (ADR-038).
@@ -312,16 +326,13 @@ impl PollJob {
         check: SnmpNeighborCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpNeighbors(check),
+            CheckSpec::SnmpNeighbors(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v2c optical-transceiver probe job (ADR-062).
@@ -333,16 +344,13 @@ impl PollJob {
         check: SnmpOpticalCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpOptical(check),
+            CheckSpec::SnmpOptical(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v3 (USM) optical-transceiver probe job (ADR-062).
@@ -354,16 +362,13 @@ impl PollJob {
         check: SnmpV3OpticalCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3Optical(check),
+            CheckSpec::SnmpV3Optical(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v2c media-type walk job (ADR-063 Inc.2).
@@ -375,16 +380,13 @@ impl PollJob {
         check: SnmpMauCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpMau(check),
+            CheckSpec::SnmpMau(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v3 (USM) media-type walk job (ADR-063 Inc.2).
@@ -396,16 +398,13 @@ impl PollJob {
         check: SnmpV3MauCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3Mau(check),
+            CheckSpec::SnmpV3Mau(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v3 (USM) CDP/LLDP neighbour-walk job (ADR-038).
@@ -417,16 +416,13 @@ impl PollJob {
         check: SnmpV3NeighborCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3Neighbors(check),
+            CheckSpec::SnmpV3Neighbors(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v2c interface-address walk job (ADR-043).
@@ -438,16 +434,13 @@ impl PollJob {
         check: SnmpL3Check,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpL3(check),
+            CheckSpec::SnmpL3(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v3 (USM) interface-address walk job (ADR-043).
@@ -459,16 +452,13 @@ impl PollJob {
         check: SnmpV3L3Check,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3L3(check),
+            CheckSpec::SnmpV3L3(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v2c ARP / IPv6-neighbour walk job (ADR-043 Increment 3).
@@ -480,16 +470,13 @@ impl PollJob {
         check: SnmpArpCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpArp(check),
+            CheckSpec::SnmpArp(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v3 (USM) ARP / IPv6-neighbour walk job (ADR-043 Increment 3).
@@ -501,16 +488,13 @@ impl PollJob {
         check: SnmpV3ArpCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3Arp(check),
+            CheckSpec::SnmpV3Arp(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v2c routing-adjacency job (ADR-043 Increment 4).
@@ -522,16 +506,13 @@ impl PollJob {
         check: SnmpRoutingCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpRouting(check),
+            CheckSpec::SnmpRouting(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// Build an SNMP v3 (USM) routing-adjacency job (ADR-043 Increment 4).
@@ -543,16 +524,13 @@ impl PollJob {
         check: SnmpV3RoutingCheck,
         interval_secs: u32,
     ) -> Self {
-        Self {
+        Self::for_spec(
             job_id,
             node_id,
             target,
-            check: CheckSpec::SnmpV3Routing(check),
+            CheckSpec::SnmpV3Routing(check),
             interval_secs,
-            credential_ref: None,
-            probe_identity: false,
-            trace_context: TraceContext::new(),
-        }
+        )
     }
 
     /// A new Meraki org-scoped collector job. Unlike the per-node checks above, one collect job
@@ -1163,10 +1141,6 @@ impl CheckSpec {
     /// length floor. **Never log the result.**
     #[must_use]
     pub fn secret_literals(&self) -> Vec<&str> {
-        // v3 (USM) carries the same two optional passphrases in every variant.
-        fn v3<'a>(auth: Option<&'a str>, private: Option<&'a str>) -> Vec<&'a str> {
-            auth.into_iter().chain(private).collect()
-        }
         match self {
             // Neither carries a credential: ICMP has no authentication, and a DNS query is
             // unauthenticated by construction.
@@ -1179,14 +1153,14 @@ impl CheckSpec {
             Self::SnmpL3(c) => vec![c.community.as_str()],
             Self::SnmpArp(c) => vec![c.community.as_str()],
             Self::SnmpRouting(c) => vec![c.community.as_str()],
-            Self::SnmpV3(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3Table(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3Optical(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3Mau(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3Neighbors(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3L3(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3Arp(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
-            Self::SnmpV3Routing(c) => v3(c.auth_key.as_deref(), c.priv_key.as_deref()),
+            Self::SnmpV3(c) => c.auth.secret_literals(),
+            Self::SnmpV3Table(c) => c.auth.secret_literals(),
+            Self::SnmpV3Optical(c) => c.auth.secret_literals(),
+            Self::SnmpV3Mau(c) => c.auth.secret_literals(),
+            Self::SnmpV3Neighbors(c) => c.auth.secret_literals(),
+            Self::SnmpV3L3(c) => c.auth.secret_literals(),
+            Self::SnmpV3Arp(c) => c.auth.secret_literals(),
+            Self::SnmpV3Routing(c) => c.auth.secret_literals(),
             // Only the secret half of each scheme. The username, the header *name* and the URL are
             // structural — they identify which account, not how to use it — and are exactly what a
             // log has to keep saying for a misconfiguration to stay diagnosable. `HttpAuth`'s manual
@@ -1354,22 +1328,13 @@ const fn default_snmp_timeout_ms() -> u32 {
 /// inlined here (ADR-018/020); the poller never reads the secret store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3Check {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// OIDs to GET.
     pub oids: Vec<String>,
     /// Scalar OIDs to GET *with an explicit metric name and kind* (configured collection
@@ -1406,22 +1371,13 @@ pub struct SnmpTableCheck {
 /// forward-compatible message (ADR-017).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3TableCheck {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// Numeric table columns → per-interface TSDB samples.
     pub columns: Vec<SnmpColumn>,
     /// Interface-metadata columns (ifName/ifAlias/ifSpeed) → interface inventory, not TSDB.
@@ -1499,22 +1455,13 @@ pub struct SnmpOpticalCheck {
 /// reads the secret store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3OpticalCheck {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// Dialects to read.
     #[serde(default)]
     pub probes: Vec<OpticalProbe>,
@@ -1556,22 +1503,13 @@ pub struct SnmpMauCheck {
 /// store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3MauCheck {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// See [`SnmpMauCheck::entity_fallback`].
     #[serde(default = "default_true")]
     pub entity_fallback: bool,
@@ -1585,22 +1523,13 @@ pub struct SnmpV3MauCheck {
 /// secret store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3NeighborCheck {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// Neighbour table columns to walk.
     #[serde(default)]
     pub columns: Vec<SnmpNeighborColumn>,
@@ -1632,22 +1561,13 @@ pub struct SnmpL3Check {
 /// secret store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3L3Check {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// Address table columns to walk.
     #[serde(default)]
     pub columns: Vec<SnmpL3Column>,
@@ -1684,22 +1604,13 @@ pub struct SnmpArpCheck {
 /// store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3ArpCheck {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// Neighbour-cache columns to walk.
     #[serde(default)]
     pub columns: Vec<SnmpArpColumn>,
@@ -1739,22 +1650,13 @@ pub struct SnmpRoutingCheck {
 /// secret store.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SnmpV3RoutingCheck {
-    /// USM user name.
-    pub user: String,
-    /// `noauth` | `auth` | `authpriv`.
-    pub security_level: String,
-    /// Auth protocol (`md5` | `sha`), if `security_level` is auth/authpriv.
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    /// Auth passphrase.
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    /// Privacy protocol (`des` | `aes`), if `security_level` is authpriv.
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    /// Privacy passphrase.
-    #[serde(default)]
-    pub priv_key: Option<String>,
+    /// USM credentials, resolved and decrypted by core (ADR-018/020).
+    ///
+    /// Flattened, so the six fields stay at the top level of this JSON object exactly where
+    /// they sat before ADR-084 folded eleven copies into one. Do not nest them under a key:
+    /// that changes the wire and stops an N-1 poller reading v3 jobs.
+    #[serde(flatten)]
+    pub auth: SnmpV3Auth,
     /// Adjacency columns to walk.
     #[serde(default)]
     pub columns: Vec<SnmpRoutingColumn>,
@@ -2208,21 +2110,14 @@ pub struct DiscoveryCredential {
     pub v3: Option<DiscoveryV3>,
 }
 
-/// SNMP v3 USM parameters for a discovery probe (mirrors [`SnmpV3Check`]'s tokens:
-/// `security_level` ∈ noauth|auth|authpriv, lowercase protocol tokens).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiscoveryV3 {
-    pub user: String,
-    pub security_level: String,
-    #[serde(default)]
-    pub auth_protocol: Option<String>,
-    #[serde(default)]
-    pub auth_key: Option<String>,
-    #[serde(default)]
-    pub priv_protocol: Option<String>,
-    #[serde(default)]
-    pub priv_key: Option<String>,
-}
+/// SNMP v3 USM parameters for a discovery probe.
+///
+/// An **alias**, not a `#[serde(flatten)]` wrapper like the checks above: this type never had a
+/// field of its own, so it *was* the credential rather than something that carries one. Spelling
+/// that as an alias keeps every `DiscoveryV3 { user, .. }` literal compiling and leaves nothing
+/// to fall out of step. Give the discovery probe a parameter that is not a USM credential and
+/// this becomes a struct again — deliberately, and in one visible edit.
+pub type DiscoveryV3 = SnmpV3Auth;
 
 /// One device found by a discovery sweep.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2656,12 +2551,14 @@ mod tests {
             NodeId::from(Uuid::nil()),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
             SnmpV3TableCheck {
-                user: "monitor".into(),
-                security_level: "authpriv".into(),
-                auth_protocol: Some("sha256".into()),
-                auth_key: Some("auth-pass".into()),
-                priv_protocol: Some("aes256".into()),
-                priv_key: Some("priv-pass".into()),
+                auth: SnmpV3Auth {
+                    user: "monitor".into(),
+                    security_level: "authpriv".into(),
+                    auth_protocol: Some("sha256".into()),
+                    auth_key: Some("auth-pass".into()),
+                    priv_protocol: Some("aes256".into()),
+                    priv_key: Some("priv-pass".into()),
+                },
                 columns: vec![SnmpColumn {
                     metric_name: "if_hc_in_octets".into(),
                     oid: "1.3.6.1.2.1.31.1.1.1.6".into(),
@@ -2681,6 +2578,77 @@ mod tests {
         assert_eq!(job, back);
     }
 
+    /// 🚨 The v3 wire contract: the six USM fields sit at the **top level** of the check object,
+    /// beside `kind` and the check's own fields — never nested under a key.
+    ///
+    /// ADR-084 replaced eight verbatim copies of those six fields with one flattened
+    /// [`SnmpV3Auth`]. `#[serde(flatten)]` makes that invisible on the wire, which is the point —
+    /// and also why it needs pinning here. Every other v3 test in this file round-trips through
+    /// Rust, and a round-trip is exactly what a nested `"auth": { … }` would still pass: the new
+    /// core would write it and read it back happily while every N-1 poller stopped decoding v3
+    /// jobs mid-rollout, the one failure ADR-017 forbids.
+    ///
+    /// Asserted on the **key set**, and for a `None`-heavy check as well as a full one, because
+    /// flatten also decides whether an absent optional field is emitted as `null` or dropped —
+    /// a second way the object could change shape without any Rust-side test noticing.
+    #[test]
+    fn the_v3_usm_fields_stay_at_the_top_level_of_the_check_object() {
+        let keys_of = |spec: &CheckSpec| {
+            let v = serde_json::to_value(spec).unwrap();
+            let mut k: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            k.sort();
+            k
+        };
+        let usm = [
+            "auth_key",
+            "auth_protocol",
+            "priv_key",
+            "priv_protocol",
+            "security_level",
+            "user",
+        ];
+
+        let full = CheckSpec::SnmpV3(SnmpV3Check {
+            auth: SnmpV3Auth {
+                user: "monitor".into(),
+                security_level: "authpriv".into(),
+                auth_protocol: Some("sha256".into()),
+                auth_key: Some("auth-pass".into()),
+                priv_protocol: Some("aes256".into()),
+                priv_key: Some("priv-pass".into()),
+            },
+            oids: vec!["1.3.6.1.2.1.1.3.0".into()],
+            columns: Vec::new(),
+            timeout_ms: 2000,
+        });
+        let full_keys = keys_of(&full);
+        for k in usm {
+            assert!(
+                full_keys.iter().any(|got| got == k),
+                "`{k}` must be a top-level key of the v3 check, got {full_keys:?}"
+            );
+        }
+
+        // noauth: the four optionals are `None`. Whatever the answer is — emitted as `null` or
+        // omitted — it must be the *same* answer flatten gave before, so pin it rather than
+        // assume it.
+        let bare = CheckSpec::SnmpV3(SnmpV3Check {
+            auth: SnmpV3Auth {
+                user: "monitor".into(),
+                security_level: "noauth".into(),
+                ..SnmpV3Auth::default()
+            },
+            oids: vec!["1.3.6.1.2.1.1.3.0".into()],
+            columns: Vec::new(),
+            timeout_ms: 2000,
+        });
+        assert_eq!(
+            keys_of(&bare),
+            full_keys,
+            "an absent optional must not change the v3 check's key set"
+        );
+    }
+
     #[test]
     fn snmp_v3_table_check_defaults_are_forward_compatible() {
         // An N-1 producer that omits every newer optional field (auth/priv, meta_columns,
@@ -2697,9 +2665,9 @@ mod tests {
         let CheckSpec::SnmpV3Table(t) = check else {
             panic!("expected snmp_v3_table variant");
         };
-        assert_eq!(t.user, "monitor");
-        assert!(t.auth_protocol.is_none());
-        assert!(t.priv_key.is_none());
+        assert_eq!(t.auth.user, "monitor");
+        assert!(t.auth.auth_protocol.is_none());
+        assert!(t.auth.priv_key.is_none());
         assert!(t.meta_columns.is_empty());
         assert_eq!(t.timeout_ms, default_snmp_timeout_ms());
         assert_eq!(t.columns[0].kind, MetricKind::Gauge); // column kind defaults to gauge
@@ -3328,7 +3296,7 @@ mod tests {
         assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
         let v3: SnmpV3L3Check =
             serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
-        assert!(v3.auth_key.is_none() && v3.columns.is_empty());
+        assert!(v3.auth.auth_key.is_none() && v3.columns.is_empty());
 
         // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
         let spec = CheckSpec::SnmpL3(v2c);
@@ -3348,7 +3316,7 @@ mod tests {
         assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
         let v3: SnmpV3OpticalCheck =
             serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
-        assert!(v3.auth_key.is_none() && v3.probes.is_empty());
+        assert!(v3.auth.auth_key.is_none() && v3.probes.is_empty());
 
         // A probe may name only one of the two readings — that is how an operator disabling one
         // half of the built-in template reaches the poller.
@@ -3557,7 +3525,7 @@ mod tests {
         );
         let v3: SnmpV3ArpCheck =
             serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
-        assert!(v3.auth_key.is_none() && v3.columns.is_empty());
+        assert!(v3.auth.auth_key.is_none() && v3.columns.is_empty());
         assert_eq!(v3.max_rows, v2c.max_rows);
 
         // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
@@ -3606,7 +3574,7 @@ mod tests {
 
         let v3: SnmpV3RoutingCheck =
             serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
-        assert!(v3.auth_key.is_none() && v3.columns.is_empty() && v3.route_probes.is_empty());
+        assert!(v3.auth.auth_key.is_none() && v3.columns.is_empty() && v3.route_probes.is_empty());
 
         // The tags are what an N-1 poller skips on, so they must be the expected snake_case.
         let wire = serde_json::to_string(&CheckSpec::SnmpRouting(v2c)).unwrap();
@@ -3642,7 +3610,7 @@ mod tests {
         assert_eq!(v2c.timeout_ms, default_snmp_timeout_ms());
         let v3: SnmpV3NeighborCheck =
             serde_json::from_str(r#"{"user":"monitor","security_level":"authpriv"}"#).unwrap();
-        assert!(v3.auth_key.is_none() && v3.columns.is_empty());
+        assert!(v3.auth.auth_key.is_none() && v3.columns.is_empty());
     }
 
     /// The working-set decoder drops a spec it cannot understand rather than failing the chunk —

@@ -200,16 +200,13 @@ fn candidates_of(job: &DiscoveryJob) -> Vec<SnmpCandidate> {
     let mut out = Vec::with_capacity(job.credentials.len() + job.communities.len());
     for c in &job.credentials {
         if let Some(v3) = &c.v3 {
+            // One type since ADR-084: the job's `DiscoveryV3` and the walker's `SnmpV3Params` are
+            // both `yagra_common::SnmpV3Auth`, so what used to be a six-field transcription is a
+            // clone. It was the last place a USM field could be added on one side and dropped on
+            // the other without the compiler noticing.
             out.push(SnmpCandidate::V3 {
                 cred_ref: c.cred_ref,
-                params: SnmpV3Params {
-                    user: v3.user.clone(),
-                    security_level: v3.security_level.clone(),
-                    auth_protocol: v3.auth_protocol.clone(),
-                    auth_key: v3.auth_key.clone(),
-                    priv_protocol: v3.priv_protocol.clone(),
-                    priv_key: v3.priv_key.clone(),
-                },
+                params: v3.clone(),
             });
         } else if let Some(community) = &c.community {
             out.push(SnmpCandidate::V2c {

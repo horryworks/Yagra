@@ -87,14 +87,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3(v3) => {
             let timeout = Duration::from_millis(u64::from(v3.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: v3.user.clone(),
-                security_level: v3.security_level.clone(),
-                auth_protocol: v3.auth_protocol.clone(),
-                auth_key: v3.auth_key.clone(),
-                priv_protocol: v3.priv_protocol.clone(),
-                priv_key: v3.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(v3.auth.clone());
             execute_scalar_get(
                 job,
                 transport,
@@ -121,14 +114,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3Optical(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: check.user.clone(),
-                security_level: check.security_level.clone(),
-                auth_protocol: check.auth_protocol.clone(),
-                auth_key: check.auth_key.clone(),
-                priv_protocol: check.priv_protocol.clone(),
-                priv_key: check.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(check.auth.clone());
             execute_optical(job, transport, at_unix_ms, &check.probes, timeout, &walker).await
         }
         CheckSpec::SnmpMau(check) => {
@@ -146,14 +132,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3Mau(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: check.user.clone(),
-                security_level: check.security_level.clone(),
-                auth_protocol: check.auth_protocol.clone(),
-                auth_key: check.auth_key.clone(),
-                priv_protocol: check.priv_protocol.clone(),
-                priv_key: check.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(check.auth.clone());
             execute_mau(
                 job,
                 transport,
@@ -171,14 +150,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3Neighbors(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: check.user.clone(),
-                security_level: check.security_level.clone(),
-                auth_protocol: check.auth_protocol.clone(),
-                auth_key: check.auth_key.clone(),
-                priv_protocol: check.priv_protocol.clone(),
-                priv_key: check.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(check.auth.clone());
             execute_neighbors(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
         }
         CheckSpec::SnmpL3(check) => {
@@ -188,14 +160,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3L3(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: check.user.clone(),
-                security_level: check.security_level.clone(),
-                auth_protocol: check.auth_protocol.clone(),
-                auth_key: check.auth_key.clone(),
-                priv_protocol: check.priv_protocol.clone(),
-                priv_key: check.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(check.auth.clone());
             execute_l3(job, transport, at_unix_ms, &check.columns, timeout, &walker).await
         }
         CheckSpec::SnmpArp(check) => {
@@ -214,14 +179,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3Arp(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: check.user.clone(),
-                security_level: check.security_level.clone(),
-                auth_protocol: check.auth_protocol.clone(),
-                auth_key: check.auth_key.clone(),
-                priv_protocol: check.priv_protocol.clone(),
-                priv_key: check.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(check.auth.clone());
             execute_arp(
                 job,
                 transport,
@@ -249,14 +207,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
         }
         CheckSpec::SnmpV3Routing(check) => {
             let timeout = Duration::from_millis(u64::from(check.timeout_ms));
-            let walker = SnmpWalker::V3(yagra_transport::SnmpV3Params {
-                user: check.user.clone(),
-                security_level: check.security_level.clone(),
-                auth_protocol: check.auth_protocol.clone(),
-                auth_key: check.auth_key.clone(),
-                priv_protocol: check.priv_protocol.clone(),
-                priv_key: check.priv_key.clone(),
-            });
+            let walker = SnmpWalker::V3(check.auth.clone());
             execute_routing(
                 job,
                 transport,
@@ -1907,15 +1858,7 @@ async fn execute_snmp_v3_table(
     table: &SnmpV3TableCheck,
     timeout: Duration,
 ) -> PollResult {
-    let params = SnmpV3Params {
-        user: table.user.clone(),
-        security_level: table.security_level.clone(),
-        auth_protocol: table.auth_protocol.clone(),
-        auth_key: table.auth_key.clone(),
-        priv_protocol: table.priv_protocol.clone(),
-        priv_key: table.priv_key.clone(),
-    };
-    let walker = SnmpWalker::V3(params);
+    let walker = SnmpWalker::V3(table.auth.clone());
     execute_table_walk(
         job,
         transport,
@@ -2335,7 +2278,7 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use uuid::Uuid;
     use yagra_bus::{Bus, IcmpCheck, InMemoryBus, SnmpCheck};
-    use yagra_common::NodeId;
+    use yagra_common::{NodeId, SnmpV3Auth};
     use yagra_transport::{FakeTransport, SnmpSample};
 
     /// A dark port answers the walk with the vendor's placeholder on every column. It must produce
@@ -2790,12 +2733,14 @@ mod tests {
             NodeId::from(Uuid::nil()),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)),
             yagra_bus::SnmpV3NeighborCheck {
-                user: "monitor".into(),
-                security_level: "authpriv".into(),
-                auth_protocol: Some("sha256".into()),
-                auth_key: Some("auth-pass-12345".into()),
-                priv_protocol: Some("aes256".into()),
-                priv_key: Some("priv-pass-12345".into()),
+                auth: SnmpV3Auth {
+                    user: "monitor".into(),
+                    security_level: "authpriv".into(),
+                    auth_protocol: Some("sha256".into()),
+                    auth_key: Some("auth-pass-12345".into()),
+                    priv_protocol: Some("aes256".into()),
+                    priv_key: Some("priv-pass-12345".into()),
+                },
                 columns: neighbor_columns(),
                 timeout_ms: 2000,
             },
@@ -2992,12 +2937,14 @@ mod tests {
             NodeId::from(Uuid::nil()),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
             SnmpV3Check {
-                user: "monitor".to_owned(),
-                security_level: "authpriv".to_owned(),
-                auth_protocol: Some("sha256".to_owned()),
-                auth_key: Some("auth-pass".to_owned()),
-                priv_protocol: Some("aes256".to_owned()),
-                priv_key: Some("priv-pass".to_owned()),
+                auth: SnmpV3Auth {
+                    user: "monitor".to_owned(),
+                    security_level: "authpriv".to_owned(),
+                    auth_protocol: Some("sha256".to_owned()),
+                    auth_key: Some("auth-pass".to_owned()),
+                    priv_protocol: Some("aes256".to_owned()),
+                    priv_key: Some("priv-pass".to_owned()),
+                },
                 oids: vec!["1.3.6.1.2.1.1.3.0".to_owned()],
                 columns: Vec::new(),
                 timeout_ms: 2000,
@@ -3432,12 +3379,14 @@ mod tests {
             NodeId::from(Uuid::nil()),
             IpAddr::V4(Ipv4Addr::new(10, 0, 0, 3)),
             SnmpV3TableCheck {
-                user: "monitor".to_owned(),
-                security_level: "authpriv".to_owned(),
-                auth_protocol: Some("sha256".to_owned()),
-                auth_key: Some("auth-pass".to_owned()),
-                priv_protocol: Some("aes256".to_owned()),
-                priv_key: Some("priv-pass".to_owned()),
+                auth: SnmpV3Auth {
+                    user: "monitor".to_owned(),
+                    security_level: "authpriv".to_owned(),
+                    auth_protocol: Some("sha256".to_owned()),
+                    auth_key: Some("auth-pass".to_owned()),
+                    priv_protocol: Some("aes256".to_owned()),
+                    priv_key: Some("priv-pass".to_owned()),
+                },
                 columns: vec![SnmpColumn {
                     metric_name: "if_hc_in_octets".to_owned(),
                     oid: "1.3.6.1.2.1.31.1.1.1.6".to_owned(),

@@ -186,12 +186,7 @@ pub fn build_snmp_v3_check(
         })
         .collect();
     (!scalar.is_empty()).then(|| SnmpV3Check {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         oids: Vec::new(),
         columns: scalar,
         timeout_ms,
@@ -219,12 +214,7 @@ pub fn build_snmp_v3_table_check(
         })
         .collect();
     (!table.is_empty()).then(|| SnmpV3TableCheck {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         columns: table,
         meta_columns: builtin_interface_meta_columns()
             .into_iter()
@@ -354,12 +344,7 @@ pub fn build_snmp_v3_optical_check(
 ) -> Option<SnmpV3OpticalCheck> {
     let probes = optical_probes(items);
     (!probes.is_empty()).then(|| SnmpV3OpticalCheck {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         probes,
         timeout_ms,
     })
@@ -384,12 +369,7 @@ pub fn build_snmp_mau_check(community: &str, timeout_ms: u32) -> SnmpMauCheck {
 #[must_use]
 pub fn build_snmp_v3_mau_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3MauCheck {
     SnmpV3MauCheck {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         entity_fallback: true,
         timeout_ms,
     }
@@ -415,12 +395,7 @@ pub fn build_snmp_neighbor_check(community: &str, timeout_ms: u32) -> SnmpNeighb
 #[must_use]
 pub fn build_snmp_v3_neighbor_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3NeighborCheck {
     SnmpV3NeighborCheck {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         columns: neighbor_columns(),
         timeout_ms,
     }
@@ -446,12 +421,7 @@ pub fn build_snmp_l3_check(community: &str, timeout_ms: u32) -> SnmpL3Check {
 #[must_use]
 pub fn build_snmp_v3_l3_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3L3Check {
     SnmpV3L3Check {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         columns: l3_columns(),
         timeout_ms,
     }
@@ -477,12 +447,7 @@ pub fn build_snmp_arp_check(community: &str, timeout_ms: u32) -> SnmpArpCheck {
 #[must_use]
 pub fn build_snmp_v3_arp_check(secret: &SnmpV3Secret, timeout_ms: u32) -> SnmpV3ArpCheck {
     SnmpV3ArpCheck {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         columns: arp_columns(),
         max_rows: arp_max_rows(),
         timeout_ms,
@@ -517,12 +482,7 @@ pub fn build_snmp_v3_routing_check(
     timeout_ms: u32,
 ) -> SnmpV3RoutingCheck {
     SnmpV3RoutingCheck {
-        user: secret.user.clone(),
-        security_level: secret.security_level.clone(),
-        auth_protocol: secret.auth_protocol.clone(),
-        auth_key: secret.auth_key.clone(),
-        priv_protocol: secret.priv_protocol.clone(),
-        priv_key: secret.priv_key.clone(),
+        auth: secret.auth(),
         columns: routing_columns(),
         route_probes: route_probes(targets),
         timeout_ms,
@@ -2176,7 +2136,7 @@ mod tests {
         let v2c = build_snmp_optical_check("public", &items, 1000).expect("v2c");
         let v3 = build_snmp_v3_optical_check(&v3_secret(), &items, 1000).expect("v3");
         assert_eq!(v2c.probes, v3.probes);
-        assert_eq!(v3.user, "monitor");
+        assert_eq!(v3.auth.user, "monitor");
     }
 
     #[test]
@@ -2234,9 +2194,9 @@ mod tests {
             ),
         ];
         let check = build_snmp_v3_check(&v3_secret(), &items, 2000).expect("scalar check");
-        assert_eq!(check.user, "monitor");
-        assert_eq!(check.security_level, "authpriv");
-        assert_eq!(check.auth_protocol.as_deref(), Some("sha256"));
+        assert_eq!(check.auth.user, "monitor");
+        assert_eq!(check.auth.security_level, "authpriv");
+        assert_eq!(check.auth.auth_protocol.as_deref(), Some("sha256"));
         // Only the scalar item lands in the scalar check; the table item goes to the table check.
         assert_eq!(check.columns.len(), 1);
         assert_eq!(check.columns[0].metric_name, "snmp_sys_uptime_ticks");
@@ -2268,8 +2228,8 @@ mod tests {
             ),
         ];
         let check = build_snmp_v3_table_check(&v3_secret(), &items, 2000).expect("table check");
-        assert_eq!(check.user, "monitor");
-        assert_eq!(check.priv_protocol.as_deref(), Some("aes128"));
+        assert_eq!(check.auth.user, "monitor");
+        assert_eq!(check.auth.priv_protocol.as_deref(), Some("aes128"));
         // Only the table item becomes a walk column; the scalar stays in the scalar check.
         assert_eq!(check.columns.len(), 1);
         assert_eq!(check.columns[0].oid, "1.3.6.1.2.1.31.1.1.1.6");

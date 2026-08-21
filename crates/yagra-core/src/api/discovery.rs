@@ -156,17 +156,13 @@ async fn resolve_scan_credentials(
         };
         if kind == crate::secrets::KIND_SNMP_V3 {
             match crate::secrets::SnmpV3Secret::parse(&secret) {
+                // `DiscoveryV3` is `SnmpV3Auth` since ADR-084, so the six-field copy that used to
+                // sit here is `SnmpV3Secret::auth()` — the one crossing from the stored shape to
+                // the wire shape, shared with the eight scheduler builders.
                 Ok(v3) => out.push(yagra_bus::DiscoveryCredential {
                     cred_ref: id,
                     community: None,
-                    v3: Some(yagra_bus::DiscoveryV3 {
-                        user: v3.user,
-                        security_level: v3.security_level,
-                        auth_protocol: v3.auth_protocol,
-                        auth_key: v3.auth_key,
-                        priv_protocol: v3.priv_protocol,
-                        priv_key: v3.priv_key,
-                    }),
+                    v3: Some(v3.auth()),
                 }),
                 Err(reason) => {
                     return Err(ApiError::bad_request(
