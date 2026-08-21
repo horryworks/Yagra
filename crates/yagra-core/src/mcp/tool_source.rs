@@ -30,6 +30,10 @@
 //! a list would be the thirteenth place to forget, which is the shape this module exists to remove.
 //! `read_dir` cannot be out of date.
 //!
+//! **After the split, dropping one domain file from what this returns fails 20 tests** — every
+//! source-text reader plus this module's own two. That is the state the increment was for: a
+//! botched split cannot be quiet.
+//!
 //! Everything here is test-only. It reads from disk (`CARGO_MANIFEST_DIR`) rather than
 //! `include_str!` because a macro needs a literal path and there is no literal that means "every
 //! file of the surface". `api/route_table.rs::declared_mcp_tools` has always read this way and its
@@ -48,12 +52,52 @@ fn surface_roots() -> Vec<PathBuf> {
         .collect()
 }
 
+/// The modules `tools/mod.rs` declares under `#[cfg(test)]` — scaffolding, not surface.
+///
+/// 🚨 **Excluding them is not tidiness; leaving them in broke three checks the moment the split
+/// landed.** A check that reads the surface for a phrase has to be sure the phrase is not its own:
+/// the old single-file guards were careful about this and said so ("this reads a *different* file,
+/// so a literal needle is correct here"). Splitting `tools.rs` moved those guards *into the
+/// directory they read*, and their own needles — `AuditFilterInput {`, `see the tool description
+/// for the ` — started matching themselves. Derived from `mod.rs` rather than listed, for the same
+/// reason the file list is: a name written here is a name that can be forgotten.
+fn test_only_modules() -> Vec<String> {
+    let mod_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools/mod.rs");
+    if !mod_rs.exists() {
+        return Vec::new();
+    }
+    read(&mod_rs)
+        .split("#[cfg(test)]")
+        .skip(1)
+        .filter_map(|after| after.trim_start().strip_prefix("mod ")?.split(';').next())
+        .map(|m| format!("{}.rs", m.trim()))
+        .collect()
+}
+
 /// Every file holding part of the tool surface, as `(file name, contents)`, sorted by name.
 ///
-/// Sorted so a caller that reports a finding names the same file every run; a `read_dir` order is
-/// not stable across platforms and an unstable message reads as a flaky test.
+/// The contents are the **code**: each file is cut at its own `#[cfg(test)]`, and the modules that
+/// are test-only in full are not here at all. Every caller wants it that way — a tool name, a
+/// `#[tool(` attribute, a refusal's wording and a folded branch's argument all live in a tool body —
+/// and doing it here means no caller writes `.split("#[cfg(test)]")` for itself. That mattered:
+/// doing it caller-side over a *concatenation* keeps only the first file's code, which is how one
+/// guard came to check 10 tools out of 36 and still pass its own assertions.
+///
+/// Sorted so a caller that reports a finding names the same file every run; `read_dir` order is not
+/// stable across platforms and an unstable message reads as a flaky test.
 pub(crate) fn tool_surface_files() -> Vec<(String, String)> {
+    let skip = test_only_modules();
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut push = |name: String, text: String| {
+        if skip.contains(&name) {
+            return;
+        }
+        let code = match text.find("\n#[cfg(test)]") {
+            Some(i) => text[..i].to_owned(),
+            None => text,
+        };
+        out.push((name, code));
+    };
     for root in surface_roots() {
         if root.is_file() {
             let name = root
@@ -61,7 +105,8 @@ pub(crate) fn tool_surface_files() -> Vec<(String, String)> {
                 .and_then(|n| n.to_str())
                 .unwrap_or("tools.rs")
                 .to_owned();
-            out.push((name, read(&root)));
+            let text = read(&root);
+            push(name, text);
             continue;
         }
         for entry in std::fs::read_dir(&root).expect("read src/mcp/tools/") {
@@ -74,7 +119,8 @@ pub(crate) fn tool_surface_files() -> Vec<(String, String)> {
                 .and_then(|n| n.to_str())
                 .expect("a UTF-8 file name")
                 .to_owned();
-            out.push((name, read(&path)));
+            let text = read(&path);
+            push(name, text);
         }
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
@@ -141,11 +187,13 @@ mod tests {
         );
     }
 
-    /// Every `.rs` file under the surface root is in what the accessor returns.
+    /// The accessor returns every `.rs` file under the surface root **except** the test-only
+    /// modules, and both halves of that are derived rather than listed.
     ///
     /// Not tautological, though it reads that way: it is the assertion that the accessor keeps
-    /// deriving its answer from the directory. The moment someone replaces `read_dir` with a
-    /// hand-written list — the obvious "tidy-up" — this is what refuses it.
+    /// deriving its answer from the directory and from `mod.rs`. The moment someone replaces either
+    /// `read_dir` or the `#[cfg(test)] mod …` scan with a hand-written list — the obvious "tidy-up"
+    /// — this is what refuses it, because a list would not track a file added afterwards.
     #[test]
     fn the_accessor_is_derived_from_the_directory_not_from_a_list() {
         let named: std::collections::BTreeSet<String> =
@@ -163,9 +211,44 @@ mod tests {
                 }
             }
         }
+        let skip: std::collections::BTreeSet<String> = test_only_modules().into_iter().collect();
+        let expected: std::collections::BTreeSet<String> =
+            on_disk.difference(&skip).cloned().collect();
         assert_eq!(
-            named, on_disk,
+            named, expected,
             "the accessor and the directory disagree about which files are the tool surface"
+        );
+        // Both halves must be doing something, or the equality above is one empty set against
+        // another dressed up as agreement.
+        assert!(
+            named.len() >= 5 && !skip.is_empty(),
+            "surface files: {named:?}, test-only: {skip:?} — one of the two derivations returned \
+             nothing, so this test compares nothing"
+        );
+        // …and the exclusion must be excluding the file that reads this surface. `guards.rs` sits
+        // inside the directory it greps, so if it were included its own needles would match
+        // themselves — which is exactly what happened on the day of the split.
+        assert!(
+            skip.contains("guards.rs"),
+            "guards.rs is not being excluded; its own literals are back in the text it searches"
+        );
+    }
+
+    /// A file's own `#[cfg(test)]` tail is not part of the surface.
+    #[test]
+    fn a_files_test_module_is_cut_away_from_its_code() {
+        let files = tool_surface_files();
+        let (name, code) = files
+            .iter()
+            .find(|(n, _)| n == "system.rs")
+            .expect("system.rs is part of the surface");
+        assert!(
+            code.contains("async fn get_config"),
+            "{name}: the code half is missing the tool it declares"
+        );
+        assert!(
+            !code.contains("#[cfg(test)]"),
+            "{name}: the test module was not cut away, so a needle can match a test's own literal"
         );
     }
 }
