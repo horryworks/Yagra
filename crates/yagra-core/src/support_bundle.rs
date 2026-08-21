@@ -136,6 +136,10 @@ pub const ENV_ALLOWLIST: &[(&str, EnvShape)] = &[
     // Polling and retention
     ("YAGRA_POLL_INTERVAL_SECS", EnvShape::Plain),
     ("YAGRA_FLOW_RETENTION_DAYS", EnvShape::Plain),
+    (
+        "YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS",
+        EnvShape::Plain,
+    ),
     ("YAGRA_PAT_OIDC_IDLE_DAYS", EnvShape::Plain),
     ("YAGRA_IPASN_DB", EnvShape::Plain),
     ("YAGRA_IPASN_RELOAD_SECS", EnvShape::Plain),

@@ -21,6 +21,25 @@
 
 ### Improvements
 
+- **The host resource charts on System Health now average each step instead of sampling one point
+  out of it.** Host metrics are written every 15 seconds, and the range query returned a single
+  raw sample per step and discarded the rest — so a signal that rises and falls on a cycle was
+  read at whatever point of that cycle the sampling grid happened to land on. Restarting a poller
+  was enough to shift the phase and make CPU appear to jump from 41% to 86% with no change in
+  load at all. The charts now show the mean over each step, and the step will not go finer than
+  the sampling interval. **Expect the line to sit higher than it used to**: it was previously
+  drawing a moment, not an average.
+- **ClickHouse's own log tables are now bounded.** Yagra ships ClickHouse with stock settings, and
+  stock ClickHouse logs at `trace` level and puts no expiry on its nine `system.*_log` tables. On
+  one month-old deployment they held 2.3 GiB across ~693 million rows — against 49 MiB of actual
+  flow data — and roughly a third of a CPU core went to merging them, much of it logs about
+  merging those very tables. The shipped composition now logs at `information`, samples
+  asynchronous metrics once a minute rather than once a second, and declares a 7-day expiry;
+  core applies the same expiry to the tables an existing deployment already has, since a
+  configuration file only ever governs tables at the moment they are created. Set
+  `YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS=0` to leave `system.*` untouched — that is the
+  setting for a ClickHouse the deployment does not own. **The first start after upgrading will do
+  real work** clearing what has accumulated.
 - **The MCP `get_active_alerts` tool now refuses an unrecognised `min_severity` instead of
   ignoring it.** The value was ranked by a string comparison that scored anything it did not
   recognise below `info`, so `min_severity: "fatal"` matched every alert and the caller read the

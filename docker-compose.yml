@@ -79,6 +79,12 @@ services:
       YAGRA_CLICKHOUSE_URL: http://clickhouse:8123
       # Flow retention in days (ClickHouse TTL). Default 30.
       # YAGRA_FLOW_RETENTION_DAYS: "30"
+      # Retention for ClickHouse's OWN system log tables (ADR-031 Inc.4). Default 7 days. Set to
+      # "0" when YAGRA_CLICKHOUSE_URL points at a ClickHouse this deployment does not own — core
+      # then leaves `system.*` completely alone. Unlike the flow window above this is NOT seeded
+      # into a settings table: it is read every start, because it is housekeeping on the store
+      # rather than a retention policy over Yagra's data.
+      # YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS: "7"
       # How long a poller pool must have nodes but no live poller before Yagra notifies (ADR-009's
       # self-monitoring blind spot). A poller announces its own departure, so an ordinary rolling
       # restart raises the condition instantly — this debounce is what stops that paging anyone.
@@ -316,6 +322,11 @@ services:
       nofile: { soft: 262144, hard: 262144 }
     volumes:
       - chdata:/var/lib/clickhouse
+    # Bound ClickHouse's OWN telemetry (ADR-031 Increment 4) — see docker-compose.deploy.yml for
+    # the measured numbers and for why this is a `configs:` entry and not a volume over config.d.
+    configs:
+      - source: clickhouse-telemetry
+        target: /etc/clickhouse-server/config.d/yagra-telemetry.xml
     restart: unless-stopped
 
   # ── IP→ASN dataset updater (ADR-031 Increment 3; optional, off by default) ──
@@ -366,6 +377,42 @@ services:
       - "16686:16686"   # Jaeger UI
       - "4318:4318"     # OTLP/HTTP receiver (what YAGRA_OTEL_ENDPOINT points at)
     restart: unless-stopped
+
+# ── ClickHouse self-telemetry (ADR-031 Increment 4) ─────────────────────────────────────────────
+# Two knobs, and each fixes a different half of the same measured problem.
+#
+#   <logger><level>  Stock is `trace`. In one hour that produced 22,112 Trace + 10,500 Debug rows
+#                    in `system.text_log`, and the top producers were the merges of the system log
+#                    tables themselves — logging about the work of storing the logs. `information`
+#                    keeps startup, shutdown and schema messages, which are the ones an operator
+#                    actually reads in `docker logs`.
+#   <ttl>            Stock is none, on all nine `system.*_log` tables. They grow forever.
+#
+# `asynchronous_metrics_update_period_s` is here for the same reason at a different scale: at the
+# default of 1s that table had accumulated **640 million rows** in 33 days. Nothing in Yagra reads
+# `system.asynchronous_metrics`, so a minute is plenty.
+#
+# ⚠️ **The 7 here is only what a brand-new table is born with.** ClickHouse applies a config `<ttl>`
+# at CREATE time and never afterwards, so on any existing volume this file changes nothing — that
+# is what `YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS` and core's startup `ALTER` are for, and core
+# is the authority if the two ever disagree. Set that variable to `0` on a ClickHouse Yagra does
+# not own; then this file is the only bound, and it applies to new tables only.
+configs:
+  clickhouse-telemetry:
+    content: |
+      <clickhouse>
+          <logger><level>information</level></logger>
+          <asynchronous_metrics_update_period_s>60</asynchronous_metrics_update_period_s>
+          <asynchronous_metric_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></asynchronous_metric_log>
+          <metric_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></metric_log>
+          <text_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></text_log>
+          <trace_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></trace_log>
+          <query_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></query_log>
+          <query_views_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></query_views_log>
+          <part_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></part_log>
+          <processors_profile_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></processors_profile_log>
+          <error_log><ttl>event_date + INTERVAL 7 DAY DELETE</ttl></error_log>
+      </clickhouse>
 
 volumes:
   pgdata:

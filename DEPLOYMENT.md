@@ -453,6 +453,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` | `300` | How long a poller pool must hold nodes with **no live poller** before it raises a critical alert. A poller announces its own departure, so a rolling restart trips the condition instantly — this debounce is what stops that paging anyone. `0` disables the alert; the gauges are exported either way |
 | **Traffic flow & AS enrichment** | | |
 | `YAGRA_FLOW_RETENTION_DAYS` | `30` (clamp 1–3650) | Flow retention in days. **Seeds a brand-new deployment only** — afterwards Settings ▸ System settings ▸ Data retention is authoritative |
+| `YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS` | `7` (clamp 0–3650) | Retention for ClickHouse's **own** `system.*_log` tables. Stock ClickHouse gives them no TTL at all, so they grow without bound and burn CPU merging themselves. Read at every start, not seeded into a settings table. **`0` leaves `system.*` untouched** — use it when `YAGRA_CLICKHOUSE_URL` points at a ClickHouse this deployment does not own |
 | `YAGRA_IPASN_DB` | unset ⇒ enrichment off | Path to an offline iptoasn.com TSV for flow IP→ASN enrichment |
 | `YAGRA_IPASN_RELOAD_SECS` | `0` ⇒ load once at startup | Hot-reload period (seconds) for the IP→ASN file; `>0` reloads without a restart |
 | **High availability** | | |

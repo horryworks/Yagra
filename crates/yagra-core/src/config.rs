@@ -83,6 +83,19 @@ pub struct Config {
     /// Flow retention in days for the ClickHouse TTL (`YAGRA_FLOW_RETENTION_DAYS`, ADR-031).
     /// Defaults to [`crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS`] when unset/invalid.
     pub flow_retention_days: u32,
+    /// How many days of ClickHouse's **own** system log tables to keep
+    /// (`YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS`, ADR-031 Increment 4). `0` disables the
+    /// bounding entirely and leaves `system.*` untouched.
+    ///
+    /// Yagra ships ClickHouse with stock defaults, and stock ClickHouse gives its nine system log
+    /// tables **no TTL at all**. Measured on one deployment after a month: 49 MiB of actual flow
+    /// data against **2.3 GiB / ~693M rows** of self-telemetry, and a third of a CPU core burned
+    /// continuously merging it — most of it logs *about* merging those same tables.
+    ///
+    /// ⚠️ Default-on, because a default-off fix ships inert. The escape hatch exists because
+    /// `YAGRA_CLICKHOUSE_URL` can point at a ClickHouse Yagra does not own, and quietly rewriting
+    /// someone else's `system.*` retention is not ours to do — set `0` there.
+    pub flow_system_log_days: u32,
     /// Path to an offline IP→ASN dataset (iptoasn.com TSV) for flow AS enrichment
     /// (`YAGRA_IPASN_DB`, ADR-031 Increment 3). Optional and **default-OFF**: when set and readable,
     /// core enriches flow records whose exporter carried no AS (`AS = 0`) and resolves AS names in
@@ -158,6 +171,10 @@ impl Config {
             flow_retention_days: parse_retention_days(
                 std::env::var("YAGRA_FLOW_RETENTION_DAYS").ok(),
             ),
+            // ClickHouse's own system logs (ADR-031 Inc.4): bounded by default, `0` opts out.
+            flow_system_log_days: parse_system_log_days(
+                std::env::var("YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS").ok(),
+            ),
             // IP→ASN enrichment (ADR-031 Increment 3): opt-in. Unset ⇒ AS is export-provided only.
             ipasn_db_path: parse_optional(std::env::var("YAGRA_IPASN_DB").ok()),
             ipasn_reload_secs: std::env::var("YAGRA_IPASN_RELOAD_SECS")
@@ -197,6 +214,50 @@ fn parse_retention_days(raw: Option<String>) -> u32 {
         .filter(|&n| n > 0)
         .map(|n| n.clamp(1, 3650))
         .unwrap_or(crate::flowstore::DEFAULT_FLOW_RETENTION_DAYS)
+}
+
+/// Parse the ClickHouse system-log retention (`YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS`).
+///
+/// Differs from [`parse_retention_days`] in exactly one way, and it is deliberate: **`0` is a
+/// meaningful value here**, not a typo to be defaulted away. `0` means "this is not my ClickHouse,
+/// leave `system.*` alone". Unset or unparseable still falls back to the default, because a
+/// deployment that never heard of this variable is precisely the one drowning in trace logs.
+fn parse_system_log_days(raw: Option<String>) -> u32 {
+    match raw.map(|s| s.trim().to_owned()) {
+        Some(s) if !s.is_empty() => s
+            .parse::<u32>()
+            .map(|n| n.clamp(0, 3650))
+            .unwrap_or(crate::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS),
+        _ => crate::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS,
+    }
+}
+
+#[cfg(test)]
+mod system_log_days_tests {
+    use super::parse_system_log_days;
+    use crate::flowstore::DEFAULT_SYSTEM_LOG_RETENTION_DAYS as DEF;
+
+    /// 🚨 `0` must survive, and that is the whole difference from `parse_retention_days`.
+    ///
+    /// Its sibling filters `0` away as a typo, because a 0-day flow TTL means "expire everything
+    /// immediately" — a value nobody wants. Here `0` means "this ClickHouse is not mine, do not
+    /// touch `system.*`", which is the one thing an operator on a managed/shared store needs to be
+    /// able to say. Copying the sibling's `.filter(|&n| n > 0)` would silently turn that opt-out
+    /// into the default and rewrite retention on a store Yagra does not own.
+    #[test]
+    fn zero_means_hands_off_not_a_typo() {
+        assert_eq!(parse_system_log_days(Some("0".into())), 0);
+        assert_eq!(parse_system_log_days(Some(" 0 ".into())), 0);
+        // Unset or unparseable still defaults — a deployment that never heard of this variable is
+        // exactly the one drowning in trace logs.
+        assert_eq!(parse_system_log_days(None), DEF);
+        assert_eq!(parse_system_log_days(Some(String::new())), DEF);
+        assert_eq!(parse_system_log_days(Some("  ".into())), DEF);
+        assert_eq!(parse_system_log_days(Some("banana".into())), DEF);
+        // A real number is honoured, and an absurd one is clamped rather than accepted.
+        assert_eq!(parse_system_log_days(Some("30".into())), 30);
+        assert_eq!(parse_system_log_days(Some("99999".into())), 3650);
+    }
 }
 
 /// Parse the SSO-owner idle window in days. Unset, unparseable, or zero ⇒ the default; clamped to

@@ -228,6 +228,23 @@ async fn host_metric_range(
     ))
 }
 
+/// The step a host trend is folded and drawn at.
+///
+/// 🚨 **The floor is the sample interval, not 1.** [`crate::store`]'s `host_range_query` folds each
+/// step with `avg_over_time` over a window of exactly that step, so a step finer than
+/// [`crate::HOST_SAMPLE_SECS`] leaves buckets with no sample in them — gaps, where the old
+/// raw-selector read drew a carried-forward value instead. Drawing finer than you sample was never
+/// honest; before ADR-082 it was merely invisible, because the raw read had VictoriaMetrics'
+/// staleness window to hide behind.
+fn host_trend_step(from: i64, to: i64, requested: Option<u64>) -> u64 {
+    clamp_range_step(
+        from,
+        to,
+        requested.unwrap_or(DEFAULT_STEP_SECS),
+        crate::HOST_SAMPLE_SECS,
+    )
+}
+
 /// One host's resource trends, shared by `GET /api/v1/system/hosts/:instance/metrics/range` and the
 /// MCP `get_system_health(section="host_trends")` tool (ADR-042 I3a).
 ///
@@ -247,7 +264,7 @@ pub(crate) async fn host_trends(
     })?;
     let to = to.unwrap_or_else(now_unix_s);
     let from = from.unwrap_or(to - DEFAULT_RANGE_SECS);
-    let step = clamp_range_step(from, to, step.unwrap_or(DEFAULT_STEP_SECS), 1);
+    let step = host_trend_step(from, to, step);
     let store = &st.store;
     // The six scalar series and each mount's two disk series are independent queries — fan them out
     // concurrently, since this backs a 15s System Health refresh.
@@ -345,6 +362,31 @@ mod tests {
         let bytes = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(json["error"]["code"], "host_not_found");
+    }
+
+    /// The step is floored at the sampling interval, so `avg_over_time`'s window always contains a
+    /// sample.
+    ///
+    /// 🚨 The old floor was `1`. That was harmless only while the read was a bare selector, which
+    /// VictoriaMetrics answers from its staleness window — folding at `[1s]` instead returns
+    /// nothing for 14 of every 15 seconds, i.e. a chart that is mostly gaps. The two changes are
+    /// one change: ADR-082 cannot land without this floor.
+    #[test]
+    fn the_host_trend_step_is_never_finer_than_the_sampling() {
+        // A caller asking for per-second detail gets the sampling interval, not per-second gaps.
+        assert_eq!(host_trend_step(0, 3600, Some(1)), crate::HOST_SAMPLE_SECS);
+        assert_eq!(host_trend_step(0, 3600, Some(0)), crate::HOST_SAMPLE_SECS);
+        // Anything at or above the floor is honoured as asked.
+        assert_eq!(
+            host_trend_step(0, 3600, Some(crate::HOST_SAMPLE_SECS)),
+            crate::HOST_SAMPLE_SECS
+        );
+        assert_eq!(host_trend_step(0, 3600, Some(300)), 300);
+        // The default is above the floor — otherwise the default view would be silently re-stepped.
+        assert!(host_trend_step(0, 3600, None) >= crate::HOST_SAMPLE_SECS);
+        assert_eq!(host_trend_step(0, 3600, None), DEFAULT_STEP_SECS);
+        // A long window is still bounded by the point cap, which outranks the floor.
+        assert!(host_trend_step(0, 90 * 86_400, Some(15)) > crate::HOST_SAMPLE_SECS);
     }
 
     #[test]

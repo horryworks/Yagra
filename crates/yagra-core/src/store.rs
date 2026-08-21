@@ -606,6 +606,27 @@ fn finite(v: f64) -> f64 {
     }
 }
 
+/// The PromQL a host trend chart reads: `selector`, folded to exactly one point per `step_s`.
+///
+/// 🚨 **Never range-query the bare selector.** `yagra_host_*` is written every
+/// [`crate::HOST_SAMPLE_SECS`] (15s), and `query_range` returns, for each step boundary, the *last
+/// raw sample* in its lookback window — so at any step coarser than the sample interval it draws
+/// one sample per step and silently discards the rest. Host CPU is not smooth: a polling cycle pegs
+/// the box for a few seconds and it falls back, a sawtooth locked to the poll interval. Sampling
+/// that on a grid aliases, and then the drawn *level* is decided by the phase between the two
+/// rather than by the load. On 2026-08-21 a poller restart re-phased the sawtooth and the chart
+/// stepped from ~41% to ~86% with no change in load whatsoever — measured across that boundary the
+/// 30-minute average moved 66.3 → 68.8, and min/max were 11/100 on **both** sides.
+///
+/// `avg_over_time` over exactly one step is the fix, and the reason it is exactly one step is that
+/// the folding window and the drawing interval are then the same number by construction: no sample
+/// can be dropped, and no phase can move the line. Callers must floor the step at the sample
+/// interval ([`crate::api::system`] does) — a window shorter than the sampling produces empty
+/// buckets, i.e. gaps where the old code drew a carried-forward value. (ADR-082.)
+fn host_range_query(selector: &str, step_s: u64) -> String {
+    format!("avg_over_time({selector}[{}s])", step_s.max(1))
+}
+
 /// Build the Prometheus exposition body for one host self-sample: the scalar gauges (cpu/load/mem/
 /// swap) plus a `fs_used_bytes`/`fs_size_bytes` pair per watched filesystem, all tagged
 /// `instance`/`role`(/`pool`)(/`mount`) with a trailing millisecond timestamp. The label set here
@@ -1122,12 +1143,13 @@ impl MetricStore for VmStore {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint> {
-        let query = format!(
+        let selector = format!(
             "yagra_host_{}{{instance=\"{}\"}}",
             metric,
             promql_label_escape(instance)
         );
-        self.query_range_points(query, from_s, to_s, step_s).await
+        self.query_range_points(host_range_query(&selector, step_s), from_s, to_s, step_s)
+            .await
     }
 
     async fn host_disk_range(
@@ -1139,13 +1161,14 @@ impl MetricStore for VmStore {
         to_s: i64,
         step_s: u64,
     ) -> Vec<MetricPoint> {
-        let query = format!(
+        let selector = format!(
             "yagra_host_{}{{instance=\"{}\",mount=\"{}\"}}",
             metric,
             promql_label_escape(instance),
             promql_label_escape(mount)
         );
-        self.query_range_points(query, from_s, to_s, step_s).await
+        self.query_range_points(host_range_query(&selector, step_s), from_s, to_s, step_s)
+            .await
     }
 
     async fn latest(&self, key: &SeriesKey) -> Option<f64> {
@@ -1725,6 +1748,37 @@ mod tests {
             aggregate_latest_query(&key),
             "max(last_over_time(huawei_cpu_usage{node=\"00000000-0000-0000-0000-000000000000\"}[1800s]))"
         );
+    }
+
+    /// 🚨 A host trend query must fold **the whole step**, not sample one point out of it.
+    ///
+    /// A bare selector handed to `query_range` returns the last raw sample at each step boundary
+    /// and drops everything between, so a periodic signal aliases and the drawn *level* follows the
+    /// phase rather than the load. That is not theoretical: on 2026-08-21 a poller restart
+    /// re-phased the 60-second sawtooth of host CPU and the chart stepped from ~41% to ~86% while
+    /// the 30-minute average across that boundary moved 66.3 → 68.8 (ADR-082).
+    ///
+    /// Two things are pinned, and they are pinned together because drift between them re-opens the
+    /// bug from either side: that a rollup is applied at all, and that its window is the same
+    /// number as the step the points are drawn at. A window narrower than the step drops samples
+    /// again; wider than the step counts them twice.
+    #[test]
+    fn a_host_trend_query_folds_the_whole_step_it_will_be_drawn_at() {
+        let sel = "yagra_host_cpu_pct{instance=\"core\"}";
+        assert_eq!(
+            host_range_query(sel, 60),
+            "avg_over_time(yagra_host_cpu_pct{instance=\"core\"}[60s])"
+        );
+        for step in [15u64, 60, 300, 3600] {
+            let q = host_range_query(sel, step);
+            assert_ne!(q, sel, "step {step}: the bare selector is what aliases");
+            assert!(
+                q.starts_with("avg_over_time(") && q.ends_with(&format!("[{step}s])")),
+                "step {step}: window must equal the step, got {q}"
+            );
+        }
+        // A caller that forgets to floor the step still gets a legal window, never `[0s]`.
+        assert!(host_range_query(sel, 0).ends_with("[1s])"));
     }
 
     #[test]

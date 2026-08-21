@@ -774,6 +774,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         meraki_devices: meraki_devices.clone(),
         meraki_orgs: meraki_orgs.clone(),
         meraki_pool,
+        flow_system_log_days: cfg.flow_system_log_days,
         creds: creds.clone(),
         dispatcher: dispatcher.clone(),
         discovery: discovery.clone(),
@@ -1187,6 +1188,10 @@ struct LeaderTasks {
     meraki_orgs: Arc<meraki::MerakiOrgRepo>,
     /// Which poller pool Meraki collection jobs are published to (moved: read once at startup).
     meraki_pool: String,
+    /// Retention for ClickHouse's own system logs (ADR-031 Inc.4); `0` leaves `system.*` alone.
+    /// Leader-only like the rest of this struct, which is what keeps two cores from racing the
+    /// same `ALTER`.
+    flow_system_log_days: u32,
     creds: Arc<CredentialStore>,
     dispatcher: Arc<scheduler::PollDispatcher>,
     discovery: Arc<DiscoveryRunner>,
@@ -1412,6 +1417,7 @@ impl LeaderTasks {
     async fn spawn_flow_pipeline(&self) -> anyhow::Result<()> {
         if let Some(flow_store) = self.flows.clone() {
             ensure_flow_schema(&flow_store).await;
+            bound_clickhouse_system_logs(&flow_store, self.flow_system_log_days).await;
             let (flow_tx, flow_rx) =
                 tokio::sync::mpsc::channel::<FlowRow>(FLOW_PERSIST_CHANNEL_CAP);
             tokio::spawn(run_flow_writer(flow_rx, flow_store, self.shutdown.clone()));
@@ -1642,7 +1648,7 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
 }
 
 /// How often core samples its own host resources (self-observability). Matches the WebUI refresh.
-const HOST_SAMPLE_SECS: u64 = 15;
+pub(crate) const HOST_SAMPLE_SECS: u64 = 15;
 
 /// Drain locally-produced session revocations (logout / user disable-demote-reset-delete): persist
 /// each to the durable `auth_revocations` table so it survives restart/failover, then fan it out on
@@ -2858,6 +2864,23 @@ async fn ensure_flow_schema(store: &Arc<dyn FlowStore>) {
     tracing::error!(
         "could not ensure ClickHouse flow schema after retries — flow inserts will fail until reachable"
     );
+}
+
+/// Bound ClickHouse's own system log tables (ADR-031 Increment 4). Best-effort by construction:
+/// a failure here is logged and the flow pipeline starts anyway.
+///
+/// 🚨 **This must never be able to stop flow ingestion.** It is housekeeping on the store's
+/// self-telemetry, not on Yagra's data — a ClickHouse that refuses `ALTER TABLE system.*` (managed
+/// service, restricted user) is still a perfectly good flow store, and treating that as fatal would
+/// trade a disk-growth problem for an outage.
+async fn bound_clickhouse_system_logs(store: &Arc<dyn FlowStore>, days: u32) {
+    if let Err(e) = store.bound_system_logs(days).await {
+        tracing::warn!(
+            error = %e,
+            days,
+            "could not bound ClickHouse system log retention; its own logs stay unbounded"
+        );
+    }
 }
 
 /// Build the ClickHouse rows for one edge-aggregated flow batch: resolve the exporter to a node and

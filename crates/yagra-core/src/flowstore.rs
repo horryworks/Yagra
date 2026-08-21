@@ -32,6 +32,13 @@ use uuid::Uuid;
 /// operator-editable thereafter — the policy table is [`crate::retention`] (ADR-040).
 pub use crate::retention::DEFAULT_FLOW_DAYS as DEFAULT_FLOW_RETENTION_DAYS;
 
+/// Default retention for ClickHouse's **own** system log tables (ADR-031 Increment 4).
+///
+/// Not operator-editable from the UI and deliberately not in the [`crate::retention`] policy table:
+/// that table is about *Yagra's* data, and this is about the store's self-telemetry. One env var
+/// (`YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS`) is the whole surface.
+pub const DEFAULT_SYSTEM_LOG_RETENTION_DAYS: u32 = 7;
+
 /// One flow row to insert (a poller's per-bucket top-N record, with `node_id` resolved by core).
 #[derive(Debug, Clone)]
 pub struct FlowRow {
@@ -270,6 +277,24 @@ pub trait FlowStore: Send + Sync {
     async fn set_retention_days(&self, _days: u32) -> anyhow::Result<()> {
         Ok(())
     }
+    /// Bound ClickHouse's **own** system log tables to `days` (ADR-031 Increment 4). `0` = leave
+    /// `system.*` untouched.
+    ///
+    /// Stock ClickHouse gives `text_log` / `trace_log` / `metric_log` / `asynchronous_metric_log`
+    /// and friends **no TTL at all**, and Yagra ships it with stock defaults. Measured on one
+    /// deployment after a month: 49 MiB of flow data against 2.3 GiB / ~693M rows of self-
+    /// telemetry, a third of a core burned merging it, and the top log producers were the merges of
+    /// those very tables. It is a feedback loop, and nothing bounds it.
+    ///
+    /// 🚨 **A config-file `<ttl>` does not fix an existing deployment**, for exactly the reason
+    /// [`Self::set_retention_days`] exists: ClickHouse applies it when it *creates* the table, so
+    /// every volume that is not brand new keeps the TTL it was born with — which here is none. The
+    /// shipped `config.d` and this `ALTER` are not alternatives; they cover different deployments.
+    ///
+    /// Defaults to a no-op so the in-memory fake need not pretend to own a ClickHouse.
+    async fn bound_system_logs(&self, _days: u32) -> anyhow::Result<()> {
+        Ok(())
+    }
     /// Insert a batch of flow rows (best-effort tier — a store hiccup is logged, never fatal).
     async fn insert_batch(&self, rows: &[FlowRow]) -> anyhow::Result<()>;
     /// Top source hosts by bytes for a node/window.
@@ -421,6 +446,35 @@ fn conversations_sql(q: &FlowQuery) -> String {
 /// name they read back from the `IN ('flow_records', 'flow_rollup_5m')` list above.
 fn ttl_modify_sql(table: &str, days: u32) -> String {
     format!("ALTER TABLE {table} MODIFY TTL ts + INTERVAL {days} DAY DELETE")
+}
+
+/// The system log tables to bound, discovered rather than listed (ADR-031 Increment 4).
+///
+/// Discovered, because a hardcoded list is a mirror of ClickHouse's release notes: 24.8 ships nine
+/// of these and a later version will ship a tenth, which a list would silently leave unbounded —
+/// the exact failure this increment exists to fix. The three predicates are what make "discovered"
+/// safe: `database = 'system'` keeps it off Yagra's own tables and the operator's, `endsWith(…,
+/// '_log')` is ClickHouse's own naming rule for them, and the join on an `event_date` column is
+/// what guarantees the TTL expression below is even valid for the table.
+///
+/// The `name` values that come back are ClickHouse's, never an operator's — the same property that
+/// lets [`ttl_modify_sql`] interpolate a table name without escaping it.
+const SYSTEM_LOG_TABLES_SQL: &str = "SELECT t.name AS name, t.engine_full AS engine_full \
+     FROM system.tables AS t \
+     INNER JOIN (SELECT table FROM system.columns \
+                 WHERE database = 'system' AND name = 'event_date' GROUP BY table) AS c \
+       ON c.table = t.name \
+     WHERE t.database = 'system' AND endsWith(t.name, '_log') \
+       AND position(t.engine, 'MergeTree') > 0 \
+     ORDER BY t.name FORMAT JSONEachRow";
+
+/// The `ALTER` that bounds one ClickHouse system log table. `table` comes from
+/// [`SYSTEM_LOG_TABLES_SQL`], i.e. from ClickHouse, never from operator input.
+///
+/// `event_date` rather than `event_time`: it is the partitioning key of every system log, so
+/// expiry drops whole partitions instead of rewriting parts row by row.
+fn system_log_ttl_sql(table: &str, days: u32) -> String {
+    format!("ALTER TABLE system.{table} MODIFY TTL event_date + INTERVAL {days} DAY DELETE")
 }
 
 /// Whether a `system.tables.engine_full` string already declares a `days`-day TTL.
@@ -631,6 +685,45 @@ impl FlowStore for ChStore {
         // Stored only after the ALTER succeeds, so a failed change does not leave the process
         // believing a TTL that ClickHouse never accepted.
         self.retention_days.store(days, Ordering::Relaxed);
+        Ok(())
+    }
+
+    async fn bound_system_logs(&self, days: u32) -> anyhow::Result<()> {
+        if days == 0 {
+            tracing::info!("ClickHouse system-log bounding disabled by configuration");
+            return Ok(());
+        }
+        let rows = self.query_json(SYSTEM_LOG_TABLES_SQL).await?;
+        if rows.is_empty() {
+            // Not an error: a ClickHouse with every system log switched off is a legitimate — and
+            // in fact ideal — shape for this deployment to be in.
+            tracing::info!("no ClickHouse system log tables to bound");
+            return Ok(());
+        }
+        for row in rows {
+            let Some(name) = row.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            let engine_full = row
+                .get("engine_full")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if engine_full_declares_ttl_days(engine_full, days) {
+                continue;
+            }
+            // ⚠️ First application on a long-lived deployment schedules a real mutation — that is
+            // the point (it is what reclaims the disk), but it is also work, so say so.
+            tracing::warn!(
+                table = name,
+                to_days = days,
+                "bounding a ClickHouse system log table that had no matching TTL"
+            );
+            // Per-table tolerance on purpose: a managed ClickHouse may refuse ALTER on some of
+            // `system.*`, and one refusal must not skip the tables that would have accepted it.
+            if let Err(e) = self.exec(&system_log_ttl_sql(name, days)).await {
+                tracing::warn!(table = name, error = %e, "could not bound system log TTL");
+            }
+        }
         Ok(())
     }
 
@@ -1182,6 +1275,36 @@ mod tests {
         assert!(engine_full_declares_ttl_days(
             &ttl_modify_sql("flow_rollup_5m", 45),
             45
+        ));
+    }
+
+    /// The system-log bounding must land on ClickHouse's logs and nothing else, and must converge.
+    ///
+    /// 🚨 The table names in that `ALTER` are interpolated unescaped, which is safe **only**
+    /// because [`SYSTEM_LOG_TABLES_SQL`] is what produced them. Its three predicates are therefore
+    /// load-bearing, not stylistic: drop `database = 'system'` and the statement reaches Yagra's
+    /// own flow tables; drop the `event_date` join and it is emitted for tables where the
+    /// expression does not compile; drop `endsWith(…, '_log')` and it reaches `system.parts` and
+    /// friends. Each is pinned here because nothing else in the tree reads that string.
+    #[test]
+    fn the_system_log_alter_is_scoped_to_clickhouses_own_logs_and_converges() {
+        assert_eq!(
+            system_log_ttl_sql("text_log", 7),
+            "ALTER TABLE system.text_log MODIFY TTL event_date + INTERVAL 7 DAY DELETE"
+        );
+        assert!(SYSTEM_LOG_TABLES_SQL.contains("t.database = 'system'"));
+        assert!(SYSTEM_LOG_TABLES_SQL.contains("endsWith(t.name, '_log')"));
+        assert!(SYSTEM_LOG_TABLES_SQL.contains("name = 'event_date'"));
+        assert!(SYSTEM_LOG_TABLES_SQL.contains("MergeTree"));
+        // Round trip, same reason as the flow tables above: what we write has to be what the skip
+        // check reads back, or every core start re-mutates every system log table on the box.
+        assert!(engine_full_declares_ttl_days(
+            &system_log_ttl_sql("asynchronous_metric_log", 7),
+            7
+        ));
+        assert!(!engine_full_declares_ttl_days(
+            &system_log_ttl_sql("trace_log", 3),
+            7
         ));
     }
 
