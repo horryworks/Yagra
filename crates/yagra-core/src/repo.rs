@@ -2737,6 +2737,37 @@ mod tests {
         assert!(!relax_ignore_missing(&[], &[1, 2, 3]), "nothing embedded");
     }
 
+    /// The exact boot decision an N-1 core makes against the ADR-081 schema, on real numbers.
+    ///
+    /// Measured 2026-08-21 rather than imagined: the shipped `f30570a` image reports 97 embedded
+    /// migrations when asked (`yagra-core migrations`, side-effect-free by design), and the test
+    /// deployment's `_sqlx_migrations` holds 98 applied. So the rollback question — "does the
+    /// older binary start, or does it refuse a database it thinks is from elsewhere" — is exactly
+    /// this predicate on exactly these two lists.
+    ///
+    /// 🚨 This is the half of the rollback that can be answered without a rollback. It says the
+    /// binary decides to start; it does not say the process then runs. That is still owed, and the
+    /// ADR-081 entry in the backlog says so.
+    #[test]
+    fn the_shipped_n1_core_boots_against_the_adr_081_schema() {
+        let embedded: Vec<i64> = (1..=97).collect();
+        let applied: Vec<i64> = (1..=98).collect();
+        assert!(
+            relax_ignore_missing(&embedded, &applied),
+            "a core that predates migration 0098 must still start against a database that has it"
+        );
+        // The relaxation must still be a decision. On the same measured embedded list, a database
+        // that is merely *current* has nothing to forgive and must not open it — otherwise the
+        // assertion above would pass equally on a function that returned true unconditionally.
+        // (The misconfigurations the guard catches are enumerated in
+        // `the_ignore_missing_relaxation_only_opens_for_a_newer_database`; this pair is only about
+        // the two lists that were actually measured.)
+        assert!(
+            !relax_ignore_missing(&embedded, &embedded),
+            "a database at exactly this binary's level forgives nothing"
+        );
+    }
+
     /// Every migration that narrows the schema must say how far back it can still be run.
     ///
     /// `schema_compat` (0078) answers "can this deployment go back to version X?", and its default

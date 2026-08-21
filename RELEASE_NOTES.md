@@ -41,6 +41,14 @@
 
 ### Bug Fixes
 
+- **An alert from a two-sided rule named the wrong bound.** A rule bounding a metric on both
+  sides is filed under `above`, and the alert published that side's numbers whichever side the
+  value had actually crossed — so a receive level of 0.909 that tripped "at or below 1.0" went
+  out as `threshold: 5000.0, direction: above`, which is not merely uninformative but false.
+  `breach.direction` and `breach.threshold` now name the bound the value crossed, in the API,
+  the alert history, notifications and the WebUI alike. One-sided rules are unaffected: their two
+  sides are the same side.
+
 - **A threshold rule facing the opposite way to its neighbour no longer disappears.** Where two
   rules at the same scope named opposite directions, one had its bounds compared the wrong way
   round during resolution and stopped contributing. Each side is now resolved under its own

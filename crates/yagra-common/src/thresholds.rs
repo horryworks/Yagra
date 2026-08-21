@@ -197,20 +197,65 @@ impl ThresholdBounds {
         })
     }
 
+    /// Classify one value: how bad it is, **and which side said so**.
+    ///
+    /// The one walk behind [`Self::evaluate`] and [`Self::breaching_side`]. Splitting it was the
+    /// original mistake: the first version answered only "how bad", so the alert had to name a
+    /// bound from somewhere else and named the *primary* side's — which for a band is routinely
+    /// the side the value did not cross. Observed on the live deployment 2026-08-21: a value of
+    /// 0.909 that tripped `critical_below: 1.0` was published as
+    /// `threshold: 5000.0, direction: above`. Keep the two answers in one function so a future
+    /// edit cannot make them disagree again.
+    fn classify(&self, value: f64) -> Option<(NodeState, Direction)> {
+        if matches!(self.critical_below, Some(c) if value <= c) {
+            return Some((NodeState::Critical, Direction::Below));
+        }
+        if matches!(self.critical_above, Some(c) if value >= c) {
+            return Some((NodeState::Critical, Direction::Above));
+        }
+        if matches!(self.warning_below, Some(w) if value <= w) {
+            return Some((NodeState::Warning, Direction::Below));
+        }
+        if matches!(self.warning_above, Some(w) if value >= w) {
+            return Some((NodeState::Warning, Direction::Above));
+        }
+        None
+    }
+
     /// Classify one value. `Critical` beats `Warning`, and either side can raise either.
     #[must_use]
     pub fn evaluate(&self, value: f64) -> NodeState {
-        if matches!(self.critical_below, Some(c) if value <= c)
-            || matches!(self.critical_above, Some(c) if value >= c)
-        {
-            return NodeState::Critical;
+        self.classify(value)
+            .map_or(NodeState::Ok, |(state, _)| state)
+    }
+
+    /// The side `value` actually crossed, if it crossed one.
+    ///
+    /// `None` means the value is inside the band (or the rule names no bound). Callers describing
+    /// a breach to an operator must use this rather than [`Self::direction`]: `direction` answers
+    /// "which side is this rule *filed* under", which exists for the legacy column and the N-1
+    /// rollback, and is not a claim about any particular sample.
+    #[must_use]
+    pub fn breaching_side(&self, value: f64) -> Option<Direction> {
+        self.classify(value).map(|(_, side)| side)
+    }
+
+    /// One side's warning bound.
+    #[must_use]
+    pub const fn warning_on(&self, side: Direction) -> Option<f64> {
+        match side {
+            Direction::Below => self.warning_below,
+            Direction::Above => self.warning_above,
         }
-        if matches!(self.warning_below, Some(w) if value <= w)
-            || matches!(self.warning_above, Some(w) if value >= w)
-        {
-            return NodeState::Warning;
+    }
+
+    /// One side's critical bound.
+    #[must_use]
+    pub const fn critical_on(&self, side: Direction) -> Option<f64> {
+        match side {
+            Direction::Below => self.critical_below,
+            Direction::Above => self.critical_above,
         }
-        NodeState::Ok
     }
 
     /// Combine two rules' bounds, keeping the more restrictive on **each side separately**.
@@ -845,6 +890,69 @@ mod tests {
         assert_eq!(eff.evaluate(-12.0), NodeState::Ok, "inside the band");
         assert_eq!(eff.evaluate(-4.0), NodeState::Warning, "getting hot");
         assert_eq!(eff.evaluate(-1.0), NodeState::Critical, "overdriven");
+    }
+
+    /// A breach must be described by the bound it crossed, not by the rule's primary side.
+    ///
+    /// `direction()` answers "which side is this rule filed under" — an artefact of the legacy
+    /// column and the N-1 rollback, and `Above` for every band. Describing a breach with it made
+    /// an alert state something false: on the live deployment 2026-08-21 a value of 0.909 that had
+    /// crossed `critical_below: 1.0` went out as `threshold: 5000.0, direction: above`. Nothing
+    /// caught it because every test in the suite used a one-sided rule, where the two coincide.
+    #[test]
+    fn the_reported_bound_is_the_one_that_was_crossed() {
+        let bounds = ThresholdBounds {
+            warning_below: Some(-18.0),
+            critical_below: Some(-20.0),
+            warning_above: Some(-5.0),
+            critical_above: Some(-3.0),
+        };
+        // The rule is filed under `above`, and every answer below has to survive that.
+        assert_eq!(bounds.direction(), Direction::Above);
+
+        for (value, side, warning, critical) in [
+            (-25.0, Direction::Below, Some(-18.0), Some(-20.0)),
+            (-19.0, Direction::Below, Some(-18.0), Some(-20.0)),
+            (-4.0, Direction::Above, Some(-5.0), Some(-3.0)),
+            (-1.0, Direction::Above, Some(-5.0), Some(-3.0)),
+        ] {
+            assert_eq!(bounds.breaching_side(value), Some(side), "value {value}");
+            assert_eq!(bounds.warning_on(side), warning, "value {value}");
+            assert_eq!(bounds.critical_on(side), critical, "value {value}");
+        }
+        assert_eq!(
+            bounds.breaching_side(-12.0),
+            None,
+            "inside the band nothing was crossed, and no bound may be named"
+        );
+    }
+
+    /// The two answers come out of one walk, so they can never disagree — pinned across the band
+    /// and past both ends, because the failure this guards is silent: a value classified `Critical`
+    /// while no side admits to having been crossed would publish an alert with no threshold at all.
+    #[test]
+    fn evaluate_and_breaching_side_always_agree() {
+        let bounds = ThresholdBounds {
+            warning_below: Some(-18.0),
+            critical_below: Some(-20.0),
+            warning_above: Some(-5.0),
+            critical_above: Some(-3.0),
+        };
+        let mut v = -30.0;
+        while v <= 5.0 {
+            let breached = bounds.breaching_side(v).is_some();
+            assert_eq!(
+                breached,
+                bounds.evaluate(v) != NodeState::Ok,
+                "value {v}: evaluate and breaching_side disagree"
+            );
+            v += 0.25;
+        }
+        // A one-sided rule keeps naming its own side and nothing else.
+        let up = ThresholdBounds::above(Some(70.0), Some(90.0));
+        assert_eq!(up.breaching_side(95.0), Some(Direction::Above));
+        assert_eq!(up.breaching_side(1.0), None, "low values are not a breach");
+        assert_eq!(up.warning_on(Direction::Below), None);
     }
 
     #[test]

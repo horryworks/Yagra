@@ -685,11 +685,11 @@ pub struct RuleCoverage {
 struct ThresholdEval {
     /// Observed sample value.
     value: f64,
-    /// Breach direction of the rule.
+    /// The side this sample crossed — **not** the rule's primary side. See where this is built.
     direction: Direction,
-    /// Effective warning bound, if any.
+    /// That side's warning bound, if it has one.
     warning: Option<f64>,
-    /// Effective critical bound, if any.
+    /// That side's critical bound, if it has one.
     critical: Option<f64>,
 }
 
@@ -1173,14 +1173,24 @@ impl AlertManager {
         } else {
             eff.evaluate(sample.value)
         };
-        // The side the operator is told about. For a band rule this is the primary side, which is
-        // not necessarily the side that just tripped — a genuine narrowing, and the reason the
-        // breach detail is worth revisiting when a screen wants to say *which* bound was crossed.
+        // 🚨 The side the operator is told about is the side this sample actually crossed, never
+        // the rule's primary side — which for a band is routinely the other one. Publishing the
+        // primary side made the alert contradict itself, and it reached the test deployment before
+        // anyone saw it: a value of 0.909 that tripped `critical_below: 1.0` was published as
+        // `threshold: 5000.0, direction: above` (2026-08-21). 2,600 green tests did not catch it
+        // because every one of them used a one-sided rule, where the two sides are the same side.
+        //
+        // An in-band sample falls back to the primary side. Nothing fires from one, but a resolve
+        // commits with this eval in hand and a side is still required.
+        let bounds = eff.bounds();
+        let side = bounds
+            .breaching_side(sample.value)
+            .unwrap_or(eff.direction());
         let eval = ThresholdEval {
             value: sample.value,
-            direction: eff.direction(),
-            warning: eff.warning(),
-            critical: eff.critical(),
+            direction: side,
+            warning: bounds.warning_on(side),
+            critical: bounds.critical_on(side),
         };
         self.process_check(
             node,
@@ -3477,6 +3487,240 @@ mod tests {
         let actions = mgr.observe(&reachable_ok);
         assert!(matches!(actions.as_slice(), [NotifyAction::Resolve(_)]));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// One band rule, walked through every state it can reach (ADR-081).
+    ///
+    /// The seven unit tests in `yagra-common` pin `ThresholdBounds::evaluate` and the resolution
+    /// fold; none of them runs a band through the **engine**, which is where the four bounds have
+    /// to survive `AlertConfig` construction, `resolve`, the dwell window and the check id. This
+    /// walks the three states an operator actually sees, on one rule and therefore **one check**:
+    /// the invariant ADR-081 chose ranges to protect (one rule = one check = one dwell window) is
+    /// only worth anything if a single check can change which side it breaches without changing
+    /// identity.
+    ///
+    /// Verified against the live deployment 2026-08-21 on `jpmyj01fw01`'s `icmp_rtt_ms`, by moving
+    /// the band rather than the metric — snmpsim replays a fixed recording, so the lab cannot move
+    /// an optical level (the ADR-077 decision 1 constraint). Same three transitions, same rule.
+    #[test]
+    fn a_band_rule_fires_on_each_side_and_clears_between_them() {
+        use yagra_bus::Sample;
+        use yagra_common::{Direction, ThresholdBounds, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        // An optical receive level: dark at/below -20 dBm, overdriven at/above -3 dBm.
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "if_rx_power_dbm",
+                    ThresholdBounds {
+                        warning_below: Some(-18.0),
+                        critical_below: Some(-20.0),
+                        warning_above: Some(-5.0),
+                        critical_above: Some(-3.0),
+                    },
+                    1,
+                ),
+            )],
+            meta,
+        ));
+
+        let observe = |value: f64, at: i64| {
+            let mut r = result(node, CheckOutcome::Reachable, at);
+            r.samples = vec![Sample::gauge("if_rx_power_dbm", value)];
+            mgr.observe(&r)
+        };
+
+        // Dark: -25 <= -20 => critical on the LOW side.
+        assert!(matches!(
+            observe(-25.0, 0).as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+        let low = mgr.active_alerts();
+        assert_eq!(low.len(), 1);
+        assert_eq!(low[0].state, NodeState::Critical);
+        let check = low[0].check;
+        // 🚨 What the operator is TOLD, which is a separate claim from what the engine decided.
+        // This rule's primary side is `above` (a band is filed under `above`, for the legacy
+        // column), so publishing the primary side would say "0.909 exceeded 5000" — the shape that
+        // reached the test deployment on 2026-08-21 and read as nonsense. It must name the side the
+        // value crossed.
+        assert_eq!(
+            low[0].breach.as_ref().map(|b| (b.direction, b.threshold)),
+            Some((Direction::Below, Some(-20.0))),
+            "a breach on the low side must not be published as the primary side's bound"
+        );
+
+        // Healthy light: inside the band => resolves. A one-directional rule could not express
+        // "-10 is fine but both -25 and -2 are not" at all, which is why this row exists.
+        assert!(matches!(
+            observe(-10.0, 1_000).as_slice(),
+            [NotifyAction::Resolve(_)]
+        ));
+        assert!(mgr.active_alerts().is_empty());
+
+        // Still the low side, but only warning: -19 <= -18 and > -20. Both severities on one side.
+        assert!(matches!(
+            observe(-19.0, 2_000).as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+        let warn = mgr.active_alerts();
+        assert_eq!(warn[0].state, NodeState::Warning);
+        assert_eq!(
+            warn[0].breach.as_ref().map(|b| (b.direction, b.threshold)),
+            Some((Direction::Below, Some(-18.0))),
+            "the warning bound reported must be the one on the side that was crossed"
+        );
+        assert!(matches!(
+            observe(-10.0, 3_000).as_slice(),
+            [NotifyAction::Resolve(_)]
+        ));
+
+        // Overdriven: -2 >= -3 => critical on the HIGH side, out of the SAME rule.
+        assert!(matches!(
+            observe(-2.0, 4_000).as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+        let high = mgr.active_alerts();
+        assert_eq!(high.len(), 1);
+        assert_eq!(high[0].state, NodeState::Critical);
+        // The mirror: the same rule, the other side, and the bound reported moves with it. A fix
+        // that simply hard-coded the low side would pass every assertion above and fail this one.
+        assert_eq!(
+            high[0].breach.as_ref().map(|b| (b.direction, b.threshold)),
+            Some((Direction::Above, Some(-3.0))),
+        );
+        // The load-bearing assertion. `check_id` is the external dedup key (ADR-015/075): if the
+        // side a band happens to be breaching were part of a check's identity, an incident in
+        // PagerDuty would be orphaned every time the value crossed the band instead of updated.
+        assert_eq!(
+            high[0].check, check,
+            "both sides of one rule must be one check"
+        );
+    }
+
+    /// The node-wide fold must keep the sample that is **breaching**, not the largest (ADR-081).
+    ///
+    /// A metric with several table rows per node (chassis temperature sensors, stack power
+    /// supplies) is collapsed to one sample per poll before the state machine sees it, because the
+    /// rows' identities were lost at collection time. Before ranges that fold asked one question —
+    /// "which value is furthest in the rule's single direction" — and a band has no single
+    /// direction to be furthest in.
+    ///
+    /// The numbers are measured, not invented: `jpmyj01fw01` reports 15 `huawei_temp` rows,
+    /// **one at 59 and fourteen at 0** (2026-08-21). A rule reading "at/below 40 is critical" is
+    /// therefore decided entirely by whether the fold can look past the 59 — and a fold that kept
+    /// the maximum would report `Ok` and never fire, silently, with the rule visible on the screen.
+    #[test]
+    fn the_node_wide_fold_keeps_a_breaching_sample_over_a_higher_one_inside_the_band() {
+        use yagra_bus::Sample;
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "huawei_temp",
+                    // The upper bound is out of reach: only the low side can decide this.
+                    ThresholdBounds {
+                        warning_below: Some(45.0),
+                        critical_below: Some(40.0),
+                        warning_above: Some(90_000.0),
+                        critical_above: Some(100_000.0),
+                    },
+                    1,
+                ),
+            )],
+            meta,
+        ));
+
+        let mut r = result(node, CheckOutcome::Reachable, 0);
+        // The order is deliberate: the in-band 59 arrives FIRST and so becomes the incumbent. A
+        // fold that only ever replaces the incumbent with a larger value keeps it and reports Ok.
+        r.samples = vec![
+            Sample::gauge("huawei_temp", 59.0),
+            Sample::gauge("huawei_temp", 0.0),
+            Sample::gauge("huawei_temp", 0.0),
+        ];
+        assert!(
+            matches!(mgr.observe(&r).as_slice(), [NotifyAction::Fire(_)]),
+            "a sensor at 0 breaches `critical_below: 40` and must not be hidden by one at 59"
+        );
+        let alerts = mgr.active_alerts();
+        assert_eq!(alerts.len(), 1, "many rows, one check, one alert (ADR-076)");
+        assert_eq!(alerts[0].state, NodeState::Critical);
+        assert_eq!(
+            alerts[0].breach.as_ref().map(|b| b.value),
+            Some(0.0),
+            "the operator must be shown the row that actually breached"
+        );
+    }
+
+    /// The mirror image: a low sample sitting inside the band must not hide a high breach.
+    ///
+    /// Written because the fix for the case above is a severity comparison, and a severity
+    /// comparison written the other way round — "keep the smallest" — would pass that test and
+    /// fail this one. Neither direction may win by default.
+    #[test]
+    fn the_node_wide_fold_keeps_a_high_breach_over_a_lower_sample_inside_the_band() {
+        use yagra_bus::Sample;
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+
+        let node = NodeId::new();
+        let mgr = manager();
+        let mut meta = HashMap::new();
+        meta.insert(node, NodeMeta::default());
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "huawei_temp",
+                    // Now the LOW bound is out of reach and only the high side can decide.
+                    ThresholdBounds {
+                        warning_below: Some(-100.0),
+                        critical_below: Some(-200.0),
+                        warning_above: Some(45.0),
+                        critical_above: Some(50.0),
+                    },
+                    1,
+                ),
+            )],
+            meta,
+        ));
+
+        let mut r = result(node, CheckOutcome::Reachable, 0);
+        // In-band incumbent first again, this time below the breach rather than above it.
+        r.samples = vec![
+            Sample::gauge("huawei_temp", 0.0),
+            Sample::gauge("huawei_temp", 0.0),
+            Sample::gauge("huawei_temp", 59.0),
+        ];
+        assert!(matches!(
+            mgr.observe(&r).as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+        let alerts = mgr.active_alerts();
+        assert_eq!(alerts.len(), 1);
+        assert_eq!(alerts[0].state, NodeState::Critical);
+        assert_eq!(
+            alerts[0].breach.as_ref().map(|b| b.value),
+            Some(59.0),
+            "the operator must be shown the row that actually breached"
+        );
     }
 
     /// An interface-scoped rule beats the node's, and applies to that port only (ADR-076).
