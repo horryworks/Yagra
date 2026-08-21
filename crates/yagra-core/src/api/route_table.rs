@@ -1658,8 +1658,7 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
 /// `mcp/mod.rs` needs it too: the instructions string names tools, and one parser for "what tools
 /// exist" is the point of having a parser at all.
 pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools.rs");
-    let src = std::fs::read_to_string(path).expect("read src/mcp/tools.rs");
+    let src = crate::mcp::tool_source::tool_surface();
     let mut out = std::collections::BTreeSet::new();
     // `#[tool_router]` and `#[tool_handler(…)]` do not match this needle, so they cost nothing.
     for chunk in src.split("#[tool(").skip(1) {
@@ -1687,6 +1686,20 @@ pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
             out.insert(name);
         }
     }
+    // The floor lives **inside** the function, not only in the test below it, so that every caller
+    // inherits it (ADR-086). The caller that needs it most is
+    // `mcp/tools.rs::every_tool_wrapper_declares_its_own_name`, which asserts its own count equals
+    // this one — and both counts are derived from the same source text, so a surface read only in
+    // part shrinks both sides and they go on agreeing. A floor on one side is what turns that from
+    // a silent pass into a failure. 36 tools are declared today; 34 is a floor, so removing a tool
+    // stays a decision rather than a build break.
+    assert!(
+        out.len() >= 34,
+        "only {} MCP tools were parsed out of the surface; either the parser stopped matching \
+         or the surface was read in part - every check that compares against this count would now \
+         agree with it and prove nothing",
+        out.len()
+    );
     out
 }
 
@@ -1703,8 +1716,7 @@ pub(crate) fn declared_mcp_tools() -> std::collections::BTreeSet<String> {
 /// continuation is undone here so a caller can search for a phrase without caring where the source
 /// happened to wrap; the result is whitespace-normalized for the same reason.
 pub(crate) fn declared_mcp_tool_description(tool: &str) -> Option<String> {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools.rs");
-    let src = std::fs::read_to_string(path).expect("read src/mcp/tools.rs");
+    let src = crate::mcp::tool_source::tool_surface();
     for chunk in src.split("#[tool(").skip(1) {
         let Some((attr, after)) = chunk.split_once(")]") else {
             continue;

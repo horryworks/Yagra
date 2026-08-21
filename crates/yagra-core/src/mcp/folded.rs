@@ -1351,7 +1351,8 @@ mod tests {
     /// satisfied without a row here.
     #[test]
     fn every_folded_branch_is_reachable_from_its_tool() {
-        let tools_src = include_str!("tools.rs");
+        let tools_src = crate::mcp::tool_source::tool_surface();
+        let tools_src = tools_src.as_str();
         for f in FOLDED_READS.iter().filter(|f| !f.arg.is_empty()) {
             assert!(
                 tools_src.contains(&format!("\"{}\"", f.arg)),

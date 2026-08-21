@@ -1405,7 +1405,8 @@ mod tests {
     /// type, and the write tools do.
     #[test]
     fn every_typed_tool_result_is_canaried() {
-        let tools_src = include_str!("tools.rs");
+        let tools_src = crate::mcp::tool_source::tool_surface();
+        let tools_src = tools_src.as_str();
         let dto_src = include_str!("dto.rs");
         // `tools.rs` is a different file, so a literal needle is safe here; the canary-body needles
         // below read this file and are assembled at runtime for the usual reason.

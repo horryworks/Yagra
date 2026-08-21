@@ -29,6 +29,10 @@
 
 mod dto;
 pub(crate) mod folded;
+// Test-only, like `api/route_table.rs`: the one accessor every source-text check reads the tool
+// surface through, so the ADR-086 split cannot leave a reader pointed at a fraction of it.
+#[cfg(test)]
+pub(crate) mod tool_source;
 // `pub(crate)` since ADR-028 WS-G: the RCA agent calls the tool bodies in-process, which is the
 // reuse `tools.rs`'s module doc has promised since Increment 1. It reaches `*_in(params, &NodeScope)`
 // and `YagraMcp::tool_router()`, never `ToolRouter::call` — rmcp's `RequestContext` needs a `Peer`

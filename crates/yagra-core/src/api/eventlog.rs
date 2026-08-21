@@ -860,6 +860,9 @@ mod tests {
         // Checked against the field lists, not the file: the prose above says `src_regex` in order
         // to say there isn't one, and a whole-file scan would match that.
         let field = format!("\n    src_{}: Option<", "regex");
+        // The MCP row reads the whole tool surface through one accessor (ADR-086), so splitting
+        // `tools.rs` into `tools/` cannot leave this pointed at a fraction of it.
+        let mcp = crate::mcp::tool_source::tool_surface();
         for (what, decl, src) in [
             (
                 "GET /events",
@@ -874,7 +877,7 @@ mod tests {
             (
                 "the MCP search_events tool",
                 "pub(crate) struct EventSearchParams {",
-                include_str!("../mcp/tools.rs"),
+                mcp.as_str(),
             ),
         ] {
             let body = src.split(decl).nth(1).expect("the struct is declared");
@@ -917,7 +920,8 @@ mod tests {
             "src_not",
         ];
         let rest = include_str!("eventlog.rs");
-        let mcp = include_str!("../mcp/tools.rs");
+        let mcp = crate::mcp::tool_source::tool_surface();
+        let mcp = mcp.as_str();
 
         fn fields<'a>(src: &'a str, decl: &str) -> &'a str {
             let body = src.split(decl).nth(1).expect("the struct is in this file");

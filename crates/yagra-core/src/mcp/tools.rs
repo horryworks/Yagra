@@ -4470,8 +4470,9 @@ mod tests {
              they exist: {missing:?}"
         );
 
-        const SRC: &str = include_str!("tools.rs");
-        let stated: usize = SRC
+        let surface = crate::mcp::tool_source::tool_surface();
+        let src: &str = surface.as_str();
+        let stated: usize = src
             .split("see the tool description for the ")
             .nth(1)
             .expect("the kind parameter states how many values there are")
@@ -4711,7 +4712,8 @@ mod tests {
     /// - `renamed` — the tool's parameter has a different name from the seam's field.
     #[test]
     fn every_shared_filter_seam_is_passed_through_whole() {
-        const TOOLS: &str = include_str!("tools.rs");
+        let surface = crate::mcp::tool_source::tool_surface();
+        let tools: &str = surface.as_str();
         const ALERTS: &str = include_str!("../api/alerts.rs");
         const AUDIT: &str = include_str!("../api/audit.rs");
         const ANALYSIS: &str = include_str!("../api/analysis.rs");
@@ -4795,7 +4797,7 @@ mod tests {
                 seam.decl
             );
 
-            let call = TOOLS
+            let call = tools
                 .split(seam.init)
                 .nth(1)
                 .unwrap_or_else(|| panic!("no tool builds {}", seam.init));
@@ -4932,7 +4934,8 @@ mod tests {
     fn every_tool_name_written_here_is_a_tool_that_exists() {
         // Needles assembled at runtime: this test reads its own file, so a literal one would match
         // itself and the test would describe nothing.
-        let src = include_str!("tools.rs");
+        let surface = crate::mcp::tool_source::tool_surface();
+        let src: &str = surface.as_str();
         let surface = src
             .split(&format!("#[{}(test)]", "cfg"))
             .next()
@@ -4990,7 +4993,8 @@ mod tests {
     /// wrong — the block below the one you copied keeps the name of the block above.
     #[test]
     fn every_tool_wrapper_declares_its_own_name() {
-        let src = include_str!("tools.rs");
+        let surface = crate::mcp::tool_source::tool_surface();
+        let src: &str = surface.as_str();
         let attr = format!("#[{}(", "tool");
         let const_needle = format!("const {}: &str = {}", "TOOL", '"');
         let mut checked = 0;
@@ -5010,6 +5014,19 @@ mod tests {
             );
             checked += 1;
         }
+        // 🚨 **An independent floor, because the assertion below is not one** (ADR-086). `checked`
+        // and `declared_mcp_tools()` are both derived from the same source text, so a surface read
+        // in part shrinks both and they go on agreeing — the equality would hold at the wrong
+        // number and this test would pass having visited a fraction of the tools. That is the third
+        // shape of "quietly green" this repository has met: ADR-083's moved `.split()` target,
+        // ADR-085's needle that stopped matching, and now *both sides of a comparison sharing a
+        // source*. `declared_mcp_tools()` carries the same floor internally; this one is here so
+        // the failure names this parser when it is this parser that drifted.
+        assert!(
+            checked >= 34,
+            "only {checked} `#[tool]` wrappers were visited; the parser drifted or the surface was \
+             read in part, and the equality below would agree with it either way"
+        );
         assert_eq!(
             checked,
             crate::api::route_table::declared_mcp_tools().len(),
@@ -5048,7 +5065,8 @@ mod tests {
         // anywhere. A tool body can only reach the caller through its `RequestContext`, so taking
         // one is the observable marker that the question was asked. This does not prove the answer
         // is *used* correctly; it proves nobody added a tool that cannot ask.
-        let src = include_str!("tools.rs");
+        let surface = crate::mcp::tool_source::tool_surface();
+        let src: &str = surface.as_str();
         // Assembled at runtime — this test reads its own file, so literal needles would match
         // themselves and pass forever.
         let attr = format!("#[{}(", "tool");
@@ -6102,7 +6120,7 @@ mod tests {
         assert_eq!(permission_label(Permission::View), "view");
         // The spelling the existing hand-written refusals use, so the two families agree.
         assert!(
-            include_str!("tools.rs").contains("lacks ack-alerts permission"),
+            crate::mcp::tool_source::tool_surface().contains("lacks ack-alerts permission"),
             "the older refusals spell it hyphenated; this helper must match them"
         );
     }
