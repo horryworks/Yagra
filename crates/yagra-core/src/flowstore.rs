@@ -452,10 +452,19 @@ fn ttl_modify_sql(table: &str, days: u32) -> String {
 ///
 /// Discovered, because a hardcoded list is a mirror of ClickHouse's release notes: 24.8 ships nine
 /// of these and a later version will ship a tenth, which a list would silently leave unbounded —
-/// the exact failure this increment exists to fix. The three predicates are what make "discovered"
-/// safe: `database = 'system'` keeps it off Yagra's own tables and the operator's, `endsWith(…,
-/// '_log')` is ClickHouse's own naming rule for them, and the join on an `event_date` column is
-/// what guarantees the TTL expression below is even valid for the table.
+/// the exact failure this increment exists to fix. Three predicates make "discovered" safe:
+/// `database = 'system'` keeps it off Yagra's own tables and the operator's, the name pattern is
+/// ClickHouse's own naming rule for them, and the join on an `event_date` column guarantees the TTL
+/// expression below is even valid for the table.
+///
+/// 🚨 **The `_<N>` suffix in the pattern is not defensive, it is the common case on an upgrade.**
+/// When a system log's declared TTL stops matching the table on disk, ClickHouse does not alter it:
+/// it **renames the old table to `<name>_0` and creates a fresh one**. Measured on the first real
+/// deployment of this increment — the nine live tables came back bounded and green while
+/// `text_log_0`, `trace_log_0`, `metric_log_0` and four more sat beside them holding the entire
+/// 2.3 GiB with no TTL and no writer, invisible to a pattern that only matched `_log`. Growth had
+/// stopped and nothing had been reclaimed, which is the failure mode that looks exactly like
+/// success.
 ///
 /// The `name` values that come back are ClickHouse's, never an operator's — the same property that
 /// lets [`ttl_modify_sql`] interpolate a table name without escaping it.
@@ -464,7 +473,7 @@ const SYSTEM_LOG_TABLES_SQL: &str = "SELECT t.name AS name, t.engine_full AS eng
      INNER JOIN (SELECT table FROM system.columns \
                  WHERE database = 'system' AND name = 'event_date' GROUP BY table) AS c \
        ON c.table = t.name \
-     WHERE t.database = 'system' AND endsWith(t.name, '_log') \
+     WHERE t.database = 'system' AND match(t.name, '_log(_[0-9]+)?$') \
        AND position(t.engine, 'MergeTree') > 0 \
      ORDER BY t.name FORMAT JSONEachRow";
 
@@ -1293,7 +1302,10 @@ mod tests {
             "ALTER TABLE system.text_log MODIFY TTL event_date + INTERVAL 7 DAY DELETE"
         );
         assert!(SYSTEM_LOG_TABLES_SQL.contains("t.database = 'system'"));
-        assert!(SYSTEM_LOG_TABLES_SQL.contains("endsWith(t.name, '_log')"));
+        // The archive suffix is load-bearing: ClickHouse renames a system log to `<name>_0` when
+        // its declared TTL stops matching, so on the very upgrade that introduces a TTL the bytes
+        // move to a table a plain `_log` match cannot see.
+        assert!(SYSTEM_LOG_TABLES_SQL.contains("match(t.name, '_log(_[0-9]+)?$')"));
         assert!(SYSTEM_LOG_TABLES_SQL.contains("name = 'event_date'"));
         assert!(SYSTEM_LOG_TABLES_SQL.contains("MergeTree"));
         // Round trip, same reason as the flow tables above: what we write has to be what the skip
