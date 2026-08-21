@@ -1385,10 +1385,16 @@ mod tests {
             "{inline:?} are folded, so saying they build their result inline explains nothing that \
              is still checked"
         );
-        // The load-bearing half: both lists must be non-empty, or "no overlap" is vacuous.
+        // The load-bearing half: an empty `folded` makes "no overlap" vacuously true, and it is
+        // built by iterating at run time, so nothing else here would notice.
+        //
+        // `TOOL_RESULT_TYPES` needs no such assertion and must not be given one — it is a `const`,
+        // so clippy folds `is_empty()` to a literal and refuses the line as an expression that
+        // always evaluates the same way. What guards *that* table against being emptied is
+        // [`every_typed_tool_result_is_canaried`]'s own floor.
         assert!(
-            !TOOL_RESULT_TYPES.is_empty() && !folded.is_empty(),
-            "one of the two tables is empty; this test proves nothing"
+            !folded.is_empty(),
+            "the folded table came back empty; this test proves nothing"
         );
     }
 
