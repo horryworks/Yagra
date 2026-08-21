@@ -12,7 +12,7 @@
 //! ⚠️ One half is **not** here: a `FolderGroup` rule matches the node's own folder *and every
 //! folder above it*, so several can arrive at that one level. Which of them survives is decided by
 //! depth — nearest wins — and depth is a fact about the node, not about the rule, so
-//! `alerts.rs::resolve` filters before calling [`resolve_effective`] (ADR-075 増分 3).
+//! `alerts/rules.rs::resolve` filters before calling [`resolve_effective`] (ADR-075 増分 3).
 
 use crate::state::NodeState;
 use serde::{Deserialize, Serialize};

@@ -121,7 +121,8 @@ Shared types live in `crates/yagra-common`.
 
 > Two crate names are narrower than they sound, and it is worth knowing before you go looking:
 > the alert **engine** (state machine, dependency suppression, maintenance windows) is
-> `crates/yagra-core/src/alerts.rs` — `yagra-alert` holds the primitives it composes. Likewise
+> `crates/yagra-core/src/alerts/` — `rules.rs` resolves which threshold applies, `engine.rs` is
+> the state machine, `notify.rs` is delivery; `yagra-alert` holds the primitives they compose. Likewise
 > `yagra-discovery` holds identification and rate limiting; the network sweep lives in
 > `crates/yagra-poller` and the classifier in `crates/yagra-core`.
 

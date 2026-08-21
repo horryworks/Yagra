@@ -277,7 +277,7 @@ pub struct Alert {
     /// The interface this alert is about, for a per-interface metric; `None` for a node-level one.
     //
     // Descriptive only — alert *identity* lives in [`Self::check`], which already namespaces the
-    // port (`alerts.rs::interface_check_id`). This field exists so History, the API and a
+    // port (`alerts/rules.rs::interface_check_id`). This field exists so History, the API and a
     // notification can say *which* port without re-deriving it from a hash that cannot be inverted.
     //
     // `#[serde(default)]` plus `skip_serializing_if` is what keeps N-1 safe in both directions: an

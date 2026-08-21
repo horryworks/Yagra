@@ -21,11 +21,19 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use crate::coordinator::PollerView;
+use std::sync::Arc;
+
+use crate::alerts::{AlertManager, Notifier};
+use crate::coordinator::{Coordinator, PollerView};
 use crate::groups::GroupRepo;
+use crate::history::AlertHistoryStore;
 use crate::meraki::MerakiDeviceRepo;
 use crate::poolres::PoolResolver;
 use crate::repo::NodeRepo;
+// Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
+// lived in `main.rs` until ADR-083, where those paths were the only way to name this module; the
+// alternative was to strip 9 prefixes and make the move stop being verifiable by diff.
+use crate::{alerts, config_gen, groups, meraki, pool_coverage};
 
 /// How often the watch loop samples coverage.
 ///
@@ -330,9 +338,136 @@ pub fn now_unix_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
+/// Leader-only loop: alert when a poller pool has nodes but no live poller (ADR-009's blind spot).
+///
+/// **Leader-only is a correctness requirement, not an optimization.** A standby core runs no
+/// coordinator — `run_heartbeat_consumer` is spawned here in `leader_work` — so its registry is
+/// permanently empty and it would read *every* pool as dark and page for the whole fleet. This is
+/// the same hazard `api/pollers.rs::resolve_polled_by` guards with an `is_leader` check.
+///
+/// **The node scan is generation-gated** (ADR-026, the idiom `SweepCache` already uses): pool
+/// membership is config-derived and `audit_mw` bumps `config_gen` on every config mutation, so an
+/// unchanged generation means the counts are identical and a steady-state tick costs one in-memory
+/// registry read. Without that this would scan the node table every 30 seconds, which at 50,000
+/// nodes is not affordable.
+pub(crate) async fn run_pool_coverage_watch(
+    coordinator: Arc<Coordinator>,
+    repo: Arc<NodeRepo>,
+    meraki: Arc<meraki::MerakiDeviceRepo>,
+    groups: Arc<groups::GroupRepo>,
+    alerts: Arc<AlertManager>,
+    notifier: Arc<Notifier>,
+    history: Arc<AlertHistoryStore>,
+) {
+    let mut watch = pool_coverage::CoverageWatch::from_env();
+    if watch.disabled() {
+        tracing::info!(
+            env = pool_coverage::RAISE_AFTER_ENV,
+            "poller-pool coverage notifications are disabled; gauges still published"
+        );
+    }
+    let mut cached: Option<(u64, HashMap<String, usize>)> = None;
+    loop {
+        tokio::time::sleep(pool_coverage::WATCH_TICK).await;
+
+        let generation = config_gen::current();
+        if cached.as_ref().is_none_or(|(gen, _)| *gen != generation) {
+            let counts = pool_coverage::node_counts_by_pool(&repo, &meraki, &groups).await;
+            // An empty map means "no pool has any nodes", which silently disables the whole check.
+            // `node_counts_by_pool` already degrades on a read error, so only a genuinely empty
+            // inventory produces one legitimately — keep the previous answer when we had one
+            // rather than letting a bad read look like a healthy fleet.
+            if counts.is_empty() && cached.is_some() {
+                tracing::warn!("pool coverage: node counts came back empty; keeping the last set");
+            } else {
+                cached = Some((generation, counts));
+            }
+        }
+        let Some((_, node_pools)) = cached.as_ref() else {
+            continue;
+        };
+
+        let coverage =
+            pool_coverage::coverage(&coordinator.poller_views(Instant::now()), node_pools);
+        pool_coverage::publish_gauges(&coverage);
+
+        for event in watch.observe(&coverage, Instant::now()) {
+            let action = match event {
+                pool_coverage::CoverageEvent::Raise { pool, nodes } => {
+                    tracing::warn!(
+                        pool = %pool,
+                        nodes,
+                        "poller pool has nodes but no live poller — they are not being monitored"
+                    );
+                    pool_coverage::count_notification("raise");
+                    alerts.raise_pool_coverage_alert(&pool, pool_coverage::now_unix_ms())
+                }
+                pool_coverage::CoverageEvent::Clear { pool } => {
+                    tracing::info!(pool = %pool, "poller pool has a live poller again");
+                    pool_coverage::count_notification("clear");
+                    alerts.resolve_pool_coverage_alert(&pool)
+                }
+            };
+            let Some(action) = action else { continue };
+            // Persist before notifying, and write **inline** rather than through the batch
+            // channel: that channel exists to keep the poll-result hot path off the database, and
+            // this loop is a 30-second tick that emits at most one row per pool per debounce. A
+            // failure here is logged and the notification still goes out — an operator being paged
+            // matters more than the row, and the row is what History reads afterwards.
+            if let Some(alert) = alerts::recordable_alert(&action) {
+                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
+                if let Err(e) = history.record(alert, resolved).await {
+                    tracing::warn!(error = %e, "recording a pool-coverage transition failed");
+                }
+            }
+            notifier.handle(action).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This module's own source, for the structural assertions below.
+    ///
+    /// It reads `pool_coverage.rs` rather than `main.rs` because ADR-083 moved the loop here. Repointing it
+    /// is not optional bookkeeping: a needle aimed at the old file finds nothing and panics, which
+    /// is the loud half of the failure — the quiet half is a `.split()` argument that still matches
+    /// something and checks nothing. Both assertions below were re-run against a deliberately
+    /// broken body after the move, and both failed, which is the only reason to believe them.
+    const SRC: &str = include_str!("pool_coverage.rs");
+
+    /// **A coverage transition is written to History, not only notified.**
+    ///
+    /// ⚠️ Found on real hardware, not by a test: Increment 1 deliberately kept pool alerts out of
+    /// `alert_history`, so the watch loop was wired to the notifier alone. Increment 2 opened the
+    /// store to every subject — and nothing in the type system connected the two, so the alert
+    /// raised, paged, and left no row. The gauges and the log line all looked correct.
+    ///
+    /// Structural because the loop's body is a 30-second tick around a real database; the
+    /// behaviour a unit test *can* reach is `alerts::recordable_alert`, tested in `alerts/mod.rs`.
+    #[test]
+    fn a_pool_coverage_transition_reaches_the_history_store() {
+        let production = SRC
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        let watch = production
+            .split("async fn run_pool_coverage_watch")
+            .nth(1)
+            .expect("the watch loop exists");
+        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        assert!(
+            body.contains("history.record("),
+            "the coverage watch notifies without recording — the alert pages and History stays \
+             empty, which is exactly what shipped in Increment 1"
+        );
+        assert!(
+            body.contains("notifier.handle("),
+            "…and it must still notify"
+        );
+    }
 
     fn view(id: &str, pool: &str, online: bool) -> PollerView {
         PollerView {

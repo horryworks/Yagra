@@ -34,7 +34,7 @@ export interface AlertMuteSeed {
  *
  * The metric is carried through **verbatim, including the `__liveness__` sentinel**, and that is
  * the whole point: a mute is stored by check *name*, and the backend re-derives its identity as
- * `check_id(node, name)` — the same v5 hash the alert's `check` already is (`alerts.rs::check_id`).
+ * `check_id(node, name)` — the same v5 hash the alert's `check` already is (`alerts/rules.rs::check_id`).
  * Passing the alert's metric therefore produces a mute matching exactly the check the operator
  * clicked. Substituting the display text ("Reachability") or dropping the sentinel would silently
  * widen or miss the mute; rendering it readably is the *form's* job, not this function's.

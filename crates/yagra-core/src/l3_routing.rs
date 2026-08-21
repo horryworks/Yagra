@@ -2,6 +2,12 @@
 //! Routing-adjacency persistence, and the rule that decides which destinations get probed
 //! (ADR-043 Increment 4, migration 0071).
 //!
+//! **Named `l3_routing`, not `routing`, on purpose** (ADR-083): this is layer-3 routing between
+//! devices, and 40 files under `api/` import `axum::routing::{get, post}`. Under the shorter name
+//! a search for `routing::` returned the web framework and buried this module — and "routing" also
+//! already means notification routing here (`notifications.rs::RoutingRule`), so the short name was
+//! ambiguous in two directions at once.
+//!
 //! Structured observations, so this is PostgreSQL (store separation) — a peer address in a
 //! `SeriesKey` label is the cardinality explosion CLAUDE.md §7.1 names (ADR-011). Runtime
 //! `sqlx::query` (not the compile-time macro) so the build needs no live database.
@@ -173,7 +179,7 @@ mod tests {
     /// This module's own source, for the SQL-shape assertions below. The upsert's `first_seen` rule
     /// and the host-address filter live entirely inside SQL strings, so nothing else can catch a
     /// rewrite that changes their meaning — the peer stores pin their statements the same way.
-    const SRC: &str = include_str!("routing.rs");
+    const SRC: &str = include_str!("l3_routing.rs");
 
     /// The executable code above this test module, comments stripped. Without this, a test that
     /// reads its own file matches its own needles (testing.md's self-match trap) and a doc comment

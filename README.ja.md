@@ -115,7 +115,8 @@ Yagra は、ネットワークデバイスやサーバを **ICMP / SNMP / API �
 横断的な型は `crates/yagra-common` にあります。
 
 > クレート名が実体より狭いものが 2 つあるので、探しに行く前に知っておくと早いです。アラートの
-> **エンジン**（状態機械・依存抑制・メンテナンス期間）は `crates/yagra-core/src/alerts.rs` にあり、
+> **エンジン**（状態機械・依存抑制・メンテナンス期間）は `crates/yagra-core/src/alerts/` にあり（`rules.rs`＝どのしきい値が効くか、`engine.rs`＝状態機械、
+> `notify.rs`＝配送）、
 > `yagra-alert` はそれが組み合わせるプリミティブ群です。同様に `yagra-discovery` は識別とレート制御
 > だけで、ネットワークスイープは `crates/yagra-poller`、分類器は `crates/yagra-core` にあります。
 

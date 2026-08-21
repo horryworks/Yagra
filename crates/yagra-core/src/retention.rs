@@ -22,6 +22,11 @@
 //!
 //! The compiled constants below are both the first-boot defaults and the fallback a reader
 //! degrades to, so a transient database failure can never silently change the policy.
+//!
+//! The PostgreSQL prune sites: nine of the ten are [`crate::retention_sweep`], run off the
+//! fleet-health tick. The tenth is `report_runs`, pruned by the report scheduler on its own
+//! cadence. **Nine is not ten** — a new [`Subject`] still has to be given a prune site by hand,
+//! and this module is deliberately not the thing that would notice if nobody did.
 
 /// Alert-linked PostgreSQL data: alert history, node-state snapshots, DNS chain changes, and
 /// matched passive events. One number because these are the "90-day must-preserve subset" that

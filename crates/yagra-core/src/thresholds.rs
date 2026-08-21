@@ -328,14 +328,14 @@ impl ThresholdStore {
     }
 
     /// Every rule that could conceivably reach one port — the input to
-    /// `alerts::matching_rules`, which then decides which of them actually do.
+    /// `alerts::rules::matching_rules`, which then decides which of them actually do.
     ///
     /// Not `list_all()`: that is the engine's uncapped read of the whole table, and a browser
     /// opening one port must not pull a fleet's node-level overrides across. Not `list_page`
     /// either: its cap would silently drop rules, and "which rules govern this port" is a question
     /// a prefix cannot answer.
     ///
-    /// The predicate is the exact complement of what [`crate::alerts::threshold_applies`] can
+    /// The predicate is the exact complement of what [`crate::alerts::rules::threshold_applies`] can
     /// reject cheaply. The four broad levels are taken whole because whether one matches depends
     /// on the node's profile, tags and folder chain, which live in the engine's snapshot rather
     /// than in this table; the two narrow levels are matched by their `scope_id`, which is this

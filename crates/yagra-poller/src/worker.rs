@@ -439,7 +439,7 @@ pub async fn execute(job: &PollJob, transport: &dyn Transport, at_unix_ms: i64) 
                     // threshold fires), while a timeout — no answer at all — is Unreachable.
                     //
                     // 🚨 Listed variant by variant on purpose. This value drives the **liveness
-                    // state machine** (`alerts.rs::observe` folds every `outcome` into the dwell
+                    // state machine** (`alerts/engine.rs::observe` folds every `outcome` into the dwell
                     // window), so a wildcard here decides for a failure mode nobody has thought
                     // about yet — and it decided `Reachable`, i.e. "the device is up". A new
                     // transport-level variant (connection refused, network unreachable, TLS

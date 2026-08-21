@@ -319,7 +319,7 @@ pub(super) struct ThresholdBody {
 /// Most targets one rule may name (ADR-078 decision 3).
 ///
 /// The largest built-in fan-out is four (the Huawei VRP profiles), so this is room rather than a
-/// constraint. It exists because [`crate::alerts::threshold_applies`] walks the set for every
+/// constraint. It exists because [`crate::alerts::rules::threshold_applies`] walks the set for every
 /// sample: an unbounded list is a per-poll cost an operator can set from a text field.
 /// ⚠️ Not measured — chosen as headroom over the built-ins. Someone wanting more targets than
 /// this wants a folder group, which is one target that grows on its own.

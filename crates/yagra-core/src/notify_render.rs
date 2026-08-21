@@ -9,7 +9,7 @@
 //! Alerting is the last line, and a typo in a template silently swallowing an outage page is worse
 //! than having no template feature at all. So [`render_with_fallback`] never fails: whatever goes
 //! wrong, the caller gets the built-in text it passed in and a [`TemplateFailure`] to count. That
-//! is also why the built-in form is a plain `format!` in `alerts.rs` and *not* itself a template —
+//! is also why the built-in form is a plain `format!` in `alerts/notify.rs` and *not* itself a template —
 //! a fallback that runs through the same engine is not a fallback.
 //!
 //! **Two guards, catching different things.** [`validate`] rejects a template that does not compile,

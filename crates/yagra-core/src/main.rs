@@ -50,6 +50,7 @@ mod history;
 mod interface_util;
 mod ipasn;
 mod l3;
+mod l3_routing;
 mod ldap;
 mod leader;
 mod link_overrides;
@@ -78,8 +79,8 @@ mod rca;
 mod repo;
 mod reports;
 mod retention;
+mod retention_sweep;
 mod ring;
-mod routing;
 mod scheduler;
 mod secrets;
 mod seed_ids;
@@ -147,7 +148,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 use volatile::VolatileStore;
 use yagra_alert::Alert;
-use yagra_bus::{FlowBatch, JobSpec, NatsBus, PollResult, DEFAULT_POOL};
+use yagra_bus::{FlowBatch, NatsBus, PollResult, DEFAULT_POOL};
 use yagra_common::NodeId;
 use yagra_topology::Topology;
 
@@ -597,7 +598,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let neighbor_repo = Arc::new(neighbors::NeighborRepo::new(repo.pool()));
     let l3_repo = Arc::new(l3::L3Repo::new(repo.pool()));
     let arp_repo = Arc::new(arp::ArpRepo::new(repo.pool()));
-    let routing_repo = Arc::new(routing::RoutingRepo::new(repo.pool()));
+    let routing_repo = Arc::new(l3_routing::RoutingRepo::new(repo.pool()));
     let discovered_repo = Arc::new(arp::DiscoveredRepo::new(repo.pool()));
     let topo_link_repo = Arc::new(topology_links::TopoLinkRepo::new(repo.pool()));
     let link_override_repo = Arc::new(link_overrides::LinkOverrideRepo::new(repo.pool()));
@@ -1218,7 +1219,7 @@ struct LeaderTasks {
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
     arp: Arc<arp::ArpRepo>,
-    routing: Arc<routing::RoutingRepo>,
+    routing: Arc<l3_routing::RoutingRepo>,
     discovered: Arc<arp::DiscoveredRepo>,
     topology_links: Arc<topology_links::TopoLinkRepo>,
     link_overrides: Arc<link_overrides::LinkOverrideRepo>,
@@ -1440,7 +1441,7 @@ impl LeaderTasks {
     fn spawn_schedulers(&mut self) {
         spawn_cancellable(
             &self.shutdown,
-            run_scheduler(
+            scheduler::run_scheduler(
                 self.repo.clone(),
                 self.group_repo.clone(),
                 self.dispatcher.clone(),
@@ -1530,7 +1531,7 @@ impl LeaderTasks {
         // every notification.
         spawn_cancellable(
             &self.shutdown,
-            run_interface_utilization_watch(
+            interface_util::run_interface_utilization_watch(
                 self.store.clone(),
                 self.repo.clone(),
                 self.alerts.clone(),
@@ -1540,7 +1541,7 @@ impl LeaderTasks {
         );
         spawn_cancellable(
             &self.shutdown,
-            run_pool_coverage_watch(
+            pool_coverage::run_pool_coverage_watch(
                 self.coordinator.clone(),
                 self.repo.clone(),
                 self.meraki_devices.clone(),
@@ -2068,6 +2069,18 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         rca_reports,
         pollers,
     } = sources;
+    // Built once: the sweep borrows these every tick rather than cloning nine Arcs per tick.
+    let targets = retention_sweep::Targets {
+        repo: repo.clone(),
+        history,
+        events_repo,
+        dns_checks,
+        neighbors,
+        l3,
+        analyses,
+        rca_reports,
+        pollers,
+    };
     const SNAPSHOT_SECS: u64 = 300;
     loop {
         tokio::time::sleep(Duration::from_secs(SNAPSHOT_SECS)).await;
@@ -2075,7 +2088,6 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         // re-reads the poll interval, so an edit in Settings applies on the next sweep without a
         // restart. A read failure degrades to the compiled defaults rather than skipping the prune.
         let retention = repo.get_retention_settings().await;
-        let alert_linked_secs = retention.alert_linked_secs();
         // The **raw engine view**, deliberately — not the reconciled view the live surfaces show.
         //
         // `node_states()` only knows nodes the in-memory matcher has observed since this process
@@ -2098,54 +2110,7 @@ async fn run_fleet_health_timeline(sources: TimelineSources) {
         if let Err(e) = repo.insert_state_snapshot(&snapshot).await {
             tracing::warn!(error = %e, "node-state snapshot failed");
         }
-        if let Err(e) = repo.prune_state_snapshots(alert_linked_secs).await {
-            tracing::warn!(error = %e, "prune state snapshots failed");
-        }
-        if let Err(e) = history.prune_old(alert_linked_secs).await {
-            tracing::warn!(error = %e, "prune alert history failed");
-        }
-        // Passive events in PostgreSQL: matched rows follow alert-history retention, unmatched
-        // (rule-authoring material) get their own shorter window. When the log store is enabled
-        // (ADR-024) unmatched rows never land in PostgreSQL, so this pruning naturally trims
-        // PostgreSQL to the alert-linked subset; the log store keeps the full firehose.
-        if let Err(e) = events_repo
-            .prune_old(alert_linked_secs, retention.unmatched_event_secs())
-            .await
-        {
-            tracing::warn!(error = %e, "prune events failed");
-        }
-        // DNS chain history is append-on-change, so a healthy fleet writes almost nothing here —
-        // the canonicalization in `DnsChain::content_key` is exactly what keeps it that way. Prune
-        // on the same window as alert history so the retention story stays consistent.
-        if let Err(e) = dns_checks.prune_chain_changes(alert_linked_secs).await {
-            tracing::warn!(error = %e, "prune dns chain history failed");
-        }
-        // Adjacency history is append-on-change for the same reason and on the same window
-        // (`retention::Subject::NeighborChanges`): a rack nobody is repatching writes nothing.
-        if let Err(e) = neighbors.prune_changes(alert_linked_secs).await {
-            tracing::warn!(error = %e, "prune neighbour history failed");
-        }
-        // Interface-address history, same shape and same window (`retention::Subject::L3Changes`):
-        // a network nobody is re-subnetting writes nothing.
-        if let Err(e) = l3.prune_changes(alert_linked_secs).await {
-            tracing::warn!(error = %e, "prune interface-address history failed");
-        }
-        // Monitoring gaps go on the alert-linked window too (`retention::Subject::MonitoringGaps`)
-        // — a gap explains an absence of alerts, so outliving the alert history would leave a
-        // window nothing can be read against.
-        if let Err(e) = pollers.prune_monitoring_gaps(alert_linked_secs).await {
-            tracing::warn!(error = %e, "prune monitoring gaps failed");
-        }
-        // Diagnostic artefacts get their own window (`retention::Subject::AnalysisRuns` /
-        // `RcaReports`): both are reproducible by asking again, unlike everything above. Analysis
-        // findings need no prune of their own — they cascade from the job.
-        let diagnostic_secs = retention.diagnostic_secs();
-        if let Err(e) = analyses.prune_jobs(diagnostic_secs).await {
-            tracing::warn!(error = %e, "prune analysis runs failed");
-        }
-        if let Err(e) = rca_reports.prune_reports(diagnostic_secs).await {
-            tracing::warn!(error = %e, "prune RCA reports failed");
-        }
+        retention_sweep::sweep(&targets, &retention).await;
     }
 }
 
@@ -2171,7 +2136,7 @@ async fn run_topology_derivation(
     repo: Arc<NodeRepo>,
     l3: Arc<l3::L3Repo>,
     neighbors: Arc<neighbors::NeighborRepo>,
-    routing: Arc<routing::RoutingRepo>,
+    routing: Arc<l3_routing::RoutingRepo>,
     links: Arc<topology_links::TopoLinkRepo>,
     overrides: Arc<link_overrides::LinkOverrideRepo>,
 ) {
@@ -2360,372 +2325,6 @@ async fn run_routing_refresh(
         tokio::time::sleep(Duration::from_secs(30)).await;
         load_routing(&notifier, &notifications).await;
         load_mutes(&notifier, &maintenance, &repo, &group_repo).await;
-    }
-}
-
-/// Leader-only loop: alert when a poller pool has nodes but no live poller (ADR-009's blind spot).
-///
-/// **Leader-only is a correctness requirement, not an optimization.** A standby core runs no
-/// coordinator — `run_heartbeat_consumer` is spawned here in `leader_work` — so its registry is
-/// permanently empty and it would read *every* pool as dark and page for the whole fleet. This is
-/// the same hazard `api/pollers.rs::resolve_polled_by` guards with an `is_leader` check.
-///
-/// **The node scan is generation-gated** (ADR-026, the idiom `SweepCache` already uses): pool
-/// membership is config-derived and `audit_mw` bumps `config_gen` on every config mutation, so an
-/// unchanged generation means the counts are identical and a steady-state tick costs one in-memory
-/// registry read. Without that this would scan the node table every 30 seconds, which at 50,000
-/// nodes is not affordable.
-async fn run_pool_coverage_watch(
-    coordinator: Arc<Coordinator>,
-    repo: Arc<NodeRepo>,
-    meraki: Arc<meraki::MerakiDeviceRepo>,
-    groups: Arc<groups::GroupRepo>,
-    alerts: Arc<AlertManager>,
-    notifier: Arc<Notifier>,
-    history: Arc<AlertHistoryStore>,
-) {
-    let mut watch = pool_coverage::CoverageWatch::from_env();
-    if watch.disabled() {
-        tracing::info!(
-            env = pool_coverage::RAISE_AFTER_ENV,
-            "poller-pool coverage notifications are disabled; gauges still published"
-        );
-    }
-    let mut cached: Option<(u64, HashMap<String, usize>)> = None;
-    loop {
-        tokio::time::sleep(pool_coverage::WATCH_TICK).await;
-
-        let generation = config_gen::current();
-        if cached.as_ref().is_none_or(|(gen, _)| *gen != generation) {
-            let counts = pool_coverage::node_counts_by_pool(&repo, &meraki, &groups).await;
-            // An empty map means "no pool has any nodes", which silently disables the whole check.
-            // `node_counts_by_pool` already degrades on a read error, so only a genuinely empty
-            // inventory produces one legitimately — keep the previous answer when we had one
-            // rather than letting a bad read look like a healthy fleet.
-            if counts.is_empty() && cached.is_some() {
-                tracing::warn!("pool coverage: node counts came back empty; keeping the last set");
-            } else {
-                cached = Some((generation, counts));
-            }
-        }
-        let Some((_, node_pools)) = cached.as_ref() else {
-            continue;
-        };
-
-        let coverage =
-            pool_coverage::coverage(&coordinator.poller_views(Instant::now()), node_pools);
-        pool_coverage::publish_gauges(&coverage);
-
-        for event in watch.observe(&coverage, Instant::now()) {
-            let action = match event {
-                pool_coverage::CoverageEvent::Raise { pool, nodes } => {
-                    tracing::warn!(
-                        pool = %pool,
-                        nodes,
-                        "poller pool has nodes but no live poller — they are not being monitored"
-                    );
-                    pool_coverage::count_notification("raise");
-                    alerts.raise_pool_coverage_alert(&pool, pool_coverage::now_unix_ms())
-                }
-                pool_coverage::CoverageEvent::Clear { pool } => {
-                    tracing::info!(pool = %pool, "poller pool has a live poller again");
-                    pool_coverage::count_notification("clear");
-                    alerts.resolve_pool_coverage_alert(&pool)
-                }
-            };
-            let Some(action) = action else { continue };
-            // Persist before notifying, and write **inline** rather than through the batch
-            // channel: that channel exists to keep the poll-result hot path off the database, and
-            // this loop is a 30-second tick that emits at most one row per pool per debounce. A
-            // failure here is logged and the notification still goes out — an operator being paged
-            // matters more than the row, and the row is what History reads afterwards.
-            if let Some(alert) = coverage_alert_of(&action) {
-                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
-                if let Err(e) = history.record(alert, resolved).await {
-                    tracing::warn!(error = %e, "recording a pool-coverage transition failed");
-                }
-            }
-            notifier.handle(action).await;
-        }
-    }
-}
-
-/// Evaluate per-interface bandwidth utilisation against the threshold rules, on the leader
-/// (ADR-076 decision 3).
-///
-/// Modelled on [`run_pool_coverage_watch`] — the other loop that raises alerts from outside the
-/// poll path — and it follows the same order for the same reason: persist to History **before**
-/// notifying, so an operator who is paged can always find the row.
-///
-/// Utilisation is not a stored series (ADR-012), so each tick is: ask the rules what they cover →
-/// compute the query floor from the slowest covered port → ask VictoriaMetrics for the ports above
-/// it → join their speeds from PostgreSQL → divide → feed the engine. The pure half of that is
-/// [`crate::interface_util`]; this function is the I/O and the ordering.
-///
-/// Leader-only for the same reason pool coverage is: two instances evaluating the same ports would
-/// double every notification, and the engine's check state is process-local.
-/// Which VictoriaMetrics dimension each direction's derived metric pair is computed from.
-///
-/// One entry per **direction**, not per metric: the percentage and the absolute rate come out of
-/// the same answer, so a direction costs one query however many of its metrics carry rules.
-///
-/// The names come from `DERIVED_PAIRS` rather than being written again here; what this table adds
-/// is the dimension, which `interface_util` cannot name — it is the pure half and knows nothing
-/// about the store. The index-to-direction pairing is what
-/// `the_dimensions_match_their_metric_pairs` exists to pin.
-const INTERFACE_DIMENSIONS: [(
-    crate::interface_util::DerivedPair,
-    store::InterfaceTopMetric,
-); 2] = [
-    (
-        crate::interface_util::DERIVED_PAIRS[0],
-        store::InterfaceTopMetric::InBps,
-    ),
-    (
-        crate::interface_util::DERIVED_PAIRS[1],
-        store::InterfaceTopMetric::OutBps,
-    ),
-];
-
-async fn run_interface_utilization_watch(
-    store: Arc<dyn MetricStore>,
-    repo: Arc<NodeRepo>,
-    alerts: Arc<AlertManager>,
-    notifier: Arc<Notifier>,
-    history: Arc<AlertHistoryStore>,
-) {
-    use crate::interface_util as util;
-    use std::collections::{BTreeMap, BTreeSet};
-
-    let mut tracked = util::TrackedChecks::default();
-    loop {
-        tokio::time::sleep(util::WATCH_TICK).await;
-        let now_ms = chrono::Utc::now().timestamp_millis();
-
-        // One action list per tick, drained once at the bottom. The orphan sweep below runs even
-        // when no dimension does (a deleted rule is exactly the case where nothing can fire), so
-        // the dispatch cannot live inside the dimension loop the way it used to.
-        let mut actions = Vec::new();
-
-        // Close the port alerts whose rule was deleted. The poll path's `!alerting` branch does
-        // this for every check it visits, but it never visits a derived per-interface check —
-        // nothing polls `if_in_util_pct` — so before this, deleting a port rule stranded its alert
-        // for the life of the process (ADR-076 増分 7 決定 14).
-        for action in alerts.resolve_orphaned_interface_alerts() {
-            // Stop asking about a port nobody has a rule for. `TrackedChecks` has no other way to
-            // shrink (増分 6d), and the recovery sweep below is skipped entirely when a metric has
-            // no rule left — so without this the key would outlive the rule forever.
-            if let crate::alerts::NotifyAction::Resolve(a) = &action {
-                if let (Some(node), Some(idx), Some(m)) =
-                    (a.node(), a.ifindex, util::derived_metric_name(&a.metric))
-                {
-                    tracked.forget(&(node, idx, m));
-                }
-            }
-            actions.push(action);
-        }
-
-        for (pair, dimension) in INTERFACE_DIMENSIONS {
-            let pct_cov = alerts.interface_rule_coverage(pair.pct);
-            let bps_cov = alerts.interface_rule_coverage(pair.bps);
-            let pct_demand = util::BoundDemand {
-                lowest_bound: pct_cov.lowest_bound,
-                has_below: pct_cov.has_below,
-            };
-            let bps_demand = util::BoundDemand {
-                lowest_bound: bps_cov.lowest_bound,
-                has_below: bps_cov.has_below,
-            };
-            let pct_can_fire = pct_demand.lowest_bound.is_some();
-            let bps_can_fire = bps_demand.lowest_bound.is_some();
-            if !pct_can_fire && !bps_can_fire {
-                // No rule that can fire on either metric. Nothing is queried and nothing is swept
-                // clear — a port that was alerting when its rule was deleted is resolved by the
-                // config refresh, not by pretending its traffic dropped.
-                continue;
-            }
-            // The union of both families' node sets. A family with no rule contributes an empty
-            // set; one scoped too broadly to enumerate contributes `None`, which means the fleet.
-            let nodes = match (&pct_cov.nodes, &bps_cov.nodes) {
-                (Some(a), Some(b)) => Some(a.union(b).copied().collect::<BTreeSet<Uuid>>()),
-                _ => None,
-            };
-            if nodes.as_ref().is_some_and(BTreeSet::is_empty) {
-                continue;
-            }
-            let scoped: Vec<Uuid> = nodes
-                .as_ref()
-                .map(|s| s.iter().copied().collect())
-                .unwrap_or_default();
-
-            // Only the percentage family needs a denominator, so an absolute-only tick asks
-            // PostgreSQL nothing. Taken over the union rather than over the percentage rules'
-            // own nodes: a slower link in the other family can only *lower* the floor, and a
-            // lower floor never hides a breaching port.
-            let slowest = if pct_can_fire {
-                match repo.slowest_interface_speed_bps(&scoped).await {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(error = %e, metric = pair.pct, "reading the interface speed floor failed");
-                        continue;
-                    }
-                }
-            } else {
-                None
-            };
-            let Some(floor) = util::query_floor_bps(slowest, pct_demand, bps_demand) else {
-                // Percentage rules exist but no covered port has a usable speed, and no absolute
-                // rule is there to reach them. Not an error — it is what a fleet of agents that
-                // implement neither speed OID looks like — but it is invisible without a number.
-                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => pair.pct)
-                    .set(0.0);
-                continue;
-            };
-
-            // `scoped` is the union of both families' node sets — computed above for the speed
-            // floor and, until increment 6c, thrown away afterwards. `None` here means the same
-            // thing it means there: a rule is scoped too broadly to enumerate, so ask the fleet.
-            let scope: Option<&[Uuid]> = nodes.is_some().then_some(scoped.as_slice());
-            let Some(candidates) = store.interface_candidates(dimension, floor, scope).await else {
-                // The store could not answer. Skip the whole tick rather than treating it as
-                // "nothing is busy": the recovery sweep below would otherwise resolve every open
-                // interface alert and send a recovery to PagerDuty for each, then re-fire them all
-                // when VictoriaMetrics came back.
-                metrics::counter!("yagra_interface_util_query_failures_total").increment(1);
-                tracing::warn!(
-                    metric = pair.pct,
-                    "interface-utilisation query did not answer; tick skipped"
-                );
-                continue;
-            };
-
-            // Speeds for exactly the candidate nodes — bounded by what crossed the floor, not by
-            // the fleet. Skipped entirely when only absolute rules are in force.
-            let speeds: BTreeMap<(Uuid, i32), Option<i64>> = if pct_can_fire {
-                let ids: Vec<Uuid> = candidates
-                    .iter()
-                    .map(|(n, _, _)| *n)
-                    .collect::<BTreeSet<_>>()
-                    .into_iter()
-                    .collect();
-                match repo.interface_idents_for(&ids).await {
-                    Ok(m) => m.iter().map(|(k, v)| (*k, v.if_speed)).collect(),
-                    Err(e) => {
-                        tracing::warn!(error = %e, metric = pair.pct, "reading interface speeds failed");
-                        continue;
-                    }
-                }
-            } else {
-                BTreeMap::new()
-            };
-
-            let (readings, no_pct) = util::evaluate(&candidates, &speeds);
-            if pct_can_fire {
-                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => pair.pct)
-                    .set(no_pct as f64);
-            }
-            metrics::gauge!("yagra_interface_util_tracked", "metric" => pair.pct)
-                .set(tracked.count_for(pair.pct) as f64);
-            metrics::gauge!("yagra_interface_util_tracked", "metric" => pair.bps)
-                .set(tracked.count_for(pair.bps) as f64);
-
-            let mut present = BTreeSet::new();
-            for r in &readings {
-                present.insert((r.node, r.ifindex));
-                // A node whose *liveness* is not Ok is frozen, not observed. Feeding `Ok` would
-                // resolve a real congestion alert the moment the device went unreachable; feeding
-                // the reading would page about a link on a box that is already down.
-                //
-                // 🚨 Liveness, never the display roll-up: the roll-up folds in this port's own
-                // alert, so gating on it froze the evaluator on its own output and the alert could
-                // never clear (ADR-076 増分 7 決定 13). A maintenance window is let through, so an
-                // open port alert resolves inside one the way a node-level alert does.
-                if !util::may_observe_ports(alerts.node_liveness(r.node)) {
-                    continue;
-                }
-                // ⚠️ The mark comes *after* the observation, and that ordering is the point
-                // (ADR-076 increment 6d). Marking first tracked every port above the floor —
-                // fleet-wide, including nodes nobody wrote a rule for — and since `TrackedChecks`
-                // never shrank, the recovery sweep then walked that set on every subsequent tick
-                // forever. `None` means no rule resolved: nothing to remember, nothing to recover.
-                if let (true, Some(pct)) = (pct_can_fire, r.pct) {
-                    if let Some(a) =
-                        alerts.observe_interface_metric(r.node, r.ifindex, pair.pct, pct, now_ms)
-                    {
-                        tracked.mark((r.node, r.ifindex, pair.pct));
-                        actions.extend(a);
-                    }
-                }
-                if bps_can_fire {
-                    if let Some(a) =
-                        alerts.observe_interface_metric(r.node, r.ifindex, pair.bps, r.bps, now_ms)
-                    {
-                        tracked.mark((r.node, r.ifindex, pair.bps));
-                        actions.extend(a);
-                    }
-                }
-            }
-
-            // Anything tracked that is no longer above the floor has recovered: below the floor is
-            // below every rule's bound by construction. Frozen nodes are skipped here too, for the
-            // same reason they are skipped above.
-            //
-            // Not done for a metric that has a `below` rule, and the reason is the same inversion
-            // that `query_floor_bps` handles: the floor is zero there, so a port only leaves the
-            // candidate set by losing its series altogether — and calling that "0 bits/sec" would
-            // *fire* a `below` rule on a port nobody has heard from, which is a data gap being
-            // reported as a traffic level.
-            for metric in [pair.pct, pair.bps] {
-                let (can_fire, has_below) = if metric == pair.pct {
-                    (pct_can_fire, pct_demand.has_below)
-                } else {
-                    (bps_can_fire, bps_demand.has_below)
-                };
-                if !can_fire || has_below {
-                    continue;
-                }
-                for key in tracked.absent(metric, &present) {
-                    let (node, ifindex, m) = key;
-                    if !util::may_observe_ports(alerts.node_liveness(node)) {
-                        continue;
-                    }
-                    match alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms) {
-                        Some(a) => actions.extend(a),
-                        // The rule was deleted between the mark and now. Drop the key instead of
-                        // asking about it every tick for the life of the process; any alert it left
-                        // open was already closed by the orphan sweep at the top of this tick — not
-                        // by claiming the traffic fell to zero.
-                        None => tracked.forget(&key),
-                    }
-                }
-            }
-        }
-
-        // One drain per tick, for every dimension and for the orphan sweep. History first, then
-        // the notifier: Increment 1 wired this loop to the notifier alone and the alerts paged with
-        // no row behind them, so `a_transition_from_the_interface_watch_reaches_the_history_store`
-        // pins both calls to this function's body.
-        for action in actions {
-            if let Some(alert) = coverage_alert_of(&action) {
-                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
-                if let Err(e) = history.record(alert, resolved).await {
-                    tracing::warn!(error = %e, "recording an interface-utilisation transition failed");
-                }
-            }
-            notifier.handle(action).await;
-        }
-    }
-}
-
-/// The alert inside a coverage action, for the history write.
-///
-/// `Suppress` is unreachable here — dependency suppression is a property of the node graph and a
-/// pool is not in it — but it is spelled out rather than caught by a wildcard so a new action
-/// variant has to decide what History should do with it.
-fn coverage_alert_of(action: &crate::alerts::NotifyAction) -> Option<&Alert> {
-    match action {
-        crate::alerts::NotifyAction::Fire(a) | crate::alerts::NotifyAction::Resolve(a) => Some(a),
-        crate::alerts::NotifyAction::Suppress(_) => None,
     }
 }
 
@@ -3206,7 +2805,7 @@ struct MetaStores {
     neighbors: Arc<neighbors::NeighborRepo>,
     l3: Arc<l3::L3Repo>,
     arp: Arc<arp::ArpRepo>,
-    routing: Arc<routing::RoutingRepo>,
+    routing: Arc<l3_routing::RoutingRepo>,
 }
 
 async fn run_pg_writer(
@@ -3401,369 +3000,6 @@ async fn flush_history(history: &Arc<AlertHistoryStore>, buf: &mut Vec<HistoryRe
     match history.record_batch(&rows).await {
         Ok(n) => metrics::counter!("yagra_result_history_persisted_total").increment(n),
         Err(e) => tracing::warn!(error = %e, "batch alert-history insert failed"),
-    }
-}
-
-/// Periodically turn the inventory into polling work, choosing per pool (ADR-009/020) between:
-///
-/// - **working-set mode** — a pool with at least one live poller (`coordinator.live_pools`): core
-///   hands the coordinator the pool's *entire* desired spec set (built via
-///   [`scheduler::PollDispatcher::build_node_specs`], **not** gated by `due()` — the working set
-///   always holds every node, and an interval change flows as a spec change), and the coordinator
-///   diffs + distributes it as snapshots/deltas. The poller schedules locally.
-/// - **legacy mode** — a pool with no live poller: exactly the previous behavior (per-node
-///   `due()` + anti-stampede jitter + per-job publish), but routed to the pool's own subject so an
-///   old wildcard poller still absorbs it. This is the zero-poller fallback and N/N-1 safety net.
-///
-/// The mode is decided per pool every sweep, so a pool is served one way or the other but never
-/// both (no double-polling). The effective interval per node is `profile override → global default`
-/// (both re-read each round, so a UI edit applies next round). The loop wakes at the smallest
-/// interval in play; legacy jitter spans that window.
-/// Cached result of a full sweep's spec resolution, reused while config is unchanged (S2). Holds the
-/// per-pool desired working sets so a steady-state round costs no `list_nodes` scan, no per-node spec
-/// build, and no credential decrypt — the coordinator is fed the cached sets and handles poller
-/// membership + its own diff. Populated **only** when the whole fleet was working-set at build time
-/// (a legacy pool needs node rows each round, so a mixed fleet keeps rebuilding, as before).
-struct SweepCache {
-    /// Config generation this was built at; a mismatch forces a rebuild.
-    generation: u64,
-    /// Sleep period for the round (fleet-minimum interval), cached so the fast path needn't rescan.
-    min_interval: u32,
-    /// Per-pool desired working set (`build_node_specs` output).
-    ///
-    /// Handed to [`Coordinator::reconcile_pool`] **by reference**. It used to be cloned per pool per
-    /// round, which at fleet scale meant deep-copying every node's decrypted credentials, OID column
-    /// lists and route-probe plans on a path whose entire purpose is that nothing changed — the
-    /// steady-state round now touches this map without allocating.
-    desired_by_pool: HashMap<String, HashMap<NodeId, Vec<JobSpec>>>,
-}
-
-impl SweepCache {
-    /// Whether this cache can serve the current round: config unchanged since it was built AND every
-    /// cached pool still has a live poller (working-set). A pool that fell back to legacy needs node
-    /// rows this round, so the cache can't serve it — force a rebuild. (Config-derived pool membership
-    /// is stable while the generation is unchanged, so the cached pool set equals the current one.)
-    fn reusable(&self, generation: u64, live: &std::collections::HashSet<String>) -> bool {
-        self.generation == generation
-            && self
-                .desired_by_pool
-                .keys()
-                .all(|p| scheduler::pool_uses_working_set(p, live))
-    }
-}
-
-/// Group the round's nodes by the pool that should poll them.
-///
-/// The pool is the node's **effective** one (own > ancestor folder > default, [`poolres`]), so a
-/// folder-level assignment routes its whole subtree. Kept a separate pure function so that
-/// resolution is unit-testable without a scheduler loop.
-///
-/// The map is also **seeded with every live pool** before the node loop. Without that, a pool whose
-/// last node moved away simply vanishes from the map and is never reconciled again — its poller
-/// keeps polling the stale working set for the life of the core process, double-polling nodes that
-/// have since moved elsewhere. `reconcile_pool` with an empty desired set publishes one empty
-/// snapshot and is idempotent afterwards, so seeding costs nothing in steady state.
-///
-/// Meraki device nodes are dropped: core's org collector owns them, not a pool poller.
-fn group_by_pool(
-    resolved: Vec<(yagra_common::Node, u32)>,
-    meraki_node_ids: &std::collections::HashSet<Uuid>,
-    live: &std::collections::HashSet<String>,
-    resolver: &poolres::PoolResolver,
-) -> HashMap<String, Vec<(yagra_common::Node, u32)>> {
-    let mut groups: HashMap<String, Vec<(yagra_common::Node, u32)>> = HashMap::new();
-    for pool in live {
-        groups.entry(pool.clone()).or_default();
-    }
-    for (node, secs) in resolved {
-        if meraki_node_ids.contains(&node.id.as_uuid()) {
-            continue;
-        }
-        let pool = resolver.resolve_pool(&node).to_owned();
-        groups.entry(pool).or_default().push((node, secs));
-    }
-    groups
-}
-
-async fn run_scheduler(
-    repo: Arc<NodeRepo>,
-    groups_repo: Arc<groups::GroupRepo>,
-    dispatcher: Arc<scheduler::PollDispatcher>,
-    stats: Arc<scheduler::SchedulerStats>,
-    meraki_devices: Arc<meraki::MerakiDeviceRepo>,
-    coordinator: Arc<Coordinator>,
-) {
-    use std::collections::HashSet;
-    use std::time::Instant;
-    let mut last_dispatched: HashMap<Uuid, Instant> = HashMap::new();
-    // Legacy-mode cadence for jobs that run slower than their node's interval, keyed by
-    // (node, job kind). Only the neighbour walk is in here today; it is keyed by kind rather than
-    // special-cased so a second slow job needs no new bookkeeping.
-    let mut last_slow: HashMap<(Uuid, &'static str), Instant> = HashMap::new();
-    let mut cache: Option<SweepCache> = None;
-    // Last successfully-built folder-pool resolver. A transient DB error must NOT degrade to "no
-    // inheritance": that would silently move every folder-assigned node to the default pool for one
-    // round, churning both pools' working sets. Reusing the last-known map is the safe failure.
-    let mut resolver: Option<poolres::PoolResolver> = None;
-    loop {
-        // Read the config generation before any work so a change racing the rebuild is caught next
-        // round (the cache is tagged with the pre-work value).
-        let generation = config_gen::current();
-        let now = Instant::now();
-        let live = coordinator.live_pools(now);
-
-        // Fast path: config unchanged since the cache was built AND every cached pool still has a
-        // live poller (working-set). Reuse the cached desired sets — no DB scan, no per-node spec
-        // build, no credential decrypt — and let the coordinator handle poller membership + its diff.
-        if let Some(c) = &cache {
-            if c.reusable(generation, &live) {
-                for (pool, desired) in &c.desired_by_pool {
-                    coordinator.reconcile_pool(pool, desired, now).await;
-                }
-                stats.record_sweep(0);
-                stats.set_pool_modes(c.desired_by_pool.len() as u64, 0);
-                let sleep_secs = c.min_interval;
-                metrics::counter!("yagra_sweep_cache_hits_total").increment(1);
-                // Wake early if a poller announced it is leaving: the ring changed, so the desired
-                // set must be re-pushed now rather than after a full poll interval.
-                tokio::select! {
-                    () = tokio::time::sleep(Duration::from_secs(u64::from(sleep_secs))) => {}
-                    () = coordinator.sweep_nudged() => {}
-                }
-                continue;
-            }
-        }
-        metrics::counter!("yagra_sweep_cache_misses_total").increment(1);
-
-        // Meraki device nodes are polled by the org collector, not per-node — preload their ids
-        // once per round (like the interval overrides) and skip them, so no per-node lookup runs in
-        // the hot loop. A load failure degrades to an empty set (they'd fall through to the
-        // per-node dispatcher, which then short-circuits them anyway).
-        let meraki_node_ids = meraki_devices.node_ids().await.unwrap_or_default();
-        // Resolve the round's intervals: the global default (DB-backed) and any per-profile
-        // overrides. On a read failure, degrade to the compiled default / no overrides rather than
-        // stalling the poll loop.
-        let default_secs = repo
-            .get_default_poll_interval()
-            .await
-            .unwrap_or(crate::config::DEFAULT_POLL_INTERVAL_SECS);
-        let overrides = repo.profile_interval_overrides().await.unwrap_or_default();
-        // Adjacency policy (ADR-038): read once per rebuild, exactly like the intervals above, so
-        // no per-node settings query enters the sweep. Degrades to the compiled default.
-        //
-        // Resolved through the dispatcher rather than straight off `repo`, because it also carries
-        // the route-probe plan (ADR-043 Increment 4), which the dispatcher caches on its own TTL —
-        // rebuilding that per sweep would mean a JSONB scan of `node_l3` every round.
-        let neighbors = dispatcher.adjacency_policy().await;
-        // Folder-pool inheritance (ADR-009/020). One small query per rebuild — never on the cached
-        // fast path above, which is already generation-keyed.
-        match groups_repo.pool_rows().await {
-            Ok(rows) => resolver = Some(poolres::PoolResolver::build(rows)),
-            Err(e) => {
-                let Some(_) = resolver.as_ref() else {
-                    tracing::error!(
-                        error = %e,
-                        "scheduler: loading folder pools failed and none is cached — skipping the round \
-                         rather than routing the fleet to the wrong pool"
-                    );
-                    // Wake early if a poller announced it is leaving: the ring changed, so the desired
-                    // set must be re-pushed now rather than after a full poll interval.
-                    tokio::select! {
-                        () = tokio::time::sleep(Duration::from_secs(u64::from(default_secs))) => {}
-                        () = coordinator.sweep_nudged() => {}
-                    }
-                    continue;
-                };
-                tracing::warn!(error = %e, "scheduler: loading folder pools failed; reusing the last-known map");
-            }
-        }
-        let pool_resolver = resolver
-            .clone()
-            .unwrap_or_else(poolres::PoolResolver::empty);
-        let mut min_interval = default_secs;
-
-        match repo.list_nodes().await {
-            Ok(nodes) => {
-                // Pair each node with its resolved interval, and find the round's smallest so the
-                // jitter window matches the sleep period (a node is never double-scheduled per round).
-                let resolved: Vec<_> = nodes
-                    .into_iter()
-                    .map(|node| {
-                        let secs =
-                            scheduler::resolve_interval(node.profile, &overrides, default_secs);
-                        (node, secs)
-                    })
-                    .collect();
-                for (_, secs) in &resolved {
-                    min_interval = min_interval.min(*secs);
-                }
-                let window_ms = (u64::from(min_interval).saturating_mul(1000)).max(1);
-                let node_count = resolved.len();
-
-                // Group the non-Meraki nodes by their effective pool so each pool's mode is decided
-                // once — and seed every live pool so one that has lost all its nodes still gets
-                // reconciled (see `group_by_pool`).
-                let groups = group_by_pool(resolved, &meraki_node_ids, &live, &pool_resolver);
-
-                tracing::debug!(
-                    count = node_count,
-                    pools = groups.len(),
-                    default_secs,
-                    min_interval,
-                    "scheduling poll round"
-                );
-
-                // `present` tracks only legacy-dispatched nodes so the retain below can prune
-                // last_dispatched without dropping their cadence; working-set nodes are removed
-                // from it explicitly (so a later legacy fallback re-polls them at once).
-                let mut present: HashSet<Uuid> = HashSet::new();
-                let mut jobs_round: u64 = 0;
-                let mut working_set_pools: u64 = 0;
-                let mut legacy_pools: u64 = 0;
-                // Collect this rebuild's working-set desired sets to seed the cache (see below).
-                let mut new_desired_by_pool: HashMap<String, HashMap<NodeId, Vec<JobSpec>>> =
-                    HashMap::new();
-
-                // Per-node working-set builds fan out with bounded concurrency: each resolves a
-                // node's URL/SNMP/collection config with a few DB round-trips, so at tens of
-                // thousands of nodes doing them strictly one-at-a-time would let the build alone
-                // exceed the poll interval. Bounded so the DB connection pool isn't overwhelmed.
-                const SWEEP_BUILD_CONCURRENCY: usize = 16;
-
-                // URL and DNS monitors each live in their own 1:1 side table, so resolving a node's
-                // kind means a query per table. Preload both id sets once per sweep and let the
-                // dispatcher skip the query for every node that isn't one — the same reason Meraki
-                // ids are preloaded above. Without this the sweep pays one extra round trip per
-                // node per table per round at fleet scale.
-                let monitor_ids = Arc::new((
-                    dispatcher.url_node_ids().await,
-                    dispatcher.dns_node_ids().await,
-                ));
-
-                for (pool, members) in groups {
-                    if scheduler::pool_uses_working_set(&pool, &live) {
-                        // Build the pool's whole desired working set and let the coordinator diff +
-                        // distribute it (snapshots/deltas). Not gated by `due()`. These nodes leave
-                        // the legacy `last_dispatched` map (a later legacy fallback re-polls at once).
-                        for (node, _secs) in &members {
-                            last_dispatched.remove(&node.id.as_uuid());
-                        }
-                        // Own each item into the stream and clone the `Arc` per future so no borrow
-                        // crosses an `.await` (keeps the concurrent builds free of lifetime coupling).
-                        let desired: HashMap<_, _> = futures::stream::iter(members)
-                            .map(|(node, secs)| {
-                                let dispatcher = dispatcher.clone();
-                                let monitor_ids = monitor_ids.clone();
-                                // Cheap: scalars plus one `Arc` to the shared route-probe plan.
-                                let neighbors = neighbors.clone();
-                                async move {
-                                    let (url_ids, dns_ids) = monitor_ids.as_ref();
-                                    let specs = dispatcher
-                                        .build_node_specs(
-                                            &node,
-                                            secs,
-                                            scheduler::MonitorHints {
-                                                url: Some(url_ids),
-                                                dns: Some(dns_ids),
-                                            },
-                                            &neighbors,
-                                        )
-                                        .await;
-                                    (node.id, specs)
-                                }
-                            })
-                            .buffer_unordered(SWEEP_BUILD_CONCURRENCY)
-                            .filter_map(|(id, specs)| async move {
-                                (!specs.is_empty()).then_some((id, specs))
-                            })
-                            .collect()
-                            .await;
-                        // Reconcile from the borrow, then hand the one copy to the cache — the set
-                        // is built once per rebuild and never duplicated.
-                        coordinator.reconcile_pool(&pool, &desired, now).await;
-                        new_desired_by_pool.insert(pool.clone(), desired);
-                        working_set_pools += 1;
-                    } else {
-                        // Legacy: per-node due-check + jittered per-job publish to the pool subject.
-                        for (node, secs) in &members {
-                            let id = node.id.as_uuid();
-                            present.insert(id);
-                            let elapsed = last_dispatched.get(&id).map(|&t| now.duration_since(t));
-                            if !scheduler::due(elapsed, Duration::from_secs(u64::from(*secs))) {
-                                continue;
-                            }
-                            last_dispatched.insert(id, now);
-                            for (job, kind) in dispatcher
-                                .build_scheduled_jobs_hinted(
-                                    node,
-                                    *secs,
-                                    scheduler::MonitorHints {
-                                        url: Some(&monitor_ids.0),
-                                        dns: Some(&monitor_ids.1),
-                                    },
-                                    &neighbors,
-                                )
-                                .await
-                            {
-                                // A job whose own cadence is slower than the node's (today: the
-                                // neighbour walk) gets its own due-check. Working-set mode needs
-                                // nothing here — the poller schedules each spec by its own
-                                // `interval_secs` — but this path publishes on the *node's* tick,
-                                // so without the gate an hourly walk would go out every minute.
-                                // Existing jobs all carry `*secs`, so they never enter this branch.
-                                if job.interval_secs > *secs {
-                                    let key = (id, kind);
-                                    let elapsed =
-                                        last_slow.get(&key).map(|&t| now.duration_since(t));
-                                    let cadence = Duration::from_secs(u64::from(job.interval_secs));
-                                    if !scheduler::due(elapsed, cadence) {
-                                        continue;
-                                    }
-                                    last_slow.insert(key, now);
-                                }
-                                jobs_round += 1;
-                                let dispatcher = dispatcher.clone();
-                                let node_id = node.id;
-                                let pool = pool.clone();
-                                let delay =
-                                    Duration::from_millis(rand::random::<u64>() % window_ms);
-                                tokio::spawn(async move {
-                                    tokio::time::sleep(delay).await;
-                                    dispatcher.publish_job(job, kind, node_id, &pool).await;
-                                });
-                            }
-                        }
-                        legacy_pools += 1;
-                    }
-                }
-                // Forget legacy nodes no longer present so the map can't grow unbounded (working-set
-                // nodes were already removed above).
-                last_dispatched.retain(|id, _| present.contains(id));
-                last_slow.retain(|(id, _), _| present.contains(id));
-                stats.record_sweep(jobs_round);
-                stats.set_pool_modes(working_set_pools, legacy_pools);
-                // Seed the fast-path cache only when the whole fleet was working-set — a legacy pool
-                // needs node rows every round, so a mixed fleet keeps rebuilding (unchanged behavior).
-                // Tagged with the generation read before the rebuild so a racing config change is
-                // detected next round.
-                cache = if legacy_pools == 0 {
-                    Some(SweepCache {
-                        generation,
-                        min_interval,
-                        desired_by_pool: new_desired_by_pool,
-                    })
-                } else {
-                    None
-                };
-            }
-            Err(e) => tracing::error!(error = %e, "scheduler: listing nodes failed"),
-        }
-        // Wake early if a poller announced it is leaving: the ring changed, so the desired
-        // set must be re-pushed now rather than after a full poll interval.
-        tokio::select! {
-            () = tokio::time::sleep(Duration::from_secs(u64::from(min_interval))) => {}
-            () = coordinator.sweep_nudged() => {}
-        }
     }
 }
 
@@ -4421,95 +3657,6 @@ mod tests {
     /// This file's own source, for the structural assertion below.
     const SRC: &str = include_str!("main.rs");
 
-    /// The dimension table is positional, and getting it backwards is silent: the loop would
-    /// evaluate receive rules against transmit traffic and never fail anywhere.
-    #[test]
-    fn the_dimensions_match_their_metric_pairs() {
-        use crate::interface_util as util;
-        use store::InterfaceTopMetric;
-
-        assert_eq!(INTERFACE_DIMENSIONS.len(), util::DERIVED_PAIRS.len());
-        for (pair, dimension) in INTERFACE_DIMENSIONS {
-            let want = match dimension {
-                InterfaceTopMetric::InBps => {
-                    ("in", util::METRIC_IF_IN_UTIL_PCT, util::METRIC_IF_IN_BPS)
-                }
-                InterfaceTopMetric::OutBps => {
-                    ("out", util::METRIC_IF_OUT_UTIL_PCT, util::METRIC_IF_OUT_BPS)
-                }
-                // The loop reads one direction at a time; a combined or per-error dimension has
-                // no percentage to divide and no pair to observe.
-                InterfaceTopMetric::Throughput
-                | InterfaceTopMetric::Errors
-                | InterfaceTopMetric::Discards => {
-                    panic!("{dimension:?} is not a single direction")
-                }
-            };
-            assert_eq!(pair.pct, want.1, "{} percentage", want.0);
-            assert_eq!(pair.bps, want.2, "{} absolute rate", want.0);
-        }
-        // Both directions are present, and neither is listed twice.
-        let dims: std::collections::BTreeSet<&str> = INTERFACE_DIMENSIONS
-            .iter()
-            .map(|(pair, _)| pair.pct)
-            .collect();
-        assert_eq!(dims.len(), INTERFACE_DIMENSIONS.len());
-    }
-
-    /// **A coverage transition is written to History, not only notified.**
-    ///
-    /// ⚠️ Found on real hardware, not by a test: Increment 1 deliberately kept pool alerts out of
-    /// `alert_history`, so the watch loop was wired to the notifier alone. Increment 2 opened the
-    /// store to every subject — and nothing in the type system connected the two, so the alert
-    /// raised, paged, and left no row. The gauges and the log line all looked correct.
-    ///
-    /// Structural because the loop's body is a 30-second tick around a real database; the
-    /// behaviour a unit test *can* reach is `coverage_alert_of`, tested below.
-    #[test]
-    fn a_pool_coverage_transition_reaches_the_history_store() {
-        let production = SRC
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
-        let watch = production
-            .split("async fn run_pool_coverage_watch")
-            .nth(1)
-            .expect("the watch loop exists");
-        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
-        assert!(
-            body.contains("history.record("),
-            "the coverage watch notifies without recording — the alert pages and History stays \
-             empty, which is exactly what shipped in Increment 1"
-        );
-        assert!(
-            body.contains("notifier.handle("),
-            "…and it must still notify"
-        );
-    }
-
-    #[test]
-    fn every_notify_action_decides_what_history_does_with_it() {
-        use yagra_alert::{Alert, Breach, Subject};
-        let alert = Alert {
-            subject: Subject::Pool("tokyo".to_owned()),
-            check: yagra_common::CheckId::from(Uuid::nil()),
-            severity: yagra_common::Severity::Critical,
-            state: yagra_common::NodeState::Unreachable,
-            at_unix_ms: 0,
-            root_cause: None,
-            flapping: false,
-            metric: "live_pollers".to_owned(),
-            breach: None::<Breach>,
-            ifindex: None,
-        };
-        // A fire and a resolve are both rows; the two are told apart by `resolved`, which the
-        // caller derives from the same action.
-        assert!(coverage_alert_of(&crate::alerts::NotifyAction::Fire(alert.clone())).is_some());
-        assert!(coverage_alert_of(&crate::alerts::NotifyAction::Resolve(alert.clone())).is_some());
-        // Suppression is a property of the node dependency graph, which a pool is not in.
-        assert!(coverage_alert_of(&crate::alerts::NotifyAction::Suppress(alert)).is_none());
-    }
-
     /// **In shadow mode the alert engine receives the manual graph, and nothing else.**
     ///
     /// ADR-043 決定 5's safety property, and the reason `AlertConfigBase` carries one topology
@@ -4541,75 +3688,6 @@ mod tests {
             !production.contains("shadow_topology"),
             "a shadow graph must not be a field the engine could be handed"
         );
-    }
-
-    // ── Sweep pool grouping (effective pool + live-pool seeding) ──────────────
-
-    fn test_node(pool: Option<&str>, group: Option<Uuid>) -> yagra_common::Node {
-        use std::net::{IpAddr, Ipv4Addr};
-        let mut n =
-            yagra_common::Node::new(NodeId::new(), "n", IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)));
-        n.pool = pool.map(str::to_owned);
-        n.group = group.map(yagra_common::GroupId::from);
-        n
-    }
-
-    #[test]
-    fn group_by_pool_uses_the_effective_pool() {
-        let folder = Uuid::from_u128(1);
-        let resolver = poolres::PoolResolver::build(vec![(folder, None, Some("tokyo".to_owned()))]);
-        let nodes = vec![
-            (test_node(None, Some(folder)), 30),          // inherits tokyo
-            (test_node(Some("osaka"), Some(folder)), 30), // own pool wins
-            (test_node(None, None), 30),                  // default
-        ];
-        let groups = group_by_pool(
-            nodes,
-            &std::collections::HashSet::new(),
-            &std::collections::HashSet::new(),
-            &resolver,
-        );
-        assert_eq!(groups.get("tokyo").map(Vec::len), Some(1));
-        assert_eq!(groups.get("osaka").map(Vec::len), Some(1));
-        assert_eq!(groups.get(yagra_bus::DEFAULT_POOL).map(Vec::len), Some(1));
-    }
-
-    fn live_set(pools: &[&str]) -> std::collections::HashSet<String> {
-        pools.iter().map(|p| (*p).to_owned()).collect()
-    }
-
-    #[test]
-    fn group_by_pool_seeds_live_pools_that_have_no_nodes() {
-        // Regression: without seeding, a pool whose last node moved away vanishes from the map and
-        // is never reconciled again — its poller keeps polling a stale working set forever, so the
-        // moved node ends up polled by two pollers. Editing pools from the UI makes this routine.
-        let groups = group_by_pool(
-            vec![(test_node(Some("osaka"), None), 30)],
-            &std::collections::HashSet::new(),
-            &live_set(&["tokyo", "osaka"]),
-            &poolres::PoolResolver::empty(),
-        );
-        assert_eq!(
-            groups.get("tokyo").map(Vec::len),
-            Some(0),
-            "an emptied pool must still be reconciled (with an empty desired set)"
-        );
-        assert_eq!(groups.get("osaka").map(Vec::len), Some(1));
-    }
-
-    #[test]
-    fn group_by_pool_drops_meraki_nodes() {
-        // Core's org collector polls Meraki devices; no pool poller ever should.
-        let meraki = test_node(Some("tokyo"), None);
-        let meraki_ids: std::collections::HashSet<Uuid> =
-            [meraki.id.as_uuid()].into_iter().collect();
-        let groups = group_by_pool(
-            vec![(meraki, 30), (test_node(Some("tokyo"), None), 30)],
-            &meraki_ids,
-            &std::collections::HashSet::new(),
-            &poolres::PoolResolver::empty(),
-        );
-        assert_eq!(groups.get("tokyo").map(Vec::len), Some(1));
     }
 
     #[tokio::test]
@@ -4938,34 +4016,6 @@ mod tests {
         );
     }
 
-    fn sweep_cache(generation: u64, pools: &[&str]) -> SweepCache {
-        SweepCache {
-            generation,
-            min_interval: 30,
-            desired_by_pool: pools
-                .iter()
-                .map(|p| ((*p).to_owned(), HashMap::new()))
-                .collect(),
-        }
-    }
-
-    fn live(pools: &[&str]) -> std::collections::HashSet<String> {
-        pools.iter().map(|p| (*p).to_owned()).collect()
-    }
-
-    #[test]
-    fn sweep_cache_reused_only_when_gen_matches_and_all_pools_working_set() {
-        let c = sweep_cache(7, &["default", "site-a"]);
-        // Config unchanged and both pools have live pollers → reuse.
-        assert!(c.reusable(7, &live(&["default", "site-a"])));
-        // A newer generation (config edited) → rebuild.
-        assert!(!c.reusable(8, &live(&["default", "site-a"])));
-        // A cached pool lost its poller (fell back to legacy) → rebuild.
-        assert!(!c.reusable(7, &live(&["default"])));
-        // An empty-fleet cache is vacuously reusable while the generation holds.
-        assert!(sweep_cache(7, &[]).reusable(7, &live(&[])));
-    }
-
     // The spill is bounded: past the cap the oldest batch is dropped rather than growing unbounded.
     #[tokio::test(start_paused = true)]
     async fn vm_flush_bounds_the_spill() {
@@ -5144,41 +4194,6 @@ mod tests {
         assert_eq!(rx.try_recv().unwrap().bytes, 0);
         assert_eq!(rx.try_recv().unwrap().bytes, 1);
         assert!(rx.try_recv().is_err(), "only the accepted rows are queued");
-    }
-
-    /// The interface watch must record to History as well as notify — the same property
-    /// `a_pool_coverage_transition_reaches_the_history_store` pins for the pool watch, and for the
-    /// same reason: Increment 1 wired that loop to the notifier alone, the alerts paged, and
-    /// History stayed empty with every gauge and log line looking correct.
-    ///
-    /// Structural because the loop body is a 60-second tick around VictoriaMetrics, PostgreSQL and
-    /// a notifier. It also guards the ADR-076 増分 7 refactor that moved the drain out of the
-    /// per-dimension loop so the orphan sweep could share it: a drain that ended up outside this
-    /// function would still compile.
-    #[test]
-    fn a_transition_from_the_interface_watch_reaches_the_history_store() {
-        let production = SRC
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
-        let watch = production
-            .split("async fn run_interface_utilization_watch")
-            .nth(1)
-            .expect("the watch loop exists");
-        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
-        assert!(
-            body.contains("history.record("),
-            "the interface watch notifies without recording — the alert pages and History stays \
-             empty"
-        );
-        assert!(
-            body.contains("notifier.handle("),
-            "…and it must still notify"
-        );
-        assert!(
-            body.contains("resolve_orphaned_interface_alerts()"),
-            "without the sweep, deleting a port rule strands its alert for the life of the process"
-        );
     }
 
     /// 🚨 ADR-080: a failed read must not become an empty value here.

@@ -13,9 +13,15 @@
 //! path.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 use std::time::Duration;
 
 use uuid::Uuid;
+
+use crate::alerts::{self, AlertManager, Notifier};
+use crate::history::AlertHistoryStore;
+use crate::repo::NodeRepo;
+use crate::store::{self, MetricStore};
 use yagra_common::{IfIndex, MetricKind, NodeId, NodeState};
 
 /// Derived metric: receive utilisation as a percentage of the port's own speed.
@@ -347,9 +353,355 @@ pub fn evaluate(
     (out, no_pct)
 }
 
+/// Which VictoriaMetrics dimension each direction's derived metric pair is computed from.
+///
+/// One entry per **direction**, not per metric: the percentage and the absolute rate come out of
+/// the same answer, so a direction costs one query however many of its metrics carry rules.
+///
+/// The names come from `DERIVED_PAIRS` rather than being written again here; what this table adds
+/// is the dimension, which `interface_util` cannot name — it is the pure half and knows nothing
+/// about the store. The index-to-direction pairing is what
+/// `the_dimensions_match_their_metric_pairs` exists to pin.
+pub(crate) const INTERFACE_DIMENSIONS: [(
+    crate::interface_util::DerivedPair,
+    store::InterfaceTopMetric,
+); 2] = [
+    (
+        crate::interface_util::DERIVED_PAIRS[0],
+        store::InterfaceTopMetric::InBps,
+    ),
+    (
+        crate::interface_util::DERIVED_PAIRS[1],
+        store::InterfaceTopMetric::OutBps,
+    ),
+];
+
+/// Evaluate per-interface bandwidth utilisation against the threshold rules, on the leader
+/// (ADR-076 decision 3).
+///
+/// Modelled on [`run_pool_coverage_watch`] — the other loop that raises alerts from outside the
+/// poll path — and it follows the same order for the same reason: persist to History **before**
+/// notifying, so an operator who is paged can always find the row.
+///
+/// Utilisation is not a stored series (ADR-012), so each tick is: ask the rules what they cover →
+/// compute the query floor from the slowest covered port → ask VictoriaMetrics for the ports above
+/// it → join their speeds from PostgreSQL → divide → feed the engine. The pure half of that is
+/// [`crate::interface_util`]; this function is the I/O and the ordering.
+///
+/// Leader-only for the same reason pool coverage is: two instances evaluating the same ports would
+/// double every notification, and the engine's check state is process-local.
+pub(crate) async fn run_interface_utilization_watch(
+    store: Arc<dyn MetricStore>,
+    repo: Arc<NodeRepo>,
+    alerts: Arc<AlertManager>,
+    notifier: Arc<Notifier>,
+    history: Arc<AlertHistoryStore>,
+) {
+    use crate::interface_util as util;
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut tracked = util::TrackedChecks::default();
+    loop {
+        tokio::time::sleep(util::WATCH_TICK).await;
+        let now_ms = chrono::Utc::now().timestamp_millis();
+
+        // One action list per tick, drained once at the bottom. The orphan sweep below runs even
+        // when no dimension does (a deleted rule is exactly the case where nothing can fire), so
+        // the dispatch cannot live inside the dimension loop the way it used to.
+        let mut actions = Vec::new();
+
+        // Close the port alerts whose rule was deleted. The poll path's `!alerting` branch does
+        // this for every check it visits, but it never visits a derived per-interface check —
+        // nothing polls `if_in_util_pct` — so before this, deleting a port rule stranded its alert
+        // for the life of the process (ADR-076 増分 7 決定 14).
+        for action in alerts.resolve_orphaned_interface_alerts() {
+            // Stop asking about a port nobody has a rule for. `TrackedChecks` has no other way to
+            // shrink (増分 6d), and the recovery sweep below is skipped entirely when a metric has
+            // no rule left — so without this the key would outlive the rule forever.
+            if let crate::alerts::NotifyAction::Resolve(a) = &action {
+                if let (Some(node), Some(idx), Some(m)) =
+                    (a.node(), a.ifindex, util::derived_metric_name(&a.metric))
+                {
+                    tracked.forget(&(node, idx, m));
+                }
+            }
+            actions.push(action);
+        }
+
+        for (pair, dimension) in INTERFACE_DIMENSIONS {
+            let pct_cov = alerts.interface_rule_coverage(pair.pct);
+            let bps_cov = alerts.interface_rule_coverage(pair.bps);
+            let pct_demand = util::BoundDemand {
+                lowest_bound: pct_cov.lowest_bound,
+                has_below: pct_cov.has_below,
+            };
+            let bps_demand = util::BoundDemand {
+                lowest_bound: bps_cov.lowest_bound,
+                has_below: bps_cov.has_below,
+            };
+            let pct_can_fire = pct_demand.lowest_bound.is_some();
+            let bps_can_fire = bps_demand.lowest_bound.is_some();
+            if !pct_can_fire && !bps_can_fire {
+                // No rule that can fire on either metric. Nothing is queried and nothing is swept
+                // clear — a port that was alerting when its rule was deleted is resolved by the
+                // config refresh, not by pretending its traffic dropped.
+                continue;
+            }
+            // The union of both families' node sets. A family with no rule contributes an empty
+            // set; one scoped too broadly to enumerate contributes `None`, which means the fleet.
+            let nodes = match (&pct_cov.nodes, &bps_cov.nodes) {
+                (Some(a), Some(b)) => Some(a.union(b).copied().collect::<BTreeSet<Uuid>>()),
+                _ => None,
+            };
+            if nodes.as_ref().is_some_and(BTreeSet::is_empty) {
+                continue;
+            }
+            let scoped: Vec<Uuid> = nodes
+                .as_ref()
+                .map(|s| s.iter().copied().collect())
+                .unwrap_or_default();
+
+            // Only the percentage family needs a denominator, so an absolute-only tick asks
+            // PostgreSQL nothing. Taken over the union rather than over the percentage rules'
+            // own nodes: a slower link in the other family can only *lower* the floor, and a
+            // lower floor never hides a breaching port.
+            let slowest = if pct_can_fire {
+                match repo.slowest_interface_speed_bps(&scoped).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!(error = %e, metric = pair.pct, "reading the interface speed floor failed");
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let Some(floor) = util::query_floor_bps(slowest, pct_demand, bps_demand) else {
+                // Percentage rules exist but no covered port has a usable speed, and no absolute
+                // rule is there to reach them. Not an error — it is what a fleet of agents that
+                // implement neither speed OID looks like — but it is invisible without a number.
+                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => pair.pct)
+                    .set(0.0);
+                continue;
+            };
+
+            // `scoped` is the union of both families' node sets — computed above for the speed
+            // floor and, until increment 6c, thrown away afterwards. `None` here means the same
+            // thing it means there: a rule is scoped too broadly to enumerate, so ask the fleet.
+            let scope: Option<&[Uuid]> = nodes.is_some().then_some(scoped.as_slice());
+            let Some(candidates) = store.interface_candidates(dimension, floor, scope).await else {
+                // The store could not answer. Skip the whole tick rather than treating it as
+                // "nothing is busy": the recovery sweep below would otherwise resolve every open
+                // interface alert and send a recovery to PagerDuty for each, then re-fire them all
+                // when VictoriaMetrics came back.
+                metrics::counter!("yagra_interface_util_query_failures_total").increment(1);
+                tracing::warn!(
+                    metric = pair.pct,
+                    "interface-utilisation query did not answer; tick skipped"
+                );
+                continue;
+            };
+
+            // Speeds for exactly the candidate nodes — bounded by what crossed the floor, not by
+            // the fleet. Skipped entirely when only absolute rules are in force.
+            let speeds: BTreeMap<(Uuid, i32), Option<i64>> = if pct_can_fire {
+                let ids: Vec<Uuid> = candidates
+                    .iter()
+                    .map(|(n, _, _)| *n)
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                match repo.interface_idents_for(&ids).await {
+                    Ok(m) => m.iter().map(|(k, v)| (*k, v.if_speed)).collect(),
+                    Err(e) => {
+                        tracing::warn!(error = %e, metric = pair.pct, "reading interface speeds failed");
+                        continue;
+                    }
+                }
+            } else {
+                BTreeMap::new()
+            };
+
+            let (readings, no_pct) = util::evaluate(&candidates, &speeds);
+            if pct_can_fire {
+                metrics::gauge!("yagra_interface_util_unknown_speed", "metric" => pair.pct)
+                    .set(no_pct as f64);
+            }
+            metrics::gauge!("yagra_interface_util_tracked", "metric" => pair.pct)
+                .set(tracked.count_for(pair.pct) as f64);
+            metrics::gauge!("yagra_interface_util_tracked", "metric" => pair.bps)
+                .set(tracked.count_for(pair.bps) as f64);
+
+            let mut present = BTreeSet::new();
+            for r in &readings {
+                present.insert((r.node, r.ifindex));
+                // A node whose *liveness* is not Ok is frozen, not observed. Feeding `Ok` would
+                // resolve a real congestion alert the moment the device went unreachable; feeding
+                // the reading would page about a link on a box that is already down.
+                //
+                // 🚨 Liveness, never the display roll-up: the roll-up folds in this port's own
+                // alert, so gating on it froze the evaluator on its own output and the alert could
+                // never clear (ADR-076 増分 7 決定 13). A maintenance window is let through, so an
+                // open port alert resolves inside one the way a node-level alert does.
+                if !util::may_observe_ports(alerts.node_liveness(r.node)) {
+                    continue;
+                }
+                // ⚠️ The mark comes *after* the observation, and that ordering is the point
+                // (ADR-076 increment 6d). Marking first tracked every port above the floor —
+                // fleet-wide, including nodes nobody wrote a rule for — and since `TrackedChecks`
+                // never shrank, the recovery sweep then walked that set on every subsequent tick
+                // forever. `None` means no rule resolved: nothing to remember, nothing to recover.
+                if let (true, Some(pct)) = (pct_can_fire, r.pct) {
+                    if let Some(a) =
+                        alerts.observe_interface_metric(r.node, r.ifindex, pair.pct, pct, now_ms)
+                    {
+                        tracked.mark((r.node, r.ifindex, pair.pct));
+                        actions.extend(a);
+                    }
+                }
+                if bps_can_fire {
+                    if let Some(a) =
+                        alerts.observe_interface_metric(r.node, r.ifindex, pair.bps, r.bps, now_ms)
+                    {
+                        tracked.mark((r.node, r.ifindex, pair.bps));
+                        actions.extend(a);
+                    }
+                }
+            }
+
+            // Anything tracked that is no longer above the floor has recovered: below the floor is
+            // below every rule's bound by construction. Frozen nodes are skipped here too, for the
+            // same reason they are skipped above.
+            //
+            // Not done for a metric that has a `below` rule, and the reason is the same inversion
+            // that `query_floor_bps` handles: the floor is zero there, so a port only leaves the
+            // candidate set by losing its series altogether — and calling that "0 bits/sec" would
+            // *fire* a `below` rule on a port nobody has heard from, which is a data gap being
+            // reported as a traffic level.
+            for metric in [pair.pct, pair.bps] {
+                let (can_fire, has_below) = if metric == pair.pct {
+                    (pct_can_fire, pct_demand.has_below)
+                } else {
+                    (bps_can_fire, bps_demand.has_below)
+                };
+                if !can_fire || has_below {
+                    continue;
+                }
+                for key in tracked.absent(metric, &present) {
+                    let (node, ifindex, m) = key;
+                    if !util::may_observe_ports(alerts.node_liveness(node)) {
+                        continue;
+                    }
+                    match alerts.observe_interface_metric(node, ifindex, m, 0.0, now_ms) {
+                        Some(a) => actions.extend(a),
+                        // The rule was deleted between the mark and now. Drop the key instead of
+                        // asking about it every tick for the life of the process; any alert it left
+                        // open was already closed by the orphan sweep at the top of this tick — not
+                        // by claiming the traffic fell to zero.
+                        None => tracked.forget(&key),
+                    }
+                }
+            }
+        }
+
+        // One drain per tick, for every dimension and for the orphan sweep. History first, then
+        // the notifier: Increment 1 wired this loop to the notifier alone and the alerts paged with
+        // no row behind them, so `a_transition_from_the_interface_watch_reaches_the_history_store`
+        // pins both calls to this function's body.
+        for action in actions {
+            if let Some(alert) = alerts::recordable_alert(&action) {
+                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
+                if let Err(e) = history.record(alert, resolved).await {
+                    tracing::warn!(error = %e, "recording an interface-utilisation transition failed");
+                }
+            }
+            notifier.handle(action).await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This module's own source, for the structural assertions below.
+    ///
+    /// It reads `interface_util.rs` rather than `main.rs` because ADR-083 moved the loop here. Repointing it
+    /// is not optional bookkeeping: a needle aimed at the old file finds nothing and panics, which
+    /// is the loud half of the failure — the quiet half is a `.split()` argument that still matches
+    /// something and checks nothing. Both assertions below were re-run against a deliberately
+    /// broken body after the move, and both failed, which is the only reason to believe them.
+    const SRC: &str = include_str!("interface_util.rs");
+
+    /// The dimension table is positional, and getting it backwards is silent: the loop would
+    /// evaluate receive rules against transmit traffic and never fail anywhere.
+    #[test]
+    fn the_dimensions_match_their_metric_pairs() {
+        use crate::interface_util as util;
+        use store::InterfaceTopMetric;
+
+        assert_eq!(INTERFACE_DIMENSIONS.len(), util::DERIVED_PAIRS.len());
+        for (pair, dimension) in INTERFACE_DIMENSIONS {
+            let want = match dimension {
+                InterfaceTopMetric::InBps => {
+                    ("in", util::METRIC_IF_IN_UTIL_PCT, util::METRIC_IF_IN_BPS)
+                }
+                InterfaceTopMetric::OutBps => {
+                    ("out", util::METRIC_IF_OUT_UTIL_PCT, util::METRIC_IF_OUT_BPS)
+                }
+                // The loop reads one direction at a time; a combined or per-error dimension has
+                // no percentage to divide and no pair to observe.
+                InterfaceTopMetric::Throughput
+                | InterfaceTopMetric::Errors
+                | InterfaceTopMetric::Discards => {
+                    panic!("{dimension:?} is not a single direction")
+                }
+            };
+            assert_eq!(pair.pct, want.1, "{} percentage", want.0);
+            assert_eq!(pair.bps, want.2, "{} absolute rate", want.0);
+        }
+        // Both directions are present, and neither is listed twice.
+        let dims: std::collections::BTreeSet<&str> = INTERFACE_DIMENSIONS
+            .iter()
+            .map(|(pair, _)| pair.pct)
+            .collect();
+        assert_eq!(dims.len(), INTERFACE_DIMENSIONS.len());
+    }
+
+    /// The interface watch must record to History as well as notify — the same property
+    /// `a_pool_coverage_transition_reaches_the_history_store` pins for the pool watch, and for the
+    /// same reason: Increment 1 wired that loop to the notifier alone, the alerts paged, and
+    /// History stayed empty with every gauge and log line looking correct.
+    ///
+    /// Structural because the loop body is a 60-second tick around VictoriaMetrics, PostgreSQL and
+    /// a notifier. It also guards the ADR-076 増分 7 refactor that moved the drain out of the
+    /// per-dimension loop so the orphan sweep could share it: a drain that ended up outside this
+    /// function would still compile.
+    #[test]
+    fn a_transition_from_the_interface_watch_reaches_the_history_store() {
+        let production = SRC
+            .split("#[cfg(test)]")
+            .next()
+            .expect("split always yields a first element");
+        let watch = production
+            .split("async fn run_interface_utilization_watch")
+            .nth(1)
+            .expect("the watch loop exists");
+        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        assert!(
+            body.contains("history.record("),
+            "the interface watch notifies without recording — the alert pages and History stays \
+             empty"
+        );
+        assert!(
+            body.contains("notifier.handle("),
+            "…and it must still notify"
+        );
+        assert!(
+            body.contains("resolve_orphaned_interface_alerts()"),
+            "without the sweep, deleting a port rule strands its alert for the life of the process"
+        );
+    }
 
     #[test]
     fn every_derived_metric_is_a_gauge_and_is_not_collected() {
