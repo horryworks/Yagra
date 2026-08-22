@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
-import { alertSubject, subjectNodeId } from './alertSubject';
+import { alertSubject, rootCause, subjectNodeId } from './alertSubject';
 
 const NODE = '6f1c9d2a-0b3e-4a71-9c8d-2e5f7a1b4c60';
 
@@ -40,5 +40,32 @@ describe('alertSubject', () => {
     expect(
       subjectNodeId({ node: 'pool:tokyo', subject_kind: 'pool', subject_name: 'tokyo' }),
     ).toBeNull();
+  });
+});
+
+describe('rootCause', () => {
+  const node = '11111111-1111-4111-8111-111111111111';
+  const other = '22222222-2222-4222-8222-222222222222';
+
+  it('reports no cause when the alert carries none', () => {
+    expect(rootCause({ node, subject_kind: 'node' }).kind).toBe('none');
+  });
+
+  // The case ADR-087 introduced, and the reason this function exists: the arrow every other case
+  // renders would say `X ← X`.
+  it('distinguishes an alert rolled into its own node from one rolled up under another', () => {
+    expect(rootCause({ node, subject_kind: 'node', root_cause: node })).toEqual({ kind: 'self' });
+    expect(rootCause({ node, subject_kind: 'node', root_cause: other })).toEqual({
+      kind: 'upstream',
+      nodeId: other,
+    });
+  });
+
+  // A pool alert has no node, so it can never be `self` — and reading `node` without the kind is
+  // exactly the mistake this module exists to prevent.
+  it('never calls a pool alert self-caused', () => {
+    expect(
+      rootCause({ node: 'pool:tokyo', subject_kind: 'pool', subject_name: 'tokyo', root_cause: other }),
+    ).toEqual({ kind: 'upstream', nodeId: other });
   });
 });

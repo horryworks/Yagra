@@ -21,6 +21,16 @@
 
 ### Improvements
 
+- **A node going down now opens one incident, not two.** When a device stopped answering, Yagra
+  raised both a node-down alert and an SNMP-down alert, and because the deduplication key carries
+  the check id, PagerDuty and Jira Service Management opened a separate incident for each — one
+  outage, two pages, two to close by hand. Every alert on a node that is down is now rolled into
+  that node's own outage: it stays visible in Alerts and in History exactly as before, but it does
+  not page separately. A check that is still failing once the device answers again — an SNMP agent
+  that stayed dead while ICMP recovered — starts paging on its own, which is what the built-in
+  SNMP rule was always for. ⚠️ The two checks run on different intervals, so roughly half the time
+  the SNMP alert commits first: there, one page is sent and then closed automatically when the
+  outage commits, the same as an alert that beats its parent's dwell today.
 - **The host resource charts on System Health now average each step instead of sampling one point
   out of it.** Host metrics are written every 15 seconds, and the range query returned a single
   raw sample per step and discarded the rest — so a signal that rises and falls on a cycle was

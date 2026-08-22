@@ -56,3 +56,29 @@ export function subjectNodeId(a: HasSubject): string | null {
   const s = alertSubject(a);
   return s.kind === 'node' ? s.nodeId : null;
 }
+
+/** How an alert's `root_cause` should read to an operator. */
+export type RootCause =
+  | { kind: 'none' }
+  /** Part of this alert's *own* node's outage — there is no other node to name (ADR-087). */
+  | { kind: 'self' }
+  /** Rolled up under a different node that is down. */
+  | { kind: 'upstream'; nodeId: string };
+
+/**
+ * Read an alert's `root_cause` the way the UI must render it.
+ *
+ * 🚨 **`root_cause` can point at the alert's own node.** ADR-087 widened it from "an *upstream*
+ * node" to "the node whose outage this alert is part of": when a device falls over, its `snmp_up`
+ * alert is attributed to the device itself so that one outage opens one incident instead of two.
+ * Rendering that with the arrow every other case uses produces `sim-panos ← sim-panos`, which
+ * reads as a bug even though it is the correct answer — so the two cases need different words,
+ * and the branch lives here rather than in the components because `.tsx` tests are never run
+ * (`testing.md`).
+ */
+export function rootCause(a: HasSubject & { root_cause?: string | null }): RootCause {
+  if (!a.root_cause) return { kind: 'none' };
+  return a.root_cause === subjectNodeId(a)
+    ? { kind: 'self' }
+    : { kind: 'upstream', nodeId: a.root_cause };
+}

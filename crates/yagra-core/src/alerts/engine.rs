@@ -528,18 +528,38 @@ impl AlertManager {
             return Vec::new();
         };
 
-        // Dependency suppression (liveness only): if this node is down and every upstream is
-        // also down, attribute the alert to the highest down ancestor so it groups under
-        // that incident and its own notification is suppressed (ADR-015).
-        let root_cause = if is_liveness && t.state.is_problem() {
-            let down = self.down_set();
-            self.config
-                .read()
-                .expect("config rwlock poisoned")
-                .topology
-                .root_cause(node, &down)
+        // Who this alert's incident belongs to (ADR-015, widened by ADR-087).
+        //
+        // Two cases, and they are the same idea one level apart:
+        //
+        // - **liveness**: if this node is down and every upstream is also down, attribute it to the
+        //   highest down ancestor, so it groups under *that* incident.
+        // - **anything else on a node that is already down** (ADR-087): attribute it to **the node
+        //   itself**. The incident is "node X is down", and `snmp_up` going to 0 is part of that
+        //   outage rather than a second one. Before this, a single device falling over opened two
+        //   incidents in PagerDuty/JSM — `dedup_string` carries the check id, so they do not merge —
+        //   and 13 nodes were in exactly that state when this was measured. `repo.rs`'s built-in
+        //   rule table has always said two criticals for one outage is a notification flood and
+        //   that this project treats that as a bug.
+        //
+        // ⚠️ `root_cause` therefore no longer means "an *upstream* node". It means "the node whose
+        // outage this alert is part of", which may be this node. Nothing downstream had to change:
+        // `Notifier` keys its skip on `Some(_)` without looking at which node, and the close-on-
+        // rollup path (`NotifyAction::Suppress`) is the same either way.
+        let root_cause = if is_liveness {
+            t.state
+                .is_problem()
+                .then(|| {
+                    let down = self.down_set();
+                    self.config
+                        .read()
+                        .expect("config rwlock poisoned")
+                        .topology
+                        .root_cause(node, &down)
+                })
+                .flatten()
         } else {
-            None
+            self.down_set().contains(&node).then_some(node)
         };
 
         let mut actions = match t.to_alert(Subject::Node(node), check, at_unix_ms, root_cause) {
@@ -606,8 +626,15 @@ impl AlertManager {
     ///   it pages on its own now that its upstream is back.
     /// - **re-attributed** (`Some → Some`): never paged; just refresh the attribution.
     ///
-    /// Liveness only (threshold alerts are never dependency-suppressed). Bounded by the current
-    /// active-alert count; runs only when a node actually entered/left `Unreachable`.
+    /// Liveness alerts of `changed`'s descendants, **plus `changed`'s own non-liveness alerts**
+    /// (ADR-087). Bounded by the current active-alert count; runs only when a node actually
+    /// entered/left `Unreachable`.
+    ///
+    /// The second half is what makes ADR-087 work in both directions. A node's `snmp_up` alert can
+    /// commit *before* its liveness does — measured across 13 down nodes, `snmp_up` won 7 times,
+    /// liveness 4, and they tied twice — so attributing at fire time alone would leave the earlier
+    /// one paging standalone forever. Reconsidering it here turns that into "page once, then close",
+    /// which is exactly what a child alert that beat its parent's dwell already does.
     fn resweep_suppression(&self, changed: NodeId) -> Vec<NotifyAction> {
         let down = self.down_set();
         // A flip of `changed` can only change the root-cause attribution of nodes with `changed` on
@@ -627,8 +654,20 @@ impl AlertManager {
             active
                 .values()
                 // Node subjects only: the dependency graph is a graph of nodes, so a
-                // pool-coverage alert has no ancestor to be attributed to.
-                .filter(|a| a.metric == LIVENESS && a.node().is_some_and(|n| affected.contains(&n)))
+                // pool-coverage alert has no ancestor to be attributed to — and `changed`s own
+                // roll-up is about `changed` as a node too.
+                .filter(|a| {
+                    a.node().is_some_and(|n| {
+                        if a.metric == LIVENESS {
+                            affected.contains(&n)
+                        } else {
+                            // ADR-087: everything else this node is complaining about belongs to
+                            // this node's outage. Only `changed` 's own — a sibling's threshold
+                            // alert is unaffected by `changed` flipping.
+                            n == changed
+                        }
+                    })
+                })
                 .cloned()
                 .collect()
         };
@@ -637,12 +676,17 @@ impl AlertManager {
             let Some(alert_node) = alert.node() else {
                 continue;
             };
-            let new_rc = self
-                .config
-                .read()
-                .expect("config rwlock poisoned")
-                .topology
-                .root_cause(alert_node, &down);
+            // A liveness alert climbs the dependency graph; anything else rolls up into its own
+            // node's outage, which is present or absent exactly as that node is in the down set.
+            let new_rc = if alert.metric == LIVENESS {
+                self.config
+                    .read()
+                    .expect("config rwlock poisoned")
+                    .topology
+                    .root_cause(alert_node, &down)
+            } else {
+                down.contains(&alert_node).then_some(alert_node)
+            };
             if new_rc == alert.root_cause {
                 continue; // attribution unchanged
             }
@@ -2463,6 +2507,229 @@ mod tests {
         high.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
         assert!(mgr.observe(&high).is_empty());
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    // ── ADR-087: a node's outage owns that node's other alerts ──────────────────────────────────
+    //
+    // The defect these cover, measured on the running deployment (2026-08-22): a device falling
+    // over raised **two** critical alerts — `__liveness__` and `snmp_up` — and `dedup_string`
+    // carries the check id, so PagerDuty/JSM opened two incidents for one outage. Thirteen nodes
+    // were in that state. `repo.rs`'s built-in rule table has always called two criticals for one
+    // outage a notification flood and said this project treats that as a bug.
+
+    /// A `snmp_up` rule shaped like the seeded one (`below 0.5`), with the dwell the caller wants.
+    fn snmp_up_rule(dwell: u32) -> StoredThreshold {
+        StoredThreshold::new(
+            Uuid::new_v4(),
+            ScopeLevel::Global,
+            vec!["global".to_string()],
+            yagra_common::ThresholdRule::new(
+                yagra_common::METRIC_SNMP_UP,
+                ThresholdBounds::from_legacy(yagra_common::Direction::Below, None, Some(0.5)),
+                dwell,
+            ),
+        )
+    }
+
+    /// One poll result carrying `snmp_up = 0` — what the poller sends on the SNMP error path, which
+    /// is the case that matters: `worker.rs` emits the sample even when the GET could not be issued.
+    fn snmp_down(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
+        let mut r = result(node, outcome, at);
+        r.samples = vec![yagra_bus::Sample::gauge(yagra_common::METRIC_SNMP_UP, 0.0)];
+        r
+    }
+
+    /// **The receiving side first**: a node already down rolls its other alerts into its own
+    /// outage, so only one incident is opened.
+    ///
+    /// Written before the ordering test below on purpose — a suite that only demonstrates
+    /// suppression would pass against an engine that suppressed everything
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[test]
+    fn an_alert_on_a_node_that_is_already_down_rolls_into_that_nodes_outage() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(node)));
+
+        // Commit the outage first: liveness needs its full dwell.
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i));
+        }
+        assert!(mgr.down_set().contains(&node), "the outage is committed");
+        let liveness = mgr.active_alerts();
+        assert_eq!(liveness.len(), 1);
+        assert_eq!(
+            liveness[0].root_cause, None,
+            "the outage itself pages — it is the incident, not part of one"
+        );
+
+        // Now SNMP reports the agent gone. It is part of that outage, not a second one.
+        let actions = mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 100));
+        let fired = actions
+            .iter()
+            .find_map(|a| match a {
+                NotifyAction::Fire(al) if al.metric == yagra_common::METRIC_SNMP_UP => Some(al),
+                _ => None,
+            })
+            .expect("snmp_up breaches its rule");
+        assert_eq!(
+            fired.root_cause,
+            Some(node),
+            "attributed to the node whose outage it is — `Notifier` keys its skip on this being \
+             Some, so the second incident is never opened"
+        );
+        // Both are still visible: only the page is rolled up, never the signal.
+        assert_eq!(mgr.active_alerts().len(), 2);
+    }
+
+    /// The ordering case, which is the common one: `snmp_up` commits **before** liveness does, so
+    /// it pages standalone and must then be closed when the outage commits.
+    ///
+    /// Measured across the 13 doubled nodes: `snmp_up` won 7 times, liveness 4, and they tied
+    /// twice — the two checks run on different intervals, so neither order is the rule. This is
+    /// the same "page once, then close" a child alert that beats its parent's dwell already gets
+    /// (`child_down_before_parent_rolls_up_when_parent_falls`), and it is why attributing at fire
+    /// time alone is not enough.
+    #[test]
+    fn an_alert_that_beat_the_outage_is_closed_when_the_outage_commits() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(node)));
+
+        // Sample 1: SNMP is gone but the outage has not committed (dwell 3), so this pages on its
+        // own — correctly, at that moment nothing says the device is down.
+        let first = mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, 0));
+        let paged = first
+            .iter()
+            .find_map(|a| match a {
+                NotifyAction::Fire(al) if al.metric == yagra_common::METRIC_SNMP_UP => Some(al),
+                _ => None,
+            })
+            .expect("snmp_up fires at dwell 1");
+        assert_eq!(paged.root_cause, None, "nothing to roll it up into yet");
+
+        // Samples 2-3: the outage commits, and the re-sweep must reconsider the alert that beat it.
+        let mut suppressed = None;
+        let mut liveness_fired = false;
+        for i in 1..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, i)) {
+                match action {
+                    NotifyAction::Suppress(al) if al.metric == yagra_common::METRIC_SNMP_UP => {
+                        suppressed = Some(al);
+                    }
+                    NotifyAction::Fire(al) if al.metric == LIVENESS => liveness_fired = true,
+                    _ => {}
+                }
+            }
+        }
+        assert!(liveness_fired, "the outage itself pages");
+        let suppressed = suppressed.expect(
+            "the snmp_up alert that had been paging standalone must be closed, or on-call is left \
+             with a second open incident for one outage",
+        );
+        assert_eq!(suppressed.root_cause, Some(node));
+    }
+
+    /// Recovery is the direction that must not go quiet: a device that pings again while its SNMP
+    /// agent is still dead is exactly the case the seeded `snmp_up` rule was written for — its own
+    /// comment says "the SNMP agent stopped answering **while the device itself is fine**".
+    #[test]
+    fn when_the_node_comes_back_a_still_broken_check_pages_on_its_own() {
+        let node = NodeId::new();
+        let mgr = AlertManager::new();
+        mgr.set_config(cfg(vec![liveness_rule(), snmp_up_rule(1)], meta_for(node)));
+
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&snmp_down(node, CheckOutcome::Unreachable, i));
+        }
+        assert!(mgr.down_set().contains(&node));
+        assert!(mgr
+            .active_alerts()
+            .iter()
+            .any(|a| a.metric == yagra_common::METRIC_SNMP_UP && a.root_cause == Some(node)));
+
+        // ICMP answers again; SNMP still does not.
+        let mut fired = None;
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            for action in mgr.observe(&snmp_down(node, CheckOutcome::Reachable, 100 + i)) {
+                if let NotifyAction::Fire(al) = action {
+                    if al.metric == yagra_common::METRIC_SNMP_UP {
+                        fired = Some(al);
+                    }
+                }
+            }
+        }
+        assert!(!mgr.down_set().contains(&node), "the outage is over");
+        let fired = fired.expect(
+            "with the outage gone the SNMP failure is its own incident again — staying silent here \
+             would mean an agent-only outage never pages",
+        );
+        assert_eq!(fired.root_cause, None);
+    }
+
+    /// A neighbour's alert is not touched when this node flips, and a pool-coverage alert is not
+    /// touched at all.
+    ///
+    /// The scoping half: the re-sweep reconsiders `changed`'s **own** non-liveness alerts, not
+    /// every open alert in the fleet. Without this the check would be "does anything change",
+    /// which a sweep over the whole active set would also satisfy — while costing O(active) on
+    /// every flip, the exact regression S3 removed.
+    #[test]
+    fn a_flip_does_not_reattribute_another_nodes_alert_or_a_pool_alert() {
+        use yagra_bus::Sample;
+
+        let down_node = NodeId::new();
+        let other = NodeId::new();
+        let mgr = AlertManager::new();
+        let mut meta = meta_for(down_node);
+        meta.extend(meta_for(other));
+        mgr.set_config(cfg(
+            vec![
+                liveness_rule(),
+                snmp_up_rule(1),
+                StoredThreshold::new(
+                    Uuid::new_v4(),
+                    ScopeLevel::Global,
+                    vec!["global".to_string()],
+                    yagra_common::ThresholdRule::new(
+                        "icmp_rtt_ms",
+                        ThresholdBounds::above(None, Some(100.0)),
+                        1,
+                    ),
+                ),
+            ],
+            meta,
+        ));
+
+        // `other` is reachable but slow: its own alert, nothing to do with `down_node`.
+        let mut slow = result(other, CheckOutcome::Reachable, 0);
+        slow.samples = vec![Sample::gauge("icmp_rtt_ms", 150.0)];
+        mgr.observe(&slow);
+        // …and a pool alert, which has no node at all.
+        assert!(mgr.raise_pool_coverage_alert("tokyo", 1_000).is_some());
+
+        for i in 0..i64::from(DEFAULT_LIVENESS_DWELL) {
+            mgr.observe(&snmp_down(down_node, CheckOutcome::Unreachable, i));
+        }
+        assert!(mgr.down_set().contains(&down_node));
+
+        for alert in mgr.active_alerts() {
+            match alert.node() {
+                Some(n) if n == down_node => {
+                    if alert.metric != LIVENESS {
+                        assert_eq!(alert.root_cause, Some(down_node));
+                    }
+                }
+                Some(_) => assert_eq!(
+                    alert.root_cause, None,
+                    "another node's alert must be untouched by this node's outage"
+                ),
+                None => assert_eq!(
+                    alert.root_cause, None,
+                    "a pool alert has no node, so it can belong to no node's outage"
+                ),
+            }
+        }
     }
 
     #[test]

@@ -21,7 +21,7 @@ import { useMemo, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import { alertSubject } from '../lib/alertSubject';
+import { alertSubject, rootCause } from '../lib/alertSubject';
 import { alertWhatOf, formatTimestamp, severityColorVar } from '../lib/format';
 import { useViewportMode } from '../lib/viewport';
 import { sortedAlerts, useAlertStore } from '../store';
@@ -108,6 +108,7 @@ function AlertRow({
 }) {
   const { t } = useTranslation('alerts');
   const subject = alertSubject(a);
+  const cause = rootCause(a);
   return (
     <div
       className="alertrow"
@@ -124,10 +125,16 @@ function AlertRow({
       <span className="alertrow-check" title={a.check}>
         <AlertWhatText what={alertWhatOf(a)} />
       </span>
-      {a.root_cause && (
+      {/* Two shapes, because ADR-087 let `root_cause` point at the alert's own node: a device
+          falling over rolls its `snmp_up` alert into its own outage, and the arrow form would
+          render `X ← X`. The branch is in `lib/alertSubject.ts` where a test can reach it. */}
+      {cause.kind === 'upstream' && (
         <span className="alertrow-cause muted">
-          ← <EntityName name={nodeName(a.root_cause)} id={a.root_cause} />
+          ← <EntityName name={nodeName(cause.nodeId)} id={cause.nodeId} />
         </span>
+      )}
+      {cause.kind === 'self' && (
+        <span className="alertrow-cause muted">{t('row.partOfOutage')}</span>
       )}
       {a.flapping && <span className="alertrow-flap">{t('row.flapping')}</span>}
       {a.acked && (

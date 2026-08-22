@@ -22,7 +22,8 @@
     "flapping": "flapping",
     "acked": "acked",
     "poolSubject": "Poller pool “{{pool}}”",
-    "poolSubjectHint": "This alert is about Yagra's own monitoring coverage, not a device: the pool still has nodes assigned to it but no live poller to poll them."
+    "poolSubjectHint": "This alert is about Yagra's own monitoring coverage, not a device: the pool still has nodes assigned to it but no live poller to poll them.",
+    "partOfOutage": "part of this node’s outage"
   },
   "acked": {
     "title": "Acknowledged in {{source}} by {{by}}{{note}} (read-only, mirrored from your external tool)",

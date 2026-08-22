@@ -229,7 +229,6 @@
     "icmpRttTitle": "ICMP RTT · last 30 min",
     "noRttHistory": "No RTT history yet…",
     "unreachableDash": "— (unreachable)",
-    "causedBy": "← caused by {{cause}}",
     "urlMonitor": "URL monitor",
     "availability": "Availability",
     "up": "Up",
@@ -279,7 +278,8 @@
       "loop_detected": "CNAME loop at {{at}}",
       "depth_exceeded": "Chain longer than {{maxDepth}} hops",
       "malformed": "Malformed response"
-    }
+    },
+    "partOfOutage": "part of this node’s outage"
   },
   "interfaces": {
     "emptyDiscovered": "No interfaces discovered yet. They appear after an SNMP table walk runs — the node needs a bound SNMP credential and a table metric in its collection set.",

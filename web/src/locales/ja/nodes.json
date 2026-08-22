@@ -229,7 +229,6 @@
     "icmpRttTitle": "ICMP RTT · 直近 30 分",
     "noRttHistory": "RTT の履歴はまだありません…",
     "unreachableDash": "—（到達不能）",
-    "causedBy": "← 起因: {{cause}}",
     "urlMonitor": "URL 監視",
     "availability": "可用性",
     "up": "アップ",
@@ -279,7 +278,8 @@
       "loop_detected": "{{at}} で CNAME ループ",
       "depth_exceeded": "チェーンが {{maxDepth}} ホップを超過",
       "malformed": "不正な応答"
-    }
+    },
+    "partOfOutage": "このノードの停止に含まれる"
   },
   "interfaces": {
     "emptyDiscovered": "インターフェースはまだ検出されていません。SNMP のテーブルウォークが走ると表示されます。そのためには、ノードに SNMP 認証情報が紐付いていることと、収集セットにテーブルメトリクスが入っていることが必要です。",

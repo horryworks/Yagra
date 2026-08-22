@@ -7,6 +7,8 @@
 
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { rootCause, type HasSubject } from '../../lib/alertSubject';
+import { EntityName, useEntityNames } from '../ui/EntityName';
 import { api } from '../../services/api';
 import {
   deriveMem,
@@ -138,11 +140,10 @@ export function OverviewTab({
                   style={{ background: severityColorVar(a.severity) }}
                 />
                 <span className="nd-alert-state">{stateLabel(a.state)}</span>
-                {a.root_cause && (
-                  <span className="nd-muted mono nd-alert-cause">
-                    {t('overview.causedBy', { cause: a.root_cause })}
-                  </span>
-                )}
+                {/* `causedBy` used to interpolate the raw UUID, which `no-raw-uuids-in-tables`
+                    forbids and which ADR-087 made worse: on this very node's page the cause is
+                    often the node itself, so it read "caused by <this node's own uuid>". */}
+                <AlertCause alert={a} />
                 {a.flapping && <span className="nd-alert-flap">{t('alerts:row.flapping')}</span>}
                 <span className="nd-muted nd-alert-time">{formatTimestamp(a.at_unix_ms)}</span>
               </div>
@@ -975,5 +976,26 @@ function SnmpScalars({ nodeId }: { nodeId: string }) {
         })}
       </div>
     </section>
+  );
+}
+/** How an alert's cause reads on the node's own page (ADR-087).
+ *
+ * `self` is the common case here and the one that has no other node to name: this page *is* the
+ * node whose outage the alert belongs to. `upstream` resolves the id to a name — the old copy
+ * interpolated the raw UUID, which `no-raw-uuids-in-tables` forbids. */
+function AlertCause({ alert }: { alert: HasSubject & { root_cause?: string | null } }) {
+  const { t } = useTranslation('nodes');
+  // Hooks before the early returns: this component renders nothing for most alerts, and a hook
+  // after a conditional return is the classic React rules-of-hooks break.
+  const { nodeName } = useEntityNames();
+  const cause = rootCause(alert);
+  if (cause.kind === 'none') return null;
+  if (cause.kind === 'self') {
+    return <span className="nd-muted nd-alert-cause">{t('overview.partOfOutage')}</span>;
+  }
+  return (
+    <span className="nd-muted nd-alert-cause">
+      ← <EntityName name={nodeName(cause.nodeId)} id={cause.nodeId} />
+    </span>
   );
 }
