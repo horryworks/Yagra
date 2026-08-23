@@ -99,6 +99,11 @@ mod seed_ids;
 // configurations for outbound peers — see that module's doc.
 mod server_cert;
 mod sink;
+// The table vocabulary the placement guards scan against, derived from `migrations/` (ADR-095).
+// Apart from `module_source`, which answers what a module's own text is rather than what the
+// schema declares.
+#[cfg(test)]
+mod sql_tables;
 mod store;
 mod stored_enum;
 // Diagnostic snapshot for a deployment nobody can open a shell on (ADR-045). Named apart from

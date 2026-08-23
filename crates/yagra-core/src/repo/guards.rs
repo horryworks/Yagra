@@ -10,7 +10,6 @@
 //! hit that within minutes of splitting `mcp/tools.rs`, so the mechanism has been in place since.
 
 use std::collections::BTreeSet;
-use std::path::Path;
 
 /// The search cap is one number, and no implementation may re-clamp to its own.
 ///
@@ -87,46 +86,6 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// Every table this deployment has, derived from `migrations/` rather than written down.
-///
-/// Derived because a hand-written vocabulary would be the very thing this check exists to stop: a
-/// list that falls behind the schema, quietly narrowing what the scan below can even see. A table
-/// missing from here is a table the scan skips, so this list going empty would make the whole check
-/// vacuous — which is why its size has a floor of its own.
-fn table_vocabulary() -> BTreeSet<String> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../migrations");
-    let mut out = BTreeSet::new();
-    for entry in std::fs::read_dir(&dir).expect("migrations/ is readable from the crate directory")
-    {
-        let path = entry.expect("a readable directory entry").path();
-        if path.extension().is_none_or(|x| x != "sql") {
-            continue;
-        }
-        let sql = std::fs::read_to_string(&path).expect("migration is readable");
-        // Whitespace is collapsed first: `CREATE TABLE` and `IF NOT EXISTS` are split across lines
-        // in several migrations, and a line-oriented scan reads the tail of the first line as the
-        // table name. Measured — it produced `if` and `node_l` as "tables".
-        let flat = sql
-            .to_lowercase()
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        for tail in flat.split("create table ").skip(1) {
-            let tail = tail.strip_prefix("if not exists ").unwrap_or(tail);
-            let name: String = tail
-                .chars()
-                .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
-                .collect();
-            if !name.is_empty() {
-                out.insert(name);
-            }
-        }
-    }
-    // sqlx creates this one itself, so no migration declares it — and `migrate.rs` reads it.
-    out.insert("_sqlx_migrations".to_owned());
-    out
-}
-
 /// **A statement may only name a table its file has declared** — the rule the split was cut on.
 ///
 /// Placement in this module is decided by the table a method's SQL names, not by what the method is
@@ -135,10 +94,11 @@ fn table_vocabulary() -> BTreeSet<String> {
 /// holds until the next person adds a method next to the one they were reading, so it is here as a
 /// test instead.
 ///
-/// **Two filters, and neither is sufficient alone.** A name is counted only when it appears in SQL
-/// position (after `FROM` / `INTO` / `UPDATE` / `JOIN`) *and* is a real table. Position alone
-/// matches `FROM unnest($1::uuid[])` and `extract(epoch FROM last_seen)`; vocabulary alone matches
-/// `nodes` inside `list_nodes` and a dozen other identifiers.
+/// **The two filters live in [`crate::sql_tables`]** — a name counts only in SQL position *and* only if it
+/// is a real table, and neither is sufficient alone. They moved there when `events/guards.rs` needed
+/// the same pair (ADR-095): a rule written twice is a rule that rots on one side, which is the
+/// lesson ADR-091 paid twenty-three times for. What stays here is what is about `repo/` — the
+/// ownership table above, and both floors below.
 ///
 /// 🚨 **Two floors, because this is a check that reports "nothing wrong" when it sees nothing.**
 /// One on the vocabulary and one on the statements actually inspected — and the second counts the
@@ -146,7 +106,7 @@ fn table_vocabulary() -> BTreeSet<String> {
 /// ADR-091 made in its own guard and only found by breaking it.
 #[test]
 fn every_statement_names_a_table_its_file_declares() {
-    let vocab = table_vocabulary();
+    let vocab = crate::sql_tables::vocabulary();
     assert!(
         vocab.len() >= 55,
         "only {} tables were derived from migrations/, so this check can barely see anything; \
@@ -174,29 +134,17 @@ fn every_statement_names_a_table_its_file_declares() {
         );
     }
 
-    let sql = regex::Regex::new(r"\b(?:FROM|INTO|UPDATE|JOIN)\s+([a-z_][a-z0-9_]*)")
-        .expect("a valid pattern");
     let mut checked = 0usize;
     let mut wrong: Vec<String> = Vec::new();
     for (name, text) in &files {
-        // Whole-line comments out first: prose explaining a query would otherwise read as one.
-        let code = text
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
         let allowed = declared[name.as_str()];
-        for caps in sql.captures_iter(&code) {
-            let table = &caps[1];
-            if !vocab.contains(table) {
-                continue; // not a table — `unnest(…)`, a column in `extract(epoch FROM …)`
-            }
+        for table in crate::sql_tables::references(text, &vocab) {
             checked += 1;
-            if !allowed.contains(&table) {
+            if !allowed.contains(&table.as_str()) {
                 wrong.push(format!(
-                    "repo/{name} names `{table}`, which it does not declare. Either the method \
-                     belongs in the file for `{table}`, or `{table}` belongs in this file's \
-                     TABLE_OWNERSHIP row with a comment saying why"
+                    "repo/{name} names `{table}`, which it does not declare. Either \
+                     the method belongs in the file for `{table}`, or `{table}` belongs in \
+                     this file's TABLE_OWNERSHIP row with a comment saying why"
                 ));
             }
         }
