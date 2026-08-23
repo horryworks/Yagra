@@ -115,14 +115,10 @@ mod tests {
     #[test]
     fn every_file_arrives_without_its_test_module() {
         let files = analysis_source_files();
-        for (name, code) in &files {
-            // A `#[cfg(test)] mod guards;` **declaration** legitimately survives — it is structure,
-            // not a tail. What must not survive is a test *body*.
-            assert!(
-                !code.contains("#[cfg(test)]\nmod tests"),
-                "{name}: its test module survived, so a needle can match a test's own literal"
-            );
-        }
+        // That no file's test module survived is asserted inside `module_source::files` itself
+        // since ADR-091, so every caller inherits it rather than the ones that remembered to ask.
+        // What is left to check here is the part only this module knows.
+        assert!(!files.is_empty(), "no analysis file was read at all");
         // The scaffolding must not be part of what the guards grep, or their needles match
         // themselves — the mistake ADR-086 made within minutes of splitting.
         for scaffold in ["guards.rs", "source.rs"] {

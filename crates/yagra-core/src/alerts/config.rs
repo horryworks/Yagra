@@ -424,16 +424,11 @@ pub(crate) async fn run_alert_config_refresh(
 #[cfg(test)]
 mod tests {
 
-    /// This module's own source. Read through [`crate::module_source`] rather than
-    /// `include_str!` + `.split("#[cfg(test)]")`, so a future `#[cfg(test)] mod x;` declaration
-    /// cannot truncate what these two assertions see (ADR-089/090).
+    /// This module's own source, read through [`crate::module_source`]: it removes each test-only
+    /// item rather than truncating at the first one, so a test-only declaration added here later
+    /// cannot shorten what these two assertions see (ADR-089/090/091).
     fn production_source() -> String {
-        let files =
-            crate::module_source::files(&crate::module_source::roots("src/alerts", "config"));
-        let (_, code) = files
-            .into_iter()
-            .find(|(name, _)| name == "config.rs")
-            .expect("alerts/config.rs is a module root");
+        let code = crate::module_source::code("src/alerts", "config");
         // A floor: an absence claim over an empty string is satisfied by nothing at all.
         assert!(
             code.contains("async fn load_alert_config_base"),

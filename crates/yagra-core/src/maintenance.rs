@@ -792,21 +792,14 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr};
     use yagra_common::ProfileId;
 
-    /// This module's own source. The bulk clear's two safety conditions live entirely inside one
-    /// SQL string and there is no database in unit tests, so nothing else can catch a rewrite that
-    /// drops one of them.
-    const SRC: &str = include_str!("maintenance.rs");
-
-    /// The executable code above this test module, comments stripped — otherwise a doc comment
-    /// *naming* a pattern reads as the pattern itself (testing.md's self-match trap).
+    /// This module's code, comments stripped — see
+    /// [`crate::module_source::code_no_comments`] for why both.
+    ///
+    /// It is read at all because the bulk clear's two safety conditions live entirely inside one
+    /// SQL string and there is no database in unit tests, so nothing else can catch a rewrite
+    /// that drops one of them.
     fn production_source() -> String {
-        SRC.split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element")
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::module_source::code_no_comments("src", "maintenance")
     }
 
     #[test]

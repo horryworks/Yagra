@@ -117,6 +117,20 @@ pub(crate) fn code(dir: &str, stem: &str) -> String {
         .join("\n")
 }
 
+/// [`code`] with whole-line `//` comments dropped.
+///
+/// Two things would otherwise make a "this pattern must not appear" assertion useless: a test that
+/// reads its own file matches its own needles, and a doc comment *naming* the banned pattern —
+/// "never OFFSET" — reads as the pattern itself. Eighteen files asked for exactly this before
+/// ADR-091, each with its own copy of the filter and its own copy of the defect above.
+pub(crate) fn code_no_comments(dir: &str, stem: &str) -> String {
+    code(dir, stem)
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The modules a root declares as test-only, as file names.
 ///
 /// The declaring file is `<root>/mod.rs` for a directory root and the root itself for a file root.
@@ -442,6 +456,64 @@ mod tests {
             logs.lines().count() > 500,
             "logstore.rs came back as {} lines; it used to come back as 15",
             logs.lines().count()
+        );
+    }
+
+    /// **Nobody computes "production code" for themselves any more.**
+    ///
+    /// Twenty-three files did before ADR-091, each holding its own copy of a rule that was wrong,
+    /// and the copies were invisible: a hand-rolled cut compiles, runs, and reports success over a
+    /// fraction of a file. The needle is the attribute **as a string literal** rather than any one
+    /// spelling of the cut, because `.split`, `.split_once` and `.find` were all in use and a
+    /// fourth is one keystroke away.
+    ///
+    /// Comment lines are dropped before the search: prose has to be able to name the thing it
+    /// forbids, and this module's own doc does so repeatedly.
+    #[test]
+    fn no_file_spells_the_test_attribute_for_itself() {
+        let needle = format!("\"{MARK}\"");
+        // Acceptance side first: a search whose needle has stopped matching is indistinguishable
+        // from a clean crate (`rejection-only-tests-pass-when-everything-rejects`).
+        assert!(
+            format!("SRC.split({needle}).next()").contains(&needle),
+            "the needle no longer matches the idiom it exists to find"
+        );
+
+        let mut paths = Vec::new();
+        rs_files(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut paths,
+        );
+        // …except this module, which is the one place the rule is allowed to be written down.
+        let searched: Vec<&PathBuf> = paths
+            .iter()
+            .filter(|p| file_name(p) != "module_source.rs")
+            .collect();
+        // 🚨 The floor counts what was **searched**, not what was walked. Asserting on `paths`
+        // before the exclusion read identically and was not the same thing: narrowing the exclusion
+        // until it matched everything left this test green over zero files, which is the failure it
+        // exists to stop. Found by breaking it, which is the only way this kind is ever found.
+        assert!(
+            searched.len() >= 150,
+            "only {} files were searched; nothing below is being checked",
+            searched.len()
+        );
+        let offenders: Vec<String> = searched
+            .iter()
+            .filter(|p| {
+                read(p)
+                    .lines()
+                    .filter(|l| !l.trim_start().starts_with("//"))
+                    .any(|l| l.contains(&needle))
+            })
+            .map(|p| file_name(p))
+            .collect();
+        assert!(
+            offenders.is_empty(),
+            "{offenders:?} spell the test attribute themselves. Read the module through \
+             `module_source::code` or `code_no_comments` instead: a hand-rolled cut is how ten \
+             files in this crate came to be read as 1–14% of themselves, and the reader could not \
+             tell"
         );
     }
 

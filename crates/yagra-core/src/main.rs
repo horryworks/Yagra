@@ -59,9 +59,17 @@ mod link_overrides;
 mod logstore;
 mod maintenance;
 mod mcp;
+// ⚠️ **This line used to live at the bottom of the file, and the position was load-bearing.**
+// Twenty-one files in this crate computed "production code" as everything above the first test
+// attribute, so a test-only `mod` declaration at the top of a file truncated their view to its
+// imports — both of this file's structural tests failed the moment this sat here. ADR-091 moved
+// all twenty-one onto `module_source`, which removes each test-only item instead of cutting at
+// the first, so the constraint is gone and this line has come home to prove it.
 mod meraki;
 mod metric_meaning;
 mod mib;
+#[cfg(test)]
+mod module_source;
 mod neighbors;
 mod notifications;
 mod notify_facts;
@@ -1978,33 +1986,16 @@ async fn connect_bus(url: &str) -> anyhow::Result<NatsBus> {
     }
 }
 
-// ⚠️ **Declared here rather than with the other `mod` lines, and the position is load-bearing.**
-// Twenty-three files in this crate — main.rs included, twice below — compute "production code" as
-// `SRC.split("#[cfg(test)]").next()`. A `#[cfg(test)] mod x;` line at the top of the file is the
-// first match, so it truncates their view to the imports; both of this file's structural tests
-// failed the moment this sat above them. `module_source` itself knows the difference (a
-// declaration is not a test tail), which is why `analysis.rs` may keep its own at the top — but
-// nothing teaches the other twenty-three, so this one stays down here.
-#[cfg(test)]
-mod module_source;
-
 #[cfg(test)]
 mod tests {
 
     /// This file's own source, for the structural assertions below.
     ///
-    /// Read through [`module_source`] rather than `include_str!` + `.split("#[cfg(test)]")`: that
-    /// idiom is what the note above the `mod module_source;` declaration is about, and the helper
-    /// already cuts each file at its **own** test tail while ignoring a `#[cfg(test)] mod x;`
-    /// declaration. Doing it here means this file can grow such a declaration anywhere without
-    /// quietly truncating what these tests read (ADR-089/090).
+    /// Read through [`module_source`], which removes each test-only item rather than truncating
+    /// at the first one — so this file can grow a test-only declaration anywhere without quietly
+    /// shortening what these tests read (ADR-089/090/091).
     fn production_source() -> String {
-        let files = crate::module_source::files(&crate::module_source::roots("src", "main"));
-        let (_, code) = files
-            .into_iter()
-            .find(|(name, _)| name == "main.rs")
-            .expect("main.rs is a module root");
-        code
+        crate::module_source::code("src", "main")
     }
 
     /// `run_live`'s body, from its signature to the closing brace at column 0.

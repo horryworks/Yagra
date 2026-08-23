@@ -550,17 +550,10 @@ mod tests {
     use yagra_alert::Breach;
     use yagra_common::{CheckId, NodeId};
 
-    const SRC: &str = include_str!("history.rs");
-
-    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    /// This module's code, comments stripped — see
+    /// [`crate::module_source::code_no_comments`] for why both.
     fn production_source() -> String {
-        SRC.split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element")
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::module_source::code_no_comments("src", "history")
     }
 
     fn alert(metric: &str, breach: Option<Breach>) -> Alert {

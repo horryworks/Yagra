@@ -625,14 +625,14 @@ pub(crate) async fn run_interface_utilization_watch(
 mod tests {
     use super::*;
 
-    /// This module's own source, for the structural assertions below.
-    ///
-    /// It reads `interface_util.rs` rather than `main.rs` because ADR-083 moved the loop here. Repointing it
-    /// is not optional bookkeeping: a needle aimed at the old file finds nothing and panics, which
-    /// is the loud half of the failure — the quiet half is a `.split()` argument that still matches
-    /// something and checks nothing. Both assertions below were re-run against a deliberately
-    /// broken body after the move, and both failed, which is the only reason to believe them.
-    const SRC: &str = include_str!("interface_util.rs");
+    // The structural assertions below read this file's own code through `crate::module_source`,
+    // which since ADR-091 removes each test-only item rather than truncating at the first one.
+    // They read `interface_util.rs` rather than `main.rs` because ADR-083 moved the loop here, and
+    // repointing them was not optional bookkeeping: a needle aimed at the old file finds nothing
+    // and panics, which is the loud half of the failure — the quiet half is a `.split()` argument
+    // that still matches something and checks nothing. Both assertions below were re-run against
+    // a deliberately broken body after the move, and both failed, which is the only reason to
+    // believe them.
 
     /// The dimension table is positional, and getting it backwards is silent: the loop would
     /// evaluate receive rules against transmit traffic and never fail anywhere.
@@ -680,10 +680,7 @@ mod tests {
     /// function would still compile.
     #[test]
     fn a_transition_from_the_interface_watch_reaches_the_history_store() {
-        let production = SRC
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
+        let production = crate::module_source::code("src", "interface_util");
         let watch = production
             .split("async fn run_interface_utilization_watch")
             .nth(1)

@@ -323,17 +323,10 @@ mod tests {
     /// pin their statements the same way.
     const SRC: &str = include_str!("neighbors.rs");
 
-    /// The executable code above this test module, comments stripped. Without this, a test that
-    /// reads its own file matches its own needles (testing.md's self-match trap) and a doc comment
-    /// *naming* a banned pattern — "never OFFSET" — reads as the pattern itself.
+    /// This module's code, comments stripped — see
+    /// [`crate::module_source::code_no_comments`] for why both.
     fn production_source() -> String {
-        SRC.split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element")
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::module_source::code_no_comments("src", "neighbors")
     }
 
     #[test]

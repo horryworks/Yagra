@@ -369,17 +369,10 @@ mod tests {
     // below are unchanged and still assert the same properties; they now assert them about the
     // shipping code rather than about a test-local copy of it, which is strictly better.
 
-    const SRC: &str = include_str!("audit.rs");
-
-    /// Executable code above the tests, comments stripped — see `dns_check.rs` for why both.
+    /// This module's code, comments stripped — see
+    /// [`crate::module_source::code_no_comments`] for why both.
     fn production_source() -> String {
-        SRC.split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element")
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::module_source::code_no_comments("src", "audit")
     }
 
     #[test]

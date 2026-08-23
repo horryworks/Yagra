@@ -204,16 +204,10 @@ impl LinkOverrideRepo {
 mod tests {
     use super::*;
 
-    const SRC: &str = include_str!("link_overrides.rs");
-
+    /// This module's code, comments stripped — see
+    /// [`crate::module_source::code_no_comments`] for why both.
     fn production_source() -> String {
-        SRC.split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element")
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        crate::module_source::code_no_comments("src", "link_overrides")
     }
 
     #[test]

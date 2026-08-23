@@ -1587,10 +1587,12 @@ mod tests {
         // `worker.rs` is the only file in the poller that builds a `Sample` at all, and the only
         // counter it can produce is `kind: col.kind` — copied from the collection column. Every
         // other sample it emits goes through `Sample::gauge`.
-        let src = include_str!("../../../yagra-poller/src/worker.rs");
-        // Production code only: fixtures below `#[cfg(test)]` may build counters freely. Needles
-        // assembled at runtime so this test's own text cannot satisfy the search.
-        let production = src.split("#[cfg(test)]").next().unwrap_or(src);
+        // Production code only: the fixtures below the poller's test attribute may build
+        // counters freely. Read through `module_source` (ADR-091) rather than cutting at the
+        // first attribute: a test-only item mid-file would otherwise truncate this to the
+        // imports and the assertion below would pass over nothing. Needles are assembled at
+        // runtime so this test's own text cannot satisfy the search.
+        let production = crate::module_source::code("../yagra-poller/src", "worker");
         let hardcoded = format!("MetricKind::{}", "Counter");
         assert!(
             !production.contains(&hardcoded),

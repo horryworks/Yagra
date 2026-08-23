@@ -429,14 +429,14 @@ pub(crate) async fn run_pool_coverage_watch(
 mod tests {
     use super::*;
 
-    /// This module's own source, for the structural assertions below.
-    ///
-    /// It reads `pool_coverage.rs` rather than `main.rs` because ADR-083 moved the loop here. Repointing it
-    /// is not optional bookkeeping: a needle aimed at the old file finds nothing and panics, which
-    /// is the loud half of the failure — the quiet half is a `.split()` argument that still matches
-    /// something and checks nothing. Both assertions below were re-run against a deliberately
-    /// broken body after the move, and both failed, which is the only reason to believe them.
-    const SRC: &str = include_str!("pool_coverage.rs");
+    // The structural assertions below read this file's own code through `crate::module_source`,
+    // which since ADR-091 removes each test-only item rather than truncating at the first one.
+    // They read `pool_coverage.rs` rather than `main.rs` because ADR-083 moved the loop here, and
+    // repointing them was not optional bookkeeping: a needle aimed at the old file finds nothing
+    // and panics, which is the loud half of the failure — the quiet half is a `.split()` argument
+    // that still matches something and checks nothing. Both assertions below were re-run against
+    // a deliberately broken body after the move, and both failed, which is the only reason to
+    // believe them.
 
     /// **A coverage transition is written to History, not only notified.**
     ///
@@ -449,10 +449,7 @@ mod tests {
     /// behaviour a unit test *can* reach is `alerts::recordable_alert`, tested in `alerts/mod.rs`.
     #[test]
     fn a_pool_coverage_transition_reaches_the_history_store() {
-        let production = SRC
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
+        let production = crate::module_source::code("src", "pool_coverage");
         let watch = production
             .split("async fn run_pool_coverage_watch")
             .nth(1)

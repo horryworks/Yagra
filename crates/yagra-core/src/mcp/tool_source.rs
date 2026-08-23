@@ -172,9 +172,7 @@ mod tests {
             code.contains("async fn get_config"),
             "{name}: the code half is missing the tool it declares"
         );
-        assert!(
-            !code.contains("#[cfg(test)]\nmod tests"),
-            "{name}: the test module was not cut away, so a needle can match a test's own literal"
-        );
+        // That the test module went is asserted inside `module_source::files` itself since
+        // ADR-091, so every caller inherits it instead of each one remembering to ask.
     }
 }
