@@ -16,13 +16,29 @@
 use super::source::{analysis_source, analysis_source_files};
 use super::{AnalysisJobState, AnalysisTool};
 
-/// Whether a trimmed line opens a function, under any visibility spelling.
-fn is_fn_definition(t: &str) -> bool {
-    let rest = t
-        .strip_prefix("pub(crate) ")
+/// A trimmed line with its visibility prefix removed, whatever it is.
+///
+/// 🚨 Not cosmetic. The scans below matched `async fn run_` against the trimmed line, which was
+/// right while every analysis was private in one file. The split made them `pub(super)`, and both
+/// scans instantly saw **one** `run_*` instead of fifteen — caught by their floors, which is the
+/// whole reason those floors exist. Neither scan would have found a single offender, and without
+/// the floors both would have said so as "nothing wrong".
+fn without_visibility(t: &str) -> &str {
+    t.strip_prefix("pub(crate) ")
         .or_else(|| t.strip_prefix("pub(super) "))
         .or_else(|| t.strip_prefix("pub "))
-        .unwrap_or(t);
+        .unwrap_or(t)
+}
+
+/// The name in `… async fn run_<name>(`, if the line opens an analysis.
+fn opens_an_analysis(t: &str) -> Option<String> {
+    let rest = without_visibility(t).strip_prefix("async fn run_")?;
+    rest.split('(').next().map(str::to_owned)
+}
+
+/// Whether a trimmed line opens a function, under any visibility spelling.
+fn is_fn_definition(t: &str) -> bool {
+    let rest = without_visibility(t);
     let rest = rest.strip_prefix("async ").unwrap_or(rest);
     rest.starts_with("fn ")
 }
@@ -44,8 +60,8 @@ fn needs_flow_tier_matches_which_analyses_actually_short_circuit() {
         let mut current_fn: Option<String> = None;
         for line in src.lines() {
             let t = line.trim();
-            if let Some(rest) = t.strip_prefix("async fn run_") {
-                current_fn = rest.split('(').next().map(str::to_owned);
+            if let Some(name) = opens_an_analysis(t) {
+                current_fn = Some(name);
             } else if is_fn_definition(t) {
                 current_fn = None;
             }
@@ -105,8 +121,8 @@ fn every_event_analysis_reads_through_the_store_router() {
         let mut current_fn: Option<String> = None;
         for line in src.lines() {
             let t = line.trim();
-            if let Some(rest) = t.strip_prefix("async fn run_") {
-                current_fn = rest.split('(').next().map(|f| format!("run_{f}"));
+            if let Some(name) = opens_an_analysis(t) {
+                current_fn = Some(format!("run_{name}"));
                 bodies_seen += 1;
             } else if is_fn_definition(t) {
                 // Left the `run_*` body. Every visibility spelling counts as a boundary, not just

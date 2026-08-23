@@ -1,0 +1,640 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! Job and finding persistence — PostgreSQL (ADR-004, ADR-089).
+//!
+//! Job metadata, findings and schedules are metadata, so they live in PostgreSQL rather than the
+//! TSDB. This file holds the statements and the row mappers; what to *run* is [`super::runner`]'s
+//! side of the module.
+//!
+//! ⚠️ `analysis_jobs.state` is written by statement literals rather than by a bind, so every
+//! statement interpolates [`AnalysisJobState`]'s token instead of spelling it — pinned by
+//! `guards::the_job_state_sql_is_built_from_the_enum`, which reads this file as text.
+
+use super::*;
+
+/// Columns selected for a job row (timestamps projected to epoch-millis).
+/// What narrows the runs list. Every field optional; all of them ANDed.
+///
+/// A struct rather than three `Option` parameters, because the order of three optionals is exactly
+/// the call-site mistake that compiles, runs, and answers a different question.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct JobFilter<'a> {
+    /// Only runs of this tool. Validated against [`AnalysisTool`] at the API edge.
+    pub tool: Option<&'a str>,
+    /// Only runs in this state. Typed, so the vocabulary the filter accepts is the vocabulary the
+    /// writers produce — there is no second list to keep in step.
+    pub state: Option<AnalysisJobState>,
+    /// Only runs started at or after this instant.
+    pub since: Option<DateTime<Utc>>,
+}
+
+/// The runs filter's predicate: one const, every clause always present, every value a nullable
+/// bind. Not assembled conditionally — a `WHERE` built by pushing clauses has a branch per filter
+/// that can be forgotten, and a forgotten one fails open, showing runs the operator did not ask for.
+pub(super) const JOB_FILTER_WHERE: &str = "($1::text IS NULL OR tool = $1) \
+     AND ($2::text IS NULL OR state = $2) \
+     AND ($3::timestamptz IS NULL OR created_at >= $3)";
+
+pub(super) const JOB_COLS: &str =
+    "id, tool, scope_kind, scope_id, scope_label, params, state, pct, phase, \
+     finding_count, summary, error, \
+     (EXTRACT(EPOCH FROM created_at) * 1000)::bigint AS created_ms, \
+     (EXTRACT(EPOCH FROM started_at) * 1000)::bigint AS started_ms, \
+     (EXTRACT(EPOCH FROM finished_at) * 1000)::bigint AS finished_ms";
+
+/// The `WHERE` of the cross-run findings search — one always-present clause per filter, `NULL`
+/// meaning "no filter".
+///
+/// Written this way rather than appended per filter because of `$7`, the caller's group scope: a
+/// conditionally-added restriction has a branch that can be forgotten, and forgetting *that* one
+/// fails **open**, returning the whole fleet's findings. `NodeRepo::SCOPE_PREDICATE` and
+/// `EVENT_FILTER_WHERE` are the same shape for the same reason.
+///
+/// ⚠️ `$7` and `$8` look alike and are not alike. `$7` is what the caller **may** see and is never
+/// optional; `$8` is the group they **asked** to narrow to, and is dropped when they don't. Binding
+/// a request into `$7` would let a caller widen their own scope by omitting a query parameter.
+///
+/// A finding with no `node_id` (the flow-tier-off notice, a fleet-level summary row) matches
+/// neither group clause — `NULL IN (…)` is never true — so it is visible only to a caller with no
+/// group restriction at all. That is the same rule the per-job endpoint applies in Rust, and the
+/// same one `Scope::allows` applies to an ungrouped node.
+pub(super) const FINDING_SEARCH_WHERE: &str = "\
+     ($1::timestamptz IS NULL OR (f.created_at, f.id) < \
+        ($1, coalesce($2::uuid, '00000000-0000-0000-0000-000000000000'::uuid))) \
+     AND ($3::timestamptz IS NULL OR f.created_at >= $3) \
+     AND ($4::text[] IS NULL OR j.tool = ANY($4)) \
+     AND ($5::text[] IS NULL OR f.severity = ANY($5)) \
+     AND ($6::uuid IS NULL OR f.node_id = $6) \
+     AND ($7::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($7))) \
+     AND ($8::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($8))) \
+     AND ($9::text IS NULL \
+          OR (f.metric ILIKE '%' || $9 || '%' OR f.kind ILIKE '%' || $9 || '%')) \
+     AND ($10::text IS NULL \
+          OR f.node_id IN (SELECT id FROM nodes WHERE name ILIKE '%' || $10 || '%')) \
+     AND ($11::double precision IS NULL OR f.score >= $11) \
+     AND ($12::double precision IS NULL OR f.score <= $12)";
+
+/// The cross-run findings query. `ORDER BY` matches the cursor in [`FINDING_SEARCH_WHERE`] column
+/// for column, and both match `analysis_findings_created_idx` (migration 0058) — if those three
+/// ever disagree the paging silently drops rows, which is why a test pins them together.
+pub(super) fn finding_search_sql() -> String {
+    format!(
+        "SELECT f.id, f.job_id, j.tool, f.score, f.severity, f.node_id, f.node_name, \
+         f.metric, f.kind, f.when_label, f.duration, f.created_at \
+         FROM analysis_findings f JOIN analysis_jobs j ON j.id = f.job_id \
+         WHERE {FINDING_SEARCH_WHERE} \
+         ORDER BY f.created_at DESC, f.id DESC LIMIT ${}",
+        FINDING_SEARCH_BINDS + 1
+    )
+}
+
+/// How many placeholders [`FINDING_SEARCH_WHERE`] uses. The page size is the one *after* them.
+///
+/// Derived rather than written twice, for the reason `EVENT_FILTER_BINDS` records: renumbering by
+/// hand after widening the predicate is neither a compile error nor a crash — the page size lands in
+/// a filter's slot and the query answers a different question. Here that would be `LIMIT` binding
+/// into `max_score`, i.e. "findings scoring at most 100" returned unpaged.
+pub(super) const FINDING_SEARCH_BINDS: usize = 12;
+
+/// Columns selected for a schedule row (timestamps projected to epoch-millis, as the job rows are).
+pub(super) const SCHED_COLS: &str =
+    "id, tool, scope_kind, scope_id, scope_label, params, frequency, \
+     day_of_week, day_of_month, at_hour, at_minute, enabled, last_status, \
+     (EXTRACT(EPOCH FROM next_run_at) * 1000)::bigint AS next_run_ms, \
+     (EXTRACT(EPOCH FROM last_run_at) * 1000)::bigint AS last_run_ms";
+
+pub(super) fn sched_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<AnalysisSchedule> {
+    Ok(AnalysisSchedule {
+        id: row.try_get("id")?,
+        tool: row.try_get("tool")?,
+        scope_kind: row.try_get("scope_kind")?,
+        scope_id: row.try_get("scope_id")?,
+        scope_label: row.try_get("scope_label")?,
+        params: row.try_get("params")?,
+        frequency: crate::cadence::Cadence::from_stored(row.try_get("frequency")?),
+        day_of_week: row.try_get("day_of_week")?,
+        day_of_month: row.try_get("day_of_month")?,
+        at_hour: row.try_get("at_hour")?,
+        at_minute: row.try_get("at_minute")?,
+        enabled: row.try_get("enabled")?,
+        next_run_ms: row.try_get("next_run_ms")?,
+        last_run_ms: row.try_get("last_run_ms")?,
+        last_status: row
+            .try_get::<Option<String>, _>("last_status")?
+            .as_deref()
+            .map(AnalysisScheduleStatus::from_stored),
+    })
+}
+
+pub(super) fn job_from_row(row: &sqlx::postgres::PgRow) -> anyhow::Result<AnalysisJob> {
+    Ok(AnalysisJob {
+        id: row.try_get("id")?,
+        tool: row.try_get("tool")?,
+        scope_kind: row.try_get("scope_kind")?,
+        scope_id: row.try_get("scope_id")?,
+        scope_label: row.try_get("scope_label")?,
+        params: row.try_get("params")?,
+        state: AnalysisJobState::from_stored(row.try_get::<String, _>("state")?.as_str()),
+        pct: row.try_get("pct")?,
+        phase: row.try_get("phase")?,
+        finding_count: row.try_get("finding_count")?,
+        summary: row.try_get("summary")?,
+        error: row.try_get("error")?,
+        created_ms: row.try_get("created_ms")?,
+        started_ms: row.try_get("started_ms")?,
+        finished_ms: row.try_get("finished_ms")?,
+    })
+}
+
+/// PostgreSQL-backed store for analysis jobs and their findings.
+pub struct AnalysisRepo {
+    pool: PgPool,
+}
+
+impl AnalysisRepo {
+    #[must_use]
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+
+    /// Insert a new job in the `running` state (started_at = now) and return its row.
+    pub async fn insert(
+        &self,
+        params: &JobParams,
+        created_by: Option<&str>,
+    ) -> anyhow::Result<AnalysisJob> {
+        let id = Uuid::new_v4();
+        let row = sqlx::query(&format!(
+            "INSERT INTO analysis_jobs \
+             (id, tool, scope_kind, scope_id, scope_label, params, state, pct, phase, \
+              finding_count, created_by, started_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, '{}', 0, $7, 0, $8, now()) \
+             RETURNING {JOB_COLS}",
+            AnalysisJobState::Running.as_str()
+        ))
+        .bind(id)
+        .bind(params.tool.as_str())
+        .bind(params.scope_kind.as_str())
+        .bind(params.scope_id)
+        .bind(&params.scope_label)
+        .bind(params.to_json())
+        .bind("Queued — fetching history…")
+        .bind(created_by)
+        .fetch_one(&self.pool)
+        .await?;
+        job_from_row(&row)
+    }
+
+    /// Update progress (percent + phase caption) of a running job.
+    pub async fn set_progress(&self, id: Uuid, pct: i32, phase: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET pct = $2, phase = $3 WHERE id = $1 AND state = '{}'",
+            AnalysisJobState::Running.as_str()
+        ))
+        .bind(id)
+        .bind(pct.clamp(0, 100))
+        .bind(phase)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Mark a job done with its result summary (findings inserted separately).
+    pub async fn finish(&self, id: Uuid, finding_count: i32, summary: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', pct = 100, phase = NULL, \
+             finding_count = $2, summary = $3, finished_at = now() WHERE id = $1",
+            AnalysisJobState::Done.as_str()
+        ))
+        .bind(id)
+        .bind(finding_count)
+        .bind(summary)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Mark a job failed with a reason.
+    pub async fn fail(&self, id: Uuid, error: &str) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', phase = NULL, error = $2, \
+             finished_at = now() WHERE id = $1",
+            AnalysisJobState::Failed.as_str()
+        ))
+        .bind(id)
+        .bind(error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Mark a job cancelled (set by the runner when its cancel flag was tripped).
+    pub async fn mark_cancelled(&self, id: Uuid) -> anyhow::Result<()> {
+        sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', phase = NULL, finished_at = now() \
+             WHERE id = $1 AND state = '{}'",
+            AnalysisJobState::Cancelled.as_str(),
+            AnalysisJobState::Running.as_str()
+        ))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Drop analysis runs older than `retention_secs`, and with them their findings.
+    ///
+    /// `retention::Subject::AnalysisRuns`. Migration 0026 shipped this table with "no auto-trim
+    /// yet" written into it, and 0059 later added *scheduled* analyses — so the table nothing
+    /// pruned became one that fills on a cadence. `analysis_findings` needs no statement of its
+    /// own: it is `ON DELETE CASCADE` from here, which is also why the cascade never fired before.
+    pub async fn prune_jobs(&self, retention_secs: i64) -> anyhow::Result<u64> {
+        let res = sqlx::query(
+            "DELETE FROM analysis_jobs WHERE created_at < now() - make_interval(secs => $1)",
+        )
+        .bind(retention_secs as f64)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+
+    /// Insert a batch of findings for a job.
+    pub(super) async fn insert_findings(
+        &self,
+        job_id: Uuid,
+        findings: &[NewFinding],
+    ) -> anyhow::Result<()> {
+        for f in findings {
+            sqlx::query(
+                "INSERT INTO analysis_findings \
+                 (id, job_id, score, severity, node_id, node_name, metric, kind, when_label, duration, detail) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(job_id)
+            .bind(f.score)
+            .bind(&f.severity)
+            .bind(f.node_id)
+            .bind(&f.node_name)
+            .bind(&f.metric)
+            .bind(&f.kind)
+            .bind(&f.when_label)
+            .bind(&f.duration)
+            .bind(&f.detail)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Recent jobs, newest first (the runs list). `limit` clamped by the caller.
+    pub async fn list(
+        &self,
+        limit: i64,
+        filter: &JobFilter<'_>,
+    ) -> anyhow::Result<Vec<AnalysisJob>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {JOB_COLS} FROM analysis_jobs WHERE {JOB_FILTER_WHERE} \
+             ORDER BY created_at DESC LIMIT $4"
+        ))
+        .bind(filter.tool.map(str::to_owned))
+        .bind(filter.state.map(|s| s.as_str().to_owned()))
+        .bind(filter.since)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(job_from_row).collect()
+    }
+
+    /// One job by id.
+    pub async fn get(&self, id: Uuid) -> anyhow::Result<Option<AnalysisJob>> {
+        let row = sqlx::query(&format!(
+            "SELECT {JOB_COLS} FROM analysis_jobs WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(job_from_row).transpose()
+    }
+
+    /// A job's findings, highest score first.
+    pub async fn findings(&self, job_id: Uuid) -> anyhow::Result<Vec<AnalysisFinding>> {
+        let rows = sqlx::query(
+            "SELECT id, score, severity, node_id, node_name, metric, kind, when_label, duration, detail \
+             FROM analysis_findings WHERE job_id = $1 ORDER BY score DESC",
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(AnalysisFinding {
+                    id: row.try_get("id")?,
+                    score: row.try_get("score")?,
+                    severity: row.try_get("severity")?,
+                    node_id: row.try_get("node_id")?,
+                    node_name: row.try_get("node_name")?,
+                    metric: row.try_get("metric")?,
+                    kind: row.try_get("kind")?,
+                    when_label: row.try_get("when_label")?,
+                    duration: row.try_get("duration")?,
+                    detail: row.try_get("detail")?,
+                })
+            })
+            .collect()
+    }
+
+    /// Findings across **every** run, newest first — the Saved-findings search.
+    ///
+    /// The join to `analysis_jobs` is what makes `?tool=` possible at all: a finding row records
+    /// what was found, never which diagnostic found it.
+    pub async fn search_findings(
+        &self,
+        q: &FindingSearch<'_>,
+    ) -> anyhow::Result<Vec<SavedFinding>> {
+        // An empty set means *unfiltered*, which is a NULL bind — an empty array would make
+        // `= ANY(…)` match nothing and turn "no filter" into "no results".
+        fn set<'s>(tokens: impl Iterator<Item = &'s str>) -> Option<Vec<String>> {
+            let v: Vec<String> = tokens.map(str::to_owned).collect();
+            (!v.is_empty()).then_some(v)
+        }
+        let rows = sqlx::query(&finding_search_sql())
+            .bind(q.before)
+            .bind(q.before_id)
+            .bind(q.since)
+            .bind(set(q.tool.iter().map(|t| t.as_str())))
+            .bind(set(q.severity.iter().copied()))
+            .bind(q.node_id)
+            .bind(q.groups.map(<[Uuid]>::to_vec))
+            .bind(q.in_group.map(<[Uuid]>::to_vec))
+            .bind(q.q)
+            .bind(q.node_q)
+            .bind(q.min_score)
+            .bind(q.max_score)
+            .bind(q.limit)
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let at: DateTime<Utc> = row.try_get("created_at")?;
+                Ok(SavedFinding {
+                    id: row.try_get("id")?,
+                    job_id: row.try_get("job_id")?,
+                    tool: row.try_get("tool")?,
+                    score: row.try_get("score")?,
+                    severity: row.try_get("severity")?,
+                    node_id: row.try_get("node_id")?,
+                    node_name: row.try_get("node_name")?,
+                    metric: row.try_get("metric")?,
+                    kind: row.try_get("kind")?,
+                    when_label: row.try_get("when_label")?,
+                    duration: row.try_get("duration")?,
+                    at: at.to_rfc3339(),
+                })
+            })
+            .collect()
+    }
+
+    // — Schedules —
+
+    /// Every schedule, soonest first.
+    pub async fn list_schedules(&self) -> anyhow::Result<Vec<AnalysisSchedule>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {SCHED_COLS} FROM analysis_schedules ORDER BY next_run_at"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(sched_from_row).collect()
+    }
+
+    pub async fn create_schedule(
+        &self,
+        input: &ScheduleInput,
+        next_run_at: DateTime<Utc>,
+        updated_by: Option<&str>,
+    ) -> anyhow::Result<Uuid> {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO analysis_schedules \
+             (id, tool, scope_kind, scope_id, scope_label, params, frequency, day_of_week, \
+              day_of_month, at_hour, at_minute, enabled, next_run_at, updated_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+        )
+        .bind(id)
+        .bind(input.params.tool.as_str())
+        .bind(input.params.scope_kind.as_str())
+        .bind(input.params.scope_id)
+        .bind(&input.params.scope_label)
+        .bind(input.params.to_json())
+        .bind(input.cadence.frequency.as_str())
+        .bind(input.cadence.day_of_week)
+        .bind(input.cadence.day_of_month)
+        .bind(input.cadence.at_hour)
+        .bind(input.cadence.at_minute)
+        .bind(input.enabled)
+        .bind(next_run_at)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(id)
+    }
+
+    pub async fn update_schedule(
+        &self,
+        id: Uuid,
+        input: &ScheduleInput,
+        next_run_at: DateTime<Utc>,
+        updated_by: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let res = sqlx::query(
+            "UPDATE analysis_schedules SET tool = $2, scope_kind = $3, scope_id = $4, \
+             scope_label = $5, params = $6, frequency = $7, day_of_week = $8, day_of_month = $9, \
+             at_hour = $10, at_minute = $11, enabled = $12, next_run_at = $13, updated_by = $14, \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(id)
+        .bind(input.params.tool.as_str())
+        .bind(input.params.scope_kind.as_str())
+        .bind(input.params.scope_id)
+        .bind(&input.params.scope_label)
+        .bind(input.params.to_json())
+        .bind(input.cadence.frequency.as_str())
+        .bind(input.cadence.day_of_week)
+        .bind(input.cadence.day_of_month)
+        .bind(input.cadence.at_hour)
+        .bind(input.cadence.at_minute)
+        .bind(input.enabled)
+        .bind(next_run_at)
+        .bind(updated_by)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// One schedule by id — the read the API edge does before letting a scoped caller edit it.
+    pub async fn get_schedule(&self, id: Uuid) -> anyhow::Result<Option<AnalysisSchedule>> {
+        let row = sqlx::query(&format!(
+            "SELECT {SCHED_COLS} FROM analysis_schedules WHERE id = $1"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(sched_from_row).transpose()
+    }
+
+    pub async fn delete_schedule(&self, id: Uuid) -> anyhow::Result<bool> {
+        let res = sqlx::query("DELETE FROM analysis_schedules WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Enabled schedules whose `next_run_at` has passed (the scheduler's due-query).
+    pub async fn due_schedules(&self) -> anyhow::Result<Vec<AnalysisSchedule>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {SCHED_COLS} FROM analysis_schedules \
+             WHERE enabled = true AND next_run_at <= now() ORDER BY next_run_at"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(sched_from_row).collect()
+    }
+
+    /// Record a fire that produced a run: stamp `last_run_at`/`last_status` and advance to `next`.
+    pub async fn mark_fired(
+        &self,
+        id: Uuid,
+        status: AnalysisScheduleStatus,
+        next: DateTime<Utc>,
+    ) -> anyhow::Result<()> {
+        sqlx::query(
+            "UPDATE analysis_schedules SET last_run_at = now(), last_status = $2, next_run_at = $3 \
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(status.as_str())
+        .bind(next)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Record an attempt admission control refused: **leave `next_run_at` where it is** so the
+    /// schedule stays due and the next tick retries.
+    ///
+    /// `last_run_at` is deliberately not stamped either — nothing ran, and a schedule reporting a
+    /// last run that produced no row is the confusing half of this failure mode. The status alone
+    /// says what happened.
+    pub async fn mark_deferred(&self, id: Uuid) -> anyhow::Result<()> {
+        sqlx::query("UPDATE analysis_schedules SET last_status = $2 WHERE id = $1")
+            .bind(id)
+            .bind(AnalysisScheduleStatus::Busy.as_str())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// On startup, fail any job left `running` by a previous core process (it can't resume).
+    pub async fn fail_orphans(&self) -> anyhow::Result<u64> {
+        let res = sqlx::query(&format!(
+            "UPDATE analysis_jobs SET state = '{}', phase = NULL, \
+             error = 'core restarted while running', finished_at = now() WHERE state = '{}'",
+            AnalysisJobState::Failed.as_str(),
+            AnalysisJobState::Running.as_str()
+        ))
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
+    }
+}
+
+// ── Runner ─────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_findings_search_orders_on_exactly_the_columns_its_cursor_pages_on() {
+        // The three that must agree or paging silently drops rows: the cursor predicate, the
+        // ORDER BY, and the index in migration 0058. The events list has its own version of this
+        // test because the same disagreement shipped there once.
+        let sql = finding_search_sql();
+        // The page size is derived from `FINDING_SEARCH_BINDS`, so this asserts the derivation is
+        // right rather than re-hardcoding the number the derivation exists to stop anyone writing.
+        assert!(
+            sql.contains("ORDER BY f.created_at DESC, f.id DESC LIMIT $13"),
+            "{sql}"
+        );
+        assert_eq!(FINDING_SEARCH_BINDS, 12);
+        assert!(sql.contains(FINDING_SEARCH_WHERE), "{sql}");
+        assert!(
+            FINDING_SEARCH_WHERE.contains("(f.created_at, f.id) <"),
+            "the cursor must be the row value, not the timestamp alone: {FINDING_SEARCH_WHERE}"
+        );
+        // Findings carry no tool of their own; `?tool=` is only answerable through the run.
+        assert!(
+            sql.contains("JOIN analysis_jobs j ON j.id = f.job_id"),
+            "{sql}"
+        );
+    }
+
+    #[test]
+    fn the_findings_search_restricts_by_scope_unconditionally() {
+        // The inversion that would be a privilege escalation: the caller's scope must be a clause
+        // that is always in the statement, with NULL — not absence — meaning unrestricted. It must
+        // also be bound, never interpolated (security.md).
+        assert!(FINDING_SEARCH_WHERE.contains(
+            "($7::uuid[] IS NULL OR f.node_id IN (SELECT id FROM nodes WHERE group_id = ANY($7)))"
+        ));
+        // …and the group the caller *asked* for is a separate bind, so dropping the request cannot
+        // drop the restriction.
+        assert!(FINDING_SEARCH_WHERE.contains("ANY($8)"));
+        // Two kinds of quoted literal are allowed here and nothing else: the cursor's nil-uuid
+        // floor, and the `'%'` wildcards the substring filters concatenate around a *bound* value.
+        // Anything left after removing those means a request value reached SQL as text.
+        let without_wildcards = FINDING_SEARCH_WHERE.replace("'%'", "");
+        assert_eq!(
+            without_wildcards.matches('\'').count(),
+            2,
+            "the nil-uuid cursor floor is the only non-wildcard literal that belongs here: \
+             {FINDING_SEARCH_WHERE}"
+        );
+        // …and each wildcard sits beside a placeholder, never beside inlined text.
+        for bind in ["$9", "$10"] {
+            assert!(
+                FINDING_SEARCH_WHERE.contains(&format!("'%' || {bind} || '%'")),
+                "{bind} must be concatenated as a bound value: {FINDING_SEARCH_WHERE}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_score_bounds_are_inclusive_and_every_placeholder_is_used_once() {
+        // Inclusive at both ends. `>` instead of `>=` is the version of this that looks right and
+        // drops exactly the rows sitting on the bound the operator typed — invisible unless you go
+        // looking, because the answer is still plausible.
+        assert!(
+            FINDING_SEARCH_WHERE.contains("($11::double precision IS NULL OR f.score >= $11)"),
+            "{FINDING_SEARCH_WHERE}"
+        );
+        assert!(
+            FINDING_SEARCH_WHERE.contains("($12::double precision IS NULL OR f.score <= $12)"),
+            "{FINDING_SEARCH_WHERE}"
+        );
+        // Every placeholder the predicate declares is actually written, and none beyond it — this is
+        // what makes `FINDING_SEARCH_BINDS` a fact about the string rather than a hopeful constant.
+        // (`search_findings` binds them in order, so a gap here would silently shift every later
+        // filter's value into the wrong clause.)
+        for i in 1..=FINDING_SEARCH_BINDS {
+            assert!(
+                FINDING_SEARCH_WHERE.contains(&format!("${i}")),
+                "${i} is declared by FINDING_SEARCH_BINDS but never used: {FINDING_SEARCH_WHERE}"
+            );
+        }
+        assert!(
+            !FINDING_SEARCH_WHERE.contains(&format!("${}", FINDING_SEARCH_BINDS + 1)),
+            "the predicate uses the slot reserved for LIMIT: {FINDING_SEARCH_WHERE}"
+        );
+    }
+}

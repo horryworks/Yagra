@@ -644,7 +644,10 @@ mod tests {
         include_str!("events.rs"),
         include_str!("pollers.rs"),
         include_str!("reports.rs"),
-        include_str!("analysis.rs"),
+        // ADR-089 split `analysis.rs` into a directory; the `DELETE` this list is looking for
+        // is in the persistence half. A wrong path here can only make the search *fail*, naming
+        // the subject — which is why a hand-maintained list is tolerable at all.
+        include_str!("analysis/repo.rs"),
         include_str!("rca/store.rs"),
     ];
 
