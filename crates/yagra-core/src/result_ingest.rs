@@ -743,7 +743,7 @@ mod tests {
         let (history_tx, _history_rx) = tokio::sync::mpsc::channel::<HistoryRecord>(64);
         // The history store is never touched: the channel is wide enough that `enqueue_history`
         // never takes its inline-write fallback. `connect_lazy` gives a handle that connects to
-        // nothing (the same trick `events.rs`'s planner tests use).
+        // nothing (the same trick `events/engine.rs`'s planner tests use).
         let history = Arc::new(AlertHistoryStore::new(
             sqlx::postgres::PgPoolOptions::new()
                 .connect_lazy("postgres://localhost/unused")

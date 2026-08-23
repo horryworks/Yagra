@@ -336,7 +336,7 @@ mod tests {
 
     /// This module's own source, for the SQL-shape assertions below. The append-on-change rule and
     /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite that
-    /// changes their meaning — the peer stores (`events.rs`, `logstore.rs`, `flowstore.rs`,
+    /// changes their meaning — the peer stores (`events/repo.rs`, `logstore.rs`, `flowstore.rs`,
     /// `reports.rs`) all pin their statements the same way.
     const SRC: &str = include_str!("dns_check.rs");
 

@@ -2,7 +2,7 @@
 // Where in a string the filter's term matched, so the UI can mark it (ADR-053 Inc.2e).
 //
 // 🚨 **This is the fourth implementation of "what does a plain term match".** The other three are
-// PostgreSQL's `ILIKE`/`~*` predicate (`events.rs::EVENT_FILTER_WHERE`), the LogsQL builder
+// PostgreSQL's `ILIKE`/`~*` predicate (`events/sql.rs::EVENT_FILTER_WHERE`), the LogsQL builder
 // (`logstore.rs::msg_prefix`), and the in-memory fake that stands in for the log store in tests
 // (`logstore.rs::word_prefix_match`). The failure mode of a fourth copy is specific and nasty: this
 // one is the only one the operator *looks at*, so when it drifts the screen lies — either marking

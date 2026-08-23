@@ -616,7 +616,7 @@ pub(super) struct CheckSpec<'a> {
 }
 
 /// Deterministic check id for a (node, check-name) pair, so the same logical check keeps a
-/// stable dedup identity across restarts. Also used by the event pipeline (`events.rs`)
+/// stable dedup identity across restarts. Also used by the event pipeline (`events/engine.rs`)
 /// with `event:<rule-id>` names, keeping event alerts in the same identity space.
 pub(crate) fn check_id(node: NodeId, name: &str) -> CheckId {
     subject_check_id(&Subject::Node(node), name)

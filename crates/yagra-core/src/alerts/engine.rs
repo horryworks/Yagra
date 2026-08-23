@@ -756,7 +756,7 @@ impl AlertManager {
 
     /// Insert an event-rule alert into the active set and broadcast it. Event alerts are
     /// edge-triggered (no `CheckState`/dwell — the rule's min-count/window gate and TTL do
-    /// the damping upstream in `events.rs`), so this bypasses `process_check` on purpose.
+    /// the damping upstream in `events/engine.rs`), so this bypasses `process_check` on purpose.
     /// Dependency suppression is also skipped by design: a device that just emitted an
     /// event is demonstrably reachable, so `root_cause` stays `None`.
     ///

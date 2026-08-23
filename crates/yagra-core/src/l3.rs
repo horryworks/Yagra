@@ -180,7 +180,7 @@ impl L3Repo {
 mod tests {
     /// This module's own source, for the SQL-shape assertions below. The append-on-change rule and
     /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite that
-    /// changes their meaning — the peer stores (`neighbors.rs`, `dns_check.rs`, `events.rs`) all
+    /// changes their meaning — the peer stores (`neighbors.rs`, `dns_check.rs`, `events/repo.rs`) all
     /// pin their statements the same way.
     const SRC: &str = include_str!("l3.rs");
 
