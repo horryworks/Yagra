@@ -442,7 +442,7 @@ impl std::ops::Deref for Ldap {
 /// The passive-event engine — present only when event ingestion is configured.
 ///
 /// Its own extractor for the same reason as [`Admin`]: four handlers opened with the identical
-/// `let Some(engine) = st.events.as_ref() else { … }`.
+/// `let Some(engine) = st.event_engine.as_ref() else { … }`.
 pub struct Events(pub Arc<crate::events::EventEngine>);
 
 #[async_trait]
@@ -450,7 +450,7 @@ impl FromRequestParts<ApiState> for Events {
     type Rejection = ApiError;
 
     async fn from_request_parts(_: &mut Parts, st: &ApiState) -> Result<Self, Self::Rejection> {
-        st.events
+        st.event_engine
             .as_ref()
             .map(|e| Self(e.clone()))
             .ok_or_else(ApiError::admin_unavailable)

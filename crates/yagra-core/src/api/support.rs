@@ -332,7 +332,7 @@ async fn build(
     // scan and the gzip over those same bytes. There are no awaits left in `build`, so on a Tokio
     // worker that stretch is a straight stall of one runtime thread — on a support bundle, i.e.
     // exactly when the deployment is already unwell and someone is watching. Onto the blocking
-    // pool, the same discipline the IP→ASN reloader (`main.rs`) and the store-and-forward disk
+    // pool, the same discipline the IP→ASN reloader (`ipasn::start_reload`) and the store-and-forward disk
     // read (`yagra-poller`) already follow.
     let scan = SecretScan::from_env();
     tokio::task::spawn_blocking(move || {

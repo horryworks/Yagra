@@ -8,9 +8,10 @@
 //! arithmetic, the query floor, and the set of checks currently being tracked — so all of it is
 //! testable without a TSDB or a database.
 //!
-//! The impure half is `main.rs::run_interface_utilization_watch`, modelled on
-//! `run_pool_coverage_watch`: it is the only other loop that raises alerts from outside the poll
-//! path.
+//! The impure half is [`run_interface_utilization_watch`] below, modelled on
+//! `pool_coverage::run_pool_coverage_watch`: it is the only other loop that raises alerts from
+//! outside the poll path. (It lived in `main.rs` until ADR-083; this sentence said so until
+//! ADR-090 noticed it had been describing the wrong file for two releases.)
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

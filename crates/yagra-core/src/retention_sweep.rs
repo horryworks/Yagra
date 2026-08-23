@@ -32,7 +32,7 @@ use crate::{analysis, dns_check, events, l3, neighbors, rca};
 pub(crate) struct Targets {
     pub repo: Arc<NodeRepo>,
     pub history: Arc<AlertHistoryStore>,
-    pub events_repo: Arc<events::EventRepo>,
+    pub events: Arc<events::EventRepo>,
     pub dns_checks: Arc<dns_check::DnsCheckRepo>,
     pub neighbors: Arc<neighbors::NeighborRepo>,
     pub l3: Arc<l3::L3Repo>,
@@ -54,7 +54,7 @@ pub(crate) async fn sweep(t: &Targets, retention: &RetentionSettings) {
     let Targets {
         repo,
         history,
-        events_repo,
+        events,
         dns_checks,
         neighbors,
         l3,
@@ -73,7 +73,7 @@ pub(crate) async fn sweep(t: &Targets, retention: &RetentionSettings) {
     // (rule-authoring material) get their own shorter window. When the log store is enabled
     // (ADR-024) unmatched rows never land in PostgreSQL, so this pruning naturally trims
     // PostgreSQL to the alert-linked subset; the log store keeps the full firehose.
-    if let Err(e) = events_repo
+    if let Err(e) = events
         .prune_old(alert_linked_secs, retention.unmatched_event_secs())
         .await
     {

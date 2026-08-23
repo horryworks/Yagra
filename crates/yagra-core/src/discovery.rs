@@ -28,7 +28,7 @@
 //!    never as an empty page. Do not paper over this by inventing a scan record on an unknown
 //!    result: that would report progress for a sweep whose targets and credentials are unknown.
 //!
-//! ⚠️ **`run_consumer` runs on the leader only** (`main.rs`'s `LeaderWork`), while every core serves
+//! ⚠️ **`run_consumer` runs on the leader only** (`main.rs`'s `LeaderTasks`), while every core serves
 //! the API. So a standby that accepted `POST /discovery/scan` would put real traffic on the wire and
 //! never see a single result — which is why that route takes the `Leader` guard.
 

@@ -1562,7 +1562,7 @@ pub(crate) async fn poll_now(
         })?
         .ok_or_else(|| ApiError::not_found("node_not_found", format!("no node {node_id}")))?;
     let pool = pool_resolver(admin).await.resolve(&node).pool;
-    let dispatched = admin.poll.poll_now(&node, &pool).await;
+    let dispatched = admin.dispatcher.poll_now(&node, &pool).await;
     tracing::info!(node = %node_id, dispatched, pool = %pool, "manual poll dispatched");
     Ok(PollNowResult {
         dispatched,

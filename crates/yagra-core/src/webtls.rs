@@ -12,9 +12,9 @@
 //! this system living outside the envelope. So the certificate of record is one PostgreSQL row, and
 //! `server.pem` on the shared volume is written from it. Deleting the volume is safe.
 //!
-//! Materialization happens **before `serve()` binds** (`main.rs`), which is what makes the compose
-//! files' `depends_on: core: {condition: service_healthy}` a real guarantee rather than a race that
-//! usually goes the right way.
+//! Materialization happens **before `serve()` binds** — [`materialize_and_renew`], called from
+//! `run_live` — which is what makes the compose files' `depends_on: core: {condition:
+//! service_healthy}` a real guarantee rather than a race that usually goes the right way.
 //!
 //! ## The rule that protects an operator's certificate
 //!

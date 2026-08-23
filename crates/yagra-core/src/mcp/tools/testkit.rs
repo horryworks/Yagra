@@ -41,7 +41,7 @@ pub(super) fn skeleton_state() -> ApiState {
         login_throttle: Arc::new(LoginThrottle::new()),
         history: None,
         ack: None,
-        events: None,
+        event_engine: None,
         public_dashboard: false,
         is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         ldap: None,

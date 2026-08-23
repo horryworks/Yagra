@@ -217,7 +217,7 @@ async fn ingest_webhook(
 /// Best-effort by design — the 30s refresh loop is the backstop, so a reload failure delays a rule
 /// rather than losing the write that already succeeded.
 async fn reload_event_engine(st: &ApiState, admin: &AdminState) {
-    if let Some(engine) = st.events.as_ref() {
+    if let Some(engine) = st.event_engine.as_ref() {
         engine.reload(&admin.repo).await;
     }
 }

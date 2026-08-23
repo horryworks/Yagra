@@ -156,7 +156,7 @@ pub struct AdminState {
     pub scheduler_stats: Arc<crate::scheduler::SchedulerStats>,
     /// On-demand poll dispatch (the "poll now" action) — shares the scheduler's job-building so a
     /// manual poll matches a periodic one. Bus-only (core⇄poller never call directly, ADR-003).
-    pub poll: Arc<PollDispatcher>,
+    pub dispatcher: Arc<PollDispatcher>,
     /// Troubleshoot deep-diagnostic jobs (anomaly/correlation/capacity/flap). A TSDB-read
     /// background computation in core (ADR-022) — not a poller/bus job.
     pub analysis: Arc<AnalysisRunner>,
@@ -278,7 +278,7 @@ pub struct ApiState {
     pub ack: Option<Arc<AckRepo>>,
     /// Passive-event engine (webhook ingest + manual close + inline rule reload);
     /// `None` in skeleton mode.
-    pub events: Option<Arc<crate::events::EventEngine>>,
+    pub event_engine: Option<Arc<crate::events::EventEngine>>,
     /// When true, read-only endpoints skip authentication (public read-only dashboard).
     /// When false (default), they require a valid session with `View` (every role has it).
     pub public_dashboard: bool,
@@ -633,7 +633,7 @@ mod tests {
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
             ack: None,
-            events: None,
+            event_engine: None,
             public_dashboard: true,
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
@@ -672,7 +672,7 @@ mod tests {
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
             ack: None,
-            events: None,
+            event_engine: None,
             public_dashboard: false,
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,
@@ -709,7 +709,7 @@ mod tests {
             login_throttle: Arc::new(LoginThrottle::new()),
             history: None,
             ack: None,
-            events: None,
+            event_engine: None,
             public_dashboard: false,
             is_leader: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             ldap: None,

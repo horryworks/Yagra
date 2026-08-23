@@ -205,7 +205,7 @@ async fn start_discovery_scan(
     _guard: RequireManageConfig,
     admin: Admin,
     // ⚠️ Leader-gated, and the reason is not efficiency. Only the leader runs the discovery result
-    // consumer (`main.rs`'s `LeaderWork`), so a standby accepting this would publish a job — real
+    // consumer (`main.rs`'s `LeaderTasks`), so a standby accepting this would publish a job — real
     // ICMP and SNMP at the operator's network — whose every result lands on a core that has no
     // record of the scan and drops it. The sweep would happen and be invisible.
     _leader: Leader,
