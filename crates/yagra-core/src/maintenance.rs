@@ -601,7 +601,7 @@ pub fn nodes_covered_by_a_class_window(
 //
 // The release itself is granted at the API edge, but the rule it rests on — *what a node merely
 // inherits*, and *how long a release from it may last* — has three readers: the grant
-// (`api::maintenance`), the alert engine's refresh (`main::resolve_maintenance`), and
+// (`api::maintenance`), the alert engine's refresh (`alerts::config::resolve_maintenance`), and
 // [`reconcile_exemptions`] below. It lives here because of that, per `api-conventions.md`: a
 // helper shared across domains must not live inside one of them.
 
