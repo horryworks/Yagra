@@ -605,7 +605,7 @@ async fn apply_node_filter(st: &ApiState, nodes: Vec<Node>, filter: &NodeFilter)
         .into_iter()
         .filter(|n| {
             // An empty set is "no filter", never "match nothing" — the same rule the SQL sets use
-            // (a NULL bind rather than an empty array, `analysis.rs::search_findings`).
+            // (a NULL bind rather than an empty array, `analysis/repo.rs::search_findings`).
             if !filter.state.is_empty() {
                 let have = states
                     .get(&n.id)

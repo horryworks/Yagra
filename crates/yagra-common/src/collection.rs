@@ -953,7 +953,7 @@ pub fn builtin_templates() -> Vec<BuiltinTemplate> {
         //
         // ⚠️ Stored as the raw enumeration integer, like if_oper_status — this product has no
         // "OID enum value → label" table by design, and the meaning is applied once at the display
-        // layer. The _state suffix is load-bearing: analysis.rs::anomaly_usable excludes any
+        // layer. The _state suffix is load-bearing: analysis/stats.rs::anomaly_usable excludes any
         // metric whose name contains it from anomaly detection, which is right for a discrete code.
         BuiltinTemplate {
             name: T_CISCO_ENV_STATE,

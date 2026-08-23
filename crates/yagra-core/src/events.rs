@@ -1220,7 +1220,7 @@ impl EventRepo {
     // ⚠️ These answer about **PostgreSQL**, which holds only alert-linked rows once a log store is
     // configured (ADR-024). That is why each has a `LogStore` twin of the same name and why the
     // analyses reach both through a router rather than calling either directly — see
-    // `analysis.rs`'s `agg_*` methods. `event_flap_stats` is the exception, and deliberately: every
+    // `analysis/mod.rs`'s `agg_*` methods. `event_flap_stats` is the exception, and deliberately: every
     // action it counts is alert-linked, so PostgreSQL is complete for it either way.
 
     /// Per-(node, time-bucket) event counts. Uncorrelated events (no node) are excluded — an event

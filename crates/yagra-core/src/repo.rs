@@ -1457,7 +1457,7 @@ impl NodeRepo {
     ///
     // Unscoped, unlike `node_names`: the notifier is the deployment acting on its own behalf, not
     // a principal reading the inventory, so there is no scope to apply. Same call
-    // `analysis.rs` makes for a background run. The result never reaches an API response — it
+    // `analysis/mod.rs` makes for a background run. The result never reaches an API response — it
     // renders into a notification whose destination the operator configured.
     /// Ids with no row are simply absent from the map; the caller falls back to the raw id.
     pub async fn node_facts(&self, ids: &[Uuid]) -> anyhow::Result<HashMap<Uuid, NodeFacts>> {
