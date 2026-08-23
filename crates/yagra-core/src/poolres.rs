@@ -7,7 +7,7 @@
 //! under the Tokyo site is polled from Tokyo" one setting instead of one edit per node, and it
 //! mirrors the profile→group→node precedence thresholds already use.
 //!
-//! Resolution lives here, in code, rather than in SQL: [`crate::repo::Repo::NODE_COLUMNS`] is
+//! Resolution lives here, in code, rather than in SQL: `NodeRepo::NODE_COLUMNS` is
 //! inlined into many queries, and a per-node recursive walk would be O(nodes × depth) against a
 //! table sized for tens of thousands of rows. `node_groups` is small (hundreds of rows) and is
 //! read whole once per sweep rebuild, so the whole map is built in one pass with path compression
