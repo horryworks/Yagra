@@ -71,6 +71,84 @@ pub(crate) struct AlertConfigBase {
     per_interface: std::collections::BTreeSet<String>,
 }
 
+/// The reads [`load_alert_config_base`] is assembled from.
+///
+/// **Six methods, not four repositories** (ADR-093). The loader used to take `&NodeRepo`,
+/// `&ThresholdStore`, `&GroupRepo` and `&TopologySources` — four concrete types holding a
+/// `PgPool` between them, so there was no way to run the loader in a test and therefore no way to
+/// check the one property that matters most about it: that a failed read does not become an empty
+/// value. That was left to a test which greps this file for `unwrap_or`, and whose own doc claimed
+/// no behavioural test could stand in for it. A fake that returns `Err` is that test.
+///
+/// The trait names what the loader *asks*, not who answers. Six of the sixty-odd methods those four
+/// types expose are reachable from here; a seam sized to the types instead of to the questions was
+/// the reason ADR-092 deferred this as expensive when it is not.
+///
+/// ⚠️ **`topology_mode` and `derived_topology` are two methods on purpose.** One `topology_for`
+/// would read better and would move ADR-043 決定 5's choice — *the derived graph reaches the engine
+/// only in `derived`* — out of the loader and into every implementation, fakes included. A test
+/// would then exercise the fake's copy of the rule. The same mistake ADR-092 caught in its own
+/// first draft.
+#[async_trait::async_trait]
+pub(crate) trait AlertConfigSources: Send + Sync {
+    /// Every threshold rule in the deployment.
+    async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>>;
+    /// The whole inventory. The expensive one, and why this is generation-gated.
+    async fn nodes(&self) -> anyhow::Result<Vec<yagra_common::Node>>;
+    /// `(group, parent, pool)` for every folder group — folder-pool inheritance (migration 0054).
+    async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>>;
+    /// `(group, parent)` for every folder group, for the ancestor walk.
+    async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>>;
+    /// Metric names that publish one series per interface (ADR-076).
+    async fn per_interface_metrics(&self) -> anyhow::Result<std::collections::BTreeSet<String>>;
+    /// Which graph the deployment is configured to suppress with.
+    ///
+    /// Not a `Result`: it degrades to `Manual` inside the repository, which is the mode that
+    /// changes nothing — see [`NodeRepo::get_topology_mode`] before copying that.
+    async fn topology_mode(&self) -> crate::topology_mode::TopologyMode;
+    /// The derived connectivity graph for these nodes (ADR-043). Only called when the mode says so.
+    async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology;
+}
+
+/// The live sources: the four handles the loader used to take, behind the six questions it asks.
+pub(crate) struct LiveConfigSources {
+    pub(crate) repo: Arc<NodeRepo>,
+    pub(crate) thresholds: Arc<ThresholdStore>,
+    pub(crate) groups: Arc<groups::GroupRepo>,
+    pub(crate) topo: topology_projection::TopologySources,
+}
+
+#[async_trait::async_trait]
+impl AlertConfigSources for LiveConfigSources {
+    async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>> {
+        self.thresholds.list_all().await
+    }
+    async fn nodes(&self) -> anyhow::Result<Vec<yagra_common::Node>> {
+        self.repo.list_nodes().await
+    }
+    async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
+        self.groups.pool_rows().await
+    }
+    async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+        self.groups.edges().await
+    }
+    async fn per_interface_metrics(&self) -> anyhow::Result<std::collections::BTreeSet<String>> {
+        // Constructed here rather than held as a field: it is a handle on the pool `repo` already
+        // owns, and this runs only when the config generation advances.
+        crate::collection::CollectionRepo::new(self.repo.pool())
+            .per_interface_metric_names()
+            .await
+    }
+    async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
+        self.repo.get_topology_mode().await
+    }
+    async fn derived_topology(&self, nodes: &[yagra_common::Node]) -> Topology {
+        topology_projection::derived_topology(&self.topo, nodes)
+            .await
+            .0
+    }
+}
+
 /// Load the config-derived alert base (thresholds + node-meta + dependency topology).
 ///
 /// 🚨 **Every read here propagates its error; none of them degrades to an empty value** (ADR-080).
@@ -88,41 +166,35 @@ pub(crate) struct AlertConfigBase {
 /// and for the opposite reason: it degrades to the mode that *changes nothing* (`Manual`), so it
 /// cannot silence or redirect anything. Read its doc comment before copying the pattern.
 pub(crate) async fn load_alert_config_base(
-    repo: &NodeRepo,
-    thresholds: &ThresholdStore,
-    groups: &groups::GroupRepo,
-    topo: &topology_projection::TopologySources,
+    sources: &dyn AlertConfigSources,
 ) -> anyhow::Result<AlertConfigBase> {
-    let rules = thresholds
-        .list_all()
+    let rules = sources
+        .thresholds()
         .await
         .map_err(|e| anyhow::anyhow!("load thresholds: {e}"))?;
-    let nodes = repo
-        .list_nodes()
+    let nodes = sources
+        .nodes()
         .await
         .map_err(|e| anyhow::anyhow!("load nodes: {e}"))?;
     // Folder-pool inheritance (0054).
     let pools = poolres::PoolResolver::build(
-        groups
-            .pool_rows()
+        sources
+            .folder_pools()
             .await
             .map_err(|e| anyhow::anyhow!("load folder pools: {e}"))?,
     );
     // Folder-group threshold scope (ADR-075 増分 3): a rule on a group covers every group inside
     // it, so each node needs its group plus every group above it. Read the edges once — the walk
     // is per-node and `group_ancestors` is a linear scan of this slice.
-    let group_edges = groups
-        .edges()
+    let group_edges = sources
+        .group_edges()
         .await
         .map_err(|e| anyhow::anyhow!("load group edges: {e}"))?;
     // Which metrics are per-interface (ADR-076). Built from the collection catalogue, never from
     // whether a sample carries an `ifindex` label — that label is a row key, so a chassis reading
     // would otherwise be split into one bogus check per "port" (ADR-011).
-    //
-    // The repo is constructed here rather than threaded through `LeaderTasks`: it is a handle on
-    // the pool `repo` already owns, and this runs only when the config generation advances.
-    let per_interface = crate::collection::CollectionRepo::new(repo.pool())
-        .per_interface_metric_names()
+    let per_interface = sources
+        .per_interface_metrics()
         .await
         .map_err(|e| anyhow::anyhow!("load per-interface metric names: {e}"))?;
     let mut meta = HashMap::new();
@@ -156,8 +228,13 @@ pub(crate) async fn load_alert_config_base(
 
     // ADR-043 決定 5. The engine gets the derived graph only in `derived`; `shadow` is byte-for-byte
     // `manual` here, and the comparison an operator reviews is computed by the read-side endpoint.
-    let topology = if repo.get_topology_mode().await.uses_derived() {
-        topology_projection::derived_topology(topo, &nodes).await.0
+    //
+    // 🚨 The *choice* stays here rather than behind one `topology_for` method, and that is what
+    // makes it testable: a seam that answered "the topology" would put this branch in the live
+    // implementation and in every fake, so a test would exercise the fake's copy of the rule
+    // instead of this one (ADR-092's lesson, ADR-093's application of it).
+    let topology = if sources.topology_mode().await.uses_derived() {
+        sources.derived_topology(&nodes).await
     } else {
         // Dependency edge child → parent feeds parent-down suppression (ADR-015).
         topology_projection::manual_topology(&nodes)
@@ -251,13 +328,12 @@ async fn exempt_nodes(
 /// synchronous load at startup; the refresh loop uses the two halves directly with generation
 /// caching so the base isn't rebuilt when config is unchanged (S6).
 pub(crate) async fn load_alert_config(
-    repo: &NodeRepo,
-    thresholds: &ThresholdStore,
+    sources: &dyn AlertConfigSources,
     maintenance: &MaintenanceRepo,
     groups: &groups::GroupRepo,
-    topo: &topology_projection::TopologySources,
+    repo: &NodeRepo,
 ) -> anyhow::Result<AlertConfig> {
-    let base = load_alert_config_base(repo, thresholds, groups, topo).await?;
+    let base = load_alert_config_base(sources).await?;
     let in_maintenance = resolve_maintenance(maintenance, groups, repo, &base.nodes).await;
     Ok(AlertConfig::new(base.rules, base.meta)
         .with_topology(base.topology)
@@ -366,6 +442,15 @@ pub(crate) async fn run_alert_config_refresh(
     // meta/topology rebuild runs only after an actual config change (S6). Maintenance windows are
     // time-dependent, so re-resolve them each cycle over the cached node list, and only swap the
     // live config when the base or the in-maintenance set actually changed.
+    // Built once: it is four `Arc` clones and the same handles this loop already holds. The loop
+    // keeps the individual handles too, because maintenance and mute resolution ask questions
+    // that are not part of the config base.
+    let sources = LiveConfigSources {
+        repo: repo.clone(),
+        thresholds: thresholds.clone(),
+        groups: group_repo.clone(),
+        topo: topo_sources.clone(),
+    };
     let mut cached_base: Option<(u64, AlertConfigBase)> = None;
     let mut last_maintenance: Option<std::collections::BTreeSet<NodeId>> = None;
     loop {
@@ -377,7 +462,7 @@ pub(crate) async fn run_alert_config_refresh(
             // generation, so the next cycle sees the same mismatch and reads again — the retry is
             // the loop itself. Installing a partial base instead is what made a single database
             // blip resolve every open threshold alert in the fleet and page a recovery for each.
-            match load_alert_config_base(&repo, &thresholds, &group_repo, &topo_sources).await {
+            match load_alert_config_base(&sources).await {
                 Ok(base) => cached_base = Some((generation, base)),
                 Err(e) => {
                     metrics::counter!("yagra_alert_config_load_failures_total").increment(1);
@@ -423,10 +508,13 @@ pub(crate) async fn run_alert_config_refresh(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use yagra_common::{Node, NodeId};
 
     /// This module's own source, read through [`crate::module_source`]: it removes each test-only
     /// item rather than truncating at the first one, so a test-only declaration added here later
-    /// cannot shorten what these two assertions see (ADR-089/090/091).
+    /// cannot shorten what the structural assertions see (ADR-089/090/091).
     fn production_source() -> String {
         let code = crate::module_source::code("src/alerts", "config");
         // A floor: an absence claim over an empty string is satisfied by nothing at all.
@@ -437,24 +525,238 @@ mod tests {
         code
     }
 
-    /// **In shadow mode the alert engine receives the manual graph, and nothing else.**
+    /// Which read a [`FakeSources`] should fail. One at a time, so a test names the read it broke.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum Fails {
+        Nothing,
+        Thresholds,
+        Nodes,
+        FolderPools,
+        GroupEdges,
+        PerInterface,
+    }
+
+    /// Every fallible read. A seventh added to the trait makes this list wrong in a way the
+    /// compiler cannot see, which is why the walk below also counts against the trait's own text.
+    const FALLIBLE: [Fails; 5] = [
+        Fails::Thresholds,
+        Fails::Nodes,
+        Fails::FolderPools,
+        Fails::GroupEdges,
+        Fails::PerInterface,
+    ];
+
+    struct FakeSources {
+        fails: Fails,
+        nodes: Vec<Node>,
+        mode: crate::topology_mode::TopologyMode,
+        /// The graph `derived_topology` hands back…
+        derived: Topology,
+        /// …and whether it was asked for at all, which is half of ADR-043 決定 5's property.
+        derived_asked: Mutex<bool>,
+    }
+
+    impl FakeSources {
+        fn new(fails: Fails, nodes: Vec<Node>, mode: crate::topology_mode::TopologyMode) -> Self {
+            Self {
+                fails,
+                nodes,
+                mode,
+                derived: Topology::new(),
+                derived_asked: Mutex::new(false),
+            }
+        }
+        fn refuse(&self, which: Fails) -> anyhow::Result<()> {
+            if self.fails == which {
+                anyhow::bail!("the database said no");
+            }
+            Ok(())
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl AlertConfigSources for FakeSources {
+        async fn thresholds(&self) -> anyhow::Result<Vec<thresholds::StoredThreshold>> {
+            self.refuse(Fails::Thresholds)?;
+            Ok(Vec::new())
+        }
+        async fn nodes(&self) -> anyhow::Result<Vec<Node>> {
+            self.refuse(Fails::Nodes)?;
+            Ok(self.nodes.clone())
+        }
+        async fn folder_pools(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>, Option<String>)>> {
+            self.refuse(Fails::FolderPools)?;
+            Ok(Vec::new())
+        }
+        async fn group_edges(&self) -> anyhow::Result<Vec<(Uuid, Option<Uuid>)>> {
+            self.refuse(Fails::GroupEdges)?;
+            Ok(Vec::new())
+        }
+        async fn per_interface_metrics(
+            &self,
+        ) -> anyhow::Result<std::collections::BTreeSet<String>> {
+            self.refuse(Fails::PerInterface)?;
+            Ok(std::collections::BTreeSet::new())
+        }
+        async fn topology_mode(&self) -> crate::topology_mode::TopologyMode {
+            self.mode
+        }
+        async fn derived_topology(&self, _nodes: &[Node]) -> Topology {
+            *self.derived_asked.lock().expect("no panic holds this lock") = true;
+            self.derived.clone()
+        }
+    }
+
+    fn nid(n: u128) -> NodeId {
+        NodeId::from(Uuid::from_u128(n))
+    }
+
+    fn node(id: u128, parent: Option<u128>) -> Node {
+        let mut n = Node::new(
+            nid(id),
+            format!("n{id}"),
+            "10.0.0.1".parse().expect("an address"),
+        );
+        n.parent = parent.map(nid);
+        n
+    }
+
+    /// **Acceptance side, and it runs first on purpose.** Everything below asserts a *refusal*, and
+    /// a loader that refused everything would satisfy all of them
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[tokio::test]
+    async fn a_healthy_source_set_produces_the_base_it_was_given() {
+        let sources = FakeSources::new(
+            Fails::Nothing,
+            vec![node(1, None), node(2, Some(1))],
+            crate::topology_mode::TopologyMode::Manual,
+        );
+        let base = load_alert_config_base(&sources)
+            .await
+            .expect("nothing failed, so nothing should refuse");
+        assert_eq!(base.nodes.len(), 2);
+        assert_eq!(base.meta.len(), 2, "every node gets a metadata entry");
+    }
+
+    /// 🚨 **ADR-080: a failed read refuses; it never becomes an empty value.**
+    ///
+    /// Each read used to carry its own `unwrap_or`, justified as "the narrowing failure, so it is
+    /// safe". They were wrong the same way: narrowing is not harmless once alerts are open, because
+    /// a check whose rule stops resolving is a check with no rule, and `AlertManager::observe`
+    /// closes every alert on one of those. A single failed threshold read therefore resolved the
+    /// whole fleet's alerts and paged a recovery for each.
+    ///
+    /// ⚠️ **This test could not be written before ADR-093, and the version it replaced said so** —
+    /// it grepped the loader for `unwrap_or`, and its doc claimed "the failure needs a sick database
+    /// to reproduce, so no behavioural test can stand in for it". A fake that returns `Err` is a
+    /// sick database. The claim was true of the code as it stood, and false of the code it described.
+    #[tokio::test]
+    async fn every_fallible_read_refuses_rather_than_narrowing() {
+        for which in FALLIBLE {
+            let sources = FakeSources::new(
+                which,
+                vec![node(1, None)],
+                crate::topology_mode::TopologyMode::Manual,
+            );
+            assert!(
+                load_alert_config_base(&sources).await.is_err(),
+                "{which:?} failed and the loader returned a base anyway; an empty ruleset is \
+                 indistinguishable from `every rule was deleted` and resolves the fleet"
+            );
+        }
+
+        // …and the walk covers every fallible read the trait declares, rather than a list that can
+        // fall behind it. A read nobody breaks is a read that may still narrow.
+        let src = production_source();
+        let decl = src
+            .split("trait AlertConfigSources: Send + Sync {")
+            .nth(1)
+            .expect("the trait is declared in this file");
+        let decl = &decl[..decl.find("\n}\n").unwrap_or(decl.len())];
+        assert!(
+            decl.contains("async fn thresholds"),
+            "the slice is not the trait's body, so the count below is of nothing"
+        );
+        assert_eq!(
+            decl.matches("-> anyhow::Result<").count(),
+            FALLIBLE.len(),
+            "the trait declares a number of fallible reads this test does not walk"
+        );
+    }
+
+    /// **In shadow mode the engine receives the manual graph, and the derived one is not even
+    /// computed.**
     ///
     /// ADR-043 決定 5's safety property, and the reason [`AlertConfigBase`] carries one topology
-    /// rather than two: the derived graph is chosen *only* when the mode says to use it, so there is
-    /// no runtime state in which a preview graph could suppress a real alert. That is a property of
-    /// one expression, and this is what stops the expression growing a second branch.
+    /// rather than two: there is no runtime state in which a preview graph could suppress a real
+    /// alert. Before ADR-093 this was a needle in this file's own text; now the loader runs.
+    #[tokio::test]
+    async fn only_the_derived_mode_hands_the_engine_a_derived_graph() {
+        // The manual graph says 2 → 1; the derived graph the fake offers says 3 → 1. The two are
+        // told apart by which child has a parent at all, so neither can be mistaken for the other.
+        let mut derived = Topology::new();
+        derived.add_dependency(nid(3), nid(1));
+        let nodes = vec![node(1, None), node(2, Some(1)), node(3, None)];
+
+        for mode in [
+            crate::topology_mode::TopologyMode::Manual,
+            crate::topology_mode::TopologyMode::Shadow,
+        ] {
+            let mut sources = FakeSources::new(Fails::Nothing, nodes.clone(), mode);
+            sources.derived = derived.clone();
+            let base = load_alert_config_base(&sources).await.expect("healthy");
+            assert_eq!(
+                base.topology.parents_of(nid(2)).len(),
+                1,
+                "{mode:?} must hand the engine the manual graph"
+            );
+            assert!(
+                base.topology.parents_of(nid(3)).is_empty(),
+                "{mode:?} handed the engine the derived graph"
+            );
+            assert!(
+                !*sources
+                    .derived_asked
+                    .lock()
+                    .expect("no panic holds this lock"),
+                "{mode:?} computed a graph it is not allowed to use"
+            );
+        }
+
+        // …and the derived graph really does reach the engine in `derived`, or the two assertions
+        // above would hold for a loader that never used it at all.
+        let mut sources = FakeSources::new(
+            Fails::Nothing,
+            nodes,
+            crate::topology_mode::TopologyMode::Derived,
+        );
+        sources.derived = derived;
+        let base = load_alert_config_base(&sources).await.expect("healthy");
+        assert_eq!(
+            base.topology.parents_of(nid(3)).len(),
+            1,
+            "derived mode must hand the engine the derived graph"
+        );
+    }
+
+    /// **The derived graph reaches the engine from exactly one place.**
+    ///
+    /// Structural, and it stays structural: "how many call sites" is not something a type or a fake
+    /// can answer, and a second one is how a preview graph starts suppressing alerts. The
+    /// behavioural half of what this used to assert moved into the test above — its absence here is
+    /// not the property being dropped.
     ///
     /// The needles are assembled at runtime — a literal one would match this test's own source and
     /// pass forever.
     #[test]
-    fn only_the_derived_mode_hands_the_engine_a_derived_graph() {
+    fn the_derived_graph_has_one_call_site() {
         let production = production_source();
-        let guard = format!("get_topology_mode().await.{}()", "uses_derived");
+        let guard = format!("topology_mode().await.{}()", "uses_derived");
         assert!(
             production.contains(&guard),
             "the topology choice is no longer gated on `uses_derived`"
         );
-        let call = format!("{}::derived_topology", "topology_projection");
+        let call = format!("sources.{}(&nodes)", "derived_topology");
         assert_eq!(
             production.matches(call.as_str()).count(),
             1,
@@ -464,37 +766,6 @@ mod tests {
         assert!(
             !production.contains("shadow_topology"),
             "a shadow graph must not be a field the engine could be handed"
-        );
-    }
-
-    /// 🚨 ADR-080: a failed read must not become an empty value here.
-    ///
-    /// Every load in this function used to carry its own `unwrap_or`, each justified as "the
-    /// narrowing failure, so it is safe". They were all wrong the same way: narrowing is *not*
-    /// harmless once alerts are open, because a check whose rule stops resolving is a check with no
-    /// rule, and `AlertManager::observe` closes every alert on one of those. A single failed
-    /// threshold read therefore resolved the whole fleet's alerts and paged a recovery for each.
-    ///
-    /// This is the only permanent guard: the failure needs a sick database to reproduce, so no
-    /// behavioural test can stand in for it. The needle is assembled at runtime — a literal would
-    /// match this test's own source and pass forever.
-    #[test]
-    fn the_alert_config_base_never_degrades_a_failed_load_to_an_empty_one() {
-        let production = production_source();
-        let f = production
-            .split("async fn load_alert_config_base")
-            .nth(1)
-            .expect("the loader exists");
-        let body = &f[..f.find("\n}\n").map_or(f.len(), |i| i + 2)];
-        let needle = format!("unwrap{}or", "_");
-        assert!(
-            !body.contains(needle.as_str()),
-            "a read in load_alert_config_base degrades to an empty value again; an empty ruleset \
-             is indistinguishable from `every rule was deleted` and resolves the fleet"
-        );
-        assert!(
-            body.contains("-> anyhow::Result<AlertConfigBase>"),
-            "the loader must be able to fail, or the caller cannot keep the previous config"
         );
     }
 }

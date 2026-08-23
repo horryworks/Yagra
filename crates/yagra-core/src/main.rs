@@ -558,11 +558,15 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // cannot resolve anything; the leader's 30s refresh installs the real one. Refusing to start
     // would be worse — a transient query failure right after migrations would take monitoring down.
     match alerts::config::load_alert_config(
-        &repo,
-        &thresholds,
+        &alerts::config::LiveConfigSources {
+            repo: repo.clone(),
+            thresholds: thresholds.clone(),
+            groups: group_repo.clone(),
+            topo: topo_sources.clone(),
+        },
         &maintenance,
         &group_repo,
-        &topo_sources,
+        &repo,
     )
     .await
     {
