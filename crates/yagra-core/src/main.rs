@@ -3645,6 +3645,16 @@ async fn connect_bus(url: &str) -> anyhow::Result<NatsBus> {
     }
 }
 
+// ⚠️ **Declared here rather than with the other `mod` lines, and the position is load-bearing.**
+// Twenty-three files in this crate — main.rs included, twice below — compute "production code" as
+// `SRC.split("#[cfg(test)]").next()`. A `#[cfg(test)] mod x;` line at the top of the file is the
+// first match, so it truncates their view to the imports; both of this file's structural tests
+// failed the moment this sat above them. `module_source` itself knows the difference (a
+// declaration is not a test tail), which is why `analysis.rs` may keep its own at the top — but
+// nothing teaches the other twenty-three, so this one stays down here.
+#[cfg(test)]
+mod module_source;
+
 #[cfg(test)]
 mod tests {
     use super::*;

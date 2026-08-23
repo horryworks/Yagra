@@ -34,96 +34,24 @@
 //! source-text reader plus this module's own two. That is the state the increment was for: a
 //! botched split cannot be quiet.
 //!
-//! Everything here is test-only. It reads from disk (`CARGO_MANIFEST_DIR`) rather than
-//! `include_str!` because a macro needs a literal path and there is no literal that means "every
-//! file of the surface". `api/route_table.rs::declared_mcp_tools` has always read this way and its
-//! doc gives the same reason.
+//! **How it reads is no longer written here** (ADR-089). Finding both spellings of a root, cutting
+//! each file at its *own* `#[cfg(test)]`, and deriving the test-only exclusions from `mod.rs` are
+//! all in [`crate::module_source`], because `analysis.rs` needed the identical three and writing
+//! them twice is how the second copy comes to disagree. What stays here is what is actually about
+//! MCP: which root, and **the floor** — 34 `#[tool(` declarations. The floor deliberately did not
+//! move: a shared floor would hide what is being counted from the surface that cares.
+//!
+//! Everything here is test-only, for the reason `module_source` gives.
 
-use std::path::{Path, PathBuf};
-
-/// The tool surface's root: `tools.rs` before ADR-086 splits it, `tools/` after. Both are named so
-/// this module needs no edit on the day of the split — and so a half-finished split (both present)
-/// is read whole rather than half.
-fn surface_roots() -> Vec<PathBuf> {
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp");
-    [src.join("tools.rs"), src.join("tools")]
-        .into_iter()
-        .filter(|p| p.exists())
-        .collect()
-}
-
-/// The modules `tools/mod.rs` declares under `#[cfg(test)]` — scaffolding, not surface.
-///
-/// 🚨 **Excluding them is not tidiness; leaving them in broke three checks the moment the split
-/// landed.** A check that reads the surface for a phrase has to be sure the phrase is not its own:
-/// the old single-file guards were careful about this and said so ("this reads a *different* file,
-/// so a literal needle is correct here"). Splitting `tools.rs` moved those guards *into the
-/// directory they read*, and their own needles — `AuditFilterInput {`, `see the tool description
-/// for the ` — started matching themselves. Derived from `mod.rs` rather than listed, for the same
-/// reason the file list is: a name written here is a name that can be forgotten.
-fn test_only_modules() -> Vec<String> {
-    let mod_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/mcp/tools/mod.rs");
-    if !mod_rs.exists() {
-        return Vec::new();
-    }
-    read(&mod_rs)
-        .split("#[cfg(test)]")
-        .skip(1)
-        .filter_map(|after| after.trim_start().strip_prefix("mod ")?.split(';').next())
-        .map(|m| format!("{}.rs", m.trim()))
-        .collect()
-}
+use crate::module_source;
 
 /// Every file holding part of the tool surface, as `(file name, contents)`, sorted by name.
 ///
 /// The contents are the **code**: each file is cut at its own `#[cfg(test)]`, and the modules that
 /// are test-only in full are not here at all. Every caller wants it that way — a tool name, a
-/// `#[tool(` attribute, a refusal's wording and a folded branch's argument all live in a tool body —
-/// and doing it here means no caller writes `.split("#[cfg(test)]")` for itself. That mattered:
-/// doing it caller-side over a *concatenation* keeps only the first file's code, which is how one
-/// guard came to check 10 tools out of 36 and still pass its own assertions.
-///
-/// Sorted so a caller that reports a finding names the same file every run; `read_dir` order is not
-/// stable across platforms and an unstable message reads as a flaky test.
+/// `#[tool(` attribute, a refusal's wording and a folded branch's argument all live in a tool body.
 pub(crate) fn tool_surface_files() -> Vec<(String, String)> {
-    let skip = test_only_modules();
-    let mut out: Vec<(String, String)> = Vec::new();
-    let mut push = |name: String, text: String| {
-        if skip.contains(&name) {
-            return;
-        }
-        let code = match text.find("\n#[cfg(test)]") {
-            Some(i) => text[..i].to_owned(),
-            None => text,
-        };
-        out.push((name, code));
-    };
-    for root in surface_roots() {
-        if root.is_file() {
-            let name = root
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("tools.rs")
-                .to_owned();
-            let text = read(&root);
-            push(name, text);
-            continue;
-        }
-        for entry in std::fs::read_dir(&root).expect("read src/mcp/tools/") {
-            let path = entry.expect("a directory entry").path();
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .expect("a UTF-8 file name")
-                .to_owned();
-            let text = read(&path);
-            push(name, text);
-        }
-    }
-    out.sort_by(|a, b| a.0.cmp(&b.0));
+    let out = module_source::files(&module_source::roots("src/mcp", "tools"));
     assert!(
         !out.is_empty(),
         "no MCP tool surface found under src/mcp — tools.rs and tools/ are both absent"
@@ -151,10 +79,6 @@ pub(crate) fn tool_surface() -> String {
          the surface while reporting success"
     );
     joined
-}
-
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -198,20 +122,22 @@ mod tests {
     fn the_accessor_is_derived_from_the_directory_not_from_a_list() {
         let named: std::collections::BTreeSet<String> =
             tool_surface_files().into_iter().map(|(n, _)| n).collect();
+        let roots = module_source::roots("src/mcp", "tools");
         let mut on_disk = std::collections::BTreeSet::new();
-        for root in surface_roots() {
+        let mut skip = std::collections::BTreeSet::new();
+        for root in &roots {
             if root.is_file() {
                 on_disk.insert(root.file_name().unwrap().to_str().unwrap().to_owned());
                 continue;
             }
-            for entry in std::fs::read_dir(&root).expect("read the surface directory") {
+            skip.extend(module_source::test_only_modules(root));
+            for entry in std::fs::read_dir(root).expect("read the surface directory") {
                 let path = entry.expect("a directory entry").path();
                 if path.extension().and_then(|e| e.to_str()) == Some("rs") {
                     on_disk.insert(path.file_name().unwrap().to_str().unwrap().to_owned());
                 }
             }
         }
-        let skip: std::collections::BTreeSet<String> = test_only_modules().into_iter().collect();
         let expected: std::collections::BTreeSet<String> =
             on_disk.difference(&skip).cloned().collect();
         assert_eq!(
@@ -247,7 +173,7 @@ mod tests {
             "{name}: the code half is missing the tool it declares"
         );
         assert!(
-            !code.contains("#[cfg(test)]"),
+            !code.contains("#[cfg(test)]\nmod tests"),
             "{name}: the test module was not cut away, so a needle can match a test's own literal"
         );
     }
