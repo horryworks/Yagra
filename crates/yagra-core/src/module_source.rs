@@ -319,10 +319,23 @@ mod tests {
 
     /// A root that is a plain file and a root that is a directory are both found, and a stem that
     /// is neither yields nothing rather than panicking.
+    ///
+    /// 🚨 **Each case asserts the root's shape, not just that one was found, and that is the whole
+    /// point of the test.** It used to name `repo` as the file case and check only
+    /// `len() == 1`. `roots` returns one path for either spelling, so the day `repo.rs` became
+    /// `repo/` (ADR-094) the count would still have been 1, the message would have read
+    /// "repo.rs is a file" about a directory, and **this test would have had two directory cases
+    /// and no file case while staying green** — the failure mode this module exists to prevent,
+    /// inside the module itself. Changing the example alone would only move that hole to the next
+    /// file to be split; asserting the shape closes it wherever the example ends up.
     #[test]
     fn a_root_is_found_whether_it_is_a_file_or_a_directory() {
-        assert_eq!(roots("src/mcp", "tools").len(), 1, "tools/ is a directory");
-        assert_eq!(roots("src", "repo").len(), 1, "repo.rs is a file");
+        let dir = roots("src/mcp", "tools");
+        assert_eq!(dir.len(), 1, "tools/ is a directory");
+        assert!(dir[0].is_dir(), "the directory case must really be one");
+        let file = roots("src", "seed_ids");
+        assert_eq!(file.len(), 1, "seed_ids.rs is a plain file");
+        assert!(file[0].is_file(), "the file case must really be one");
         assert!(
             roots("src", "no_such_module_exists").is_empty(),
             "a stem naming nothing must yield nothing, not a phantom path"

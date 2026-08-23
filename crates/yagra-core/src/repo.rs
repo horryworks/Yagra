@@ -2676,9 +2676,17 @@ mod tests {
     /// 500 and documented that as the maximum, while `NodeRepo::search` re-clamped to 100, so
     /// filtering a large fleet silently returned 100 rows. The needle is built at runtime; a
     /// literal written out in this file would match itself and fail forever (testing.md).
+    ///
+    /// Reads through [`crate::module_source`] rather than `include_str!`, so it keeps seeing both
+    /// implementations once this module becomes a directory (ADR-094). `include_str!` needs a
+    /// literal path and there is no literal that means "every file of this module"; a reader left
+    /// on one file of several would find one `clamp` instead of two. That the count is asserted
+    /// as an exact `2` is also this test's floor: a reader that came back empty fails here rather
+    /// than reporting that nothing re-clamps.
     #[test]
     fn the_search_cap_is_declared_once() {
-        let src = include_str!("repo.rs");
+        let src = crate::module_source::code_no_comments("src", "repo");
+        let src = src.as_str();
         // Both needles are assembled at runtime. A literal spelled out here would appear in this
         // file and match itself — the stale one would fail forever, the good one would over-count.
         let stale = format!("clamp(1, {})", 100);
