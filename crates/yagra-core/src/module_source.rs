@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! Reading a module's **own source text**, whether it is one file or a directory (ADR-089).
+//! Reading a module's **own source text**, whether it is one file or a directory (ADR-089/091).
 //!
 //! Some things a module must hold true have no type, so the only check available is to read the
 //! source as a string: that a `#[tool]` names itself, that a SQL statement interpolates an enum
@@ -10,27 +10,67 @@
 //! **A reader left pointing at one file of several keeps running, over a fraction, reporting
 //! success.** ADR-086 met that when `mcp/tools.rs` became `mcp/tools/`, and wrote
 //! `mcp/tool_source.rs` for it. ADR-089 is the same split on `analysis.rs`, so the mechanism moved
-//! here rather than being written a second time — and the two callers keep only the parts that are
-//! genuinely theirs.
+//! here rather than being written a second time. ADR-091 is why this is *one* place rather than
+//! twenty-three: the rule below was hand-copied into every file that checks its own SQL, and every
+//! copy — this one included — carried the same defect.
 //!
 //! Three behaviours live here because none of them is about MCP or about analysis:
 //!
 //! 1. **Both spellings of a root.** `X.rs` *and* `X/` are looked for, so this needs no edit on the
 //!    day of a split — and a half-finished split (both present) is read whole rather than half.
-//! 2. **Each file is cut at its *own* `#[cfg(test)]`.** 🚨 This is the load-bearing one. Doing it
-//!    caller-side over a *concatenation* keeps only the first file's code — measured on ADR-086,
-//!    where one guard checked 10 tools of 36 and passed its own assertions. `analysis.rs` carries
-//!    exactly that shape today (`the_job_state_sql_is_built_from_the_enum`), which is why it is
-//!    done here, once, where no caller can forget it.
+//! 2. **Every test-only item is removed, per file.** 🚨 This is the load-bearing one, and ADR-091
+//!    had to rewrite it. Doing it caller-side over a *concatenation* keeps only the first file's
+//!    code — measured on ADR-086, where one guard checked 10 tools of 36 and passed its own
+//!    assertions. Worse, the old spelling of it was wrong even for a single file; see below.
 //! 3. **Test-only modules are excluded, derived from `mod.rs`.** A guard file sitting *inside* the
 //!    directory it greps matches its own needles. ADR-086 hit that within minutes of splitting.
 //!    Derived from the `#[cfg(test)] mod …` lines rather than listed, for the same reason the file
 //!    list is derived: a name written down is a name that can be forgotten.
 //!
-//! **What is deliberately *not* here: the floor.** Each caller asserts its own minimum — the MCP
-//! surface counts `#[tool(`, the analysis module counts `async fn run_`. Sharing "how to read"
-//! is removing a duplicate; sharing "how many there should be" would hide what is being counted
-//! from the place that cares, and a floor nobody can see is a floor nobody maintains.
+//! ## The rule, and why it is not "cut at the first `#[cfg(test)]`"
+//!
+//! **Code is the file with every top-level test-only *item* taken out** — not the prefix above the
+//! first one. Cutting truncates the moment a test-only `use`, `fn`, `type` or a second inline test
+//! module appears anywhere but the very end, and **ten files in this crate are already shaped that
+//! way**. `logstore.rs` opens with a test-only `use std::sync::Mutex;` on line 16, so the old rule
+//! called **15 lines of 2,606** its code and every needle over it was vacuous. `config.rs` is the
+//! case that also defeats the obvious repair: it holds *two* inline test modules with two
+//! production functions between them, so "cut at the first inline `mod … {`" loses those two too.
+//!
+//! Two limits are deliberate, and both are stated here because a reader would otherwise assume
+//! otherwise:
+//!
+//! * **Top level only.** An indented attribute — a test-only method inside an `impl`, of which this
+//!   workspace has sixteen — stays in the code. This mechanism is line-oriented, and rustfmt (a CI
+//!   gate *and* a `/flashdeploy` pre-commit guard) is what guarantees a top-level item starts and
+//!   ends at column zero. Nothing guarantees that about a member.
+//! * **When the end is ambiguous, too much is kept rather than too little.** A raw string holding a
+//!   column-zero `}` ends an item early, leaving some test text in the code. That makes a check
+//!   *noisy*; the opposite mistake makes a check *silent*, and only silence is fatal. Every
+//!   ambiguity here is resolved toward noise on purpose.
+//!
+//! ## The floor is the caller's; the invariant is this module's
+//!
+//! **The floor stays out of here.** Each caller asserts its own minimum — the MCP surface counts
+//! `#[tool(`, the analysis module counts `async fn run_`. Sharing "how to read" removes a
+//! duplicate; sharing "how many there should be" would hide what is being counted from the place
+//! that cares, and a floor nobody can see is a floor nobody maintains.
+//!
+//! What *is* asserted here is a different kind of claim: not "did the caller get enough" but **"did
+//! this mechanism cut in a sane place"** — no top-level test attribute survives, and a non-empty
+//! file does not come back empty. Those are statements about the machinery, so they live with the
+//! machinery, and `every_file_in_this_crate_survives_being_read` checks them over all of the crate's
+//! real files rather than over three synthetic strings.
+//!
+//! 🚨 **Those two invariants only catch one of the two directions, and this was measured rather
+//! than assumed.** They fire when the mechanism leaves test text *behind*. They are silent when it
+//! takes *too much* — restoring the old "cut at the first attribute" rule satisfies both of them on
+//! every file in the crate, because a truncated file still holds no attribute and is still
+//! non-empty. The over-cut direction is guarded by naming two real files instead:
+//! `the_two_files_that_were_being_mis_read_come_back_whole` asserts that `config.rs` still has the
+//! two functions between its test modules and that `logstore.rs` still has its `impl LogStore`.
+//! A general assertion for that direction would have to know what the file is *supposed* to
+//! contain, which is the caller's floor again — so this is the boundary, not an omission.
 //!
 //! Everything here is test-only. It reads from disk (`CARGO_MANIFEST_DIR`) rather than
 //! `include_str!` because a macro needs a literal path and there is no literal that means "every
@@ -38,9 +78,18 @@
 
 use std::path::{Path, PathBuf};
 
+/// The attribute this module recognises: on a line of its own, at column zero.
+///
+/// A `const` rather than a runtime-assembled needle, unlike the ones in files that grep themselves:
+/// nothing here searches for a *banned* pattern, so this file's own occurrences of the literal
+/// cannot satisfy anything. What matters is that the comparison is against a whole line — the line
+/// you are reading holds the text and is not equal to it.
+const MARK: &str = "#[cfg(test)]";
+
 /// Both spellings of a module root: `<dir>/<stem>.rs` and `<dir>/<stem>/`, whichever exist.
 ///
-/// `dir` is relative to the crate root (e.g. `"src/mcp"`).
+/// `dir` is relative to the crate root (e.g. `"src/mcp"`), and may climb out of it
+/// (`"../yagra-poller/src"`) — `api/metrics.rs` reads the poller's worker that way.
 pub(crate) fn roots(dir: &str, stem: &str) -> Vec<PathBuf> {
     let base = Path::new(env!("CARGO_MANIFEST_DIR")).join(dir);
     [base.join(format!("{stem}.rs")), base.join(stem)]
@@ -49,13 +98,35 @@ pub(crate) fn roots(dir: &str, stem: &str) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The modules a root declares under `#[cfg(test)]`, as file names.
+/// The whole module's code, concatenated — the form most callers want.
+///
+/// Prefer [`files`] when a finding names the file or the function it was found in: a per-function
+/// scan over the concatenation attributes the second file's items to the first file's last
+/// function.
+pub(crate) fn code(dir: &str, stem: &str) -> String {
+    let roots = roots(dir, stem);
+    assert!(
+        !roots.is_empty(),
+        "no module `{stem}` under {dir}: neither {stem}.rs nor {stem}/ exists, so every check \
+         built on this text would run over nothing"
+    );
+    files(&roots)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The modules a root declares as test-only, as file names.
 ///
 /// The declaring file is `<root>/mod.rs` for a directory root and the root itself for a file root.
 /// ⚠️ **Both cases are needed, and the file case is the one that is easy to miss**: a module that is
 /// still a single `X.rs` can already own `X/guards.rs`, which is exactly the state a split passes
 /// through. Resolving only `mod.rs` would let the guard file into the text it greps for the length
 /// of the increment that exists to stop that.
+///
+/// Reads the **raw** file rather than its code: the declarations it looks for are the very items
+/// [`strip_test_items`] takes out.
 pub(crate) fn test_only_modules(root: &Path) -> Vec<String> {
     let declarer = if root.is_dir() {
         root.join("mod.rs")
@@ -66,7 +137,7 @@ pub(crate) fn test_only_modules(root: &Path) -> Vec<String> {
         return Vec::new();
     }
     read(&declarer)
-        .split("#[cfg(test)]")
+        .split(MARK)
         .skip(1)
         .filter_map(declared_module)
         .map(|m| format!("{m}.rs"))
@@ -88,31 +159,87 @@ fn declared_module(after: &str) -> Option<String> {
         .then(|| name.to_owned())
 }
 
-/// Where a file's test tail begins: the first `#[cfg(test)]` that is **not** a module declaration.
+/// Does this line close a top-level item?
 ///
-/// 🚨 The distinction is load-bearing and was found the hard way. `#[cfg(test)] mod guards;` is part
-/// of a module's structure and belongs above its code, but the idiom every reader here uses —
-/// "everything before the first `#[cfg(test)]`" — then truncates the file to its imports. Adding one
-/// such declaration to `main.rs` cut its production text to 63 lines and failed two of its
-/// structural tests instantly, which is the behaviour those tests are for.
-fn test_tail_start(text: &str) -> Option<usize> {
-    const MARK: &str = "\n#[cfg(test)]";
-    let mut from = 0;
-    while let Some(rel) = text[from..].find(MARK) {
-        let at = from + rel;
-        if declared_module(&text[at + MARK.len()..]).is_none() {
-            return Some(at);
-        }
-        from = at + MARK.len();
+/// Only a column-zero line can, which is what rustfmt buys: everything nested is indented, so the
+/// first unindented `}` / `};` / `…;` after an item's head is that item's end.
+fn closes_at_column_zero(line: &str) -> bool {
+    if line.is_empty() || line.starts_with(char::is_whitespace) {
+        return false;
     }
-    None
+    line == "}" || line.trim_end().ends_with(';')
+}
+
+/// Index of the last line of the test-only item whose attribute sits at `at`.
+fn item_end(lines: &[&str], at: usize) -> usize {
+    // Further attributes belong to the same item — `#[cfg(test)] #[must_use] fn …` is real
+    // (`api/openapi.rs`), and reading the `#[must_use]` as the item's head would end it there.
+    let mut head = at + 1;
+    while head < lines.len() && lines[head].starts_with("#[") {
+        head += 1;
+    }
+    if head >= lines.len() {
+        return lines.len() - 1;
+    }
+    // A one-line statement item (`use …;`, `mod x;`, `type X = …;`) ends on its own line.
+    if closes_at_column_zero(lines[head]) {
+        return head;
+    }
+    // Anything else runs to the next line that closes at column zero. Running off the end means the
+    // file ends inside the item, so the item is the rest of the file.
+    lines[head + 1..]
+        .iter()
+        .position(|l| closes_at_column_zero(l))
+        .map_or(lines.len() - 1, |off| head + 1 + off)
+}
+
+/// A file's code: the text with every top-level test-only item removed.
+///
+/// See the module doc for why this removes items rather than cutting at the first one, and for the
+/// two deliberate limits (top level only; ambiguity keeps text rather than dropping it).
+fn strip_test_items(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut kept: Vec<&str> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        if lines[i] == MARK {
+            i = item_end(&lines, i) + 1;
+        } else {
+            kept.push(lines[i]);
+            i += 1;
+        }
+    }
+    let mut out = kept.join("\n");
+    if text.ends_with('\n') {
+        out.push('\n');
+    }
+    out
+}
+
+/// [`strip_test_items`] plus this module's own invariants — see the module doc's last section.
+///
+/// These are not a floor (the caller owns that). They answer "did the mechanism cut in a sane
+/// place", which is a question about the machinery and has no caller-visible subject.
+fn strip_and_check(name: &str, text: &str) -> String {
+    let code = strip_test_items(text);
+    assert!(
+        !code.lines().any(|l| l == MARK),
+        "{name}: a top-level `{MARK}` item survived being stripped, so a needle can match a \
+         test's own literal and a count can be inflated by test-only code"
+    );
+    assert!(
+        text.trim().is_empty() || !code.trim().is_empty(),
+        "{name}: reading it left no code at all; every check built on this file is now vacuous \
+         while reporting success"
+    );
+    code
 }
 
 /// Every file of the module as `(file name, code)`, sorted by name.
 ///
-/// The contents are the **code**: each file cut at its own `#[cfg(test)]`, and the modules that are
-/// test-only in full left out entirely. Every caller wants it that way, and doing it here means no
-/// caller writes `.split("#[cfg(test)]")` for itself — see behaviour 2 in the module doc.
+/// The contents are the **code**: each file with its own test-only items removed, and the modules
+/// that are test-only in full left out entirely. Every caller wants it that way, and doing it here
+/// means no caller writes the cut for itself — see behaviour 2 in the module doc.
 ///
 /// Sorted so a caller that reports a finding names the same file every run; `read_dir` order is not
 /// stable across platforms and an unstable message reads as a flaky test.
@@ -123,10 +250,7 @@ pub(crate) fn files(roots: &[PathBuf]) -> Vec<(String, String)> {
         if skip.contains(&name) {
             return;
         }
-        let code = match test_tail_start(&text) {
-            Some(i) => text[..i].to_owned(),
-            None => text,
-        };
+        let code = strip_and_check(&name, &text);
         out.push((name, code));
     };
     for root in roots {
@@ -167,6 +291,18 @@ fn read(path: &Path) -> String {
 mod tests {
     use super::*;
 
+    /// Every `.rs` file under a directory, recursively.
+    fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {dir:?}: {e}")) {
+            let path = entry.expect("a directory entry").path();
+            if path.is_dir() {
+                rs_files(&path, out);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                out.push(path);
+            }
+        }
+    }
+
     /// A root that is a plain file and a root that is a directory are both found, and a stem that
     /// is neither yields nothing rather than panicking.
     #[test]
@@ -195,20 +331,20 @@ mod tests {
         assert!(none.is_empty());
     }
 
-    /// A file's own `#[cfg(test)]` tail is cut away, and it is cut **per file** rather than once
-    /// over the concatenation — the difference this module exists for.
+    /// A file's test module is taken away, and it is taken **per file** rather than once over the
+    /// concatenation — the difference this module exists for.
     #[test]
     fn every_file_is_cut_at_its_own_test_module() {
         let got = files(&roots("src/mcp", "tools"));
         assert!(got.len() >= 5, "only {} files were read", got.len());
         for (name, code) in &got {
             assert!(
-                test_tail_start(code).is_none(),
+                !code.lines().any(|l| l == MARK),
                 "{name}: its test module survived, so a needle can match a test's own literal"
             );
         }
         // The proof that the cut is per file: a file *after* the first still has its code. Cutting
-        // the concatenation once would leave everything past the first `#[cfg(test)]` empty.
+        // the concatenation once would leave everything past the first attribute empty.
         let last = got.last().expect("at least one file");
         assert!(
             !last.1.trim().is_empty(),
@@ -217,32 +353,119 @@ mod tests {
         );
     }
 
-    /// A `#[cfg(test)] mod x;` **declaration** is structure, not a test tail.
+    /// **The defect ADR-091 exists for: an item is removed, the file is not truncated at it.**
     ///
-    /// Acceptance side first: the cut must still happen where a test module really begins, or this
-    /// would pass against a helper that never cuts anything at all.
+    /// Acceptance side first — the test module really does go — because a helper that removed
+    /// nothing at all would satisfy the interesting half by accident.
+    #[test]
+    fn a_test_only_item_removes_itself_and_nothing_below_it() {
+        let src = "use a::b;\n#[cfg(test)]\nuse std::sync::Mutex;\nfn keep() {}\n#[cfg(test)]\n\
+                   mod tests {\n    fn t() {}\n}\n";
+        let code = strip_test_items(src);
+        assert!(
+            !code.contains("mod tests"),
+            "the test module must still go: {code:?}"
+        );
+        assert!(
+            !code.contains("Mutex"),
+            "the test-only import must go too: {code:?}"
+        );
+        assert!(
+            code.contains("fn keep()"),
+            "the production function below the test-only import was lost — the exact defect this \
+             replaced, which read `logstore.rs` as 15 lines of 2,606: {code:?}"
+        );
+
+        // Two inline test modules with production code between them: `config.rs`'s shape, and the
+        // reason "cut at the first inline `mod … {`" was not a sufficient repair either.
+        let two = "#[cfg(test)]\nmod first {\n}\nfn between() {}\n#[cfg(test)]\nmod tests {\n}\n";
+        let code = strip_test_items(two);
+        assert!(code.contains("fn between()"), "{code:?}");
+        assert!(!code.contains("mod first"), "{code:?}");
+
+        // A stacked attribute belongs to the same item (`api/openapi.rs`'s shape).
+        let stacked = "#[cfg(test)]\n#[must_use]\nfn helper() -> u8 {\n    1\n}\nfn keep() {}\n";
+        let code = strip_test_items(stacked);
+        assert!(!code.contains("fn helper()"), "{code:?}");
+        assert!(code.contains("fn keep()"), "{code:?}");
+
+        // …and a file that is all code comes back whole.
+        assert_eq!(strip_test_items("fn a() {}\n"), "fn a() {}\n");
+    }
+
+    /// A `#[cfg(test)] mod x;` declaration is an item like any other, and taking it out must not
+    /// take the code below it.
+    ///
+    /// It used to be special-cased — skipped, so it stayed in the text — which is why one such line
+    /// at the top of `main.rs` truncated its production text to the imports under the old rule.
     #[test]
     fn a_test_only_module_declaration_is_not_where_the_code_ends() {
-        let real = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n";
-        assert_eq!(
-            test_tail_start(real),
-            Some("fn a() {}".len()),
-            "the cut must still land on a real test module"
-        );
-
-        // The declaration is preceded by a line on purpose: the scan looks for `\n#[cfg(test)]`, so
-        // a declaration on the very first byte would be skipped for the wrong reason and this test
-        // would prove nothing.
-        let with_decl =
-            "mod x;\n#[cfg(test)]\nmod guards;\nfn a() {}\n#[cfg(test)]\nmod tests {\n}\n";
-        let cut = test_tail_start(with_decl).expect("there is still a test module");
+        let src = "mod x;\n#[cfg(test)]\nmod guards;\nfn a() {}\n#[cfg(test)]\nmod tests {\n}\n";
+        let code = strip_test_items(src);
         assert!(
-            with_decl[..cut].contains("fn a()"),
-            "a `#[cfg(test)] mod x;` declaration truncated the code half; that is how one line at \
-             the top of main.rs cut its production text to the imports"
+            code.contains("fn a()"),
+            "the declaration truncated the code half; that is how one line at the top of main.rs \
+             cut its production text to its imports: {code:?}"
         );
+        assert!(code.contains("mod x;"), "{code:?}");
+        assert!(!code.contains("mod guards;"), "{code:?}");
+        // The exclusion list still sees it: it reads the raw file, not the code.
+        assert_eq!(
+            declared_module("\nmod guards;\nfn a() {}"),
+            Some("guards".to_owned())
+        );
+    }
 
-        // …and a file that is all code has no tail at all, rather than a cut at position 0.
-        assert_eq!(test_tail_start("fn a() {}\n"), None);
+    /// **Two files this crate really holds, read back whole.**
+    ///
+    /// Synthetic strings prove the algorithm; these two prove it against the shapes that were
+    /// actually being mis-read, and they name the files so a regression says where to look.
+    #[test]
+    fn the_two_files_that_were_being_mis_read_come_back_whole() {
+        // `config.rs`: two inline test modules with production code between them.
+        let cfg = code("src", "config");
+        for needle in ["fn interval_in_bounds(", "fn parse_interval("] {
+            assert!(
+                cfg.contains(needle),
+                "config.rs is missing `{needle}`, which sits between its two test modules"
+            );
+        }
+        assert!(!cfg.contains("mod system_log_days_tests"), "…and both go");
+
+        // `logstore.rs`: a test-only `use` on line 16 used to end the file there.
+        let logs = code("src", "logstore");
+        assert!(
+            logs.contains("impl LogStore for VlStore"),
+            "logstore.rs was read as its first few lines again — the production impl is gone"
+        );
+        assert!(
+            logs.lines().count() > 500,
+            "logstore.rs came back as {} lines; it used to come back as 15",
+            logs.lines().count()
+        );
+    }
+
+    /// **The mechanism's own invariants, over every real file in this crate.**
+    ///
+    /// Three synthetic strings say the algorithm is right about the shapes I thought of. This says
+    /// it is right about the shapes that exist — and it is the check that fires on the day someone
+    /// writes a fourth shape, rather than the day a needle silently stops matching.
+    #[test]
+    fn every_file_in_this_crate_survives_being_read() {
+        let mut paths = Vec::new();
+        rs_files(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut paths,
+        );
+        assert!(
+            paths.len() >= 150,
+            "only {} files were walked; the walk stopped finding this crate's sources and every \
+             assertion below is now vacuous",
+            paths.len()
+        );
+        for path in &paths {
+            // `strip_and_check` holds the two invariants; calling it *is* the assertion.
+            let _ = strip_and_check(&file_name(path), &read(path));
+        }
     }
 }
