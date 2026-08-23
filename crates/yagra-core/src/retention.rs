@@ -644,7 +644,10 @@ mod tests {
         include_str!("dns_check.rs"),
         include_str!("neighbors.rs"),
         include_str!("l3.rs"),
-        include_str!("events.rs"),
+        // ADR-095 split `events.rs` into a directory; the `DELETE` this list is looking for is in
+        // the PostgreSQL half. Same shape as the `repo/` and `analysis/` entries, and same safety:
+        // a wrong path can only make the search fail.
+        include_str!("events/repo.rs"),
         include_str!("pollers.rs"),
         include_str!("reports.rs"),
         // ADR-089 split `analysis.rs` into a directory; the `DELETE` this list is looking for
