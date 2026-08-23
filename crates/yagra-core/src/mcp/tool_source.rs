@@ -34,8 +34,9 @@
 //! source-text reader plus this module's own two. That is the state the increment was for: a
 //! botched split cannot be quiet.
 //!
-//! **How it reads is no longer written here** (ADR-089). Finding both spellings of a root, cutting
-//! each file at its *own* `#[cfg(test)]`, and deriving the test-only exclusions from `mod.rs` are
+//! **How it reads is no longer written here** (ADR-089). Finding both spellings of a root,
+//! removing each file's *own* test-only items (ADR-091 — not cutting at the first one, which read
+//! ten files in this crate as 1–14% of themselves), and deriving the exclusions from `mod.rs` are
 //! all in [`crate::module_source`], because `analysis.rs` needed the identical three and writing
 //! them twice is how the second copy comes to disagree. What stays here is what is actually about
 //! MCP: which root, and **the floor** — 34 `#[tool(` declarations. The floor deliberately did not
@@ -47,7 +48,7 @@ use crate::module_source;
 
 /// Every file holding part of the tool surface, as `(file name, contents)`, sorted by name.
 ///
-/// The contents are the **code**: each file is cut at its own `#[cfg(test)]`, and the modules that
+/// The contents are the **code**: each file has its own test-only items removed, and the modules that
 /// are test-only in full are not here at all. Every caller wants it that way — a tool name, a
 /// `#[tool(` attribute, a refusal's wording and a folded branch's argument all live in a tool body.
 pub(crate) fn tool_surface_files() -> Vec<(String, String)> {

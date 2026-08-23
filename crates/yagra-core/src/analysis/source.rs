@@ -44,8 +44,8 @@
 
 use crate::module_source;
 
-/// Every file of the analysis module as `(file name, code)`, sorted by name, each already cut at
-/// its own `#[cfg(test)]`.
+/// Every file of the analysis module as `(file name, code)`, sorted by name, each already
+/// stripped of its own test-only items.
 ///
 /// Callers that attribute a finding to a function **must** use this rather than
 /// [`analysis_source`], and must reset their per-function state at each file boundary.
@@ -110,8 +110,8 @@ mod tests {
         );
     }
 
-    /// Each file arrives cut at its **own** test module, which is what makes a per-function scan
-    /// safe over more than one file.
+    /// Each file arrives stripped of its **own** test-only items, which is what makes a
+    /// per-function scan safe over more than one file.
     #[test]
     fn every_file_arrives_without_its_test_module() {
         let files = analysis_source_files();
