@@ -475,8 +475,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let event_engine = Arc::new(events::EventEngine::new(
         events_repo.clone(),
         alerts.clone(),
-        notifier.clone(),
-        history.clone(),
+        Arc::new(alerts::sink::RecordingSink::new(
+            history.clone(),
+            notifier.clone(),
+            "an event alert",
+        )),
         Some(persist_tx),
         Some(event_action_tx),
     ));
@@ -932,6 +935,20 @@ struct LeaderTasks {
 }
 
 impl LeaderTasks {
+    /// A sink for one alert source, built from the two handles this struct already holds.
+    ///
+    /// The `subject` is what its failure log says — a shared message across the sources would tell
+    /// an operator that *something* failed to record and not which loop. Nothing is stored: a sink
+    /// is two `Arc` clones and a `&'static str`, and giving each source its own is what lets it be
+    /// named (ADR-092).
+    fn alert_sink(&self, subject: &'static str) -> Arc<dyn alerts::sink::AlertSink> {
+        Arc::new(alerts::sink::RecordingSink::new(
+            self.history.clone(),
+            self.notifier.clone(),
+            subject,
+        ))
+    }
+
     /// Start every leader-only pipeline. Returns once they are all spawned (they run until the
     /// shutdown token fires); an `Err` means a bus subscription failed, which the caller treats as
     /// a failed promotion and restarts for.
@@ -1244,8 +1261,7 @@ impl LeaderTasks {
                 self.store.clone(),
                 self.repo.clone(),
                 self.alerts.clone(),
-                self.notifier.clone(),
-                self.history.clone(),
+                self.alert_sink("an interface-utilisation transition"),
             ),
         );
         spawn_cancellable(
@@ -1256,8 +1272,7 @@ impl LeaderTasks {
                 self.meraki_devices.clone(),
                 self.groups.clone(),
                 self.alerts.clone(),
-                self.notifier.clone(),
-                self.history.clone(),
+                self.alert_sink("a pool-coverage transition"),
             ),
         );
         // Report schedule-firing loop (60s tick, advances `next_run_at`, prunes runs).

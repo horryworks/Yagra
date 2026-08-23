@@ -57,6 +57,7 @@ pub(crate) mod config;
 pub(crate) mod engine;
 pub(crate) mod notify;
 pub(crate) mod rules;
+pub(crate) mod sink;
 #[cfg(test)]
 pub(crate) mod testkit;
 
@@ -102,28 +103,37 @@ pub enum NotifyAction {
     Suppress(Alert),
 }
 
-/// The alert inside a notify action, for a History write — `None` when there is nothing to record.
+/// The `alert_history` row a notify action produces — `(alert, resolved)`, or `None` for nothing.
 ///
-/// Used by the two alert sources that sit **outside the poll path**: the pool-coverage watch
-/// ([`crate::pool_coverage`]) and the interface-utilisation watch ([`crate::interface_util`]).
-/// Everything on the poll path records through `ingest_result` instead.
+/// **Every alert source in the crate goes through this**, and that is the point of ADR-092: the
+/// rule was written five times, in five shapes, and each copy derived `resolved` for itself —
+/// `matches!(action, Resolve(_))` in the two watch loops, a `match` in `events::run_action`, a
+/// `filter_map` in `events::history_rows`, and two literal `false`/`true` arguments in
+/// `result_ingest`. Nothing made them agree, and the copies are why the *effect* could drift: a
+/// watch loop shipped notifying without recording, and the alert paged with no row behind it.
 ///
-/// It was called `coverage_alert_of` and lived in `main.rs` until ADR-083. The name said "pool
-/// coverage" while the interface watch had been calling it too, which is the kind of name that
-/// stops a reader from finding the second caller.
+/// It was called `coverage_alert_of` and lived in `main.rs` until ADR-083, then `recordable_alert`
+/// until ADR-092 folded `resolved` into it. The first name said "pool coverage" while the interface
+/// watch had been calling it too, which is the kind of name that stops a reader from finding the
+/// second caller.
 ///
-/// **[`NotifyAction::Suppress`] returns `None`, and is unreachable from both callers** — but for
-/// two different reasons, so neither one alone justifies the arm:
+/// **[`NotifyAction::Suppress`] returns `None`**, and the reason differs by caller, so no single one
+/// of them justifies the arm:
 /// * pool coverage — dependency suppression is a property of the node graph, and a pool is not in it;
 /// * interface utilisation — `Suppress` is only ever produced by [`AlertManager::resweep_suppression`],
 ///   which runs off a **liveness** transition; the interface watch reaches the engine through
-///   [`AlertManager::observe_interface_metric`], which cannot get there.
+///   [`AlertManager::observe_interface_metric`], which cannot get there;
+/// * the poll path — a roll-up means the node is still down, so it is not a lifecycle resolve and
+///   the eventual real recovery is what records;
+/// * events — an event alert is never dependency-suppressed (a device emitting an event is
+///   demonstrably reachable), so the pipeline never produces one.
 ///
 /// It is spelled out rather than caught by a wildcard so a fourth action variant has to decide what
 /// History should do with it.
-pub(crate) fn recordable_alert(action: &NotifyAction) -> Option<&Alert> {
+pub(crate) fn history_row(action: &NotifyAction) -> Option<(&Alert, bool)> {
     match action {
-        NotifyAction::Fire(a) | NotifyAction::Resolve(a) => Some(a),
+        NotifyAction::Fire(a) => Some((a, false)),
+        NotifyAction::Resolve(a) => Some((a, true)),
         NotifyAction::Suppress(_) => None,
     }
 }
@@ -179,11 +189,17 @@ mod tests {
             breach: None::<Breach>,
             ifindex: None,
         };
-        // A fire and a resolve are both rows; the two are told apart by `resolved`, which the
-        // caller derives from the same action.
-        assert!(recordable_alert(&NotifyAction::Fire(alert.clone())).is_some());
-        assert!(recordable_alert(&NotifyAction::Resolve(alert.clone())).is_some());
+        // A fire and a resolve are both rows, and `resolved` is decided here rather than by each
+        // caller — the half that used to be written five ways (ADR-092).
+        assert_eq!(
+            history_row(&NotifyAction::Fire(alert.clone())).map(|(_, r)| r),
+            Some(false)
+        );
+        assert_eq!(
+            history_row(&NotifyAction::Resolve(alert.clone())).map(|(_, r)| r),
+            Some(true)
+        );
         // Suppression is a property of the node dependency graph, which a pool is not in.
-        assert!(recordable_alert(&NotifyAction::Suppress(alert)).is_none());
+        assert!(history_row(&NotifyAction::Suppress(alert)).is_none());
     }
 }

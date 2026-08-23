@@ -23,17 +23,17 @@ use std::time::{Duration, Instant};
 
 use std::sync::Arc;
 
-use crate::alerts::{AlertManager, Notifier};
+use crate::alerts::sink::AlertSink;
+use crate::alerts::AlertManager;
 use crate::coordinator::{Coordinator, PollerView};
 use crate::groups::GroupRepo;
-use crate::history::AlertHistoryStore;
 use crate::meraki::MerakiDeviceRepo;
 use crate::poolres::PoolResolver;
 use crate::repo::NodeRepo;
 // Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
 // lived in `main.rs` until ADR-083, where those paths were the only way to name this module; the
 // alternative was to strip 9 prefixes and make the move stop being verifiable by diff.
-use crate::{alerts, config_gen, groups, meraki, pool_coverage};
+use crate::{config_gen, groups, meraki, pool_coverage};
 
 /// How often the watch loop samples coverage.
 ///
@@ -356,8 +356,7 @@ pub(crate) async fn run_pool_coverage_watch(
     meraki: Arc<meraki::MerakiDeviceRepo>,
     groups: Arc<groups::GroupRepo>,
     alerts: Arc<AlertManager>,
-    notifier: Arc<Notifier>,
-    history: Arc<AlertHistoryStore>,
+    sink: Arc<dyn AlertSink>,
 ) {
     let mut watch = pool_coverage::CoverageWatch::from_env();
     if watch.disabled() {
@@ -409,18 +408,13 @@ pub(crate) async fn run_pool_coverage_watch(
                 }
             };
             let Some(action) = action else { continue };
-            // Persist before notifying, and write **inline** rather than through the batch
-            // channel: that channel exists to keep the poll-result hot path off the database, and
-            // this loop is a 30-second tick that emits at most one row per pool per debounce. A
-            // failure here is logged and the notification still goes out — an operator being paged
-            // matters more than the row, and the row is what History reads afterwards.
-            if let Some(alert) = alerts::recordable_alert(&action) {
-                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
-                if let Err(e) = history.record(alert, resolved).await {
-                    tracing::warn!(error = %e, "recording a pool-coverage transition failed");
-                }
-            }
-            notifier.handle(action).await;
+            // Persist **and** notify, as one step. Writing inline rather than through the batch
+            // channel is deliberate: that channel exists to keep the poll-result hot path off the
+            // database, and this loop is a 30-second tick that emits at most one row per pool per
+            // debounce. This loop holds no `Notifier` of its own (ADR-092) — Increment 1 wired it
+            // to the notifier alone and the alerts paged with no row behind them, and the type is
+            // now what stops that rather than a test reading this function's text.
+            sink.dispatch(action).await;
         }
     }
 }
@@ -429,42 +423,17 @@ pub(crate) async fn run_pool_coverage_watch(
 mod tests {
     use super::*;
 
-    // The structural assertions below read this file's own code through `crate::module_source`,
-    // which since ADR-091 removes each test-only item rather than truncating at the first one.
-    // They read `pool_coverage.rs` rather than `main.rs` because ADR-083 moved the loop here, and
-    // repointing them was not optional bookkeeping: a needle aimed at the old file finds nothing
-    // and panics, which is the loud half of the failure — the quiet half is a `.split()` argument
-    // that still matches something and checks nothing. Both assertions below were re-run against
-    // a deliberately broken body after the move, and both failed, which is the only reason to
-    // believe them.
-
-    /// **A coverage transition is written to History, not only notified.**
-    ///
-    /// ⚠️ Found on real hardware, not by a test: Increment 1 deliberately kept pool alerts out of
-    /// `alert_history`, so the watch loop was wired to the notifier alone. Increment 2 opened the
-    /// store to every subject — and nothing in the type system connected the two, so the alert
-    /// raised, paged, and left no row. The gauges and the log line all looked correct.
-    ///
-    /// Structural because the loop's body is a 30-second tick around a real database; the
-    /// behaviour a unit test *can* reach is `alerts::recordable_alert`, tested in `alerts/mod.rs`.
-    #[test]
-    fn a_pool_coverage_transition_reaches_the_history_store() {
-        let production = crate::module_source::code("src", "pool_coverage");
-        let watch = production
-            .split("async fn run_pool_coverage_watch")
-            .nth(1)
-            .expect("the watch loop exists");
-        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
-        assert!(
-            body.contains("history.record("),
-            "the coverage watch notifies without recording — the alert pages and History stays \
-             empty, which is exactly what shipped in Increment 1"
-        );
-        assert!(
-            body.contains("notifier.handle("),
-            "…and it must still notify"
-        );
-    }
+    // **"A coverage transition is written to History, not only notified" was a test here, and is a
+    // type now.** ⚠️ Found on real hardware, not by a test: Increment 1 wired this loop to the
+    // notifier alone, so the alert raised, paged, and left no row — with every gauge and log line
+    // looking correct. What stood in for the missing type was a structural assertion that read this
+    // file's own text for `history.record(` and `notifier.handle(`, because the loop's body is a
+    // 30-second tick around a real database and there was no seam to test through.
+    //
+    // ADR-092 gave the loop an `AlertSink` and took its `Notifier` away, so the assertion has
+    // nothing left to assert: the failure it described does not compile. What `dispatch` actually
+    // does with a transition is tested in `alerts/sink.rs`, against fakes, including the case where
+    // the History write fails and the page must still go out.
 
     fn view(id: &str, pool: &str, online: bool) -> PollerView {
         PollerView {

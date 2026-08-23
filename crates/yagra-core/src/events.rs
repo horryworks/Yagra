@@ -44,6 +44,7 @@ use yagra_bus::{EventKind, EventMsg};
 use yagra_common::{trap_oid_name, CheckId, NodeId, NodeState, Severity};
 use yagra_telemetry::CancellationToken;
 
+use crate::alerts::sink::AlertSink;
 use crate::alerts::{check_id, AlertManager, Notifier, NotifyAction};
 use crate::history::AlertHistoryStore;
 use crate::logstore::LogStore;
@@ -1709,8 +1710,10 @@ const INGEST_RATE_PER_SOURCE: f64 = 10.0;
 pub struct EventEngine {
     repo: Arc<EventRepo>,
     alerts: Arc<AlertManager>,
-    notifier: Arc<Notifier>,
-    history: Arc<AlertHistoryStore>,
+    /// Where a planned transition goes when it runs inline: the History row and the delivery, as
+    /// one step. Holding this rather than a `Notifier` and an `AlertHistoryStore` is what makes
+    /// "notified but not recorded" unwritable here (ADR-092).
+    sink: Arc<dyn AlertSink>,
     snapshot: RwLock<Snapshot>,
     runtime: Mutex<Runtime>,
     /// Ingest token buckets per (already-verified) webhook source: (tokens, last-refill ms).
@@ -1729,16 +1732,14 @@ impl EventEngine {
     pub fn new(
         repo: Arc<EventRepo>,
         alerts: Arc<AlertManager>,
-        notifier: Arc<Notifier>,
-        history: Arc<AlertHistoryStore>,
+        sink: Arc<dyn AlertSink>,
         persist_tx: Option<tokio::sync::mpsc::Sender<PersistRecord>>,
         action_tx: Option<tokio::sync::mpsc::Sender<QueuedAction>>,
     ) -> Self {
         Self {
             repo,
             alerts,
-            notifier,
-            history,
+            sink,
             snapshot: RwLock::new(Snapshot::default()),
             runtime: Mutex::new(Runtime::new()),
             ingest_rate: Mutex::new(HashMap::new()),
@@ -2013,29 +2014,27 @@ impl EventEngine {
         planned
     }
 
-    /// Execute the I/O for one planned/expired action: record history and forward to the
-    /// notifier (the manager-side active-set mutation already happened under the lock).
+    /// Execute the I/O for one planned/expired action (the manager-side active-set mutation
+    /// already happened under the lock).
+    ///
+    /// The counters stay here and the row does not: which `alert_history` row an action produces
+    /// is one rule for the whole crate (ADR-092), while `fired`/`resolved{reason}` are this
+    /// pipeline's own instrumentation and mean nothing to a watch loop.
     async fn run_action(&self, action: NotifyAction, resolve_reason: &'static str) {
         match &action {
-            NotifyAction::Fire(alert) => {
+            NotifyAction::Fire(_) => {
                 metrics::counter!("yagra_event_alerts_fired_total").increment(1);
-                if let Err(e) = self.history.record(alert, false).await {
-                    tracing::warn!(error = %e, "failed to record event alert history");
-                }
             }
-            NotifyAction::Resolve(alert) => {
-                if let Err(e) = self.history.record(alert, true).await {
-                    tracing::warn!(error = %e, "failed to record event alert resolution");
-                }
+            NotifyAction::Resolve(_) => {
                 metrics::counter!("yagra_event_alerts_resolved_total", "reason" => resolve_reason)
                     .increment(1);
             }
             // Event alerts are never dependency-suppressed (a device emitting an event is
             // demonstrably reachable), so the event pipeline never produces a roll-up. Handled
-            // defensively for exhaustiveness; the notifier still forwards it below.
+            // defensively for exhaustiveness; it is still delivered below.
             NotifyAction::Suppress(_) => {}
         }
-        self.notifier.handle(action).await;
+        self.sink.dispatch(action).await;
     }
 
     /// Hand a planned action to the async action writer (S10). Blocking send — never drops (the
@@ -2224,11 +2223,9 @@ pub async fn run_persist_writer(
 fn history_rows(actions: &[QueuedAction]) -> Vec<(Alert, bool)> {
     actions
         .iter()
-        .filter_map(|ea| match &ea.action {
-            NotifyAction::Fire(alert) => Some((alert.clone(), false)),
-            NotifyAction::Resolve(alert) => Some((alert.clone(), true)),
-            NotifyAction::Suppress(_) => None,
-        })
+        // The rule is `alerts::history_row`; only the batching is this path's own (ADR-092).
+        .filter_map(|ea| crate::alerts::history_row(&ea.action))
+        .map(|(alert, resolved)| (alert.clone(), resolved))
         .collect()
 }
 
@@ -2846,8 +2843,11 @@ mod tests {
         EventEngine::new(
             Arc::new(EventRepo::new(pool.clone())),
             Arc::new(AlertManager::new()),
-            Arc::new(Notifier::from_env()),
-            Arc::new(AlertHistoryStore::new(pool)),
+            Arc::new(crate::alerts::sink::RecordingSink::new(
+                Arc::new(AlertHistoryStore::new(pool)),
+                Arc::new(Notifier::from_env()),
+                "an event alert",
+            )),
             None,
             None,
         )

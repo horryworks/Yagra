@@ -19,8 +19,8 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
-use crate::alerts::{self, AlertManager, Notifier};
-use crate::history::AlertHistoryStore;
+use crate::alerts::sink::AlertSink;
+use crate::alerts::AlertManager;
 use crate::repo::NodeRepo;
 use crate::store::{self, MetricStore};
 use yagra_common::{IfIndex, MetricKind, NodeId, NodeState};
@@ -395,8 +395,7 @@ pub(crate) async fn run_interface_utilization_watch(
     store: Arc<dyn MetricStore>,
     repo: Arc<NodeRepo>,
     alerts: Arc<AlertManager>,
-    notifier: Arc<Notifier>,
-    history: Arc<AlertHistoryStore>,
+    sink: Arc<dyn AlertSink>,
 ) {
     use crate::interface_util as util;
     use std::collections::{BTreeMap, BTreeSet};
@@ -605,18 +604,11 @@ pub(crate) async fn run_interface_utilization_watch(
             }
         }
 
-        // One drain per tick, for every dimension and for the orphan sweep. History first, then
-        // the notifier: Increment 1 wired this loop to the notifier alone and the alerts paged with
-        // no row behind them, so `a_transition_from_the_interface_watch_reaches_the_history_store`
-        // pins both calls to this function's body.
+        // One drain per tick, for every dimension and for the orphan sweep. Recording and
+        // delivery are one step and this loop holds no `Notifier` of its own (ADR-092): Increment
+        // 1 wired it to the notifier alone and the alerts paged with no row behind them.
         for action in actions {
-            if let Some(alert) = alerts::recordable_alert(&action) {
-                let resolved = matches!(action, crate::alerts::NotifyAction::Resolve(_));
-                if let Err(e) = history.record(alert, resolved).await {
-                    tracing::warn!(error = %e, "recording an interface-utilisation transition failed");
-                }
-            }
-            notifier.handle(action).await;
+            sink.dispatch(action).await;
         }
     }
 }
@@ -625,14 +617,13 @@ pub(crate) async fn run_interface_utilization_watch(
 mod tests {
     use super::*;
 
-    // The structural assertions below read this file's own code through `crate::module_source`,
+    // The one structural assertion below reads this file's own code through `crate::module_source`,
     // which since ADR-091 removes each test-only item rather than truncating at the first one.
-    // They read `interface_util.rs` rather than `main.rs` because ADR-083 moved the loop here, and
-    // repointing them was not optional bookkeeping: a needle aimed at the old file finds nothing
-    // and panics, which is the loud half of the failure — the quiet half is a `.split()` argument
-    // that still matches something and checks nothing. Both assertions below were re-run against
-    // a deliberately broken body after the move, and both failed, which is the only reason to
-    // believe them.
+    // It reads `interface_util.rs` rather than `main.rs` because ADR-083 moved the loop here, and
+    // repointing it was not optional bookkeeping: a needle aimed at the old file finds nothing and
+    // panics, which is the loud half of the failure — the quiet half is a `.split()` argument that
+    // still matches something and checks nothing. It was re-run against a deliberately broken body
+    // after the move and it failed, which is the only reason to believe it.
 
     /// The dimension table is positional, and getting it backwards is silent: the loop would
     /// evaluate receive rules against transmit traffic and never fail anywhere.
@@ -669,31 +660,30 @@ mod tests {
         assert_eq!(dims.len(), INTERFACE_DIMENSIONS.len());
     }
 
-    /// The interface watch must record to History as well as notify — the same property
-    /// `a_pool_coverage_transition_reaches_the_history_store` pins for the pool watch, and for the
-    /// same reason: Increment 1 wired that loop to the notifier alone, the alerts paged, and
-    /// History stayed empty with every gauge and log line looking correct.
+    /// **The orphan sweep runs inside the watch loop.**
     ///
-    /// Structural because the loop body is a 60-second tick around VictoriaMetrics, PostgreSQL and
-    /// a notifier. It also guards the ADR-076 増分 7 refactor that moved the drain out of the
-    /// per-dimension loop so the orphan sweep could share it: a drain that ended up outside this
-    /// function would still compile.
+    /// ADR-076 増分 7 moved the drain out of the per-dimension loop so the sweep could share it,
+    /// and a drain that ended up outside this function would still compile. That is a question
+    /// about *where a call sits*, which no type can answer, so it stays structural — the loop body
+    /// is a 60-second tick around VictoriaMetrics and PostgreSQL.
+    ///
+    /// ⚠️ **This test used to assert two more things** — that the loop recorded to History as well
+    /// as notifying, the property Increment 1 shipped without. Those are gone because ADR-092 made
+    /// them a type: the loop holds an `AlertSink` and no `Notifier`, so "notified but not recorded"
+    /// does not compile. Do not read their absence as the property having been dropped.
     #[test]
-    fn a_transition_from_the_interface_watch_reaches_the_history_store() {
+    fn the_orphan_sweep_runs_inside_the_watch_loop() {
         let production = crate::module_source::code("src", "interface_util");
         let watch = production
             .split("async fn run_interface_utilization_watch")
             .nth(1)
             .expect("the watch loop exists");
         let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        // A floor: everything below asks whether something is *present*, and over an empty slice
+        // that is a claim about nothing (ADR-089).
         assert!(
-            body.contains("history.record("),
-            "the interface watch notifies without recording — the alert pages and History stays \
-             empty"
-        );
-        assert!(
-            body.contains("notifier.handle("),
-            "…and it must still notify"
+            body.contains("sink.dispatch("),
+            "the slice is not the watch loop's body — it does not even drain its actions"
         );
         assert!(
             body.contains("resolve_orphaned_interface_alerts()"),

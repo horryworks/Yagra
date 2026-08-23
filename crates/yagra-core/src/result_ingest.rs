@@ -278,7 +278,6 @@ async fn ingest_result(
     meraki_inflight: &Arc<meraki::MerakiInflight>,
     coordinator: &Arc<Coordinator>,
 ) {
-    use crate::alerts::NotifyAction;
     metrics::counter!("yagra_poll_results_total").increment(1);
     stats.record_result();
     // Attribute the result to its producing poller for the Pollers view (provenance only;
@@ -318,12 +317,11 @@ async fn ingest_result(
     // lifecycle transition (batched via `history_tx`, inline fallback), and hand delivery to the
     // notification task (bounded queue) so a slow vendor endpoint can't stall ingest.
     for action in alerts.observe(&result) {
-        match &action {
-            NotifyAction::Fire(alert) => enqueue_history(history_tx, history, alert, false).await,
-            NotifyAction::Resolve(alert) => enqueue_history(history_tx, history, alert, true).await,
-            // A roll-up (child rolled under a newly-down parent): the node is still down, so this is
-            // not a lifecycle resolve — nothing to persist; the eventual real recovery records it.
-            NotifyAction::Suppress(_) => {}
+        // Which row an action produces is one rule for the whole crate (ADR-092); what is this
+        // path's own is the channel — a roll-up persists nothing, and the eventual real recovery
+        // is what records.
+        if let Some((alert, resolved)) = crate::alerts::history_row(&action) {
+            enqueue_history(history_tx, history, alert, resolved).await;
         }
         if notify_tx.send(action).await.is_err() {
             tracing::debug!("notification channel closed (shutdown); dropping delivery");
