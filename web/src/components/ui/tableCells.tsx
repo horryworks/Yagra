@@ -26,7 +26,13 @@ export function SealedSecret() {
   );
 }
 
-/** Mono id, truncated, with a copy button that appears on row hover and flashes "Copied". */
+/** Mono id, truncated, with a copy button that appears on row hover and flashes "Copied".
+ *
+ *  The id also goes in a `title`, because truncated is the normal case: `.yt-copy-id` ellipses at
+ *  whatever the column is, and a UUID is 36 characters. Copying it was the only way to read it,
+ *  which is a strange thing to have to do to answer "is this the token I am looking at". Its
+ *  sibling `EntityName` already does this for its raw-id fallback (`yt-entity-raw`); this is the
+ *  copy of that idea that had been left without it (ADR-088). */
 export function CopyableId({ id }: { id: string }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -37,7 +43,9 @@ export function CopyableId({ id }: { id: string }) {
   };
   return (
     <span className="yt-copy">
-      <span className="yt-copy-id">{id}</span>
+      <span className="yt-copy-id" title={id}>
+        {id}
+      </span>
       <IconButton
         className="yt-copy-btn"
         title={copied ? t('copy.copied') : t('copy.copyId')}

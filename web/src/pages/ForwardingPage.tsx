@@ -137,11 +137,15 @@ function destinationColumns(
       width: '130px',
       render: (r) => {
         const n = r.filter?.conditions?.length ?? 0;
-        return n === 0 ? (
-          <span className="muted">{t('filter.none')}</span>
-        ) : (
-          <span>{t('filter.count', { count: n, mode: t(`filter.mode.${r.filter.mode}`) })}</span>
-        );
+        if (n === 0) return <span className="muted">{t('filter.none')}</span>;
+        // The mode is the half that gets cut in a 130px column ("1 condition (all mus…"), and it is
+        // the half that changes what the row does — any-match and all-match forward different
+        // traffic. `title` keeps the sentence whole (ADR-088).
+        const summary = t('filter.count', {
+          count: n,
+          mode: t(`filter.mode.${r.filter.mode}`),
+        });
+        return <span title={summary}>{summary}</span>;
       },
     },
     {

@@ -21,6 +21,13 @@
 
 ### Improvements
 
+- **Values that no longer fit their column can be read on hover.** A filter's summary under a
+  column header, a raw id, an alert history timestamp, a forwarding rule's condition count and the
+  metric-and-threshold line on an alert row all truncate when the window or the column is narrow,
+  and several of them had no way to see the rest — or offered a tooltip that answered a different
+  question, such as the internal check id instead of the sentence that was cut. Each now carries
+  the whole value in its tooltip.
+
 - **A node going down now opens one incident, not two.** When a device stopped answering, Yagra
   raised both a node-down alert and an SNMP-down alert, and because the deduplication key carries
   the check id, PagerDuty and Jira Service Management opened a separate incident for each — one
@@ -127,6 +134,13 @@
   previous configuration and is counted by `yagra_alert_config_load_failures_total`. The cost is
   that a configuration change can take an extra refresh cycle to apply while the database is
   unhealthy.
+
+- **On a phone, the ⋮ menu on a list row now opens where it can be seen.** It was positioned
+  without measuring itself, so on ten of the twelve screens that use it the menu was either clipped
+  away entirely by the card it was drawn inside — pressing ⋮ appeared to do nothing — or opened
+  partly off the left edge of the screen. Editing, disabling and deleting a row were unreachable
+  from a phone on those screens. The menu now uses the same portalled, viewport-clamped popover as
+  the rest of the app.
 
 ## v0.2.17 — alerting is yours to configure, and the threshold rules that never fired now do
 

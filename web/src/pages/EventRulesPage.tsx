@@ -129,7 +129,14 @@ export function EventRulesPage() {
         key: 'scope',
         header: t('eventRules.cols.scope'),
         width: '120px',
-        render: (r) => <span className="mono">{scopeLabel(r)}</span>,
+        // `title` like the signature cells above it. A real `source_kind` is short enough for the
+        // 120px column, so this one is insurance rather than a repair — but the value comes from a
+        // backend enum that has grown three times, and the cell beside it already learned this.
+        render: (r) => (
+          <span className="mono" title={scopeLabel(r)}>
+            {scopeLabel(r)}
+          </span>
+        ),
       },
       {
         key: 'status',

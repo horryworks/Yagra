@@ -50,7 +50,7 @@ describe('shouldDismissOnEscape', () => {
 });
 
 describe('the two selectors', () => {
-  const floating = ['[role="dialog"]', '.apop', '.ntree-menu', '.ovm-menu', '.ts-run-menu'];
+  const floating = ['[role="dialog"]', '.apop', '.ntree-menu', '.ts-run-menu'];
 
   it('name every floating layer in both', () => {
     // Pinned by name because the list is hand-maintained: dropping one of these is how Escape

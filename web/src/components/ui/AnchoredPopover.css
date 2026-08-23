@@ -1,7 +1,8 @@
 /* Shared popover surface: `position: fixed` + measured coordinates, so the popover is not clipped
    by a scrolling / overflow-hidden ancestor, and not re-anchored by a virtualized row's transform.
-   Chrome matches the popover the rest of the app already uses (`.ovm-menu`, `.ts-run-menu`); those
-   three predate this primitive and are follow-ups, not copies to grow.
+   Chrome matches the popovers that predate this primitive (`.ts-run-menu`, `.ntree-menu`); they
+   are follow-ups, not copies to grow. There were three — `.ovm-menu` migrated onto `ActionMenu`
+   in ADR-088 Inc.3, after a browser check found its unclamped placement broken on ten screens.
 
    Per-caller padding and widths live on the caller's own class (`.amenu-menu`, `.msel`, `.tcond`) —
    this rule is only the surface. */

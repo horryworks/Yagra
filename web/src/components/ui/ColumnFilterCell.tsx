@@ -351,6 +351,13 @@ export function ColumnFilterCell<T>({
     }
   };
 
+  // Held rather than called twice: it is also the trigger's tooltip. `.dt-f-text` is
+  // `flex: 1; min-width: 0`, so the summary is the first thing a narrow column takes away — and
+  // with the controls collapsed into the popover, this line is the ONLY place the filter state is
+  // visible. Eleven columns across eight screens were showing a cut-off state with no way to read
+  // the rest (ADR-088's first sweep); the tooltip is what makes the truncation lossless.
+  const summaryText = triggerText();
+
   return (
     <div className={align === 'right' ? 'dt-f right' : 'dt-f'} ref={wrapRef}>
       <button
@@ -359,6 +366,7 @@ export function ColumnFilterCell<T>({
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={t('filter.open', { column: label })}
+        title={summaryText}
         onClick={() => {
           const next = !open;
           setOpen(next);

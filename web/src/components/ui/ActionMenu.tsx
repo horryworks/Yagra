@@ -4,11 +4,12 @@
 // This is the primitive `web/src/components/ui/` was missing. `OverflowMenu` is NOT one — on
 // desktop it deliberately renders a bare IconButton row and no menu at all — so the popover chrome
 // had been re-typed three times (`.ovm-menu`, troubleshoot's `.ts-run-menu`, NodeTree's
-// `.ntree-menu`). Those three are follow-ups, not this change: `OverflowMenu`'s mobile branch is
-// the natural first adopter but is live on 14+ pages with no component tests to catch a regression
-// (`.tsx` tests never run — see .claude/rules/testing.md), and `.ntree-menu` is a *different*
-// primitive (cursor-anchored context menu carrying sections and chips). Migrate them here rather
-// than growing a fourth copy.
+// `.ntree-menu`). **`OverflowMenu`'s mobile branch has since migrated here** (ADR-088 Inc.3): the
+// one reason it was deferred was "no component tests to catch a regression", and
+// `tests/ui/overflowMenu.spec.ts` is that test — it opens the last row's menu on all twelve screens
+// that use the component, and it found the hand-rolled placement broken on ten of them. Two legacy
+// menus remain; `.ntree-menu` is a *different* primitive (cursor-anchored context menu carrying
+// sections and chips). Migrate them here rather than growing a fourth copy.
 //
 // **Placement, the portal and the dismiss lifecycle now live in `AnchoredPopover`** — this file was
 // where they were written, and the reasons they are load-bearing are in that file's header. What

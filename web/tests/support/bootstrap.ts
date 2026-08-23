@@ -167,4 +167,15 @@ export const BOOTSTRAP_OVERRIDES: Record<string, Override> = {
     body.tool = REPORT_TOOL;
     return body as unknown as Json;
   },
+
+  // The generator fills every `date-time` field, including the nullable ones — so every token it
+  // hands the walk is already **revoked**, and `ApiTokensPage` renders no action control on a
+  // revoked row. The screen was therefore green while showing a list nobody can act on, which is
+  // the same shape as the `/auth/me` and `/roles` entries above: schema-valid, and not the state
+  // the walk meant to be looking at. Found by ADR-088's row-menu check reporting "no ⋮ trigger".
+  '/api/v1/api-tokens': (url) => {
+    const body = defaultBodyFor(url.pathname) as { revoked_at: string | null }[];
+    for (const row of body) row.revoked_at = null;
+    return body as unknown as Json;
+  },
 };

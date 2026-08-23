@@ -133,7 +133,17 @@ export function HistoryPage() {
         key: 'range',
         header: t('history.cols.when'),
         width: '1fr',
-        render: (r) => <span className="muted">{formatTimestamp(r.at_unix_ms)}</span>,
+        // `title` because the column is `1fr`: the formatted stamp is a fixed ~20 characters and
+        // does not shrink with the window, so on a narrow viewport it is the first cell to lose its
+        // tail — and half a timestamp is not a weaker answer, it is no answer (ADR-088).
+        render: (r) => {
+          const when = formatTimestamp(r.at_unix_ms);
+          return (
+            <span className="muted" title={when}>
+              {when}
+            </span>
+          );
+        },
       },
     ];
     for (const c of cols) c.filter = specs[c.key];

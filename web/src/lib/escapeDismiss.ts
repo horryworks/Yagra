@@ -13,20 +13,21 @@
 // four-clause condition in three components is also how the third copy ends up wrong
 // (`extensibility.md` §3), so the judgement lives here once and the components only supply facts.
 
-/** Surfaces that float above a page: dialogs, popovers, the three legacy menus. Each is in the DOM
- *  only while open, so "does one exist?" is the same question as "is one open?".
+/** Surfaces that float above a page: dialogs, popovers, the two remaining legacy menus. Each is in
+ *  the DOM only while open, so "does one exist?" is the same question as "is one open?".
  *
  *  ⚠️ **Hand-maintained, and nothing checks it.** A fourth popover primitive that never gets added
  *  here makes one Escape both close the panel and clear the selection behind it. That failure is
  *  mild by construction — the selection is re-selectable in one click — which is why this is a
  *  documented limit rather than a blocker. What holds it together is `ui-conventions.md`'s existing
  *  rule that new popovers use `AnchoredPopover` (`.apop`) instead of becoming a fourth entry here;
- *  the three legacy classes are the closed set that predates it. */
+ *  the legacy classes are a closed set that predates it, and it is shrinking: `.ovm-menu` left when
+ *  `OverflowMenu` moved onto `ActionMenu` (ADR-088 Inc.3), so its entry was removed with it — a
+ *  selector kept here for a surface that no longer exists is a line nobody can evaluate. */
 const FLOATING_LAYERS = [
   '[role="dialog"]',
   '.apop',
   '.ntree-menu',
-  '.ovm-menu',
   '.ts-run-menu',
 ] as const;
 

@@ -18,10 +18,15 @@
 //   6. **Its filter controls sit under their columns** (ADR-053) — see the note at the assertion.
 //   7. **It explains itself in one line, on screen** (ADR-055 R2). `NOTE_EXEMPT` in `screens.ts`
 //      holds the two screens that argue out of it, each with its reason.
+//   8. **Nothing is laid out off the page, and no text is cut off with no way to read it**
+//      (ADR-088) — see the note at the assertion.
+//   9. **Its row actions appear when the row is hovered** (ADR-088) — see `rowActions.ts`.
 
 import { expect, test } from '../support/app';
 import { MOCK_PREFIX } from '../support/openapi';
 import { inspectFilterSurface, MUST_FILTER } from './filterSurface';
+import { inspectRowActions } from './rowActions';
+import { inspectScreenGeometry, MIN_TEXT_ELEMENTS } from './screenGeometry';
 import { ALL_SCREENS, NOTE_EXEMPT, SCREEN_EXPECT, type Expect } from './screens';
 
 /** How long a screen gets to show its data. Generous: the settings group lazy-loads a chunk. */
@@ -139,5 +144,26 @@ for (const screen of ALL_SCREENS) {
         `${screen.path}: its description is empty`,
       ).toBeGreaterThan(0);
     }
+
+    // 8. **It is readable and it fits** (ADR-088). Four of the last ten `fix(web)` commits were
+    //    geometry defects that every text assertion passes — the element is there, the string is
+    //    there, and a human still cannot read it. Free here for the same reason as checks 6 and 7.
+    //
+    //    🚨 **The count is asserted, not logged.** A sweep whose traversal stops matching returns
+    //    an empty finding list, which is indistinguishable from a healthy screen. This repo has
+    //    shipped that exact failure three times; the floor is what makes it a red test instead.
+    const geometry = await inspectScreenGeometry(page);
+    expect(geometry.findings, `${screen.path}: geometry`).toEqual([]);
+    expect(
+      geometry.inspected,
+      `${screen.path}: the sweep found only ${geometry.inspected} text elements — it stopped matching, so its empty result means nothing`,
+    ).toBeGreaterThanOrEqual(MIN_TEXT_ELEMENTS);
+
+    // 9. **Its row actions can be seen when the row is hovered** (ADR-088). One hover, on a screen
+    //    that is already open — and no list of which screens have row actions, deliberately: the
+    //    defect this catches came from one shared stylesheet and hit ten screens at once, so a list
+    //    would have had to be right about all ten. `rowActions.ts` carries the reasoning, including
+    //    why `isVisible()` is not allowed to answer this.
+    expect((await inspectRowActions(page)).findings, `${screen.path}: row actions`).toEqual([]);
   });
 }
