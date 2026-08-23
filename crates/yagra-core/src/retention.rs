@@ -637,7 +637,10 @@ mod tests {
     /// is the safe direction for a hand-maintained list.
     const PRUNE_SITES: [&str; 10] = [
         include_str!("history.rs"),
-        include_str!("repo.rs"),
+        // ADR-094 split `repo.rs` by the table each method's SQL names, so the `node_state_snapshots`
+        // delete this list wants is in the file for that table. Same shape as the `analysis/` entry
+        // below, and same safety: a wrong path can only make the search fail.
+        include_str!("repo/snapshots.rs"),
         include_str!("dns_check.rs"),
         include_str!("neighbors.rs"),
         include_str!("l3.rs"),
