@@ -47,6 +47,7 @@ mod forward_store;
 mod gcp;
 mod groups;
 mod history;
+mod host_collector;
 mod interface_util;
 mod ipasn;
 mod l3;
@@ -112,7 +113,7 @@ mod volatile;
 mod webtls;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -358,39 +359,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         );
     }
 
-    // Offline IP→ASN table for flow AS enrichment (ADR-031 Increment 3). Opt-in/default-OFF: loaded
-    // once from a mounted iptoasn.com TSV. A missing/unreadable file logs and disables enrichment
-    // (non-fatal) so a stale path never takes core down. Shared by the writer (IP→AS) and the flow
-    // API (AS→name).
-    let ipasn_initial: Option<Arc<crate::ipasn::IpAsnDb>> =
-        cfg.ipasn_db_path.as_deref().and_then(|p| {
-            match crate::ipasn::IpAsnDb::load(std::path::Path::new(p)) {
-                Ok(db) if db.is_empty() => {
-                    tracing::warn!(
-                        path = p,
-                        "IP→ASN dataset loaded 0 ranges — AS enrichment disabled"
-                    );
-                    None
-                }
-                Ok(db) => {
-                    tracing::info!(
-                        ranges = db.len(),
-                        path = p,
-                        "IP→ASN enrichment enabled (ADR-031)"
-                    );
-                    Some(db)
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, path = p, "IP→ASN dataset load failed — AS enrichment disabled");
-                    None
-                }
-            }
-        });
-    // Hot-swappable handle shared by the writer (IP→AS) and flow API (AS→name). A background reloader
-    // (below, when YAGRA_IPASN_RELOAD_SECS > 0) can replace it without a restart, so an external
-    // updater refreshing the file keeps the table current (ADR-031).
-    let ipasn: crate::ipasn::IpAsnHandle =
-        std::sync::Arc::new(std::sync::RwLock::new(ipasn_initial));
+    // Offline IP→ASN table for flow AS enrichment (ADR-031 Increment 3), behind a hot-swappable
+    // handle shared by the flow writer (IP→AS) and the flow API (AS→name). Opt-in/default-OFF;
+    // `ipasn::open` carries what a missing or empty dataset does. The reloader starts below, once
+    // the shutdown token exists.
+    let ipasn: crate::ipasn::IpAsnHandle = ipasn::open(cfg.ipasn_db_path.as_deref());
 
     // Alert engine + notifier (env default route + DB channels/rules, ADR-015) + history.
     let alerts = Arc::new(AlertManager::new());
@@ -437,48 +410,14 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // (ADR-017). `serve` (end of `run`) installs the signal handler that cancels this token.
     let shutdown = CancellationToken::new();
 
-    // IP→ASN periodic reloader (ADR-031): when enabled, re-read the dataset from disk every
-    // `ipasn_reload_secs` and hot-swap it in, so an external updater (the compose `ipasn-updater`
-    // sidecar writing to a shared volume) keeps the table fresh without restarting core. Runs on every
-    // core (leader and standbys) since the flow API resolves names everywhere. A failed/empty reload
-    // keeps the previous table. Also recovers if the file appeared only after startup.
-    if let Some(path) = cfg.ipasn_db_path.clone() {
-        if cfg.ipasn_reload_secs > 0 {
-            let handle = ipasn.clone();
-            let sd = shutdown.clone();
-            let secs = cfg.ipasn_reload_secs;
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(Duration::from_secs(secs));
-                ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                ticker.tick().await; // consume the immediate first tick
-                loop {
-                    tokio::select! {
-                        () = sd.cancelled() => break,
-                        _ = ticker.tick() => {
-                            // Offload the blocking file read + parse/sort of the ~500k-row iptoasn TSV
-                            // onto the blocking pool so a reload tick never stalls a Tokio worker
-                            // (same discipline as the store-and-forward disk read).
-                            let p = path.clone();
-                            let loaded = tokio::task::spawn_blocking(move || {
-                                crate::ipasn::IpAsnDb::load(std::path::Path::new(&p))
-                            })
-                            .await;
-                            match loaded {
-                                Ok(Ok(db)) if !db.is_empty() => {
-                                    let ranges = db.len();
-                                    *handle.write().unwrap() = Some(db);
-                                    tracing::info!(ranges, "IP→ASN dataset reloaded (ADR-031)");
-                                }
-                                Ok(Ok(_)) => tracing::warn!("IP→ASN reload read 0 ranges — keeping previous table"),
-                                Ok(Err(e)) => tracing::warn!(error = %e, "IP→ASN reload failed — keeping previous table"),
-                                Err(e) => tracing::warn!(error = %e, "IP→ASN reload task panicked — keeping previous table"),
-                            }
-                        }
-                    }
-                }
-            });
-        }
-    }
+    // IP→ASN periodic reloader (ADR-031). Nothing starts unless a dataset and a non-zero interval
+    // are both configured; on every core when they are. `ipasn::start_reload` carries why.
+    ipasn::start_reload(
+        ipasn.clone(),
+        cfg.ipasn_db_path.as_deref(),
+        cfg.ipasn_reload_secs,
+        &shutdown,
+    );
 
     // HA leader election (ADR-016): every leader-only background task (coordinator consumers, the
     // result-ingest → alert/notify/persist chain, the event pipeline, the schedulers, and the
@@ -487,65 +426,26 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // inline so the API serves complete config from its first request, on the leader and standbys
     // alike. When HA is off, `leader_work` runs inline before `serve` — byte-identical to pre-HA.
 
-    // Core self-observability (monitoring-conventions): sample core's own host every
-    // HOST_SAMPLE_SECS, cache the latest for the System Health page, and persist the `yagra_host_*`
-    // series to the TSDB (core is the single writer for its own host + every poller's).
+    // Core self-observability (monitoring-conventions): the cache the System Health page reads, and
+    // the sampler that fills it. On every core; `host_collector::start` carries why.
     let core_host: api::CoreHostSample = Arc::new(std::sync::Mutex::new(None));
-    {
-        let store = store.clone();
-        let cache = core_host.clone();
-        let pool = repo.pool().clone();
-        spawn_cancellable(&shutdown, run_host_collector(store, cache, pool));
-    }
+    host_collector::start(
+        store.clone(),
+        core_host.clone(),
+        repo.pool().clone(),
+        &shutdown,
+    );
 
-    // Per-poller NATS credential scoping via Auth Callout (ADR-030). When a callout account seed is
-    // mounted AND the poller bootstrap secret is set, run core as the NATS auth service on EVERY core
-    // (queue-subscribed, not leader-gated) so authentication survives a failover. Unset ⇒ NATS uses
-    // its static account config and this is a no-op — byte-identical to today's deployments.
-    if let (Some(seed_path), Some(secret)) = (
+    // Per-poller NATS credential scoping via Auth Callout (ADR-030). A no-op unless both inputs are
+    // set; on every core when they are. `authcallout::start` carries why it is queue-subscribed.
+    authcallout::start(
         cfg.nats_callout_seed_file.as_deref(),
+        &cfg.nats_callout_account,
         cfg.nats_poller_password.clone(),
-    ) {
-        match std::fs::read_to_string(seed_path) {
-            Ok(seed) => {
-                match yagra_authz::AccountSigner::from_seed(
-                    seed.trim(),
-                    cfg.nats_callout_account.clone(),
-                ) {
-                    Ok(signer) => {
-                        // The issuer public key is NOT a secret — the operator pastes it into the
-                        // NATS `auth_callout { issuer }` config, so surface it on startup.
-                        tracing::info!(
-                            issuer = %signer.issuer_public_key(),
-                            account = %cfg.nats_callout_account,
-                            "auth-callout enabled (ADR-030) — set this issuer in nats-server.conf auth_callout"
-                        );
-                        spawn_cancellable(
-                            &shutdown,
-                            authcallout::run_auth_callout(
-                                bus.client(),
-                                Arc::new(signer),
-                                secret,
-                                // The inventory is now part of the decision (ADR-065 Inc.3): an id
-                                // with no row here is refused, and one with a token of its own is
-                                // no longer opened by the deployment-wide secret.
-                                poller_repo.clone(),
-                            ),
-                        );
-                    }
-                    Err(e) => tracing::error!(
-                        error = %e,
-                        "auth-callout: invalid account seed; per-poller credential scoping disabled"
-                    ),
-                }
-            }
-            Err(e) => tracing::error!(
-                error = %e,
-                path = %seed_path,
-                "auth-callout: cannot read seed file; per-poller credential scoping disabled"
-            ),
-        }
-    }
+        bus.client(),
+        poller_repo.clone(),
+        &shutdown,
+    );
 
     // Discovery: a runner that publishes sweep jobs (shared with the API) + a consumer that folds
     // results back in — the consumer is leader-only (spawned in `leader_work`).
@@ -670,30 +570,9 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
 
     // Write side (inventory + encrypted credentials + users + thresholds), sharing the pool.
     let users = Arc::new(UserStore::new(repo.pool()));
-    // Bootstrap admin: use YAGRA_ADMIN_PASSWORD when supplied, otherwise generate a random
-    // one-time password — never a well-known default like "admin" (security.md).
-    let provided_admin_password = std::env::var("YAGRA_ADMIN_PASSWORD")
-        .ok()
-        .filter(|p| !p.trim().is_empty());
-    let admin_password = provided_admin_password
-        .clone()
-        .unwrap_or_else(auth::generate_bootstrap_password);
-    if users.ensure_default_admin(&admin_password).await? {
-        if provided_admin_password.is_some() {
-            tracing::warn!(
-                "SECURITY: seeded the initial 'admin' account from YAGRA_ADMIN_PASSWORD — \
-                 change it after first login"
-            );
-        } else {
-            // One-time disclosure of the generated bootstrap password so the operator can log in;
-            // it is not stored in plaintext and will not be shown again.
-            tracing::warn!(
-                admin_bootstrap_password = %admin_password,
-                "SECURITY: no YAGRA_ADMIN_PASSWORD set — generated a one-time bootstrap password \
-                 for the 'admin' account (shown once above). Log in and change it immediately."
-            );
-        }
-    }
+    // Bootstrap admin on a fresh database. `auth::ensure_bootstrap_admin` carries the rule that the
+    // generated password is disclosed to the log exactly once, on purpose.
+    auth::ensure_bootstrap_admin(&users).await?;
     // Troubleshoot analysis runner (ADR-022): read-only background diagnostics. Reads VictoriaMetrics
     // plus, for the event/flow analyses (ADR-024/031 increment), the passive-event store and the flow
     // store (both read-only + admission-bounded — still a "read"). The orphan-reconcile (fail jobs
@@ -870,68 +749,16 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         config_bundle: Arc::new(config_bundle::ConfigBundleRepo::new(repo.pool().clone())),
         support: Arc::new(support_bundle::SupportRepo::new(repo.pool().clone())),
     }));
-    // Session store. Default: opaque per-process tokens (byte-identical to pre-HA). When a session
-    // signing key is mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any
-    // core sharing the key verifies synchronously — the Core HA active/active session substrate
-    // (ADR-016 Increment 2a). Revocation rides a per-core denylist fed by the durable
-    // `auth_revocations` table (cold-loaded here) and the `yagra.auth.revoke` bus fan-out.
-    let sessions = if let Some(key_path) = cfg.session_key_file.as_deref() {
-        // Fail-closed: a configured-but-unreadable/invalid key aborts startup (don't silently
-        // downgrade to per-core sessions under a multi-core expectation). The key is never logged.
-        let key = token::load_session_key(key_path)?;
-        tracing::info!(
-            path = %key_path,
-            "signed session tokens enabled (ADR-016 Increment 2a) — sessions verify on any core sharing the key"
-        );
-        let (revoke_tx, revoke_rx) =
-            tokio::sync::mpsc::unbounded_channel::<yagra_bus::AuthRevoke>();
-        let store = Arc::new(SessionStore::with_signer(
-            token::TokenSigner::new(key),
-            revoke_tx,
-        ));
-        // Cold-load durable revocations so a restart / promotion honors prior logouts & disables.
-        match auth::load_active_revocations(&repo.pool()).await {
-            Ok(list) => {
-                let n = list.len();
-                for r in &list {
-                    store.apply_remote_revoke(r);
-                }
-                if n > 0 {
-                    tracing::info!(
-                        count = n,
-                        "loaded active session revocations from auth_revocations"
-                    );
-                }
-            }
-            Err(e) => tracing::warn!(error = %e, "failed to load session revocations (continuing)"),
-        }
-        // These run on EVERY core (not leader-gated) so a revocation is durable + reaches all cores,
-        // and every core honors revocations made elsewhere — required once reads go active/active.
-        {
-            let bus = bus.clone();
-            let pool = repo.pool().clone();
-            spawn_cancellable(&shutdown, run_auth_revoke_writer(revoke_rx, bus, pool));
-        }
-        {
-            let bus = bus.clone();
-            let store = store.clone();
-            spawn_cancellable(&shutdown, run_auth_revoke_subscriber(bus, store));
-        }
-        {
-            let store = store.clone();
-            let pool = repo.pool().clone();
-            spawn_cancellable(&shutdown, run_revocation_pruner(store, pool));
-        }
-        store
-    } else {
-        if cfg.enable_ha {
-            tracing::warn!(
-                "HA enabled without YAGRA_SESSION_KEY_FILE — sessions remain per-core in-memory \
-                 (fine for active/passive; set a key file for the coming active/active read scale-out)"
-            );
-        }
-        Arc::new(SessionStore::new())
-    };
+    // Session store, plus the three revocation tasks when a signing key is mounted. On every core;
+    // `auth::start_sessions` carries the fail-closed rule and why none of it is leader-gated.
+    let sessions = auth::start_sessions(
+        cfg.session_key_file.as_deref(),
+        cfg.enable_ha,
+        repo.pool(),
+        bus.clone(),
+        &shutdown,
+    )
+    .await?;
     // External-IdP login (OIDC, ADR-010 Phase 3): provider store (envelope-encrypted secret) + the
     // in-memory in-flight authorization map.
     let oidc = Some(Arc::new(oidc::OidcRepo::new(repo.pool(), kek.clone())));
@@ -939,129 +766,32 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // Directory login (LDAP/AD, ADR-041): the single configuration row, with the service account's
     // bind password sealed by the same KEK. No in-flight map — there is no redirect leg.
     let ldap = Some(Arc::new(ldap::LdapRepo::new(repo.pool(), kek.clone())));
-    // The WebUI's own TLS certificate (ADR-044). Same KEK as every other secret; the directory is
-    // where the certificate is materialized for nginx to read, and is absent on a deployment that
-    // terminates TLS somewhere else.
-    let webtls = Arc::new(webtls::WebTlsRepo::new(
-        repo.pool(),
-        kek.clone(),
-        std::env::var("YAGRA_TLS_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from),
-    ));
+    // The WebUI's own TLS certificate (ADR-044). Same KEK as every other secret.
+    let webtls = webtls::open(repo.pool(), kek.clone());
     // The bus's certificate (ADR-065). Written by the `bus-cert` one-shot before this process
     // starts; core holds the repo so Settings ▸ Pollers can show what remote sites must pin and mint
     // a replacement covering a new site's address. Core deliberately runs no renewal timer for it —
     // see `bus_cert`'s module doc: a new bus certificate disconnects every site until each is given
     // the new one, so it is an operator action rather than a background chore.
-    let bus_tls = Arc::new(bus_cert::BusTlsRepo::new(
-        repo.pool(),
-        kek.clone(),
-        std::env::var("YAGRA_BUS_TLS_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from),
-    ));
+    let bus_tls = bus_cert::open(repo.pool(), kek.clone());
 
-    // Built before `repo` is erased to `Arc<dyn NodeListing>` below, which moves it. An unset
-    // YAGRA_UPGRADE_DIR means the updater sidecar is not deployed, which is the default: the
-    // migration/compatibility half still answers, the apply half reports itself disabled.
-    let upgrade = Arc::new(upgrade::UpgradeRepo::new(
-        repo.pool(),
-        std::env::var("YAGRA_UPGRADE_DIR")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(std::path::PathBuf::from),
-        std::env::var("YAGRA_UPGRADE_BUNDLE_MAX_BYTES")
-            .ok()
-            .and_then(|s| s.trim().parse().ok())
-            .unwrap_or(upgrade::DEFAULT_BUNDLE_MAX_BYTES),
-    ));
+    // ⚠️ Built before `repo` is erased to `Arc<dyn NodeListing>` below, which moves it.
+    let upgrade = upgrade::open(repo.pool());
+    // Settle the run that replaced the previous process, sweep abandoned archives, republish the
+    // switch. On every core; `upgrade::start` carries why, and why it is not awaited.
+    upgrade::start(
+        &upgrade,
+        audit_repo.clone(),
+        maintenance.clone(),
+        bus.clone(),
+        coordinator.clone(),
+        &shutdown,
+    )
+    .await;
 
-    // If an upgrade replaced the process we just took over from, see it through: close its audit
-    // trail, and give the fleet back the monitoring the run's maintenance window is suppressing.
-    //
-    // Deliberately not leader-gated — the claim marker makes a double-run harmless, whereas
-    // deferring it behind leadership would lose both on a single-core deployment that is not yet
-    // leader when this runs.
-    //
-    // Deliberately **not** awaited, which is the change: core boots during the updater's `compose`
-    // step, so the run is still in flight when this starts and settling it means waiting for the
-    // outcome. Awaiting that would hold the whole API port closed for the length of an upgrade.
-    {
-        let upgrade = upgrade.clone();
-        let audit = audit_repo.clone();
-        let maintenance = maintenance.clone();
-        let bus_up = bus.clone();
-        let coord = coordinator.clone();
-        spawn_cancellable(&shutdown, async move {
-            let Some(run) = upgrade.settle_finished_run(&audit, &maintenance).await else {
-                return;
-            };
-            // Remote-site pollers are a separate compose project on a separate host, so core's own
-            // upgrade never touched them (ADR-051). Hand them the same release now — and only now:
-            // N/N-1 covers new-core-with-old-poller, while the reverse has a known routing hole
-            // (ADR-009), so "core first" is a constraint rather than a preference.
-            if run.state != "succeeded" {
-                return;
-            }
-            let Some(tag) = run.target.clone() else {
-                return;
-            };
-            let targets: Vec<poller_upgrade::Target> = coord
-                .poller_views(std::time::Instant::now())
-                .into_iter()
-                .filter(|v| v.online && v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE))
-                .map(|v| poller_upgrade::Target {
-                    id: v.id,
-                    pool: v.pool,
-                    version: v.version,
-                    incarnation: v.incarnation,
-                })
-                .collect();
-            poller_upgrade::converge(
-                poller_upgrade::Run {
-                    bus: bus_up,
-                    coordinator: coord,
-                    audit,
-                    tag,
-                    run_id: run.id,
-                    requested_by: run.requested_by.unwrap_or_else(|| "unknown".to_owned()),
-                },
-                targets,
-            )
-            .await;
-        });
-    }
-    // An uploaded image archive is a gigabyte, and the paths that abandon one all end with core
-    // not running (ADR-050 Increment 3). Startup is therefore the only reliable place to sweep.
-    upgrade.prune_stale_bundles();
-    // Republish the operator's switch into the hand-off volume. PostgreSQL is the source of truth
-    // and the file is its cache, so a deleted volume — or one last written by a core that has since
-    // been replaced — converges here rather than silently disagreeing with what was chosen.
-    upgrade.publish_enabled(upgrade.enabled().await);
-
-    // Support-log retrieval from remote-site pollers (ADR-045 Inc.4). The reply subscriber is a
-    // process-lifetime task rather than one started per bundle: a subscription set up at request
-    // time races the first chunk, and a bundle is taken during an incident, which is the worst
-    // moment for a race that loses evidence.
-    //
-    // Deliberately **not** leader-gated. A bundle is an on-demand read a standby must be able to
-    // serve — ADR-016's whole point is that either core answers — and two cores subscribed here is
-    // harmless: each routes only by its own request ids and drops the rest.
-    let poller_log_collector = Arc::new(poller_logs::PollerLogCollector::new(bus.clone()));
-    match bus.subscribe_poller_log_chunks().await {
-        Ok(stream) => {
-            let collector = poller_log_collector.clone();
-            spawn_cancellable(&shutdown, collector.run_reply_loop(Box::pin(stream)));
-        }
-        // Not fatal: the support bundle degrades to "no remote poller logs", which it already
-        // reports by name. Nothing else in core depends on this subscription.
-        Err(e) => {
-            tracing::warn!(error = %e, "support-log replies unavailable; remote poller logs will be recorded as gaps");
-        }
-    }
+    // Support-log retrieval from remote-site pollers (ADR-045 Inc.4). Process-lifetime subscriber,
+    // on every core; `poller_logs::start` carries why it is neither per-bundle nor leader-gated.
+    let poller_log_collector = poller_logs::start(bus.clone(), &shutdown).await;
 
     let nodes: Arc<dyn NodeListing> = repo;
     let state = ApiState {
@@ -1093,67 +823,21 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         poller_logs: Some(poller_log_collector),
     };
 
-    // Establish the certificate BEFORE the listener binds, so "core is healthy" implies the file
-    // nginx is about to open already exists — which is what turns the compose files'
-    // `depends_on: core: {condition: service_healthy}` into a guarantee instead of a race that
-    // usually goes the right way. Deliberately not leader-gated: on a fresh database a standby that
-    // starts first must still be able to bootstrap one, or `web` waits forever for a file the leader
-    // has not been elected to write.
-    let tls_names = webtls::configured_names();
-    webtls.ensure_ready(&tls_names).await;
-    {
-        // Renewal. Also not leader-gated, and safe not to be: the write is content-addressed and
-        // atomic, so two cores producing the same bytes is a no-op, and only a self-signed
-        // certificate is ever replaced.
-        let webtls = webtls.clone();
-        let shutdown_renew = shutdown.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(webtls::RENEWAL_CHECK_INTERVAL);
-            tick.tick().await; // the first tick is immediate, and ensure_ready just ran
-            loop {
-                tokio::select! {
-                    () = shutdown_renew.cancelled() => break,
-                    _ = tick.tick() => webtls.ensure_ready(&tls_names).await,
-                }
-            }
-        });
-    }
+    // Materialize the WebUI certificate BEFORE the listener binds, and keep it renewed. Both halves
+    // run on every core; `webtls::materialize_and_renew` carries the reason.
+    webtls::materialize_and_renew(webtls.clone(), &shutdown).await;
 
-    if cfg.enable_ha {
-        // Standby until the advisory lock is won. The API (incl. `/healthz`) already serves below,
-        // so the container stays healthy while waiting; promotion is live (no restart). A lost lock
-        // connection = graceful shutdown for orchestrator restart (spawn-once, ADR-016 model B).
-        let shutdown_lease = shutdown.clone();
-        let is_leader = is_leader.clone();
-        let db_url = cfg.database_url.clone();
-        let core_label = cfg.core_id.clone().unwrap_or_else(|| "core".to_owned());
-        tokio::spawn(async move {
-            tracing::info!(core = %core_label, "HA enabled — standby, waiting for leadership");
-            let Some(conn) = leader::acquire(&db_url, &shutdown_lease).await else {
-                return; // shutdown fired before leadership was won
-            };
-            is_leader.store(true, Ordering::Release);
-            metrics::gauge!("yagra_core_is_leader").set(1.0);
-            tracing::info!(core = %core_label, "acquired leadership — starting coordinator and background workers");
-            if let Err(e) = leader_work.await {
-                tracing::error!(error = %e, "leader startup failed — shutting down for restart");
-                shutdown_lease.cancel();
-                return;
-            }
-            leader::hold_until_lost(conn, &shutdown_lease).await;
-            if !shutdown_lease.is_cancelled() {
-                is_leader.store(false, Ordering::Release);
-                metrics::gauge!("yagra_core_is_leader").set(0.0);
-                tracing::error!(
-                    "lost leadership (PostgreSQL connection lost) — shutting down for restart"
-                );
-                shutdown_lease.cancel();
-            }
-        });
-    } else {
-        // Single active core: run all leader work inline before serving — byte-identical to pre-HA.
-        leader_work.await?;
-    }
+    // Leader-only work starts now (HA off) or the moment this core wins the advisory lock (HA on).
+    // The election itself lives in `leader.rs` — see `run_leader_work` for the standby behaviour.
+    leader::run_leader_work(
+        cfg.enable_ha,
+        &cfg.database_url,
+        cfg.core_id.as_deref(),
+        is_leader.clone(),
+        &shutdown,
+        leader_work,
+    )
+    .await?;
 
     serve(state, &cfg.api_addr, metrics, shutdown).await
 }
@@ -1646,98 +1330,6 @@ async fn run_skeleton(metrics: PrometheusHandle) -> anyhow::Result<()> {
         poller_logs: None,
     };
     serve(state, "0.0.0.0:8080", metrics, CancellationToken::new()).await
-}
-
-/// How often core samples its own host resources (self-observability). Matches the WebUI refresh.
-pub(crate) const HOST_SAMPLE_SECS: u64 = 15;
-
-/// Drain locally-produced session revocations (logout / user disable-demote-reset-delete): persist
-/// each to the durable `auth_revocations` table so it survives restart/failover, then fan it out on
-/// `yagra.auth.revoke` so every other core denies the token too (Core HA active/active, ADR-016
-/// Increment 2a). Runs on every core. Loops until the channel closes on shutdown.
-async fn run_auth_revoke_writer(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<yagra_bus::AuthRevoke>,
-    bus: Arc<dyn yagra_bus::PeerBus>,
-    pool: sqlx::PgPool,
-) {
-    while let Some(revoke) = rx.recv().await {
-        // Persist first (durable source of truth), then fan out (best-effort live propagation).
-        if let Err(e) = auth::persist_revocation(&pool, &revoke).await {
-            tracing::warn!(error = %e, "failed to persist session revocation");
-        }
-        if let Err(e) = bus.publish_auth_revoke(revoke).await {
-            tracing::warn!(error = %e, "failed to fan out session revocation to other cores");
-        }
-    }
-}
-
-/// Apply session revocations fanned out by other cores to this core's in-memory denylist so a token
-/// revoked anywhere is denied here (Core HA active/active, ADR-016 Increment 2a). Runs on every core.
-async fn run_auth_revoke_subscriber(bus: Arc<NatsBus>, sessions: Arc<SessionStore>) {
-    let stream = match bus.subscribe_auth_revoke().await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(error = %e, "auth-revoke subscribe failed; cross-core session revocation is DOWN");
-            return;
-        }
-    };
-    tokio::pin!(stream);
-    while let Some(revoke) = stream.next().await {
-        sessions.apply_remote_revoke(&revoke);
-    }
-}
-
-/// Periodically drop expired denylist entries (in-memory) and expired rows (durable table) so both
-/// stay bounded. Hourly is ample — entries live at most the token absolute TTL (24h).
-async fn run_revocation_pruner(sessions: Arc<SessionStore>, pool: sqlx::PgPool) {
-    let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tick.tick().await;
-        sessions.prune_denylist();
-        if let Err(e) = auth::prune_revocations(&pool).await {
-            tracing::debug!(error = %e, "session-revocation table prune failed");
-        }
-    }
-}
-
-/// Sample core's own host every [`HOST_SAMPLE_SECS`]: refresh the shared latest-sample cache (read
-/// by `GET /api/v1/system/hosts`) and persist the `yagra_host_*` series to the TSDB. Also records
-/// PostgreSQL growth as a `mount="database"` used-only proxy — core can't `statvfs` the 0700 PG data
-/// dir, so its size comes from `pg_database_size`. Runs for the process lifetime.
-async fn run_host_collector(
-    store: Arc<dyn MetricStore>,
-    cache: api::CoreHostSample,
-    pool: sqlx::PgPool,
-) {
-    let collector = yagra_hoststats::HostCollector::from_env();
-    let mut tick = tokio::time::interval(Duration::from_secs(HOST_SAMPLE_SECS));
-    loop {
-        tick.tick().await;
-        let mut sample = collector.sample();
-        // Database growth trend: used-only proxy (capacity unknown ⇒ size_bytes = 0).
-        match sqlx::query_scalar::<_, i64>("SELECT pg_database_size(current_database())")
-            .fetch_one(&pool)
-            .await
-        {
-            Ok(bytes) => sample.disks.push(yagra_common::DiskUsage {
-                mount: "database".to_owned(),
-                used_bytes: u64::try_from(bytes).unwrap_or(0),
-                size_bytes: 0,
-            }),
-            Err(e) => tracing::debug!(error = %e, "pg_database_size query failed"),
-        }
-        let at_unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-            .unwrap_or(0);
-        store
-            .write_host_sample("core", "core", None, &sample, at_unix_ms)
-            .await;
-        if let Ok(mut g) = cache.lock() {
-            *g = Some(sample);
-        }
-    }
 }
 
 /// Bounded queue between the single result matcher and each async batch persist writer (ADR-025,
@@ -3664,8 +3256,81 @@ mod tests {
     use yagra_bus::{CheckOutcome, Sample};
     use yagra_common::{NodeId, SeriesKey};
 
-    /// This file's own source, for the structural assertion below.
-    const SRC: &str = include_str!("main.rs");
+    /// This file's own source, for the structural assertions below.
+    ///
+    /// Read through [`module_source`] rather than `include_str!` + `.split("#[cfg(test)]")`: that
+    /// idiom is what the note above the `mod module_source;` declaration is about, and the helper
+    /// already cuts each file at its **own** test tail while ignoring a `#[cfg(test)] mod x;`
+    /// declaration. Doing it here means this file can grow such a declaration anywhere without
+    /// quietly truncating what these tests read (ADR-089/090).
+    fn production_source() -> String {
+        let files = crate::module_source::files(&crate::module_source::roots("src", "main"));
+        let (_, code) = files
+            .into_iter()
+            .find(|(name, _)| name == "main.rs")
+            .expect("main.rs is a module root");
+        code
+    }
+
+    /// `run_live`'s body, from its signature to the closing brace at column 0.
+    ///
+    /// 🚨 **The floor is not decoration.** Everything below asks whether something is *absent* from
+    /// this text, and an absence claim over an empty string is satisfied by nothing at all — the
+    /// fifth-time failure ADR-089 named. So a caller that gets a slice which does not look like the
+    /// wiring must fail here, loudly, rather than report "nothing wrong".
+    fn run_live_body() -> String {
+        let src = production_source();
+        let from = src
+            .split_once("async fn run_live(")
+            .expect("run_live is declared in main.rs")
+            .1;
+        let body = match from.find("\n}\n") {
+            Some(i) => &from[..i],
+            None => from,
+        };
+        let lines = body.lines().count();
+        assert!(
+            lines >= 250,
+            "run_live came back as {lines} lines — the slice is wrong, and every assertion over it \
+             would pass for want of anything to check"
+        );
+        assert!(
+            body.contains("let state = ApiState {"),
+            "the slice does not contain the state it exists to build; it is not run_live's body"
+        );
+        body.to_owned()
+    }
+
+    /// **`run_live` wires; it does not start anything itself.**
+    ///
+    /// ADR-090's property. Every background task now starts inside the module that owns its
+    /// subject — `ipasn::start_reload`, `authcallout::start`, `auth::start_sessions`,
+    /// `upgrade::start`, `webtls::materialize_and_renew`, `poller_logs::start`,
+    /// `host_collector::start`, `leader::run_leader_work` — or in [`LeaderTasks`], which is the
+    /// same rule for the leader-gated half. That is what makes "is this safe on every core?" a
+    /// question with a written answer next to the loop, instead of a comment in the wiring.
+    ///
+    /// ⚠️ What this does **not** check is whether a given task is gated *correctly*. HA is off by
+    /// default and the lab runs one core, so a mis-gated task is wrong only where nobody is
+    /// looking. A grep over comments was considered and rejected: a noisy check gets ignored.
+    ///
+    /// The needles are assembled at runtime — literals would match this test's own source if the
+    /// test tail ever stopped being cut.
+    #[test]
+    fn run_live_starts_no_task_of_its_own() {
+        let body = run_live_body();
+        for needle in [
+            format!("tokio::{}", "spawn"),
+            format!("spawn_{}(", "cancellable"),
+        ] {
+            assert_eq!(
+                body.matches(needle.as_str()).count(),
+                0,
+                "run_live starts a task with `{needle}`; it belongs in the module that owns the \
+                 subject, or in LeaderTasks if it is leader-gated (ADR-090)"
+            );
+        }
+    }
 
     /// **In shadow mode the alert engine receives the manual graph, and nothing else.**
     ///
@@ -3678,10 +3343,7 @@ mod tests {
     /// pass forever.
     #[test]
     fn only_the_derived_mode_hands_the_engine_a_derived_graph() {
-        let production = SRC
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
+        let production = production_source();
         let guard = format!("get_topology_mode().await.{}()", "uses_derived");
         assert!(
             production.contains(&guard),
@@ -4219,10 +3881,7 @@ mod tests {
     /// match this test's own source and pass forever.
     #[test]
     fn the_alert_config_base_never_degrades_a_failed_load_to_an_empty_one() {
-        let production = SRC
-            .split("#[cfg(test)]")
-            .next()
-            .expect("split always yields a first element");
+        let production = production_source();
         let f = production
             .split("async fn load_alert_config_base")
             .nth(1)

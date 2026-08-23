@@ -402,6 +402,22 @@ impl BusTlsRepo {
     }
 }
 
+/// Open the store, reading the materialization directory from the environment.
+///
+/// Moved here from `run_live` by ADR-090 so the variable is read by the module that uses it.
+/// `None` (unset) is the deployment that never exposes its bus, where the row still exists and
+/// nothing is written to disk.
+pub(crate) fn open(pool: PgPool, kek: Kek) -> std::sync::Arc<BusTlsRepo> {
+    std::sync::Arc::new(BusTlsRepo::new(
+        pool,
+        kek,
+        std::env::var("YAGRA_BUS_TLS_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from),
+    ))
+}
+
 /// Create restrictively, write, fsync, then rename — so no reader ever sees a partial file and the
 /// private key is never briefly readable by anyone the final mode would exclude.
 fn write_atomically(dst: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {

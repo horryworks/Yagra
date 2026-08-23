@@ -371,6 +371,38 @@ fn assemble(pending: HashMap<String, Pending>) -> RemoteLogs {
     out
 }
 
+/// Build the collector and start its reply loop for the process lifetime.
+///
+/// Moved here from `run_live` by ADR-090. The loop is process-lifetime rather than per-bundle for
+/// the reason in this module's doc: a subscription set up at request time races the first chunk,
+/// and a bundle is taken during an incident — the worst moment for a race that loses evidence.
+///
+/// **Runs on every core, deliberately not leader-gated.** A bundle is an on-demand read a standby
+/// must be able to serve — ADR-016's whole point is that either core answers — and two cores
+/// subscribed here is harmless: each routes only by its own request ids and drops the rest.
+///
+/// A failed subscription is **not** fatal, in keeping with "it cannot fail a bundle" above: the
+/// bundle degrades to "no remote poller logs", which it already reports by name, and nothing else
+/// in core depends on this subscription.
+pub(crate) async fn start(
+    bus: Arc<yagra_bus::NatsBus>,
+    shutdown: &yagra_telemetry::CancellationToken,
+) -> Arc<PollerLogCollector> {
+    let collector = Arc::new(PollerLogCollector::new(bus.clone()));
+    match bus.subscribe_poller_log_chunks().await {
+        Ok(stream) => {
+            yagra_telemetry::spawn_cancellable(
+                shutdown,
+                collector.clone().run_reply_loop(Box::pin(stream)),
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "support-log replies unavailable; remote poller logs will be recorded as gaps");
+        }
+    }
+    collector
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

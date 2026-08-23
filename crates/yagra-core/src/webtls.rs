@@ -593,6 +593,53 @@ const SAVE_SQL: &str = "INSERT INTO web_tls_config \
        fingerprint_sha256 = EXCLUDED.fingerprint_sha256, key_algorithm = EXCLUDED.key_algorithm, \
        imported_at = now(), imported_by = EXCLUDED.imported_by";
 
+/// Open the store, reading the materialization directory from the environment.
+///
+/// The directory is absent on a deployment that terminates TLS somewhere else, in which case the
+/// row is still the record and nothing is written to disk. Moved here from `run_live` by ADR-090
+/// so the variable is read by the module that uses it.
+pub(crate) fn open(pool: PgPool, kek: Kek) -> std::sync::Arc<WebTlsRepo> {
+    std::sync::Arc::new(WebTlsRepo::new(
+        pool,
+        kek,
+        std::env::var("YAGRA_TLS_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from),
+    ))
+}
+
+/// Materialize the certificate now, then keep it fresh for the process lifetime.
+///
+/// **The caller must await this before its listener binds**, so "core is healthy" implies the file
+/// nginx is about to open already exists — which is what turns the compose files'
+/// `depends_on: core: {condition: service_healthy}` into a guarantee instead of a race that usually
+/// goes the right way.
+///
+/// **Runs on every core, deliberately not leader-gated**, in both halves. On a fresh database a
+/// standby that starts first must still be able to bootstrap a certificate, or `web` waits forever
+/// for a file the leader has not been elected to write. Renewal is safe unguarded for a different
+/// reason: the write is content-addressed and atomic, so two cores producing the same bytes is a
+/// no-op, and only a self-signed certificate is ever replaced.
+pub(crate) async fn materialize_and_renew(
+    repo: std::sync::Arc<WebTlsRepo>,
+    shutdown: &yagra_telemetry::CancellationToken,
+) {
+    let tls_names = configured_names();
+    repo.ensure_ready(&tls_names).await;
+    let shutdown_renew = shutdown.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(RENEWAL_CHECK_INTERVAL);
+        tick.tick().await; // the first tick is immediate, and ensure_ready just ran
+        loop {
+            tokio::select! {
+                () = shutdown_renew.cancelled() => break,
+                _ = tick.tick() => repo.ensure_ready(&tls_names).await,
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

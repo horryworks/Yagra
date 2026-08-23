@@ -1274,6 +1274,155 @@ async fn enabled_admin_count(
     Ok(n)
 }
 
+// ── Startup (moved out of `run_live` by ADR-090) ────────────────────────────────────────────────
+
+/// Seed the `admin` account on a fresh database, and disclose its password exactly once.
+///
+/// Uses `YAGRA_ADMIN_PASSWORD` when supplied, otherwise generates a random one-time password —
+/// never a well-known default like "admin" (security.md). ⚠️ The generated one is **written to the
+/// log on purpose**: it is not stored in plaintext anywhere and will not be shown again, so this is
+/// the operator's only chance to read it. That is a deliberate disclosure, not an oversight, and it
+/// happens only when the account did not already exist.
+pub(crate) async fn ensure_bootstrap_admin(users: &UserStore) -> anyhow::Result<()> {
+    let provided = std::env::var("YAGRA_ADMIN_PASSWORD")
+        .ok()
+        .filter(|p| !p.trim().is_empty());
+    let admin_password = provided.clone().unwrap_or_else(generate_bootstrap_password);
+    if users.ensure_default_admin(&admin_password).await? {
+        if provided.is_some() {
+            tracing::warn!(
+                "SECURITY: seeded the initial 'admin' account from YAGRA_ADMIN_PASSWORD — \
+                 change it after first login"
+            );
+        } else {
+            // One-time disclosure of the generated bootstrap password so the operator can log in;
+            // it is not stored in plaintext and will not be shown again.
+            tracing::warn!(
+                admin_bootstrap_password = %admin_password,
+                "SECURITY: no YAGRA_ADMIN_PASSWORD set — generated a one-time bootstrap password \
+                 for the 'admin' account (shown once above). Log in and change it immediately."
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Build the session store and, when signing is configured, start the three revocation tasks.
+///
+/// Default: opaque per-process tokens (byte-identical to pre-HA). When a session signing key is
+/// mounted (`YAGRA_SESSION_KEY_FILE`), mint stateless HMAC-signed tokens that any core sharing the
+/// key verifies synchronously — the Core HA active/active session substrate (ADR-016 Increment 2a).
+/// Revocation rides a per-core denylist fed by the durable `auth_revocations` table (cold-loaded
+/// here) and the `yagra.auth.revoke` bus fan-out.
+///
+/// **Fail-closed**: a configured-but-unreadable/invalid key aborts startup rather than silently
+/// downgrading to per-core sessions under a multi-core expectation. The key is never logged.
+///
+/// **The three tasks run on every core, deliberately not leader-gated**, so a revocation is durable
+/// and reaches all cores, and every core honours revocations made elsewhere — required once reads
+/// go active/active.
+pub(crate) async fn start_sessions(
+    session_key_file: Option<&str>,
+    enable_ha: bool,
+    pool: PgPool,
+    bus: std::sync::Arc<yagra_bus::NatsBus>,
+    shutdown: &yagra_telemetry::CancellationToken,
+) -> anyhow::Result<std::sync::Arc<SessionStore>> {
+    let Some(key_path) = session_key_file else {
+        if enable_ha {
+            tracing::warn!(
+                "HA enabled without YAGRA_SESSION_KEY_FILE — sessions remain per-core in-memory \
+                 (fine for active/passive; set a key file for the coming active/active read scale-out)"
+            );
+        }
+        return Ok(std::sync::Arc::new(SessionStore::new()));
+    };
+    let key = token::load_session_key(key_path)?;
+    tracing::info!(
+        path = %key_path,
+        "signed session tokens enabled (ADR-016 Increment 2a) — sessions verify on any core sharing the key"
+    );
+    let (revoke_tx, revoke_rx) = tokio::sync::mpsc::unbounded_channel::<AuthRevoke>();
+    let store = std::sync::Arc::new(SessionStore::with_signer(TokenSigner::new(key), revoke_tx));
+    // Cold-load durable revocations so a restart / promotion honors prior logouts & disables.
+    match load_active_revocations(&pool).await {
+        Ok(list) => {
+            let n = list.len();
+            for r in &list {
+                store.apply_remote_revoke(r);
+            }
+            if n > 0 {
+                tracing::info!(
+                    count = n,
+                    "loaded active session revocations from auth_revocations"
+                );
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "failed to load session revocations (continuing)"),
+    }
+    yagra_telemetry::spawn_cancellable(
+        shutdown,
+        run_auth_revoke_writer(revoke_rx, bus.clone(), pool.clone()),
+    );
+    yagra_telemetry::spawn_cancellable(shutdown, run_auth_revoke_subscriber(bus, store.clone()));
+    yagra_telemetry::spawn_cancellable(shutdown, run_revocation_pruner(store.clone(), pool));
+    Ok(store)
+}
+
+/// Drain locally-produced session revocations (logout / user disable-demote-reset-delete): persist
+/// each to the durable `auth_revocations` table so it survives restart/failover, then fan it out on
+/// `yagra.auth.revoke` so every other core denies the token too (Core HA active/active, ADR-016
+/// Increment 2a). Runs on every core. Loops until the channel closes on shutdown.
+async fn run_auth_revoke_writer(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<AuthRevoke>,
+    bus: std::sync::Arc<dyn yagra_bus::PeerBus>,
+    pool: PgPool,
+) {
+    while let Some(revoke) = rx.recv().await {
+        // Persist first (durable source of truth), then fan out (best-effort live propagation).
+        if let Err(e) = persist_revocation(&pool, &revoke).await {
+            tracing::warn!(error = %e, "failed to persist session revocation");
+        }
+        if let Err(e) = bus.publish_auth_revoke(revoke).await {
+            tracing::warn!(error = %e, "failed to fan out session revocation to other cores");
+        }
+    }
+}
+
+/// Apply session revocations fanned out by other cores to this core's in-memory denylist so a token
+/// revoked anywhere is denied here (Core HA active/active, ADR-016 Increment 2a). Runs on every core.
+async fn run_auth_revoke_subscriber(
+    bus: std::sync::Arc<yagra_bus::NatsBus>,
+    sessions: std::sync::Arc<SessionStore>,
+) {
+    use futures::StreamExt;
+    let stream = match bus.subscribe_auth_revoke().await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(error = %e, "auth-revoke subscribe failed; cross-core session revocation is DOWN");
+            return;
+        }
+    };
+    tokio::pin!(stream);
+    while let Some(revoke) = stream.next().await {
+        sessions.apply_remote_revoke(&revoke);
+    }
+}
+
+/// Periodically drop expired denylist entries (in-memory) and expired rows (durable table) so both
+/// stay bounded. Hourly is ample — entries live at most the token absolute TTL (24h).
+async fn run_revocation_pruner(sessions: std::sync::Arc<SessionStore>, pool: PgPool) {
+    let mut tick = tokio::time::interval(Duration::from_secs(3600));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tick.tick().await;
+        sessions.prune_denylist();
+        if let Err(e) = prune_revocations(&pool).await {
+            tracing::debug!(error = %e, "session-revocation table prune failed");
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

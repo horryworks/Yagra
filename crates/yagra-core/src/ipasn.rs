@@ -154,6 +154,90 @@ impl IpAsnDb {
     }
 }
 
+/// Load the configured dataset once and hand back the hot-swappable handle.
+///
+/// Opt-in/default-OFF (ADR-031 Increment 3): `None` leaves the handle empty and AS names unset.
+/// A missing, unreadable or empty file **logs and disables enrichment** rather than failing startup
+/// — a stale path must never take core down. Moved here from `run_live` by ADR-090.
+///
+/// The handle is shared by the flow writer (IP→AS) and the flow API (AS→name), and
+/// [`start_reload`] can replace what is behind it without a restart.
+pub(crate) fn open(db_path: Option<&str>) -> IpAsnHandle {
+    let initial = db_path.and_then(|p| match IpAsnDb::load(Path::new(p)) {
+        Ok(db) if db.is_empty() => {
+            tracing::warn!(
+                path = p,
+                "IP→ASN dataset loaded 0 ranges — AS enrichment disabled"
+            );
+            None
+        }
+        Ok(db) => {
+            tracing::info!(
+                ranges = db.len(),
+                path = p,
+                "IP→ASN enrichment enabled (ADR-031)"
+            );
+            Some(db)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, path = p, "IP→ASN dataset load failed — AS enrichment disabled");
+            None
+        }
+    });
+    Arc::new(std::sync::RwLock::new(initial))
+}
+
+/// Re-read the dataset from disk every `reload_secs` and hot-swap it in, so an external updater
+/// (the compose `ipasn-updater` sidecar writing to a shared volume) keeps the table fresh without
+/// restarting core. `0` (the default) starts nothing. Moved here from `run_live` by ADR-090.
+///
+/// **Runs on every core, deliberately not leader-gated** — the flow API resolves names everywhere,
+/// so a standby needs the same table the leader has.
+///
+/// A failed or empty reload **keeps the previous table**: a truncated file mid-write must not erase
+/// working enrichment. It also recovers if the file appeared only after startup.
+pub(crate) fn start_reload(
+    handle: IpAsnHandle,
+    db_path: Option<&str>,
+    reload_secs: u64,
+    shutdown: &yagra_telemetry::CancellationToken,
+) {
+    let Some(path) = db_path.map(str::to_owned) else {
+        return;
+    };
+    if reload_secs == 0 {
+        return;
+    }
+    let sd = shutdown.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(reload_secs));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ticker.tick().await; // consume the immediate first tick
+        loop {
+            tokio::select! {
+                () = sd.cancelled() => break,
+                _ = ticker.tick() => {
+                    // Offload the blocking file read + parse/sort of the ~500k-row iptoasn TSV
+                    // onto the blocking pool so a reload tick never stalls a Tokio worker
+                    // (same discipline as the store-and-forward disk read).
+                    let p = path.clone();
+                    let loaded = tokio::task::spawn_blocking(move || IpAsnDb::load(Path::new(&p))).await;
+                    match loaded {
+                        Ok(Ok(db)) if !db.is_empty() => {
+                            let ranges = db.len();
+                            *handle.write().unwrap() = Some(db);
+                            tracing::info!(ranges, "IP→ASN dataset reloaded (ADR-031)");
+                        }
+                        Ok(Ok(_)) => tracing::warn!("IP→ASN reload read 0 ranges — keeping previous table"),
+                        Ok(Err(e)) => tracing::warn!(error = %e, "IP→ASN reload failed — keeping previous table"),
+                        Err(e) => tracing::warn!(error = %e, "IP→ASN reload task panicked — keeping previous table"),
+                    }
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

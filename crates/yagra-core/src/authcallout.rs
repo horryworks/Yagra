@@ -33,6 +33,65 @@ fn unix_now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Start the responder when a callout account seed is mounted **and** the poller bootstrap secret
+/// is set. Moved here from `run_live` by ADR-090, together with the seed-file read.
+///
+/// **Runs on EVERY core, deliberately not leader-gated** — it is queue-subscribed (see
+/// [`AUTH_QUEUE`]), so one core always answers and authentication survives a failover.
+///
+/// Either input unset ⇒ NATS uses its static account config and this is a no-op, byte-identical to
+/// a deployment that never enabled ADR-030. A seed that is unreadable or invalid is logged at
+/// `error` and leaves scoping disabled rather than aborting startup: refusing to boot would take
+/// the whole deployment down over a feature that is off by default.
+///
+/// ⚠️ The seed itself is never logged. What *is* logged is the issuer **public** key, which is not a
+/// secret — the operator has to paste it into `nats-server.conf`'s `auth_callout { issuer }`, and
+/// startup is the only place it can be read from.
+pub(crate) fn start(
+    seed_file: Option<&str>,
+    account: &str,
+    poller_password: Option<String>,
+    client: Client,
+    pollers: Arc<crate::pollers::PollerRepo>,
+    shutdown: &yagra_telemetry::CancellationToken,
+) {
+    let (Some(seed_path), Some(secret)) = (seed_file, poller_password) else {
+        return;
+    };
+    let seed = match std::fs::read_to_string(seed_path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                path = %seed_path,
+                "auth-callout: cannot read seed file; per-poller credential scoping disabled"
+            );
+            return;
+        }
+    };
+    let signer = match AccountSigner::from_seed(seed.trim(), account.to_owned()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "auth-callout: invalid account seed; per-poller credential scoping disabled"
+            );
+            return;
+        }
+    };
+    tracing::info!(
+        issuer = %signer.issuer_public_key(),
+        account = %account,
+        "auth-callout enabled (ADR-030) — set this issuer in nats-server.conf auth_callout"
+    );
+    yagra_telemetry::spawn_cancellable(
+        shutdown,
+        // The inventory is part of the decision (ADR-065 Inc.3): an id with no row here is refused,
+        // and one with a token of its own is no longer opened by the deployment-wide secret.
+        run_auth_callout(client, Arc::new(signer), secret, pollers),
+    );
+}
+
 /// Subscribe to `$SYS.REQ.USER.AUTH` and answer each request with a per-poller-scoped user JWT (or a
 /// signed rejection). Loops until the subscription ends or the task is cancelled on shutdown.
 pub async fn run_auth_callout(

@@ -609,7 +609,7 @@ fn finite(v: f64) -> f64 {
 /// The PromQL a host trend chart reads: `selector`, folded to exactly one point per `step_s`.
 ///
 /// 🚨 **Never range-query the bare selector.** `yagra_host_*` is written every
-/// [`crate::HOST_SAMPLE_SECS`] (15s), and `query_range` returns, for each step boundary, the *last
+/// [`crate::host_collector::HOST_SAMPLE_SECS`] (15s), and `query_range` returns, for each step boundary, the *last
 /// raw sample* in its lookback window — so at any step coarser than the sample interval it draws
 /// one sample per step and silently discards the rest. Host CPU is not smooth: a polling cycle pegs
 /// the box for a few seconds and it falls back, a sawtooth locked to the poll interval. Sampling

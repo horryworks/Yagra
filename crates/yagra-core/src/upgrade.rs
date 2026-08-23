@@ -877,6 +877,98 @@ const SETTINGS_FILE: &str = "settings";
 /// `the_sidecar_reads_the_settings_key_core_writes`.
 const SETTINGS_ENABLED_KEY: &str = "enabled";
 
+/// Open the store, reading the hand-off directory and the archive ceiling from the environment.
+///
+/// Moved here from `run_live` by ADR-090 so the two variables are read by the module that uses
+/// them. ⚠️ The caller still has to build this **before `repo` is erased to `Arc<dyn NodeListing>`**,
+/// which moves it. An unset `YAGRA_UPGRADE_DIR` means the updater sidecar is not deployed, which is
+/// the default: the migration/compatibility half still answers, the apply half reports itself
+/// disabled.
+pub(crate) fn open(pool: PgPool) -> std::sync::Arc<UpgradeRepo> {
+    std::sync::Arc::new(UpgradeRepo::new(
+        pool,
+        std::env::var("YAGRA_UPGRADE_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from),
+        std::env::var("YAGRA_UPGRADE_BUNDLE_MAX_BYTES")
+            .ok()
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(DEFAULT_BUNDLE_MAX_BYTES),
+    ))
+}
+
+/// Settle the run that replaced the previous process, sweep abandoned archives, and republish the
+/// operator's switch. Moved here from `run_live` by ADR-090.
+///
+/// If an upgrade replaced the process we just took over from, see it through: close its audit
+/// trail, and give the fleet back the monitoring the run's maintenance window is suppressing.
+///
+/// **Runs on every core, deliberately not leader-gated** — the claim marker makes a double-run
+/// harmless, whereas deferring it behind leadership would lose both on a single-core deployment
+/// that is not yet leader when this runs.
+///
+/// Deliberately **not** awaited: core boots during the updater's `compose` step, so the run is
+/// still in flight when this starts and settling it means waiting for the outcome. Awaiting that
+/// would hold the whole API port closed for the length of an upgrade.
+pub(crate) async fn start(
+    repo: &std::sync::Arc<UpgradeRepo>,
+    audit: std::sync::Arc<crate::audit::AuditRepo>,
+    maintenance: std::sync::Arc<crate::maintenance::MaintenanceRepo>,
+    bus: std::sync::Arc<yagra_bus::NatsBus>,
+    coordinator: std::sync::Arc<crate::coordinator::Coordinator>,
+    shutdown: &yagra_telemetry::CancellationToken,
+) {
+    {
+        let upgrade = repo.clone();
+        yagra_telemetry::spawn_cancellable(shutdown, async move {
+            let Some(run) = upgrade.settle_finished_run(&audit, &maintenance).await else {
+                return;
+            };
+            // Remote-site pollers are a separate compose project on a separate host, so core's own
+            // upgrade never touched them (ADR-051). Hand them the same release now — and only now:
+            // N/N-1 covers new-core-with-old-poller, while the reverse has a known routing hole
+            // (ADR-009), so "core first" is a constraint rather than a preference.
+            if run.state != "succeeded" {
+                return;
+            }
+            let Some(tag) = run.target.clone() else {
+                return;
+            };
+            let targets: Vec<crate::poller_upgrade::Target> = coordinator
+                .poller_views(std::time::Instant::now())
+                .into_iter()
+                .filter(|v| v.online && v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE))
+                .map(|v| crate::poller_upgrade::Target {
+                    id: v.id,
+                    pool: v.pool,
+                    version: v.version,
+                    incarnation: v.incarnation,
+                })
+                .collect();
+            crate::poller_upgrade::converge(
+                crate::poller_upgrade::Run {
+                    bus,
+                    coordinator,
+                    audit,
+                    tag,
+                    run_id: run.id,
+                    requested_by: run.requested_by.unwrap_or_else(|| "unknown".to_owned()),
+                },
+                targets,
+            )
+            .await;
+        });
+    }
+    // An uploaded image archive is a gigabyte, and the paths that abandon one all end with core
+    // not running (ADR-050 Increment 3). Startup is therefore the only reliable place to sweep.
+    repo.prune_stale_bundles();
+    // Republish the operator's switch into the hand-off volume. PostgreSQL is the source of truth
+    // and the file is its cache, so a deleted volume — or one last written by a core that has since
+    // been replaced — converges here rather than silently disagreeing with what was chosen.
+    repo.publish_enabled(repo.enabled().await);
+}
+
 /// A fresh run id.
 ///
 /// Minted by the caller rather than inside [`UpgradeRepo::request`] because an archive upload names

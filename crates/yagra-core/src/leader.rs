@@ -12,6 +12,7 @@
 //! session ends") that match "leader until this process dies". The dedicated connection is +1
 //! outside `YAGRA_PG_MAX_CONNECTIONS`, so size PostgreSQL `max_connections` accordingly.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
@@ -121,6 +122,60 @@ impl Probe for PgProbe<'_> {
             }
         })
     }
+}
+
+/// Run the leader-only work — now, or the moment this core wins the election.
+///
+/// Moved out of `run_live` by ADR-090. Choosing *when* the singletons start is this module's
+/// subject, and it was the last background task the wiring spawned for itself.
+///
+/// With HA off (the default) `work` is awaited inline before the caller serves — byte-identical to
+/// pre-HA. With HA on the caller serves immediately and this stands by: the API (including
+/// `/healthz`) is already up, so the container stays healthy while waiting, and promotion is live
+/// (no restart). A lost lock connection = graceful shutdown for orchestrator restart (spawn-once,
+/// ADR-016 model B).
+pub(crate) async fn run_leader_work<F>(
+    enable_ha: bool,
+    database_url: &str,
+    core_id: Option<&str>,
+    is_leader: std::sync::Arc<AtomicBool>,
+    shutdown: &CancellationToken,
+    work: F,
+) -> anyhow::Result<()>
+where
+    F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+{
+    if !enable_ha {
+        // Single active core: run all leader work inline before serving — byte-identical to pre-HA.
+        return work.await;
+    }
+    let shutdown_lease = shutdown.clone();
+    let db_url = database_url.to_owned();
+    let core_label = core_id.map_or_else(|| "core".to_owned(), str::to_owned);
+    tokio::spawn(async move {
+        tracing::info!(core = %core_label, "HA enabled — standby, waiting for leadership");
+        let Some(conn) = acquire(&db_url, &shutdown_lease).await else {
+            return; // shutdown fired before leadership was won
+        };
+        is_leader.store(true, Ordering::Release);
+        metrics::gauge!("yagra_core_is_leader").set(1.0);
+        tracing::info!(core = %core_label, "acquired leadership — starting coordinator and background workers");
+        if let Err(e) = work.await {
+            tracing::error!(error = %e, "leader startup failed — shutting down for restart");
+            shutdown_lease.cancel();
+            return;
+        }
+        hold_until_lost(conn, &shutdown_lease).await;
+        if !shutdown_lease.is_cancelled() {
+            is_leader.store(false, Ordering::Release);
+            metrics::gauge!("yagra_core_is_leader").set(0.0);
+            tracing::error!(
+                "lost leadership (PostgreSQL connection lost) — shutting down for restart"
+            );
+            shutdown_lease.cancel();
+        }
+    });
+    Ok(())
 }
 
 #[cfg(test)]
