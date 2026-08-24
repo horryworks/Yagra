@@ -87,10 +87,35 @@ impl CheckState {
         }
     }
 
-    /// The currently committed state.
+    /// New check state holding a value **read back from persisted history** rather than seeded —
+    /// see [`hysteresis::DwellTracker::restored`]. The flap detector starts empty either way: its
+    /// window is a property of the running process, and a restart genuinely has no flap history.
+    #[must_use]
+    pub fn restored(
+        state: NodeState,
+        dwell: u32,
+        flap_window_ms: i64,
+        flap_threshold: usize,
+    ) -> Self {
+        Self {
+            dwell: DwellTracker::restored(state, dwell),
+            flap: FlapDetector::new(flap_window_ms, flap_threshold),
+        }
+    }
+
+    /// The currently committed state, seed or not.
+    ///
+    /// ⚠️ Anything that *displays* a state wants [`Self::observed`] — see ADR-097.
     #[must_use]
     pub const fn committed(&self) -> NodeState {
         self.dwell.committed()
+    }
+
+    /// The committed state **iff it was observed** — `None` while this check still holds the seed
+    /// it was constructed with. See [`hysteresis::DwellTracker::observed`].
+    #[must_use]
+    pub const fn observed(&self) -> Option<NodeState> {
+        self.dwell.observed()
     }
 
     /// Re-point the dwell at what the check's rule says now — see

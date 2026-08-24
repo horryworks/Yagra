@@ -361,7 +361,12 @@ impl AlertManager {
 
         // Push an incremental node-state event only when the rolled-up display state actually moved
         // (including this node's first observation) — subscribers patch the one node live instead of
-        // re-fetching the whole fleet (S14). `after` is `Some` whenever a liveness check ran.
+        // re-fetching the whole fleet (S14).
+        //
+        // ⚠️ `after` is **not** `Some` merely because a liveness check ran — since ADR-097 a check
+        // that has not yet confirmed anything writes no state, so both sides can be `None` and this
+        // emits nothing. That is the correct silence: a device whose first poll after a restart
+        // failed has told the engine nothing, and the old code broadcast `ok` for it.
         let state_after = self.node_state(node);
         if state_after != state_before {
             if let Some(state) = state_after {
@@ -459,7 +464,7 @@ impl AlertManager {
             eval,
             ifindex,
         } = spec;
-        let (transition, committed) = {
+        let (transition, observed) = {
             let mut states = self.states.lock().expect("states mutex poisoned");
             let cs = states.entry(check).or_insert_with(|| {
                 CheckState::new(NodeState::Ok, dwell.max(1), FLAP_WINDOW_MS, FLAP_THRESHOLD)
@@ -470,7 +475,7 @@ impl AlertManager {
             // showing 5. Re-point it every observation instead (ADR-075).
             cs.set_dwell(dwell.max(1));
             let t = cs.observe(raw, at_unix_ms);
-            (t, cs.committed())
+            (t, cs.observed())
         };
 
         // Keep the per-node committed liveness current even when nothing transitioned (a
@@ -478,26 +483,40 @@ impl AlertManager {
         // still needs to read it as `ok`). Capture whether this node's *down-set membership*
         // flipped (entered or left `Unreachable`) — that's exactly when downstream dependency
         // suppression must be re-evaluated (a parent going down/up changes its children's roll-up).
-        let down_set_changed = if is_liveness {
-            let previous = self
-                .live
-                .lock()
-                .expect("live mutex poisoned")
-                .insert(node, committed);
-            let flipped = matches!(previous, Some(NodeState::Unreachable))
-                != matches!(committed, NodeState::Unreachable);
-            if flipped {
-                // Keep the incremental down-set in lockstep with `live` (its only mutation site).
-                let mut down = self.down.lock().expect("down mutex poisoned");
-                if matches!(committed, NodeState::Unreachable) {
-                    down.insert(node);
-                } else {
-                    down.remove(&node);
+        //
+        // 🚨 `observed()` rather than `committed()`, and that one word is ADR-097. A check the
+        // engine has never seen conclude still *holds* a state — the `Ok` seed `CheckState::new`
+        // has to start from, because a transition away from it is what fires an alert. Writing that
+        // seed here published it as the node's display state, so after a core restart every node
+        // read `ok` until it had failed `dwell` times: measured five minutes after a restart, 15 of
+        // 22 stopped devices were reported healthy, and `/flashdeploy`'s own health check runs
+        // inside that window. An unconfirmed check writes nothing at all, which leaves the node
+        // absent from `live` — exactly the state `nodes::state_or_fallback` already answers for
+        // ("a recent liveness sample means ok, silence means unknown"), so no caller changes.
+        let down_set_changed = match (is_liveness, observed) {
+            (true, Some(committed)) => {
+                let previous = self
+                    .live
+                    .lock()
+                    .expect("live mutex poisoned")
+                    .insert(node, committed);
+                let flipped = matches!(previous, Some(NodeState::Unreachable))
+                    != matches!(committed, NodeState::Unreachable);
+                if flipped {
+                    // Keep the incremental down-set in lockstep with `live` (its only mutation
+                    // site).
+                    let mut down = self.down.lock().expect("down mutex poisoned");
+                    if matches!(committed, NodeState::Unreachable) {
+                        down.insert(node);
+                    } else {
+                        down.remove(&node);
+                    }
                 }
+                flipped
             }
-            flipped
-        } else {
-            false
+            // Not a liveness check, or a liveness check still holding its seed. Neither can move
+            // the down-set: an unconfirmed check is `Ok` only because it had to start somewhere.
+            _ => false,
         };
 
         // No rule ⇒ no paging (ADR-075). Everything above still ran: the committed state, the
@@ -1280,6 +1299,95 @@ mod tests {
         let (_, ev) = rx.try_recv().expect("dwell-crossing observe emits");
         assert!(ev.contains("\"unreachable\""), "state unreachable: {ev}");
         assert!(rx.try_recv().is_err(), "exactly one event per real change");
+    }
+
+    /// ADR-097, the **accepting** side — and it is written first on purpose. A ban that also
+    /// rejected the healthy case would pass a suite in which the engine simply never reports
+    /// anything (`rejection-only-tests-pass-when-everything-rejects`).
+    ///
+    /// A device that answers its first poll agrees with the seed, so it is confirmed at once and
+    /// reads exactly as it did before this ADR.
+    #[test]
+    fn a_node_that_answers_its_first_poll_is_ok_immediately() {
+        let mgr = manager();
+        let node = NodeId::new();
+        mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Ok));
+        assert_eq!(mgr.node_state(node), Some(NodeState::Ok));
+    }
+
+    /// The defect ADR-097 exists for: a check has to be *seeded* with `Ok` so that a transition
+    /// away from it can fire, and that seed used to be published as the node's state. After a core
+    /// restart every check is rebuilt from the seed, so the whole fleet read `ok` — measured on the
+    /// test server, five minutes after a restart 15 of 22 stopped devices were reported healthy.
+    ///
+    /// A node whose first poll *fails* has told the engine nothing. It must have no state at all,
+    /// which is what `nodes::state_or_fallback` already answers for.
+    #[test]
+    fn a_node_whose_first_poll_fails_has_no_state_rather_than_ok() {
+        let mgr = manager();
+        let node = NodeId::new();
+        mgr.observe(&result(node, CheckOutcome::Unreachable, 0));
+        assert_eq!(
+            mgr.node_liveness(node),
+            None,
+            "the seed is held, never published"
+        );
+        assert_eq!(mgr.node_state(node), None, "and the roll-up says so too");
+        assert!(
+            !mgr.down_set().contains(&node),
+            "an unconfirmed check cannot move the down-set either"
+        );
+
+        // Two more failures reach the dwell, and only then does a state exist.
+        for i in 1..DEFAULT_LIVENESS_DWELL {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
+        }
+        assert_eq!(mgr.node_liveness(node), Some(NodeState::Unreachable));
+        assert!(mgr.down_set().contains(&node));
+    }
+
+    /// 🚨 The half that must **not** move: this ADR changes what is displayed, never what is paged.
+    /// The same run that leaves the node stateless above still fires exactly once, at the dwell.
+    #[test]
+    fn withholding_the_seed_does_not_change_when_a_node_pages() {
+        let mgr = manager();
+        let node = NodeId::new();
+        for i in 0..(DEFAULT_LIVENESS_DWELL - 1) {
+            assert!(
+                mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)))
+                    .is_empty(),
+                "no notification before the dwell is satisfied"
+            );
+        }
+        assert!(matches!(
+            mgr.observe(&result(node, CheckOutcome::Unreachable, 100))
+                .as_slice(),
+            [NotifyAction::Fire(_)]
+        ));
+        assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// The live view has to stay silent too. The node-state SSE stream exists so the WebUI can
+    /// patch one row without re-fetching (S14), and before ADR-097 a device whose first poll after a
+    /// restart *failed* pushed `"ok"` down it — the engine announcing a state it had never observed.
+    #[test]
+    fn a_failed_first_poll_broadcasts_nothing() {
+        let mgr = manager();
+        let node = NodeId::new();
+        let mut rx = mgr.subscribe_node_states();
+
+        mgr.observe(&result(node, CheckOutcome::Unreachable, 0));
+        assert!(
+            rx.try_recv().is_err(),
+            "nothing observed ⇒ nothing to announce"
+        );
+
+        for i in 1..DEFAULT_LIVENESS_DWELL {
+            mgr.observe(&result(node, CheckOutcome::Unreachable, i64::from(i)));
+        }
+        let (_, ev) = rx.try_recv().expect("the dwell-crossing observe emits");
+        assert!(ev.contains("\"unreachable\""), "state unreachable: {ev}");
     }
 
     // ⚠️ The guard for the rename described in the `NodeMeta` docs. `tag_groups` (threshold scope)
