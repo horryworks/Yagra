@@ -6,9 +6,11 @@
 //! [`assemble_node_jobs`](super::assemble::assemble_node_jobs) can run.
 //!
 //! ⚠️ [`PollDispatcherSeams`] is named for seams but is not one: eight of its ten fields are
-//! concrete repositories, so this file has **no tests** — the same shape ADR-092 recorded for
-//! `AnalysisSeams`. Fixing that means putting a seam on the *effect* (ADR-092 decision 1), not
-//! renaming this one.
+//! concrete repositories, so this file has **no tests**. `AnalysisSeams` told the same lie and
+//! ADR-098 fixed it — by cutting traits for what the *callers* need and renaming the wiring struct
+//! to `AnalysisStores`, not by renaming the seams. The same is available here and is deliberately
+//! not taken yet (ADR-098 decision 4): this file decides **what gets polled**, so getting it wrong
+//! stops a node being monitored silently, and the seam count is roughly double.
 
 use crate::collection::CollectionRepo;
 use crate::dns_check::DnsCheckRepo;

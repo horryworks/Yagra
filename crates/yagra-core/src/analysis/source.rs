@@ -2,11 +2,12 @@
 //! The analysis module **as source text** — one entry point for every check that reads it
 //! (ADR-089).
 //!
-//! Four tests read this module as a string rather than as code, because what they check has no
-//! type: that an analysis short-circuits on exactly the store tier it declares it needs, that no
-//! `run_*` reaches an event store directly, that a SQL statement interpolates the state enum
-//! instead of re-hardcoding its token, and — from `retention.rs` — that the retention policy's
-//! `analysis_jobs` row is implemented by an actual `DELETE`.
+//! Three tests read this module as a string rather than as code, because what they check has no
+//! type: that an analysis short-circuits on exactly the store tier it declares it needs, that a SQL
+//! statement interpolates the state enum instead of re-hardcoding its token, and — from
+//! `retention.rs` — that the retention policy's `analysis_jobs` row is implemented by an actual
+//! `DELETE`. **A fourth is gone**: ADR-098 put the event-store routing behind a seam, so
+//! "no `run_*` reaches an event store directly" became a thing the type system says.
 //!
 //! ADR-089 splits `analysis.rs` into a directory, so the same failure ADR-086 met applies here:
 //! **a reader left pointing at one file of several keeps running, over a fraction, reporting
@@ -16,11 +17,10 @@
 //! | reader | over 40% of the module |
 //! |---|---|
 //! | `needs_flow_tier_matches_which_analyses_actually_short_circuit` | fails — no analysis short-circuits ✅ |
-//! | `every_event_analysis_reads_through_the_store_router` | fails — `bodies_seen` is 4, not 15 ✅ |
 //! | `the_job_state_sql_is_built_from_the_enum` | 🚨 **passes.** Its three positive assertions all sit inside the first 40%, and its one negative assertion is satisfied by text holding no SQL |
 //! | `retention.rs::PRUNE_SITES` | fails — its needle is gone ✅ |
 //!
-//! **One of four goes quietly green, and the floors are the only thing that stops it.** With them
+//! **One of these goes quietly green, and the floors are the only thing that stops it.** With them
 //! restored, all four fail. The general shape, the same one ADR-086 named: *an assertion whose only
 //! failure mode is "found something bad" cannot tell "nothing bad" from "nothing at all".*
 //!
@@ -34,8 +34,8 @@
 //! A fourth thing the split makes dangerous, found by reading rather than by a failure:
 //! `needs_flow_tier_matches_…` tracked "which `run_*` am I inside" and **never reset** — not at the
 //! end of a function and not at the end of a file. Harmless in one file; across a concatenation it
-//! attributes one file's opening lines to the previous file's last analysis. Both scanners now
-//! iterate per file and reset at the boundary.
+//! attributes one file's opening lines to the previous file's last analysis. The surviving scanner
+//! iterates per file and resets at the boundary.
 //!
 //! **The floor lives here, so every caller inherits it** — fifteen `run_*` are declared today and
 //! the accessor refuses to hand back text holding fewer than fifteen. Deliberately not shared with
@@ -121,7 +121,7 @@ mod tests {
         assert!(!files.is_empty(), "no analysis file was read at all");
         // The scaffolding must not be part of what the guards grep, or their needles match
         // themselves — the mistake ADR-086 made within minutes of splitting.
-        for scaffold in ["guards.rs", "source.rs"] {
+        for scaffold in ["guards.rs", "source.rs", "testkit.rs"] {
             assert!(
                 !files.iter().any(|(n, _)| n == scaffold),
                 "{scaffold} is inside the text it reads; it must be declared `#[cfg(test)] mod` so \

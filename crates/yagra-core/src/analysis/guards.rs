@@ -1,10 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The checks that read the analysis module **as source text** (ADR-089).
 //!
-//! Three things this module must hold true have no type, so reading the source is the only
+//! Two things this module must hold true have no type, so reading the source is the only
 //! technique available; each test below says what it would take to check it any other way. They
 //! were inline in `analysis.rs` and moved here when it became a directory, for the reason
 //! `mcp/tools/guards.rs` exists: a scan that lives in the text it scans matches its own literals.
+//!
+//! 🎯 **There were three.** `every_event_analysis_reads_through_the_store_router` watched for a
+//! `run_*` reading `self.events.event_*` directly, which with a log store configured answers from
+//! the alert-linked subset — and for `rule_gap`, which looks for *unmatched* events, from the empty
+//! set. ADR-098 put the routing behind the `AnalysisEvents` seam, so an analysis has no `EventRepo`
+//! to reach and the offence cannot be written. **A check deleted because the thing it forbade
+//! became unspellable is the outcome to prefer over converting it** (ADR-092 decision 1).
 //! This file is declared `#[cfg(test)] mod guards;`, which is how
 //! [`super::source`]'s exclusion derives it — it is never part of what it reads.
 //!
@@ -92,60 +99,6 @@ fn needs_flow_tier_matches_which_analyses_actually_short_circuit() {
             }
         );
     }
-}
-
-/// PostgreSQL holds only alert-linked rows (ADR-024), so `self.events.event_*` answers about a
-/// subset — and `rule_gap`, which looks for *unmatched* events, about the empty set. Only the
-/// four `agg_*` routers may touch a store; every analysis goes through them.
-///
-/// Same shape as `needs_flow_tier_matches_…` above, including the runtime-built needles.
-#[test]
-fn every_event_analysis_reads_through_the_store_router() {
-    // The aggregates that have a log-store twin. `event_flap_stats` is deliberately absent:
-    // every action it counts is alert-linked, so PostgreSQL is complete for it (pinned by
-    // `events::tests::event_flap_only_counts_rows_postgresql_keeps`).
-    let routed = [
-        "event_counts_by_bucket",
-        "event_severity_counts",
-        "event_unmatched_signatures",
-        "event_auth_sources",
-    ];
-    let direct: Vec<String> = routed
-        .iter()
-        .map(|m| format!("{}{}", "self.events.", m))
-        .collect();
-
-    let mut offenders: Vec<String> = Vec::new();
-    let mut bodies_seen = 0usize;
-    for (file, src) in analysis_source_files() {
-        let mut current_fn: Option<String> = None;
-        for line in src.lines() {
-            let t = line.trim();
-            if let Some(name) = opens_an_analysis(t) {
-                current_fn = Some(format!("run_{name}"));
-                bodies_seen += 1;
-            } else if is_fn_definition(t) {
-                // Left the `run_*` body. Every visibility spelling counts as a boundary, not just
-                // a bare `async fn` — `pub(crate) async fn incident_signals` sits between two
-                // `run_*` bodies, and missing it would attribute its lines to the previous one.
-                current_fn = None;
-            }
-            if let Some(f) = &current_fn {
-                if direct.iter().any(|n| line.contains(n.as_str())) {
-                    offenders.push(format!("{file}::{f}: {}", t.trim()));
-                }
-            }
-        }
-    }
-    assert!(
-        bodies_seen >= 15,
-        "the source scan stopped matching `run_*` bodies (saw {bodies_seen})"
-    );
-    assert!(
-        offenders.is_empty(),
-        "these analyses read PostgreSQL directly and will answer from the alert-linked subset \
-         when a log store is configured — route them through the `agg_*` helpers: {offenders:#?}"
-    );
 }
 
 /// `analysis_jobs.state` is written by statement literals, not by a bind, so without this the enum

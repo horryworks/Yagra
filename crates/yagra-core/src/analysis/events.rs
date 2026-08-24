@@ -10,7 +10,7 @@
 
 use super::*;
 
-impl AnalysisRunner {
+impl Engine {
     // ── Engine: Event Storm (passive) ─────────────────────────────────────────────
     //
     // Per node: bucket the passive-event volume, learn a baseline rate, and flag a recent bucket
@@ -100,7 +100,7 @@ impl AnalysisRunner {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        let stats = self.events.event_flap_stats(from * 1000, to * 1000).await?;
+        let stats = self.events.flap_stats(from * 1000, to * 1000).await?;
         let scope: HashSet<Uuid> = node_ids.iter().copied().collect();
         let window_hours = ((to - from) as f64 / 3600.0).max(1.0);
         let mut findings: Vec<NewFinding> = Vec::new();

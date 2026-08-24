@@ -10,7 +10,7 @@
 
 use super::*;
 
-impl AnalysisRunner {
+impl Engine {
     // ── Engine: Traffic Anomaly (flow) ────────────────────────────────────────────
     //
     // Per node: sum flow bytes per 5-minute bucket, learn a baseline, flag a recent spike (DDoS,

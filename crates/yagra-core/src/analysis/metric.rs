@@ -7,7 +7,7 @@
 
 use super::*;
 
-impl AnalysisRunner {
+impl Engine {
     // ── Engine: Anomaly Detection ─────────────────────────────────────────────────
     //
     // For each node × usable gauge: learn a baseline (mean/σ over the baseline window) and flag

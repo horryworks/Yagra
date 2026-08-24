@@ -614,7 +614,7 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // `flows` (None when the flow tier is off), and `ipasn` are shared with the API/ingest paths.
     let analysis = Arc::new(analysis::AnalysisRunner::new(
         analysis_repo.clone(),
-        analysis::AnalysisSeams {
+        analysis::AnalysisStores {
             store: store.clone(),
             nodes: repo.clone(),
             groups: group_repo.clone(),

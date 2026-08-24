@@ -12,7 +12,7 @@
 
 use super::*;
 
-impl AnalysisRunner {
+impl Engine {
     // ── Engine: Incident Correlate (cross-store) ──────────────────────────────────
     //
     // For each node, assemble a cross-signal timeline over the window: a reachability metric anomaly
@@ -167,7 +167,7 @@ impl AnalysisRunner {
         &self,
         authorized: &HashSet<Uuid>,
     ) -> HashMap<Uuid, Vec<(Uuid, &'static str)>> {
-        let nodes = match self.nodes.list_nodes().await {
+        let nodes = match self.inventory.list_nodes().await {
             Ok(n) => n,
             Err(e) => {
                 // Degrade to no expansion rather than failing the job: single-node correlation is
@@ -176,7 +176,7 @@ impl AnalysisRunner {
                 return HashMap::new();
             }
         };
-        let (derived, _) = crate::topology_projection::derived_topology(&self.topo, &nodes).await;
+        let derived = self.graph.derived(&nodes).await;
         let manual = crate::topology_projection::manual_topology(&nodes);
         one_hop_neighbours(&derived, &manual, authorized)
     }
@@ -228,7 +228,7 @@ impl AnalysisRunner {
     ///
     /// `recent_window_s` is how far back still counts as "recent" for the anomaly scorer, and
     /// `sigma` its sensitivity.
-    pub(crate) async fn incident_signals(
+    pub(super) async fn incident_signals(
         &self,
         node: Uuid,
         from_s: i64,
@@ -260,14 +260,11 @@ impl AnalysisRunner {
             node_id: Some(node),
             ..Default::default()
         };
-        let events = match self.logs.as_ref() {
-            Some(logs) => {
-                logs.search(&filter, crate::logstore::NameIds::default(), 20)
-                    .await
-            }
-            None => self.events.list_events(&filter, 20).await,
-        }
-        .unwrap_or_default();
+        let events = self
+            .events
+            .recent_events(&filter, 20)
+            .await
+            .unwrap_or_default();
         for e in events.iter().take(INCIDENT_EVENT_CAP) {
             signals.push(IncidentSignal {
                 at_s: e.at_unix_ms / 1000,
