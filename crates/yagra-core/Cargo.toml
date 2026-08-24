@@ -110,4 +110,8 @@ default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 
 [dev-dependencies]
+# `srcread` for the checks that read a module's own text (ADR-091/099). A dev-dependency on purpose:
+# under resolver v2 the feature is not unified into a normal `cargo build`, so the shipped core
+# still links a `yagra-common` with no filesystem reader in it.
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
 tower = { workspace = true }

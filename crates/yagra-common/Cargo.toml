@@ -8,6 +8,12 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# The source-reading mechanism (`srcread`, ADR-091/099). Kept out of the shipped library the same
+# way `yagra-transport`'s `test-util` keeps `FakeTransport` out: dependents enable it from
+# **dev-dependencies** only, which resolver v2 does not unify into a normal build of the dependent.
+test-util = []
+
 [dependencies]
 serde = { workspace = true }
 uuid = { workspace = true }

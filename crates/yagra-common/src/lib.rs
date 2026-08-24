@@ -28,6 +28,13 @@ mod rbac;
 pub mod routing;
 pub mod severity;
 pub mod snmp_auth;
+/// Reading a module's own source text — see the module doc (ADR-091/099).
+///
+/// Gated behind this crate's own `cfg(test)` and the `test-util` feature, the same shape
+/// `yagra_transport::FakeTransport` uses: it touches the filesystem and has no business in a
+/// release binary.
+#[cfg(any(test, feature = "test-util"))]
+pub mod srcread;
 pub mod state;
 pub mod thresholds;
 pub mod topology;

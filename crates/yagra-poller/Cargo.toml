@@ -53,6 +53,10 @@ mimalloc = ["dep:mimalloc"]
 # is not unified into a normal `cargo build`, so the shipped poller binary still links a
 # `yagra-transport` with no test double in it.
 yagra-transport = { path = "../yagra-transport", features = ["test-util"] }
+# `srcread` for `worker/guards.rs` and this crate's two readability invariants (ADR-099). Same
+# reasoning as the line above, and the reason the mechanism moved to `yagra-common` at all:
+# `yagra-core` held it, and the poller must never depend on core (they talk over the bus).
+yagra-common = { path = "../yagra-common", features = ["test-util"] }
 async-trait = { workspace = true }
 # Trap PDU fixtures for the listener tests (vendored patch build).
 snmp2 = { workspace = true }

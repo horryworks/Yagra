@@ -36,6 +36,10 @@ mod limiter;
 mod listeners;
 mod location;
 mod mau;
+/// Reading a module's own source text (ADR-091/099). Test-only; the rule lives in
+/// `yagra_common::srcread` and this is only where this crate is on disk.
+#[cfg(test)]
+mod module_source;
 mod neighbors;
 mod optical;
 mod routing;
