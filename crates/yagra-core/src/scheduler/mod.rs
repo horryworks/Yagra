@@ -28,6 +28,8 @@ use yagra_common::ProfileId;
 mod assemble;
 mod checks;
 mod dispatch;
+#[cfg(test)]
+mod guards;
 mod stats;
 mod sweep;
 #[cfg(test)]

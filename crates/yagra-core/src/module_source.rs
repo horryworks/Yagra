@@ -131,6 +131,28 @@ pub(crate) fn code_no_comments(dir: &str, stem: &str) -> String {
         .join("\n")
 }
 
+/// [`files`] with whole-line `//` comments dropped, per file.
+///
+/// [`code_no_comments`] is the same filter over the concatenation, which loses the file name — and
+/// a "this must not appear" check whose finding cannot say *where* is a check nobody can act on.
+/// Added rather than filtered at the call site because that filter is exactly what ADR-091 found
+/// hand-copied into twenty-three files, each copy carrying the same defect; a twenty-fourth would
+/// be the same mistake at a smaller scale. First caller: `scheduler/guards.rs` (ADR-096), whose
+/// module docs *name* `.await` while promising never to use it.
+pub(crate) fn files_no_comments(roots: &[PathBuf]) -> Vec<(String, String)> {
+    files(roots)
+        .into_iter()
+        .map(|(name, text)| {
+            let code = text
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            (name, code)
+        })
+        .collect()
+}
+
 /// The modules a root declares as test-only, as file names.
 ///
 /// The declaring file is `<root>/mod.rs` for a directory root and the root itself for a file root.
