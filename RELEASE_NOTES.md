@@ -82,6 +82,24 @@
 
 ### Bug Fixes
 
+- **The fleet no longer reports itself healthy for the first minutes after a core restart.** A
+  check that had not yet concluded anything still held a starting value of "ok", and that value
+  was published as the node's state — so after every restart the Nodes page, the fleet summary and
+  the MCP node list called devices healthy until each had failed enough consecutive polls to
+  commit. Measured on the test server: five minutes after a restart, 15 of 22 stopped devices were
+  reported healthy, and the window is not fixed — it counts poll results rather than seconds, so it
+  stretches exactly when a large outage slows polling down (1.4 to 24.75 minutes in that run). A
+  node the engine has not yet concluded anything about now reads `unknown`, or `ok` if it has
+  recently reported in, and nothing about when an alert fires has changed.
+- **An alert now survives a core restart instead of being raised a second time.** Alert state was
+  held only in memory, so a restart made every still-broken device look new: it re-fired, adding
+  another never-closed entry to Alerts > History for the same continuous outage. Worse, a device
+  that recovered *while* core was down was never seen to recover, so no clear was ever sent and the
+  incident stayed open in PagerDuty or Jira Service Management until somebody closed it by hand.
+  Core now reads the alerts that were open when it stopped back out of its own history at startup.
+  ⚠️ **On the first start after upgrading, alerts that were left open by this bug and whose devices
+  have since recovered will clear** — one clear each, and each of them closes an incident that
+  should have closed already.
 - **Alerts > Event rules showed `severity.critical` in its Severity filter instead of `Critical`.**
   The dropdown built its label from a key that screen's namespace does not carry, so the filter
   named the severities differently from the badges in the column it filters. It now resolves them

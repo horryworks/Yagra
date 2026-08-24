@@ -109,8 +109,12 @@ fn breach_columns(alert: &Alert) -> (Option<String>, Option<f64>, Option<f64>, O
         Some(b) => (Some(b.value), b.threshold, Some(b.direction)),
         None => (None, None, None),
     };
-    // The liveness sentinel is stored as NULL, not as its internal token: the column is what the
-    // operator reads as "what fired".
+    // ⚠️ **The liveness sentinel IS stored**, as its own token — this comment used to claim the
+    // opposite ("stored as NULL, not as its internal token"), and the deployment says otherwise:
+    // 328 `__liveness__` rows and not one NULL. The check is only for an alert whose descriptive
+    // context was never filled in (`Alert::from` starts it empty), which the engine's own paths do
+    // not produce. Storing the token is what lets `alerts::restore` hand a liveness alert back as
+    // one, and `metric == LIVENESS` is the predicate the whole engine branches on.
     let metric = (!alert.metric.is_empty()).then(|| alert.metric.clone());
     (metric, value, threshold, direction)
 }
