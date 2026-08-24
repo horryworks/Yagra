@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
-use crate::store::MetricStore;
+use crate::store::{MetricStore, INSTANT_LOOKBACK_SECS};
 use yagra_common::{MetricKind, NodeId};
 
 /// How often the evaluator ticks.
@@ -50,13 +50,6 @@ use yagra_common::{MetricKind, NodeId};
 /// screen says so, because "3 consecutive breaches" means three minutes here and three polls
 /// everywhere else.
 pub const WATCH_TICK: Duration = Duration::from_secs(60);
-
-/// How far back a series may have last been seen and still count as current.
-///
-/// Generous relative to [`WATCH_TICK`]: SNMP collection intervals are per profile and a five-minute
-/// gauge is normal. Too short and a slowly-polled device silently drops out of every derived rule;
-/// too long and a decommissioned box keeps alerting on its last reading.
-pub const LOOKBACK_SECS: u64 = 600;
 
 /// How a derived metric is computed from collected ones.
 ///
@@ -277,7 +270,10 @@ pub fn derived_node_metric_kind(metric: &str) -> Option<MetricKind> {
 pub struct DerivedReading {
     pub node: NodeId,
     /// The row key the inputs shared. `0` for a scalar.
-    pub row: i32,
+    ///
+    /// `i64` because a table walk's row key is the last OID sub-identifier, whatever its size —
+    /// the live Huawei USG answers with `3237192130`, past `i32::MAX`.
+    pub row: i64,
     pub value: f64,
 }
 
@@ -293,8 +289,8 @@ pub struct DerivedReading {
 #[must_use]
 pub fn evaluate(
     formula: Formula,
-    first: &BTreeMap<(Uuid, i32), f64>,
-    second: &BTreeMap<(Uuid, i32), f64>,
+    first: &BTreeMap<(Uuid, i64), f64>,
+    second: &BTreeMap<(Uuid, i64), f64>,
 ) -> Vec<DerivedReading> {
     let mut out = Vec::new();
     match formula {
@@ -397,8 +393,8 @@ pub(crate) async fn run_derived_metric_watch(
             let scope: Option<&[Uuid]> = coverage.nodes.is_some().then_some(scoped.as_slice());
 
             let [first_name, second_name] = derived.formula.inputs();
-            let first: BTreeMap<(Uuid, i32), f64> = store
-                .series_rows(first_name, scope, LOOKBACK_SECS)
+            let first: BTreeMap<(Uuid, i64), f64> = store
+                .series_rows(first_name, scope, INSTANT_LOOKBACK_SECS)
                 .await
                 .into_iter()
                 .collect();
@@ -411,11 +407,11 @@ pub(crate) async fn run_derived_metric_watch(
             }
             // `Complement` repeats its single input; querying it twice would cost a round-trip per
             // tick for no second answer.
-            let second: BTreeMap<(Uuid, i32), f64> = if second_name == first_name {
+            let second: BTreeMap<(Uuid, i64), f64> = if second_name == first_name {
                 first.clone()
             } else {
                 store
-                    .series_rows(second_name, scope, LOOKBACK_SECS)
+                    .series_rows(second_name, scope, INSTANT_LOOKBACK_SECS)
                     .await
                     .into_iter()
                     .collect()
@@ -456,7 +452,7 @@ pub(crate) async fn run_derived_metric_watch(
 mod tests {
     use super::*;
 
-    fn rows(entries: &[(u128, i32, f64)]) -> BTreeMap<(Uuid, i32), f64> {
+    fn rows(entries: &[(u128, i64, f64)]) -> BTreeMap<(Uuid, i64), f64> {
         entries
             .iter()
             .map(|(n, r, v)| ((Uuid::from_u128(*n), *r), *v))
@@ -553,6 +549,28 @@ mod tests {
         assert_eq!(of_sum.apply(3.0, 1.0), Some(75.0));
         assert_eq!(of_total.apply(10.0, 4.0), Some(60.0));
         assert_eq!(per_core.apply(4.0, 2.0), Some(2.0));
+    }
+
+    /// A row key past `i32::MAX` is a real one, and it must still join.
+    ///
+    /// The live Huawei USG keys its memory rows on `3237192130`. Both halves carry it, so the
+    /// pairing works — but only if nothing along the way narrows the key.
+    #[test]
+    fn a_row_key_from_a_real_entity_index_still_joins() {
+        let f = Formula::PercentUsedOfTotal {
+            total: "huawei_mem_total",
+            free: "huawei_mem_free",
+        };
+        let total = rows(&[(1, 3_237_192_130, 3_702_417_408.0)]);
+        let free = rows(&[(1, 3_237_192_130, 727_363_584.0)]);
+        let out = evaluate(f, &total, &free);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].row, 3_237_192_130);
+        assert!(
+            (out[0].value - 80.4).abs() < 0.5,
+            "got {} — the device's own huawei_mem_usage reads 80",
+            out[0].value
+        );
     }
 
     /// Load per core divides by how many processor rows the node has, not by a matching key.

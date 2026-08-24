@@ -346,7 +346,7 @@ pub trait MetricStore: Send + Sync {
         _metric: &str,
         _nodes: Option<&[Uuid]>,
         _within_secs: u64,
-    ) -> std::collections::HashMap<(Uuid, i32), f64> {
+    ) -> std::collections::HashMap<(Uuid, i64), f64> {
         std::collections::HashMap::new()
     }
 
@@ -727,7 +727,7 @@ fn rate_query(key: &SeriesKey, lookback_s: u64) -> String {
 /// falls outside VictoriaMetrics' default staleness window and returns nothing — blanking the
 /// UI even though recent data exists. Wrapping in `last_over_time` over this window returns
 /// the most recent value within it (the `stale` flag still dims genuinely-old rows).
-const INSTANT_LOOKBACK_SECS: u64 = 1800;
+pub(crate) const INSTANT_LOOKBACK_SECS: u64 = 1800;
 
 /// Instant query for the latest value within [`INSTANT_LOOKBACK_SECS`], robust to poll gaps:
 /// `last_over_time(icmp_rtt_ms{node="…"}[1800s])`.
@@ -1033,11 +1033,17 @@ fn series_rows_query(metric: &str, nodes: Option<&[Uuid]>, within_secs: u64) -> 
 
 /// Demux an instant-query result into `(node, row) → value`.
 ///
-/// A series with no `ifindex` label lands on row `0`, which is what makes a scalar and a one-row
+/// A series with **no** `ifindex` label lands on row `0`, which is what makes a scalar and a one-row
 /// table indistinguishable to [`MetricStore::series_rows`]'s callers. A series with no parseable
 /// `node` label is skipped: it cannot be attributed, and guessing would file one device's memory
 /// under another's.
-fn parse_node_row_values(json: &serde_json::Value) -> std::collections::HashMap<(Uuid, i32), f64> {
+///
+/// 🚨 The key is `i64` because a table walk's row key is whatever the last OID sub-identifier was,
+/// and the live Huawei USG answers `huawei_mem_total` with `ifindex="3237192130"` — an
+/// entPhysicalIndex, larger than `i32::MAX`. An `i32` parse of that fails, and an unparseable
+/// label **must skip the series rather than fall back to row 0**: two boards would then collide on
+/// one key and the join would silently pair one board's total with another's free.
+fn parse_node_row_values(json: &serde_json::Value) -> std::collections::HashMap<(Uuid, i64), f64> {
     let mut out = std::collections::HashMap::new();
     let Some(results) = json
         .get("data")
@@ -1055,11 +1061,20 @@ fn parse_node_row_values(json: &serde_json::Value) -> std::collections::HashMap<
         else {
             continue;
         };
-        let row = labels
+        let row = match labels
             .and_then(|m| m.get("ifindex"))
             .and_then(|i| i.as_str())
-            .and_then(|s| s.parse::<i32>().ok())
-            .unwrap_or(0);
+        {
+            // Present and readable: the row it belongs to.
+            Some(raw) => match raw.parse::<i64>() {
+                Ok(v) => v,
+                // Present and unreadable. Skipping loses one series; folding it onto 0 would let
+                // two rows share a key, which loses the *pairing* and says nothing about it.
+                Err(_) => continue,
+            },
+            // Absent: a node-scalar, which is the one-row case.
+            None => 0,
+        };
         let Some(value) = series
             .get("value")
             .and_then(|v| v.get(1))
@@ -1346,7 +1361,7 @@ impl MetricStore for VmStore {
         metric: &str,
         nodes: Option<&[Uuid]>,
         within_secs: u64,
-    ) -> std::collections::HashMap<(Uuid, i32), f64> {
+    ) -> std::collections::HashMap<(Uuid, i64), f64> {
         let url = format!("{}/api/v1/query", self.base);
         let query = series_rows_query(metric, nodes, within_secs);
         let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
@@ -1994,6 +2009,59 @@ mod tests {
         )
         .await
         .is_empty());
+    }
+
+    /// A table walk's row key is whatever the last OID sub-identifier was, and it does not fit i32.
+    ///
+    /// Written from the live fleet: the Huawei USG answers `huawei_mem_total` with
+    /// `ifindex="3237192130"` — an entPhysicalIndex, 1.5x `i32::MAX`. The first version of this
+    /// parser read the key as `i32` and fell back to `0` on failure, which is worse than dropping
+    /// it: two boards would share one key and the derived join would pair one board's total with
+    /// another board's free, silently, and report the answer as a measurement.
+    #[test]
+    fn a_row_key_larger_than_i32_survives_and_an_unreadable_one_is_dropped() {
+        let json = serde_json::json!({
+            "data": { "result": [
+                // The real shape, from the deployment.
+                { "metric": { "node": "1ac62665-8bb6-45fa-b073-1c9c32661376", "ifindex": "3237192130" },
+                  "value": [0, "3702417408"] },
+                // A node-scalar: no ifindex label at all, which is the one-row case.
+                { "metric": { "node": "1ac62665-8bb6-45fa-b073-1c9c32661376" }, "value": [0, "7"] },
+                // Present but unreadable — dropped, never folded onto row 0.
+                { "metric": { "node": "1ac62665-8bb6-45fa-b073-1c9c32661376", "ifindex": "e1/0/1" },
+                  "value": [0, "9"] },
+                // Unattributable: no node label.
+                { "metric": { "ifindex": "1" }, "value": [0, "5"] },
+            ]}
+        });
+        let node = Uuid::parse_str("1ac62665-8bb6-45fa-b073-1c9c32661376").unwrap();
+        let out = parse_node_row_values(&json);
+        assert_eq!(out.len(), 2, "two readable rows: {out:?}");
+        assert_eq!(out.get(&(node, 3_237_192_130_i64)), Some(&3_702_417_408.0));
+        assert_eq!(out.get(&(node, 0)), Some(&7.0));
+    }
+
+    /// The derived evaluator asks the same question `latest` asks, so it must use the same window.
+    ///
+    /// It shipped with its own 600s constant, and the live fleet found it in one tick: the Huawei's
+    /// SNMP collection interval is longer than ten minutes, so every derived rule on that device
+    /// evaluated **zero rows** and looked exactly like "no such device here".
+    #[test]
+    fn the_series_rows_query_uses_the_window_the_caller_asked_for() {
+        assert_eq!(
+            series_rows_query("huawei_mem_total", None, INSTANT_LOOKBACK_SECS),
+            "last_over_time(huawei_mem_total[1800s])"
+        );
+        let node = Uuid::nil();
+        assert_eq!(
+            series_rows_query("huawei_mem_total", Some(&[node]), 1800),
+            "last_over_time(huawei_mem_total{node=~\"00000000-0000-0000-0000-000000000000\"}[1800s])"
+        );
+        // An empty scope means "no filter", not "no nodes" — the caller decides not to query.
+        assert_eq!(
+            series_rows_query("m", Some(&[]), 60),
+            series_rows_query("m", None, 60)
+        );
     }
 
     #[test]
