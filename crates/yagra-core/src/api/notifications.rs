@@ -143,13 +143,20 @@ fn validate_webhook_url(url: &str) -> Result<(), &'static str> {
 }
 
 /// Validate a channel's connection config at the API edge.
+///
+/// Exhaustive on purpose. A `_ =>` arm here fails **open**: a fifth channel kind would be accepted
+/// unvalidated, and the first delivery attempt would be the first check the operator ever gets.
+/// Every arm has to say what it accepts, even when the answer is "anything".
 fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
     match c {
         ChannelConfig::Webhook { url } => validate_webhook_url(url),
-        ChannelConfig::Email { host, from, to, .. }
-            if host.trim().is_empty() || from.trim().is_empty() || to.trim().is_empty() =>
-        {
-            Err("email host/from/to required")
+        ChannelConfig::Email { host, from, to, .. } => {
+            if host.trim().is_empty() || from.trim().is_empty() || to.trim().is_empty() {
+                return Err("email host/from/to required");
+            }
+            // No host allow-list, unlike PagerDuty and JSM below: an SMTP relay is site-local by
+            // nature, so there is no vendor endpoint to pin it to.
+            Ok(())
         }
         ChannelConfig::PagerDuty {
             routing_key,
@@ -169,7 +176,6 @@ fn validate_channel_config(c: &ChannelConfig) -> Result<(), &'static str> {
             }
             validate_vendor_url(api_url, JSM_HOSTS)
         }
-        _ => Ok(()),
     }
 }
 
@@ -898,6 +904,21 @@ mod tests {
             api_key: "k".into(),
         })
         .is_err());
+
+        // Email: the arm that used to reach the fail-open wildcard. Accept side first — a
+        // rejection-only check here would pass even if every config were refused.
+        let email = |host: &str, from: &str, to: &str| ChannelConfig::Email {
+            host: host.into(),
+            port: None,
+            from: from.into(),
+            to: to.into(),
+            user: None,
+            pass: None,
+        };
+        assert!(validate_channel_config(&email("smtp.example", "a@example", "b@example")).is_ok());
+        assert!(validate_channel_config(&email(" ", "a@example", "b@example")).is_err());
+        assert!(validate_channel_config(&email("smtp.example", "", "b@example")).is_err());
+        assert!(validate_channel_config(&email("smtp.example", "a@example", "  ")).is_err());
     }
 
     #[test]
