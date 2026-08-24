@@ -42,9 +42,15 @@
 //! resolves for all 26 callers — moving an item between the three files is not a change to them.
 //!
 //! 🚨 **The engine must not learn to call delivery, and delivery must not learn engine types.**
-//! That the two shared zero types is what made the split provably behaviour-free; it is also what
-//! stops [`Notifier`]'s serialized dispatch (its own doc admits it) from being able to stall
-//! evaluation. If you find yourself importing across that line, the thing you want belongs here.
+//! That the two shared zero types is what made the split provably behaviour-free. If you find
+//! yourself importing across that line, the thing you want belongs here.
+//!
+//! ⚠️ **What the type split does *not* buy is that delivery cannot stall evaluation** — this doc
+//! used to claim it did. The two are decoupled by a *bounded* channel (1024 actions, filled by
+//! [`crate::result_ingest`] with a blocking send), not by the absence of a shared type, so a
+//! delivery slow enough for long enough still reaches the matcher. ADR-104 narrowed what "slow"
+//! means — a wedged vendor endpoint no longer holds up other channels or the 30-second config
+//! refresh — but it did not remove that path, and its decision 6 says why not.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

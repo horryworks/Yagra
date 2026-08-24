@@ -17,7 +17,8 @@ use std::sync::{Arc, RwLock};
 use async_trait::async_trait;
 use uuid::Uuid;
 use yagra_alert::{
-    Alert, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy, Subject,
+    Alert, DispatchOutcome, Dispatcher, Notification, NotifyChannel, NotifyError, RetryPolicy,
+    Subject,
 };
 use yagra_common::{is_ssrf_blocked, AlertFacts, CheckId, NodeId, NotifyEvent, Severity};
 
@@ -556,39 +557,132 @@ struct ChannelOverride {
     needs_json: bool,
 }
 
+/// One channel as [`Notifier::install_routing`] takes it: its id, the live channel (`None` when
+/// the stored config could not be built), and the override that renders it (`None` = built-in).
+///
+/// Exists so that building a channel and installing it are separate steps: `build_channel` only
+/// ever makes real HTTP/SMTP clients, which is why the 117 lines of [`Notifier::handle`] had no
+/// test at all before ADR-104. A test hands these in directly.
+struct BuiltChannel {
+    id: Uuid,
+    channel: Option<Arc<dyn NotifyChannel>>,
+    over: Option<ChannelOverride>,
+}
+
 /// The live routing snapshot: the always-on env default route, the DB-configured channels
 /// (each with its own dedup+retry dispatcher), and the rules that select channels per alert.
-struct Routes {
+///
+/// **Immutable, and shared as an `Arc`** (ADR-104). Delivery clones the `Arc` and drops the lock
+/// guard before it awaits anything, so a wedged vendor endpoint cannot hold up the 30-second
+/// refresh that installs a new mute or a new channel. Replacing it is a whole-value swap:
+/// see [`Notifier::install_routing`].
+struct Routing {
     /// Env-configured channels (`YAGRA_WEBHOOK_URL`/`YAGRA_SMTP_*`) — fire for *every* alert,
     /// preserving the pre-routing behaviour. `None` if no env channel is set.
     ///
     /// **Always the built-in format.** It has no channel id and no database row, so there is
     /// nothing for a per-channel override to hang off (ADR-039 decision 1); a deployment that
     /// wants templated notifications configures a channel in the UI.
-    default: Option<Dispatcher<MultiChannel>>,
+    default: Option<Arc<Dispatcher<Arc<dyn NotifyChannel>>>>,
     /// DB channels by id, each with its own dedup state (preserved across config refresh).
-    channels: HashMap<Uuid, Dispatcher<Arc<dyn NotifyChannel>>>,
+    channels: HashMap<Uuid, Arc<Dispatcher<Arc<dyn NotifyChannel>>>>,
     /// Per-channel template overrides, for the channels that have one. Absent = built-in format.
     overrides: HashMap<Uuid, ChannelOverride>,
     /// Routing rules (severity → channel ids).
     rules: Vec<RoutingRule>,
-    /// Unexpired mutes — matching alerts are not delivered (UI/history unaffected).
-    mutes: Vec<ActiveMute>,
+}
+
+impl Routing {
+    /// Channel ids whose enabled routing rule matches this severity (a rule with no severity
+    /// matches any).
+    ///
+    /// One function rather than the three verbatim copies the fire / resolve / roll-up paths each
+    /// carried — the set has to be identical across them or a resolve would go somewhere its fire
+    /// did not (ADR-104 decision 5).
+    fn matched(&self, severity: Severity) -> BTreeSet<Uuid> {
+        self.rules
+            .iter()
+            .filter(|r| r.enabled && rule_matches_severity(r.severity, severity))
+            .flat_map(|r| r.channel_ids.iter().copied())
+            .collect()
+    }
+}
+
+/// Counter for delivery itself (ADR-104 decision 4).
+///
+/// Before this, a [`DispatchOutcome`] only ever reached a `tracing::info!` — so "the PagerDuty
+/// endpoint is wedged and every page is 31.5 seconds late" was invisible on the metrics endpoint,
+/// which is the one place an operator would look for it.
+const M_DISPATCH: &str = "yagra_notification_dispatch_total";
+/// Wall time for one dispatch, including retries and backoff. See [`M_DISPATCH`].
+const M_DELIVERY_SECONDS: &str = "yagra_notification_delivery_seconds";
+
+/// Record one dispatch: its outcome and how long it took.
+///
+/// ⚠️ **`route` is `default` or a channel UUID, so this label is bounded but not constant.**
+/// Channels are operator-created and there are single digits of them in practice; a deployment
+/// with hundreds would pay for it (`monitoring-conventions.md` — every label is a cardinality
+/// cost). It is the useful grouping precisely because two PagerDuty channels are two on-call
+/// rotations.
+fn record_dispatch(
+    route: &str,
+    event: NotifyEvent,
+    outcome: DispatchOutcome,
+    started: std::time::Instant,
+) {
+    let result = match outcome {
+        DispatchOutcome::Delivered { .. } => "delivered",
+        DispatchOutcome::Suppressed => "suppressed",
+        DispatchOutcome::Failed { .. } => "failed",
+    };
+    metrics::counter!(
+        M_DISPATCH,
+        "route" => route.to_owned(),
+        "event" => event.as_str(),
+        "outcome" => result,
+    )
+    .increment(1);
+    metrics::histogram!(M_DELIVERY_SECONDS, "route" => route.to_owned())
+        .record(started.elapsed().as_secs_f64());
 }
 
 /// Forwards alert lifecycle to the configured channels with the engine's dedup + retry
 /// (ADR-015). Channels + rules come from the database (refreshed periodically via
 /// [`Self::set_routing`]); env channels remain an always-on default route.
+///
+/// # Nothing here waits on delivery (ADR-104)
+///
+/// [`Self::set_routing`] and [`Self::set_mutes`] are **not `async`**, and that is the guarantee
+/// rather than a coincidence: they cannot await, so "the config refresh is stuck behind a wedged
+/// vendor endpoint" is not a state this type can be in. Until ADR-104 both took the same mutex
+/// that [`Self::handle`] held across PagerDuty/JSM requests with retry and backoff — measured at
+/// up to 31.5 seconds per notification, or 61.5 with a 429 — so an operator muting a noisy node
+/// waited out the vendor before the mute applied.
+///
+/// What is still serialized is one channel at a time, inside its own [`Dispatcher`], which is
+/// where the dedup and ordering guarantees live. See that type's doc.
+///
+/// ⚠️ **One consequence to know.** A delivery that has already cloned the routing snapshot can
+/// finish against a channel deleted a moment later; deletion no longer waits for it. The bound is
+/// "the notifications already in flight", and waiting is the thing being removed.
 pub struct Notifier {
-    routes: tokio::sync::Mutex<Routes>,
+    /// The routing snapshot. `std::sync::RwLock` deliberately: it is never held across an await,
+    /// and making that impossible is the point.
+    routing: RwLock<Arc<Routing>>,
+    /// Unexpired mutes — matching alerts are not delivered (UI/history unaffected).
+    ///
+    /// Held apart from [`Routing`] so that installing a mute does not clone the channel map:
+    /// mutes are re-resolved on every 30-second cycle because they expire, while channels change
+    /// only when an operator edits one.
+    mutes: RwLock<Arc<Vec<ActiveMute>>>,
     /// Resolves node names/group/profile for a template's context (ADR-039). `None` in skeleton
     /// mode and before startup wiring, in which case a template sees ids instead of names.
     facts: RwLock<Option<Arc<dyn AlertFactsSource>>>,
     /// Whether *any* channel currently has a template.
     ///
-    /// Read without the routing lock so that a deployment with no templates — which is every
-    /// deployment until someone writes one — does exactly what it did before this feature landed,
-    /// including issuing no extra query to resolve names nobody is going to interpolate.
+    /// Read without touching the routing snapshot so that a deployment with no templates — which
+    /// is every deployment until someone writes one — does exactly what it did before this feature
+    /// landed, including issuing no extra query to resolve names nobody is going to interpolate.
     any_templates: AtomicBool,
 }
 
@@ -611,16 +705,19 @@ impl Notifier {
                 channels = channels.len(),
                 "alert notifier default route enabled"
             );
-            Dispatcher::new(MultiChannel { channels }, RetryPolicy::default())
+            Arc::new(Dispatcher::new(
+                Arc::new(MultiChannel { channels }) as Arc<dyn NotifyChannel>,
+                RetryPolicy::default(),
+            ))
         });
         Self {
-            routes: tokio::sync::Mutex::new(Routes {
+            routing: RwLock::new(Arc::new(Routing {
                 default,
                 channels: HashMap::new(),
                 overrides: HashMap::new(),
                 rules: Vec::new(),
-                mutes: Vec::new(),
-            }),
+            })),
+            mutes: RwLock::new(Arc::new(Vec::new())),
             facts: RwLock::new(None),
             any_templates: AtomicBool::new(false),
         }
@@ -642,25 +739,57 @@ impl Notifier {
     /// is not: it lives beside the dispatcher rather than inside the channel, so it is replaced
     /// wholesale here and an edit takes effect on the next refresh with no restart and without
     /// resetting dedup (ADR-039).
-    pub async fn set_routing(&self, channels: Vec<OpenChannel>, rules: Vec<RoutingRule>) {
-        let mut routes = self.routes.lock().await;
-        let mut old = std::mem::take(&mut routes.channels);
-        let mut next = HashMap::new();
-        let mut overrides = HashMap::new();
-        for ch in channels {
-            if !ch.template.is_builtin() {
-                overrides.insert(
-                    ch.id,
-                    ChannelOverride {
+    ///
+    /// **Not `async` since ADR-104** — see the type doc.
+    pub fn set_routing(&self, channels: Vec<OpenChannel>, rules: Vec<RoutingRule>) {
+        let built = channels
+            .into_iter()
+            .map(|ch| {
+                // `needs_json` reads the stored config, so it is resolved here, on the side that
+                // still has one — `install_routing` sees only built channels.
+                let over = if ch.template.is_builtin() {
+                    None
+                } else {
+                    Some(ChannelOverride {
                         needs_json: body_must_be_json(ch.config.kind()),
                         template: ch.template,
-                    },
-                );
+                    })
+                };
+                BuiltChannel {
+                    id: ch.id,
+                    channel: build_channel(&ch.config),
+                    over,
+                }
+            })
+            .collect();
+        self.install_routing(built, rules);
+    }
+
+    /// Install an already-built routing snapshot, carrying over the dispatcher of every channel
+    /// that survives so its dedup state is not reset.
+    ///
+    /// Split out of [`Self::set_routing`] so a test can hand in fake channels (ADR-104
+    /// decision 3). The write lock spans the read of the previous value so two concurrent
+    /// installs cannot each build from the same predecessor; it still cannot be blocked by
+    /// delivery, which never holds this lock across an await.
+    fn install_routing(&self, channels: Vec<BuiltChannel>, rules: Vec<RoutingRule>) {
+        let mut slot = self
+            .routing
+            .write()
+            .expect("notifier routing lock poisoned");
+        let mut next = HashMap::new();
+        let mut overrides = HashMap::new();
+        for built in channels {
+            if let Some(over) = built.over {
+                overrides.insert(built.id, over);
             }
-            if let Some(disp) = old.remove(&ch.id) {
-                next.insert(ch.id, disp); // preserve dedup
-            } else if let Some(channel) = build_channel(&ch.config) {
-                next.insert(ch.id, Dispatcher::new(channel, RetryPolicy::default()));
+            if let Some(existing) = slot.channels.get(&built.id) {
+                next.insert(built.id, Arc::clone(existing)); // preserve dedup
+            } else if let Some(channel) = built.channel {
+                next.insert(
+                    built.id,
+                    Arc::new(Dispatcher::new(channel, RetryPolicy::default())),
+                );
             }
         }
         // Only keep an override for a channel that actually has a live dispatcher, so the flag
@@ -668,21 +797,32 @@ impl Notifier {
         overrides.retain(|id, _| next.contains_key(id));
         self.any_templates
             .store(!overrides.is_empty(), Ordering::Relaxed);
-        routes.channels = next;
-        routes.overrides = overrides;
-        routes.rules = rules;
+        *slot = Arc::new(Routing {
+            default: slot.default.clone(),
+            channels: next,
+            overrides,
+            rules,
+        });
     }
 
     /// Replace the unexpired-mute snapshot (refreshed alongside routing).
-    pub async fn set_mutes(&self, mutes: Vec<ActiveMute>) {
-        self.routes.lock().await.mutes = mutes;
+    ///
+    /// **Not `async` since ADR-104** — see the type doc. This is the call an operator is waiting
+    /// on when they mute a noisy node.
+    pub fn set_mutes(&self, mutes: Vec<ActiveMute>) {
+        *self.mutes.write().expect("notifier mutes lock poisoned") = Arc::new(mutes);
+    }
+
+    /// The current routing snapshot. Clones one `Arc` and releases the lock — never held across
+    /// an await.
+    fn routing(&self) -> Arc<Routing> {
+        Arc::clone(&self.routing.read().expect("notifier routing lock poisoned"))
     }
 
     /// Resolve the template context for an alert, or `None` when no channel has a template.
     ///
-    /// Deliberately **before** the routing lock is taken: this is the one part of delivery that
-    /// touches the database, and holding the lock across it would add a query to the window that
-    /// already serializes every notification.
+    /// Deliberately **before** the routing snapshot is read: this is the one part of delivery that
+    /// touches the database, and there is no reason for it to be inside anything.
     async fn context(&self, alert: &Alert, event: NotifyEvent) -> Option<AlertFacts> {
         if !self.any_templates.load(Ordering::Relaxed) {
             return None;
@@ -705,22 +845,25 @@ impl Notifier {
 
     /// Apply one notify action (deliver a fire, or resolve/clear a recovered alert).
     ///
-    /// The `routes` mutex is held across delivery (including PagerDuty/JSM resolve
-    /// requests with retry/backoff). This serializes all delivery — a wedged vendor
-    /// endpoint can delay other notifications for up to the retry budget. This matches
-    /// the pre-existing `Fire` path (which has always dispatched under this lock) and is
-    /// an accepted tradeoff for keeping per-channel dedup state consistent; decoupling
-    /// delivery from the routing snapshot is a future refactor.
+    /// **Holds no lock across delivery** (ADR-104): the routing snapshot and the mutes are each
+    /// one `Arc` clone taken before anything is awaited. What serializes is one channel at a time,
+    /// inside its own [`Dispatcher`].
+    ///
+    /// ⚠️ This still awaits its caller. A wedged vendor endpoint no longer blocks other channels,
+    /// other callers, or the config refresh — but the single-consumer notification worker that
+    /// feeds this is still one action at a time, so its bounded queue can still fill. Giving each
+    /// channel its own queue would need a policy for a full queue, and dropping a page is worse
+    /// than delaying one; deliberately left out (ADR-104 decision 6).
     pub async fn handle(&self, action: NotifyAction) {
-        // Resolving names is I/O, so it happens outside the lock. A muted or rolled-up alert pays
-        // for a lookup it will not use, which the facts cache makes negligible and which is worth
-        // not restructuring the suppression checks around.
+        // Resolving names is I/O, so it happens first. A muted or rolled-up alert pays for a
+        // lookup it will not use, which the facts cache makes negligible and which is worth not
+        // restructuring the suppression checks around.
         let facts = match &action {
             NotifyAction::Fire(a) => self.context(a, NotifyEvent::Fire).await,
             NotifyAction::Resolve(a) => self.context(a, NotifyEvent::Resolve).await,
             NotifyAction::Suppress(a) => self.context(a, NotifyEvent::Suppress).await,
         };
-        let routes = self.routes.lock().await;
+        let routing = self.routing();
         match action {
             NotifyAction::Fire(alert) => {
                 // Suppressed downstream alert: it's attributed to an upstream root cause and
@@ -733,47 +876,38 @@ impl Notifier {
                 }
                 // Muted: the operator asked for silence on this node/check until the mute
                 // expires. The alert itself stays live in the UI/history.
-                if mute_matches(&routes.mutes, &alert) {
+                let mutes = Arc::clone(&self.mutes.read().expect("notifier mutes lock poisoned"));
+                if mute_matches(&mutes, &alert) {
                     tracing::debug!(subject = %alert.subject, "suppressing muted alert notification");
                     return;
                 }
                 let notification = builtin_notification(&alert, NotifyEvent::Fire);
-
-                // Channels selected by the routing rules (severity match; None = any).
-                let matched: BTreeSet<Uuid> = routes
-                    .rules
-                    .iter()
-                    .filter(|r| r.enabled && rule_matches_severity(r.severity, alert.severity))
-                    .flat_map(|r| r.channel_ids.iter().copied())
-                    .collect();
-
-                let Routes {
-                    default,
-                    channels,
-                    overrides,
-                    ..
-                } = &*routes;
-                if let Some(d) = default.as_ref() {
+                let matched = routing.matched(alert.severity);
+                if let Some(d) = routing.default.as_ref() {
+                    let started = std::time::Instant::now();
                     let outcome = d.dispatch(notification.clone()).await;
+                    record_dispatch("default", NotifyEvent::Fire, outcome, started);
                     tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert notification dispatched");
                 }
                 for id in matched {
-                    if let Some(d) = channels.get(&id) {
-                        let n = for_channel(id, overrides, facts.as_ref(), &notification);
+                    if let Some(d) = routing.channels.get(&id) {
+                        let n = for_channel(id, &routing.overrides, facts.as_ref(), &notification);
+                        let started = std::time::Instant::now();
                         let outcome = d.dispatch(n).await;
+                        record_dispatch(&id.to_string(), NotifyEvent::Fire, outcome, started);
                         tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert notification dispatched");
                     }
                 }
             }
             NotifyAction::Resolve(alert) => {
-                let key = alert.dedup_key();
                 // A root-cause-suppressed alert never delivered its fire, so there is no
                 // remote incident to close — just clear local dedup (mirror of the fire path).
                 if alert.root_cause.is_some() {
-                    if let Some(d) = routes.default.as_ref() {
+                    let key = alert.dedup_key();
+                    if let Some(d) = routing.default.as_ref() {
                         d.mark_resolved(&key).await;
                     }
-                    for d in routes.channels.values() {
+                    for d in routing.channels.values() {
                         d.mark_resolved(&key).await;
                     }
                     return;
@@ -783,37 +917,14 @@ impl Notifier {
                 // incident; webhook/email keep their no-op default. Deliberately NOT
                 // mute-filtered: a mute placed after the fire must not leave a remote
                 // incident dangling open (vendor resolves are idempotent).
-                let notification = builtin_notification(&alert, NotifyEvent::Resolve);
-
-                let matched: BTreeSet<Uuid> = routes
-                    .rules
-                    .iter()
-                    .filter(|r| r.enabled && rule_matches_severity(r.severity, alert.severity))
-                    .flat_map(|r| r.channel_ids.iter().copied())
-                    .collect();
-
-                let Routes {
-                    default,
-                    channels,
-                    overrides,
-                    ..
-                } = &*routes;
-                if let Some(d) = default.as_ref() {
-                    let outcome = d.dispatch_resolve(notification.clone()).await;
-                    tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert resolve dispatched");
-                }
-                let ids: Vec<Uuid> = channels.keys().copied().collect();
-                for id in ids {
-                    if let Some(d) = channels.get(&id) {
-                        if matched.contains(&id) {
-                            let n = for_channel(id, overrides, facts.as_ref(), &notification);
-                            let outcome = d.dispatch_resolve(n).await;
-                            tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert resolve dispatched");
-                        } else {
-                            d.mark_resolved(&key).await;
-                        }
-                    }
-                }
+                self.close(
+                    &routing,
+                    &alert,
+                    NotifyEvent::Resolve,
+                    facts.as_ref(),
+                    "alert resolve dispatched",
+                )
+                .await;
             }
             NotifyAction::Suppress(alert) => {
                 // A downstream alert that had been paging standalone is now rolled up under its
@@ -821,38 +932,50 @@ impl Notifier {
                 // separate open page. Mirrors the (non-root-cause) resolve close path — the alert
                 // itself stays live in the UI grouped under the root cause. Vendor resolves are
                 // idempotent, so a repeat close is harmless.
-                let key = alert.dedup_key();
-                let notification = builtin_notification(&alert, NotifyEvent::Suppress);
+                self.close(
+                    &routing,
+                    &alert,
+                    NotifyEvent::Suppress,
+                    facts.as_ref(),
+                    "downstream alert rolled up (incident closed)",
+                )
+                .await;
+            }
+        }
+    }
 
-                let matched: BTreeSet<Uuid> = routes
-                    .rules
-                    .iter()
-                    .filter(|r| r.enabled && rule_matches_severity(r.severity, alert.severity))
-                    .flat_map(|r| r.channel_ids.iter().copied())
-                    .collect();
-
-                let Routes {
-                    default,
-                    channels,
-                    overrides,
-                    ..
-                } = &*routes;
-                if let Some(d) = default.as_ref() {
-                    let outcome = d.dispatch_resolve(notification.clone()).await;
-                    tracing::info!(?outcome, subject = %alert.subject, route = "default", "downstream alert rolled up (incident closed)");
-                }
-                let ids: Vec<Uuid> = channels.keys().copied().collect();
-                for id in ids {
-                    if let Some(d) = channels.get(&id) {
-                        if matched.contains(&id) {
-                            let n = for_channel(id, overrides, facts.as_ref(), &notification);
-                            let outcome = d.dispatch_resolve(n).await;
-                            tracing::info!(?outcome, subject = %alert.subject, channel = %id, "downstream alert rolled up (incident closed)");
-                        } else {
-                            d.mark_resolved(&key).await;
-                        }
-                    }
-                }
+    /// Close a remote incident on the channels the fire was routed to, and clear local dedup on
+    /// the rest.
+    ///
+    /// Resolve and roll-up were 32 identical lines apart from their log wording, which is why the
+    /// wording is a parameter rather than a merged sentence: it is what an operator greps for, so
+    /// both strings are preserved verbatim (ADR-104 decision 5).
+    async fn close(
+        &self,
+        routing: &Routing,
+        alert: &Alert,
+        event: NotifyEvent,
+        facts: Option<&AlertFacts>,
+        message: &'static str,
+    ) {
+        let key = alert.dedup_key();
+        let notification = builtin_notification(alert, event);
+        let matched = routing.matched(alert.severity);
+        if let Some(d) = routing.default.as_ref() {
+            let started = std::time::Instant::now();
+            let outcome = d.dispatch_resolve(notification.clone()).await;
+            record_dispatch("default", event, outcome, started);
+            tracing::info!(?outcome, subject = %alert.subject, route = "default", "{}", message);
+        }
+        for (id, d) in &routing.channels {
+            if matched.contains(id) {
+                let n = for_channel(*id, &routing.overrides, facts, &notification);
+                let started = std::time::Instant::now();
+                let outcome = d.dispatch_resolve(n).await;
+                record_dispatch(&id.to_string(), event, outcome, started);
+                tracing::info!(?outcome, subject = %alert.subject, channel = %id, "{}", message);
+            } else {
+                d.mark_resolved(&key).await;
             }
         }
     }

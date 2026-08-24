@@ -402,7 +402,7 @@ pub(crate) async fn load_mutes(
             Err(e) => tracing::warn!(error = %e, "failed to load group edges for mutes"),
         }
     }
-    notifier.set_mutes(active).await;
+    notifier.set_mutes(active);
 }
 
 /// Load the DB notification channels + routing rules into the notifier. Failures degrade to
@@ -419,7 +419,7 @@ pub(crate) async fn load_routing(notifier: &Notifier, notifications: &Notificati
         tracing::warn!(error = %e, "failed to load routing rules");
         Vec::new()
     });
-    notifier.set_routing(channels, rules).await;
+    notifier.set_routing(channels, rules);
 }
 
 /// Leader-only refresh loop: keep the alert engine's config fresh. Rebuild the config-derived base

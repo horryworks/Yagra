@@ -151,8 +151,9 @@ fn history_rows(actions: &[QueuedAction]) -> Vec<(Alert, bool)> {
 }
 
 /// Flush a drained batch of alert actions (S10): one multi-row `alert_history` INSERT for all
-/// fire/resolve rows, then per-action notification delivery in FIFO order (the notifier serializes
-/// delivery internally). Best-effort on history: a DB error is logged, never propagated (the
+/// fire/resolve rows, then per-action notification delivery in FIFO order (this loop is what makes
+/// it FIFO — since ADR-104 the notifier serializes per channel rather than globally, so a fire and
+/// its later resolve stay ordered because they reach the same dispatcher). Best-effort on history: a DB error is logged, never propagated (the
 /// in-memory alert state already advanced in the matcher). Fire/resolve counters mirror the inline
 /// `run_action` path so metrics are identical whichever path executes.
 async fn flush_actions(
