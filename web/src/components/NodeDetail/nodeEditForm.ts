@@ -4,7 +4,7 @@
 // The regression this exists to prevent: one dialog rendered the same five fields — device profile,
 // SNMP credential, maker, model, pool — for every `NodeKind`, having never read `node.kind`. For a
 // URL or DNS monitor an SNMP credential is not "usually blank", it is structurally absent:
-// `scheduler.rs::assemble_node_jobs` returns one HTTP/DNS job before the SNMP branch, so
+// `scheduler/assemble.rs::assemble_node_jobs` returns one HTTP/DNS job before the SNMP branch, so
 // `node.credential_id` is written by the dialog and read by nothing. The backend neither refuses
 // nor warns — it stores the binding, counts it in the credential's `used_by`, and never looks at it
 // again. The read side already knew this (`overviewFacts.ts` drops those rows for url/dns); only

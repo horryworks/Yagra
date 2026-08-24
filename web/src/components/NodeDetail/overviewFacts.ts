@@ -6,7 +6,7 @@
 // `include: ['src/**/*.test.ts']` — a test in a `.tsx` is a file nothing executes (`testing.md`).
 //
 // The rows dropped for a monitor are not "usually blank", they are structurally absent: a URL or
-// DNS monitor is never given an SNMP credential to bind (`scheduler.rs::assemble_node_jobs` returns
+// DNS monitor is never given an SNMP credential to bind (`scheduler/assemble.rs::assemble_node_jobs` returns
 // one HTTP/DNS job before the SNMP branch), so Maker, Model, SNMP credential and Uptime — which all
 // come from an SNMP walk — can only ever render an em dash. Printing four dashes in a row tells an
 // operator "this device is not answering" about something that was never asked.
@@ -60,7 +60,7 @@ export function visibleFactRows(kind: NodeKind): readonly FactRow[] {
 
 /** Whether the Overview leads with the ICMP RTT sparkline.
  *
- *  Only an ordinary device. `scheduler.rs::assemble_node_jobs` returns before the ICMP branch for a
+ *  Only an ordinary device. `scheduler/assemble.rs::assemble_node_jobs` returns before the ICMP branch for a
  *  URL or DNS monitor (a URL target may be unpingable behind a CDN, and a name has no address of
  *  its own), and a Meraki node emits no per-node job at all. `icmp_rtt_ms` is therefore absent by
  *  construction, and "No RTT history yet…" reads as a fault rather than as "not applicable". */

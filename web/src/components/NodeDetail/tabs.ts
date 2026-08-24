@@ -44,7 +44,7 @@ export function normalizeNodeDetailTab(tab: string): NodeDetailTab {
 /** Every kind — the tabs that mean something whatever the node is. */
 const ALL_KINDS: readonly NodeKind[] = NODE_KINDS;
 
-/** Only an ordinary device. `scheduler.rs::assemble_node_jobs` returns *before* the ICMP and SNMP
+/** Only an ordinary device. `scheduler/assemble.rs::assemble_node_jobs` returns *before* the ICMP and SNMP
  *  branches for a URL or DNS monitor (one HTTP/DNS job and nothing else), and a Meraki node emits
  *  no per-node job at all — it is polled by the org collector. So there is never an ifTable walk,
  *  never a CDP/LLDP walk, and never a NetFlow export to attribute. These tabs are not "empty for

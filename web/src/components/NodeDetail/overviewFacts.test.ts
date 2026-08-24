@@ -102,7 +102,7 @@ describe('overview fact rows', () => {
 });
 
 describe('overviewShowsIcmp', () => {
-  // `scheduler.rs::assemble_node_jobs` returns before the ICMP branch for a URL or DNS monitor,
+  // `scheduler/assemble.rs::assemble_node_jobs` returns before the ICMP branch for a URL or DNS monitor,
   // and a Meraki node emits no per-node job at all — `icmp_rtt_ms` is structurally absent for
   // three of the four kinds, not merely empty right now.
   it('shows the ICMP sparkline only for an ordinary device', () => {

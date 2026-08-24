@@ -13,7 +13,7 @@ import {
 describe('credential kind allow-lists', () => {
   it('offers both SNMP kinds for a node binding', () => {
     // The regression: the node-binding pickers filtered to `snmp_v2c` alone, so an SNMPv3
-    // credential could never be bound from the UI — while `scheduler.rs::resolve_snmp_auth` reads
+    // credential could never be bound from the UI — while `scheduler/dispatch.rs::resolve_snmp_auth` reads
     // one, `secrets.rs` stores one, and Discovery's credential finder already tried one.
     expect([...SNMP_CREDENTIAL_KINDS]).toEqual(['snmp_v2c', 'snmp_v3']);
     expect(isSnmpCredentialKind('snmp_v3')).toBe(true);

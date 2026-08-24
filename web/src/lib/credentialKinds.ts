@@ -4,7 +4,7 @@
 // This was four hardcoded lists that had already drifted: Discovery's credential-finder offered
 // `['snmp_v2c', 'snmp_v3']` while the two node-binding pickers offered `snmp_v2c` alone, so an
 // SNMPv3 credential could be created, matched against a device during discovery, and then never
-// bound to a node from either dialog — even though `scheduler.rs::resolve_snmp_auth` has always
+// bound to a node from either dialog — even though `scheduler/dispatch.rs::resolve_snmp_auth` has always
 // decrypted and used one. `ui-conventions.md` names these lists as ones to fold into a source
 // rather than extend; this is that source.
 //

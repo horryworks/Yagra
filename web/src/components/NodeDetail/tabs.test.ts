@@ -50,7 +50,7 @@ describe('node-detail tabs', () => {
 });
 
 // Which kinds see which tabs. A URL or DNS monitor produces one HTTP/DNS job and nothing else
-// (scheduler.rs::assemble_node_jobs returns before the ICMP and SNMP branches), and a Meraki node
+// (scheduler/assemble.rs::assemble_node_jobs returns before the ICMP and SNMP branches), and a Meraki node
 // emits no per-node job at all — so Interfaces / Neighbors / Flow are structurally unreachable for
 // them, not merely empty today.
 describe('node-detail tab visibility by kind', () => {
