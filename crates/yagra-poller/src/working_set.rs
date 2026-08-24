@@ -67,8 +67,10 @@ use uuid::Uuid;
 use yagra_bus::{JobSpec, NodeJobs, PollJob, SyncMsg, WorkingSetDelta, WorkingSetSnapshot};
 use yagra_common::NodeId;
 
-/// How often the poller's local scheduler asks [`WorkingSet::due`] what has fired (`main.rs`'s
-/// `run_local_scheduler` owns the timer and reads this constant rather than repeating the literal).
+/// How often the poller's local scheduler asks [`WorkingSet::due`] what has fired
+/// (`assignment.rs`'s `run_local_scheduler` owns the timer and reads this constant rather than
+/// repeating the literal — ADR-103 moved it out of `main.rs`, and it is there rather than here
+/// because this module keeps no timer and does no I/O).
 ///
 /// It is **the** quantum of this module: two specs due within one tick of each other are due *at the
 /// same time* as far as anything downstream can tell, which is why [`settle`] spaces a node's specs

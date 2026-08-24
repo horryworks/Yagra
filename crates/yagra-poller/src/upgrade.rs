@@ -107,6 +107,11 @@ where
 /// A second copy of a rule is normally the thing to avoid, but not across a trust boundary: the
 /// point is that the value is checked by *both* sides, so neither has to assume the other did. The
 /// rule is small and stable enough to state twice, and each side's copy has a test.
+///
+/// ⚠️ **That last sentence was false on this side until ADR-103.** Core's copy really is tested
+/// (`upgrade.rs::a_run_id_cannot_name_a_path`); this one had nothing, while the doc said otherwise
+/// — on the three functions standing between a value core sent and a filename this process writes.
+/// The tests are at the bottom of this file now.
 fn is_release_tag(tag: &str) -> bool {
     let Some(rest) = tag.strip_prefix('v') else {
         return false;
@@ -150,5 +155,84 @@ fn sanitize_actor(who: &str) -> String {
         "unknown".to_owned()
     } else {
         clean
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tag becomes an image reference on the other side of the hand-off file.
+    ///
+    /// 🚨 **The accepting cases come first, and are not a formality**: a validator that refuses
+    /// everything satisfies every rejection below while stopping the poller from ever upgrading
+    /// (`rejection-only-tests-pass-when-everything-rejects`).
+    #[test]
+    fn a_release_tag_is_a_v_and_three_numbers() {
+        for good in [
+            "v0.2.17",
+            "v1.0.0",
+            "v1.0.0-beta1",
+            "v10.20.30-rc2",
+            "v0.0.1",
+        ] {
+            assert!(
+                is_release_tag(good),
+                "{good:?} is a tag this poller must pass on"
+            );
+        }
+        for bad in [
+            "",
+            "0.2.17",   // core's own check spells the `v`, so this side must too
+            "v1.2",     // two parts
+            "v1.2.3.4", // four
+            "v1.2.",
+            "v1.2.3-",    // an empty suffix is not a suffix
+            "v1.2.3-a b", // a space would split the updater's `key=value` line
+            "v1.2.3-../..",
+            "v1.2.3456789", // a part longer than six digits
+            "latest",
+        ] {
+            assert!(
+                !is_release_tag(bad),
+                "{bad:?} must not reach the site updater"
+            );
+        }
+    }
+
+    /// The run id becomes part of a filename, so it may be a UUID and nothing else.
+    ///
+    /// The same property core asserts on its own copy — that is the point of there being two.
+    #[test]
+    fn a_run_id_cannot_name_a_path() {
+        assert!(is_run_id("0f8fad5b-d9cb-469f-a165-70867728950e"));
+        for bad in [
+            "",
+            "../../etc/passwd",
+            "0f8fad5b-d9cb-469f-a165-70867728950e/x",
+            "0f8fad5b-d9cb-469f-a165-7086772895",    // too short
+            "0f8fad5b-d9cb-469f-a165-70867728950ee", // too long
+            "0f8fad5b-d9cb-469f-a165-708677289.0e",  // a dot would split the extension
+            "0f8fad5b d9cb 469f a165 70867728950e",
+        ] {
+            assert!(!is_run_id(bad), "{bad:?} must not become a file name");
+        }
+    }
+
+    /// The actor is written into a `key=value` line the updater parses back.
+    #[test]
+    fn an_actor_cannot_break_out_of_its_line() {
+        assert_eq!(sanitize_actor("admin@example.com"), "admin@example.com");
+        assert_eq!(sanitize_actor("ops-team_1.2"), "ops-team_1.2");
+        // A newline would end the line early and everything after it would read as a new key.
+        assert_eq!(sanitize_actor("admin\ncommand=apply"), "admincommandapply");
+        assert_eq!(sanitize_actor("a=b"), "ab");
+        // ⚠️ Dots survive, and are meant to: this guards the *line format*, not a path. The value
+        // is written after `requested_by=` and never used to open anything.
+        assert_eq!(sanitize_actor("../../root"), "....root");
+        // Nothing left is not an empty actor, it is an unknown one — the field is never blank.
+        assert_eq!(sanitize_actor(""), "unknown");
+        assert_eq!(sanitize_actor("\n\n"), "unknown");
+        assert_eq!(sanitize_actor(&"x".repeat(200)).len(), 64);
     }
 }
