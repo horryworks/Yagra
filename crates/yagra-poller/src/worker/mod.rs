@@ -33,6 +33,8 @@
 //! into one of them would take away the only property they claim.
 
 mod adjacency;
+#[cfg(test)]
+mod guards;
 mod interfaces;
 mod meraki;
 mod physical;

@@ -13,10 +13,24 @@
 //! rule here would have been the twenty-fourth copy ADR-091 exists to refuse, so it moved to
 //! `yagra-common` behind `test-util` instead.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// This crate's root on disk. See the module doc for why it cannot live in `srcread`.
 const BASE: &str = env!("CARGO_MANIFEST_DIR");
+
+/// Both spellings of a module root, relative to this crate: `<dir>/<stem>.rs` and `<dir>/<stem>/`.
+pub(crate) fn roots(dir: &str, stem: &str) -> Vec<PathBuf> {
+    yagra_common::srcread::roots_in(Path::new(BASE), dir, stem)
+}
+
+/// Every file of the module as `(file name, code)`, with whole-line `//` comments dropped.
+///
+/// The comment-free form is what a "this pattern must not appear" check wants, and naming the
+/// file is what lets a finding say *where* — see `srcread`'s doc on why neither is done at the
+/// call site.
+pub(crate) fn files_no_comments(roots: &[PathBuf]) -> Vec<(String, String)> {
+    yagra_common::srcread::files_no_comments(roots)
+}
 
 #[cfg(test)]
 mod tests {
