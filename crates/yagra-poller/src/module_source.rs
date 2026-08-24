@@ -23,6 +23,15 @@ pub(crate) fn roots(dir: &str, stem: &str) -> Vec<PathBuf> {
     yagra_common::srcread::roots_in(Path::new(BASE), dir, stem)
 }
 
+/// The whole module's code, concatenated.
+///
+/// ⚠️ `dir` may leave this crate — `"../yagra-bus/src"` is how `guards.rs` derives the capability
+/// vocabulary from the message definitions, the same shape `yagra-core`'s `api/metrics.rs` uses to
+/// read this crate's worker. It resolves against `BASE`, so it is a path and not a package name.
+pub(crate) fn code(dir: &str, stem: &str) -> String {
+    yagra_common::srcread::code_in(Path::new(BASE), dir, stem)
+}
+
 /// Every file of the module as `(file name, code)`, with whole-line `//` comments dropped.
 ///
 /// The comment-free form is what a "this pattern must not appear" check wants, and naming the
@@ -39,21 +48,23 @@ mod tests {
     /// This crate holds itself to the mechanism's two invariants, and nobody here writes the rule
     /// down for themselves.
     ///
-    /// Both floors are this crate's, which is why they are arguments — see `srcread`'s module doc.
-    /// The floor of 16 is what the crate has today; it is here so that a walk which stops finding
-    /// sources fails instead of passing over nothing.
+    /// The floors are this crate's, which is why they are arguments — see `srcread`'s module doc.
+    /// 19 is what the crate has today; they are here so that a walk which stops finding sources
+    /// fails instead of passing over nothing.
     ///
-    /// ⚠️ `main.rs` reads its own text with `include_str!` (the `leaving` heartbeat must flush). That
-    /// is not an offence against the second check — it slices by a *production* needle rather than
-    /// defining "production code" for itself, which is the thing that was wrong twenty-three times.
-    /// It is not an offence against the third either, which is why that check refuses the *use* it
-    /// found wrong (a literal needle thrown at one's own raw text) rather than the read itself:
-    /// forbidding `include_str!` outright would need an exemption list, and this file would be on it.
+    /// ⚠️ **The third check is the strict form, and only because this crate earned it.** ADR-102
+    /// deliberately policed the *use* rather than the read — a literal needle thrown at one's own
+    /// raw text — because forbidding `include_str!` outright would have needed an exemption list
+    /// and `main.rs` would have been its only member (the `leaving` beat check wanted the raw
+    /// file). ADR-103 moved that check to `heartbeat.rs` and pointed it at [`code`], so the list
+    /// has nobody on it and the strict form costs nothing. `yagra-core` still has eight legitimate
+    /// raw readers and keeps the lenient form; demanding zero there would only teach the next
+    /// person to write themselves into `exempt`.
     #[test]
     fn this_crate_is_readable_and_writes_the_rule_down_nowhere() {
         let src = Path::new(BASE).join("src");
-        yagra_common::srcread::assert_crate_is_readable(&src, 16);
-        yagra_common::srcread::assert_no_file_spells_the_attribute(&src, 16, &[]);
-        yagra_common::srcread::assert_no_file_matches_a_literal_against_its_own_text(&src, 1);
+        yagra_common::srcread::assert_crate_is_readable(&src, 19);
+        yagra_common::srcread::assert_no_file_spells_the_attribute(&src, 19, &[]);
+        yagra_common::srcread::assert_no_file_reads_its_own_raw_text(&src, 19, &[]);
     }
 }

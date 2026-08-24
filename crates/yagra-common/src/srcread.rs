@@ -527,6 +527,70 @@ pub fn assert_no_file_matches_a_literal_against_its_own_text(src_dir: &Path, min
     );
 }
 
+/// **No file in this crate binds its own raw text at all** — the strict form of the rule above.
+///
+/// [`assert_no_file_matches_a_literal_against_its_own_text`] polices the *use* rather than the read,
+/// and ADR-102 said why in as many words: forbidding `include_str!` outright would need an exemption
+/// list, and `yagra-poller`'s `main.rs` would have been on it. ADR-103 moved that check to
+/// `heartbeat.rs` and made it read through `module_source`, so the exemption has no member left —
+/// which is what makes the strict form available to that crate, with no list to keep.
+///
+/// **Reach for this whenever a crate has no legitimate raw reader, and keep the lenient form
+/// otherwise.** `yagra-core` has eight, every one of them negated and correct; demanding zero there
+/// would only teach the next person to add themselves to `exempt`.
+///
+/// ⚠️ The two are not interchangeable in the other direction either. The lenient form's floor counts
+/// **bindings**, so it goes vacuous — and then fails on its own floor — the moment a crate stops
+/// having any. This one's floor counts **files searched**, which is a population that does not
+/// disappear, and that difference is the whole reason a crate can adopt it.
+pub fn assert_no_file_reads_its_own_raw_text(src_dir: &Path, min_files: usize, exempt: &[&str]) {
+    // Acceptance side first, on a sample that is not on disk: a detector that has stopped matching
+    // reports a clean crate in exactly the same words as a clean crate
+    // (`rejection-only-tests-pass-when-everything-rejects`). Both halves are pinned — the file's own
+    // name is found, a sibling's is not.
+    let q = '"';
+    let sample = format!(
+        "const SRC: &str = include_str!({q}sample.rs{q});\n\
+         const OTHER: &str = include_str!({q}sibling.rs{q});\n"
+    );
+    let found = self_read_bindings(Path::new("crate/src/sample.rs"), &sample);
+    assert_eq!(
+        found,
+        vec!["SRC".to_owned()],
+        "the detector no longer reads the idiom it exists to find: {found:?}"
+    );
+
+    let mut paths = Vec::new();
+    rs_files(src_dir, &mut paths);
+    let searched: Vec<&PathBuf> = paths
+        .iter()
+        .filter(|p| !exempt.contains(&file_name(p).as_str()))
+        .collect();
+    // 🚨 The floor counts what was **searched**, not what was walked, for the reason
+    // `assert_no_file_spells_the_attribute` gives: narrowing the exclusion until it matches
+    // everything otherwise leaves this green over zero files.
+    assert!(
+        searched.len() >= min_files,
+        "only {} files were searched under {}; nothing below is being checked",
+        searched.len(),
+        src_dir.display()
+    );
+    let offenders: Vec<String> = searched
+        .iter()
+        .filter_map(|p| {
+            let bound = self_read_bindings(p, &read(p));
+            (!bound.is_empty()).then(|| format!("{}: {}", file_name(p), bound.join(", ")))
+        })
+        .collect();
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} bind their own raw text. Read the module through `module_source::code` / \
+         `code_no_comments` instead: the raw text includes the test items, so a needle thrown at it \
+         can match the line it is written on, and this crate has declared it has no reader that \
+         needs them"
+    );
+}
+
 /// Every literal needle `text` throws at its own raw text, as `file: NAME.contains("…")`.
 ///
 /// Public so a caller can report rather than assert; [`assert_no_file_matches_a_literal_against_its_own_text`]

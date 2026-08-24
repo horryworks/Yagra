@@ -1,0 +1,246 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//! This poller saying it is alive, and what it can do (ADR-009).
+//!
+//! One beat every [`HEARTBEAT_SECS`], carrying liveness, the working set's epoch/last_seq so core
+//! can spot a stale or gapped poller, node/spec/inflight/result counts, which listeners bound, a
+//! host-resource sample, and this host's management addresses. Never logs and never carries a
+//! secret.
+//!
+//! ⚠️ **This loop is deliberately not cancellable.** Its last act is to publish a `leaving` beat so
+//! core reassigns this poller's nodes immediately instead of waiting three missed heartbeats; being
+//! aborted mid-publish would put every graceful restart back on the timeout path. It observes the
+//! shutdown token instead, and `main` joins it with a bounded timeout — that join is what makes the
+//! guarantee real, since otherwise the beat races the runtime being dropped.
+//!
+//! **The capability list is the part that fails silently.** Five claims are unconditional and two
+//! are earned; a claim this poller does not make is work core withholds — authenticated URL checks,
+//! byte-exact forwarding, a support-log request — with no error anywhere and every test green.
+//! `guards.rs` makes an unclaimed capability a build failure by deriving the vocabulary from
+//! `yagra-bus`, which is the only place that list is written down.
+
+use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use tokio::task::JoinHandle;
+use uuid::Uuid;
+use yagra_bus::{HeartbeatMsg, NatsBus, SyncBus, HEARTBEAT_SECS};
+use yagra_telemetry::CancellationToken;
+
+use crate::working_set::WorkingSet;
+use crate::{location, PollerIdentity};
+
+/// How long the `leaving` beat itself waits for the bus to confirm it left the process.
+const LEAVE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Start the heartbeat loop, returning its handle so `main` can join the `leaving` beat.
+///
+/// ⚠️ **`tokio::spawn`, not `spawn_cancellable`** — see the module doc. The handle is the other half
+/// of that decision: without joining it the final beat is lost with the runtime.
+pub(crate) fn start(
+    bus: &Arc<NatsBus>,
+    identity: &PollerIdentity,
+    working_set: &Arc<Mutex<WorkingSet>>,
+    results_total: &Arc<AtomicU64>,
+    inflight: &Arc<AtomicU64>,
+    listeners: Vec<String>,
+    shutdown: &CancellationToken,
+) -> JoinHandle<()> {
+    // The host collector rides the beat so this poller's CPU/load/mem/disk reach core even across
+    // NAT/FW (self-observability).
+    let host_collector = Arc::new(yagra_hoststats::HostCollector::from_env());
+    tokio::spawn(run_heartbeat_loop(
+        bus.clone(),
+        identity.id.clone(),
+        identity.pool.clone(),
+        identity.incarnation,
+        identity.version,
+        working_set.clone(),
+        results_total.clone(),
+        inflight.clone(),
+        listeners,
+        host_collector,
+        // Read once at startup rather than per beat: enumerating interfaces is a syscall, and an
+        // address change on a poller host is a restart-level event in every deployment shape we
+        // support (a container gets a new address by being recreated).
+        location::local_mgmt_addrs(),
+        shutdown.clone(),
+    ))
+}
+
+/// Publish a liveness + telemetry heartbeat every [`HEARTBEAT_SECS`] (ADR-009). Echoes the working
+/// set's epoch/last_seq so core can spot a stale/gapped poller, plus node/spec/inflight/result
+/// counts, the bound listeners, and a host-resource sample (CPU/load/mem/disk). Never logs or
+/// carries a secret.
+#[allow(clippy::too_many_arguments)]
+async fn run_heartbeat_loop<B>(
+    bus: Arc<B>,
+    poller_id: String,
+    pool: String,
+    incarnation: Uuid,
+    version: &'static str,
+    working_set: Arc<Mutex<WorkingSet>>,
+    results_total: Arc<AtomicU64>,
+    inflight: Arc<AtomicU64>,
+    listeners: Vec<String>,
+    host_collector: Arc<yagra_hoststats::HostCollector>,
+    mgmt_addrs: Vec<std::net::IpAddr>,
+    shutdown: CancellationToken,
+) where
+    B: SyncBus + 'static,
+{
+    let mut tick = tokio::time::interval(Duration::from_secs(HEARTBEAT_SECS));
+    loop {
+        // A shutdown must not wait out the next tick: the point of the final beat is that it
+        // arrives before the process is gone, so core can hand this poller's nodes over
+        // immediately instead of waiting three missed beats.
+        let leaving = tokio::select! {
+            () = shutdown.cancelled() => true,
+            _ = tick.tick() => false,
+        };
+        let (nodes, specs, epoch, last_seq) = {
+            let ws = working_set.lock().expect("working set mutex poisoned");
+            let (nodes, specs) = ws.stats();
+            let (epoch, last_seq) = ws.sync_state();
+            (nodes, specs, epoch, last_seq)
+        };
+        metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
+        let hb = HeartbeatMsg {
+            poller_id: poller_id.clone(),
+            pool: pool.clone(),
+            incarnation,
+            version: version.to_owned(),
+            epoch,
+            last_seq,
+            working_set_nodes: nodes,
+            working_set_specs: specs,
+            inflight: u32::try_from(inflight.load(Ordering::Relaxed)).unwrap_or(u32::MAX),
+            results_total: results_total.load(Ordering::Relaxed),
+            listeners: listeners.clone(),
+            // This build attaches the original datagram to passive events (ADR-034), so core may
+            // promise byte-exact forwarding for anything this poller received. An N-1 poller sends
+            // no caps, and core degrades that poller's traffic to re-rendered output + a warning.
+            caps: vec![
+                yagra_bus::CAP_RAW_CAPTURE.to_owned(),
+                yagra_bus::CAP_FLOW_RELAY.to_owned(),
+                // This build understands `HttpCheck::auth`. Without the claim core withholds every
+                // authenticated URL check from this poller rather than let it probe anonymously and
+                // report the resulting 401 as an outage.
+                yagra_bus::CAP_HTTP_AUTH.to_owned(),
+                // This build reads a URL check's response body and applies `HttpCheck::body_match`.
+                // Without the claim core withholds every content-checked monitor rather than let
+                // this poller report `http_up = 1` for a page it never looked at.
+                yagra_bus::CAP_HTTP_BODY.to_owned(),
+                // This build honours a `DiscoveryCancel` (ADR-068 Inc.2). Unconditional, like the
+                // four above, because the subscription is unconditional.
+                //
+                // ⚠️ Core cannot use this to withhold anything — a sweep is queue-delivered, so it
+                // does not know which poller will run one. The claim only lets the UI tell the
+                // operator, before they press Stop, whether every poller that might be running the
+                // sweep understands the command.
+                yagra_bus::CAP_DISCOVERY_CANCEL.to_owned(),
+            ]
+            .into_iter()
+            // Unlike the four above, this one is conditional: it says a site updater is deployed
+            // beside this poller and has been seen alive, so core may hand it a release to install
+            // (ADR-051). Claiming it unconditionally would make core send commands into sites that
+            // cannot act on them, and report every such site as "will upgrade" when it will not.
+            .chain(self_upgrade_cap())
+            // Conditional for the same shape of reason (ADR-045 Inc.4): this poller can answer a
+            // support-log request only if it has a file layer to read. Without the claim core does
+            // not ask, and the bundle names the site as unrepresented — which is the true statement.
+            // Claiming it unconditionally would turn "there is nothing to send" into an empty reply
+            // core cannot distinguish from a deliberate one.
+            .chain(log_ship_cap())
+            .collect(),
+            host: Some(host_collector.sample()),
+            leaving,
+            // Where this poller sits, so core can root the derived dependency graph (ADR-043).
+            mgmt_addrs: mgmt_addrs.clone(),
+        };
+        if let Err(e) = bus.publish_heartbeat(hb).await {
+            tracing::warn!(error = %e, "failed to publish heartbeat");
+        }
+        if leaving {
+            // `publish` only queues into the client's writer, and this process is about to stop
+            // existing — so without the flush the beat that makes a hand-over prompt is exactly the
+            // beat most likely to be lost, degrading every graceful restart to the 30s timeout path
+            // it was written to avoid (ADR-051). Bounded: a broker that cannot take it in a second
+            // will not take it at all, and we are on the way out either way.
+            match tokio::time::timeout(LEAVE_FLUSH_TIMEOUT, bus.flush()).await {
+                Ok(Ok(())) => tracing::info!(
+                    "published leaving heartbeat — core can reassign this poller's nodes"
+                ),
+                Ok(Err(e)) => {
+                    tracing::warn!(error = %e, "leaving heartbeat may not have reached the bus");
+                }
+                Err(_) => tracing::warn!(
+                    "timed out flushing the leaving heartbeat — core will fall back to timeout detection"
+                ),
+            }
+            return;
+        }
+    }
+}
+
+/// [`yagra_bus::CAP_SELF_UPGRADE`], but only when a site updater is really there to act on it.
+///
+/// Two conditions, and both are needed. `YAGRA_UPGRADE_DIR` says an operator wired the hand-off
+/// volume; a **fresh** `current.json` in it says the sidecar is running rather than commented out,
+/// crashed, or wired to the wrong path. Claiming on the env var alone would let core report a site
+/// as "will upgrade with core" and then send it a command nothing reads — the version skew would
+/// still be there, and the page would say it had been dealt with, which is worse than saying
+/// nothing (ADR-051).
+fn self_upgrade_cap() -> Option<String> {
+    let dir = crate::env_nonempty("YAGRA_UPGRADE_DIR")?;
+    let raw = std::fs::read_to_string(Path::new(&dir).join("current.json")).ok()?;
+    let beat: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let written_at = beat.get("written_at")?.as_i64()?;
+    let now = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs(),
+    )
+    .ok()?;
+    // The sidecar beats every few seconds; a minute of slack absorbs clock skew between two
+    // containers on the same host without ever calling a dead updater alive. A beat from the future
+    // is skew, not staleness — it was clearly written.
+    (now.saturating_sub(written_at) <= 60).then(|| yagra_bus::CAP_SELF_UPGRADE.to_owned())
+}
+
+/// [`yagra_bus::CAP_LOG_SHIP`], but only when there is a log file to ship (ADR-045 Inc.4).
+///
+/// One condition, and it is the same one the subscribe above is gated on, deliberately read from the
+/// same place: `yagra_telemetry::log_dir()`. If these two ever disagreed the failure would be
+/// silent in the worse direction — core would ask a poller that is not listening and wait out the
+/// whole deadline, then record the site as unresponsive when it was merely never subscribed.
+fn log_ship_cap() -> Option<String> {
+    yagra_telemetry::log_dir().map(|_| yagra_bus::CAP_LOG_SHIP.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    /// The `leaving` beat is the one publish in the process with no successor, so it is the one that
+    /// must be flushed. Nothing in the type system says so — `publish` returning `Ok` reads like
+    /// delivery — hence a test that reads the source and pins the call.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-091/102). The raw text would
+    /// carry this test module with it, and then both needles below — the one that cuts and the one
+    /// that asserts — would match the lines they are written on, so the check could not fail. That
+    /// was true of this test until ADR-103 moved it here.
+    #[test]
+    fn the_leaving_beat_is_flushed_before_the_loop_returns() {
+        let src = crate::module_source::code("src", "heartbeat");
+        let leave = src
+            .split_once("if leaving {")
+            .expect("the heartbeat loop's leaving arm")
+            .1;
+        let arm = &leave[..leave.find("\n        }").unwrap_or(leave.len())];
+        assert!(
+            arm.contains("bus.flush()"),
+            "the leaving arm must flush: a queued publish dies with the runtime"
+        );
+    }
+}
