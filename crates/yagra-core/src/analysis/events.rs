@@ -299,3 +299,339 @@ impl Engine {
         Ok(Some((findings, summary)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::testkit::{params, Harness};
+    use crate::events::EventFlapStat;
+
+    /// Acceptance first: a node whose event volume bursts past its baseline is reported.
+    #[tokio::test]
+    async fn a_burst_of_events_is_reported_against_its_node() {
+        let to = now_s();
+        let h = Harness::new();
+        let node = h.inventory.node(1, "chatty-sw");
+        let mut buckets: Vec<EventBucketCount> = (0..20)
+            .map(|i| EventBucketCount {
+                node_id: node,
+                bucket_start_s: to - 86_400 + i * 300,
+                count: 1,
+            })
+            .collect();
+        buckets.push(EventBucketCount {
+            node_id: node,
+            bucket_start_s: to - 600,
+            count: 50,
+        });
+        *h.events.buckets.lock().expect("lock") = buckets;
+
+        let (findings, summary) = h
+            .engine()
+            .run_event_storm(
+                Uuid::nil(),
+                &params(AnalysisTool::EventStorm),
+                &[node],
+                &HashMap::from([(node, "chatty-sw".to_owned())]),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "{summary}");
+        assert_eq!(findings[0].kind, "event_storm");
+        assert_eq!(findings[0].metric, "event_rate");
+        assert_eq!(findings[0].node_name, "chatty-sw");
+        assert!(summary.contains("1 nodes with event-volume spikes"));
+    }
+
+    /// 🎯 The store applies the caller's scope, but `node_cap` is applied *here* — a run limited to
+    /// N nodes must not score a node outside that set even when the store hands one back. Both
+    /// nodes are seeded with a burst, so a fold that dropped everything would fail this too.
+    #[tokio::test]
+    async fn a_node_outside_the_runs_own_set_is_not_scored() {
+        let to = now_s();
+        let h = Harness::new();
+        let inside = h.inventory.node(1, "inside");
+        let outside = h.inventory.node(2, "outside");
+        let mut buckets = Vec::new();
+        for node in [inside, outside] {
+            for i in 0..20 {
+                buckets.push(EventBucketCount {
+                    node_id: node,
+                    bucket_start_s: to - 86_400 + i * 300,
+                    count: 1,
+                });
+            }
+            buckets.push(EventBucketCount {
+                node_id: node,
+                bucket_start_s: to - 600,
+                count: 50,
+            });
+        }
+        *h.events.buckets.lock().expect("lock") = buckets;
+
+        let (findings, _) = h
+            .engine()
+            .run_event_storm(
+                Uuid::nil(),
+                &params(AnalysisTool::EventStorm),
+                &[inside], // the run's resolved set, after node_cap
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(
+            findings
+                .iter()
+                .filter_map(|f| f.node_id)
+                .collect::<Vec<_>>(),
+            vec![inside],
+            "only the run's own nodes are scored"
+        );
+    }
+
+    /// 🎯 A cycle is a fire **paired with** a clear, so the count is the smaller of the two. Nine
+    /// fires and three clears is three cycles — reading `fires` would triple the score.
+    #[tokio::test]
+    async fn an_event_flap_counts_completed_cycles_not_fires() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        *h.events.flaps.lock().expect("lock") = vec![
+            EventFlapStat {
+                node_id: node,
+                rule_id: Uuid::from_u128(0xB1),
+                rule_name: "linkDown".to_owned(),
+                fires: 9,
+                clears: 3,
+            },
+            EventFlapStat {
+                node_id: node,
+                rule_id: Uuid::from_u128(0xB2),
+                rule_name: "bgpDown".to_owned(),
+                fires: 9,
+                clears: 1, // one completed cycle — below the floor of two
+            },
+        ];
+
+        let (findings, _) = h
+            .engine()
+            .run_event_flap(
+                Uuid::nil(),
+                &params(AnalysisTool::EventFlap),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "one rule is above the floor");
+        assert_eq!(findings[0].metric, "event:linkDown");
+        assert_eq!(findings[0].when_label, "3 cycles");
+        assert_eq!(findings[0].detail["fires"], 9);
+        assert_eq!(findings[0].detail["cycles"], 3);
+    }
+
+    /// A severity mix that skews toward error and worse in the recent window is the finding. The
+    /// two windows are two separate store reads, and the fake answers them in order.
+    #[tokio::test]
+    async fn a_syslog_mix_skewing_to_errors_is_reported() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        *h.events.severities.lock().expect("lock") = vec![
+            // Baseline: all informational.
+            vec![EventSeverityCount {
+                node_id: node,
+                severity: 6,
+                count: 100,
+            }],
+            // Recent: three fifths at error or worse.
+            vec![
+                EventSeverityCount {
+                    node_id: node,
+                    severity: 3,
+                    count: 30,
+                },
+                EventSeverityCount {
+                    node_id: node,
+                    severity: 6,
+                    count: 20,
+                },
+            ],
+        ];
+
+        let (findings, _) = h
+            .engine()
+            .run_severity_shift(
+                Uuid::nil(),
+                &params(AnalysisTool::SeverityShift),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, "severity_shift");
+        assert_eq!(findings[0].when_label, "60% err+");
+        assert_eq!(findings[0].duration, "was 0%");
+    }
+
+    /// An unchanged mix is not a shift. Same shape as the test above with the recent window equal
+    /// to the baseline, so what is measured is the comparison and not the plumbing.
+    #[tokio::test]
+    async fn an_unchanged_severity_mix_is_not_a_shift() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        let same = vec![
+            EventSeverityCount {
+                node_id: node,
+                severity: 3,
+                count: 30,
+            },
+            EventSeverityCount {
+                node_id: node,
+                severity: 6,
+                count: 20,
+            },
+        ];
+        *h.events.severities.lock().expect("lock") = vec![same.clone(), same];
+
+        let (findings, _) = h
+            .engine()
+            .run_severity_shift(
+                Uuid::nil(),
+                &params(AnalysisTool::SeverityShift),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+        assert!(findings.is_empty(), "no delta ⇒ nothing to report");
+    }
+
+    /// 🎯 A signature with **no** representative node must survive.
+    ///
+    /// `rule_gap` used to filter its results by whether the sample node was in scope. That dropped
+    /// signatures which genuinely occurred inside the caller's group whenever some out-of-group
+    /// node sorted lower — and on the log-store path `sample_node` is `None` for *every* row
+    /// (LogsQL has no `min(uuid)`), which the filter read as "out of scope" and discarded
+    /// wholesale. Until now the only thing saying so was a comment.
+    #[tokio::test]
+    async fn an_unmatched_signature_with_no_sample_node_is_still_reported() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        *h.events.signatures.lock().expect("lock") = vec![
+            EventSignatureCount {
+                kind: "trap".to_owned(),
+                signature: "1.3.6.1.6.3.1.1.5.4".to_owned(),
+                count: 200,
+                sample_node: None, // what the log-store path always returns
+            },
+            EventSignatureCount {
+                kind: "syslog".to_owned(),
+                signature: "sshd".to_owned(),
+                count: RULE_GAP_FLOOR - 1,
+                sample_node: Some(node),
+            },
+        ];
+
+        let (findings, summary) = h
+            .engine()
+            .run_rule_gap(
+                Uuid::nil(),
+                &params(AnalysisTool::RuleGap),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "{summary}");
+        assert_eq!(findings[0].kind, "rule_gap");
+        assert_eq!(findings[0].node_id, None);
+        assert_eq!(
+            findings[0].node_name, "fleet",
+            "a signature with no sample node belongs to the fleet, not to nobody"
+        );
+        assert_eq!(findings[0].metric, "trap:1.3.6.1.6.3.1.1.5.4");
+    }
+
+    /// 🎯 An auth-failure source that maps to no inventory node at all must survive — that is
+    /// exactly what an external prober looks like, and the old scope filter hid it.
+    #[tokio::test]
+    async fn an_auth_source_outside_the_inventory_is_still_reported() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        *h.events.auth.lock().expect("lock") = vec![
+            EventAuthSource {
+                source_ip: Some("203.0.113.9".to_owned()),
+                node_id: None, // no inventory node — an outsider
+                count: 40,
+            },
+            EventAuthSource {
+                source_ip: Some("10.0.0.5".to_owned()),
+                node_id: Some(node),
+                count: AUTH_FLOOR - 1,
+            },
+        ];
+
+        let (findings, _) = h
+            .engine()
+            .run_auth_probe(
+                Uuid::nil(),
+                &params(AnalysisTool::AuthProbe),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, "auth_probe");
+        assert_eq!(findings[0].node_id, None);
+        assert_eq!(
+            findings[0].node_name, "203.0.113.9",
+            "an unknown source is named by its address"
+        );
+        assert_eq!(findings[0].duration, "203.0.113.9");
+    }
+
+    /// An event store that cannot answer fails the job rather than reporting a healthy fleet.
+    /// Silence and health look identical in a finding list, so this must be an error.
+    #[tokio::test]
+    async fn an_unreachable_event_store_fails_the_run_rather_than_reporting_nothing() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        *h.events.failing.lock().expect("lock") = true;
+
+        let out = h
+            .engine()
+            .run_event_storm(
+                Uuid::nil(),
+                &params(AnalysisTool::EventStorm),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await;
+        assert!(
+            out.is_err(),
+            "an unanswerable store is an error, not an empty report"
+        );
+    }
+}

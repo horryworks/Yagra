@@ -76,6 +76,8 @@ use crate::ratelimit::{charge_window, env_cap};
 mod guards;
 #[cfg(test)]
 mod source;
+#[cfg(test)]
+mod testkit;
 
 // ADR-089: what was one 4,401-line file is now this directory. `mod.rs` keeps the runner's
 // lifecycle — admission, scoping, progress, and the one exhaustive `match` that dispatches to an
@@ -630,6 +632,142 @@ mod tests {
         // nothing for. Collapsing it to `None` is the fail-open inversion.
         let empty = Engine::scoped_window(&scoped, &[], 100, 200);
         assert_eq!(empty.visible_node_ids.as_deref(), Some(&[][..]));
+    }
+
+    /// Every analysis that declares it needs the flow tier says so when there is none, and every
+    /// analysis that does not, does not.
+    ///
+    /// 🎯 This replaces a source-text check that looked for the literal `return … flow_tier_off()`
+    /// inside each `run_*` body. Driving the real dispatch instead is strictly stronger: it also
+    /// covers an arm wired to the wrong analysis, and a short circuit that returns the wrong
+    /// finding. The two must agree or a scheduled flow analysis is refused for a tier it does not
+    /// need, or — worse — accepted and left to stack up an empty successful run every day.
+    ///
+    /// Acceptance-first, and with a floor: a loop over an empty `ALL` would assert nothing.
+    #[tokio::test]
+    async fn every_analysis_needing_the_flow_tier_says_so_when_there_is_none() {
+        use testkit::{params, Harness};
+
+        assert!(
+            AnalysisTool::ALL.len() >= 15,
+            "the tool table shrank; this loop would be checking a fraction"
+        );
+        let h = Harness::new(); // deliberately no flow tier
+        let node = h.inventory.node(1, "n");
+        let engine = h.engine();
+        let mut short_circuited = Vec::new();
+
+        for tool in AnalysisTool::ALL.iter().copied() {
+            let mut p = params(tool);
+            p.scope_id = Some(node);
+            let (findings, summary) = engine
+                .execute(Uuid::nil(), &p, &AtomicBool::new(false))
+                .await
+                .unwrap_or_else(|e| panic!("{} failed: {e}", tool.as_str()))
+                .unwrap_or_else(|| panic!("{} reported itself cancelled", tool.as_str()));
+
+            let off = summary == "flow tier not enabled";
+            assert_eq!(
+                tool.needs_flow_tier(),
+                off,
+                "{}: needs_flow_tier() = {} but the run {} short-circuit",
+                tool.as_str(),
+                tool.needs_flow_tier(),
+                if off { "did" } else { "did not" }
+            );
+            if off {
+                short_circuited.push(tool.as_str());
+                assert_eq!(
+                    findings.len(),
+                    1,
+                    "{}: one note, not a report",
+                    tool.as_str()
+                );
+                assert_eq!(findings[0].severity, "info");
+                assert_eq!(findings[0].metric, "flow");
+                assert_eq!(findings[0].node_id, None);
+            }
+        }
+        assert_eq!(
+            short_circuited.len(),
+            5,
+            "five analyses read the flow store: {short_circuited:?}"
+        );
+    }
+
+    /// A scope that resolves to nothing is answered, not run. Without this the fifteen arms below
+    /// would each have to decide what an empty fleet means.
+    #[tokio::test]
+    async fn a_scope_that_resolves_to_no_node_is_answered_before_any_analysis_runs() {
+        use testkit::{params, Harness};
+
+        let h = Harness::new();
+        let p = params(AnalysisTool::Anomaly); // Node scope, no id ⇒ nothing resolves
+        let (findings, summary) = h
+            .engine()
+            .execute(Uuid::nil(), &p, &AtomicBool::new(false))
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+        assert!(findings.is_empty());
+        assert_eq!(summary, "no nodes in scope");
+        assert_eq!(
+            h.progress.ticks().len(),
+            1,
+            "it reported resolving the scope and then stopped"
+        );
+    }
+
+    /// A group scope covers the group and every subgroup beneath it, and the node cap applies to
+    /// the result. Both are decided before any analysis sees a node.
+    #[tokio::test]
+    async fn a_group_scope_reaches_the_whole_subtree() {
+        use testkit::{params, Harness};
+
+        let h = Harness::new();
+        let parent = Uuid::from_u128(0xA1);
+        let child = Uuid::from_u128(0xA2);
+        let unrelated = Uuid::from_u128(0xA3);
+        let in_parent = h.inventory.node(1, "in-parent");
+        let in_child = h.inventory.node(2, "in-child");
+        let elsewhere = h.inventory.node(3, "elsewhere");
+        h.inventory.group(parent, None, vec![in_parent]);
+        h.inventory.group(child, Some(parent), vec![in_child]);
+        h.inventory.group(unrelated, None, vec![elsewhere]);
+
+        // Give every node the same anomaly so the finding set names exactly who was in scope.
+        let to = now_s();
+        for n in [in_parent, in_child, elsewhere] {
+            let mut pts = (0..40)
+                .map(|i| MetricPoint {
+                    t: to - 4_000 - 2_000 * (39 - i),
+                    v: 10.0,
+                })
+                .collect::<Vec<_>>();
+            pts.push(MetricPoint {
+                t: to - 1_000,
+                v: 90.0,
+            });
+            h.metrics.aggregated(n, "cpu_pct", pts);
+        }
+
+        let mut p = params(AnalysisTool::Anomaly);
+        p.scope_kind = ScopeKind::Group;
+        p.scope_id = Some(parent);
+        let (findings, _) = h
+            .engine()
+            .execute(Uuid::nil(), &p, &AtomicBool::new(false))
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        let hit: std::collections::BTreeSet<Uuid> =
+            findings.iter().filter_map(|f| f.node_id).collect();
+        assert_eq!(
+            hit,
+            [in_parent, in_child].into_iter().collect(),
+            "the subgroup is in scope and the unrelated group is not"
+        );
     }
 
     // The sliding-window rule itself is tested in [`crate::ratelimit`]; what belongs here is that

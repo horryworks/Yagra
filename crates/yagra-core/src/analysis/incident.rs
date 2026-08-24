@@ -304,3 +304,208 @@ impl Engine {
         signals
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::testkit::{params, Harness};
+    use crate::events::{EventAction, EventRow};
+    use chrono::TimeZone;
+    use yagra_bus::EventKind;
+
+    /// A stored event on `node`, `ago_s` seconds ago, that fired a rule.
+    fn event(node: Uuid, ago_s: i64, message: &str) -> EventRow {
+        let at_ms = (now_s() - ago_s) * 1_000;
+        EventRow {
+            id: Uuid::new_v4(),
+            kind: EventKind::Syslog,
+            at_unix_ms: at_ms,
+            recorded_at: Utc.timestamp_opt(at_ms / 1_000, 0).single().expect("ts"),
+            source_ip: None,
+            node_id: Some(node),
+            source_id: None,
+            pool: None,
+            facility: Some(4),
+            syslog_severity: Some(3),
+            hostname: None,
+            app_name: Some("kernel".to_owned()),
+            trap_oid: None,
+            trap_name: None,
+            varbinds: None,
+            message: message.to_owned(),
+            matched_rule_id: None,
+            action: EventAction::Fired,
+        }
+    }
+
+    /// A window narrow enough that the reachability series has a real baseline: the analysis floors
+    /// its read window at an hour, but `recent_window_s` follows `window_secs`.
+    fn incident_params() -> JobParams {
+        let mut p = params(AnalysisTool::IncidentCorrelate);
+        p.window_secs = 600;
+        p
+    }
+
+    /// Seed a reachability series that is flat for most of the hour and then jumps.
+    fn seed_rtt_anomaly(h: &Harness, node: Uuid) {
+        let to = now_s();
+        let mut pts: Vec<MetricPoint> = (0..20)
+            .map(|i| MetricPoint {
+                t: to - 3_600 + i * 145,
+                v: 4.0,
+            })
+            .collect();
+        pts.push(MetricPoint {
+            t: to - 300,
+            v: 40.0,
+        });
+        pts.push(MetricPoint {
+            t: to - 100,
+            v: 40.0,
+        });
+        h.metrics.series(node, "icmp_rtt_ms", pts);
+    }
+
+    /// Acceptance first: two kinds of signal on the same node is what a correlated incident is.
+    #[tokio::test]
+    async fn a_node_showing_two_kinds_of_signal_is_a_correlated_incident() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "core-sw-01");
+        seed_rtt_anomaly(&h, node);
+        *h.events.recent.lock().expect("lock") = vec![event(node, 200, "link down")];
+
+        let (findings, summary) = h
+            .engine()
+            .run_incident_correlate(
+                Uuid::nil(),
+                &incident_params(),
+                &[node],
+                &HashMap::from([(node, "core-sw-01".to_owned())]),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "{summary}");
+        assert_eq!(findings[0].kind, "incident_correlate");
+        assert_eq!(findings[0].metric, "incident");
+        assert_eq!(findings[0].node_name, "core-sw-01");
+        let kinds: std::collections::BTreeSet<&str> = findings[0].detail["timeline"]
+            .as_array()
+            .expect("a timeline")
+            .iter()
+            .map(|e| e["kind"].as_str().expect("kind"))
+            .collect();
+        assert_eq!(
+            kinds,
+            ["event", "metric"].into_iter().collect(),
+            "the timeline carries both kinds: {:?}",
+            findings[0].detail["timeline"]
+        );
+        assert_eq!(findings[0].detail["peer_count"], 0, "no graph ⇒ no peers");
+    }
+
+    /// Two signals of the *same* kind are not a correlation. Evidence has to cross stores, or the
+    /// analysis is just an event list with a score on it.
+    #[tokio::test]
+    async fn two_signals_of_one_kind_are_not_a_correlated_incident() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        // Events only — no reachability series at all.
+        *h.events.recent.lock().expect("lock") =
+            vec![event(node, 200, "one"), event(node, 100, "two")];
+
+        let (findings, _) = h
+            .engine()
+            .run_incident_correlate(
+                Uuid::nil(),
+                &incident_params(),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+        assert!(
+            findings.is_empty(),
+            "two events are two signals of one kind: {findings:?}"
+        );
+    }
+
+    /// 🎯 The inventory being unreachable costs the neighbour expansion, not the finding.
+    ///
+    /// `incident_neighbourhood` says so in its own doc — "degrade to no expansion rather than
+    /// failing the job: single-node correlation is exactly the behaviour this analysis had before,
+    /// so it is a safe floor". Nothing checked it. A failing read here would otherwise be the
+    /// difference between a diagnostic with fewer peers and no diagnostic at all.
+    #[tokio::test]
+    async fn an_unreachable_inventory_costs_the_expansion_not_the_finding() {
+        let h = Harness::new();
+        let node = h.inventory.node(1, "n");
+        seed_rtt_anomaly(&h, node);
+        *h.events.recent.lock().expect("lock") = vec![event(node, 200, "link down")];
+        h.inventory.fail();
+
+        let (findings, _) = h
+            .engine()
+            .run_incident_correlate(
+                Uuid::nil(),
+                &incident_params(),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("a failed inventory read is not a failed job")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "the node's own signals still stand");
+        assert_eq!(findings[0].detail["peer_count"], 0);
+    }
+
+    /// A derived neighbour whose signals land in the same window corroborates the incident, and
+    /// says which side of the link it is on.
+    #[tokio::test]
+    async fn a_neighbour_in_scope_with_coinciding_signals_corroborates() {
+        let h = Harness::new();
+        let subject = h.inventory.node(1, "leaf");
+        let upstream = h.inventory.node(2, "spine");
+        for n in [subject, upstream] {
+            seed_rtt_anomaly(&h, n);
+            h.events
+                .recent
+                .lock()
+                .expect("lock")
+                .push(event(n, 200, "link down"));
+        }
+        let mut topo = Topology::new();
+        topo.add_dependency(NodeId::from(subject), NodeId::from(upstream));
+        h.graph.set(topo);
+
+        let (findings, _) = h
+            .engine()
+            .run_incident_correlate(
+                Uuid::nil(),
+                &incident_params(),
+                &[subject, upstream],
+                &HashMap::from([(upstream, "spine".to_owned())]),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        let leaf = findings
+            .iter()
+            .find(|f| f.node_id == Some(subject))
+            .expect("the subject has a finding");
+        assert_eq!(leaf.detail["peer_count"], 1, "the upstream corroborates");
+        assert_eq!(
+            leaf.detail["peers"][0]["node_id"],
+            serde_json::json!(upstream)
+        );
+        assert_eq!(leaf.detail["peers"][0]["relation"], "upstream");
+    }
+}

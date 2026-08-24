@@ -457,3 +457,355 @@ impl Engine {
         Some(bytes * 8.0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analysis::testkit::{params, Harness};
+    use crate::flowstore::FlowRow;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    /// One flow record. Defaults are the uninteresting ones; a test names only what it is about.
+    fn row(node: Uuid, src: &str, dst: &str, dst_port: u16, bytes: u64, ts_s: i64) -> FlowRow {
+        FlowRow {
+            node_id: node,
+            ts_unix_ms: ts_s * 1000,
+            exporter_ip: IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)),
+            if_index: 2,
+            src_ip: src.parse().expect("src"),
+            dst_ip: dst.parse().expect("dst"),
+            src_port: 40_000,
+            dst_port,
+            proto: 6,
+            tos: 0,
+            src_as: 0,
+            dst_as: 0,
+            bytes,
+            packets: bytes / 100,
+            flows: 1,
+        }
+    }
+
+    async fn seed(h: &Harness, rows: Vec<FlowRow>) {
+        h.flow_store()
+            .insert_batch(&rows)
+            .await
+            .expect("the in-memory flow store accepts rows");
+    }
+
+    /// A quiet baseline that then bursts. `run_traffic_anomaly` needs at least `MIN_POINTS` series
+    /// points and half that many baseline buckets before it will score anything.
+    #[tokio::test]
+    async fn a_burst_of_flow_volume_is_reported_against_its_node() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "edge-fw");
+        let mut rows = Vec::new();
+        // 24 five-minute buckets of steady background, ending before the recent hour.
+        for i in 0..24 {
+            rows.push(row(
+                node,
+                "10.0.0.5",
+                "10.0.0.9",
+                443,
+                1_000,
+                to - 3_600 - i * 300,
+            ));
+        }
+        // …then one bucket a thousand times larger, inside it.
+        rows.push(row(node, "10.0.0.5", "10.0.0.9", 443, 1_000_000, to - 600));
+        seed(&h, rows).await;
+
+        let (findings, summary) = h
+            .engine()
+            .run_traffic_anomaly(
+                Uuid::nil(),
+                &params(AnalysisTool::TrafficAnomaly),
+                &[node],
+                &HashMap::from([(node, "edge-fw".to_owned())]),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "{summary}");
+        assert_eq!(findings[0].kind, "traffic_anomaly");
+        assert_eq!(findings[0].metric, "flow_bytes");
+        assert_eq!(findings[0].node_name, "edge-fw");
+        assert!(summary.contains("1 nodes with flow-volume anomalies"));
+    }
+
+    /// A talker that was not in the previous window, and is now the biggest, is the finding. The
+    /// baseline talker is seeded too, so a store returning nothing would fail rather than pass.
+    #[tokio::test]
+    async fn a_newly_dominant_talker_is_reported_and_a_familiar_one_is_not() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        seed(
+            &h,
+            vec![
+                // Baseline window (between 2w and 1w ago): one known talker.
+                row(node, "10.0.0.5", "10.0.0.9", 443, 5_000_000, to - 5_400),
+                // Recent window: the same known talker, plus a bigger stranger.
+                row(node, "10.0.0.5", "10.0.0.9", 443, 2_000_000, to - 600),
+                row(node, "10.0.0.77", "10.0.0.9", 443, 9_000_000, to - 600),
+            ],
+        )
+        .await;
+
+        let (findings, _) = h
+            .engine()
+            .run_talker_shift(
+                Uuid::nil(),
+                &params(AnalysisTool::TalkerShift),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, "talker_shift");
+        assert_eq!(
+            findings[0].detail["addr"], "10.0.0.77",
+            "the stranger is the finding, not the familiar heavy hitter"
+        );
+        assert_eq!(findings[0].when_label, "new #1");
+    }
+
+    /// Below the byte floor a new talker is noise, not a shift. Same shape as the test above with
+    /// one number changed, so what is being measured is the floor and nothing else.
+    #[tokio::test]
+    async fn a_new_talker_carrying_almost_nothing_is_not_a_shift() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        seed(
+            &h,
+            vec![
+                row(node, "10.0.0.5", "10.0.0.9", 443, 5_000_000, to - 5_400),
+                row(
+                    node,
+                    "10.0.0.77",
+                    "10.0.0.9",
+                    443,
+                    TALKER_FLOOR - 1,
+                    to - 600,
+                ),
+            ],
+        )
+        .await;
+
+        let (findings, _) = h
+            .engine()
+            .run_talker_shift(
+                Uuid::nil(),
+                &params(AnalysisTool::TalkerShift),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+        assert!(findings.is_empty(), "under the floor ⇒ nothing to say");
+    }
+
+    /// Fan-out past the scan floor is a scan; the direction it is named by is whichever dimension
+    /// is wider.
+    #[tokio::test]
+    async fn a_source_touching_many_destinations_is_reported_as_a_horizontal_scan() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        let rows: Vec<FlowRow> = (0..60)
+            .map(|i| {
+                row(
+                    node,
+                    "10.0.0.5",
+                    &format!("10.9.{}.{}", i / 250, i % 250),
+                    443,
+                    1_000,
+                    to - 600,
+                )
+            })
+            .collect();
+        seed(&h, rows).await;
+
+        let (findings, summary) = h
+            .engine()
+            .run_flow_scan(
+                Uuid::nil(),
+                &params(AnalysisTool::FlowScan),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1, "{summary}");
+        assert_eq!(findings[0].kind, "flow_scan");
+        assert_eq!(findings[0].detail["src"], "10.0.0.5");
+        assert!(
+            findings[0].duration.starts_with("horizontal"),
+            "many destinations, one port ⇒ horizontal: {}",
+            findings[0].duration
+        );
+    }
+
+    /// A handful of destinations is ordinary traffic. The floor is 50.
+    #[tokio::test]
+    async fn a_source_touching_a_few_destinations_is_not_a_scan() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        let rows: Vec<FlowRow> = (0..10)
+            .map(|i| {
+                row(
+                    node,
+                    "10.0.0.5",
+                    &format!("10.9.0.{i}"),
+                    443,
+                    1_000,
+                    to - 600,
+                )
+            })
+            .collect();
+        seed(&h, rows).await;
+
+        let (findings, _) = h
+            .engine()
+            .run_flow_scan(
+                Uuid::nil(),
+                &params(AnalysisTool::FlowScan),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+        assert!(findings.is_empty());
+    }
+
+    /// One conversation carrying most of a node's bytes is the finding, and the node's live
+    /// interface throughput rides along as context — the only place a flow analysis reads the TSDB.
+    #[tokio::test]
+    async fn one_dominant_conversation_is_reported_with_the_interface_rate_beside_it() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        h.metrics.interfaces(
+            node,
+            HashMap::from([(
+                1,
+                crate::store::InterfaceLive {
+                    in_bps: Some(1_000.0),
+                    out_bps: Some(2_000.0),
+                    oper_status: Some(1.0),
+                },
+            )]),
+        );
+        seed(
+            &h,
+            vec![
+                row(node, "10.0.0.5", "10.0.0.9", 443, 9_000_000, to - 60),
+                row(node, "10.0.0.6", "10.0.0.9", 443, 100_000, to - 60),
+            ],
+        )
+        .await;
+
+        let (findings, _) = h
+            .engine()
+            .run_saturation(
+                Uuid::nil(),
+                &params(AnalysisTool::Saturation),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, "saturation");
+        assert_eq!(findings[0].detail["src"], "10.0.0.5");
+        assert_eq!(
+            findings[0].detail["interface_bps"],
+            serde_json::json!(24_000.0),
+            "(1000 + 2000) bytes/s over one interface, reported in bits"
+        );
+    }
+
+    /// Evenly-spread traffic has no hog. Below half the node's bytes, nothing is reported.
+    #[tokio::test]
+    async fn evenly_spread_traffic_is_not_saturation() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        seed(
+            &h,
+            vec![
+                row(node, "10.0.0.5", "10.0.0.9", 443, 1_000_000, to - 60),
+                row(node, "10.0.0.6", "10.0.0.9", 443, 1_000_000, to - 60),
+                row(node, "10.0.0.7", "10.0.0.9", 443, 1_000_000, to - 60),
+            ],
+        )
+        .await;
+
+        let (findings, _) = h
+            .engine()
+            .run_saturation(
+                Uuid::nil(),
+                &params(AnalysisTool::Saturation),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+        assert!(findings.is_empty(), "a third of the traffic is not a hog");
+    }
+
+    /// A destination AS absent from the previous window is the finding. Seeded through the AS
+    /// fields rather than the addresses, because that is the dimension this analysis compares.
+    #[tokio::test]
+    async fn a_destination_as_absent_from_the_baseline_is_reported() {
+        let to = now_s();
+        let h = Harness::new().with_flows();
+        let node = h.inventory.node(1, "n");
+        let mut familiar = row(node, "10.0.0.5", "8.8.8.8", 443, 5_000_000, to - 5_400);
+        familiar.dst_as = 15_169;
+        let mut still_familiar = familiar.clone();
+        still_familiar.ts_unix_ms = (to - 600) * 1_000;
+        let mut stranger = row(node, "10.0.0.5", "1.1.1.1", 443, 6_000_000, to - 600);
+        stranger.dst_as = 13_335;
+        seed(&h, vec![familiar, still_familiar, stranger]).await;
+
+        let (findings, _) = h
+            .engine()
+            .run_new_destination(
+                Uuid::nil(),
+                &params(AnalysisTool::NewDestination),
+                &[node],
+                &HashMap::new(),
+                &AtomicBool::new(false),
+            )
+            .await
+            .expect("ok")
+            .expect("not cancelled");
+
+        assert!(
+            findings.iter().any(|f| f.kind == "new_destination"),
+            "the AS that only appears in the recent window is the finding: {findings:?}",
+        );
+    }
+}

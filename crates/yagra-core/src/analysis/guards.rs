@@ -1,105 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-//! The checks that read the analysis module **as source text** (ADR-089).
+//! The check that reads the analysis module **as source text** (ADR-089, ADR-098).
 //!
-//! Two things this module must hold true have no type, so reading the source is the only
-//! technique available; each test below says what it would take to check it any other way. They
-//! were inline in `analysis.rs` and moved here when it became a directory, for the reason
-//! `mcp/tools/guards.rs` exists: a scan that lives in the text it scans matches its own literals.
+//! One thing this module must hold true has no type, so reading the source is the only technique
+//! available. It was inline in `analysis.rs` and moved here when that became a directory, for the
+//! reason `mcp/tools/guards.rs` exists: a scan that lives in the text it scans matches its own
+//! literals. This file is declared `#[cfg(test)] mod guards;`, which is how [`super::source`]'s
+//! exclusion derives it — it is never part of what it reads.
 //!
-//! 🎯 **There were three.** `every_event_analysis_reads_through_the_store_router` watched for a
-//! `run_*` reading `self.events.event_*` directly, which with a log store configured answers from
-//! the alert-linked subset — and for `rule_gap`, which looks for *unmatched* events, from the empty
-//! set. ADR-098 put the routing behind the `AnalysisEvents` seam, so an analysis has no `EventRepo`
-//! to reach and the offence cannot be written. **A check deleted because the thing it forbade
-//! became unspellable is the outcome to prefer over converting it** (ADR-092 decision 1).
-//! This file is declared `#[cfg(test)] mod guards;`, which is how
-//! [`super::source`]'s exclusion derives it — it is never part of what it reads.
+//! 🎯 **There were three, and ADR-098 retired two of them by making the analyses runnable.**
 //!
-//! Every scan iterates [`super::source::analysis_source_files`] and **resets its per-function state
-//! at each file boundary**. That is not tidiness: before the split there was one file and no
-//! boundary, so a scanner that never reset was correct by accident. Concatenated, it attributes one
-//! file's opening lines to the previous file's last `run_*`.
+//! - `every_event_analysis_reads_through_the_store_router` watched for a `run_*` reading
+//!   `self.events.event_*` directly, which with a log store configured answers from the
+//!   alert-linked subset — and for `rule_gap`, which looks for *unmatched* events, from the empty
+//!   set. The routing now lives behind the `AnalysisEvents` seam, so an analysis has no
+//!   `EventRepo` to reach and the offence cannot be written. **A check deleted because the thing
+//!   it forbade became unspellable is a better outcome than a check converted** (ADR-092
+//!   decision 1).
+//! - `needs_flow_tier_matches_which_analyses_actually_short_circuit` looked for the literal
+//!   `return … flow_tier_off()` inside each `run_*` body. It is now
+//!   `super::tests::every_analysis_needing_the_flow_tier_says_so_when_there_is_none`, which runs
+//!   all fifteen through the real dispatch with no flow store — strictly stronger, because it also
+//!   catches an arm wired to the wrong analysis and a short circuit returning the wrong finding.
+//!
+//! What is left is about SQL, which no seam reaches.
 
-use super::source::{analysis_source, analysis_source_files};
-use super::{AnalysisJobState, AnalysisTool};
-
-/// A trimmed line with its visibility prefix removed, whatever it is.
-///
-/// 🚨 Not cosmetic. The scans below matched `async fn run_` against the trimmed line, which was
-/// right while every analysis was private in one file. The split made them `pub(super)`, and both
-/// scans instantly saw **one** `run_*` instead of fifteen — caught by their floors, which is the
-/// whole reason those floors exist. Neither scan would have found a single offender, and without
-/// the floors both would have said so as "nothing wrong".
-fn without_visibility(t: &str) -> &str {
-    t.strip_prefix("pub(crate) ")
-        .or_else(|| t.strip_prefix("pub(super) "))
-        .or_else(|| t.strip_prefix("pub "))
-        .unwrap_or(t)
-}
-
-/// The name in `… async fn run_<name>(`, if the line opens an analysis.
-fn opens_an_analysis(t: &str) -> Option<String> {
-    let rest = without_visibility(t).strip_prefix("async fn run_")?;
-    rest.split('(').next().map(str::to_owned)
-}
-
-/// Whether a trimmed line opens a function, under any visibility spelling.
-fn is_fn_definition(t: &str) -> bool {
-    let rest = without_visibility(t);
-    let rest = rest.strip_prefix("async ").unwrap_or(rest);
-    rest.starts_with("fn ")
-}
-
-#[test]
-fn needs_flow_tier_matches_which_analyses_actually_short_circuit() {
-    // The two must agree or a scheduled analysis is refused for a tier it does not need, or —
-    // worse — accepted and left to stack up an empty successful run every day. Read from the
-    // source rather than restated, so adding a `flow_tier_off()` arm without updating
-    // `needs_flow_tier` fails here.
-    //
-    // The needle is built at runtime: a literal `flow_tier_off()` written in this test would
-    // match itself if this file were ever read back as part of the module.
-    let needle = format!("{}{}", "flow_tier", "_off()");
-    let mut short_circuits = std::collections::BTreeSet::new();
-    for (_file, src) in analysis_source_files() {
-        // Reset per file: `current_fn` used to survive to the end of the source, which was
-        // harmless in one file and wrong the moment there was more than one.
-        let mut current_fn: Option<String> = None;
-        for line in src.lines() {
-            let t = line.trim();
-            if let Some(name) = opens_an_analysis(t) {
-                current_fn = Some(name);
-            } else if is_fn_definition(t) {
-                current_fn = None;
-            }
-            if line.contains(&needle) && line.contains("return") {
-                if let Some(f) = &current_fn {
-                    short_circuits.insert(f.clone());
-                }
-            }
-        }
-    }
-    assert!(
-        short_circuits.len() >= 5,
-        "the source scan stopped matching: {short_circuits:?}"
-    );
-    for tool in AnalysisTool::ALL.iter().copied() {
-        // `run_<token>` is the naming convention every analysis follows.
-        let name = tool.as_str().to_owned();
-        let short_circuits_here = short_circuits.contains(&name);
-        assert_eq!(
-            tool.needs_flow_tier(),
-            short_circuits_here,
-            "{name}: needs_flow_tier() = {} but the runner {} short-circuit on the flow tier",
-            tool.needs_flow_tier(),
-            if short_circuits_here {
-                "does"
-            } else {
-                "does not"
-            }
-        );
-    }
-}
+use super::source::analysis_source;
+use super::AnalysisJobState;
 
 /// `analysis_jobs.state` is written by statement literals, not by a bind, so without this the enum
 /// would be the source only for the *reader* and a writer could drift away from it silently.
