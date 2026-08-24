@@ -228,16 +228,51 @@ const HISTORY_FILTER_WHERE: &str = "\
      AND ($12::text IS NULL OR (subject_kind = 'node' \
           AND node IN (SELECT id FROM nodes WHERE name ILIKE '%' || $12 || '%')))";
 
+/// Every column [`AlertHistoryStore::read_rows`] reads, in the order it reads them.
+///
+/// Two statements project this now — the history page and [`AlertHistoryStore::open_alerts`] — and
+/// they share one reader, so the list is written once. A second spelling that dropped a column
+/// would not be a compile error; it would be a `try_get` failure at core startup.
+const HISTORY_COLUMNS: &str = "id, node, subject_kind, subject_ref, check_id, severity, state, \
+     at_unix_ms, resolved, metric, observed_value, threshold_value, direction, ifindex, recorded_at";
+
 /// The one statement that reads a page of history. `ORDER BY` names the cursor's columns in the
 /// cursor's direction — a keyset cursor is only valid for the ordering it was built for, and
 /// `alert_history_cursor_idx` (migration 0082) serves exactly this pair.
 fn history_page_sql() -> String {
     format!(
-        "SELECT id, node, subject_kind, subject_ref, check_id, severity, state, at_unix_ms, \
-                resolved, metric, observed_value, threshold_value, direction, ifindex, recorded_at \
+        "SELECT {HISTORY_COLUMNS} \
          FROM alert_history \
          WHERE {HISTORY_FILTER_WHERE} \
          ORDER BY recorded_at DESC, id DESC LIMIT $13"
+    )
+}
+
+/// The statement behind [`AlertHistoryStore::open_alerts`]: the newest transition per check, kept
+/// only when it is a fire.
+///
+/// Three things about it are load-bearing:
+///
+/// - **`DISTINCT ON (check_id)`** is what makes "open" answerable at all. This table is an
+///   append-only transition log, so an alert is open exactly when its check's *latest* row is a
+///   fire — not when any unresolved row exists, of which a long outage has many.
+/// - **`resolved DESC` in the tie-break** decides a fire and a clear that share a millisecond in
+///   favour of the clear, so an ambiguous pair fails *closed*: the alert is not restored, and the
+///   next poll re-fires it if it is genuinely still broken. The other order would resurrect a
+///   closed incident.
+/// - **The `nodes` sub-select** drops a row about a node that no longer exists (ADR-097 decision 4).
+///   Nothing polls a deleted node, so nothing could ever resolve its restored alert — it would be
+///   immortal. A non-node subject (a poller pool) has no `node` and is kept.
+fn open_alerts_sql() -> String {
+    format!(
+        "SELECT * FROM ( \
+           SELECT DISTINCT ON (check_id) {HISTORY_COLUMNS} \
+           FROM alert_history \
+           ORDER BY check_id, at_unix_ms DESC, resolved DESC, id DESC \
+         ) latest \
+         WHERE NOT resolved \
+           AND (subject_kind <> 'node' OR node IN (SELECT id FROM nodes)) \
+         ORDER BY at_unix_ms DESC LIMIT $1"
     )
 }
 
@@ -490,7 +525,28 @@ impl AlertHistoryStore {
         .await
     }
 
-    /// Turn raw rows into [`AlertHistoryRow`]s. One reader for one statement — the projection is
+    /// Every alert that was **open when the previous process stopped** — the newest transition per
+    /// check, kept only where that transition is a fire (see [`open_alerts_sql`]).
+    ///
+    /// This is what `alerts::restore` reads at startup (ADR-097 decision 2). Before it existed, the
+    /// engine began every process believing nothing was wrong, so a still-broken device re-fired
+    /// (one duplicate incident per restart — measured: 1,356 rows carrying only 18 clears, and one
+    /// continuously-down device with eight `__liveness__` fires and no clear in 24 hours) while a
+    /// device that recovered *during* the restart never resolved at all, leaving its incident open
+    /// in the external tool forever.
+    ///
+    /// ⚠️ `limit` is a backstop, not a policy: the answer is bounded by the number of checks, not by
+    /// the size of the log. A deployment that hits it has more open alerts than a human could act on
+    /// and wants to know, so the caller warns rather than silently restoring a prefix.
+    pub async fn open_alerts(&self, limit: i64) -> anyhow::Result<Vec<AlertHistoryRow>> {
+        let rows = sqlx::query(&open_alerts_sql())
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?;
+        Self::read_rows(rows)
+    }
+
+    /// Turn raw rows into [`AlertHistoryRow`]s. One reader for both statements — the projection is
     /// where the subject columns are interpreted, and a second copy could interpret them differently.
     fn read_rows(rows: Vec<sqlx::postgres::PgRow>) -> anyhow::Result<Vec<AlertHistoryRow>> {
         let mut out = Vec::with_capacity(rows.len());
@@ -916,9 +972,50 @@ mod tests {
         // The cursor's second half has to be readable off a row the client already holds, or the
         // client cannot build the next request. `id` is also the only unique key on the row — the
         // WebUI's previous composite React key could collide within one flush.
+        assert!(HISTORY_COLUMNS.starts_with("id, node, subject_kind"));
+        assert!(production_source().contains("id: row.try_get(\"id\")?"));
+    }
+
+    /// Two statements, one reader. `read_rows` names its columns by string, so a projection that
+    /// dropped one would compile, run, and fail at `try_get` — for `open_alerts` that means core
+    /// refusing to start. Pin both statements to the shared list instead.
+    #[test]
+    fn both_statements_project_the_columns_the_reader_names() {
+        for sql in [history_page_sql(), open_alerts_sql()] {
+            assert!(
+                sql.contains(HISTORY_COLUMNS),
+                "a statement spells its own column list: {sql}"
+            );
+        }
         let src = production_source();
-        assert!(src.contains("SELECT id, node, subject_kind"));
-        assert!(src.contains("id: row.try_get(\"id\")?"));
+        let reader = src.split("fn read_rows").nth(1).expect("the reader");
+        for col in HISTORY_COLUMNS.split(',').map(str::trim) {
+            // Matched on the call's argument rather than on `try_get("…")`, because two columns are
+            // fetched through a turbofish (`try_get::<Option<i32>, _>("ifindex")`). `node` and
+            // `subject_ref` are read into the subject before the struct is built and `check_id`
+            // lands in a field called `check`; every one is still fetched by its column name.
+            assert!(
+                reader.contains(&format!("(\"{col}\")")),
+                "the reader never fetches {col}"
+            );
+        }
+    }
+
+    /// The tie-break is the difference between "do not restore an ambiguous pair" and "resurrect a
+    /// closed incident", and neither a compiler nor a running deployment would tell you which one
+    /// you shipped.
+    #[test]
+    fn the_open_query_breaks_ties_towards_the_clear() {
+        let sql = open_alerts_sql();
+        assert!(
+            sql.contains("ORDER BY check_id, at_unix_ms DESC, resolved DESC"),
+            "a fire and a clear sharing a millisecond must resolve in favour of the clear: {sql}"
+        );
+        assert!(sql.contains("WHERE NOT resolved"));
+        assert!(
+            sql.contains("node IN (SELECT id FROM nodes)"),
+            "a deleted node's alert would have nothing left that could resolve it"
+        );
     }
 
     #[test]

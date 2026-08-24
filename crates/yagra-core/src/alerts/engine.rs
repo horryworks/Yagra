@@ -82,6 +82,92 @@ impl AlertManager {
         *self.config.write().expect("config rwlock poisoned") = config;
     }
 
+    /// Seed the engine with the alerts that were open when the previous process stopped
+    /// (ADR-097 decision 2). Returns how many it took.
+    ///
+    /// 🚨 **Restoring is not firing.** This returns no [`NotifyAction`] and broadcasts nothing:
+    /// these incidents are already open in whatever external tool their dedup key reached. What it
+    /// buys is that the *next* poll behaves the way it would have if the process had never stopped
+    /// — a still-broken check produces no transition (so no duplicate incident), and a check whose
+    /// device recovered while core was down produces a `Resolve` on its way back. Before this,
+    /// neither happened: measured on the test server, `alert_history` held 1,356 transitions of
+    /// which only 18 were clears, and one continuously-down device had eight `__liveness__` fires
+    /// and no clear inside 24 hours.
+    ///
+    /// Idempotent, and deliberately so rather than merely defensively: every insert is
+    /// `or_insert`, so anything the engine has already observed wins. That makes calling this after
+    /// results have started flowing harmless instead of destructive.
+    ///
+    /// ⚠️ The dwell it seeds each [`CheckState`] with is arbitrary. `process_check` re-points it
+    /// from the rule on the very first observation (ADR-075) and nothing reads it before then, so
+    /// there is no need to resolve the config here — which is fortunate, because at startup the
+    /// config has not been loaded yet.
+    pub fn restore(&self, alerts: Vec<Alert>) -> usize {
+        if alerts.is_empty() {
+            return 0;
+        }
+        // One lock at a time, in the order `process_check` takes them — this runs before the ingest
+        // starts, but a restore that could deadlock against a poll result would be a trap laid for
+        // whoever moves the call.
+        {
+            let mut states = self.states.lock().expect("states mutex poisoned");
+            for a in &alerts {
+                states.entry(a.check).or_insert_with(|| {
+                    CheckState::restored(
+                        a.state,
+                        DEFAULT_LIVENESS_DWELL,
+                        FLAP_WINDOW_MS,
+                        FLAP_THRESHOLD,
+                    )
+                });
+            }
+        }
+        // 🚨 `live` and `down` move together or not at all — `process_check` calls `live` the
+        // down-set's "only mutation site", and seeding one without the other would break that in a
+        // way nothing downstream could detect. So the nodes that actually landed in `live` are
+        // collected here and are the only ones `down` hears about; a node the engine has already
+        // observed keeps its observation and contributes nothing.
+        let mut newly_down: Vec<NodeId> = Vec::new();
+        {
+            let mut live = self.live.lock().expect("live mutex poisoned");
+            for a in &alerts {
+                if a.metric != LIVENESS {
+                    continue;
+                }
+                let Some(node) = a.node() else { continue };
+                if live.contains_key(&node) {
+                    continue;
+                }
+                live.insert(node, a.state);
+                if matches!(a.state, NodeState::Unreachable) {
+                    newly_down.push(node);
+                }
+            }
+        }
+        {
+            let mut down = self.down.lock().expect("down mutex poisoned");
+            down.extend(newly_down);
+        }
+        // The authoritative down set, read back rather than rebuilt from the rows: ADR-087's rule
+        // is "is this node down *now*", and a node can be in it because of an observation this
+        // restore did not make.
+        let down = self.down_set();
+        let mut active = self.active.lock().expect("alerts mutex poisoned");
+        for mut a in alerts {
+            // The attribution is not stored (`alert_history` has no `root_cause` column), so it is
+            // re-derived rather than dropped. Without this, every restart erased the "part of this
+            // node's outage" marker ADR-087 put on an alert until that node next transitioned —
+            // and a node that stays down never transitions again.
+            if a.metric != LIVENESS {
+                if let Some(node) = a.node().filter(|n| down.contains(n)) {
+                    a.root_cause = Some(node);
+                }
+            }
+            active.entry(a.check).or_insert(a);
+        }
+        active.len()
+    }
+
     /// Subscribe to the live alert event stream ([`StreamFrame`]s; `resolved` flag included in the
     /// JSON body).
     #[must_use]
@@ -1366,6 +1452,134 @@ mod tests {
             [NotifyAction::Fire(_)]
         ));
         assert_eq!(mgr.active_alerts().len(), 1);
+    }
+
+    /// One alert as `alerts::restore` hands it over: no `root_cause` (not stored) and not flapping.
+    fn open_alert(node: NodeId, metric: &str, state: NodeState) -> Alert {
+        Alert {
+            subject: Subject::Node(node),
+            check: check_id(node, metric),
+            severity: yagra_common::Severity::Critical,
+            state,
+            at_unix_ms: 1_000,
+            root_cause: None,
+            flapping: false,
+            metric: metric.to_owned(),
+            breach: None,
+            ifindex: None,
+        }
+    }
+
+    /// 🚨 **The point of ADR-097 decision 2.** A device that recovers while core is down used to be
+    /// unrecoverable: the engine had forgotten the alert, so the recovery was not a transition, so
+    /// no `Resolve` was ever sent and the incident stayed open in the external tool forever.
+    /// Measured on the test server — 1,356 stored transitions carrying 18 clears.
+    #[test]
+    fn a_restored_outage_resolves_when_the_device_comes_back() {
+        let mgr = manager();
+        let node = NodeId::new();
+        assert_eq!(
+            mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]),
+            1
+        );
+        assert_eq!(
+            mgr.node_state(node),
+            Some(NodeState::Unreachable),
+            "the fleet reads correctly from the first second, with no poll yet"
+        );
+        assert!(mgr.down_set().contains(&node), "and suppression knows too");
+
+        for i in 0..(DEFAULT_LIVENESS_DWELL - 1) {
+            assert!(
+                mgr.observe(&result(node, CheckOutcome::Reachable, i64::from(i)))
+                    .is_empty(),
+                "recovery still costs a full dwell"
+            );
+        }
+        assert!(matches!(
+            mgr.observe(&result(node, CheckOutcome::Reachable, 100))
+                .as_slice(),
+            [NotifyAction::Resolve(_)]
+        ));
+        assert!(mgr.active_alerts().is_empty());
+        assert!(!mgr.down_set().contains(&node));
+    }
+
+    /// The other half, and the one the operator feels every deploy: a device that is *still* broken
+    /// must not open a second incident. Before this, each restart wrote another fire — one
+    /// continuously-down device had eight `__liveness__` fires and no clear inside 24 hours.
+    #[test]
+    fn a_restored_outage_does_not_fire_again_while_it_is_still_broken() {
+        let mgr = manager();
+        let node = NodeId::new();
+        mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
+        for i in 0..=i64::from(DEFAULT_LIVENESS_DWELL) {
+            assert!(
+                mgr.observe(&result(node, CheckOutcome::Unreachable, i))
+                    .is_empty(),
+                "poll {i} re-fired an outage that never stopped"
+            );
+        }
+        assert_eq!(mgr.active_alerts().len(), 1, "still one incident, not two");
+    }
+
+    /// ADR-087's attribution is not stored — `alert_history` has no `root_cause` column — so it has
+    /// to be re-derived on the way back in. Without this, every restart erased the "part of this
+    /// node's outage" marker until the node next transitioned, and a node that stays down never
+    /// transitions again.
+    #[test]
+    fn a_restored_alert_on_a_down_node_is_still_part_of_that_nodes_outage() {
+        let mgr = manager();
+        let node = NodeId::new();
+        let other = NodeId::new();
+        mgr.restore(vec![
+            open_alert(node, "snmp_up", NodeState::Critical),
+            open_alert(node, LIVENESS, NodeState::Unreachable),
+            // A reachable node's own threshold alert: nothing owns it, so it must stay unattributed.
+            open_alert(other, "cpu_util", NodeState::Critical),
+        ]);
+        let owned = mgr.alerts_for(node);
+        let snmp = owned
+            .iter()
+            .find(|a| a.metric == "snmp_up")
+            .expect("the snmp alert was restored");
+        assert_eq!(
+            snmp.root_cause,
+            Some(node),
+            "rolled into this node's outage"
+        );
+        let liveness = owned
+            .iter()
+            .find(|a| a.metric == LIVENESS)
+            .expect("the outage itself was restored");
+        assert_eq!(
+            liveness.root_cause, None,
+            "the outage is the incident; it is not part of another one"
+        );
+        assert_eq!(
+            mgr.alerts_for(other)[0].root_cause,
+            None,
+            "a node that is not down owns nothing"
+        );
+    }
+
+    /// Restoring is `or_insert` on every map, which is what makes the call safe to move. A restore
+    /// that arrived after a poll had already spoken would otherwise overwrite a real observation
+    /// with a stale row — the one way this feature could make things worse rather than better.
+    #[test]
+    fn restoring_cannot_overwrite_something_the_engine_has_already_observed() {
+        let mgr = manager();
+        let node = NodeId::new();
+        for i in 0..DEFAULT_LIVENESS_DWELL {
+            mgr.observe(&result(node, CheckOutcome::Reachable, i64::from(i)));
+        }
+        mgr.restore(vec![open_alert(node, LIVENESS, NodeState::Unreachable)]);
+        assert_eq!(
+            mgr.node_liveness(node),
+            Some(NodeState::Ok),
+            "the live observation wins over the stored one"
+        );
+        assert!(!mgr.down_set().contains(&node));
     }
 
     /// The live view has to stay silent too. The node-state SSE stream exists so the WebUI can

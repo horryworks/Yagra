@@ -56,6 +56,7 @@ use yagra_alert::{Alert, Subject};
 pub(crate) mod config;
 pub(crate) mod engine;
 pub(crate) mod notify;
+pub(crate) mod restore;
 pub(crate) mod rules;
 pub(crate) mod sink;
 #[cfg(test)]

@@ -380,6 +380,11 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     let notifier = Arc::new(Notifier::from_env());
     let notifications = Arc::new(NotificationRepo::new(repo.pool(), kek.clone()));
     let history = Arc::new(AlertHistoryStore::new(repo.pool()));
+    // Give the engine back what it knew before this process started (ADR-097). Awaited here, and
+    // here rather than in a task, because it has to finish before the first poll result arrives:
+    // afterwards a still-broken check would already have re-fired, which is the duplicate incident
+    // this exists to stop. It is idempotent and never overwrites, so it cannot undo an observation.
+    alerts::restore::restore(&alerts, &history).await;
     // Inbound ack reflection from external tools (PagerDuty / JSM); read-only display (ADR-015).
     let acks = Arc::new(AckRepo::new(repo.pool()));
 
