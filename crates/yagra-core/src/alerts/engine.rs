@@ -2854,7 +2854,7 @@ mod tests {
     }
 
     /// One poll result carrying `snmp_up = 0` — what the poller sends on the SNMP error path, which
-    /// is the case that matters: `worker.rs` emits the sample even when the GET could not be issued.
+    /// is the case that matters: `worker/snmp.rs` emits the sample even when the GET could not be issued.
     fn snmp_down(node: NodeId, outcome: CheckOutcome, at: i64) -> PollResult {
         let mut r = result(node, outcome, at);
         r.samples = vec![yagra_bus::Sample::gauge(yagra_common::METRIC_SNMP_UP, 0.0)];

@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! Assemble walked LLDP/CDP rows into a normalized [`NeighborSet`] (ADR-038).
 //!
-//! Split out of `worker.rs` and kept **pure** — it takes already-walked [`SnmpInstanceRow`]s and
-//! returns a set — because this is where the feature is won or lost and every rule in it deserves a
-//! test that runs without a device. The two things it must get right:
+//! Split out of the worker and kept **pure** — already-walked [`SnmpInstanceRow`]s in, a set out —
+//! because this is where the feature is won or lost and every rule in it deserves a test that runs
+//! without a device. The SNMP session that produces those rows is `worker/adjacency.rs`.
+//! The two things this module must get right:
 //!
 //! * **Bucketing by index.** `lldpRemTable` is indexed by
 //!   `(lldpRemTimeMark, lldpRemLocalPortNum, lldpRemIndex)`, and rows for one adjacency arrive

@@ -1584,9 +1584,14 @@ mod tests {
     /// arrived at through a default rather than a decision. Nothing else would notice.
     #[test]
     fn counters_only_ever_arrive_through_a_collection_item() {
-        // `worker.rs` is the only file in the poller that builds a `Sample` at all, and the only
-        // counter it can produce is `kind: col.kind` — copied from the collection column. Every
-        // other sample it emits goes through `Sample::gauge`.
+        // `worker/` is the only module in the poller that builds a `Sample` at all, and the only
+        // counter it can produce is `kind: col.kind` — copied from the collection column, in
+        // `worker/snmp.rs`. Every other sample it emits goes through `Sample::gauge`.
+        //
+        // ⚠️ Eight files since ADR-099, and this check needed no edit for that: `roots` looks for
+        // both `worker.rs` and `worker/`, so the day of the split it went from reading one file to
+        // reading all of them. That is the property `module_source` exists for — a reader left
+        // naming one file of several keeps running, over a fraction, reporting success.
         // Production code only: the fixtures below the poller's test attribute may build
         // counters freely. Read through `module_source` (ADR-091) rather than cutting at the
         // first attribute: a test-only item mid-file would otherwise truncate this to the
