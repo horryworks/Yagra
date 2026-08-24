@@ -49,7 +49,7 @@ mod tests {
     /// down for themselves.
     ///
     /// The floors are this crate's, which is why they are arguments — see `srcread`'s module doc.
-    /// 19 is what the crate has today; they are here so that a walk which stops finding sources
+    /// 20 is what the crate has today; they are here so that a walk which stops finding sources
     /// fails instead of passing over nothing.
     ///
     /// ⚠️ **The third check is the strict form, and only because this crate earned it.** ADR-102
@@ -63,8 +63,8 @@ mod tests {
     #[test]
     fn this_crate_is_readable_and_writes_the_rule_down_nowhere() {
         let src = Path::new(BASE).join("src");
-        yagra_common::srcread::assert_crate_is_readable(&src, 19);
-        yagra_common::srcread::assert_no_file_spells_the_attribute(&src, 19, &[]);
-        yagra_common::srcread::assert_no_file_reads_its_own_raw_text(&src, 19, &[]);
+        yagra_common::srcread::assert_crate_is_readable(&src, 20);
+        yagra_common::srcread::assert_no_file_spells_the_attribute(&src, 20, &[]);
+        yagra_common::srcread::assert_no_file_reads_its_own_raw_text(&src, 20, &[]);
     }
 }

@@ -32,6 +32,9 @@ mod arp;
 mod assignment;
 mod discovery;
 mod flow;
+/// What ADR-103 bought, written as checks. Test-only, like `module_source`.
+#[cfg(test)]
+mod guards;
 mod heartbeat;
 mod l3;
 mod limiter;
