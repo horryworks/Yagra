@@ -606,12 +606,15 @@ async fn reject_duplicate_rule(
 /// samples, so this is the operator-facing half of one rule — and it is a `SELECT`, which is why
 /// it is not part of [`parse_threshold_body`].
 async fn reject_counter_metric(admin: &super::AdminState, metric: &str, op: &str) -> ApiResult<()> {
-    // A derived metric (interface utilisation, ADR-076) is a gauge Yagra computes rather than
-    // collects, so it appears in neither the built-in catalogue nor either item table. Answering
-    // from the derived list first is what stops the two database probes from running for it, and
-    // is also the only place that can answer at all — `metric_declared_counter` would say "not a
-    // counter" for a typo just as readily.
-    if crate::interface_util::derived_metric_kind(metric).is_some() {
+    // A derived metric is a gauge Yagra computes rather than collects, so it appears in neither
+    // the built-in catalogue nor either item table. Answering from the derived lists first is what
+    // stops the two database probes from running for it, and is also the only place that can
+    // answer at all — `metric_declared_counter` would say "not a counter" for a typo just as
+    // readily. Two lists because there are two dimensions: per port (ADR-076) and per node
+    // (ADR-105).
+    if crate::interface_util::derived_metric_kind(metric).is_some()
+        || crate::derived::derived_node_metric_kind(metric).is_some()
+    {
         return Ok(());
     }
     let is_counter = is_builtin_counter(metric)

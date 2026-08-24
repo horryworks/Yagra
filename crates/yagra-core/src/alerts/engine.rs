@@ -1013,15 +1013,96 @@ impl AlertManager {
         ))
     }
 
-    /// What the interface-threshold rules in force for `metric` cover — the evaluator plans its
-    /// query from this rather than re-reading `ThresholdStore`, so the rules the query was built
-    /// for and the rules the classification uses are the same snapshot.
+    /// Feed a **derived node metric** through the state machine (ADR-105).
+    ///
+    /// The node-dimension twin of [`Self::observe_interface_metric`]: same maintenance handling,
+    /// same "`None` means nobody is watching", but a node-wide [`check_id`] and no port.
+    ///
+    /// `values` is every row the evaluator computed for this node — a filesystem each for
+    /// `hr_storage_used_pct`, a memory pool each for `cisco_mem_used_pct`, one entry for a scalar.
+    /// They are folded to **one** observation here, under this rule's own direction, exactly as
+    /// [`Self::observe`] folds a table walk's samples (ADR-077 decision 1). 🚨 The caller must not
+    /// fold and must not call once per row: N observations in one dwell window is the ADR-076 bug —
+    /// one bad row among good ones has its candidate reset by the next row and never reaches the
+    /// dwell, while N bad rows satisfy a 3-sample dwell inside a single tick.
+    ///
+    /// # What the caller must decide before calling
+    ///
+    /// 🚨 A node whose **liveness** is not `Ok` must not be observed at all, for the reasons spelled
+    /// out on [`Self::observe_interface_metric`]. Read [`Self::node_liveness`] through
+    /// [`crate::interface_util::may_observe_ports`] — **never [`Self::node_state`]**, which folds in
+    /// the very alert this call is about to raise.
+    pub fn observe_derived_metric(
+        &self,
+        node: NodeId,
+        metric: &'static str,
+        values: &[f64],
+        at_unix_ms: i64,
+    ) -> Option<Vec<NotifyAction>> {
+        if !crate::interface_util::may_observe_ports(self.node_liveness(node)) {
+            // Frozen, not observed. Feeding a value would either resolve a real alert the moment
+            // the device went unreachable, or page about memory on a box that is already down.
+            return None;
+        }
+        let (eff, in_maintenance) = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            (
+                config.resolve(node, None, metric),
+                config.maintenance.contains(&node),
+            )
+        };
+        // `None`, not an empty vector: the caller distinguishes "nobody is watching this metric"
+        // from "somebody is watching and nothing happened".
+        let eff = eff?;
+        // The worst row wins, ranked by the rule's own bounds rather than by magnitude — "highest
+        // is worst" is false for any rule whose fault direction is `below` (ADR-081).
+        let value = values.iter().copied().reduce(|incumbent, candidate| {
+            if eff.is_worse(candidate, incumbent) {
+                candidate
+            } else {
+                incumbent
+            }
+        })?;
+        let raw = if in_maintenance {
+            NodeState::Maintenance
+        } else {
+            eff.evaluate(value)
+        };
+        Some(self.process_check(
+            node,
+            raw,
+            at_unix_ms,
+            CheckSpec {
+                check: check_id(node, metric),
+                metric,
+                dwell: eff.dwell_samples,
+                is_liveness: false,
+                alerting: true,
+                eval: Some(ThresholdEval {
+                    value,
+                    direction: eff.direction(),
+                    warning: eff.warning(),
+                    critical: eff.critical(),
+                }),
+                ifindex: None,
+            },
+        ))
+    }
+
+    /// What the threshold rules in force for `metric` cover — an evaluator plans its query from
+    /// this rather than re-reading `ThresholdStore`, so the rules the query was built for and the
+    /// rules the classification uses are the same snapshot.
+    ///
+    /// **Not interface-specific**, and never was: it reads the rule index by metric name and asks
+    /// each rule's scope level which nodes it reaches. ADR-076 named it after its first caller;
+    /// ADR-105 gave it a second one (the node-level derived-metric evaluator) and dropped the
+    /// prefix rather than shipping a byte-identical copy under another name.
     #[must_use]
-    pub fn interface_rule_coverage(&self, metric: &str) -> RuleCoverage {
+    pub fn rule_coverage(&self, metric: &str) -> RuleCoverage {
         self.config
             .read()
             .expect("config rwlock poisoned")
-            .interface_rule_coverage(metric)
+            .rule_coverage(metric)
     }
 
     /// The rules that reach `(node, ifindex)`, each flagged with whether it is in force

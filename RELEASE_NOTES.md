@@ -12,6 +12,28 @@
 
 ### New Features
 
+- **Ten new metrics for the things devices don't report directly — memory, disk, swap, CPU and
+  load, as percentages.** A device usually reports two raw numbers (a total and a free, or a used
+  and a free) and leaves the percentage everyone actually monitors on to the reader. Yagra now
+  computes it: `huawei_mem_used_pct`, `cisco_mem_used_pct`, `cisco_cpu_mem_used_pct`,
+  `cisco_cemp_mem_used_pct`, `hr_storage_used_pct`, `ucd_mem_used_pct`, `ucd_swap_used_pct`,
+  `ucd_cpu_used_pct`, `ucd_load_per_core` and `poe_power_used_pct` are selectable in
+  Alerts ▸ Metric alert rules like any other metric.
+  - **Default rules ship for six of them** — the three Cisco memory pools, and Net-SNMP memory,
+    swap and load-per-core. The other four deliberately have none: Yagra already ships a default
+    on a metric that measures the same thing (`huawei_mem_usage`, `ucd_cpu_idle_pct`,
+    `ucd_disk_used_pct`), and paging twice for one condition is a bug rather than thoroughness.
+    `poe_power_used_pct` has none because what counts as an over-subscribed power budget is a
+    site decision, not a device fault.
+  - They are **computed, not collected**, like the four interface-utilisation metrics: they are
+    evaluated once a minute rather than on every poll, so a rule's "consecutive breaches" counts
+    minutes; and they exist in no time series, so `query_metrics` cannot return one and there is
+    no chart of its own.
+  - A metric with several rows on one device — a filesystem each for `hr_storage_used_pct`, a
+    memory pool each for the Cisco ones — pairs its two halves **within a row** before dividing,
+    and the rule fires on the worst row.
+- **A default alert rule for BGP**: `bgp_peer_state` is now critical when a peer is anything but
+  *established*, after three consecutive polls so a normal reconvergence does not page.
 - **One threshold rule can now bound a metric on both sides.** A rule carries
   `warning_below` / `critical_below` / `warning_above` / `critical_above`, so "alert when the
   optical receive level falls below -20 dBm **or** rises above -3 dBm" is one rule instead of two.

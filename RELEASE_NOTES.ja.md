@@ -12,6 +12,25 @@
 
 ### 新機能
 
+- **機器が直接は返さない値を 10 個、メトリクスとして追加**（メモリ・ディスク・スワップ・CPU・ロードの使用率）。
+  機器が返すのはたいてい生の 2 つの数（合計と空き、または使用量と空き）で、実際に監視したい「%」は
+  返ってきません。これを Yagra 側で計算するようにしました。`huawei_mem_used_pct` /
+  `cisco_mem_used_pct` / `cisco_cpu_mem_used_pct` / `cisco_cemp_mem_used_pct` /
+  `hr_storage_used_pct` / `ucd_mem_used_pct` / `ucd_swap_used_pct` / `ucd_cpu_used_pct` /
+  `ucd_load_per_core` / `poe_power_used_pct` の 10 個で、Alerts ▸ Metric alert rules から
+  他のメトリクスと同じように選べます。
+  - **既定ルールを出荷するのは 6 個**（Cisco のメモリプール 3 種と、Net-SNMP のメモリ・スワップ・
+    ロード）。残り 4 個には**わざと付けていません** —— 同じものを測るメトリクスに既に既定が在り
+    （`huawei_mem_usage` / `ucd_cpu_idle_pct` / `ucd_disk_used_pct`）、1 つの事象で 2 回鳴らすのは
+    手厚さではなくバグだからです。`poe_power_used_pct` は、給電容量をどこから使いすぎとみなすかが
+    機器の故障ではなく現場の方針なので付けていません。
+  - これらは**収集ではなく計算**で出す値です（インタフェース使用率の 4 つと同じ扱い）。
+    ポーリングごとではなく **1 分に 1 回**判定するので、ルールの「連続回数」は分の数になります。
+    また時系列としては保存しないので、`query_metrics` では取得できず、単独のグラフもありません。
+  - 1 台に複数行あるもの（`hr_storage_used_pct` はファイルシステムごと、Cisco のメモリはプールごと）は、
+    **同じ行どうしで**割ってから、最も悪い行に対して発報します。
+- **BGP に既定ルールを 1 本追加**: `bgp_peer_state` は established 以外なら重大になります。
+  3 回連続してからなので、通常の再収束では発報しません。
 - **1 本のしきい値ルールで上下両方の境界を持てるようになりました。** ルールは
   `warning_below` / `critical_below` / `warning_above` / `critical_above` を持ちます。
   「光の受信レベルが -20dBm を下回る、**または** -3dBm を上回ったら発報」を 2 本ではなく 1 本で

@@ -92,6 +92,19 @@ export const DERIVED_METRICS = [
   'if_out_util_pct',
   'if_in_bps',
   'if_out_bps',
+  // Node-level (ADR-105). Devices report two raw numbers — a total and a free, or a used and a
+  // free — and the percentage everyone actually monitors on exists in no series at all. Same
+  // deal as the four above: computed at evaluation time, so `query_metrics` cannot return them.
+  'cisco_cemp_mem_used_pct',
+  'cisco_cpu_mem_used_pct',
+  'cisco_mem_used_pct',
+  'hr_storage_used_pct',
+  'huawei_mem_used_pct',
+  'poe_power_used_pct',
+  'ucd_cpu_used_pct',
+  'ucd_load_per_core',
+  'ucd_mem_used_pct',
+  'ucd_swap_used_pct',
 ] as const;
 
 /** One row of the generated built-in catalog (`web/src/api/metricCatalog.json`). */

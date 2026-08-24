@@ -38,6 +38,7 @@ mod config_bundle;
 mod config_gen;
 mod csv;
 mod dashboard;
+mod derived;
 mod discovery;
 mod dns_check;
 mod events;
@@ -1276,6 +1277,16 @@ impl LeaderTasks {
                 self.repo.clone(),
                 self.alerts.clone(),
                 self.alert_sink("an interface-utilisation transition"),
+            ),
+        );
+        // Node-level derived metrics (ADR-105) — memory, disk, swap and load percentages that no
+        // device reports directly. Leader-only for the same reason the two loops around it are.
+        spawn_cancellable(
+            &self.shutdown,
+            derived::run_derived_metric_watch(
+                self.store.clone(),
+                self.alerts.clone(),
+                self.alert_sink("a derived-metric transition"),
             ),
         );
         spawn_cancellable(

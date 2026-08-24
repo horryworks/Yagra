@@ -33,11 +33,12 @@ const CISCO_IOS: &[&str] = &[
     "Cisco Catalyst switch (IOS/IOS-XE)",
 ];
 
-// `cpmCPUTotal5minRev` is the CPU OID every Cisco health template reuses, so `cisco_cpu_5min`
-// reaches FIVE profiles rather than the two `CISCO_IOS` does. Counting by hand got this wrong;
+// Every Cisco profile that attaches a health template. `cpmCPUTotal5minRev` and the enhanced
+// memory pool are both on it, so `cisco_cpu_5min` and `cisco_cemp_mem_used_pct` reach FIVE
+// profiles rather than the two `CISCO_IOS` does. Counting by hand got this wrong;
 // `the_seeded_vendor_defaults_target_exactly_the_profiles_that_collect_them` is what said so,
 // which is the whole reason that test exists rather than a careful reading of the catalogue.
-const CISCO_CPU: &[&str] = &[
+const CISCO_HEALTH: &[&str] = &[
     "Cisco IOS/IOS-XE router",
     "Cisco IOS-XR router",
     "Cisco Catalyst switch (IOS/IOS-XE)",
@@ -70,6 +71,19 @@ const NETSNMP: &[&str] = &["Linux server (Net-SNMP)"];
 
 const UPS: &[&str] = &["APC UPS", "Generic UPS (RFC1628)"];
 
+// ⚠️ These five are placeholders resolved by
+// `the_seeded_vendor_defaults_target_exactly_the_profiles_that_collect_them`, which derives the
+// real answer from `builtin_profiles()` x `builtin_templates()` and prints it on a mismatch.
+// The profiles that collect a BGP peer table.
+const BGP: &[&str] = &[
+    "Cisco IOS-XR router",
+    "Cisco IOS/IOS-XE router",
+    "Generic router",
+    "Huawei NE/AR router",
+    "Juniper MX router",
+    "Nokia SR router",
+];
+
 const FLEET: &[&str] = &[];
 
 /// One seeded default: (offset, target profiles, metric, direction, warning, critical, dwell).
@@ -88,7 +102,7 @@ type DefaultThreshold = (
     i32,
 );
 
-pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 24] = [
+pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 31] = [
     // ── Fleet-wide (ADR-075 + `icmp_rtt_ms`) ───────────────────────────────────
     // These four really do apply to every node, which is why the ADR-075 argument for
     // `global` holds for them and not for the vendor rows below.
@@ -152,7 +166,7 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 24] = [
     // 54°C; 65 would have left six degrees of headroom on a device already at 59.
     (
         6,
-        CISCO_CPU,
+        CISCO_HEALTH,
         "cisco_cpu_5min",
         "above",
         Some(80.0),
@@ -306,6 +320,96 @@ pub(super) const DEFAULT_THRESHOLDS: [DefaultThreshold; 24] = [
         Some(95.0),
         2,
     ),
+    // ── The derived percentages (ADR-105) ─────────────────────────────────────
+    // 🚨 Every row here is on a metric **Yagra computes rather than collects**, so it is evaluated
+    // once a minute by `derived::run_derived_metric_watch` and its dwell counts minutes, not polls
+    // — the same trade the four interface metrics make (ADR-076).
+    //
+    // 🚨 **A default ships only where nothing else already covers the same physical quantity on the
+    // same device.** Four rows were written and then removed for failing that, which is worth
+    // recording because each looked obviously right on its own:
+    //   - `huawei_mem_used_pct` — `huawei_mem_usage` (offset 12) is the same memory read another
+    //     way, and already pages at 85/95. Two rules would page twice for one condition, which
+    //     `repo/mod.rs` calls a bug rather than a feature.
+    //   - `ucd_cpu_used_pct` — `ucd_cpu_idle_pct` (offset 6) is the same CPU from the other side.
+    //   - `hr_storage_used_pct` — on a Net-SNMP host `ucd_disk_used_pct` (offset 7) already covers
+    //     the same filesystems. It would be right for the eighteen *other* Host-Resources
+    //     profiles, and that is the follow-up: a default that must exclude the profiles another
+    //     default already reaches needs a documented-subset rule in the consistency test below,
+    //     which today demands exact equality.
+    //   - `hr_processor_load` — every vendor CPU metric here already has a default, and fleet-wide
+    //     it would double each of them on any device that answers `hrProcessorLoad` too.
+    //
+    // 80/90 unless the metric argues otherwise: they all answer "how much of this is in use", and
+    // an operator who has to remember a different number per vendor has a worse product, not a
+    // safer one.
+    (
+        24,
+        CISCO_IOS,
+        "cisco_mem_used_pct",
+        "above",
+        Some(80.0),
+        Some(90.0),
+        3,
+    ),
+    (
+        25,
+        CISCO_IOS,
+        "cisco_cpu_mem_used_pct",
+        "above",
+        Some(80.0),
+        Some(90.0),
+        3,
+    ),
+    (
+        26,
+        CISCO_HEALTH,
+        "cisco_cemp_mem_used_pct",
+        "above",
+        Some(80.0),
+        Some(90.0),
+        3,
+    ),
+    (
+        27,
+        NETSNMP,
+        "ucd_mem_used_pct",
+        "above",
+        Some(80.0),
+        Some(90.0),
+        3,
+    ),
+    // Swap is the exception, deliberately: a Linux host that has touched swap at all is usually
+    // already in trouble, so the warning sits where "it started" rather than "it is nearly gone".
+    (
+        28,
+        NETSNMP,
+        "ucd_swap_used_pct",
+        "above",
+        Some(50.0),
+        Some(80.0),
+        3,
+    ),
+    // ⚠️ In hundredths, like `laLoadInt` itself: 100 means one runnable task per processor, which
+    // is textbook "fully utilised", and 200 is twice that. Not measured against this fleet — there
+    // is no Linux host running in the lab — but these two are the definition of the unit rather
+    // than a guess about a workload.
+    (
+        29,
+        NETSNMP,
+        "ucd_load_per_core",
+        "above",
+        Some(100.0),
+        Some(200.0),
+        3,
+    ),
+    // ── Routing ───────────────────────────────────────────────────────────────
+    // `bgpPeerState`: 1=idle 2=connect 3=active 4=opensent 5=openconfirm 6=established, so the
+    // bound sits between openconfirm and established and "critical" means "this peer is not up".
+    // Critical only — there is no degraded BGP session, it is either established or it is not.
+    // Dwell 3 because the transient states are exactly what a session walks through while coming
+    // back, and one poll of `active` during a normal reconvergence is not an incident.
+    (30, BGP, "bgp_peer_state", "below", None, Some(5.5), 3),
 ];
 
 #[cfg(test)]
@@ -331,20 +435,37 @@ mod tests {
             if targets.is_empty() {
                 continue; // a fleet-wide row — there is nothing to derive it from
             }
-            let carrying: BTreeSet<&str> = templates
-                .iter()
-                .filter(|t| t.items.iter().any(|i| i.metric_name == metric))
-                .map(|t| t.name)
-                .collect();
-            assert!(
-                !carrying.is_empty(),
-                "offset {offset}: no built-in template publishes {metric}, so this rule is inert"
-            );
+            // What a rule on this metric actually needs collected. For a collected metric that is
+            // the metric itself; for a derived one (ADR-105) it is **every input of its formula**,
+            // and the answer has to be computed at the profile rather than the template level —
+            // `ucd_load_per_core` divides a UCD-SNMP-MIB reading by a HOST-RESOURCES-MIB row count,
+            // so no single template carries it and a template-level fold would find nothing.
+            let needs: Vec<&str> = match crate::derived::derived_node_metric(metric) {
+                Some(d) => {
+                    let [a, b] = d.formula.inputs();
+                    if a == b {
+                        vec![a]
+                    } else {
+                        vec![a, b]
+                    }
+                }
+                None => vec![metric],
+            };
+            let publishes = |profile: &yagra_common::BuiltinProfile, want: &str| {
+                templates.iter().any(|t| {
+                    profile.templates.contains(&t.name)
+                        && t.items.iter().any(|i| i.metric_name == want)
+                })
+            };
             let want: BTreeSet<&str> = profiles
                 .iter()
-                .filter(|p| p.templates.iter().any(|t| carrying.contains(t)))
+                .filter(|p| needs.iter().all(|m| publishes(p, m)))
                 .map(|p| p.name)
                 .collect();
+            assert!(
+                !want.is_empty(),
+                "offset {offset}: no built-in profile collects everything {metric} needs                  ({needs:?}), so this rule is inert"
+            );
             let got: BTreeSet<&str> = targets.iter().copied().collect();
             if got != want {
                 // Report EVERY mismatch, not the first. A metric can be published by several
@@ -360,7 +481,10 @@ mod tests {
         assert!(wrong.is_empty(), "{}", wrong.join("\n"));
         // Load-bearing: without it, a loop that stopped matching would skip every assertion above
         // and report success about nothing.
-        assert_eq!(checked, 20, "twenty of the defaults are profile-scoped");
+        assert_eq!(
+            checked, 27,
+            "twenty-seven of the defaults are profile-scoped"
+        );
     }
 
     /// Exactly four seeded defaults are fleet-wide, and they are the four that really are.
@@ -369,8 +493,13 @@ mod tests {
     /// node with no profile — applies to a rule about whether the node answered at all, and not to
     /// one about a vendor’s CPU register. This pins which side each row is on, because the cheap
     /// mistake when adding the next default is to copy the row above it.
+    ///
+    /// ⚠️ ADR-105 wrote a fifth (`hr_processor_load`) and took it back out: the standard SNMP set
+    /// carries it, so the honest target list is all 52 profiles — but every vendor CPU metric in
+    /// this table already has a default, and a fleet-wide rule would double each of them on any
+    /// device that answers `hrProcessorLoad` as well. See the note above offset 24.
     #[test]
-    fn only_the_four_genuinely_fleet_wide_defaults_are_global() {
+    fn only_the_genuinely_fleet_wide_defaults_are_global() {
         let fleet: Vec<&str> = DEFAULT_THRESHOLDS
             .iter()
             .filter(|(_, targets, ..)| targets.is_empty())

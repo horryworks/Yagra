@@ -321,6 +321,35 @@ pub trait MetricStore: Send + Sync {
         std::collections::HashMap::new()
     }
 
+    /// The latest value of **every series** of `metric`, fleet-wide, keyed by `(node, row)`.
+    ///
+    /// The row key is the series' `ifindex` label, whatever it means for that metric — a port for
+    /// IF-MIB, a memory pool for `cisco_mem_used`, a filesystem for `hr_storage_used`. A metric
+    /// with no `ifindex` label answers with row `0`, so a scalar and a one-row table look the same
+    /// to the caller and there is only one code path.
+    ///
+    /// 🚨 **Rows, not an aggregate, and that is the whole point** (ADR-105 decision 2). A derived
+    /// ratio has to pair its numerator and denominator *within one row*: `max(hr_storage_used)` over
+    /// `max(hr_storage_size)` divides a small `/boot`'s usage by a large `/`'s capacity and reports
+    /// it as a disk-full alert. [`Self::aggregate_latest`] is the right answer for a single metric
+    /// and the wrong one for a pair.
+    ///
+    /// One round-trip per metric for the whole fleet, so an evaluator's cost is the number of
+    /// derived metrics with a live rule, not the number of nodes. `nodes` narrows the selector when
+    /// the rules in force name their nodes; `None` means the fleet (a rule scoped to a group or a
+    /// profile cannot be enumerated without the inventory).
+    ///
+    /// Default: empty (the in-memory sink keeps only the latest value and cannot enumerate), so
+    /// only [`VmStore`] implements it and the three fakes are untouched.
+    async fn series_rows(
+        &self,
+        _metric: &str,
+        _nodes: Option<&[Uuid]>,
+        _within_secs: u64,
+    ) -> std::collections::HashMap<(Uuid, i32), f64> {
+        std::collections::HashMap::new()
+    }
+
     /// Persist a host self-metrics sample as low-cardinality `yagra_host_*{instance,role[,pool]
     /// [,mount]}` series (self-observability). Core is the single writer for **every** instance —
     /// its own host (`role="core"`) and each poller (`role="poller"`, whose samples arrive over
@@ -979,6 +1008,71 @@ fn parse_ifindex_values(json: &serde_json::Value) -> std::collections::HashMap<i
     out
 }
 
+/// Instant query for every series of `metric`, optionally narrowed to `nodes`.
+///
+/// `last_over_time` rather than a bare selector for the same reason [`latest_query`] uses it: a
+/// gauge polled every few minutes is stale by VictoriaMetrics' default instant-query lookback long
+/// before it is stale to an operator.
+///
+/// An empty `nodes` slice is treated as "no filter" rather than "no nodes" — the caller decides
+/// not to query at all, and a `node=~""` matcher would silently return everything anyway.
+fn series_rows_query(metric: &str, nodes: Option<&[Uuid]>, within_secs: u64) -> String {
+    let w = within_secs.max(1);
+    match nodes.filter(|n| !n.is_empty()) {
+        Some(ids) => {
+            let alt = ids
+                .iter()
+                .map(Uuid::to_string)
+                .collect::<Vec<_>>()
+                .join("|");
+            format!("last_over_time({metric}{{node=~\"{alt}\"}}[{w}s])")
+        }
+        None => format!("last_over_time({metric}[{w}s])"),
+    }
+}
+
+/// Demux an instant-query result into `(node, row) → value`.
+///
+/// A series with no `ifindex` label lands on row `0`, which is what makes a scalar and a one-row
+/// table indistinguishable to [`MetricStore::series_rows`]'s callers. A series with no parseable
+/// `node` label is skipped: it cannot be attributed, and guessing would file one device's memory
+/// under another's.
+fn parse_node_row_values(json: &serde_json::Value) -> std::collections::HashMap<(Uuid, i32), f64> {
+    let mut out = std::collections::HashMap::new();
+    let Some(results) = json
+        .get("data")
+        .and_then(|d| d.get("result"))
+        .and_then(|r| r.as_array())
+    else {
+        return out;
+    };
+    for series in results {
+        let labels = series.get("metric");
+        let Some(node) = labels
+            .and_then(|m| m.get("node"))
+            .and_then(|n| n.as_str())
+            .and_then(|s| Uuid::parse_str(s).ok())
+        else {
+            continue;
+        };
+        let row = labels
+            .and_then(|m| m.get("ifindex"))
+            .and_then(|i| i.as_str())
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(0);
+        let Some(value) = series
+            .get("value")
+            .and_then(|v| v.get(1))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+        else {
+            continue;
+        };
+        out.insert((node, row), value);
+    }
+    out
+}
+
 /// The `__name__=~"a|b|c"` matcher selecting every one of `metrics` in a single query.
 ///
 /// The freshness probes ask about all four node kinds' liveness series at once (ADR-059), and one
@@ -1245,6 +1339,27 @@ impl MetricStore for VmStore {
             out.entry(idx).or_default().oper_status = Some(v);
         }
         out
+    }
+
+    async fn series_rows(
+        &self,
+        metric: &str,
+        nodes: Option<&[Uuid]>,
+        within_secs: u64,
+    ) -> std::collections::HashMap<(Uuid, i32), f64> {
+        let url = format!("{}/api/v1/query", self.base);
+        let query = series_rows_query(metric, nodes, within_secs);
+        let resp = match self.http.get(&url).query(&[("query", query)]).send().await {
+            Ok(resp) => resp,
+            Err(e) => {
+                tracing::warn!(error = %e, metric, "VictoriaMetrics series-rows query failed");
+                return std::collections::HashMap::new();
+            }
+        };
+        let Ok(json) = resp.json::<serde_json::Value>().await else {
+            return std::collections::HashMap::new();
+        };
+        parse_node_row_values(&json)
     }
 
     async fn aggregate_latest(&self, key: &SeriesKey) -> Option<f64> {

@@ -429,8 +429,8 @@ pub(crate) async fn run_interface_utilization_watch(
         }
 
         for (pair, dimension) in INTERFACE_DIMENSIONS {
-            let pct_cov = alerts.interface_rule_coverage(pair.pct);
-            let bps_cov = alerts.interface_rule_coverage(pair.bps);
+            let pct_cov = alerts.rule_coverage(pair.pct);
+            let bps_cov = alerts.rule_coverage(pair.bps);
             let pct_demand = util::BoundDemand {
                 lowest_bound: pct_cov.lowest_bound,
                 has_below: pct_cov.has_below,

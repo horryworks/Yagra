@@ -316,7 +316,7 @@ impl AlertConfig {
     /// the same set — a plan built from a staler read would query ports nothing evaluates, or miss
     /// ports something does.
     #[must_use]
-    pub fn interface_rule_coverage(&self, metric: &str) -> RuleCoverage {
+    pub fn rule_coverage(&self, metric: &str) -> RuleCoverage {
         let Some(rules) = self.by_metric.get(metric).map(MetricRules::all) else {
             // An empty node set, not `Default` — `RuleCoverage::default()` leaves `nodes` at
             // `None`, which means **the whole fleet**, the opposite of what "nobody wrote a rule
@@ -1013,7 +1013,7 @@ mod tests {
     /// What the evaluator plans its query from. The three facts it needs are the lowest bound,
     /// whether any rule reads downwards, and whether the nodes can be enumerated at all.
     #[test]
-    fn interface_rule_coverage_reports_the_lowest_bound_and_the_nodes() {
+    fn rule_coverage_reports_the_lowest_bound_and_the_nodes() {
         use yagra_common::{ThresholdBounds, ThresholdRule};
 
         let a = NodeId::new();
@@ -1039,7 +1039,7 @@ mod tests {
             ],
             HashMap::new(),
         )
-        .interface_rule_coverage("if_in_util_pct");
+        .rule_coverage("if_in_util_pct");
         assert_eq!(cov.lowest_bound, Some(70.0));
         assert!(!cov.has_below);
         assert_eq!(
@@ -1049,7 +1049,7 @@ mod tests {
 
         // A metric nobody wrote a rule for asks for no query at all — spelled as an empty node
         // set rather than `None`, which would mean the whole fleet.
-        let empty = AlertConfig::default().interface_rule_coverage("if_in_util_pct");
+        let empty = AlertConfig::default().rule_coverage("if_in_util_pct");
         assert_eq!(empty.lowest_bound, None);
         assert_eq!(empty.nodes, Some(BTreeSet::new()));
 
@@ -1062,7 +1062,7 @@ mod tests {
             ],
             HashMap::new(),
         )
-        .interface_rule_coverage("if_in_util_pct");
+        .rule_coverage("if_in_util_pct");
         assert_eq!(wide.lowest_bound, Some(80.0));
         assert_eq!(wide.nodes, None);
     }
@@ -1089,7 +1089,7 @@ mod tests {
                 )],
                 HashMap::new(),
             )
-            .interface_rule_coverage("if_in_bps")
+            .rule_coverage("if_in_bps")
         };
         assert!(with(Direction::Below, Some(1_000_000.0)).has_below);
         assert!(!with(Direction::Above, Some(1_000_000.0)).has_below);
