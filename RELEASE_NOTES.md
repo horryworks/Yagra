@@ -21,6 +21,25 @@
 
 ### Improvements
 
+- **A stuck notification endpoint no longer holds up everything else.** While Yagra was
+  delivering one notification it held a single lock over its whole notification setup —
+  channels, routing rules and mutes together — for as long as the delivery took. A vendor
+  endpoint that stopped answering could hold that for up to 31.5 seconds per notification (three
+  attempts at a ten-second timeout plus backoff), or longer when the vendor answers "too many
+  requests", multiplied by the number of channels an alert fans out to. Everything queued behind
+  it: notifications for other channels, and the thirty-second refresh that applies a mute — so
+  muting a noisy node during an incident could take a minute to take effect, exactly when it was
+  needed. Delivery now takes a snapshot instead of a lock. One channel still delivers one
+  notification at a time, so a recovery can never overtake the alert it resolves, but a channel
+  that is not answering only holds up its own queue. ⚠️ A notification already in flight when a
+  channel is deleted can still be delivered to it; previously the deletion waited.
+
+- **Notification delivery is now measurable.** `yagra_notification_dispatch_total` counts every
+  delivery by route, lifecycle event and outcome (`delivered` / `suppressed` / `failed`), and
+  `yagra_notification_delivery_seconds` records how long each took including retries. Until now
+  the outcome only ever appeared in a log line, so "our PagerDuty integration is wedged and every
+  page is half a minute late" was not something a dashboard could show.
+
 - **Values that no longer fit their column can be read on hover.** A filter's summary under a
   column header, a raw id, an alert history timestamp, a forwarding rule's condition count and the
   metric-and-threshold line on an alert row all truncate when the window or the column is narrow,

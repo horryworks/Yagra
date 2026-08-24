@@ -617,6 +617,20 @@ const M_DISPATCH: &str = "yagra_notification_dispatch_total";
 /// Wall time for one dispatch, including retries and backoff. See [`M_DISPATCH`].
 const M_DELIVERY_SECONDS: &str = "yagra_notification_delivery_seconds";
 
+/// The `outcome` label for one dispatch result: `delivered`, `suppressed` (a duplicate of a
+/// still-active alert, so the channel was never called) or `failed` (every retry exhausted).
+///
+/// A named function rather than a `match` inside [`record_dispatch`] so the mapping is testable,
+/// and exhaustive rather than wildcarded so a fourth outcome cannot be filed under whichever arm
+/// happened to be last.
+fn outcome_label(outcome: DispatchOutcome) -> &'static str {
+    match outcome {
+        DispatchOutcome::Delivered { .. } => "delivered",
+        DispatchOutcome::Suppressed => "suppressed",
+        DispatchOutcome::Failed { .. } => "failed",
+    }
+}
+
 /// Record one dispatch: its outcome and how long it took.
 ///
 /// ⚠️ **`route` is `default` or a channel UUID, so this label is bounded but not constant.**
@@ -630,16 +644,11 @@ fn record_dispatch(
     outcome: DispatchOutcome,
     started: std::time::Instant,
 ) {
-    let result = match outcome {
-        DispatchOutcome::Delivered { .. } => "delivered",
-        DispatchOutcome::Suppressed => "suppressed",
-        DispatchOutcome::Failed { .. } => "failed",
-    };
     metrics::counter!(
         M_DISPATCH,
         "route" => route.to_owned(),
         "event" => event.as_str(),
-        "outcome" => result,
+        "outcome" => outcome_label(outcome),
     )
     .increment(1);
     metrics::histogram!(M_DELIVERY_SECONDS, "route" => route.to_owned())
@@ -705,14 +714,20 @@ impl Notifier {
                 channels = channels.len(),
                 "alert notifier default route enabled"
             );
-            Arc::new(Dispatcher::new(
-                Arc::new(MultiChannel { channels }) as Arc<dyn NotifyChannel>,
-                RetryPolicy::default(),
-            ))
+            Arc::new(MultiChannel { channels }) as Arc<dyn NotifyChannel>
         });
+        Self::with_default(default)
+    }
+
+    /// A notifier over a given default route, with no DB channels or rules yet.
+    ///
+    /// Split out of [`Self::from_env`] for the same reason as [`Self::install_routing`]: `from_env`
+    /// reads process-wide environment variables, so a test cannot choose a default route without
+    /// changing what every other test in the process sees.
+    fn with_default(default: Option<Arc<dyn NotifyChannel>>) -> Self {
         Self {
             routing: RwLock::new(Arc::new(Routing {
-                default,
+                default: default.map(|c| Arc::new(Dispatcher::new(c, RetryPolicy::default()))),
                 channels: HashMap::new(),
                 overrides: HashMap::new(),
                 rules: Vec::new(),
@@ -1562,9 +1577,473 @@ mod tests {
         assert!(!mute_matches(&mutes, &alert));
     }
 
+    /// The delivery metrics say what their docs say (ADR-104 decision 4).
+    ///
+    /// Same shape as `the_failure_reasons_are_the_metric_labels` above: the names are what an
+    /// operator's dashboard and alert rules are written against, so renaming one is a breaking
+    /// change to something outside this repository and should read as one in the diff.
+    #[test]
+    fn the_delivery_metrics_are_named_and_labelled_as_documented() {
+        assert_eq!(M_DISPATCH, "yagra_notification_dispatch_total");
+        assert_eq!(M_DELIVERY_SECONDS, "yagra_notification_delivery_seconds");
+        assert_eq!(
+            outcome_label(DispatchOutcome::Delivered { attempts: 1 }),
+            "delivered"
+        );
+        assert_eq!(outcome_label(DispatchOutcome::Suppressed), "suppressed");
+        assert_eq!(
+            outcome_label(DispatchOutcome::Failed { attempts: 3 }),
+            "failed"
+        );
+        // The `event` label comes from the shared vocabulary rather than a fourth spelling of it.
+        assert_eq!(
+            NotifyEvent::ALL.map(|e| e.as_str()),
+            ["fire", "resolve", "suppress"]
+        );
+    }
+
     fn mgr_alert() -> NotifyAction {
         manager()
             .raise_pool_coverage_alert("tokyo", 1_000)
             .expect("a fresh manager raises")
+    }
+}
+
+/// What `Notifier::handle` actually does with an action — the 117 lines that had no test at all
+/// until ADR-104, because `set_routing` could only build real HTTP/SMTP clients.
+///
+/// 🚨 **Every one of these asserts that something *arrives*, not only that something is
+/// suppressed.** A suite of "nothing was delivered" claims is satisfied by a notifier that
+/// delivers nothing at all (`rejection-only-tests-pass-when-everything-rejects`), and this file
+/// installs fake channels, so that failure is one typo away rather than hypothetical.
+///
+/// 🚨 **And the fake must not be the thing under test.** The first version of
+/// [`a_resolve_cannot_overtake_the_fire_it_resolves`] gated both deliveries on one mutex, so the
+/// *fake* ordered them and the test stayed green with the dispatcher's lock released before
+/// delivery — the exact defect it was written to catch. Each lifecycle point now has its own
+/// release, and the test asserts the resolve never reaches the channel at all while the fire is in
+/// flight, which is a fact about the lane rather than about the fixture.
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    use std::sync::Mutex;
+    use std::time::Duration;
+    use yagra_common::NodeState;
+
+    /// The whole suite has a deadline: if delivery starts waiting on the routing snapshot again —
+    /// the defect ADR-104 removed — these fail on the clock instead of hanging a CI run forever.
+    const DEADLINE: Duration = Duration::from_secs(5);
+
+    /// One channel's log of what it was handed, in order. `fire` is `deliver`, `close` is
+    /// `deliver_resolve` (a recovery or a roll-up).
+    #[derive(Default)]
+    struct Seen(Vec<(&'static str, String)>);
+
+    impl Seen {
+        fn count(&self, kind: &str) -> usize {
+            self.0.iter().filter(|(k, _)| *k == kind).count()
+        }
+        fn kinds(&self) -> Vec<&'static str> {
+            self.0.iter().map(|(k, _)| *k).collect()
+        }
+    }
+
+    type Log = Arc<Mutex<Seen>>;
+
+    fn log() -> Log {
+        Arc::new(Mutex::new(Seen::default()))
+    }
+
+    /// A channel that records what it receives and always succeeds.
+    struct Recorder(Log);
+
+    #[async_trait]
+    impl NotifyChannel for Recorder {
+        async fn deliver(&self, n: &Notification) -> Result<(), NotifyError> {
+            self.0.lock().unwrap().0.push(("fire", n.summary.clone()));
+            Ok(())
+        }
+        async fn deliver_resolve(&self, n: &Notification) -> Result<(), NotifyError> {
+            self.0.lock().unwrap().0.push(("close", n.summary.clone()));
+            Ok(())
+        }
+    }
+
+    /// A vendor endpoint that has stopped answering: it announces its arrival, then does not
+    /// return until the test releases it.
+    ///
+    /// Stands in for the real thing without paying its price — a wedged PagerDuty costs three
+    /// attempts at a ten-second timeout plus 1.5s of backoff, which is why holding the routing
+    /// snapshot across it mattered enough to be worth an ADR.
+    ///
+    /// ⚠️ **The two lifecycle points are released separately, on purpose.** One shared gate would
+    /// serialize them here, and then this fixture — not the dispatcher — would be what keeps a
+    /// fire ahead of its resolve.
+    struct Gate {
+        fire_gate: Arc<tokio::sync::Notify>,
+        close_gate: Arc<tokio::sync::Notify>,
+        arrived: tokio::sync::mpsc::UnboundedSender<&'static str>,
+        seen: Log,
+    }
+
+    #[async_trait]
+    impl NotifyChannel for Gate {
+        async fn deliver(&self, n: &Notification) -> Result<(), NotifyError> {
+            let _ = self.arrived.send("fire");
+            self.fire_gate.notified().await;
+            self.seen
+                .lock()
+                .unwrap()
+                .0
+                .push(("fire", n.summary.clone()));
+            Ok(())
+        }
+        async fn deliver_resolve(&self, n: &Notification) -> Result<(), NotifyError> {
+            let _ = self.arrived.send("close");
+            self.close_gate.notified().await;
+            self.seen
+                .lock()
+                .unwrap()
+                .0
+                .push(("close", n.summary.clone()));
+            Ok(())
+        }
+    }
+
+    fn built(id: Uuid, channel: impl NotifyChannel + 'static) -> BuiltChannel {
+        BuiltChannel {
+            id,
+            channel: Some(Arc::new(channel)),
+            over: None,
+        }
+    }
+
+    /// An enabled rule sending `severity` (None = any) to one channel.
+    fn rule(channel: Uuid, severity: Option<Severity>) -> RoutingRule {
+        RoutingRule {
+            id: Uuid::new_v4(),
+            name: "test rule".to_owned(),
+            enabled: true,
+            severity,
+            channel_ids: vec![channel],
+        }
+    }
+
+    fn alert(node: NodeId, severity: Severity, root_cause: Option<NodeId>) -> Alert {
+        Alert {
+            subject: Subject::Node(node),
+            check: check_id(node, "icmp_rtt_ms"),
+            severity,
+            state: NodeState::Critical,
+            at_unix_ms: 0,
+            root_cause,
+            flapping: false,
+            metric: "icmp_rtt_ms".to_owned(),
+            breach: None,
+            ifindex: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fire_reaches_the_default_route_and_every_channel_a_rule_matches() {
+        let (dflt, a, b) = (log(), log(), log());
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let (id_a, id_b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        n.install_routing(
+            vec![
+                built(id_a, Recorder(a.clone())),
+                built(id_b, Recorder(b.clone())),
+            ],
+            vec![rule(id_a, Some(Severity::Critical))],
+        );
+
+        n.handle(NotifyAction::Fire(alert(
+            NodeId::new(),
+            Severity::Critical,
+            None,
+        )))
+        .await;
+
+        assert_eq!(
+            dflt.lock().unwrap().count("fire"),
+            1,
+            "the env default route fires for every alert, rules or no rules"
+        );
+        assert_eq!(
+            a.lock().unwrap().count("fire"),
+            1,
+            "a rule named channel A for this severity"
+        );
+        assert_eq!(
+            b.lock().unwrap().count("fire"),
+            0,
+            "no rule named channel B, so it must not be paged"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_muted_alert_is_delivered_nowhere_but_an_unmuted_one_still_is() {
+        let (dflt, a) = (log(), log());
+        let n = Notifier::with_default(Some(Arc::new(Recorder(dflt.clone()))));
+        let id_a = Uuid::from_u128(1);
+        n.install_routing(
+            vec![built(id_a, Recorder(a.clone()))],
+            vec![rule(id_a, None)],
+        );
+        let (muted, other) = (NodeId::new(), NodeId::new());
+        n.set_mutes(vec![ActiveMute::new(muted.as_uuid(), None)]);
+
+        n.handle(NotifyAction::Fire(alert(muted, Severity::Critical, None)))
+            .await;
+        assert_eq!(dflt.lock().unwrap().count("fire"), 0, "muted node");
+        assert_eq!(a.lock().unwrap().count("fire"), 0, "muted node");
+
+        // The accept side: the mute silences that node, not the notifier.
+        n.handle(NotifyAction::Fire(alert(other, Severity::Critical, None)))
+            .await;
+        assert_eq!(dflt.lock().unwrap().count("fire"), 1, "a different node");
+        assert_eq!(a.lock().unwrap().count("fire"), 1, "a different node");
+    }
+
+    #[tokio::test]
+    async fn a_rolled_up_alert_does_not_page_but_its_roll_up_closes_the_incident() {
+        let a = log();
+        let n = Notifier::with_default(None);
+        let id_a = Uuid::from_u128(1);
+        n.install_routing(
+            vec![built(id_a, Recorder(a.clone()))],
+            vec![rule(id_a, None)],
+        );
+        let node = NodeId::new();
+        let upstream = NodeId::new();
+
+        // Attributed to an upstream root cause: it fired for the UI, but the page belongs to the
+        // upstream incident.
+        n.handle(NotifyAction::Fire(alert(
+            node,
+            Severity::Critical,
+            Some(upstream),
+        )))
+        .await;
+        assert_eq!(a.lock().unwrap().count("fire"), 0);
+
+        // A roll-up of an alert that *had* been paging standalone still has to close it, or
+        // on-call is left with a page nothing will ever resolve.
+        n.handle(NotifyAction::Suppress(alert(
+            node,
+            Severity::Critical,
+            Some(upstream),
+        )))
+        .await;
+        assert_eq!(
+            a.lock().unwrap().count("close"),
+            1,
+            "the roll-up closes the remote incident"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resolve_reaches_the_matched_channel_and_clears_dedup_on_the_rest() {
+        let (a, b) = (log(), log());
+        let n = Notifier::with_default(None);
+        let (id_a, id_b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+        let both = || {
+            vec![
+                built(id_a, Recorder(a.clone())),
+                built(id_b, Recorder(b.clone())),
+            ]
+        };
+        n.install_routing(both(), vec![rule(id_a, None), rule(id_b, None)]);
+        let node = NodeId::new();
+        let fire = || NotifyAction::Fire(alert(node, Severity::Critical, None));
+
+        n.handle(fire()).await;
+        assert_eq!(a.lock().unwrap().count("fire"), 1);
+        assert_eq!(b.lock().unwrap().count("fire"), 1);
+        // Still the same alert: dedup holds it back on both.
+        n.handle(fire()).await;
+        assert_eq!(a.lock().unwrap().count("fire"), 1, "deduped");
+        assert_eq!(b.lock().unwrap().count("fire"), 1, "deduped");
+
+        // Now only A is routed. The resolve is delivered to A; B is not called, but its dedup must
+        // still be cleared or the alert could never page there again.
+        n.install_routing(both(), vec![rule(id_a, None)]);
+        n.handle(NotifyAction::Resolve(alert(node, Severity::Critical, None)))
+            .await;
+        assert_eq!(a.lock().unwrap().count("close"), 1, "A was routed");
+        assert_eq!(b.lock().unwrap().count("close"), 0, "B was not routed");
+
+        n.install_routing(both(), vec![rule(id_a, None), rule(id_b, None)]);
+        n.handle(fire()).await;
+        assert_eq!(
+            a.lock().unwrap().count("fire"),
+            2,
+            "A re-pages after resolve"
+        );
+        assert_eq!(
+            b.lock().unwrap().count("fire"),
+            2,
+            "B re-pages too — mark_resolved cleared its dedup even though it got no close"
+        );
+    }
+
+    /// 🎯 **The property ADR-104 exists to buy**, stated as behaviour rather than as a grep over
+    /// this file: with one channel wedged mid-delivery, the config refresh still applies and a
+    /// notification bound for a different channel still goes out.
+    ///
+    /// Before ADR-104 all three of these waited on the same mutex the wedged delivery held, so an
+    /// operator muting a noisy node waited out the vendor's whole retry budget first.
+    #[tokio::test]
+    async fn a_wedged_channel_blocks_neither_the_config_refresh_nor_another_channel() {
+        let fire_gate = Arc::new(tokio::sync::Notify::new());
+        let (tx, mut arrived) = tokio::sync::mpsc::unbounded_channel();
+        let (a, b) = (log(), log());
+        let (id_a, id_b) = (Uuid::from_u128(1), Uuid::from_u128(2));
+
+        let n = Arc::new(Notifier::with_default(None));
+        let install = |n: &Notifier| {
+            n.install_routing(
+                vec![
+                    built(
+                        id_a,
+                        Gate {
+                            fire_gate: Arc::clone(&fire_gate),
+                            close_gate: Arc::new(tokio::sync::Notify::new()),
+                            arrived: tx.clone(),
+                            seen: a.clone(),
+                        },
+                    ),
+                    built(id_b, Recorder(b.clone())),
+                ],
+                // Critical goes to the wedged channel, Warning to the healthy one, so the two
+                // actions below are routed to different lanes.
+                vec![
+                    rule(id_a, Some(Severity::Critical)),
+                    rule(id_b, Some(Severity::Warning)),
+                ],
+            );
+        };
+        install(&n);
+
+        let wedged = tokio::spawn({
+            let n = Arc::clone(&n);
+            async move {
+                n.handle(NotifyAction::Fire(alert(
+                    NodeId::new(),
+                    Severity::Critical,
+                    None,
+                )))
+                .await;
+            }
+        });
+        assert_eq!(
+            arrived.recv().await,
+            Some("fire"),
+            "the wedged channel was called and has not returned"
+        );
+
+        tokio::time::timeout(DEADLINE, async {
+            n.set_mutes(vec![ActiveMute::new(Uuid::from_u128(9), None)]);
+            install(&n);
+            n.handle(NotifyAction::Fire(alert(
+                NodeId::new(),
+                Severity::Warning,
+                None,
+            )))
+            .await;
+        })
+        .await
+        .expect("a wedged channel must not hold up mutes, routing, or another channel");
+
+        assert_eq!(
+            b.lock().unwrap().count("fire"),
+            1,
+            "the healthy channel delivered while the other was still wedged"
+        );
+        assert_eq!(
+            a.lock().unwrap().count("fire"),
+            0,
+            "…and the wedged one had not finished"
+        );
+
+        fire_gate.notify_one();
+        tokio::time::timeout(DEADLINE, wedged)
+            .await
+            .expect("the wedged delivery finishes once its endpoint answers")
+            .expect("the delivery task did not panic");
+        assert_eq!(a.lock().unwrap().count("fire"), 1);
+    }
+
+    /// A fire is never overtaken by its own resolve, even when the fire is stuck in delivery.
+    ///
+    /// This is what the per-channel lock in [`Dispatcher`] buys, and it is the reason ADR-104 kept
+    /// that lock across delivery instead of claiming the dedup key and releasing it.
+    ///
+    /// 🚨 **The load-bearing assertion is the middle one**, not the final ordering: with the lock
+    /// released before delivery the resolve reaches the channel immediately, and the final order
+    /// then depends only on which gate the test opens first. Asserting that it does not arrive at
+    /// all is a fact about the lane. Verified by breaking it — see the module doc.
+    #[tokio::test]
+    async fn a_resolve_cannot_overtake_the_fire_it_resolves() {
+        let fire_gate = Arc::new(tokio::sync::Notify::new());
+        let close_gate = Arc::new(tokio::sync::Notify::new());
+        let (tx, mut arrived) = tokio::sync::mpsc::unbounded_channel();
+        let seen = log();
+        let id_a = Uuid::from_u128(1);
+
+        let n = Arc::new(Notifier::with_default(None));
+        n.install_routing(
+            vec![built(
+                id_a,
+                Gate {
+                    fire_gate: Arc::clone(&fire_gate),
+                    close_gate: Arc::clone(&close_gate),
+                    arrived: tx,
+                    seen: seen.clone(),
+                },
+            )],
+            vec![rule(id_a, None)],
+        );
+        let node = NodeId::new();
+
+        let fire = tokio::spawn({
+            let n = Arc::clone(&n);
+            async move {
+                n.handle(NotifyAction::Fire(alert(node, Severity::Critical, None)))
+                    .await;
+            }
+        });
+        assert_eq!(arrived.recv().await, Some("fire"));
+
+        let resolve = tokio::spawn({
+            let n = Arc::clone(&n);
+            async move {
+                n.handle(NotifyAction::Resolve(alert(node, Severity::Critical, None)))
+                    .await;
+            }
+        });
+        // Long enough for the resolve to reach the channel if anything would let it. Time rather
+        // than a signal because the property is an *absence*: there is nothing to wait for.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            arrived.try_recv().is_err(),
+            "a resolve reached the channel while the fire it resolves was still in flight"
+        );
+
+        // Released in reverse, so nothing but the lane can be producing the order below.
+        close_gate.notify_one();
+        fire_gate.notify_one();
+        tokio::time::timeout(DEADLINE, async {
+            fire.await.expect("fire task");
+            resolve.await.expect("resolve task");
+        })
+        .await
+        .expect("both actions complete once the endpoint answers");
+
+        assert_eq!(
+            seen.lock().unwrap().kinds(),
+            vec!["fire", "close"],
+            "the lane delivered them in the order they arrived"
+        );
     }
 }
