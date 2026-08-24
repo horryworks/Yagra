@@ -81,7 +81,7 @@ pub enum AuditAction {
 // `production_source()` slices this file at the first occurrence of that literal, and it does so
 // before it strips comments — so writing the attribute in prose up here silently truncates the
 // haystack and the three source-scanning tests below start passing on nothing. That is the same
-// self-matching-needle trap `reports.rs` documents from the other direction.
+// self-matching-needle trap `reports/guards.rs` documents from both directions.
 //
 // The trade-off taken here, stated once: a typed query field means an invalid `action=` is refused
 // by axum's `Query` rejection (plain text, naming the valid variants) rather than by the ADR-019

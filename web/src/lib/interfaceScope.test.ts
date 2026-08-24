@@ -65,7 +65,7 @@ describe('interface scope ids (ADR-076)', () => {
  */
 describe('the composite has exactly two builders', () => {
   // Assembled from fragments so this file cannot match itself — the trap `permissions.test.ts` and
-  // `reports.rs::the_run_state_sql_is_built_from_the_enum` both document.
+  // `reports/guards.rs::the_run_state_sql_is_built_from_the_enum` both document.
   const COMPOSITE = new RegExp(
     ['[$][{][A-Za-z0-9_.]*', 'node', '_?id[}]:[$][{][A-Za-z0-9_.]*', 'if', '_?index[}]'].join(''),
     'i',

@@ -111,7 +111,7 @@ const SRC = join(__dirname, '..');
 
 /**
  * Needles assembled at runtime, or this file would match itself and fail forever — the same trap
- * `loadState.test.ts` and `reports.rs::the_run_state_sql_is_built_from_the_enum` document.
+ * `loadState.test.ts` and `reports/guards.rs::the_run_state_sql_is_built_from_the_enum` document.
  */
 const A = `${'auth'}${'ed'}`;
 

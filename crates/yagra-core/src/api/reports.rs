@@ -707,7 +707,7 @@ async fn export_report_run(
 /// which matters because the HTML contains device-supplied strings. Errors if the binary is missing
 /// or exits non-zero.
 ///
-/// **Local file access is switched off explicitly.** `reports::render_document` emits a
+/// **Local file access is switched off explicitly.** `reports::render::render_document` emits a
 /// self-contained document — inline `<style>`, inline SVG charts, no `<img>`, no `<link>`, no
 /// `url()`, no `file://` — so nothing in a report needs to read the container's filesystem. This
 /// used to pass `--enable-local-file-access` for no reason, which is the flag that turns an escape

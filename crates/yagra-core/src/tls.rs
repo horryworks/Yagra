@@ -89,7 +89,7 @@ mod tests {
     // The property this module exists to hold. Installing a custom verifier here would disable
     // certificate checking for **both** forwarding and directory login at once, and nothing about
     // the resulting connection would look different. The needles are assembled at runtime because
-    // this test reads its own file (`reports.rs::the_run_state_sql_is_built_from_the_enum`'s shape)
+    // this test reads its own file (`reports/guards.rs::the_run_state_sql_is_built_from_the_enum`'s shape)
     // — and for the same reason none of them may be spelled out in this comment.
     #[test]
     fn this_module_never_disables_certificate_verification() {

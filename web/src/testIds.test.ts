@@ -25,7 +25,7 @@ describe('test ids', () => {
   it('are never written inline — every one comes from the map', () => {
     // The needle is assembled at runtime. A literal `data-testid="` in this file's own source
     // would match itself the moment the check ever scanned test files, and the test would then
-    // fail forever for the wrong reason (`reports.rs` has the same note for the same reason).
+    // fail forever for the wrong reason (`reports/guards.rs` has the same note for the same reason).
     const attr = ['data', 'testid'].join('-');
     const inline = new RegExp(`${attr}\\s*=\\s*["'\`]`);
     // Comment lines are skipped — the first version of this test failed on `testIds.ts`'s own

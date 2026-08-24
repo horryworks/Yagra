@@ -500,7 +500,8 @@ mod tests {
     #[test]
     fn no_handler_spells_the_scope_refusal_by_hand() {
         // Needle assembled at runtime: this test lives in a file the scan reads, so a literal
-        // would match itself and pass forever — the lesson from `reports.rs`'s run-state SQL test.
+        // would match itself and pass forever — the lesson `reports/guards.rs`'s run-state SQL test records — from the inside,
+        // having been the thing it warns about until ADR-102.
         let needle = format!("\"{}_unsupported\"", "scope");
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/api");
         let mut sites = Vec::new();

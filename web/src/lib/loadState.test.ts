@@ -52,7 +52,7 @@ describe('classifyLoadError', () => {
  * classifier above removes the duplication; this stops the next page from reintroducing it.
  *
  * ⚠️ **The needle is assembled at runtime.** A literal would match this file's own source and the
- * test would fail forever — the trap `reports.rs::the_run_state_sql_is_built_from_the_enum` records
+ * test would fail forever — the trap `reports/guards.rs::the_run_state_sql_is_built_from_the_enum` records
  * on the Rust side.
  */
 describe('no screen classifies a load failure by hand', () => {

@@ -2,7 +2,7 @@
 //! The `token_enum!` macro: one token list per fieldless enum that is both a DB column value and a
 //! JSON tag.
 //!
-//! Here rather than inside `reports.rs`, where it was written, because it is no longer a reports
+//! Here rather than inside `reports/`, where it was written, because it is no longer a reports
 //! concern: [`crate::cadence::Cadence`] and the analysis-schedule status use it too, and a macro
 //! shared across modules that lives inside one of them is the migration tripwire
 //! `api-conventions.md` describes for helpers.

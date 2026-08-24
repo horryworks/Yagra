@@ -337,7 +337,7 @@ mod tests {
     /// This module's code, with its test items and comments dropped — the reader every
     /// SQL-shape assertion below uses. The append-on-change rule and the keyset cursor live
     /// entirely inside SQL strings, so nothing else can catch a rewrite that changes their
-    /// meaning; the peer stores (`events/repo.rs`, `logstore.rs`, `flowstore.rs`, `reports.rs`)
+    /// meaning; the peer stores (`events/repo.rs`, `logstore.rs`, `flowstore.rs`, `reports/repo.rs`)
     /// all pin their statements the same way.
     ///
     /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
