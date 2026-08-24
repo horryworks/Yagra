@@ -317,14 +317,18 @@ impl NeighborRepo {
 mod tests {
     use super::*;
 
-    /// This module's own source, for the SQL-shape assertions below. The append-on-change rule and
-    /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite that
-    /// changes their meaning — the peer stores (`dns_check.rs`, `events/repo.rs`, `flowstore.rs`) all
-    /// pin their statements the same way.
-    const SRC: &str = include_str!("neighbors.rs");
-
-    /// This module's code, comments stripped — see
-    /// [`crate::module_source::code_no_comments`] for why both.
+    /// This module's code, with its test items and comments dropped — the reader every
+    /// SQL-shape assertion below uses. The append-on-change rule and the keyset cursor live
+    /// entirely inside SQL strings, so nothing else can catch a rewrite that changes their
+    /// meaning; the peer stores (`dns_check.rs`, `events/repo.rs`, `flowstore.rs`) all pin their
+    /// statements the same way.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
+    /// this test module, so a positive `contains("<literal>")` was satisfied by the needle's own
+    /// line and could not fail. Thirty-two of those were live across seven modules — all of them
+    /// here, because the negated side already read this function and only the positive side was
+    /// left on the raw text. Loud on one side and silent on the other is why they survived
+    /// ADR-091's sweep.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "neighbors")
     }
@@ -334,26 +338,27 @@ mod tests {
         // The whole point of the CTE. Losing this guard turns a once-per-change table into one row
         // per poll per node — and since neighbours are polled hourly on every SNMP node in the
         // fleet, that is the difference between a readable timeline and an unusable one.
-        assert!(SRC.contains("WHERE up.prev_neighbor_key IS DISTINCT FROM up.neighbor_key"));
+        assert!(production_source()
+            .contains("WHERE up.prev_neighbor_key IS DISTINCT FROM up.neighbor_key"));
         // And the append reads the keys the upsert just returned, not the caller's guess.
-        assert!(SRC.contains("RETURNING prev_neighbor_key, neighbor_key"));
+        assert!(production_source().contains("RETURNING prev_neighbor_key, neighbor_key"));
     }
 
     #[test]
     fn first_seen_survives_an_unchanged_observation() {
         // "How long has this wiring held" is the column's only purpose; resetting it on every poll
         // would make every adjacency look brand new.
-        assert!(SRC.contains(
+        assert!(production_source().contains(
             "first_seen = CASE WHEN node_neighbors.neighbor_key = EXCLUDED.neighbor_key"
         ));
-        assert!(SRC.contains("THEN node_neighbors.first_seen ELSE now() END"));
+        assert!(production_source().contains("THEN node_neighbors.first_seen ELSE now() END"));
     }
 
     #[test]
     fn change_paging_is_keyset_and_never_offset() {
         // ADR-019. The tuple comparison is what makes the cursor stable across inserts.
-        assert!(SRC.contains("WHERE node_id = $1 AND (at, id) < ($2, $3)"));
-        assert!(SRC.contains("ORDER BY at DESC, id DESC LIMIT"));
+        assert!(production_source().contains("WHERE node_id = $1 AND (at, id) < ($2, $3)"));
+        assert!(production_source().contains("ORDER BY at DESC, id DESC LIMIT"));
         assert!(
             !production_source().contains("OFFSET"),
             "OFFSET paging reintroduced — rows shift under the reader as history is appended"
@@ -377,7 +382,7 @@ mod tests {
     /// writer could disagree about what counts as a change.
     #[test]
     fn the_stored_key_is_the_models_own_content_key() {
-        assert!(SRC.contains("set.content_key()"));
+        assert!(production_source().contains("set.content_key()"));
     }
 
     #[test]

@@ -452,6 +452,197 @@ pub fn assert_no_file_spells_the_attribute(src_dir: &Path, min_files: usize, exe
     );
 }
 
+/// **A file may not search its own raw text for a literal** (ADR-102).
+///
+/// The idiom this refuses:
+///
+/// ```ignore
+/// const SRC: &str = include_str!("arp.rs");   // the whole file, tests included
+/// assert!(SRC.contains("last_seen = now()")); // ← this line is inside SRC
+/// ```
+///
+/// The needle's own source line is part of the text being searched, so **the assertion can never
+/// fail**: delete the SQL it exists to pin and it still passes. Thirty-two of these were live in
+/// `yagra-core` across seven files, and every one of those files already defined the correct reader
+/// ([`crate::srcread::strip_test_items`], via each crate's `module_source`) — and used it **only on
+/// the negated side**.
+///
+/// 🚨 **That asymmetry is why they survived ADR-091's sweep.** Self-matching is loud on a negated
+/// needle (the check fails forever, so it gets fixed on the spot) and silent on a positive one (the
+/// check passes forever, so nothing ever draws attention to it). Fixing the loud half is exactly
+/// what leaves the quiet half behind.
+///
+/// The rule is narrow on purpose: **a binding holding the file's own raw text may only be used in a
+/// negated `contains`.** Reading one's own raw text is legitimate — `yagra-poller`'s `main.rs` needs
+/// the test module in view and says why — so forbidding `include_str!` outright would need an
+/// exemption list, and an exemption list is the spelling that costs nothing to write.
+///
+/// `min_bindings` is the caller's floor, for the reason the module doc gives: if the binding
+/// detector stops matching, the count falls to zero and everything below is vacuous.
+pub fn assert_no_file_matches_a_literal_against_its_own_text(src_dir: &Path, min_bindings: usize) {
+    // Acceptance side first, on a sample that is not on disk: a scanner that has stopped finding
+    // anything is indistinguishable from a clean crate
+    // (`rejection-only-tests-pass-when-everything-rejects`). It also pins both halves of the rule —
+    // the positive is caught, the negated one beside it is not.
+    let q = '"';
+    let sample = format!(
+        "const SRC: &str = include_str!({q}sample.rs{q});\n\
+         fn t() {{\n    assert!(SRC.contains({q}caught{q}));\n    \
+         assert!(!SRC.contains({q}allowed{q}));\n}}\n"
+    );
+    let flagged = self_read_literal_needles(Path::new("crate/src/sample.rs"), &sample);
+    assert_eq!(
+        flagged.len(),
+        1,
+        "the scanner no longer reads the idiom it exists to find: {flagged:?}"
+    );
+    assert!(
+        flagged[0].contains("caught") && !flagged[0].contains("allowed"),
+        "the scanner flagged the wrong half of the sample: {flagged:?}"
+    );
+
+    let mut paths = Vec::new();
+    rs_files(src_dir, &mut paths);
+    let mut bindings = 0usize;
+    let mut offenders: Vec<String> = Vec::new();
+    for path in &paths {
+        let text = read(path);
+        bindings += self_read_bindings(path, &text).len();
+        offenders.extend(self_read_literal_needles(path, &text));
+    }
+    // 🚨 The floor counts the bindings **inspected**, not the files walked: the population this rule
+    // applies to is "somebody holds their own raw text", and a detector that has stopped seeing them
+    // reports a clean crate in exactly the same words as a clean crate.
+    assert!(
+        bindings >= min_bindings,
+        "only {bindings} self-reading binding(s) were found under {}; the detector has stopped \
+         matching and the assertion below is vacuous",
+        src_dir.display()
+    );
+    assert!(
+        offenders.is_empty(),
+        "{offenders:?} search their own raw text for a literal, which includes the line the \
+         literal is written on — the assertion cannot fail. Read the module through \
+         `module_source::code` / `code_no_comments` instead, which drops the test items"
+    );
+}
+
+/// Every literal needle `text` throws at its own raw text, as `file: NAME.contains("…")`.
+///
+/// Public so a caller can report rather than assert; [`assert_no_file_matches_a_literal_against_its_own_text`]
+/// is the usual entry point.
+#[must_use]
+pub fn self_read_literal_needles(path: &Path, text: &str) -> Vec<String> {
+    let name = file_name(path);
+    let mut out = Vec::new();
+    for binding in self_read_bindings(path, text) {
+        for needle in positive_literal_needles(&binding, text) {
+            out.push(format!("{name}: {binding}.contains({needle:?})"));
+        }
+    }
+    out
+}
+
+/// The names bound to **this file's own** raw text.
+///
+/// Resolved as a path rather than by file name: `api/webtls.rs` includes `../webtls.rs`, which is a
+/// different file and a perfectly ordinary thing to do.
+///
+/// ⚠️ **The search that follows is by name, not by scope**, so a file that binds `src` to its own
+/// raw text in one test and to `production_source()` in another would have the second one flagged
+/// too. No file does today, and the direction is the safe one: a false positive is loud and the fix
+/// is to rename one of the two bindings, whereas a scope-aware version that got it wrong would go
+/// quiet — which is the failure this whole module exists to refuse.
+fn self_read_bindings(path: &Path, text: &str) -> Vec<String> {
+    // Built rather than written, so this module does not match itself — the same reason
+    // `assert_no_file_spells_the_attribute` builds its needle.
+    let open = format!("include_str!({}", '"');
+    let mut names = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find(&open) {
+        let at = from + rel;
+        let arg_start = at + open.len();
+        let Some(end) = text[arg_start..].find('"') else {
+            break;
+        };
+        let arg = &text[arg_start..arg_start + end];
+        from = arg_start + end;
+        if !reads_itself(path, arg) {
+            continue;
+        }
+        // Walk back to the binding's name. The statement start is the previous `;` / brace, so this
+        // survives a declaration that wraps across lines.
+        let Some(eq) = text[..at].rfind('=') else {
+            continue;
+        };
+        let start = text[..eq].rfind([';', '{', '}']).map_or(0, |i| i + 1);
+        let decl = &text[start..eq];
+        if !decl.contains("const ") && !decl.contains("let ") {
+            continue;
+        }
+        let head = decl.split(':').next().unwrap_or(decl);
+        if let Some(name) = head.split_whitespace().next_back() {
+            // Deduplicated because the search below is by *name*: two bindings that share one
+            // (`reports.rs` had two `src`) would otherwise report every finding twice.
+            let name = name.to_owned();
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// Does `arg`, read from the file at `path`, name that same file?
+fn reads_itself(path: &Path, arg: &str) -> bool {
+    let Some(dir) = path.parent() else {
+        return false;
+    };
+    let mut resolved = dir.to_path_buf();
+    for part in arg.split(['/', '\\']) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                resolved.pop();
+            }
+            p => resolved.push(p),
+        }
+    }
+    resolved == path
+}
+
+/// Every `NAME.contains("literal")` in `text` that is **not** negated.
+///
+/// A needle built at runtime is left alone: that is the shape a self-reading check is supposed to
+/// use, and several do.
+fn positive_literal_needles(binding: &str, text: &str) -> Vec<String> {
+    let call = format!("{binding}.contains(");
+    let mut out = Vec::new();
+    let mut from = 0;
+    while let Some(rel) = text[from..].find(&call) {
+        let at = from + rel;
+        from = at + call.len();
+        // `OTHER_SRC.contains(` must not match a search for `SRC.contains(`.
+        if text[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        {
+            continue;
+        }
+        if text[..at].trim_end().ends_with('!') {
+            continue;
+        }
+        let arg = text[from..].trim_start();
+        let arg = arg.strip_prefix('&').unwrap_or(arg).trim_start();
+        let Some(rest) = arg.strip_prefix('"') else {
+            continue;
+        };
+        out.push(rest.chars().take_while(|&c| c != '"').collect());
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

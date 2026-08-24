@@ -324,13 +324,17 @@ impl TopoLinkRepo {
 
 #[cfg(test)]
 mod tests {
-    /// This module's own source, for the SQL-shape assertions below. The scope rule and the
-    /// never-wholesale-delete rule live entirely inside SQL strings, so nothing else can catch a
-    /// rewrite that changes their meaning.
-    const SRC: &str = include_str!("topology_links.rs");
-
-    /// This module's code, comments stripped — see
-    /// [`crate::module_source::code_no_comments`] for why both.
+    /// This module's code, with its test items and comments dropped — the reader every
+    /// SQL-shape assertion below uses. The scope rule and the never-wholesale-delete rule live
+    /// entirely inside SQL strings, so nothing else can catch a rewrite that changes their
+    /// meaning.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
+    /// this test module, so a positive `contains("<literal>")` was satisfied by the needle's own
+    /// line and could not fail. Thirty-two of those were live across seven modules — all of them
+    /// here, because the negated side already read this function and only the positive side was
+    /// left on the raw text. Loud on one side and silent on the other is why they survived
+    /// ADR-091's sweep.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "topology_links")
     }
@@ -401,7 +405,7 @@ mod tests {
 
     #[test]
     fn paging_is_keyset_and_never_offset() {
-        assert!(SRC.contains("ORDER BY id LIMIT"));
+        assert!(production_source().contains("ORDER BY id LIMIT"));
         assert!(
             !production_source().contains("OFFSET"),
             "OFFSET paging reintroduced"

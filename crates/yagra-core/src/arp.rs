@@ -442,14 +442,17 @@ mod tests {
     use super::*;
     use yagra_common::ArpEntry;
 
-    /// This module's own source, for the SQL-shape assertions below. The upsert's `first_seen` rule,
-    /// the scope predicate and the keyset cursor live entirely inside SQL strings, so nothing else
-    /// can catch a rewrite that changes their meaning — the peer stores pin their statements the
-    /// same way.
-    const SRC: &str = include_str!("arp.rs");
-
-    /// This module's code, comments stripped — see
-    /// [`crate::module_source::code_no_comments`] for why both.
+    /// This module's code, with its test items and comments dropped — the reader every
+    /// SQL-shape assertion below uses. The upsert's `first_seen` rule, the scope predicate and
+    /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite
+    /// that changes their meaning; the peer stores pin their statements the same way.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
+    /// this test module, so a positive `contains("<literal>")` was satisfied by the needle's own
+    /// line and could not fail. Thirty-two of those were live across seven modules — all of them
+    /// here, because the negated side already read this function and only the positive side was
+    /// left on the raw text. Loud on one side and silent on the other is why they survived
+    /// ADR-091's sweep.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "arp")
     }
@@ -568,7 +571,7 @@ mod tests {
     fn first_seen_survives_an_endpoint_being_seen_again() {
         // The column's only purpose is "how long has this host been on the network unmonitored";
         // touching it on every sweep would reset that to five minutes, forever.
-        assert!(SRC.contains("last_seen = now()"));
+        assert!(production_source().contains("last_seen = now()"));
         assert!(
             !production_source().contains("first_seen = now()"),
             "the upsert must never move first_seen"
@@ -579,13 +582,13 @@ mod tests {
     fn the_scope_predicate_filters_on_the_observing_nodes_group() {
         // Security-critical: without it a scoped operator reads the addresses of segments they
         // cannot see. The NULL branch is the unrestricted fast path, not a missing filter.
-        assert!(SRC.contains("($1::UUID[] IS NULL OR n.group_id = ANY($1))"));
+        assert!(production_source().contains("($1::UUID[] IS NULL OR n.group_id = ANY($1))"));
     }
 
     #[test]
     fn paging_is_keyset_and_never_offset() {
-        assert!(SRC.contains("(d.last_seen, d.id) < ($4, $5)"));
-        assert!(SRC.contains("ORDER BY d.last_seen DESC, d.id DESC LIMIT"));
+        assert!(production_source().contains("(d.last_seen, d.id) < ($4, $5)"));
+        assert!(production_source().contains("ORDER BY d.last_seen DESC, d.id DESC LIMIT"));
         assert!(
             !production_source().contains("OFFSET"),
             "OFFSET paging — rows shift under the reader as the sweep updates last_seen"
@@ -605,14 +608,14 @@ mod tests {
 
     #[test]
     fn the_stored_key_is_the_models_own_content_key() {
-        assert!(SRC.contains("summary.content_key()"));
+        assert!(production_source().contains("summary.content_key()"));
     }
 
     #[test]
     fn the_sweep_has_an_observation_watermark_to_trigger_on() {
         // Also its off switch: no ARP rows ⇒ no watermark ⇒ the sweep returns before it reads the
         // inventory. A deployment that never opted in must not pay for the feature.
-        assert!(SRC.contains("SELECT max(last_seen) AS w FROM node_arp"));
+        assert!(production_source().contains("SELECT max(last_seen) AS w FROM node_arp"));
     }
 
     #[test]

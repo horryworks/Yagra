@@ -176,13 +176,17 @@ impl RoutingPlan {
 mod tests {
     use super::*;
 
-    /// This module's own source, for the SQL-shape assertions below. The upsert's `first_seen` rule
-    /// and the host-address filter live entirely inside SQL strings, so nothing else can catch a
-    /// rewrite that changes their meaning — the peer stores pin their statements the same way.
-    const SRC: &str = include_str!("l3_routing.rs");
-
-    /// This module's code, comments stripped — see
-    /// [`crate::module_source::code_no_comments`] for why both.
+    /// This module's code, with its test items and comments dropped — the reader every
+    /// SQL-shape assertion below uses. The upsert's `first_seen` rule and the host-address
+    /// filter live entirely inside SQL strings, so nothing else can catch a rewrite that changes
+    /// their meaning; the peer stores pin their statements the same way.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
+    /// this test module, so a positive `contains("<literal>")` was satisfied by the needle's own
+    /// line and could not fail. Thirty-two of those were live across seven modules — all of them
+    /// here, because the negated side already read this function and only the positive side was
+    /// left on the raw text. Loud on one side and silent on the other is why they survived
+    /// ADR-091's sweep.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "l3_routing")
     }
@@ -293,22 +297,21 @@ mod tests {
     fn first_seen_survives_an_unchanged_observation() {
         // "How long has this node had these adjacencies" is the column's only purpose; resetting it
         // on every poll would make every peering look brand new.
-        assert!(
-            SRC.contains("first_seen = CASE WHEN node_routing.routing_key = EXCLUDED.routing_key")
-        );
-        assert!(SRC.contains("THEN node_routing.first_seen ELSE now() END"));
+        assert!(production_source()
+            .contains("first_seen = CASE WHEN node_routing.routing_key = EXCLUDED.routing_key"));
+        assert!(production_source().contains("THEN node_routing.first_seen ELSE now() END"));
     }
 
     #[test]
     fn the_stored_key_is_the_models_own_content_key() {
         // Re-deriving it here would let the reader and the writer disagree about what a change is.
-        assert!(SRC.contains("snapshot.content_key()"));
+        assert!(production_source().contains("snapshot.content_key()"));
     }
 
     #[test]
     fn an_observation_watermark_exists_for_the_derivation_trigger() {
         // If this statement is ever removed, a routing-only change stops redrawing the map.
-        assert!(SRC.contains("SELECT max(last_seen) AS w FROM node_routing"));
+        assert!(production_source().contains("SELECT max(last_seen) AS w FROM node_routing"));
     }
 
     #[test]

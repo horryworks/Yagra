@@ -334,14 +334,18 @@ impl DnsCheckRepo {
 mod tests {
     use super::*;
 
-    /// This module's own source, for the SQL-shape assertions below. The append-on-change rule and
-    /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite that
-    /// changes their meaning — the peer stores (`events/repo.rs`, `logstore.rs`, `flowstore.rs`,
-    /// `reports.rs`) all pin their statements the same way.
-    const SRC: &str = include_str!("dns_check.rs");
-
-    /// This module's code, comments stripped — see
-    /// [`crate::module_source::code_no_comments`] for why both.
+    /// This module's code, with its test items and comments dropped — the reader every
+    /// SQL-shape assertion below uses. The append-on-change rule and the keyset cursor live
+    /// entirely inside SQL strings, so nothing else can catch a rewrite that changes their
+    /// meaning; the peer stores (`events/repo.rs`, `logstore.rs`, `flowstore.rs`, `reports.rs`)
+    /// all pin their statements the same way.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
+    /// this test module, so a positive `contains("<literal>")` was satisfied by the needle's own
+    /// line and could not fail. Thirty-two of those were live across seven modules — all of them
+    /// here, because the negated side already read this function and only the positive side was
+    /// left on the raw text. Loud on one side and silent on the other is why they survived
+    /// ADR-091's sweep.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "dns_check")
     }
@@ -397,9 +401,11 @@ mod tests {
         // The whole point of the CTE: an unchanged poll writes no history row. Losing this guard
         // turns a once-per-change table into one row per poll per node — which at fleet scale is
         // the difference between a readable timeline and an unusable one.
-        assert!(SRC.contains("WHERE up.prev_chain_key IS DISTINCT FROM up.chain_key"));
+        assert!(
+            production_source().contains("WHERE up.prev_chain_key IS DISTINCT FROM up.chain_key")
+        );
         // And the append reads the keys the upsert just returned, not the caller's guess.
-        assert!(SRC.contains("RETURNING prev_chain_key, chain_key"));
+        assert!(production_source().contains("RETURNING prev_chain_key, chain_key"));
     }
 
     #[test]
@@ -407,15 +413,16 @@ mod tests {
         // "How long has this chain held" is the column's only purpose; resetting it on every poll
         // would make every chain look brand new. Matched on the distinctive fragments rather than
         // the whole clause, so re-wrapping the string literal does not fail the test.
-        assert!(SRC.contains("first_seen = CASE WHEN dns_chains.chain_key = EXCLUDED.chain_key"));
-        assert!(SRC.contains("THEN dns_chains.first_seen ELSE now() END"));
+        assert!(production_source()
+            .contains("first_seen = CASE WHEN dns_chains.chain_key = EXCLUDED.chain_key"));
+        assert!(production_source().contains("THEN dns_chains.first_seen ELSE now() END"));
     }
 
     #[test]
     fn change_paging_is_keyset_and_never_offset() {
         // ADR-019. The tuple comparison is what makes the cursor stable across inserts.
-        assert!(SRC.contains("WHERE node_id = $1 AND (at, id) < ($2, $3)"));
-        assert!(SRC.contains("ORDER BY at DESC, id DESC LIMIT"));
+        assert!(production_source().contains("WHERE node_id = $1 AND (at, id) < ($2, $3)"));
+        assert!(production_source().contains("ORDER BY at DESC, id DESC LIMIT"));
         assert!(
             !production_source().contains("OFFSET"),
             "OFFSET paging reintroduced — rows shift under the reader as history is appended"

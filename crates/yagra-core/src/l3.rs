@@ -178,14 +178,18 @@ impl L3Repo {
 
 #[cfg(test)]
 mod tests {
-    /// This module's own source, for the SQL-shape assertions below. The append-on-change rule and
-    /// the keyset cursor live entirely inside SQL strings, so nothing else can catch a rewrite that
-    /// changes their meaning — the peer stores (`neighbors.rs`, `dns_check.rs`, `events/repo.rs`) all
-    /// pin their statements the same way.
-    const SRC: &str = include_str!("l3.rs");
-
-    /// This module's code, comments stripped — see
-    /// [`crate::module_source::code_no_comments`] for why both.
+    /// This module's code, with its test items and comments dropped — the reader every
+    /// SQL-shape assertion below uses. The append-on-change rule and the keyset cursor live
+    /// entirely inside SQL strings, so nothing else can catch a rewrite that changes their
+    /// meaning; the peer stores (`neighbors.rs`, `dns_check.rs`, `events/repo.rs`) all pin their
+    /// statements the same way.
+    ///
+    /// ⚠️ **Read through `module_source`, never `include_str!`** (ADR-102). The raw file includes
+    /// this test module, so a positive `contains("<literal>")` was satisfied by the needle's own
+    /// line and could not fail. Thirty-two of those were live across seven modules — all of them
+    /// here, because the negated side already read this function and only the positive side was
+    /// left on the raw text. Loud on one side and silent on the other is why they survived
+    /// ADR-091's sweep.
     fn production_source() -> String {
         crate::module_source::code_no_comments("src", "l3")
     }
@@ -195,17 +199,19 @@ mod tests {
         // The whole point of the CTE. Losing this guard turns a once-per-change table into one row
         // per poll per node — and since addresses are walked hourly on every SNMP node in the
         // fleet, that is the difference between a readable timeline and an unusable one.
-        assert!(SRC.contains("WHERE up.prev_l3_key IS DISTINCT FROM up.l3_key"));
+        assert!(production_source().contains("WHERE up.prev_l3_key IS DISTINCT FROM up.l3_key"));
         // And the append reads the keys the upsert just returned, not the caller's guess.
-        assert!(SRC.contains("RETURNING prev_l3_key, l3_key"));
+        assert!(production_source().contains("RETURNING prev_l3_key, l3_key"));
     }
 
     #[test]
     fn first_seen_survives_an_unchanged_observation() {
         // "How long has this addressing held" is the column's only purpose; resetting it on every
         // poll would make every prefix look brand new.
-        assert!(SRC.contains("first_seen = CASE WHEN node_l3.l3_key = EXCLUDED.l3_key"));
-        assert!(SRC.contains("THEN node_l3.first_seen ELSE now() END"));
+        assert!(
+            production_source().contains("first_seen = CASE WHEN node_l3.l3_key = EXCLUDED.l3_key")
+        );
+        assert!(production_source().contains("THEN node_l3.first_seen ELSE now() END"));
     }
 
     /// There is no per-node reader yet (see the note above `L3Repo`), so the only paging rule to
@@ -235,14 +241,14 @@ mod tests {
     /// writer could disagree about what counts as a change.
     #[test]
     fn the_stored_key_is_the_models_own_content_key() {
-        assert!(SRC.contains("snapshot.content_key()"));
+        assert!(production_source().contains("snapshot.content_key()"));
     }
 
     /// The derivation task's trigger reads a watermark over observations, not just `config_gen`.
     /// If this statement is ever removed, the map silently stops following the network.
     #[test]
     fn an_observation_watermark_exists_for_the_derivation_trigger() {
-        assert!(SRC.contains("SELECT max(last_seen) AS w FROM node_l3"));
+        assert!(production_source().contains("SELECT max(last_seen) AS w FROM node_l3"));
     }
 
     /// The host-route filter runs in SQL. Pulling every address into core to find tens of host

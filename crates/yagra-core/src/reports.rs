@@ -1720,7 +1720,7 @@ mod tests {
     /// run that is written `succeeded` and read as `Unknown`.
     #[test]
     fn the_run_state_sql_is_built_from_the_enum() {
-        let src = include_str!("reports.rs");
+        let src = crate::module_source::code_no_comments("src", "reports");
         // Built at runtime, not written as literals: this test reads its own file, so a literal
         // needle here would match itself and fail forever.
         for state in [
@@ -1753,7 +1753,7 @@ mod tests {
             !RUN_FILTER_WHERE.contains("{}"),
             "the predicate must not be a format string"
         );
-        let src = include_str!("reports.rs");
+        let src = crate::module_source::code_no_comments("src", "reports");
         let after = src
             .split_once("pub async fn list_runs")
             .expect("list_runs exists")

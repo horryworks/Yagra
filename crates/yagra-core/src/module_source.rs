@@ -74,16 +74,23 @@ mod tests {
         );
     }
 
-    /// This crate holds itself to the mechanism's two invariants, and nobody here writes the rule
-    /// down for themselves.
+    /// This crate holds itself to the mechanism's invariants, nobody here writes the rule down for
+    /// themselves, and nobody searches their own raw text for a literal.
     ///
-    /// Both floors are this crate's, which is why they are arguments — see `srcread`'s module doc.
+    /// Every floor is this crate's, which is why they are arguments — see `srcread`'s module doc.
     /// ⚠️ No file is exempt from the second one any more: the rule lives in `yagra-common` now, and
     /// this wrapper does not spell the attribute.
+    ///
+    /// The third arrived with ADR-102, which found **thirty-two assertions that could not fail** in
+    /// seven files: each held its own file's raw text and threw a string literal at it, so the
+    /// needle's own line satisfied the search. Ten self-reading bindings survive that sweep — used
+    /// negated, or not searched for a literal at all, both of which the rule allows — so the floor
+    /// sits below that at 6.
     #[test]
     fn this_crate_is_readable_and_writes_the_rule_down_nowhere() {
         let src = Path::new(BASE).join("src");
         yagra_common::srcread::assert_crate_is_readable(&src, 150);
         yagra_common::srcread::assert_no_file_spells_the_attribute(&src, 150, &[]);
+        yagra_common::srcread::assert_no_file_matches_a_literal_against_its_own_text(&src, 6);
     }
 }
