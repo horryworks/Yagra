@@ -34,7 +34,7 @@
 //! names they already had — so the fifty-three call sites in `yagra-core` did not move, and **the
 //! rule is still written down once.**
 //!
-//! Three behaviours live here because none of them is about MCP, analysis, or polling:
+//! Four behaviours live here because none of them is about MCP, analysis, or polling:
 //!
 //! 1. **Both spellings of a root.** `X.rs` *and* `X/` are looked for, so this needs no edit on the
 //!    day of a split — and a half-finished split (both present) is read whole rather than half.
@@ -46,6 +46,15 @@
 //!    directory it greps matches its own needles. ADR-086 hit that within minutes of splitting.
 //!    Derived from the `#[cfg(test)] mod …` lines rather than listed, for the same reason the file
 //!    list is derived: a name written down is a name that can be forgotten.
+//! 4. **A nested module directory is refused, not skipped** (ADR-101). `read_dir` walks one level,
+//!    and a sub-directory has no `.rs` extension — so nesting `x/y/` under an already-split `x/`
+//!    used to drop `y/` wordlessly and leave every check running over the files beside it,
+//!    reporting success. That is the same shape as behaviour 2 and it would have been the ninth
+//!    time in this repository, so it panics naming the directory. **This costs nothing today**:
+//!    the workspace's only nested pair is `src/mcp/tools`, which `mcp/tool_source.rs` addresses
+//!    directly as `roots("src/mcp", "tools")` — there is no caller of `roots("src", "mcp")`.
+//!    Descending instead was the wrong repair: `files` is keyed by bare file name, so two `y.rs`
+//!    at different depths would collide and one would silently win.
 //!
 //! ## The rule, and why it is not "cut at the first `#[cfg(test)]`"
 //!
@@ -318,6 +327,17 @@ pub fn files(roots: &[PathBuf]) -> Vec<(String, String)> {
             std::fs::read_dir(root).unwrap_or_else(|e| panic!("read {}: {e}", root.display()))
         {
             let path = entry.expect("a directory entry").path();
+            // Behaviour 4: a nested module directory is refused rather than skipped — see the
+            // module doc for the failure it prevents.
+            assert!(
+                !path.is_dir(),
+                "{} holds the sub-directory {}/, and this reader does not descend into it. Every \
+                 check built on this module would run over the files beside it and report success. \
+                 Either keep the module flat, or give the nested one a root of its own and read it \
+                 explicitly — the shape `mcp/tool_source.rs` uses for `src/mcp/tools`.",
+                root.display(),
+                file_name(&path)
+            );
             if path.extension().and_then(|e| e.to_str()) != Some("rs") {
                 continue;
             }
@@ -459,6 +479,38 @@ mod tests {
         assert!(
             roots_in(base, "src", "no_such_module_exists").is_empty(),
             "a stem naming nothing must yield nothing, not a phantom path"
+        );
+    }
+
+    /// A module directory holding **another** module directory is refused, naming it (ADR-101).
+    ///
+    /// `src/mcp` is the workspace's one real instance: `mcp/tools/` sits inside it, `read_dir`
+    /// walks a single level, and a directory entry has no `.rs` extension — so before this
+    /// invariant `files` returned `dto.rs`/`folded.rs`/`mod.rs` and said nothing about the eleven
+    /// files it had not seen. Nothing calls `roots("src", "mcp")`, which is why the hole was open,
+    /// free, and would only have been paid for by whoever nested a directory next.
+    ///
+    /// The example is a real pair rather than a fabricated temporary one on purpose: a fabricated
+    /// directory proves the `assert!` fires, this one also proves the workspace still *contains*
+    /// the shape the assert is about. Its accepting half is the test below it — a check that only
+    /// ever refuses is satisfied by a reader that refuses everything.
+    #[test]
+    #[should_panic(expected = "tools/")]
+    fn a_nested_module_directory_is_refused_rather_than_skipped() {
+        let mcp = Path::new(env!("CARGO_MANIFEST_DIR")).join("../yagra-core/src/mcp");
+        let _ = files(&[mcp]);
+    }
+
+    /// …and the accepting half: a flat module directory still comes back whole.
+    #[test]
+    fn a_flat_module_directory_is_read_in_full() {
+        let tools = Path::new(env!("CARGO_MANIFEST_DIR")).join("../yagra-core/src/mcp/tools");
+        let read = files(&[tools]);
+        assert!(
+            read.len() >= 7,
+            "mcp/tools came back as {} files; it holds the seven domain files plus mod.rs and \
+             support.rs, so the reader has stopped seeing the directory case",
+            read.len()
         );
     }
 
