@@ -216,49 +216,18 @@ async fn main() -> anyhow::Result<()> {
     // it oldest-first onto the backfill subject. A no-op while empty or disconnected (Phase 3).
     spawn_cancellable(&shutdown, sink.clone().run_drain(shutdown.clone()));
 
-    // Passive-event listeners (Phase 2): syslog / SNMP traps, enabled per site via env. They publish
-    // EventMsgs on `yagra.events`; core does the rule matching. The returned labels advertise which
-    // ones actually bound (heartbeat telemetry).
-    let listener_labels =
-        spawn_event_listeners(&bus, &shutdown, &identity.id, &identity.pool).await;
+    // Passive-event listeners (Phase 2: syslog / SNMP traps) and the flow collector (ADR-031),
+    // each enabled per site via env. They publish on `yagra.events` / `yagra.flows`; core does
+    // the matching and the storing. The returned labels advertise which ones actually bound
+    // (heartbeat telemetry), and the two share only how a UDP edge socket is opened.
+    let tuning = listeners::EdgeTuning::from_env();
+    let mut listener_labels = listeners::start(&bus, &shutdown, &tuning).await;
+    listener_labels
+        .extend(flow::start(&bus, &shutdown, &identity.id, &identity.pool, &tuning).await);
 
-    // Discovery sweeps run alongside polling and need the same raw-socket ICMP + SNMP transport. A
-    // new core publishes them pool-scoped; an old core (or poll-now path) uses the legacy subject —
-    // merge both so either producer is served.
-    {
-        let legacy = Box::pin(bus.subscribe_discovery_jobs(&queue).await?);
-        let pooled = Box::pin(
-            bus.subscribe_discovery_jobs_for_pool(&identity.pool, &queue)
-                .await?,
-        );
-        let merged = Box::pin(futures::stream::select(legacy, pooled));
-        // Stop commands (ADR-068 Inc.2), on the two routes a sweep can arrive by and mirroring the
-        // job subscriptions above. **No queue group**, unlike those: core cannot know which poller
-        // took a queue-delivered job, so a stop goes to everyone and the `scan_id` decides.
-        //
-        // Consumed by a task of its own, which is what makes the stop arrive at all: the sweep loop
-        // is strictly sequential, so a cancel riding the same stream would queue behind the very
-        // sweep it is meant to interrupt.
-        let cancels = Arc::new(discovery::CancelSet::new());
-        let cancel_global = Box::pin(bus.subscribe_discovery_cancels(None).await?);
-        let cancel_pooled = Box::pin(
-            bus.subscribe_discovery_cancels(Some(&identity.pool))
-                .await?,
-        );
-        spawn_cancellable(
-            &shutdown,
-            discovery::run_cancel_stream(
-                Box::pin(futures::stream::select(cancel_global, cancel_pooled)),
-                cancels.clone(),
-            ),
-        );
-        let bus = bus.clone();
-        let transport = transport.clone();
-        spawn_cancellable(
-            &shutdown,
-            discovery::run_discovery_stream(merged, bus, transport, cancels),
-        );
-    }
+    // Discovery sweeps run alongside polling and need the same raw-socket ICMP + SNMP
+    // transport this poller already holds.
+    discovery::start(&bus, &transport, &identity.pool, &queue, &shutdown).await?;
 
     // Working-set sync (ADR-020) and the local scheduler that drains it: two loops around one
     // set, started together because they are one program. Hands back the receiving half of the
@@ -285,25 +254,9 @@ async fn main() -> anyhow::Result<()> {
     // writes the request into the hand-off directory its site updater watches.
     upgrade::start(&bus, &identity, &shutdown).await?;
 
-    // Support-log requests (ADR-045 Inc.4): core asks this poller for a window of its own on-disk
-    // log so a support bundle can carry a remote site's evidence. Subscribed only when there is a
-    // log directory to read — a poller with no file layer would answer every request with an empty
-    // reply, which core cannot tell apart from "answered nothing on purpose". Absence of
-    // `CAP_LOG_SHIP` is what makes core say so by name instead.
-    if let Some(dir) = yagra_telemetry::log_dir() {
-        let sub = Box::pin(bus.subscribe_poller_log_requests(&identity.id).await?);
-        let log_bus: Arc<dyn yagra_bus::LogBus> = bus.clone();
-        spawn_cancellable(
-            &shutdown,
-            support_logs::run_log_request_loop(
-                sub,
-                identity.id.clone(),
-                dir,
-                working_set.clone(),
-                log_bus,
-            ),
-        );
-    }
+    // Support-log requests (ADR-045 Inc.4): core asks this poller for a window of its own
+    // on-disk log so a support bundle can carry a remote site's evidence.
+    support_logs::start(&bus, &identity.id, &working_set, &shutdown).await?;
 
     // Legacy / pool-scoped jobs: consume only this poller's pool (no more `yagra.jobs.*` wildcard)
     // so work stays local (ADR-009). Merge with the locally-scheduled jobs into one stream driving
@@ -381,208 +334,6 @@ async fn drain_inflight(inflight: &AtomicU64, budget: Duration) {
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-}
-
-/// Spawn the syslog / SNMP-trap listeners for every bind address configured via env, returning a
-/// label per listener that actually bound (for the heartbeat's `listeners` telemetry). Unset (or
-/// empty) env = listener disabled. Both share one rate limiter so the global budget covers all
-/// passive intake on this poller.
-///
-/// Pool tag: the event's `pool` stays the **raw** `YAGRA_POLLER_POOL` env option (unset ⇒ `None` ⇒
-/// stored NULL core-side), unchanged from before — only job subscription uses the defaulted pool.
-async fn spawn_event_listeners(
-    bus: &Arc<yagra_bus::NatsBus>,
-    shutdown: &CancellationToken,
-    poller_id: &str,
-    pool_defaulted: &str,
-) -> Vec<String> {
-    let syslog_bind = env_nonempty("YAGRA_SYSLOG_BIND");
-    let trap_bind = env_nonempty("YAGRA_TRAP_BIND");
-    // Flow collector (Phase 3, ADR-031) — NetFlow v5/v9 / IPFIX on `YAGRA_FLOW_BIND` (:2055-style),
-    // sFlow v5 on `YAGRA_SFLOW_BIND` (:6343). Both off if unset; both feed the same aggregator.
-    let flow_bind = env_nonempty("YAGRA_FLOW_BIND");
-    let sflow_bind = env_nonempty("YAGRA_SFLOW_BIND");
-    if syslog_bind.is_none() && trap_bind.is_none() && flow_bind.is_none() && sflow_bind.is_none() {
-        return Vec::new();
-    }
-
-    // Edge intake caps (S8). Raised from the original 50/500 after the 2026-07-11 load test showed
-    // the core matcher + single NATS event subscriber sustain ≥27k msg/s with zero NATS drop (the
-    // real ceiling is the async persist writer, which sheds best-effort past it) — so the old
-    // defaults dropped 75-97% of a realistic multi-device / chassis-storm flow for no protective
-    // benefit. A chassis router's syslog burst now fits per-source; the global cap stays well under
-    // the measured drain limit. Both remain env-tunable per deployment.
-    let per_source = env_f64("YAGRA_EVENT_RATE_PER_SOURCE", 200.0);
-    let global = env_f64("YAGRA_EVENT_RATE_GLOBAL", 5000.0);
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-    // One shared limiter behind a `std::sync::Mutex` (S22): its critical section is a few
-    // arithmetic ops and is never held across an await, so all readers share the exact global
-    // budget without async-lock overhead. Sharing (not sharding) keeps the global rate correct.
-    let limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
-        per_source, global, now_ms,
-    )));
-    let pool = env_nonempty("YAGRA_POLLER_POOL");
-    // Parallel receive (S9): N reader sockets per protocol via SO_REUSEPORT, each with an enlarged
-    // SO_RCVBUF. Default worker count tracks CPUs (capped) so a single poller drains the kernel in
-    // parallel; both knobs are env-tunable per deployment.
-    let workers = env_listener_workers();
-    let rcvbuf = env_usize("YAGRA_LISTENER_RCVBUF_BYTES", 4 * 1024 * 1024);
-    let mut labels = Vec::new();
-
-    if let Some(bind) = syslog_bind {
-        match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
-            Ok(socks) => {
-                let n = socks.len();
-                tracing::info!(%bind, workers = n, rcvbuf, per_source, global, "syslog listener enabled");
-                labels.push(format!("syslog:{bind}"));
-                for sock in socks {
-                    spawn_cancellable(
-                        shutdown,
-                        listeners::run_syslog_listener(
-                            sock,
-                            bus.clone(),
-                            limiter.clone(),
-                            pool.clone(),
-                        ),
-                    );
-                }
-            }
-            Err(e) => tracing::error!(%bind, error = %e, "failed to bind syslog listener"),
-        }
-    }
-
-    if let Some(bind) = trap_bind {
-        // Optional community filter — value must never be logged.
-        let community = env_nonempty("YAGRA_TRAP_COMMUNITY");
-        match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
-            Ok(socks) => {
-                let n = socks.len();
-                tracing::info!(%bind, workers = n, rcvbuf, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
-                labels.push(format!("trap:{bind}"));
-                for sock in socks {
-                    spawn_cancellable(
-                        shutdown,
-                        listeners::run_trap_listener(
-                            sock,
-                            bus.clone(),
-                            limiter.clone(),
-                            community.clone(),
-                            pool.clone(),
-                        ),
-                    );
-                }
-            }
-            Err(e) => tracing::error!(%bind, error = %e, "failed to bind trap listener"),
-        }
-    }
-
-    if flow_bind.is_some() || sflow_bind.is_some() {
-        // Flow gets its own rate limiter (own env knobs): a flow datagram carries many records, so
-        // it must not be counted against the syslog/trap event budget or starve it. Caps are on
-        // datagrams/second per source, not records. Edge top-N aggregation (ADR-031) is the real
-        // cardinality control; this is just the storm front door. NetFlow and sFlow share one
-        // limiter, one aggregator `state`, and one flush ticker — a device exporting both merges
-        // per-exporter, and there is one bucket cadence per poller.
-        let flow_per_source = env_f64("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
-        let flow_global = env_f64("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
-        let flow_now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        let flow_limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
-            flow_per_source,
-            flow_global,
-            flow_now_ms,
-        )));
-        let top_n = env_usize("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
-        let bucket_secs = u32::try_from(env_usize("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
-        let state = Arc::new(std::sync::Mutex::new(flow::FlowState::new(top_n)));
-        // Verbatim relay for forwarding (ADR-034 Increment 2). Unconditional: the aggregate above is
-        // irreversible (bucketed, top-N, folded), so without the original datagrams a flow
-        // forwarding destination could never be honoured — and making it a toggle would turn
-        // fidelity into a configuration question. The tee is shared by both protocol readers.
-        let (raw_tee, raw_relay) = flow::raw_flow_tee(poller_id.to_owned(), pool.clone());
-        let mut any_bound = false;
-
-        if let Some(bind) = flow_bind {
-            match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
-                Ok(socks) => {
-                    let n = socks.len();
-                    tracing::info!(%bind, workers = n, rcvbuf, top_n, bucket_secs, "flow listener enabled (NetFlow v5/v9 / IPFIX)");
-                    labels.push(format!("flow:{bind}"));
-                    any_bound = true;
-                    for sock in socks {
-                        spawn_cancellable(
-                            shutdown,
-                            flow::run_flow_listener(
-                                sock,
-                                state.clone(),
-                                flow_limiter.clone(),
-                                flow::FlowProto::Netflow,
-                                Some(raw_tee.clone()),
-                            ),
-                        );
-                    }
-                }
-                Err(e) => tracing::error!(%bind, error = %e, "failed to bind flow listener"),
-            }
-        }
-
-        if let Some(bind) = sflow_bind {
-            match listeners::bind_reuseport(&bind, workers, rcvbuf).await {
-                Ok(socks) => {
-                    let n = socks.len();
-                    tracing::info!(%bind, workers = n, rcvbuf, top_n, bucket_secs, "sflow listener enabled (sFlow v5)");
-                    labels.push(format!("sflow:{bind}"));
-                    any_bound = true;
-                    for sock in socks {
-                        spawn_cancellable(
-                            shutdown,
-                            flow::run_flow_listener(
-                                sock,
-                                state.clone(),
-                                flow_limiter.clone(),
-                                flow::FlowProto::Sflow,
-                                Some(raw_tee.clone()),
-                            ),
-                        );
-                    }
-                }
-                Err(e) => tracing::error!(%bind, error = %e, "failed to bind sflow listener"),
-            }
-        }
-
-        // One flush ticker publishes per-exporter FlowBatches every bucket, and one relay task
-        // publishes the verbatim datagrams — both spawned only if at least one protocol socket
-        // bound (nothing to flush or relay otherwise).
-        if any_bound {
-            spawn_cancellable(
-                shutdown,
-                flow::run_flow_flusher(
-                    bus.clone(),
-                    state.clone(),
-                    poller_id.to_owned(),
-                    pool_defaulted.to_owned(),
-                    bucket_secs,
-                ),
-            );
-            spawn_cancellable(shutdown, flow::run_raw_flow_relay(bus.clone(), raw_relay));
-        }
-    }
-
-    labels
-}
-
-/// Number of parallel `recv_from` readers per edge listener (S9). Defaults to the host's parallelism
-/// capped at 4 (a single poller sustains tens of thousands of msg/s well before this matters); env
-/// `YAGRA_LISTENER_WORKERS` overrides. Non-Unix collapses to one socket in `bind_reuseport` anyway.
-fn env_listener_workers() -> usize {
-    let default = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .clamp(1, 4);
-    env_usize("YAGRA_LISTENER_WORKERS", default).max(1)
 }
 
 fn env_usize(key: &str, default: usize) -> usize {

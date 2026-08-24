@@ -40,6 +40,7 @@ use yagra_bus::{encode_raw, Bus, EventKind, EventMsg};
 use yagra_ingest::{
     build_inform_response, clip_event_text, parse_syslog, parse_trap, SourceLimiter, TrapError,
 };
+use yagra_telemetry::{spawn_cancellable, CancellationToken};
 
 /// Syslog datagrams beyond this are truncated by the recv buffer (RFC 5424 transport
 /// guidance; anything bigger than this over UDP is already pathological).
@@ -276,6 +277,134 @@ fn make_reuseport_socket(addr: SocketAddr, rcvbuf_bytes: usize) -> anyhow::Resul
     sock.bind(&addr.into())?;
     let std_sock: std::net::UdpSocket = sock.into();
     Ok(UdpSocket::from_std(std_sock)?)
+}
+
+/// The three knobs both UDP edge listeners share.
+///
+/// syslog/trap and the flow collector open their sockets the same way and are tuned the same way.
+/// Everything else about them is separate — their own rate limiters, their own env knobs, their own
+/// subjects — which is why exactly these three travel between the two and nothing else does.
+pub(crate) struct EdgeTuning {
+    /// Parallel `recv_from` readers per listener (S9).
+    pub(crate) workers: usize,
+    /// `SO_RCVBUF` per socket, so a burst is absorbed by the kernel instead of silently dropped.
+    pub(crate) rcvbuf: usize,
+    /// The **raw** `YAGRA_POLLER_POOL`, not the defaulted one: an event's `pool` is stored NULL
+    /// core-side when it is unset, and only job subscription uses the default.
+    pub(crate) pool: Option<String>,
+}
+
+impl EdgeTuning {
+    /// Read once, at startup, by the caller that starts both listeners.
+    ///
+    /// ⚠️ Read unconditionally, where the single `spawn_event_listeners` used to reach it only after
+    /// finding a bind address. The whole difference is one `available_parallelism()` call at boot in
+    /// a deployment that configures no listener at all, and its answer is discarded.
+    pub(crate) fn from_env() -> Self {
+        Self {
+            workers: env_listener_workers(),
+            rcvbuf: crate::env_usize("YAGRA_LISTENER_RCVBUF_BYTES", 4 * 1024 * 1024),
+            pool: crate::env_nonempty("YAGRA_POLLER_POOL"),
+        }
+    }
+}
+
+/// Number of parallel `recv_from` readers per edge listener (S9). Defaults to the host's parallelism
+/// capped at 4 (a single poller sustains tens of thousands of msg/s well before this matters); env
+/// `YAGRA_LISTENER_WORKERS` overrides. Non-Unix collapses to one socket in `bind_reuseport` anyway.
+fn env_listener_workers() -> usize {
+    let default = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, 4);
+    crate::env_usize("YAGRA_LISTENER_WORKERS", default).max(1)
+}
+
+/// Bind and spawn the syslog / SNMP-trap listeners for every address configured via env, returning a
+/// label per listener that actually bound (for the heartbeat's `listeners` telemetry).
+///
+/// Unset (or empty) env = listener disabled. Both share one rate limiter, so the global budget
+/// covers all passive **event** intake on this poller; the flow collector has its own, for the
+/// reason [`crate::flow::start`] gives.
+pub(crate) async fn start(
+    bus: &Arc<yagra_bus::NatsBus>,
+    shutdown: &CancellationToken,
+    tuning: &EdgeTuning,
+) -> Vec<String> {
+    let syslog_bind = crate::env_nonempty("YAGRA_SYSLOG_BIND");
+    let trap_bind = crate::env_nonempty("YAGRA_TRAP_BIND");
+    if syslog_bind.is_none() && trap_bind.is_none() {
+        return Vec::new();
+    }
+
+    // Edge intake caps (S8). Raised from the original 50/500 after the 2026-07-11 load test showed
+    // the core matcher + single NATS event subscriber sustain ≥27k msg/s with zero NATS drop (the
+    // real ceiling is the async persist writer, which sheds best-effort past it) — so the old
+    // defaults dropped 75-97% of a realistic multi-device / chassis-storm flow for no protective
+    // benefit. A chassis router's syslog burst now fits per-source; the global cap stays well under
+    // the measured drain limit. Both remain env-tunable per deployment.
+    let per_source = crate::env_f64("YAGRA_EVENT_RATE_PER_SOURCE", 200.0);
+    let global = crate::env_f64("YAGRA_EVENT_RATE_GLOBAL", 5000.0);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    // One shared limiter behind a `std::sync::Mutex` (S22): its critical section is a few
+    // arithmetic ops and is never held across an await, so all readers share the exact global
+    // budget without async-lock overhead. Sharing (not sharding) keeps the global rate correct.
+    let limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
+        per_source, global, now_ms,
+    )));
+
+    let mut labels = Vec::new();
+
+    if let Some(bind) = syslog_bind {
+        match bind_reuseport(&bind, tuning.workers, tuning.rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, per_source, global, "syslog listener enabled");
+                labels.push(format!("syslog:{bind}"));
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        run_syslog_listener(
+                            sock,
+                            bus.clone(),
+                            limiter.clone(),
+                            tuning.pool.clone(),
+                        ),
+                    );
+                }
+            }
+            Err(e) => tracing::error!(%bind, error = %e, "failed to bind syslog listener"),
+        }
+    }
+
+    if let Some(bind) = trap_bind {
+        // Optional community filter — value must never be logged.
+        let community = crate::env_nonempty("YAGRA_TRAP_COMMUNITY");
+        match bind_reuseport(&bind, tuning.workers, tuning.rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, community_filter = community.is_some(), "trap listener enabled (v1/v2c; v3 traps out of scope)");
+                labels.push(format!("trap:{bind}"));
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        run_trap_listener(
+                            sock,
+                            bus.clone(),
+                            limiter.clone(),
+                            community.clone(),
+                            tuning.pool.clone(),
+                        ),
+                    );
+                }
+            }
+            Err(e) => tracing::error!(%bind, error = %e, "failed to bind trap listener"),
+        }
+    }
+
+    labels
 }
 
 #[cfg(test)]

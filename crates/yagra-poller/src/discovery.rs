@@ -83,8 +83,11 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::stream::{Stream, StreamExt};
 use uuid::Uuid;
-use yagra_bus::{DiscoveredDevice, DiscoveryBus, DiscoveryCancel, DiscoveryJob, DiscoveryResult};
+use yagra_bus::{
+    DiscoveredDevice, DiscoveryBus, DiscoveryCancel, DiscoveryJob, DiscoveryResult, NatsBus,
+};
 use yagra_discovery::{AttemptDecision, CredentialProbeLimiter, LimiterConfig};
+use yagra_telemetry::{spawn_cancellable, CancellationToken};
 use yagra_transport::{SnmpV3Params, Transport};
 
 /// sysDescr column base — walking it yields the `.0` scalar instance (v2c path).
@@ -645,6 +648,48 @@ async fn try_candidate(
             Some(id)
         }
     }
+}
+
+/// Subscribe to this pool's sweeps and their stop commands, and start both consumers.
+///
+/// A new core publishes sweeps pool-scoped; an old core (and the poll-now path) uses the legacy
+/// subject — both are merged so either producer is served. The sweep and its cancel are consumed by
+/// **separate** tasks on purpose: the sweep loop is strictly sequential, so a cancel riding the same
+/// stream would queue behind the very sweep it exists to interrupt.
+pub(crate) async fn start(
+    bus: &Arc<NatsBus>,
+    transport: &Arc<dyn Transport>,
+    pool: &str,
+    queue: &str,
+    shutdown: &CancellationToken,
+) -> anyhow::Result<()> {
+    let legacy = Box::pin(bus.subscribe_discovery_jobs(queue).await?);
+    let pooled = Box::pin(bus.subscribe_discovery_jobs_for_pool(pool, queue).await?);
+    let merged = Box::pin(futures::stream::select(legacy, pooled));
+    // Stop commands (ADR-068 Inc.2), on the two routes a sweep can arrive by and mirroring the
+    // job subscriptions above. **No queue group**, unlike those: core cannot know which poller
+    // took a queue-delivered job, so a stop goes to everyone and the `scan_id` decides.
+    //
+    // Consumed by a task of its own, which is what makes the stop arrive at all: the sweep loop
+    // is strictly sequential, so a cancel riding the same stream would queue behind the very
+    // sweep it is meant to interrupt.
+    let cancels = Arc::new(CancelSet::new());
+    let cancel_global = Box::pin(bus.subscribe_discovery_cancels(None).await?);
+    let cancel_pooled = Box::pin(bus.subscribe_discovery_cancels(Some(pool)).await?);
+    spawn_cancellable(
+        shutdown,
+        run_cancel_stream(
+            Box::pin(futures::stream::select(cancel_global, cancel_pooled)),
+            cancels.clone(),
+        ),
+    );
+    let bus = bus.clone();
+    let transport = transport.clone();
+    spawn_cancellable(
+        shutdown,
+        run_discovery_stream(merged, bus, transport, cancels),
+    );
+    Ok(())
 }
 
 #[cfg(test)]

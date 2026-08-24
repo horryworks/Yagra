@@ -19,7 +19,7 @@
 //! buffered. Parsing shares the `yagra-ingest` never-panic contract; the socket setup, source rate
 //! limiter, and timestamp helper are reused verbatim from [`crate::listeners`].
 
-use crate::listeners::{allow, now_unix_ms};
+use crate::listeners::{allow, now_unix_ms, EdgeTuning};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -29,6 +29,7 @@ use yagra_bus::{encode_raw, Bus, FlowBatch, FlowRecord, RawFlowDatagram};
 use yagra_ingest::{
     parse_flow_export, parse_sflow, ExporterBuckets, FlowError, FlowTemplates, SourceLimiter,
 };
+use yagra_telemetry::{spawn_cancellable, CancellationToken};
 
 /// Flow datagrams beyond this are rejected outright (a NetFlow/IPFIX export never approaches it).
 const FLOW_BUF_BYTES: usize = 64 * 1024;
@@ -325,6 +326,123 @@ async fn publish_flow<B: Bus>(bus: &B, batch: FlowBatch) {
             tracing::warn!(%exporter, error = %e, "failed to publish flow batch");
         }
     }
+}
+
+/// Bind and spawn the flow collector — NetFlow v5/v9 / IPFIX and sFlow v5 — returning a label per
+/// listener that actually bound (for the heartbeat's `listeners` telemetry).
+///
+/// **Its own rate limiter and its own env knobs**, deliberately: a flow datagram carries many
+/// records, so counting it against the syslog/trap event budget would starve passive events or be
+/// starved by them. What it does share with [`crate::listeners::start`] is the three-value
+/// [`EdgeTuning`] — both open UDP sockets the same way, and nothing else about them is alike.
+pub(crate) async fn start(
+    bus: &Arc<yagra_bus::NatsBus>,
+    shutdown: &CancellationToken,
+    poller_id: &str,
+    pool_defaulted: &str,
+    tuning: &EdgeTuning,
+) -> Vec<String> {
+    // Flow collector (Phase 3, ADR-031) — NetFlow v5/v9 / IPFIX on `YAGRA_FLOW_BIND` (:2055-style),
+    // sFlow v5 on `YAGRA_SFLOW_BIND` (:6343). Both off if unset; both feed the same aggregator.
+    let flow_bind = crate::env_nonempty("YAGRA_FLOW_BIND");
+    let sflow_bind = crate::env_nonempty("YAGRA_SFLOW_BIND");
+    if flow_bind.is_none() && sflow_bind.is_none() {
+        return Vec::new();
+    }
+    let mut labels = Vec::new();
+
+    // Flow gets its own rate limiter (own env knobs): a flow datagram carries many records, so
+    // it must not be counted against the syslog/trap event budget or starve it. Caps are on
+    // datagrams/second per source, not records. Edge top-N aggregation (ADR-031) is the real
+    // cardinality control; this is just the storm front door. NetFlow and sFlow share one
+    // limiter, one aggregator `state`, and one flush ticker — a device exporting both merges
+    // per-exporter, and there is one bucket cadence per poller.
+    let flow_per_source = crate::env_f64("YAGRA_FLOW_RATE_PER_SOURCE", 1000.0);
+    let flow_global = crate::env_f64("YAGRA_FLOW_RATE_GLOBAL", 20_000.0);
+    let flow_now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+    let flow_limiter = Arc::new(std::sync::Mutex::new(yagra_ingest::SourceLimiter::new(
+        flow_per_source,
+        flow_global,
+        flow_now_ms,
+    )));
+    let top_n = crate::env_usize("YAGRA_FLOW_TOP_N", yagra_ingest::DEFAULT_FLOW_TOP_N);
+    let bucket_secs = u32::try_from(crate::env_usize("YAGRA_FLOW_BUCKET_SECS", 60)).unwrap_or(60);
+    let state = Arc::new(std::sync::Mutex::new(FlowState::new(top_n)));
+    // Verbatim relay for forwarding (ADR-034 Increment 2). Unconditional: the aggregate above is
+    // irreversible (bucketed, top-N, folded), so without the original datagrams a flow
+    // forwarding destination could never be honoured — and making it a toggle would turn
+    // fidelity into a configuration question. The tee is shared by both protocol readers.
+    let (raw_tee, raw_relay) = raw_flow_tee(poller_id.to_owned(), tuning.pool.clone());
+    let mut any_bound = false;
+
+    if let Some(bind) = flow_bind {
+        match crate::listeners::bind_reuseport(&bind, tuning.workers, tuning.rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, top_n, bucket_secs, "flow listener enabled (NetFlow v5/v9 / IPFIX)");
+                labels.push(format!("flow:{bind}"));
+                any_bound = true;
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        run_flow_listener(
+                            sock,
+                            state.clone(),
+                            flow_limiter.clone(),
+                            FlowProto::Netflow,
+                            Some(raw_tee.clone()),
+                        ),
+                    );
+                }
+            }
+            Err(e) => tracing::error!(%bind, error = %e, "failed to bind flow listener"),
+        }
+    }
+
+    if let Some(bind) = sflow_bind {
+        match crate::listeners::bind_reuseport(&bind, tuning.workers, tuning.rcvbuf).await {
+            Ok(socks) => {
+                let n = socks.len();
+                tracing::info!(%bind, workers = n, rcvbuf = tuning.rcvbuf, top_n, bucket_secs, "sflow listener enabled (sFlow v5)");
+                labels.push(format!("sflow:{bind}"));
+                any_bound = true;
+                for sock in socks {
+                    spawn_cancellable(
+                        shutdown,
+                        run_flow_listener(
+                            sock,
+                            state.clone(),
+                            flow_limiter.clone(),
+                            FlowProto::Sflow,
+                            Some(raw_tee.clone()),
+                        ),
+                    );
+                }
+            }
+            Err(e) => tracing::error!(%bind, error = %e, "failed to bind sflow listener"),
+        }
+    }
+
+    // One flush ticker publishes per-exporter FlowBatches every bucket, and one relay task
+    // publishes the verbatim datagrams — both spawned only if at least one protocol socket
+    // bound (nothing to flush or relay otherwise).
+    if any_bound {
+        spawn_cancellable(
+            shutdown,
+            run_flow_flusher(
+                bus.clone(),
+                state.clone(),
+                poller_id.to_owned(),
+                pool_defaulted.to_owned(),
+                bucket_secs,
+            ),
+        );
+        spawn_cancellable(shutdown, run_raw_flow_relay(bus.clone(), raw_relay));
+    }
+
+    labels
 }
 
 #[cfg(test)]

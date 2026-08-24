@@ -43,7 +43,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use yagra_bus::{encode_raw, LogBus, PollerLogChunk, PollerLogRequest};
+use yagra_bus::{encode_raw, LogBus, NatsBus, PollerLogChunk, PollerLogRequest};
+use yagra_telemetry::{spawn_cancellable, CancellationToken};
 
 use crate::working_set::WorkingSet;
 
@@ -259,6 +260,29 @@ async fn send_all(bus: &dyn LogBus, chunks: Vec<PollerLogChunk>) {
             return;
         }
     }
+}
+
+/// Subscribe to core's support-log requests and start the reply loop.
+///
+/// **Subscribed only when there is a log directory to read.** A poller with no file layer would
+/// answer every request with an empty reply, which core cannot tell apart from "answered nothing on
+/// purpose"; the absence of `CAP_LOG_SHIP` in the heartbeat is what makes core name the site instead
+/// (ADR-045 Inc.4). The two conditions are deliberately the same one, read from the same place.
+pub(crate) async fn start(
+    bus: &Arc<NatsBus>,
+    poller_id: &str,
+    working_set: &Arc<Mutex<WorkingSet>>,
+    shutdown: &CancellationToken,
+) -> anyhow::Result<()> {
+    if let Some(dir) = yagra_telemetry::log_dir() {
+        let sub = Box::pin(bus.subscribe_poller_log_requests(poller_id).await?);
+        let log_bus: Arc<dyn yagra_bus::LogBus> = bus.clone();
+        spawn_cancellable(
+            shutdown,
+            run_log_request_loop(sub, poller_id.to_owned(), dir, working_set.clone(), log_bus),
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
