@@ -75,8 +75,18 @@
 //! for itself in a comment banner — and two checks depended on that banner being spelled exactly:
 //!
 //! * [`export`] — out of a deployment. Reads, and `guards.rs` refuses a write here.
-//! * [`import`] — into one.
+//! * [`import`] — into one: the transaction, `dry_run`, the report, and the helpers the two
+//!   phases share. It names no table itself; the SQL is a literal at each call site.
+//! * [`import_inventory`] — **what is monitored** (profiles, templates, classification rules,
+//!   groups, nodes). It produces the four id sets that outlive their own block.
+//! * [`import_attached`] — **how it is monitored** (thresholds, check configs, forwarding,
+//!   events, reports, schedules, deployment settings). It consumes those four and produces none.
 //! * [`types`] — the document both directions speak.
+//!
+//! The inventory/attached line is not a matter of taste: exactly four values cross it
+//! (`profiles` / `groups` / `nodes` / `credentials`), and making them an argument is what stops
+//! the second half running before the first. Before the split, "profiles before nodes before
+//! thresholds" was held up by nothing but the order of statements in one 706-line function.
 //!
 //! Kept here rather than in a sibling: a child module sees its parent's private items, so the
 //! vocabulary below costs no `pub(super)`. And kept **flat** — `srcread::files` reads one directory
@@ -88,6 +98,8 @@ use std::collections::BTreeMap;
 
 mod export;
 mod import;
+mod import_attached;
+mod import_inventory;
 mod types;
 
 #[cfg(test)]
