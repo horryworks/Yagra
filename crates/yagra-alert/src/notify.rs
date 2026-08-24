@@ -111,10 +111,25 @@ pub enum DispatchOutcome {
 }
 
 /// Dedups and delivers notifications over a channel, applying the retry policy.
+///
+/// # This type owns its own serialization, and that is the point (ADR-104)
+///
+/// Every method takes `&self`: the dedup set is behind a `tokio::sync::Mutex` that is held
+/// **across this channel's own delivery**, retries and backoff included. So one dispatcher
+/// delivers one notification at a time, in the order callers arrived (tokio's mutex is fair) —
+/// which is what makes "a fire is never overtaken by its own resolve" true, and what keeps
+/// check-then-deliver-then-record atomic.
+///
+/// 🚨 **The scope of that lock is one channel and must stay one channel.** Until ADR-104 the
+/// serialization came from a mutex over the whole routing snapshot in `yagra-core`, so a wedged
+/// vendor endpoint held up every other channel, every other caller, and the 30-second config
+/// refresh that applies a mute. Holding it here instead buys the same guarantee for a hundredth of
+/// the blast radius. Do not "optimize" this into claim-then-deliver with a `std` mutex: releasing
+/// the lock across the request is exactly what lets a resolve overtake the fire it resolves.
 pub struct Dispatcher<C: NotifyChannel> {
     channel: C,
     policy: RetryPolicy,
-    active: HashSet<DedupKey>,
+    active: tokio::sync::Mutex<HashSet<DedupKey>>,
 }
 
 impl<C: NotifyChannel> Dispatcher<C> {
@@ -123,18 +138,19 @@ impl<C: NotifyChannel> Dispatcher<C> {
         Self {
             channel,
             policy,
-            active: HashSet::new(),
+            active: tokio::sync::Mutex::new(HashSet::new()),
         }
     }
 
     /// Dispatch a notification: suppress duplicates of active alerts, else deliver with retry.
-    pub async fn dispatch(&mut self, notification: Notification) -> DispatchOutcome {
-        if self.active.contains(&notification.dedup_key) {
+    pub async fn dispatch(&self, notification: Notification) -> DispatchOutcome {
+        let mut active = self.active.lock().await;
+        if active.contains(&notification.dedup_key) {
             return DispatchOutcome::Suppressed;
         }
         match self.deliver_with_retry(&notification, false).await {
             Ok(attempts) => {
-                self.active.insert(notification.dedup_key.clone());
+                active.insert(notification.dedup_key.clone());
                 DispatchOutcome::Delivered { attempts }
             }
             Err(attempts) => DispatchOutcome::Failed { attempts },
@@ -145,8 +161,9 @@ impl<C: NotifyChannel> Dispatcher<C> {
     /// delivered even when the key wasn't locally active — core may have restarted since the
     /// fire, and PagerDuty/JSM resolves are idempotent — so a remote incident is never left
     /// dangling open.
-    pub async fn dispatch_resolve(&mut self, notification: Notification) -> DispatchOutcome {
-        self.active.remove(&notification.dedup_key);
+    pub async fn dispatch_resolve(&self, notification: Notification) -> DispatchOutcome {
+        let mut active = self.active.lock().await;
+        active.remove(&notification.dedup_key);
         match self.deliver_with_retry(&notification, true).await {
             Ok(attempts) => DispatchOutcome::Delivered { attempts },
             Err(attempts) => DispatchOutcome::Failed { attempts },
@@ -154,8 +171,11 @@ impl<C: NotifyChannel> Dispatcher<C> {
     }
 
     /// Mark an alert resolved so the next occurrence notifies again.
-    pub fn mark_resolved(&mut self, dedup_key: &DedupKey) {
-        self.active.remove(dedup_key);
+    ///
+    /// Async since ADR-104 only because the set moved behind the delivery lock; it takes no I/O
+    /// and waits only for whatever delivery this channel is already doing.
+    pub async fn mark_resolved(&self, dedup_key: &DedupKey) {
+        self.active.lock().await.remove(dedup_key);
     }
 
     async fn deliver_with_retry(
@@ -234,7 +254,7 @@ mod tests {
     #[tokio::test]
     async fn delivers_on_first_try() {
         let calls = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             FlakyChannel {
                 fail_first: 0,
                 calls: calls.clone(),
@@ -251,7 +271,7 @@ mod tests {
     #[tokio::test]
     async fn retries_then_succeeds() {
         let calls = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             FlakyChannel {
                 fail_first: 2,
                 calls: calls.clone(),
@@ -268,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn gives_up_after_max_attempts() {
         let calls = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             FlakyChannel {
                 fail_first: 99,
                 calls: calls.clone(),
@@ -312,7 +332,7 @@ mod tests {
         // FlakyChannel doesn't override deliver_resolve — the default no-op must succeed
         // without touching the channel's deliver path.
         let calls = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             FlakyChannel {
                 fail_first: 99, // deliver would fail; resolve must not call it
                 calls: calls.clone(),
@@ -330,7 +350,7 @@ mod tests {
     async fn resolve_clears_dedup_and_delivers() {
         let triggers = Arc::new(AtomicU32::new(0));
         let resolves = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             LifecycleChannel {
                 triggers: triggers.clone(),
                 resolves: resolves.clone(),
@@ -361,7 +381,7 @@ mod tests {
         // Core may have restarted since the fire — the resolve still goes out (idempotent
         // on the PagerDuty/JSM side) so remote incidents are never left open.
         let resolves = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             LifecycleChannel {
                 triggers: Arc::new(AtomicU32::new(0)),
                 resolves: resolves.clone(),
@@ -379,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_retries_per_policy() {
         let resolves = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             LifecycleChannel {
                 triggers: Arc::new(AtomicU32::new(0)),
                 resolves: resolves.clone(),
@@ -397,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn duplicate_active_alert_is_suppressed() {
         let calls = Arc::new(AtomicU32::new(0));
-        let mut d = Dispatcher::new(
+        let d = Dispatcher::new(
             FlakyChannel {
                 fail_first: 0,
                 calls: calls.clone(),
@@ -414,7 +434,7 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
 
         // After resolve, it notifies again.
-        d.mark_resolved(&n.dedup_key);
+        d.mark_resolved(&n.dedup_key).await;
         assert_eq!(
             d.dispatch(n).await,
             DispatchOutcome::Delivered { attempts: 1 }

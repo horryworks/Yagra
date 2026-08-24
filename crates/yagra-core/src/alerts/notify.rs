@@ -720,7 +720,7 @@ impl Notifier {
             NotifyAction::Resolve(a) => self.context(a, NotifyEvent::Resolve).await,
             NotifyAction::Suppress(a) => self.context(a, NotifyEvent::Suppress).await,
         };
-        let mut routes = self.routes.lock().await;
+        let routes = self.routes.lock().await;
         match action {
             NotifyAction::Fire(alert) => {
                 // Suppressed downstream alert: it's attributed to an upstream root cause and
@@ -752,13 +752,13 @@ impl Notifier {
                     channels,
                     overrides,
                     ..
-                } = &mut *routes;
-                if let Some(d) = default.as_mut() {
+                } = &*routes;
+                if let Some(d) = default.as_ref() {
                     let outcome = d.dispatch(notification.clone()).await;
                     tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert notification dispatched");
                 }
                 for id in matched {
-                    if let Some(d) = channels.get_mut(&id) {
+                    if let Some(d) = channels.get(&id) {
                         let n = for_channel(id, overrides, facts.as_ref(), &notification);
                         let outcome = d.dispatch(n).await;
                         tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert notification dispatched");
@@ -770,11 +770,11 @@ impl Notifier {
                 // A root-cause-suppressed alert never delivered its fire, so there is no
                 // remote incident to close — just clear local dedup (mirror of the fire path).
                 if alert.root_cause.is_some() {
-                    if let Some(d) = routes.default.as_mut() {
-                        d.mark_resolved(&key);
+                    if let Some(d) = routes.default.as_ref() {
+                        d.mark_resolved(&key).await;
                     }
-                    for d in routes.channels.values_mut() {
-                        d.mark_resolved(&key);
+                    for d in routes.channels.values() {
+                        d.mark_resolved(&key).await;
                     }
                     return;
                 }
@@ -797,20 +797,20 @@ impl Notifier {
                     channels,
                     overrides,
                     ..
-                } = &mut *routes;
-                if let Some(d) = default.as_mut() {
+                } = &*routes;
+                if let Some(d) = default.as_ref() {
                     let outcome = d.dispatch_resolve(notification.clone()).await;
                     tracing::info!(?outcome, subject = %alert.subject, route = "default", "alert resolve dispatched");
                 }
                 let ids: Vec<Uuid> = channels.keys().copied().collect();
                 for id in ids {
-                    if let Some(d) = channels.get_mut(&id) {
+                    if let Some(d) = channels.get(&id) {
                         if matched.contains(&id) {
                             let n = for_channel(id, overrides, facts.as_ref(), &notification);
                             let outcome = d.dispatch_resolve(n).await;
                             tracing::info!(?outcome, subject = %alert.subject, channel = %id, "alert resolve dispatched");
                         } else {
-                            d.mark_resolved(&key);
+                            d.mark_resolved(&key).await;
                         }
                     }
                 }
@@ -836,20 +836,20 @@ impl Notifier {
                     channels,
                     overrides,
                     ..
-                } = &mut *routes;
-                if let Some(d) = default.as_mut() {
+                } = &*routes;
+                if let Some(d) = default.as_ref() {
                     let outcome = d.dispatch_resolve(notification.clone()).await;
                     tracing::info!(?outcome, subject = %alert.subject, route = "default", "downstream alert rolled up (incident closed)");
                 }
                 let ids: Vec<Uuid> = channels.keys().copied().collect();
                 for id in ids {
-                    if let Some(d) = channels.get_mut(&id) {
+                    if let Some(d) = channels.get(&id) {
                         if matched.contains(&id) {
                             let n = for_channel(id, overrides, facts.as_ref(), &notification);
                             let outcome = d.dispatch_resolve(n).await;
                             tracing::info!(?outcome, subject = %alert.subject, channel = %id, "downstream alert rolled up (incident closed)");
                         } else {
-                            d.mark_resolved(&key);
+                            d.mark_resolved(&key).await;
                         }
                     }
                 }
