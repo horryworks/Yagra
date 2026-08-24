@@ -649,7 +649,10 @@ mod tests {
         // a wrong path can only make the search fail.
         include_str!("events/repo.rs"),
         include_str!("pollers.rs"),
-        include_str!("reports.rs"),
+        // ADR-102 split `reports.rs` into a directory; the `DELETE` this list is looking for is in
+        // the PostgreSQL half. Same shape as the `repo/`, `events/` and `analysis/` entries above,
+        // and same safety: a wrong path can only make the search fail.
+        include_str!("reports/repo.rs"),
         // ADR-089 split `analysis.rs` into a directory; the `DELETE` this list is looking for
         // is in the persistence half. A wrong path here can only make the search *fail*, naming
         // the subject — which is why a hand-maintained list is tolerable at all.
