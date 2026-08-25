@@ -85,7 +85,7 @@ describe('collectedMetrics', () => {
 describe('profileRuleGap', () => {
   const base = { rulesTruncated: false, profileId: P };
 
-  it('reports covered when every metric has a baseline, from either level', () => {
+  it('reports covered when every bounded metric has a baseline, from either level', () => {
     expect(
       profileRuleGap({
         ...base,
@@ -95,19 +95,57 @@ describe('profileRuleGap', () => {
     ).toEqual({ kind: 'covered', total: 2 });
   });
 
-  it('names the metrics with no baseline, keeping the order it was given', () => {
+  it('names the bounded metrics with no baseline here, keeping the order it was given', () => {
     expect(
       profileRuleGap({
         ...base,
         metrics: ['cisco_cpu_5min', 'cisco_env_temp', 'ucd_swap_used_pct'],
-        rules: [rule('cisco_env_temp', 'profile', [P])],
+        rules: [
+          rule('cisco_env_temp', 'profile', [P]),
+          // Bounded on some other profile — which is exactly what makes these two a gap here.
+          rule('cisco_cpu_5min', 'profile', [OTHER]),
+          rule('ucd_swap_used_pct', 'profile', [OTHER]),
+        ],
       }),
     ).toEqual({ kind: 'gaps', missing: ['cisco_cpu_5min', 'ucd_swap_used_pct'], total: 3 });
   });
 
-  it('a rule for the metric at a narrower scope does not close the gap', () => {
+  // 🚨 The correction the real fleet forced. Asking "does every collected metric have a rule"
+  // warned on 53 of 59 profiles, because most of what a profile collects is a raw counter, a
+  // port-scoped value, or the raw half a derived metric divides — none of which anyone bounds at
+  // the node dimension. A metric nobody bounds anywhere is not a gap; it is not a threshold metric.
+  it('ignores a collected metric that no rule bounds anywhere', () => {
+    expect(
+      profileRuleGap({
+        ...base,
+        metrics: ['if_hc_in_octets', 'snmp_sys_uptime_ticks', 'cisco_mem_used'],
+        rules: [rule('cisco_cpu_5min', 'profile', [OTHER])],
+      }),
+    ).toEqual({ kind: 'empty' });
+  });
+
+  it('counts only the bounded metrics in the total it reports', () => {
+    expect(
+      profileRuleGap({
+        ...base,
+        metrics: ['cisco_cpu_5min', 'if_hc_in_octets', 'snmp_sys_uptime_ticks'],
+        rules: [rule('cisco_cpu_5min', 'profile', [P])],
+      }),
+    ).toEqual({ kind: 'covered', total: 1 });
+  });
+
+  // The "bounded anywhere" set is derived from the rules, not from the caller's query, so a wider
+  // list must not turn a node-scoped rule into evidence that the metric is a threshold metric.
+  it('a rule at a narrower scope neither closes a gap nor makes a metric count', () => {
     expect(
       profileRuleGap({ ...base, metrics: ['cisco_env_temp'], rules: [rule('cisco_env_temp', 'node', [P])] }),
+    ).toEqual({ kind: 'empty' });
+    expect(
+      profileRuleGap({
+        ...base,
+        metrics: ['cisco_env_temp'],
+        rules: [rule('cisco_env_temp', 'node', [P]), rule('cisco_env_temp', 'profile', [OTHER])],
+      }),
     ).toEqual({ kind: 'gaps', missing: ['cisco_env_temp'], total: 1 });
   });
 
@@ -115,7 +153,12 @@ describe('profileRuleGap', () => {
   // prefix is a guess — and it is a guess in the loud direction, naming metrics that are covered.
   it('refuses to answer at all when the rule list was truncated', () => {
     expect(
-      profileRuleGap({ ...base, rulesTruncated: true, metrics: ['cisco_env_temp'], rules: [] }),
+      profileRuleGap({
+        ...base,
+        rulesTruncated: true,
+        metrics: ['cisco_env_temp'],
+        rules: [rule('cisco_env_temp', 'profile', [OTHER])],
+      }),
     ).toEqual({ kind: 'unchecked' });
   });
 

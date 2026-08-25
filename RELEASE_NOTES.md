@@ -12,18 +12,19 @@
 
 ### New Features
 
-- **Device profiles now say which of the metrics they collect no alert rule covers.** Expanding a
-  profile's *Metric sets* in Nodes ▸ Device profiles lists the metrics those sets collect that no
-  fleet-wide or profile-scoped rule names — the case where a device is polled, the series is
-  stored, and nothing can ever fire. It arises on a profile you built yourself: the vendor default
-  rules name the built-in profiles they were written for, so attaching the same metric sets to a
-  new profile collects the metrics without bringing the rules. The panel links straight to
-  Alerts ▸ Metric alert rules, and says so plainly when every collected metric is covered rather
-  than staying silent.
+- **Device profiles now say which of the metrics they collect are alerted on other profiles but
+  not on theirs.** Expanding a profile’s *Metric sets* in Nodes ▸ Device profiles names them, and
+  links straight to Alerts ▸ Metric alert rules. It is the case where a device is polled, the
+  series is stored, and nothing can ever fire: the vendor default rules each name the built-in
+  profiles they were written for, so a profile you built yourself collects the same metrics
+  without inheriting the rules.
+  - **Only a metric some rule already bounds can be named.** Most of what a profile collects is
+    never meant to carry a threshold of its own — raw counters, per-port values bounded on the
+    port instead, and the raw halves a percentage divides — so counting those would have put a
+    warning on almost every profile.
   - It checks fleet-wide and profile scope only. A group, folder or node rule reaches some of a
     profile’s nodes rather than all of them, and replaces a profile rule rather than adding to
-    one, so it is not a baseline — the wording says which scopes were consulted rather than
-    claiming the metric is unmonitored.
+    one, so it is not a baseline — the wording says so rather than calling the metric unmonitored.
 - **Ten new metrics for the things devices don't report directly — memory, disk, swap, CPU and
   load, as percentages.** A device usually reports two raw numbers (a total and a free, or a used
   and a free) and leaves the percentage everyone actually monitors on to the reader. Yagra now

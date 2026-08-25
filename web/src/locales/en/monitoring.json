@@ -76,12 +76,12 @@
     },
     "templates": {
       "empty": "No metric sets exist yet. Create some first.",
-      "gap_one": "{{count}} metric collected here has no fleet-wide or profile alert rule",
-      "gap_other": "{{count}} metrics collected here have no fleet-wide or profile alert rule",
-      "gapHint": "A group, folder or node rule replaces a profile rule rather than adding to one, so these are collected but nothing can fire on them.",
+      "gap_one": "{{count}} metric collected here has an alert rule on other profiles but none on this one",
+      "gap_other": "{{count}} metrics collected here have alert rules on other profiles but none on this one",
+      "gapHint": "A default rule names the profiles it was written for, and this profile is not one of them — so these are collected and nothing can fire on them.",
       "gapLink": "Open Alert rules",
-      "covered_one": "The 1 metric collected here has an alert rule.",
-      "covered_other": "All {{count}} metrics collected here have an alert rule.",
+      "covered_one": "1 metric collected here has an alert rule. The rest are raw values no rule bounds anywhere.",
+      "covered_other": "{{count}} metrics collected here have an alert rule. The rest are raw values no rule bounds anywhere.",
       "unchecked": "Couldn't check which of these metrics have an alert rule — the rule list came back capped or unavailable."
     },
     "err": {
