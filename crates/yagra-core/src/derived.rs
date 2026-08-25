@@ -40,7 +40,7 @@ use uuid::Uuid;
 
 use crate::alerts::sink::AlertSink;
 use crate::alerts::AlertManager;
-use crate::store::{MetricStore, INSTANT_LOOKBACK_SECS};
+use crate::store::MetricStore;
 use yagra_common::{MetricKind, NodeId};
 
 /// How often the evaluator ticks.
@@ -50,6 +50,28 @@ use yagra_common::{MetricKind, NodeId};
 /// screen says so, because "3 consecutive breaches" means three minutes here and three polls
 /// everywhere else.
 pub const WATCH_TICK: Duration = Duration::from_secs(60);
+
+/// How far back a series may have last been seen and still count as current.
+///
+/// 🚨 **Measured, and both earlier answers were wrong in different ways.** It shipped as 600s,
+/// which is shorter than a normal SNMP collection interval, so the one device in the lab that
+/// could exercise this feature evaluated **zero rows** and looked exactly like "no such device
+/// here". Borrowing [`crate::store::INSTANT_LOOKBACK_SECS`] (1800s) was closer and still wrong:
+/// the live Huawei's `huawei_mem_total` arrives every **1,419–2,975 seconds** (measured over 95k
+/// samples, 2026-08-25), because the poller is sharing its budget with twenty-two unreachable
+/// nodes.
+///
+/// It is deliberately **longer** than `INSTANT_LOOKBACK_SECS`, which is a different question with
+/// a different cost. That one asks "what should a screen show as the current value", where a stale
+/// number misleads a reader. This one asks "is there a reading to evaluate", where too-short means
+/// the whole feature silently does nothing and too-long is bounded by something else entirely:
+/// [`crate::alerts::AlertManager::observe_derived_metric`] refuses to observe a node whose liveness
+/// is not `Ok`, so a device that went away stops being evaluated regardless of this window. **The
+/// guard against a stale reading is the liveness freeze, not the lookback.**
+///
+/// What an hour does accept: a metric that stops being collected while its node stays up — a
+/// template detached from a profile — keeps alerting on its last value for up to an hour.
+pub const LOOKBACK_SECS: u64 = 3600;
 
 /// How a derived metric is computed from collected ones.
 ///
@@ -369,15 +391,28 @@ pub(crate) async fn run_derived_metric_watch(
     loop {
         tokio::time::sleep(WATCH_TICK).await;
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let mut actions = Vec::new();
         let mut evaluated = 0_usize;
+
+        // Close the alerts whose rule was deleted. The poll path's `!alerting` branch does this for
+        // every check it visits, but it never visits a derived metric — nothing polls
+        // `huawei_mem_used_pct` — so before this, deleting a rule left its alert open for the life
+        // of the process. Found on the deployment: the verification rule was removed and its
+        // warning was still open three minutes later.
+        //
+        // It runs even when no metric is evaluated below, because a deleted rule is exactly the
+        // case where nothing can fire.
+        let mut actions = alerts.resolve_orphaned_node_derived_alerts();
 
         for derived in DERIVED_NODE_METRICS {
             let coverage = alerts.rule_coverage(derived.name);
             if coverage.lowest_bound.is_none() {
-                // No rule that can fire. Nothing is queried and nothing is swept clear: a metric
-                // whose rule was deleted is resolved by the config refresh's `!alerting` branch,
-                // not by pretending its value went healthy.
+                // No rule that can fire, so nothing is queried. Its alert, if it had one, was
+                // closed by the sweep above — this branch must not resolve anything itself, or a
+                // metric with a rule and no data would look the same as one with no rule.
+                //
+                // The gauge is zeroed rather than left at its last reading: a stale "1" beside a
+                // metric nobody is watching reads as "one row is being evaluated".
+                metrics::gauge!("yagra_derived_metric_rows", "metric" => derived.name).set(0.0);
                 continue;
             }
             if coverage.nodes.as_ref().is_some_and(BTreeSet::is_empty) {
@@ -394,7 +429,7 @@ pub(crate) async fn run_derived_metric_watch(
 
             let [first_name, second_name] = derived.formula.inputs();
             let first: BTreeMap<(Uuid, i64), f64> = store
-                .series_rows(first_name, scope, INSTANT_LOOKBACK_SECS)
+                .series_rows(first_name, scope, LOOKBACK_SECS)
                 .await
                 .into_iter()
                 .collect();
@@ -411,7 +446,7 @@ pub(crate) async fn run_derived_metric_watch(
                 first.clone()
             } else {
                 store
-                    .series_rows(second_name, scope, INSTANT_LOOKBACK_SECS)
+                    .series_rows(second_name, scope, LOOKBACK_SECS)
                     .await
                     .into_iter()
                     .collect()
@@ -683,6 +718,38 @@ mod tests {
             "web/src/lib/metricMeaning.ts DERIVED_METRICS is out of step.
                missing (Rust computes it, the picker will not offer it): {missing:?}
                orphaned (the picker offers it, nothing computes it): {orphaned:?}"
+        );
+    }
+
+    /// The orphan sweep runs inside the watch loop, and before the per-metric loop.
+    ///
+    /// The same structural check its interface sibling carries, for the same reason: a deleted
+    /// rule is exactly the case where no metric is evaluated, so a sweep placed inside the loop
+    /// over [`DERIVED_NODE_METRICS`] would be skipped in the one situation it exists for.
+    #[test]
+    fn the_orphan_sweep_runs_inside_the_watch_loop_and_before_the_metrics() {
+        let production = crate::module_source::code("src", "derived");
+        let watch = production
+            .split("async fn run_derived_metric_watch")
+            .nth(1)
+            .expect("the watch loop exists");
+        let body = &watch[..watch.find("\nfn ").unwrap_or(watch.len())];
+        // A floor: everything below asks whether something is *present*, which over an empty
+        // slice is a claim about nothing (ADR-089).
+        assert!(
+            body.contains("sink.dispatch("),
+            "the slice is not the watch loop's body — it does not even drain its actions"
+        );
+        let sweep = body
+            .find("resolve_orphaned_node_derived_alerts()")
+            .expect("without the sweep, deleting a rule strands its alert for the process's life");
+        let loop_start = body
+            .find("for derived in DERIVED_NODE_METRICS")
+            .expect("the per-metric loop exists");
+        assert!(
+            sweep < loop_start,
+            "the sweep must run before the per-metric loop, which skips every metric whose rule \
+             was just deleted"
         );
     }
 

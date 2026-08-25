@@ -1185,22 +1185,61 @@ impl AlertManager {
                 })
                 .collect()
         };
+        self.resolve_orphans(orphans)
+    }
+
+    /// The same sweep for a **node-level** derived metric (ADR-105).
+    ///
+    /// Same reason as its interface sibling and the same shape, but the two filters are genuinely
+    /// different — one asks about `metric@ifindex`, the other about a node-wide check — so they
+    /// stay two functions over one tail rather than one function with a dimension argument. Each
+    /// watch sweeps its own dimension, which is what keeps exactly one closer per alert.
+    ///
+    /// Found on the deployment, not in a test: the verification rule for `huawei_mem_used_pct` was
+    /// deleted and its warning stayed open for the life of the process, because nothing polls a
+    /// derived metric and so [`Self::observe`]'s `!alerting` branch never visits its check.
+    pub fn resolve_orphaned_node_derived_alerts(&self) -> Vec<NotifyAction> {
+        let orphans: Vec<CheckId> = {
+            let config = self.config.read().expect("config rwlock poisoned");
+            let active = self.active.lock().expect("alerts mutex poisoned");
+            active
+                .values()
+                .filter_map(|a| {
+                    let node = a.node()?;
+                    // A node-wide check. An alert carrying a port belongs to the other sweep, and
+                    // a node-derived metric never carries one.
+                    if a.ifindex.is_some() {
+                        return None;
+                    }
+                    let metric = crate::derived::derived_node_metric(&a.metric)?.name;
+                    config
+                        .resolve(node, None, metric)
+                        .is_none()
+                        .then_some(a.check)
+                })
+                .collect()
+        };
+        self.resolve_orphans(orphans)
+    }
+
+    /// Close each orphaned check and forget its dwell window.
+    ///
+    /// 🚨 Drop the dwell/flap bookkeeping along with the alert, or the check goes permanently
+    /// silent. Resolving only the alert leaves the state machine committed at `Warning` while
+    /// nothing is active, so a rule recreated on the same target observes `Warning → Warning`,
+    /// sees no transition, and **never fires again** for the life of the process.
+    ///
+    /// Found on the test server, not by the unit test that shipped with the first sweep: the alert
+    /// closed on deletion, the rule was recreated at 1%, the port sat at 6.7% for eight minutes and
+    /// nothing happened. The test only asserted the sweep was idempotent — which it was, on a check
+    /// that could no longer do anything.
+    ///
+    /// Removing the entry rather than resetting it is the honest form: the rule that set this
+    /// check's dwell is gone, so its window carries no meaning to preserve.
+    fn resolve_orphans(&self, orphans: Vec<CheckId>) -> Vec<NotifyAction> {
         orphans
             .into_iter()
             .filter_map(|check| {
-                // 🚨 Drop the dwell/flap bookkeeping along with the alert, or the check goes
-                // permanently silent. Resolving only the alert leaves the state machine committed
-                // at `Warning` while nothing is active, so a rule recreated on the same port
-                // observes `Warning → Warning`, sees no transition, and **never fires again** for
-                // the life of the process.
-                //
-                // Found on the test server, not by the unit test that shipped with this sweep: the
-                // alert closed on deletion, the rule was recreated at 1%, the port sat at 6.7% for
-                // eight minutes and nothing happened. The test only asserted the sweep was
-                // idempotent — which it was, on a check that could no longer do anything.
-                //
-                // Removing the entry rather than resetting it is the honest form: the rule that
-                // set this check's dwell is gone, so its window carries no meaning to preserve.
                 self.states
                     .lock()
                     .expect("states mutex poisoned")
@@ -3762,6 +3801,110 @@ mod tests {
             .expect("the rule is still there");
         assert!(acts.iter().any(|a| matches!(a, NotifyAction::Resolve(_))));
         assert!(mgr.active_alerts().is_empty());
+    }
+
+    /// Deleting a **node-level derived** rule must close its alert, for the same reason its port
+    /// sibling below does — nothing polls `huawei_mem_used_pct` either.
+    ///
+    /// Written from the deployment. The verification rule was deleted and its warning was still
+    /// open three minutes later, because `observe`'s `!alerting` branch only visits checks a poll
+    /// result carries and a derived metric is in no poll result. The port dimension had this sweep
+    /// since ADR-076 増分 7; the node dimension shipped without it.
+    #[test]
+    fn the_orphan_sweep_closes_a_node_derived_alert_whose_rule_was_deleted() {
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+        let node = NodeId::new();
+        let rule = |warning: f64| {
+            StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                ThresholdRule::new(
+                    "huawei_mem_used_pct",
+                    ThresholdBounds::above(Some(warning), Some(99.0)),
+                    1,
+                ),
+            )
+        };
+        let mgr = manager();
+        mgr.set_config(cfg(vec![rule(1.0)], meta_for(node)));
+        let _ = mgr.observe(&result(node, CheckOutcome::Reachable, 0));
+        let acts = mgr
+            .observe_derived_metric(node, "huawei_mem_used_pct", &[80.44], 1)
+            .expect("a rule is in force");
+        assert!(acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))));
+
+        // The accepting half, and it is load-bearing: a sweep that resolved everything would pass
+        // the rest of this test.
+        assert!(
+            mgr.resolve_orphaned_node_derived_alerts().is_empty(),
+            "a rule that still exists is not an orphan"
+        );
+        // …and it must leave the other dimension alone, or one alert gets two closers racing.
+        assert!(
+            mgr.resolve_orphaned_interface_alerts().is_empty(),
+            "a node-wide check is not the port sweep's to close"
+        );
+
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        let swept = mgr.resolve_orphaned_node_derived_alerts();
+        assert_eq!(swept.len(), 1);
+        assert!(matches!(swept[0], NotifyAction::Resolve(_)));
+        assert!(mgr.active_alerts().is_empty());
+        assert!(
+            mgr.resolve_orphaned_node_derived_alerts().is_empty(),
+            "the sweep runs every 60s for the life of the process; it must be idempotent"
+        );
+
+        // 🚨 And the metric must be able to alert again — the trap the port version documents.
+        // Idempotence alone is also satisfied by a check that can no longer do anything.
+        mgr.set_config(cfg(vec![rule(1.0)], meta_for(node)));
+        let acts = mgr
+            .observe_derived_metric(node, "huawei_mem_used_pct", &[80.44], 3)
+            .expect("the recreated rule is in force");
+        assert!(
+            acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))),
+            "a metric whose rule was deleted and recreated must alert again, got {acts:?}"
+        );
+    }
+
+    /// A *collected* node metric arrives on the poll path, so that path already closes it. The
+    /// derived sweep must not touch it.
+    #[test]
+    fn the_node_orphan_sweep_leaves_collected_metrics_to_the_poll_path() {
+        use yagra_bus::Sample;
+        use yagra_common::{ThresholdBounds, ThresholdRule};
+        let node = NodeId::new();
+        let mgr = manager();
+        mgr.set_config(cfg(
+            vec![StoredThreshold::new(
+                Uuid::nil(),
+                ScopeLevel::Node,
+                vec![node.to_string()],
+                // Collected, not computed — the vendor's own percentage.
+                ThresholdRule::new(
+                    "huawei_mem_usage",
+                    ThresholdBounds::above(Some(1.0), Some(99.0)),
+                    1,
+                ),
+            )],
+            meta_for(node),
+        ));
+        let mut r = result(node, CheckOutcome::Reachable, 0);
+        r.samples = vec![Sample::gauge("huawei_mem_usage", 80.0)];
+        let acts = mgr.observe(&r);
+        assert!(acts.iter().any(|a| matches!(a, NotifyAction::Fire(_))));
+
+        mgr.set_config(cfg(Vec::new(), meta_for(node)));
+        assert!(
+            mgr.resolve_orphaned_node_derived_alerts().is_empty(),
+            "a collected metric already has a closer; two would race"
+        );
+        assert_eq!(
+            mgr.active_alerts().len(),
+            1,
+            "still the poll path's to close"
+        );
     }
 
     /// Deleting a port rule must close its alert. The poll path cannot do it: that branch only
