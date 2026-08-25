@@ -49,3 +49,45 @@
 .profile-template-meta {
   font-size: var(--font-xs);
 }
+
+/* The metrics this profile collects that no fleet-wide or profile alert rule names (ADR-106).
+   Sits under the checklist because ticking a set is what changes the answer. Colour comes from the
+   shared status tokens, which are redefined per theme in tokens.css — nothing here is a literal. */
+.profile-gap {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.profile-gap.warn {
+  border-left: 3px solid var(--status-warning);
+}
+
+.profile-gap-head {
+  margin: 0;
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+/* Metric names are identifiers the operator will retype into the rule form — monospace so a
+   `cisco_env_temp` / `cisco_envt_temp` mix-up is visible rather than merely present. */
+.profile-gap-metrics {
+  margin: 4px 0 0;
+  font-family: var(--font-family);
+  font-size: var(--font-xs);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.profile-gap-hint {
+  margin: 4px 0 0;
+}
+
+.profile-gap-link {
+  display: inline-block;
+  margin-top: 6px;
+  font-weight: var(--weight-medium);
+}

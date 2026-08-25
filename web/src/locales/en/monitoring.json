@@ -75,7 +75,14 @@
       "confirm": "Delete profile <strong>{{name}}</strong>? Nodes using it keep running but lose this class's collection defaults."
     },
     "templates": {
-      "empty": "No metric sets exist yet. Create some first."
+      "empty": "No metric sets exist yet. Create some first.",
+      "gap_one": "{{count}} metric collected here has no fleet-wide or profile alert rule",
+      "gap_other": "{{count}} metrics collected here have no fleet-wide or profile alert rule",
+      "gapHint": "A group, folder or node rule replaces a profile rule rather than adding to one, so these are collected but nothing can fire on them.",
+      "gapLink": "Open Alert rules",
+      "covered_one": "The 1 metric collected here has an alert rule.",
+      "covered_other": "All {{count}} metrics collected here have an alert rule.",
+      "unchecked": "Couldn't check which of these metrics have an alert rule — the rule list came back capped or unavailable."
     },
     "err": {
       "pollInterval": "Poll interval must be a whole number of seconds between 10 and 3600.",

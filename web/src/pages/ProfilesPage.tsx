@@ -10,10 +10,16 @@
 // Collection-template attachment checklist. Add/edit via modal, delete via confirm modal.
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Trans, useTranslation } from 'react-i18next';
 import { api, errMsg } from '../services/api';
 import { useCan } from '../store';
-import type { CollectionTemplate, ProfileInput, ProfileSummary } from '../types/api';
+import type {
+  CollectionTemplate,
+  ProfileInput,
+  ProfileSummary,
+  StoredThreshold,
+} from '../types/api';
 import { PROFILE_CATEGORIES, categoryLabel } from '../lib/profileCategories';
 import { PageHeader } from '../components/ui/PageHeader';
 import { Button } from '../components/ui/Button';
@@ -37,6 +43,7 @@ import {
 import { EditIcon, TrashIcon } from '../components/ui/icons';
 import './ProfilesPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
+import { collectedMetrics, profileRuleGap } from '../lib/profileRuleGap';
 import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 const COLS = '1.8fr 1fr 120px 130px 96px';
@@ -53,6 +60,11 @@ export function ProfilesPage() {
   const [deleting, setDeleting] = useState<ProfileSummary | null>(null);
   // Which profile's template attachments are expanded (one at a time).
   const [openTemplates, setOpenTemplates] = useState<string | null>(null);
+  // The rules that can give a profile a baseline (ADR-106) — fetched once here rather than per
+  // expander, so opening one profile after another does not re-ask. `null` is "never arrived",
+  // which the gap panel reports as unchecked rather than as an absence of rules.
+  const [rules, setRules] = useState<StoredThreshold[] | null>(null);
+  const [rulesTruncated, setRulesTruncated] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -64,6 +76,19 @@ export function ProfilesPage() {
       .catch((e: unknown) => setBlock(classifyLoadError(e)))
       .finally(() => setLoading(false));
     api.listCollectionTemplates().then(setTemplates).catch(() => setTemplates([]));
+    // Only the two levels that can be a baseline, which is also what keeps this under the
+    // server's 500-rule cap on any realistic ruleset. `truncated` is carried rather than
+    // compared here — the page must not turn a prefix into "no rule names this metric".
+    api
+      .listThresholds({ scope_level: 'global,profile' })
+      .then((page) => {
+        setRules(page.items);
+        setRulesTruncated(page.truncated);
+      })
+      .catch(() => {
+        setRules(null);
+        setRulesTruncated(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -298,6 +323,8 @@ export function ProfilesPage() {
                               profileId={p.id}
                               templates={templates}
                               canEdit={canConfig}
+                              rules={rules}
+                              rulesTruncated={rulesTruncated}
                             />
                           </div>
                         )}
@@ -486,21 +513,33 @@ function DeleteProfileModal({
   );
 }
 
-/** The set of Collection templates attached to a profile, as a checklist. Toggling a row
- *  saves the new set immediately (replace-all via setProfileTemplates). */
+/** The set of Collection templates attached to a profile, as a checklist, plus the metrics those
+ *  sets collect that no baseline alert rule names (ADR-106). Toggling a row saves the new set
+ *  immediately (replace-all via setProfileTemplates), and the gap line follows the checkboxes —
+ *  ticking one is the only thing that changes what this profile collects, which is why the warning
+ *  lives here and not in the add/edit modal (that modal attaches no sets at all). */
 function ProfileTemplates({
   profileId,
   templates,
   canEdit,
+  rules,
+  rulesTruncated,
 }: {
   profileId: string;
   templates: CollectionTemplate[];
   canEdit: boolean;
+  rules: StoredThreshold[] | null;
+  rulesTruncated: boolean;
 }) {
   const { t } = useTranslation('monitoring');
   const [attached, setAttached] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The metric names behind each set, and the sets that gave up. Kept apart because a set that
+  // failed to load must never read as a set with no metrics: that would shrink the metric list and
+  // make this profile look *more* covered than it is.
+  const [items, setItems] = useState<Map<string, string[]>>(new Map());
+  const [itemsFailed, setItemsFailed] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     api
@@ -508,6 +547,47 @@ function ProfileTemplates({
       .then((list) => setAttached(new Set(list.map((tmpl) => tmpl.id))))
       .catch((e: unknown) => setError(errMsg(e, t('profiles.err.loadTemplates'))));
   }, [profileId, t]);
+
+  // Read the items of each attached set exactly once. Un-ticking a set leaves its metrics in the
+  // cache, so re-ticking it costs no request — and a set that failed stays failed rather than being
+  // retried on every keystroke elsewhere on the page.
+  useEffect(() => {
+    const want = [...attached].filter((id) => !items.has(id) && !itemsFailed.has(id));
+    if (want.length === 0) return;
+    let live = true;
+    void Promise.all(
+      want.map((id) =>
+        api
+          .listTemplateItems(id)
+          .then((list) => ({ id, names: list.map((it) => it.metric_name) as string[] | null }))
+          .catch(() => ({ id, names: null as string[] | null })),
+      ),
+    ).then((got) => {
+      if (!live) return;
+      setItems((cur) => {
+        const next = new Map(cur);
+        for (const g of got) if (g.names) next.set(g.id, g.names);
+        return next;
+      });
+      setItemsFailed((cur) => {
+        const next = new Set(cur);
+        for (const g of got) if (!g.names) next.add(g.id);
+        return next;
+      });
+    });
+    return () => {
+      live = false;
+    };
+  }, [attached, items, itemsFailed]);
+
+  // `null` while a set is still in flight — the panel stays quiet rather than flashing an answer it
+  // is about to replace. Every other not-an-answer is `unchecked`, which does get said out loud.
+  const gap = useMemo(() => {
+    const found = collectedMetrics([...attached], items, itemsFailed);
+    if (found.state === 'loading') return null;
+    if (found.state === 'failed') return { kind: 'unchecked' } as const;
+    return profileRuleGap({ metrics: found.metrics, rules, rulesTruncated, profileId });
+  }, [attached, items, itemsFailed, rules, rulesTruncated, profileId]);
 
   const toggle = (id: string) => {
     const next = new Set(attached);
@@ -543,6 +623,26 @@ function ProfileTemplates({
         </label>
       ))}
       {error && <p className="form-error">{error}</p>}
+      {gap?.kind === 'gaps' && (
+        <div className="profile-gap warn">
+          <p className="profile-gap-head">
+            {t('profiles.templates.gap', { count: gap.missing.length })}
+          </p>
+          <p className="profile-gap-metrics">{gap.missing.join(' · ')}</p>
+          <p className="profile-gap-hint">{t('profiles.templates.gapHint')}</p>
+          <Link className="profile-gap-link" to="/alerts/rules">
+            {t('profiles.templates.gapLink')}
+          </Link>
+        </div>
+      )}
+      {/* Said out loud rather than left blank: silence would make "checked, nothing missing" look
+          exactly like "never checked". */}
+      {gap?.kind === 'covered' && (
+        <p className="profile-gap">{t('profiles.templates.covered', { count: gap.total })}</p>
+      )}
+      {gap?.kind === 'unchecked' && (
+        <p className="profile-gap">{t('profiles.templates.unchecked')}</p>
+      )}
     </div>
   );
 }
