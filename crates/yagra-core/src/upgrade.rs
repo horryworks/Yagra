@@ -1602,7 +1602,58 @@ mod tests {
         assert!(checked_tag(Command::Apply, None).is_err());
     }
 
-    /// The deployment directory must be mounted into the upgrade container at the path the **host**
+    /// Every `docker run …` in the updater's script, each folded back into one string across its
+    /// backslash-continued lines. A launch is only as safe as its whole argument list, so a scan
+    /// that stopped at the first line would read every one of them as mountless.
+    fn docker_run_invocations(compose: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut lines = compose.lines();
+        while let Some(line) = lines.next() {
+            if !line.contains("docker run") {
+                continue;
+            }
+            let mut inv = line.to_owned();
+            while inv.trim_end().ends_with('\\') {
+                let Some(next) = lines.next() else { break };
+                inv.push('\n');
+                inv.push_str(next);
+            }
+            out.push(inv);
+        }
+        out
+    }
+
+    /// The updater's `command:` block, minus the two procedures it hands to containers.
+    ///
+    /// Those procedures run somewhere the updater does not, so a rule about what the updater may
+    /// touch has to be asked of what is left after they are removed.
+    fn updater_body_without_its_procedures(compose: &str) -> (String, String) {
+        let from = compose
+            .find("  yagra-updater:")
+            .expect("the updater service is in this file");
+        let to = compose
+            .find("\nconfigs:\n")
+            .expect("the file ends with its configs");
+        let mut body = compose[from..to].to_owned();
+        let mut removed = String::new();
+        for name in ["APPLY", "BUS"] {
+            let open = format!("<<'{name}'");
+            let close = format!("\n        {name}\n");
+            let start = body.find(&open).unwrap_or_else(|| {
+                panic!("the {name} procedure is gone, so this check has nothing to exclude")
+            });
+            let end = body[start..]
+                .find(&close)
+                .map(|i| start + i + close.len())
+                .unwrap_or_else(|| panic!("the {name} heredoc does not end where this expects"));
+            removed.push_str(&body[start..end]);
+            body.replace_range(start..end, "");
+        }
+        (body, removed)
+    }
+
+    /// The deployment directory must be mounted into **every container the updater launches** at the
+    /// path the **host**
     /// knows it by, because `docker compose up -d` stamps its own working directory onto every
     /// container it creates and the updater reads that label back to find the directory next time.
     ///
@@ -1616,20 +1667,88 @@ mod tests {
     /// The poison lands only when an apply recreates the *updater itself*, i.e. when the two
     /// releases spell that service differently. That is why it survived the feature's first two
     /// real upgrades: nothing here is exercised until the composition changes.
+    ///
+    /// ⚠️ **This asked about one container until 2026-08-25, and the second one did not have the
+    /// mount.** `bus` ran its work in the updater's own body rather than a throwaway container, so
+    /// it addressed `$WORKDIR` from the one process that cannot see it and was refused every single
+    /// time — "Accept remote pollers" had never once succeeded since it shipped (ADR-065 Inc.5).
+    /// A rule stated about *the* container is one the third path is free to break, so this walks
+    /// every `docker run` in the script and asserts a floor on how many it found.
     #[test]
-    fn the_upgrade_container_sees_the_deployment_directory_at_its_host_path() {
+    fn every_container_the_updater_launches_sees_the_deployment_directory() {
         let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
             .expect("the deploy composition holds the updater's script");
+        let launches = docker_run_invocations(&compose);
         assert!(
-            compose.contains(r#"-v "$$WORKDIR:$$WORKDIR""#),
-            "the upgrade container must bind the deployment directory onto itself, or the compose \
-             labels it writes name a path that does not exist on the host"
+            launches.len() >= 2,
+            "expected at least the apply and the bus launch, found {} — a scan that has stopped \
+             matching reports the same 'nothing wrong' as a healthy script",
+            launches.len()
         );
+        for launch in &launches {
+            assert!(
+                launch.contains(r#"-v "$$WORKDIR:$$WORKDIR""#),
+                "a container the updater launches cannot see the deployment directory, so any \
+                 compose it runs there is refused — or labels the stack with a path that does not \
+                 exist on the host:\n{launch}"
+            );
+        }
+        // Named, so a launch deleted rather than fixed cannot satisfy the floor on its own.
+        let all = launches.concat();
+        for path in ["yagra-upgrade-", "yagra-bus-"] {
+            assert!(
+                all.contains(path),
+                "no container the updater launches is `{path}…`"
+            );
+        }
         for stale in [r#"WORKDIR:/project"#, "cd /project"] {
             assert!(
                 !compose.contains(stale),
                 "`{stale}` is the mount point that poisoned the labels; the apply steps address \
                  the deployment directory by $WORKDIR now"
+            );
+        }
+    }
+
+    /// The other half of that rule: the updater's **own body** must never reach into the deployment
+    /// directory, because it has no mount for it — only the containers it launches do.
+    ///
+    /// This is the check that would have caught ADR-065 Inc.5 bug 2 the day it was written. The
+    /// `bus` command wrote `$WORKDIR/.env` and ran `cd "$WORKDIR" && docker compose …` from the
+    /// updater itself, so the *identical* `[ -f "$WORKDIR/docker-compose.deploy.yml" ]` guard passed
+    /// inside the apply container and could never pass inside the updater. What kept it unfound for
+    /// its whole life is the shape of the refusal: it reported a misconfigured deployment ("the
+    /// compose label this reads names …"), and the path it named was correct and the file was
+    /// there. Measured on 192.168.1.211, 2026-08-25.
+    ///
+    /// ⚠️ Its healthy answer is "found nothing", so it has to tell that apart from "looked at
+    /// nothing". Both needles are asserted **present** in the half that was cut out, and the half
+    /// that was searched is asserted to be substantial.
+    #[test]
+    fn the_updater_itself_never_reaches_into_the_deployment_directory() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let (body, removed) = updater_body_without_its_procedures(&compose);
+        // The accept side. Without it a slice that took the whole script with it would pass by
+        // having nothing left to search.
+        for needle in [r#"cd "$$WORKDIR""#, "$$WORKDIR/.env"] {
+            assert!(
+                removed.contains(needle),
+                "`{needle}` is not in the procedures the containers run — either it moved somewhere \
+                 it cannot work, or this check is cutting the wrong half out"
+            );
+        }
+        let left = body.lines().count();
+        assert!(
+            left > 100,
+            "only {left} lines left to search; the heredoc slice took the updater with it"
+        );
+        for needle in [r#"cd "$$WORKDIR""#, "$$WORKDIR/"] {
+            assert!(
+                !body.contains(needle),
+                "the updater's own body reaches the deployment directory with `{needle}`, and it \
+                 holds no mount for one. Every command written that way is refused at runtime, with \
+                 a message that blames the deployment rather than this line"
             );
         }
     }
@@ -1653,23 +1772,69 @@ mod tests {
     /// is run by the updater of the release being *replaced*, so a fix to the updater cannot apply
     /// itself to the upgrade that delivers it, and since the fix edits this service definition the
     /// recreate — and therefore the bad label — is guaranteed rather than possible.
+    ///
+    /// ⚠️ **Every line carrying that message, not the first one.** Since ADR-065 Inc.5 there are
+    /// two — the apply's and the bus change's — and `find()` would have kept checking the apply's
+    /// forever while the newer one said whatever it liked.
     #[test]
     fn the_repair_the_apply_prints_recreates_the_container_whose_label_is_read() {
         let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
             .expect("the deploy composition holds the updater's script");
-        let step0 = compose
+        let refusals: Vec<&str> = compose
             .lines()
-            .find(|l| l.contains("does not hold this deployment's docker-compose.deploy.yml"))
-            .expect("step 0 still refuses an apply whose WORKDIR holds no composition");
+            .filter(|l| l.contains("does not hold this deployment's docker-compose.deploy.yml"))
+            .collect();
         assert!(
-            step0.contains("--force-recreate yagra-updater"),
-            "step 0 must name the only command that re-stamps the label it reads; a bare `up -d` \
-             reports success and repairs nothing. Offending message: {step0}"
+            refusals.len() >= 2,
+            "expected the apply and the bus change to refuse a WORKDIR holding no composition; \
+             found {}",
+            refusals.len()
         );
+        for step0 in refusals {
+            assert!(
+                step0.contains("--force-recreate yagra-updater"),
+                "this refusal must name the only command that re-stamps the label it reads; a bare \
+                 `up -d` reports success and repairs nothing. Offending message: {step0}"
+            );
+            assert!(
+                !step0.contains("once from it"),
+                "the repair must not be described as running from $WORKDIR — that is the poisoned \
+                 path, and it is the reason this message is being printed. Offending message: \
+                 {step0}"
+            );
+        }
+    }
+
+    /// `.env` holds `POSTGRES_PASSWORD` and, once the switch is on, both bus passwords — and the
+    /// bus change rewrites it from a container running as root. `mv` carries the **temp file's**
+    /// mode and owner onto the real file, so the rewrite has to seed them from the file it replaces.
+    ///
+    /// Measured on 192.168.1.211 the first time this code ever ran (2026-08-25, ADR-065 Inc.5):
+    /// `0600 ubuntu:ubuntu` became `0644 root:root`. Nothing failed and nothing was logged. The
+    /// switch reported exactly the state it was asked for, with three plaintext passwords newly
+    /// readable by every account on the host — which is why this is a test and not a comment.
+    #[test]
+    fn rewriting_the_host_env_keeps_the_permissions_it_found() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let (_, procedures) = updater_body_without_its_procedures(&compose);
+        let start = procedures
+            .find("set_env()")
+            .expect("the bus change still rewrites the host's .env");
+        let body = &procedures[start..];
+        let body = &body[..body
+            .find("\n        }")
+            .expect("the set_env function is terminated")];
         assert!(
-            !step0.contains("once from it"),
-            "the repair must not be described as running from $WORKDIR — that is the poisoned path, \
-             and it is the reason this message is being printed. Offending message: {step0}"
+            body.contains(r#"cp -p "$$E" "$$E.tmp""#),
+            "the .env rewrite does not seed its temp file from the file it replaces, so `mv` stamps \
+             this container's umask onto a file holding three plaintext passwords:\n{body}"
+        );
+        // The atomic move is the other half of the same line, and dropping it to fix the mode would
+        // trade a leak for a truncated .env — which loses POSTGRES_PASSWORD and does not come back.
+        assert!(
+            body.contains(r#"mv "$$E.tmp" "$$E""#),
+            "the .env rewrite is no longer atomic:\n{body}"
         );
     }
 

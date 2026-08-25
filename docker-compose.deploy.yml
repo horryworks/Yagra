@@ -804,6 +804,87 @@ services:
         APPLY
         )
 
+        # Turn remote-poller acceptance on or off (ADR-065). Rewrites an ALLOW-LISTED set of keys in
+        # the host's `.env` and recreates the services that read them.
+        #
+        # Held in a VARIABLE and passed to a throwaway container as an argument, for the same two
+        # reasons APPLY is — and the second one is why this moved out of the updater's own body.
+        # Nothing executable may live in the shared volume core can write to; and **the deployment
+        # directory is a host path this updater cannot see.** `set_env` wrote into it and the
+        # compose call ran from it, out of a container that mounts neither, so the `bus` command was
+        # structurally guaranteed to be refused and had never once succeeded since it shipped
+        # (measured on 192.168.1.211, 2026-08-25: 202 accepted, then `rejected` at `validate`).
+        # The apply below already had the answer — the third `-v` — and only this path lacked it.
+        #
+        # Arguments: <mode> <run id> <requested by> [core password] [poller password].
+        BUS=$$(cat <<'BUS'
+        set -u
+        MODE="$$1"; RUN="$$2"; BY="$$3"; CPW="$${4:-}"; PPW="$${5:-}"; D=/data/upgrade
+        START=$$(date +%s)
+        # One writer for both outcomes, because this command has exactly two. `settle_finished_run`
+        # on the core that comes back is what turns either into an audit row and closes the
+        # maintenance window core opened before the request was written.
+        settle() { # <state> <message>
+          printf '{"id":"%s","command":"bus","target":null,"state":"%s","step":"compose","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
+            "$$RUN" "$$1" "$$2" "$$START" "$$(date +%s)" "$$BY" > "$$D/status.json.tmp"
+          mv "$$D/status.json.tmp" "$$D/status.json"
+          printf '{"at":%s,"step":"compose","message":"%s"}\n' "$$(date +%s)" "$$2" >> "$$D/log.ndjson"
+        }
+
+        # Step 0 of APPLY, for the same reason and with the same repair: the deployment directory is
+        # bind-mounted here at the path the HOST knows it by, and everything below addresses it there.
+        [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
+          || { settle failed "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml. On the host, from the directory that does, run: docker compose -p $$PROJ -f docker-compose.deploy.yml up -d --force-recreate yagra-updater — a plain 'up -d' will NOT repair it, because that container's definition is unchanged and compose leaves it running with the stale label"; exit 1; }
+
+        # The allow-list is the security property, not a tidiness measure. core writes the request
+        # file, so "write any line into .env" would be "core can set any variable in this
+        # composition", which is a wider capability than ADR-051 grants — the whole design there is
+        # that core names a value and never a mechanism. Every key written here is spelled out
+        # below; nothing from the request file becomes a key.
+        # ⚠️ **`cp -p` first, and it is not tidiness.** This file holds POSTGRES_PASSWORD and, three
+        # lines below, both bus passwords. `mv` carries the temp file's mode and owner onto it, so
+        # without seeding them the rewrite lands whatever this container's umask says — measured
+        # 2026-08-25 on 192.168.1.211, the first time this code ever ran: `0600 ubuntu:ubuntu`
+        # became `0644 root:root`, i.e. every account on the host could read all three. The `mv`
+        # stays regardless: rewriting in place would be non-atomic, and a deployment whose `.env`
+        # was truncated mid-write has lost POSTGRES_PASSWORD and does not come back.
+        set_env() { # <key> <value>  — replace or append, atomically, preserving mode and owner
+          E="$$WORKDIR/.env"
+          [ -f "$$E" ] || { : > "$$E"; chmod 600 "$$E"; }
+          cp -p "$$E" "$$E.tmp"
+          grep -v "^$$1=" "$$E" > "$$E.tmp" 2>/dev/null || true
+          [ -n "$$2" ] && printf '%s=%s\n' "$$1" "$$2" >> "$$E.tmp"
+          mv "$$E.tmp" "$$E"
+        }
+        if [ "$$MODE" = "on" ]; then
+          set_env YAGRA_NATS_ARGS "-js -c /etc/nats/nats-server.conf"
+          set_env YAGRA_NATS_BIND "0.0.0.0"
+          set_env YAGRA_NATS_CORE_PASSWORD "$$CPW"
+          set_env YAGRA_NATS_POLLER_PASSWORD "$$PPW"
+          set_env YAGRA_CORE_BUS_URL "tls://core:$$CPW@nats:4222"
+          set_env YAGRA_POLLER_BUS_URL "tls://poller:$$PPW@nats:4222"
+          set_env YAGRA_BUS_CA_FILE "/etc/nats/certs/server-cert.pem"
+        else
+          # Cleared rather than set to a plaintext value: the compose file already carries the
+          # right defaults, so removing the line is what returns this deployment to them. Setting
+          # them here would be a second copy of those defaults, in a file no upgrade replaces.
+          for k in YAGRA_NATS_ARGS YAGRA_NATS_BIND YAGRA_NATS_CORE_PASSWORD \
+                   YAGRA_NATS_POLLER_PASSWORD YAGRA_CORE_BUS_URL YAGRA_POLLER_BUS_URL \
+                   YAGRA_BUS_CA_FILE; do
+            set_env "$$k" ""
+          done
+        fi
+
+        # Only the services that read those variables. A bare `up -d` is survivable now that this
+        # runs outside the compose project, but it would still restart `web` and every store for a
+        # change none of them read.
+        ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d bus-init bus-cert-init nats core poller ) \
+          || { settle failed "docker compose up failed; the previous bus settings are still in .env"; exit 1; }
+        if [ "$$MODE" = "on" ]; then WHAT=accepted; else WHAT=refused; fi
+        settle succeeded "remote pollers are now $$WHAT"
+        BUS
+        )
+
         # Poller ids in this updater's own compose project — the ones an apply recreates on its way
         # past, because they are in the same `up -d` (ADR-051). Core cannot work this out for itself:
         # nothing on the bus says which compose project a poller belongs to, so without this it must
@@ -866,50 +947,6 @@ services:
           mv "$$D/status.json.tmp" "$$D/status.json"
         }
 
-        # Turn remote-poller acceptance on or off (ADR-065). Rewrites an ALLOW-LISTED set of keys in
-        # the host's `.env` and recreates the three services that read them.
-        #
-        # The allow-list is the security property, not a tidiness measure. core writes the request
-        # file, so "write any line into .env" would be "core can set any variable in this
-        # composition", which is a wider capability than ADR-051 grants — the whole design there is
-        # that core names a value and never a mechanism. Every key written here is spelled out
-        # below; nothing from the request file becomes a key.
-        #
-        # Arguments: <mode> <core password> <poller password>.
-        set_env() { # <key> <value>  — replace or append, atomically, preserving everything else
-          E="$$WORKDIR/.env"
-          touch "$$E"
-          grep -v "^$$1=" "$$E" > "$$E.tmp" 2>/dev/null || true
-          [ -n "$$2" ] && printf '%s=%s\n' "$$1" "$$2" >> "$$E.tmp"
-          mv "$$E.tmp" "$$E"
-        }
-        bus_switch() {
-          MODE="$$1"; CPW="$$2"; PPW="$$3"
-          if [ "$$MODE" = "on" ]; then
-            set_env YAGRA_NATS_ARGS "-js -c /etc/nats/nats-server.conf"
-            set_env YAGRA_NATS_BIND "0.0.0.0"
-            set_env YAGRA_NATS_CORE_PASSWORD "$$CPW"
-            set_env YAGRA_NATS_POLLER_PASSWORD "$$PPW"
-            set_env YAGRA_CORE_BUS_URL "tls://core:$$CPW@nats:4222"
-            set_env YAGRA_POLLER_BUS_URL "tls://poller:$$PPW@nats:4222"
-            set_env YAGRA_BUS_CA_FILE "/etc/nats/certs/server-cert.pem"
-          else
-            # Cleared rather than set to a plaintext value: the compose file already carries the
-            # right defaults, so removing the line is what returns this deployment to them. Setting
-            # them here would be a second copy of those defaults, in a file no upgrade replaces.
-            for k in YAGRA_NATS_ARGS YAGRA_NATS_BIND YAGRA_NATS_CORE_PASSWORD \
-                     YAGRA_NATS_POLLER_PASSWORD YAGRA_CORE_BUS_URL YAGRA_POLLER_BUS_URL \
-                     YAGRA_BUS_CA_FILE; do
-              set_env "$$k" ""
-            done
-          fi
-          # Only the three services that read those variables. `up -d` with no arguments would
-          # recreate this container too, killing the process performing the change.
-          ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d bus-init bus-cert-init nats core poller ) \
-            || return 1
-          return 0
-        }
-
         handle() {
           SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
           TAG=$$(field tag); BY=$$(field requested_by)
@@ -954,10 +991,10 @@ services:
               CMDSAFE=bus
               if paused; then reject "$$ID" "the upgrade mechanism is switched off in Settings ▸ Upgrade"; return; fi
               [ -n "$$WORKDIR" ] || { reject "$$ID" "cannot locate the compose project directory"; return; }
-              [ -f "$$WORKDIR/docker-compose.deploy.yml" ] \
-                || { reject "$$ID" "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this deployment's docker-compose.deploy.yml"; return; }
               # Every field re-checked here, not only in core: this container reads the file as root,
-              # and a request file is the one thing core can write into the shared volume.
+              # and a request file is the one thing core can write into the shared volume. The
+              # directory itself is checked inside BUS instead, because only that container can see
+              # it — asking here is what made this command answer `rejected` every time.
               case "$$BUSMODE" in on|off) ;; *) reject "$$ID" "unsupported bus mode"; return ;; esac
               if [ "$$BUSMODE" = "on" ]; then
                 for pw in "$$BUSCPW" "$$BUSPPW"; do
@@ -966,18 +1003,20 @@ services:
                 done
               fi
               echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
-              START=$$(date +%s)
+              # Written here rather than in BUS so a container that never starts still leaves a run
+              # behind — which `reject` below then overwrites with the reason.
               printf '{"id":"%s","command":"bus","target":null,"state":"running","step":"compose","message":"reconfiguring the bus","started_at":%s,"finished_at":null,"requested_by":"%s"}\n' \
-                "$$ID" "$$START" "$$BY" > "$$D/status.json.tmp"
+                "$$ID" "$$(date +%s)" "$$BY" > "$$D/status.json.tmp"
               mv "$$D/status.json.tmp" "$$D/status.json"
-              if bus_switch "$$BUSMODE" "$$BUSCPW" "$$BUSPPW"; then
-                ST=succeeded; MSG="remote pollers are now $$([ "$$BUSMODE" = on ] && echo accepted || echo refused)"
-              else
-                ST=failed; MSG="docker compose up failed; the previous bus settings are still in .env"
-              fi
-              printf '{"id":"%s","command":"bus","target":null,"state":"%s","step":"compose","message":"%s","started_at":%s,"finished_at":%s,"requested_by":"%s"}\n' \
-                "$$ID" "$$ST" "$$MSG" "$$START" "$$(date +%s)" "$$BY" > "$$D/status.json.tmp"
-              mv "$$D/status.json.tmp" "$$D/status.json"
+              # The same three mounts the apply below needs, for the same reasons — and the third is
+              # the whole fix. See the note above BUS.
+              docker run --rm -d --name "yagra-bus-$$ID" \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v "$${PROJ}_upgradedata:/data/upgrade" \
+                -v "$$WORKDIR:$$WORKDIR" \
+                -e "PROJ=$$PROJ" -e "WORKDIR=$$WORKDIR" \
+                docker:28-cli sh -c "$$BUS" yagra-bus "$$BUSMODE" "$$ID" "$$BY" "$$BUSCPW" "$$BUSPPW" >/dev/null \
+                || reject "$$ID" "could not start the bus-change container"
               return
               ;;
             refresh)
