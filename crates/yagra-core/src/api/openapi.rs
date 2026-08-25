@@ -318,14 +318,139 @@ mod tests {
             }
         }
 
+        // 🚨 The floor counts what was **compared**, not the `#[utoipa::path]` blocks walked. It
+        // sat at 100 against a real 167 for long enough that the parser could have stopped seeing
+        // a third of the surface and still reported a clean contract — the failure
+        // `floor-must-count-what-was-checked` names. Keep it just under the true count: it moves
+        // up when handlers are added, and a drop below it means the parser broke, not that the
+        // API shrank (documented shapes this cannot parse are skipped, and are ~90 more).
         assert!(
-            compared > 100,
+            compared > 160,
             "only compared {compared} handlers — the parser stopped matching"
         );
         assert!(
             wrong.is_empty(),
             "documented body ≠ handler return type:\n  {}",
             wrong.join("\n  ")
+        );
+    }
+
+    /// **The twelve routes the check above is structurally unable to reach.**
+    ///
+    /// `flow_endpoints!` generates a per-node and a fleet handler from each of six invocations, and
+    /// every one of them returns `ApiResult<Response>` — `run_flow_agg` erases the row type because
+    /// one function serves all six aggregations. So `returned_body` yields `None` for all twelve and
+    /// they are skipped, by design.
+    ///
+    /// What that leaves is the failure this test exists for: the row type each pair *documents* is a
+    /// macro argument, and the row type it actually *returns* is decided by a separate hand-written
+    /// match in `flow_agg_rows`. Two independent lists, nothing comparing them. Pair
+    /// `FlowAgg::Series` with `FlowTalker` and the OpenAPI document, the generated `schema.d.ts` and
+    /// every `api.ts` call all name the wrong shape — while the server keeps returning the right one
+    /// and every existing test stays green.
+    ///
+    /// Reads `flow.rs` through `module_source` (ADR-091: test items removed, never cut at the first
+    /// attribute) rather than this file's own directory, so no needle written here can match the
+    /// line it is written on.
+    #[test]
+    fn every_flow_endpoint_documents_the_row_its_aggregation_produces() {
+        let production = crate::module_source::code("src/api", "flow").replace("\r\n", "\n");
+
+        // 1. Each `FlowRows` variant → the row type it carries.
+        let rows_enum = production
+            .split_once("enum FlowRows {")
+            .and_then(|(_, rest)| rest.split_once("\n}"))
+            .expect("the FlowRows enum")
+            .0;
+        let mut carries = std::collections::BTreeMap::new();
+        for line in rows_enum.lines() {
+            let Some((variant, rest)) = line.trim().split_once("(Vec<") else {
+                continue;
+            };
+            let Some((path, _)) = rest.split_once(">)") else {
+                continue;
+            };
+            carries.insert(
+                variant.to_owned(),
+                path.rsplit("::").next().unwrap_or(path).to_owned(),
+            );
+        }
+        assert_eq!(
+            carries.len(),
+            6,
+            "parsed {carries:?} out of the FlowRows enum — the parser stopped matching"
+        );
+
+        // 2. Each `FlowAgg` variant → the `FlowRows` variant `flow_agg_rows` builds for it. Bounded
+        //    to that function's body: `FlowAgg::` also appears in the invocations parsed below.
+        let body = production
+            .split_once("fn flow_agg_rows(")
+            .and_then(|(_, rest)| rest.split_once("\n}\n"))
+            .expect("the flow_agg_rows body")
+            .0;
+        let mut produces = std::collections::BTreeMap::new();
+        for chunk in body.split("FlowAgg::").skip(1) {
+            let Some((agg, after)) = chunk.split_once(" =>") else {
+                continue;
+            };
+            let Some((_, tail)) = after.split_once("FlowRows::") else {
+                continue;
+            };
+            produces.insert(
+                agg.trim().to_owned(),
+                tail.chars()
+                    .take_while(char::is_ascii_alphanumeric)
+                    .collect::<String>(),
+            );
+        }
+        assert_eq!(
+            produces.len(),
+            6,
+            "parsed {produces:?} out of flow_agg_rows — the parser stopped matching"
+        );
+
+        // 3. Each invocation: the aggregation it serves, and the row type it puts in the document.
+        let mut checked = 0usize;
+        for inv in production.split("flow_endpoints!(").skip(1) {
+            let args: Vec<&str> = inv
+                .split_once("\n);")
+                .expect("an unterminated flow_endpoints! invocation")
+                .0
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .collect();
+            // Positional, and each pick is shape-checked below so a reordered macro fails loudly
+            // rather than comparing two arguments that no longer mean what this test assumes.
+            assert_eq!(args.len(), 7, "flow_endpoints! was passed {args:?}");
+            let agg = args[2]
+                .strip_prefix("FlowAgg::")
+                .and_then(|a| a.strip_suffix(','))
+                .unwrap_or_else(|| panic!("argument 3 is the aggregation; got {:?}", args[2]));
+            let documented = args[5]
+                .strip_suffix(',')
+                .filter(|r| !r.is_empty() && r.chars().all(|c| c.is_ascii_alphanumeric()))
+                .unwrap_or_else(|| panic!("argument 6 is the row type; got {:?}", args[5]));
+
+            let variant = produces
+                .get(agg)
+                .unwrap_or_else(|| panic!("flow_agg_rows has no arm for FlowAgg::{agg}"));
+            let returned = carries
+                .get(variant)
+                .unwrap_or_else(|| panic!("FlowRows has no variant {variant}"));
+            assert_eq!(
+                documented, returned,
+                "both routes for FlowAgg::{agg} document `Vec<{documented}>`, but `flow_agg_rows` \
+                 builds FlowRows::{variant}, which carries {returned}. The published document, \
+                 `web/src/api/schema.d.ts` and every `api.ts` call would all name the wrong shape, \
+                 and nothing else would notice"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 6,
+            "only {checked} flow_endpoints! invocation(s) were parsed — the twelve routes this \
+             test covers are not all being checked"
         );
     }
 }
