@@ -996,9 +996,14 @@ services:
               # directory itself is checked inside BUS instead, because only that container can see
               # it — asking here is what made this command answer `rejected` every time.
               case "$$BUSMODE" in on|off) ;; *) reject "$$ID" "unsupported bus mode"; return ;; esac
+              # 🚨 The leading letter is load-bearing, not cosmetic. This value is substituted into
+              # `nats-server.conf` as `password: $$YAGRA_NATS_POLLER_PASSWORD`, and nats-server
+              # PARSES what it substitutes: a digit-leading value starts a number and refuses to
+              # start the server, an all-digit one crashes it on a type assertion. Refusing it here
+              # costs the operator a retry; installing it costs them the bus.
               if [ "$$BUSMODE" = "on" ]; then
                 for pw in "$$BUSCPW" "$$BUSPPW"; do
-                  echo "$$pw" | grep -Eq '^[A-Za-z0-9]{16,64}$$' \
+                  echo "$$pw" | grep -Eq '^[A-Za-z][A-Za-z0-9]{15,63}$$' \
                     || { reject "$$ID" "malformed bus password"; return; }
                 done
               fi

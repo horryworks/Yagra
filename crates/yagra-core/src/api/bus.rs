@@ -355,17 +355,35 @@ fn merge_names(supplied: &[String]) -> Vec<String> {
     names
 }
 
-/// A bus password: `[A-Za-z0-9]` only.
+/// A bus password: `[A-Za-z0-9]`, and **the first character is always a letter**.
 ///
 /// The charset is not aesthetic. The value travels through the updater's `key=value` request file
 /// and is then written into a `.env` the shell reads, so anything a shell or a parser could treat
 /// specially is one place for the two to disagree. Alphanumerics cannot.
+///
+/// 🚨 **The leading letter is a third reader, and it is the one that had never been tried.** The
+/// `.env` value is substituted into `nats-server.conf` as `password: $YAGRA_NATS_POLLER_PASSWORD`,
+/// and nats-server **parses what it substitutes**. A value starting with a digit begins a number
+/// and then hits a letter, so the server refuses to start; a value that is *all* digits parses as
+/// an integer and crashes it on the type assertion. Measured on 192.168.1.211, 2026-08-25:
+///
+/// | drawn | nats-server |
+/// |---|---|
+/// | `1t1iwRhYTBq3xyPqOAKx4rgd` | `variable reference … could not be parsed` |
+/// | `Xt1iwRhYTBq3xyPqOAKx4rgd` | starts |
+/// | `9999999999999999` | `interface conversion: interface {} is int64, not string` |
+///
+/// Uniform over 62 characters that is a **10/62 chance per password**, two passwords per switch —
+/// so roughly **three in ten** attempts to accept remote pollers would have left the bus dead, with
+/// core retrying a DNS name that has no container behind it. Nothing had ever run this
+/// configuration, so nothing had ever drawn from it.
 fn random_secret() -> String {
     use rand::Rng;
+    const LETTERS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
-    (0..BUS_SECRET_LEN)
-        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+    std::iter::once(LETTERS[rng.gen_range(0..LETTERS.len())] as char)
+        .chain((1..BUS_SECRET_LEN).map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char))
         .collect()
 }
 
@@ -486,20 +504,89 @@ mod tests {
 
     /// The secret is written into a `key=value` file read as root and then into a `.env` a shell
     /// sources. A character either of them treats specially is one place for the two to disagree.
+    ///
+    /// 🚨 **And there is a third reader: `nats-server.conf` substitutes it and then _parses_ it.**
+    /// A password starting with a digit stops the bus from starting at all — measured, and at
+    /// 10/62 per password it is not a corner case but roughly three switch attempts in ten. The
+    /// first character must be a letter, and 512 draws is enough that a regression from a uniform
+    /// alphabet would have to be spectacularly unlucky to pass.
     #[test]
     fn a_generated_bus_secret_is_alphanumeric_and_long_enough() {
-        for _ in 0..64 {
+        for _ in 0..512 {
             let s = super::random_secret();
             assert_eq!(s.len(), super::BUS_SECRET_LEN);
             assert!(
                 s.chars().all(|c| c.is_ascii_alphanumeric()),
                 "generated `{s}`, which the request-file charset would refuse"
             );
+            assert!(
+                s.starts_with(|c: char| c.is_ascii_alphabetic()),
+                "generated `{s}`; nats-server parses a digit-leading password as a number and \
+                 refuses to start"
+            );
         }
+        // The rest of the value must still be drawn from the full alphabet — a fix that dropped
+        // digits everywhere would satisfy the assertion above while quietly shrinking the keyspace.
+        let drawn: String = (0..512).map(|_| super::random_secret()).collect();
+        assert!(
+            drawn.chars().any(|c| c.is_ascii_digit()),
+            "no digit in 512 draws — the alphabet has been narrowed, not just its first character"
+        );
         assert_ne!(
             super::random_secret(),
             super::random_secret(),
             "two draws were identical"
         );
+    }
+
+    /// The mirror this feature creates: **core draws the password, the updater decides whether to
+    /// install it.** Two expressions of one rule, in two languages, and nothing else compares them.
+    ///
+    /// The direction that fails silently is a generator drifting *wider* than the validator: every
+    /// draw that happens to land outside is a switch the operator clicks and watches be rejected,
+    /// with a message about a "malformed bus password" they did not type. The other direction is
+    /// worse and is what bug 4 was — a validator wider than what nats-server can actually parse.
+    ///
+    /// So this runs the updater's **actual** regex, read out of the composition, over real draws.
+    #[test]
+    fn the_updater_accepts_every_password_core_can_draw() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        // Anchored on the *refusal*, then walked back to the test it belongs to — so this cannot
+        // drift onto some other `grep -Eq` in the script and start pinning the wrong rule.
+        let lines: Vec<&str> = compose.lines().collect();
+        let refusal = lines
+            .iter()
+            .position(|l| l.contains(r#"reject "$$ID" "malformed bus password""#))
+            .expect("the updater still refuses a malformed bus password");
+        let line = lines[..refusal]
+            .iter()
+            .rposition(|l| l.contains("grep -Eq"))
+            .map(|i| lines[i])
+            .expect("the refusal is preceded by the test it belongs to");
+        let pattern = line
+            .split('\'')
+            .nth(1)
+            .expect("the check's pattern is single-quoted")
+            .replace("$$", "$");
+        let re = regex::Regex::new(&pattern)
+            .unwrap_or_else(|e| panic!("the updater's pattern is not a regex: {pattern} — {e}"));
+
+        for _ in 0..256 {
+            let s = super::random_secret();
+            assert!(
+                re.is_match(&s),
+                "the updater would refuse `{s}`, which core just drew (pattern {pattern})"
+            );
+        }
+        // The accept side alone would pass against `.*`. These are the two shapes nats-server was
+        // measured to reject, so the validator has to reject them too.
+        for bad in ["1t1iwRhYTBq3xyPqOAKx4rgd", "9999999999999999"] {
+            assert!(
+                !re.is_match(bad),
+                "the updater would install `{bad}`, and nats-server does not start with it \
+                 (pattern {pattern})"
+            );
+        }
     }
 }

@@ -13,7 +13,7 @@
 ### Bug Fixes
 
 - **Settings ▸ Pollers ▸ "Accept remote pollers" now works. It had never once succeeded since it
-  shipped**, and the reason was three separate defects in series — each one hidden by the one before
+  shipped**, and the reason was four separate defects in series — each one hidden by the one before
   it. (1) The request returned HTTP 500: core reissued the bus certificate and then tried to write it
   onto a volume it mounts read-only, and because the database write lands first, the stored
   certificate and the file on disk were left disagreeing with no way to converge. (2) With that
@@ -22,8 +22,11 @@
   that directory mounted — the upgrade path runs the same commands inside a container that does, and
   only this path lacked it. (3) With that fixed, the switch completed in 11 seconds and then put core
   into a crash loop: the first TLS bus URL this product has ever run with hit a rustls configuration
-  that no code path had reached before. If you tried this switch on v0.2.13 or later, nothing you did
-  was wrong.
+  that no code path had reached before. (4) With that fixed, the bus itself refused to start roughly
+  three times in ten: the generated password is substituted into the NATS server configuration and
+  parsed there, so one beginning with a digit is read as a number and rejected. Generated bus
+  passwords now always begin with a letter. If you tried this switch on v0.2.13 or later, nothing
+  you did was wrong.
 - **The bus change no longer widens `.env`.** Rewriting it from the sidecar left the file
   world-readable and owned by root — it holds the database password and, once the switch is on, both
   bus passwords. It now keeps the permissions and ownership it found.
