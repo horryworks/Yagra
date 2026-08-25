@@ -22,10 +22,15 @@ use super::*;
 const MAX_SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(60);
 
 /// Run the poll loop over a stream of jobs. Each job runs concurrently under the
-/// [`PollLimiter`]: a global concurrency cap bounds total load and per-device single-flight
-/// drops a poll whose target is still being probed (backpressure, monitoring-conventions).
+/// [`PollLimiter`]: a global concurrency cap bounds total load and per-device single-flight makes
+/// a poll wait for the probe already running against its target, dropping it only if the device is
+/// still busy at the deadline (backpressure, monitoring-conventions).
 /// Returns when the stream ends. Stream-generic so the same loop drives both the in-memory
 /// bus (tests/skeleton) and the NATS queue subscription (production), ADR-003/009.
+///
+/// 🚨 **This loop awaits the concurrency permit and nothing else.** Everything a *device* can make
+/// a job wait for happens inside the spawned task, because a wait on this line is a wait for every
+/// job behind it — `a_busy_device_does_not_stall_other_devices` below is what holds that.
 ///
 /// `poller_id` (its sanitized id) is stamped onto every published result for provenance; the shared
 /// `results_total` counter is bumped on each successful publish and `inflight` tracks probes in
@@ -102,23 +107,24 @@ pub async fn run_stream<S>(
             }
         }
 
+        // 🚨 **Only the permit is awaited here. The per-device wait is awaited in the task.**
+        // Both used to happen on this line, and that made one device's serialised conversation
+        // stall every *other* device's job behind it — a fan-out loop that fanned out one job at a
+        // time. The permit is the half that belongs here: it is what bounds concurrency, so
+        // awaiting it is backpressure rather than head-of-line blocking, and it keeps this from
+        // spawning unboundedly. See `PollLimiter::acquire_permit` for the measurement.
+        let Some(permit) = limiter.acquire_permit().await else {
+            continue; // shutdown
+        };
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
         // guard for the same reason Meraki collectors do. Pile-up stays bounded by each check's
         // total timeout budget (≤30 s, enforced in the transport) plus the global concurrency cap.
-        let guard = if matches!(job.check, CheckSpec::Dns(_)) {
-            limiter.begin_global().await
-        } else {
-            limiter
-                .begin_for(job.target, single_flight_wait(&job))
-                .await
-        };
-        let Some(guard) = guard else {
-            metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
-            tracing::debug!(target = %job.target, "skipping poll: device busy past the deadline");
-            continue;
-        };
+        // Both this and the wait are decided out here because the task takes the job by value.
+        let dns = matches!(job.check, CheckSpec::Dns(_));
+        let wait = single_flight_wait(&job);
+        let limiter = limiter.clone();
         let sink = sink.clone();
         let transport = transport.clone();
         let poller_id = poller_id.clone();
@@ -135,7 +141,23 @@ pub async fn run_stream<S>(
         yagra_telemetry::set_span_parent(&span, &job.trace_context);
         tokio::spawn(
             async move {
-                let _guard = guard; // released (and target unmarked) when the probe finishes
+                // Per-device single-flight, awaited here rather than on the loop: a device still
+                // being walked now delays only the jobs aimed at *it*. DNS monitors share the
+                // `0.0.0.0` display address (see above), so they hold the permit alone.
+                let guard = if dns {
+                    Some(limiter.global_guard(permit))
+                } else {
+                    limiter.claim_target(permit, job.target, wait).await
+                };
+                // Released (and the target unmarked) when the probe finishes.
+                let Some(_guard) = guard else {
+                    metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
+                    tracing::debug!(
+                        target = %job.target,
+                        "skipping poll: device busy past the deadline"
+                    );
+                    return;
+                };
                 inflight.fetch_add(1, Ordering::Relaxed);
                 metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
                 let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
@@ -195,6 +217,74 @@ mod tests {
         assert_eq!(result.outcome, CheckOutcome::Reachable);
         assert!(!result.samples.is_empty());
         assert!(result.poller_id.is_none(), "None poller id leaves it unset");
+    }
+
+    /// **A device that is still being walked stalls its own next spec — and nothing else.**
+    ///
+    /// The regression for the head-of-line stall described on [`run_stream`]. Both jobs are due at
+    /// once and the *blocked* one is first, which is the only ordering that can tell the two
+    /// designs apart: with the wait on the loop, `run_stream` parks in `claim_target` for the full
+    /// single-flight budget and the second device's job is never even pulled off the stream.
+    ///
+    /// 🚨 **The 60 s interval is load-bearing.** `single_flight_wait` is `min(interval, 60s)`, so a
+    /// short interval here would let the loop clear the blocked job inside the timeout and the test
+    /// would pass against the code it exists to reject. Confirmed by reverting the fix: this fails
+    /// (the recv times out), and the other two tests in this module do not.
+    #[tokio::test]
+    async fn a_busy_device_does_not_stall_other_devices() {
+        use std::net::Ipv4Addr;
+        use yagra_bus::IcmpCheck;
+
+        fn job_at(node: u128, target: Ipv4Addr, interval_secs: u32) -> PollJob {
+            PollJob::icmp(
+                Uuid::nil(),
+                NodeId::from(Uuid::from_u128(node)),
+                IpAddr::V4(target),
+                IcmpCheck::default(),
+                interval_secs,
+            )
+        }
+
+        let bus = Arc::new(InMemoryBus::new(16));
+        let mut results_rx = bus.subscribe_results();
+        let transport: Arc<dyn Transport> = Arc::new(FakeTransport::reachable(5.0));
+        let limiter = Arc::new(PollLimiter::new(16));
+
+        let busy = Ipv4Addr::new(10, 0, 0, 1);
+        let other = Ipv4Addr::new(10, 0, 0, 2);
+
+        // Hold `busy`'s single-flight marker for the whole test: a probe against it is still
+        // walking, exactly as a wedged or unreachable device leaves it.
+        let held = limiter
+            .begin_for(IpAddr::V4(busy), Duration::from_secs(1))
+            .await
+            .expect("the marker is free before anything else takes it");
+
+        let jobs = vec![job_at(1, busy, 60), job_at(2, other, 60)];
+        tokio::spawn(run_stream(
+            Box::pin(futures::stream::iter(jobs)),
+            crate::store_forward::StoreForwardSink::passthrough(bus.clone()),
+            transport,
+            limiter.clone(),
+            None,
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicU64::new(0)),
+        ));
+
+        let result = tokio::time::timeout(Duration::from_secs(5), results_rx.recv())
+            .await
+            .expect(
+                "no result inside 5s: the second device's job never ran while the first was \
+                 waiting. That is the head-of-line stall — the loop awaited the per-device \
+                 single-flight (up to 60s here) instead of the spawned task doing it",
+            )
+            .unwrap();
+        assert_eq!(
+            result.node_id,
+            NodeId::from(Uuid::from_u128(2)),
+            "the result that came back is the unblocked device's"
+        );
+        drop(held);
     }
 
     /// Distributed-poller walking skeleton (ADR-009/020): a spec lands in a [`WorkingSet`] via a

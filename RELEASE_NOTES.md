@@ -136,6 +136,15 @@
 
 ### Bug Fixes
 
+- **Every node is polled at the interval it is configured for again, instead of once every ~39
+  minutes.** The poll loop waited for a device's in-flight probe *before* handing the job to a
+  worker, so one device's turn held up every other device's job behind it — a loop whose entire
+  purpose is to fan out was fanning out one device at a time. Nothing was dropped and no counter
+  said so: measured on the test deployment, 4.8 polls a minute across 187 checks with a 60-second
+  interval configured, the poller at 15% CPU and 62 of its 64 concurrency slots free. It gets worse
+  the more unresponsive devices a deployment has, because their timeouts are what the loop waits
+  out. The visible symptom was a node's Interfaces tab greyed out for most of every cycle, its
+  throughput column reading "—", since a row is marked stale after 15 minutes without a walk.
 - **The fleet no longer reports itself healthy for the first minutes after a core restart.** A
   check that had not yet concluded anything still held a starting value of "ok", and that value
   was published as the node's state — so after every restart the Nodes page, the fleet summary and

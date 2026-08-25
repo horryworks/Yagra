@@ -77,18 +77,44 @@ impl PollLimiter {
         }
     }
 
-    /// Begin a probe for `target`, waiting up to `max_wait` for one already running against it.
+    /// Take **only** the global concurrency permit — the half of a probe's admission that belongs
+    /// on the job loop. Returns `None` on shutdown.
     ///
-    /// Returns `None` when the device is *still* busy at the deadline — the caller counts that as a
-    /// skipped poll, exactly as before — or on shutdown. `max_wait` is what keeps this
-    /// backpressure rather than an unbounded queue: a device that never frees up sheds load.
+    /// 🚨 **Splitting the two halves apart is not a refactor; it is the fix for a measured stall.**
+    /// There used to be one method that took the permit *and* waited for the target, and the poll
+    /// loop awaited the whole of it before spawning — so the wait for *one* device's in-flight
+    /// probe held up every other device's job behind it. Head-of-line blocking, in a loop whose
+    /// entire job is to fan out. It is invisible in the counters, because nothing is dropped:
+    /// measured on the test deployment at v0.2.17, **4.8 jobs/min against 187 specs** (every node
+    /// polled once per ~39 minutes with a 60 s interval configured) while
+    /// `yagra_poll_skipped_backpressure_total` moved by 2 in five minutes and the poller sat at 15%
+    /// CPU with 62 of its 64 permits free. Its visible end was an Interfaces tab greyed out for
+    /// most of every cycle, because a row goes stale after 900 s without a walk.
     ///
-    /// **The global permit is taken first, and the target is marked only once the probe is about to
-    /// run.** The previous order marked the target and *then* queued for a permit, so time spent
+    /// The permit is what bounds concurrency, so taking it is what the loop should await;
+    /// [`Self::claim_target`] is what the spawned task should await.
+    pub async fn acquire_permit(&self) -> Option<OwnedSemaphorePermit> {
+        self.global.clone().acquire_owned().await.ok()
+    }
+
+    /// Claim `target`'s single-flight marker for a permit already in hand, waiting up to `max_wait`
+    /// for a probe already running against it. The other half of [`Self::acquire_permit`].
+    ///
+    /// Returns `None` when the device is still busy at the deadline — the caller counts that as a
+    /// skipped poll. `max_wait` is what keeps this backpressure rather than an unbounded queue: a
+    /// device that never frees up sheds load. The permit is released with the `None`, so a shed job
+    /// frees its concurrency slot.
+    ///
+    /// **The permit is taken first and the target is marked only once the probe is about to run.**
+    /// The order before that marked the target and *then* queued for a permit, so time spent
     /// waiting for concurrency counted as "this device is being polled" even though no packet had
-    /// been sent.
-    pub async fn begin_for(&self, target: IpAddr, max_wait: Duration) -> Option<PollGuard> {
-        let permit = self.global.clone().acquire_owned().await.ok()?;
+    /// been sent. Taking the permit on the loop keeps that property.
+    pub async fn claim_target(
+        &self,
+        permit: OwnedSemaphorePermit,
+        target: IpAddr,
+        max_wait: Duration,
+    ) -> Option<PollGuard> {
         let deadline = Instant::now() + max_wait;
         loop {
             {
@@ -113,6 +139,16 @@ impl PollLimiter {
         }
     }
 
+    /// Both halves at once: take a permit, then wait for `target`. **Test-only, and deliberately
+    /// so** — this is the shape whose `.await` stalled the poll loop, and `#[cfg(test)]` is what
+    /// stops it being reachable from production code at all. Tests exercising the limiter itself
+    /// have no loop to stall, so composing here keeps them reading as one call.
+    #[cfg(test)]
+    pub async fn begin_for(&self, target: IpAddr, max_wait: Duration) -> Option<PollGuard> {
+        let permit = self.acquire_permit().await?;
+        self.claim_target(permit, target, max_wait).await
+    }
+
     /// Acquire only the global concurrency permit — **no** per-target single-flight. For jobs whose
     /// single-flight is enforced elsewhere and which share a sentinel target (Meraki org collectors
     /// all carry `0.0.0.0`, gated per-org by core), so per-device single-flight would wrongly drop
@@ -120,17 +156,20 @@ impl PollLimiter {
     /// on shutdown. The returned guard's sentinel target is never inserted into the inflight set, so
     /// its drop is a harmless no-op there.
     pub async fn begin_global(&self) -> Option<PollGuard> {
-        self.global
-            .clone()
-            .acquire_owned()
-            .await
-            .ok()
-            .map(|permit| PollGuard {
-                target: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-                inflight: self.inflight.clone(),
-                released: self.released.clone(),
-                _permit: permit,
-            })
+        self.acquire_permit().await.map(|p| self.global_guard(p))
+    }
+
+    /// Wrap a permit already in hand as a guard that took **no** per-device marker — the
+    /// [`Self::begin_global`] half that pairs with [`Self::acquire_permit`], for the same reason
+    /// [`Self::claim_target`] exists.
+    #[must_use]
+    pub fn global_guard(&self, permit: OwnedSemaphorePermit) -> PollGuard {
+        PollGuard {
+            target: IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
+            inflight: self.inflight.clone(),
+            released: self.released.clone(),
+            _permit: permit,
+        }
     }
 }
 
