@@ -177,10 +177,12 @@ async fn regenerate_bus_cert(
 ) -> ApiResult<Json<BusResponse>> {
     let names = merge_names(&body.names);
     let by = caller.map(|c| c.0.user_id);
-    let certificate = bus.regenerate(&names, by).await.map_err(to_api_error)?;
-    // No restart here, and that is honest rather than lazy: the file on the volume is current
-    // immediately, but `nats-server` reads its certificate at startup, so the *bus* keeps serving
-    // the previous one until it is recreated. The card says so; the switch is what recreates it.
+    let certificate = bus.reissue(&names, by).await.map_err(to_api_error)?;
+    // No restart here, and no file written either — both are honest rather than lazy.
+    // `bus-cert-init` is the only writer of the volume (core mounts it read-only), so the stored
+    // row moves ahead of the file and `materialized` reports the gap until the stack is recreated.
+    // That changes nothing for the bus: `nats-server` reads its certificate at startup, so it kept
+    // serving the previous one until recreation regardless. The card says so; the switch recreates.
     tracing::warn!(
         fingerprint = %certificate.fingerprint_sha256,
         sans = ?certificate.sans,
@@ -241,7 +243,7 @@ async fn set_bus_remote(
             ));
         }
         let by_id = caller.as_ref().map(|c| c.0.user_id);
-        let cert = bus.regenerate(&names, by_id).await.map_err(to_api_error)?;
+        let cert = bus.reissue(&names, by_id).await.map_err(to_api_error)?;
         let core_secret = random_secret();
         let poller_secret = random_secret();
         (

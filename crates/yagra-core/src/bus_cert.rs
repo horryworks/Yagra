@@ -235,7 +235,15 @@ impl BusTlsRepo {
 
     // ── Writes ───────────────────────────────────────────────────────────────────────────────
 
-    /// Mint a new certificate covering `names`, store it, and write it to the volume.
+    /// Mint a new certificate covering `names` and store it — **without touching the volume**.
+    ///
+    /// This is the API path (Settings ▸ Pollers). It deliberately does not write the files:
+    /// `bus-cert-init` is their only writer — the compose file says so at the mount, and a core
+    /// serving requests holds `buscerts` read-only. Calling `materialize` here fails with `EROFS`
+    /// *after* `store` has already replaced the single stored row, leaving the database ahead of
+    /// the volume with no way back: the API returns 500, so the `.env` is never written and the
+    /// stack is never recreated, and nothing afterwards closes the gap (Inc.5). The files catch up
+    /// when the stack *is* recreated, and `BusTlsView.materialized` reports the gap until they do.
     ///
     /// **Every remote poller has to be given the new certificate before it can reconnect**, which is
     /// why nothing calls this on a schedule. Callers that are about to restart the bus anyway (the
@@ -243,14 +251,25 @@ impl BusTlsRepo {
     ///
     /// # Errors
     /// [`crate::server_cert::CertError`] if generation fails, otherwise the database error.
-    pub async fn regenerate(
-        &self,
-        names: &[String],
-        by: Option<Uuid>,
-    ) -> anyhow::Result<BusTlsView> {
+    pub async fn reissue(&self, names: &[String], by: Option<Uuid>) -> anyhow::Result<BusTlsView> {
+        let cert = server_cert::generate_self_signed(names, Utc::now())?;
+        self.store(&cert, by).await?;
+        self.read_back().await
+    }
+
+    /// Mint, store **and** write the files. The one-shot path — see [`Self::ensure_ready`].
+    ///
+    /// Only `yagra-core bus-cert` reaches this, and it runs in a container that mounts the volume
+    /// read-write. Nothing serving HTTP may call it; that is what [`Self::reissue`] is for.
+    async fn regenerate(&self, names: &[String], by: Option<Uuid>) -> anyhow::Result<BusTlsView> {
         let cert = server_cert::generate_self_signed(names, Utc::now())?;
         self.store(&cert, by).await?;
         self.materialize(&cert)?;
+        self.read_back().await
+    }
+
+    /// Read the row back so every caller returns the persisted view rather than what it minted.
+    async fn read_back(&self) -> anyhow::Result<BusTlsView> {
         self.view()
             .await?
             .ok_or_else(|| anyhow::anyhow!("bus certificate stored but could not be read back"))
