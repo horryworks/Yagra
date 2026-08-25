@@ -88,6 +88,22 @@ pub fn redact_url(url: &str) -> String {
 /// fail-closed scan needs the *literal* password so it can prove that exact string appears nowhere
 /// in the archive, which is a stronger check than any pattern.
 pub fn split_userinfo_password(url: &str) -> (String, Option<String>) {
+    let (clean, _, password) = split_userinfo(url);
+    (clean, password)
+}
+
+/// Split a NATS URL into `(url_without_userinfo, user, password)`.
+///
+/// 🚨 **The credentials in a NATS URL are ours to apply, not the client library's.** `async_nats`
+/// 0.49 builds its `CONNECT` from `ConnectOptions` alone — `ServerAddr::username()` and
+/// `password()` exist and the connector never calls them. So a URL of the form
+/// `tls://core:secret@nats:4222` handed straight to `connect()` authenticates as **nobody**, and
+/// the server answers `authentication error`. Measured on 192.168.1.211, 2026-08-25: core
+/// retried that forever against a bus whose password it was holding all along.
+///
+/// This is the single parser both callers share, so "where does the userinfo end" has one answer
+/// and the redaction in [`redact_url`] cannot disagree with what was actually sent.
+pub fn split_userinfo(url: &str) -> (String, Option<String>, Option<String>) {
     let (scheme, rest) = match url.split_once("://") {
         Some((s, r)) => (Some(s), r),
         None => (None, url),
@@ -98,12 +114,22 @@ pub fn split_userinfo_password(url: &str) -> (String, Option<String>) {
         Some((u, h)) => (Some(u), h),
         None => (None, authority),
     };
-    let password = userinfo.and_then(|ui| ui.split_once(':').map(|(_, p)| p.to_owned()));
+    let (user, password) = match userinfo {
+        // A `user:pass` pair. Split at the FIRST colon: the username cannot contain one, and a
+        // password may (`redact_url`'s tests carry `poller:a:b@host`).
+        Some(ui) => match ui.split_once(':') {
+            Some((u, p)) => (Some(u.to_owned()), Some(p.to_owned())),
+            // Userinfo with no colon is a bare username, which NATS treats as a token. Reported so
+            // the caller can decide; no call site uses it today.
+            None => (Some(ui.to_owned()), None),
+        },
+        None => (None, None),
+    };
     let clean = match scheme {
         Some(s) => format!("{s}://{host}{tail}"),
         None => format!("{host}{tail}"),
     };
-    (clean, password)
+    (clean, user, password)
 }
 
 /// A [`Bus`] over NATS.
@@ -121,9 +147,10 @@ impl NatsBus {
 
     /// Connect to NATS at `url` with an optional TLS root CA (`ca_file`) to pin the server
     /// certificate — the remote-poller path, where credentials cross a trust boundary and TLS is
-    /// mandatory (security.md / ADR-020). Authentication rides in the URL
-    /// (`nats://user:pass@host`), so there are no extra auth params. With `ca_file = None` this is
-    /// the plaintext single-node connection.
+    /// mandatory (security.md / ADR-020). Authentication is written in the URL
+    /// (`nats://user:pass@host`) and **applied here**: see [`split_userinfo`] for why the URL alone
+    /// is not enough. With `ca_file = None` and no userinfo this is the plaintext single-node
+    /// connection, which presents no credential at all.
     pub async fn connect_opts(
         url: &str,
         ca_file: Option<&std::path::Path>,
@@ -132,8 +159,12 @@ impl NatsBus {
         if let Some(ca) = ca_file {
             opts = opts.add_root_certificates(ca.to_path_buf());
         }
+        let (clean_url, user, password) = split_userinfo(url);
+        if let (Some(u), Some(p)) = (user, password) {
+            opts = opts.user_and_password(u, p);
+        }
         let client = opts
-            .connect(url)
+            .connect(&clean_url)
             .await
             .map_err(|e| BusError::Publish(format!("nats connect {}: {e}", redact_url(url))))?;
         tracing::info!(url = %redact_url(url), tls = ca_file.is_some(), "connected to NATS bus");
@@ -852,6 +883,83 @@ mod tests {
         assert_eq!(redact_url("host:4222"), "host:4222");
         // user-only (no colon) userinfo is still stripped.
         assert_eq!(redact_url("nats://user@host:4222"), "nats://host:4222");
+    }
+
+    /// The **username** has to come back out too, because `async_nats` will not read it from the
+    /// URL and we have to hand it over ourselves.
+    ///
+    /// 🚨 The one that cost a day: `ServerAddr::username()`/`password()` exist in async-nats 0.49
+    /// and the connector never calls them — `CONNECT` is built from `ConnectOptions` alone. So
+    /// `connect(url_with_userinfo)` authenticates as nobody and the server answers
+    /// `authentication error` while the caller is holding the right password.
+    #[test]
+    fn userinfo_yields_both_halves_and_survives_a_password_with_colons() {
+        assert_eq!(
+            super::split_userinfo("tls://core:s3cret@nats:4222"),
+            (
+                "tls://nats:4222".to_owned(),
+                Some("core".to_owned()),
+                Some("s3cret".to_owned())
+            )
+        );
+        // The split is at the FIRST colon: a username cannot contain one, a password may.
+        assert_eq!(
+            super::split_userinfo("tls://poller:a:b@host:4222"),
+            (
+                "tls://host:4222".to_owned(),
+                Some("poller".to_owned()),
+                Some("a:b".to_owned())
+            )
+        );
+        // The single-node plaintext bus presents nothing, and must not start presenting an
+        // empty-string credential — NATS rejects that where it accepts no credential at all.
+        assert_eq!(
+            super::split_userinfo("nats://nats:4222"),
+            ("nats://nats:4222".to_owned(), None, None)
+        );
+        // A bare username (NATS token auth) is reported as a user with no password, so the caller
+        // can tell it apart from "no credentials" rather than silently dropping it.
+        assert_eq!(
+            super::split_userinfo("nats://token@host:4222"),
+            (
+                "nats://host:4222".to_owned(),
+                Some("token".to_owned()),
+                None
+            )
+        );
+        // The two-value form stays exactly what its callers already read.
+        assert_eq!(
+            super::split_userinfo_password("tls://core:s3cret@nats:4222"),
+            ("tls://nats:4222".to_owned(), Some("s3cret".to_owned()))
+        );
+    }
+
+    /// The connect path must actually *apply* what it parsed, and only the source says so —
+    /// standing up a NATS server with authorization is not something this suite can do.
+    ///
+    /// Reads the two connect functions and asserts each hands the credential to `ConnectOptions`.
+    /// `connect_opts` had exactly this shape for its whole life and was wrong the whole time: its
+    /// doc said "authentication rides in the URL, so there are no extra auth params", which is a
+    /// true sentence about NATS and a false one about this client library.
+    #[test]
+    fn every_connect_path_hands_its_credentials_to_the_client() {
+        let src = include_str!("nats.rs");
+        let mut checked = 0usize;
+        for f in [
+            "pub async fn connect_opts(",
+            "pub async fn connect_opts_identified(",
+        ] {
+            let start = src.find(f).unwrap_or_else(|| panic!("{f} is gone"));
+            let body = &src[start..];
+            let body = &body[..body.find("\n    }").expect("the function is terminated")];
+            assert!(
+                body.contains("user_and_password("),
+                "{f} never calls `user_and_password`, so async-nats sends no credential and the \
+                 server answers `authentication error`"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 2, "both connect paths must be inspected");
     }
 
     /// A provider gets installed and installing twice is not an error.

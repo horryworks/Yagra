@@ -102,12 +102,23 @@ services:
   #                          which is public (it holds `$VAR` references, never a secret).
   #   /etc/nats/certs  0750  the private key lives here, 0640 — `o=` is what keeps it off any other
   #                          container that ever mounts this volume.
+  # ⚠️ `certs/` is 0755, not 0750, and the difference is what lets the **poller** dial the bus.
+  # The poller runs as uid 10002 (core is 10001) and needs `server-cert.pem` as its trust anchor —
+  # the same certificate the WebUI hands out to remote sites, so it is public by construction. At
+  # 0750 the directory could not be traversed and the poller failed every connection with
+  # `TLS error: Permission denied (os error 13)`, measured on 192.168.1.211 the first time the TLS
+  # bus was ever run (2026-08-25).
+  # 🚨 The obvious fix — `group_add: ["10001"]` on the poller, mirroring what `nats` does — is
+  # WRONG here. nats needs it because nats needs the private *key*; giving the poller group 10001
+  # would hand it `server-key.pem` (0640) as well, which is the one file on this volume it must
+  # never see. Opening the directory and leaving the key's own mode to protect it keeps the
+  # boundary where it belongs: public certificate readable, private key not.
   bus-init:
     image: busybox:stable
     command:
       - sh
       - -c
-      - "mkdir -p /etc/nats/certs && chown -R 10001:10001 /etc/nats && chmod 0755 /etc/nats && chmod 0750 /etc/nats/certs"
+      - "mkdir -p /etc/nats/certs && chown -R 10001:10001 /etc/nats && chmod 0755 /etc/nats && chmod 0755 /etc/nats/certs"
     volumes:
       - buscerts:/etc/nats
     restart: "no"

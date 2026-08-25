@@ -13,7 +13,7 @@
 ### Bug Fixes
 
 - **Settings ▸ Pollers ▸ "Accept remote pollers" now works. It had never once succeeded since it
-  shipped**, and the reason was five separate defects in series — each one hidden by the one before
+  shipped**, and the reason was seven separate defects in series — each one hidden by the one before
   it. (1) The request returned HTTP 500: core reissued the bus certificate and then tried to write it
   onto a volume it mounts read-only, and because the database write lands first, the stored
   certificate and the file on disk were left disagreeing with no way to converge. (2) With that
@@ -28,7 +28,14 @@
   passwords now always begin with a letter. (5) With that fixed, the bus came up and the WebUI
   answered 502 to every API call: the change recreates core, which moves it to a new container
   address, and the web edge resolves that address once at startup — so it kept dialling the old one.
-  The change now recreates the web edge too. If you tried this switch on v0.2.13 or later, nothing
+  The change now recreates the web edge too. (6) With that fixed, core connected to the encrypted
+  bus with no credentials at all and was refused: the NATS client library does not read the
+  username and password from the connection URL, and core was handing them over that way — the
+  poller had always supplied them correctly, so a working implementation sat beside the broken one.
+  (7) And the poller could not read the bus certificate: it runs under a different account from
+  core, and the certificate directory was not traversable by it. The certificate is public by
+  design — it is the file the WebUI hands to remote sites — so the directory is now readable while
+  the private key beside it stays restricted. If you tried this switch on v0.2.13 or later, nothing
   you did was wrong.
 - **The bus change no longer widens `.env`.** Rewriting it from the sidecar left the file
   world-readable and owned by root — it holds the database password and, once the switch is on, both
