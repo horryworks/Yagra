@@ -174,18 +174,29 @@ impl NatsBus {
         })
     }
 
-    /// Connect and present this poller's **own identity** to core's Auth Callout (ADR-030): the
-    /// connection username becomes `poller_id` (what the callout scopes `yagra.poller.assign.{id}` to)
-    /// and the connection name becomes `pool`. The password (bootstrap secret) is taken from the URL
-    /// userinfo and re-supplied explicitly so the *username* is the poller id rather than the shared
-    /// `poller` — the callout keys the scope on it. The userinfo is stripped from the URL so the
-    /// explicit credential wins. On the plaintext single-node bus the URL has no userinfo, so no
-    /// credential is presented (only the harmless connection name) — behaviour matches
-    /// [`Self::connect_opts`] there, and a server without auth callout simply ignores user/name.
+    /// Connect as `username`, with `pool` as the connection name. The password (bootstrap secret)
+    /// comes from the URL userinfo and is re-supplied explicitly, and the userinfo is stripped so
+    /// the explicit credential is the one that travels. On the plaintext single-node bus the URL
+    /// has no userinfo, so no credential is presented — behaviour matches [`Self::connect_opts`].
+    ///
+    /// 🚨 **`username` is a deployment decision and the caller owns it**, because the two shipped
+    /// bus configurations want opposite answers:
+    ///
+    /// * **Auth Callout on (ADR-030)** — the username must be the poller's own id: that is what
+    ///   core's callout scopes `yagra.poller.assign.{id}` to, and `nats-server.conf`'s static
+    ///   `poller` account is deliberately bypassed.
+    /// * **Auth Callout off — the shipped default** — the username must be the literal `poller`
+    ///   from the URL, because the static account is the only thing authorizing anything.
+    ///
+    /// This took the poller's id unconditionally until 2026-08-25, so on the default configuration
+    /// it presented its **container hostname** and NATS answered `authentication error - User
+    /// "4aeea2381430"` forever (measured on 192.168.1.211, ADR-065 Inc.5 bug 8). The configuration
+    /// file said what should happen — "this static account remains the fallback when callout is
+    /// off" — and nothing on this side had ever been told which mode it was in.
     pub async fn connect_opts_identified(
         url: &str,
         ca_file: Option<&std::path::Path>,
-        poller_id: &str,
+        username: &str,
         pool: &str,
     ) -> Result<Self, BusError> {
         let mut opts = async_nats::ConnectOptions::new().name(pool.to_owned());
@@ -194,7 +205,7 @@ impl NatsBus {
         }
         let (clean_url, password) = split_userinfo_password(url);
         if let Some(pass) = password {
-            opts = opts.user_and_password(poller_id.to_owned(), pass);
+            opts = opts.user_and_password(username.to_owned(), pass);
         }
         let client = opts
             .connect(&clean_url)
@@ -203,7 +214,10 @@ impl NatsBus {
         tracing::info!(
             url = %redact_url(url),
             tls = ca_file.is_some(),
-            poller = %poller_id,
+            // The name presented to the broker, which is the poller's id only under Auth Callout.
+            // Logged as what was actually sent, because "authentication error - User \"…\"" is the
+            // only other place it appears and it is on the server's side of the wire.
+            user = %username,
             pool = %pool,
             "connected to NATS bus (identified)"
         );

@@ -367,6 +367,43 @@ fn env_f64(key: &str, default: f64) -> f64 {
 /// Connect to NATS, retrying with a fixed backoff so startup ordering doesn't matter. `ca_file`
 /// pins the server certificate for the remote-poller TLS path (`None` = plaintext single-node).
 /// `poller_id`/`pool` are presented to core's Auth Callout for per-poller credential scoping (ADR-030).
+/// Which username this poller presents to the broker — a **deployment** question, not an identity
+/// one, and the two shipped bus configurations want opposite answers.
+///
+/// * **Auth Callout on (ADR-030)**, `YAGRA_BUS_AUTH_CALLOUT=1`: the poller's own id. Core's callout
+///   scopes `yagra.poller.assign.{id}` to exactly that, and `nats-server.conf` deliberately keeps
+///   the static `poller` account out of the way.
+/// * **Auth Callout off — what ships**: the username written in the URL, which the ADR-065 switch
+///   generates as the literal `poller`. That static account is the only thing authorizing anyone.
+///
+/// 🚨 The id was presented unconditionally until 2026-08-25, so on the default configuration the
+/// poller offered its **container hostname** and NATS answered `authentication error - User
+/// "4aeea2381430"` forever (measured on 192.168.1.211, ADR-065 Inc.5 bug 8). `nats-server.conf`
+/// already said what should happen — "this static account remains the fallback when callout is
+/// off" — and nothing on this side had ever been told which mode it was in. The knob is the
+/// missing half of that sentence, and it defaults to the configuration that ships.
+fn bus_username<'a>(url: &'a str, poller_id: &'a str) -> &'a str {
+    if env_nonempty("YAGRA_BUS_AUTH_CALLOUT")
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        return poller_id;
+    }
+    // Leaked deliberately: the caller holds `url` for the whole connection attempt, and the
+    // alternative is allocating a String per retry for a value that never changes.
+    match url
+        .split_once("://")
+        .map_or(url, |(_, r)| r)
+        .rsplit_once('@')
+    {
+        Some((userinfo, _)) => match userinfo.split_once(':') {
+            Some((u, _)) if !u.is_empty() => u,
+            _ => poller_id,
+        },
+        // No userinfo at all — the plaintext single-node bus, where nothing is presented anyway.
+        None => poller_id,
+    }
+}
+
 async fn connect_bus(
     url: &str,
     ca_file: Option<&Path>,
@@ -374,9 +411,10 @@ async fn connect_bus(
     pool: &str,
 ) -> anyhow::Result<NatsBus> {
     const MAX_ATTEMPTS: u32 = 30;
+    let username = bus_username(url, poller_id);
     let mut attempt = 0;
     loop {
-        match NatsBus::connect_opts_identified(url, ca_file, poller_id, pool).await {
+        match NatsBus::connect_opts_identified(url, ca_file, username, pool).await {
             Ok(bus) => return Ok(bus),
             Err(e) if attempt < MAX_ATTEMPTS => {
                 attempt += 1;
@@ -391,6 +429,31 @@ async fn connect_bus(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Which name the poller offers the broker, decided from the URL rather than from its identity.
+    ///
+    /// 🚨 This is the fix for a poller that could never authenticate on the configuration that
+    /// ships. It presented its own id — a container hostname — while `nats-server.conf`'s static
+    /// account is called `poller`, so NATS answered `authentication error - User "4aeea2381430"`
+    /// for as long as the deployment was up (192.168.1.211, 2026-08-25).
+    ///
+    /// Reads no environment, so it cannot race the other tests over process-global state; the
+    /// callout branch is asserted through its own env var in a test that does set one.
+    #[test]
+    fn the_poller_offers_the_name_the_bus_configuration_expects() {
+        // What the ADR-065 switch generates: the static account's name is in the URL.
+        assert_eq!(
+            bus_username("tls://poller:s3cretpassword@nats:4222", "4aeea2381430"),
+            "poller"
+        );
+        // A password containing a colon must not shift the username.
+        assert_eq!(bus_username("tls://poller:a:b@host:4222", "id"), "poller");
+        // The plaintext single-node bus carries no userinfo and presents nothing, so the id is as
+        // good an answer as any — and is what it has always been.
+        assert_eq!(bus_username("nats://nats:4222", "aio-1"), "aio-1");
+        // Userinfo with an empty username is not a username.
+        assert_eq!(bus_username("tls://:pw@nats:4222", "aio-1"), "aio-1");
+    }
 
     /// Identity resolution: sanitized id, defaulted pool, per-boot incarnation. Runs without env
     /// (the CI/dev default) so it doesn't race other tests over process-global env vars.

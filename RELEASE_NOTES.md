@@ -13,7 +13,7 @@
 ### Bug Fixes
 
 - **Settings ▸ Pollers ▸ "Accept remote pollers" now works. It had never once succeeded since it
-  shipped**, and the reason was seven separate defects in series — each one hidden by the one before
+  shipped**, and the reason was eight separate defects in series — each one hidden by the one before
   it. (1) The request returned HTTP 500: core reissued the bus certificate and then tried to write it
   onto a volume it mounts read-only, and because the database write lands first, the stored
   certificate and the file on disk were left disagreeing with no way to converge. (2) With that
@@ -35,8 +35,11 @@
   (7) And the poller could not read the bus certificate: it runs under a different account from
   core, and the certificate directory was not traversable by it. The certificate is public by
   design — it is the file the WebUI hands to remote sites — so the directory is now readable while
-  the private key beside it stays restricted. If you tried this switch on v0.2.13 or later, nothing
-  you did was wrong.
+  the private key beside it stays restricted. (8) And with TLS working, the poller was refused as
+  well: it always announced itself by its own identifier, which is what the optional per-poller
+  authorization mode wants, while the mode that ships expects the shared account name written in
+  its connection URL. Which name to present is now a deployment setting rather than a fixed choice.
+  If you tried this switch on v0.2.13 or later, nothing you did was wrong.
 - **The bus change no longer widens `.env`.** Rewriting it from the sidecar left the file
   world-readable and owned by root — it holds the database password and, once the switch is on, both
   bus passwords. It now keeps the permissions and ownership it found.
