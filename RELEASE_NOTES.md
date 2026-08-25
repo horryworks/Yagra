@@ -10,6 +10,30 @@
 
 ## Unreleased
 
+## v0.3.0 — every device is polled on schedule again, an alert outlives a restart, and the code beneath was rebuilt
+
+**This release is mostly a rebuild of the code, not of the product.** Since v0.2.0 the backend had
+grown a handful of very large files that several unrelated jobs shared — core's startup file alone
+had reached 5,066 lines, and the poller's 1,097 — and a file like that is where a defect hides:
+nothing tells you that the piece you are editing is also read by something you have never looked
+at. Eighteen of this release's design decisions (in the range ADR-083 to ADR-104) took those files
+apart along the lines their contents actually follow, and pinned each new boundary with a test that
+fails the build when someone crosses it. Core's startup file is now 2,100 lines and the poller's
+450; the Troubleshoot analyses, the scheduler, the passive-event pipeline, the database layer, the
+reports, the configuration bundle, the MCP tool surface and the poller's per-check conversations
+each became a directory of small files instead of one. 158 test functions were added.
+
+**None of it was meant to change what Yagra does**, and none of it is what the sections below
+describe — those are the ordinary user-visible changes, and they were written and shipped on their
+own merits. The reason to mention the rebuild at all is that it sets the cost of everything after
+it: a defect is now cheaper to find, and a new check, report section or analysis is cheaper to add.
+
+**The positioning has not changed.** v0.3.0 is still an **open beta**, exactly as v0.2 was — the
+minor bump records the size of the internal change, not a claim that the system has matured past
+it. Run it alongside your existing monitoring rather than in place of it. Upgrading is unchanged
+too: the stores, the API and the bus messages are the same, so a v0.3.0 core still runs with
+v0.2.17 pollers during a rollout.
+
 ### New Features
 
 - **Device profiles now say which of the metrics they collect are alerted on other profiles but

@@ -440,6 +440,7 @@ export RUST_LOG=info
 | `YAGRA_POOL_COVERAGE_ALERT_AFTER_SECS` | `300` | ノードが残っているのに**生存ポーラーが 0 台**の状態がこの秒数続いたら critical アラートを上げる。ポーラーは終了時に自ら離脱を通知するため、ローリング再起動でも条件は即座に成立する — このデバウンスが「誰も呼び出さない」ためのもの。`0` でアラート無効（ゲージはどちらでも出力される） |
 | **トラフィックフローと IP→ASN 補完** | | |
 | `YAGRA_FLOW_RETENTION_DAYS` | `30`（1–3650 にクランプ） | フローの保持期間（日数）。**新規デプロイの初回起動時のみシード** — 以後は 設定 ▸ システム設定 ▸ データ保持期間 が正 |
+| `YAGRA_CLICKHOUSE_SYSTEM_LOG_RETENTION_DAYS` | `7`（0–3650 にクランプ） | ClickHouse **自身**の `system.*_log` テーブルの保持期間。素の ClickHouse はこれらに TTL を一切与えないため、無制限に増え続け、自分をマージするために CPU を消費します。設定テーブルにシードされるのではなく、起動のたびに読まれます。**`0` にすると `system.*` に手を触れません** — `YAGRA_CLICKHOUSE_URL` がこのデプロイの持ち物でない ClickHouse を指している場合に使ってください |
 | `YAGRA_IPASN_DB` | 未設定 ⇒ 補完無効 | フローの IP→ASN 補完に使うオフライン iptoasn.com TSV へのパス |
 | `YAGRA_IPASN_RELOAD_SECS` | `0` ⇒ 起動時に一度だけ読み込み | IP→ASN ファイルのホットリロード周期（秒）。`>0` で再起動なしに再読み込み |
 | **高可用性（HA）** | | |
