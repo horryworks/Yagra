@@ -25156,7 +25156,7 @@
       "IfIndex": {
         "type": "integer",
         "format": "int32",
-        "description": "SNMP interface index (`ifIndex`).\n\nIdentifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,\nso the `(NodeId, IfIndex)` pair is re-resolved against PostgreSQL interface\nmetadata on each discovery (ADR-011); a remap is recorded when it changes.",
+        "description": "SNMP interface index (`ifIndex`).\n\nIdentifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,\nso the `(NodeId, IfIndex)` pair is re-resolved against PostgreSQL interface\nmetadata on each discovery (ADR-011).\n\n⚠️ **A renumbering is NOT recorded anywhere, and this comment used to claim it was.**\nThere is no remap table and no code that writes one — `DELETE FROM interfaces` does not appear\nin the workspace, and nothing keys an interface by `if_name`. So when a device renumbers, the\nTSDB series silently becomes a different interface. ADR-011 carries this as remaining work; do\nnot read this doc as a description of behaviour that exists.",
         "minimum": 0
       },
       "ImportDiscovered": {

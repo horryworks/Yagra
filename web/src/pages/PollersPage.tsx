@@ -427,6 +427,14 @@ function MonitoringGapsSection({ gaps }: { gaps: MonitoringGap[] }) {
     <div className="poller-gaps">
       <h2 className="poller-gaps-title">{t('pollers.gaps.title')}</h2>
       <p className="muted poller-gaps-note">{t('pollers.gaps.note')}</p>
+      {/* Shared `.ytable` markup rather than `DataTable`, deliberately. This page's *fleet* table
+          is a `DataTable` — it is the pane's content and can own a scroll viewport. This one is a
+          stacked subsection under it, and `DataTable` is `flex: 1` (`DataTable.css`), so it would
+          claim height a section below another table has none of. `.ytable-scroll` gives exactly
+          what a subsection wants: content height, capped at 520px. The row count is bounded
+          server-side at 200 (`api/pollers.rs::monitoring_gaps`), so virtualization buys nothing
+          here, and there is no filter row — which `MutesPage` names as the trigger for migrating.
+          `styles/table.css` documents this markup as the v2 standard. */}
       <div className="ytable">
         <div className="ytable-scroll">
           <div className="ytable-head" style={{ gridTemplateColumns: GAP_COLS }}>
@@ -509,6 +517,11 @@ function PollerNodesSection({
         </p>
       )}
       {data.nodes.length > 0 && (
+        /* Shared `.ytable` markup, same reason as the gaps table above: this is a drill-down panel
+           stacked under the fleet `DataTable`, not the pane's content, so it needs content height
+           rather than `DataTable`'s `flex: 1` viewport. The list is capped by the server and says
+           so — `data.truncated` renders the "showing N of M" line above — so the paging `DataTable`
+           exists to do is already answered, and two columns carry no filter row. */
         <div className="ytable">
           <div className="ytable-scroll">
             <div className="ytable-head" style={{ gridTemplateColumns: NODE_COLS }}>

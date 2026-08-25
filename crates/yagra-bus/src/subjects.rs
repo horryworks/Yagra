@@ -15,12 +15,13 @@ pub fn jobs_for_pool(pool: &str) -> String {
     format!("{ROOT}.jobs.{pool}")
 }
 
-/// Wildcard subject matching jobs for every pool (`yagra.jobs.*`) — for a single-pool MVP
-/// or an all-pools consumer.
-#[must_use]
-pub fn jobs_all() -> String {
-    format!("{ROOT}.jobs.*")
-}
+// A `jobs_all()` building the cross-pool wildcard `yagra.jobs.*` lived here and is deliberately
+// gone. Nothing but its own test ever called it, and it is not a helper anyone should reach for:
+// `yagra-authz` asserts that a per-poller JWT is granted **neither** `yagra.jobs.*` nor
+// `yagra.jobs.>` (see `authz::tests`), because a poller that subscribed across pools would receive
+// other pools' jobs — and a job message carries plaintext device credentials. The wildcard exists
+// only in the two allow-lists, where it is the *static* account's grant (callout off) rather than
+// anything a Rust caller composes.
 
 /// Subject pollers publish results on, consumed by core.
 #[must_use]
@@ -236,11 +237,15 @@ mod tests {
     }
 
     #[test]
-    fn wildcard_matches_pool_subject_namespace() {
-        // The poller subject must sit under the wildcard's namespace.
-        let wild = jobs_all();
-        assert_eq!(wild, "yagra.jobs.*");
+    fn a_pool_job_subject_sits_under_the_namespace_the_allow_lists_grant() {
+        // Both allow-lists grant the jobs feed by namespace — `yagra.jobs.tokyo` per poller when
+        // Auth Callout is on, `yagra.jobs.>` to the shared static account when it is off — so a
+        // pool subject that fell outside `yagra.jobs.` would be denied at runtime with no compile
+        // error. Nothing else says so.
         assert!(jobs_for_pool("osaka").starts_with("yagra.jobs."));
+        // And the pool name is the last token: a pool that introduced a dot would land under a
+        // different subject than the one its poller was granted.
+        assert_eq!(jobs_for_pool("osaka").matches('.').count(), 2);
     }
 
     #[test]

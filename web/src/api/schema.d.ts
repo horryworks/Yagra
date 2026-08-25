@@ -6335,7 +6335,13 @@ export interface components {
          *
          *     Identifies an interface *within a node*. `ifIndex` can be re-numbered on reboot,
          *     so the `(NodeId, IfIndex)` pair is re-resolved against PostgreSQL interface
-         *     metadata on each discovery (ADR-011); a remap is recorded when it changes.
+         *     metadata on each discovery (ADR-011).
+         *
+         *     ⚠️ **A renumbering is NOT recorded anywhere, and this comment used to claim it was.**
+         *     There is no remap table and no code that writes one — `DELETE FROM interfaces` does not appear
+         *     in the workspace, and nothing keys an interface by `if_name`. So when a device renumbers, the
+         *     TSDB series silently becomes a different interface. ADR-011 carries this as remaining work; do
+         *     not read this doc as a description of behaviour that exists.
          */
         IfIndex: number;
         /** @description Import body: the selected devices to create as nodes. */

@@ -8,6 +8,13 @@
 //   - web/public/favicon.svg — a static file, so it cannot import this one; brandMark.test.ts
 //     is what pins it here (extensibility.md §2).
 
+// ⚠️ These two are the SECOND copy of a value `styles/tokens.css` also declares
+// (`--brand-fixed` / `--brand-mark`). Both copies are needed — the <Logo> emits SVG *attributes*,
+// and `favicon.svg` can import neither file — so what stops them drifting is a test, and it is
+// **not in this directory**: `web/tests/ui/brandColors.spec.ts` compares the token the browser
+// resolves against the colour the Logo actually paints. It cannot live in Vitest, which stubs CSS
+// imports to an empty string even with `?raw` (measured three ways). Change one, change both, and
+// run `npm run build && npm run test:ui`.
 export const BRAND = '#e95d08'; // fixed brand orange (--brand-fixed)
 export const MARK = '#faf7f3'; // off-white 生成り mark (--brand-mark)
 
