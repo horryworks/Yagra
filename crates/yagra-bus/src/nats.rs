@@ -28,6 +28,32 @@ pub const DEFAULT_POOL: &str = "default";
 /// Queue group name shared by all pollers so jobs load-balance across them.
 pub const POLLER_QUEUE: &str = "pollers";
 
+/// Install `ring` as this **process's** default rustls crypto provider. Call it once, at startup.
+///
+/// 🚨 Both `ring` and `aws-lc-rs` end up enabled in this dependency graph (the workspace
+/// `Cargo.toml` says so at length), so rustls installs no default of its own and **any library that
+/// builds a `ClientConfig` on our behalf panics the first time it tries.** Every call site this
+/// workspace owns names the provider explicitly instead — see `yagra-core/src/tls.rs` — but
+/// `async_nats`'s `add_root_certificates` builds its own, and so does `lettre`'s SMTP TLS. Those
+/// have no call site to fix, so the answer has to be process-wide.
+///
+/// Measured on 192.168.1.211, 2026-08-25 (ADR-065 Inc.5 bug 3): the first `tls://` bus URL this
+/// product has ever run with put core into a crash loop **three seconds after the WebUI reported
+/// the switch had succeeded**. Nothing before that point exercises this — the single-node bus is
+/// plaintext, and every test builds an `InMemoryBus`.
+///
+/// ⚠️ Deliberately **not** solved by handing `async_nats` a config of ours through
+/// `tls_client_config`: with that set it also loads the platform certificate store and fails the
+/// connection if the store errors, which is a new way for the bus to not come up. Installing the
+/// provider leaves its existing behaviour — pin the given CA, ignore system roots — exactly as it
+/// was.
+///
+/// Idempotent, and silent when a provider is already installed: both binaries call it and a second
+/// install is not a condition worth reporting.
+pub fn install_tls_crypto_provider() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+}
+
 /// Strip any `user:pass@` userinfo from a NATS URL before it reaches a log line or error
 /// message. The remote-poller path carries credentials in the URL (`tls://user:pass@host:4222`,
 /// ADR-020), and those must never be logged (security.md). `tls://poller:secret@host:4222` →
@@ -770,7 +796,7 @@ impl PeerBus for NatsBus {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact_url, split_userinfo_password};
+    use super::{install_tls_crypto_provider, redact_url, split_userinfo_password};
 
     #[test]
     fn splits_userinfo_password_from_url() {
@@ -826,5 +852,53 @@ mod tests {
         assert_eq!(redact_url("host:4222"), "host:4222");
         // user-only (no colon) userinfo is still stripped.
         assert_eq!(redact_url("nats://user@host:4222"), "nats://host:4222");
+    }
+
+    /// A provider gets installed and installing twice is not an error.
+    ///
+    /// Weak on its own — the assertion that matters is the one below, that both binaries call it —
+    /// but it is what proves the ⚠️ in the doc: `install_default()` returning `Err` because another
+    /// provider is already there must not become a panic in a process that starts up twice under
+    /// one test binary.
+    #[test]
+    fn installing_the_crypto_provider_is_idempotent() {
+        install_tls_crypto_provider();
+        install_tls_crypto_provider();
+        assert!(
+            rustls::crypto::CryptoProvider::get_default().is_some(),
+            "no process-level provider after installing one, so every library that builds its own \
+             client config still panics"
+        );
+    }
+
+    /// **Both binaries must call it, and nothing but this notices if one stops.**
+    ///
+    /// The failure it guards is not a compile error and not a test failure: it is a crash loop on
+    /// the one deployment shape that has a `tls://` bus, reported to the operator three seconds
+    /// after the WebUI told them the change had succeeded. `yagra-poller` is the worse half — a
+    /// remote site's poller is the whole reason the TLS bus exists, and nothing in this workspace
+    /// runs one.
+    ///
+    /// Reads the two `main.rs` files directly rather than through `srcread`, because the claim is
+    /// about the startup sequence and not about production text: a call inside a `#[cfg(test)]`
+    /// block would be exactly the drift this refuses, and `srcread` would have removed it first.
+    #[test]
+    fn both_binaries_install_the_crypto_provider_at_startup() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("crates/ is above this crate");
+        let mut checked = 0usize;
+        for bin in ["yagra-core", "yagra-poller"] {
+            let path = root.join(bin).join("src").join("main.rs");
+            let src = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+            assert!(
+                src.contains("install_tls_crypto_provider()"),
+                "{bin}'s startup does not install a rustls crypto provider, so the first `tls://` \
+                 bus URL it is given panics on connect (ADR-065 Inc.5 bug 3)"
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 2, "both binaries must be inspected, not one");
     }
 }

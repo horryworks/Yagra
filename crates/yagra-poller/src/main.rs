@@ -122,6 +122,11 @@ fn machine_hostname() -> Option<String> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Before anything that could reach a TLS library. Two crypto providers are enabled in this
+    // dependency graph, so rustls installs no default and `async_nats` panics building its own
+    // client config the moment the bus URL is `tls://` (ADR-065 Inc.5 bug 3).
+    yagra_bus::install_tls_crypto_provider();
+
     // Resolved before telemetry because the id names this poller's **log file** (ADR-045 Inc.3):
     // a pool sharing one log directory would otherwise have every member appending to the same
     // hourly file. Nothing here logs, so there is no gap in the trace.

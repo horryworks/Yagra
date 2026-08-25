@@ -28,6 +28,10 @@ utoipa = { workspace = true }
 # pull the TLS stack; the binaries (yagra-core/yagra-poller) enable it.
 async-nats = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }
+# Only to name the crypto provider (`install_tls_crypto_provider`). async-nats builds its own
+# `ClientConfig` and this dependency graph enables two providers, so without a process default the
+# first TLS bus connection panics. Optional for the same reason async-nats is.
+rustls = { workspace = true, optional = true }
 
 [features]
-nats = ["dep:async-nats", "dep:futures"]
+nats = ["dep:async-nats", "dep:futures", "dep:rustls"]

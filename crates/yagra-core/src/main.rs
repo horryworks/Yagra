@@ -166,6 +166,12 @@ use yagra_bus::{NatsBus, PollResult, DEFAULT_POOL};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Before anything that could reach a TLS library — `healthcheck` included, since it makes an
+    // HTTPS request. Two crypto providers are enabled in this dependency graph, so rustls installs
+    // no default and `async_nats` panics building its own client config the moment the bus URL is
+    // `tls://` (ADR-065 Inc.5 bug 3).
+    yagra_bus::install_tls_crypto_provider();
+
     // Container HEALTHCHECK entry point: `yagra-core healthcheck` probes our own `/healthz` and
     // exits 0 (healthy) / 1 (not). Dependency-free (reqwest is already linked), so the slim runtime
     // image needs no curl/wget. Handled before any store/bus wiring so it's cheap and side-effect-free.

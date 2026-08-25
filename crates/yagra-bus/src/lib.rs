@@ -30,4 +30,7 @@ pub use messages::{
     SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
-pub use nats::{redact_url, split_userinfo_password, NatsBus, DEFAULT_POOL, POLLER_QUEUE};
+pub use nats::{
+    install_tls_crypto_provider, redact_url, split_userinfo_password, NatsBus, DEFAULT_POOL,
+    POLLER_QUEUE,
+};
