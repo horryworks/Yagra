@@ -875,10 +875,23 @@ services:
           done
         fi
 
-        # Only the services that read those variables. A bare `up -d` is survivable now that this
-        # runs outside the compose project, but it would still restart `web` and every store for a
-        # change none of them read.
-        ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d bus-init bus-cert-init nats core poller ) \
+        # The services that read those variables — **and `web`, which does not.**
+        #
+        # 🚨 `web` is here because nginx resolves `proxy_pass http://core:8080` **once, at startup**,
+        # and there is no `resolver` directive to make it look again. Recreating core gives it a new
+        # container address, so a `web` left running keeps dialling the old one and answers 502 to
+        # every API call — while serving the page itself perfectly. Measured on 192.168.1.211,
+        # 2026-08-25: core moved to 172.18.0.6, nginx kept 172.18.0.11, and the operator who had
+        # just been told the switch succeeded had a WebUI that could not log in.
+        #
+        # A `resolver 127.0.0.11` in the nginx configuration would fix the general case, and this
+        # does not attempt it: it is the whole request path for every deployment, and this is the
+        # only place in the product that recreates core without recreating web (an apply changes
+        # every image tag, so compose recreates web there anyway).
+        #
+        # A bare `up -d` is survivable now that this runs outside the compose project, but it would
+        # still restart every store for a change none of them read.
+        ( cd "$$WORKDIR" && docker compose -p "$$PROJ" -f docker-compose.deploy.yml up -d bus-init bus-cert-init nats core poller web ) \
           || { settle failed "docker compose up failed; the previous bus settings are still in .env"; exit 1; }
         if [ "$$MODE" = "on" ]; then WHAT=accepted; else WHAT=refused; fi
         settle succeeded "remote pollers are now $$WHAT"

@@ -539,6 +539,37 @@ mod tests {
         );
     }
 
+    /// The bus change must recreate **`web`**, and the reason is not that web reads any of the
+    /// variables it rewrites — it reads none of them.
+    ///
+    /// 🚨 nginx resolves `proxy_pass http://core:8080` once, at startup, and the shipped
+    /// configuration carries no `resolver` directive. Recreating core moves it to a new container
+    /// address, so a `web` left running keeps dialling the old one: the page still loads and every
+    /// API call answers 502. Measured on 192.168.1.211, 2026-08-25 — core moved to `172.18.0.6`,
+    /// nginx held `172.18.0.11`, and the operator who had just been told the switch succeeded could
+    /// not log in.
+    ///
+    /// This is the only place in the product that recreates core without recreating web; an apply
+    /// changes every image tag, so compose recreates web there of its own accord. That is why the
+    /// fix is one word here rather than a `resolver` in the request path of every deployment.
+    #[test]
+    fn the_bus_change_recreates_the_web_edge_that_caches_cores_address() {
+        let compose = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition holds the updater's script");
+        let line = compose
+            .lines()
+            .find(|l| l.contains("up -d bus-init"))
+            .expect("the bus change still recreates the bus services");
+        for svc in ["nats", "core", "poller", "web"] {
+            assert!(
+                line.contains(&format!(" {svc}")),
+                "the bus change does not recreate `{svc}`. For `web` that is not an omission of \
+                 something it reads — it is nginx holding core's previous address and answering \
+                 502 to every API call afterwards. Offending line: {line}"
+            );
+        }
+    }
+
     /// The mirror this feature creates: **core draws the password, the updater decides whether to
     /// install it.** Two expressions of one rule, in two languages, and nothing else compares them.
     ///
