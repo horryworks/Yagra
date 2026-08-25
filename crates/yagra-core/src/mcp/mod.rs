@@ -181,16 +181,18 @@ async fn mcp_auth_mw(State(st): State<ApiState>, mut req: Request, next: Next) -
         }
         Err(resp) => {
             metrics::counter!("yagra_mcp_auth_failures_total").increment(1);
-            resp
+            *resp
         }
     }
 }
 
-/// Resolve a bearer token to an [`McpIdentity`] permitted to use MCP, or an error `Response`. Routes
+/// Resolve a bearer token to an [`McpIdentity`] permitted to use MCP, or an error `Response`. The
+/// error is boxed for the reason `api/error.rs` states: an axum `Response` is large enough that
+/// `clippy::result_large_err` refuses it as a bare `Err` variant. Routes
 /// by token shape: a `yat_` API token → [`crate::apitokens::ApiTokenStore::verify`]; otherwise a
 /// session token → [`crate::auth::SessionStore::authorize`]. Requires `View` and (Increment 1) global
 /// scope.
-async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity, Response> {
+async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity, Box<Response>> {
     let Some(token) = token else {
         return Err(unauthorized("a valid bearer token is required"));
     };
@@ -231,12 +233,20 @@ async fn authenticate(st: &ApiState, token: Option<&str>) -> Result<McpIdentity,
     Ok(McpIdentity { principal, actor })
 }
 
-fn unauthorized(message: &str) -> Response {
-    crate::api::error_response(StatusCode::UNAUTHORIZED, "unauthorized", message.to_owned())
+fn unauthorized(message: &str) -> Box<Response> {
+    Box::new(crate::api::error_response(
+        StatusCode::UNAUTHORIZED,
+        "unauthorized",
+        message.to_owned(),
+    ))
 }
 
-fn forbidden(message: &str) -> Response {
-    crate::api::error_response(StatusCode::FORBIDDEN, "forbidden", message.to_owned())
+fn forbidden(message: &str) -> Box<Response> {
+    Box::new(crate::api::error_response(
+        StatusCode::FORBIDDEN,
+        "forbidden",
+        message.to_owned(),
+    ))
 }
 
 #[cfg(test)]
