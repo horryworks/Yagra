@@ -442,6 +442,40 @@ impl PollerRepo {
     }
 }
 
+/// Give this deployment's **own** pollers an inventory row, if the updater has named them.
+///
+/// The one place that decision is made, called from the two moments it has to hold at
+/// (ADR-065 Inc.8): core startup, and the "Accept remote pollers" switch. Both matter and neither
+/// covers the other — the switch is the moment auto-registration stops, and startup is every
+/// *later* moment, because an upgrade replaces the composition without anyone pressing the switch.
+///
+/// # Why a co-located poller needs this at all
+///
+/// Accepting remote pollers turns [`PollerRepo::with_auto_register`] off, on the grounds that the
+/// Auth Callout now refuses an id nobody registered. 🚨 **That grounds does not cover the pollers
+/// inside this composition.** They connect on the static `poller` account, which the callout
+/// deliberately bypasses (`auth_users`), so the bus never refuses them — leaving them neither
+/// refused nor registered. They keep polling off their Redis liveness and disappear from
+/// Settings ▸ Pollers, which is the one outcome the gate's own comment set out to prevent.
+///
+/// The updater is the only thing that knows which ids are local: nothing on the bus says which
+/// compose project a poller belongs to. `None` means the sidecar is absent or too old to report
+/// them, and is not the same as an empty list — with no updater there is nothing to adopt.
+///
+/// Failure is the caller's to log, never fatal: this is preparation, not the change itself.
+pub async fn register_local(
+    pollers: &PollerRepo,
+    upgrade: &crate::upgrade::UpgradeRepo,
+) -> anyhow::Result<Option<(u64, usize)>> {
+    let Some(local) = upgrade.heartbeat().and_then(|h| h.local_pollers) else {
+        return Ok(None);
+    };
+    let created = pollers
+        .ensure_registered(&local, yagra_bus::DEFAULT_POOL)
+        .await?;
+    Ok(Some((created, local.len())))
+}
+
 /// Format Unix milliseconds as RFC 3339 UTC (matching how the rest of this repo exposes timestamps).
 fn ms_to_rfc3339(ms: i64) -> String {
     DateTime::<Utc>::from_timestamp_millis(ms)

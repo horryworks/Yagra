@@ -1369,4 +1369,93 @@ mod tests {
              rather than raising it to whatever was measured",
         );
     }
+
+    /// A shipped composition never lets a poller name itself after its container (ADR-065 Inc.8).
+    ///
+    /// Unset, `YAGRA_POLLER_ID` falls back to the container hostname, which Docker invents afresh on
+    /// every recreate — so an upgrade or a plain `up -d` hands the poller a new identity. On a
+    /// deployment accepting remote pollers that is invisible and load-bearing at once: acceptance
+    /// turns auto-registration off because the callout refuses an id nobody registered, but a
+    /// co-located poller connects on the static `poller` account the callout deliberately bypasses,
+    /// so it is neither refused nor registered. It keeps polling off its Redis liveness and vanishes
+    /// from Settings ▸ Pollers, while every id it used before stays behind as a row.
+    ///
+    /// The two files answer this differently on purpose, and both answers are explicit:
+    /// the co-located poller gets a default (`:-`), a remote site is *required* to name itself
+    /// (`:?`) because two sites sharing an id would share an assignment.
+    #[test]
+    fn no_shipped_composition_lets_a_poller_name_itself_after_its_container() {
+        let mut checked = 0;
+        for (file, want) in [
+            ("docker-compose.deploy.yml", "${YAGRA_POLLER_ID:-"),
+            ("docker-compose.yml", "${YAGRA_POLLER_ID:-"),
+            ("docker-compose.poller.yml", "${YAGRA_POLLER_ID:?"),
+        ] {
+            let text = std::fs::read_to_string(format!("../../{file}"))
+                .unwrap_or_else(|e| panic!("{file} ships with the product: {e}"));
+            assert!(
+                text.lines().any(|l| l.trim_start().starts_with("poller:")),
+                "{file} no longer defines a poller service, so this check is reading the wrong file",
+            );
+            let live: Vec<&str> = text
+                .lines()
+                .map(str::trim_start)
+                .filter(|l| !l.starts_with('#'))
+                .filter(|l| l.starts_with("YAGRA_POLLER_ID:"))
+                .collect();
+            assert_eq!(
+                live.len(),
+                1,
+                "{file} must set YAGRA_POLLER_ID exactly once, live; found {live:?}",
+            );
+            assert!(
+                live[0].contains(want),
+                "{file} sets YAGRA_POLLER_ID without {want}, so the id is not pinned: {}",
+                live[0],
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 3,
+            "expected all three shipped compositions to be inspected; a lower number means one \
+             stopped matching and this check passed over it",
+        );
+    }
+
+    /// The updater resolves a poller id the way the poller itself does: env var first (ADR-065
+    /// Inc.8).
+    ///
+    /// `local_pollers` is the list core pre-registers, and `YAGRA_POLLER_ID` is what a poller
+    /// actually calls itself. If the updater read the container hostname first, the id core adopted
+    /// and the id the poller claimed would be different strings, and pre-registering would create a
+    /// row for a poller that does not exist while the real one stayed missing — the same end state
+    /// this increment exists to remove, reached by the opposite route.
+    #[test]
+    fn the_updater_resolves_a_poller_id_env_first_like_the_poller_does() {
+        let text = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition ships with the product");
+        // Cut at the closing line, NOT at the first brace: the body is full of docker-inspect go
+        // templates ({{range .Config.Env}}), and stopping at one of those ends the slice before
+        // the line under test — which then reads as "the updater never mentions YAGRA_POLLER_ID"
+        // rather than as a bad cut. That is the failure this check first produced.
+        let body: String = text
+            .split_once("local_pollers() {")
+            .expect("the updater still derives local_pollers")
+            .1
+            .lines()
+            .take_while(|l| *l != "        }")
+            .collect::<Vec<_>>()
+            .join(" ");
+        let env_at = body
+            .find("YAGRA_POLLER_ID")
+            .expect("local_pollers must read YAGRA_POLLER_ID at all");
+        let host_at = body
+            .find(".Config.Hostname")
+            .expect("local_pollers must still fall back to the hostname for an older poller");
+        assert!(
+            env_at < host_at,
+            "local_pollers reads the container hostname before YAGRA_POLLER_ID, so core would \
+             adopt an id no poller claims",
+        );
+    }
 }

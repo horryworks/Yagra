@@ -866,6 +866,26 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     )
     .await;
 
+    // Give the pollers inside this composition their inventory rows (ADR-065 Inc.8).
+    //
+    // Not a background task and deliberately awaited: it is one INSERT ... ON CONFLICT DO NOTHING
+    // per co-located poller, and everything downstream reads that table. On every core, because
+    // it is idempotent and a passive core that is promoted must not first discover its own poller
+    // is missing.
+    //
+    // The switch does this too, at the moment auto-registration stops. This covers every LATER
+    // moment: an upgrade reinstalls the composition from the target image without anyone pressing
+    // the switch, so a poller id that moved would otherwise be neither refused by the bus (it is
+    // on the bypassed static account) nor registered by anything. Measured cost of getting that
+    // wrong: a poller polling 11 nodes that no page in the product lists.
+    match pollers::register_local(&poller_repo, &upgrade).await {
+        Ok(Some((created, known))) => {
+            tracing::info!(created, known, "adopted the pollers this deployment owns")
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "could not adopt the co-located pollers"),
+    }
+
     // Support-log retrieval from remote-site pollers (ADR-045 Inc.4). Process-lifetime subscriber,
     // on every core; `poller_logs::start` carries why it is neither per-bundle nor leader-gated.
     let poller_log_collector = poller_logs::start(bus.clone(), &shutdown).await;

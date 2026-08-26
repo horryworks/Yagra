@@ -161,6 +161,11 @@ services:
       log-init: { condition: service_completed_successfully }
     environment:
       YAGRA_BUS_URL: nats://nats:4222
+      # A stable id, for the same reason as the deploy composition (ADR-065 Inc.8): unset, a poller
+      # names itself after its container hostname, so every `up` leaves another dead row behind in
+      # `pollers`. This stack never turns the callout on, so the worse half of that failure cannot
+      # happen here — but the ghost rows can, and they are just as confusing on a dev box.
+      YAGRA_POLLER_ID: ${YAGRA_POLLER_ID:-local}
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
       # SUBDIRECTORY of core's log volume is load-bearing: core collects its own files by filename
       # prefix, and keeping the two apart on disk means neither collector can ever sweep up the

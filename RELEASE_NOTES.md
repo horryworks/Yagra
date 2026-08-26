@@ -23,6 +23,18 @@
   token at Settings ▸ Pollers, not by starting it. The pollers inside the central deployment are
   registered for you when you turn remote acceptance on.
 
+- **The poller inside the central deployment is now called `local` instead of being named after its
+  container.** Left unset, a poller takes its container hostname as its identity, and Docker invents
+  a fresh one every time compose recreates the container — so every upgrade left another dead row
+  behind on Settings ▸ Pollers. On a deployment that accepts remote pollers it was worse than
+  untidy: the *live* poller stopped appearing at all. It kept polling normally, but the same release
+  that turned self-registration off could not give it a row, because it connects on the internal
+  account that Auth Callout deliberately does not challenge — so it was neither refused nor
+  registered. After upgrading it appears once, as `local`, and stays there across restarts.
+  **The rows left by its earlier identities are not removed for you**: they are offline, so delete
+  them from Settings ▸ Pollers when you are ready. Set `YAGRA_POLLER_ID` in `.env` to choose a
+  different name.
+
 ### New Features
 
 - **Per-poller bus credentials now actually work, and there is nothing to set up.** Job messages on

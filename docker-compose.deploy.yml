@@ -360,6 +360,22 @@ services:
       # YAGRA_BUS_URL above. This co-located poller is the one that stops during the switch.
       YAGRA_BUS_URL: ${YAGRA_POLLER_BUS_URL:-nats://nats:4222}
       YAGRA_BUS_CA_FILE: ${YAGRA_BUS_CA_FILE:-}
+      # 🚨 A STABLE id, and it has to be set here rather than left to fall back (ADR-065 Inc.8).
+      # Unset, a poller names itself after its container hostname, which Docker invents afresh every
+      # time compose recreates the container — so an upgrade, a restart with a changed image tag, or
+      # an `up -d` after any edit gives this poller a NEW identity. Two things then go wrong at once,
+      # and only on a deployment that accepts remote pollers:
+      #   * "Accept remote pollers" turns auto-registration OFF (the bus refuses an id nobody
+      #     registered) — but this poller connects on the STATIC `poller` account, which the callout
+      #     deliberately bypasses (`auth_users`), so the bus never refuses it. It is neither refused
+      #     nor registered: it keeps polling off its Redis liveness and vanishes from Settings ▸
+      #     Pollers. Measured on 192.168.1.211, 2026-08-26 — 11 nodes assigned, 389 jobs run, no row.
+      #   * every previous container id is left behind as a row that never goes offline-and-away,
+      #     so the page shows a fleet of ghosts and not the poller doing the work.
+      # `local` because this poller is part of the deployment rather than something discovered. The
+      # updater reads this variable before falling back to the hostname (see local_pollers below), so
+      # the id core pre-registers and the id the poller claims stay the same one.
+      YAGRA_POLLER_ID: ${YAGRA_POLLER_ID:-local}
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
       # SUBDIRECTORY of core's log volume is load-bearing — core collects by filename prefix, and
       # keeping the two apart on disk means neither collector can sweep up the other's files. Each

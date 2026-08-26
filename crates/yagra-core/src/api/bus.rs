@@ -255,18 +255,21 @@ async fn set_bus_remote(
         // The updater is the only thing that knows which ids are local; core cannot work it out,
         // because nothing on the bus says which compose project a poller belongs to. Failure is
         // logged and ignored: this is preparation for the change, not the change.
-        if let Some(local) = upgrade.heartbeat().and_then(|h| h.local_pollers) {
-            match admin.pollers.ensure_registered(&local, yagra_bus::DEFAULT_POOL).await {
-                Ok(n) => tracing::info!(
-                    created = n, known = local.len(),
-                    "registered this deployment's own pollers before the callout starts refusing unknown ids"
-                ),
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    "could not pre-register the co-located pollers; one that has never heartbeated \
-                     will not appear until remote acceptance is turned off again"
-                ),
-            }
+        //
+        // WARNING: this moment is necessary and NOT sufficient (ADR-065 Inc.8). It adopts the
+        // ids that exist right now; an upgrade later replaces the composition without anyone
+        // pressing this switch, so `run_live` runs the same adoption at every start.
+        match crate::pollers::register_local(&admin.pollers, &upgrade).await {
+            Ok(Some((created, known))) => tracing::info!(
+                created,
+                known,
+                "registered the pollers this deployment owns, before the callout refuses unknown ids"
+            ),
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                "could not pre-register the co-located pollers; one never seen stays hidden"
+            ),
         }
         let core_secret = random_secret();
         let poller_secret = random_secret();
