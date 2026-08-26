@@ -483,6 +483,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_NATS_CALLOUT_SEED_FILE` | unset ⇒ callout off | Path to the mounted NATS account nkey seed; core then mints per-poller scoped bus users |
 | `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | NATS account minted poller users are placed into (must match the server's `auth_callout` account) |
 | `YAGRA_NATS_POLLER_PASSWORD` | unset ⇒ callout off | Shared poller bootstrap secret the callout validates (also consumed by the NATS server config) |
+| `YAGRA_BUS_AUTH_CALLOUT` | unset ⇒ off | Poller only. `1` or `true` makes the poller present its own `YAGRA_POLLER_ID` as the bus username, which is the name Auth Callout scopes its permissions on. Left off — the default, and what the remote-poller switch configures — it presents the username written in `YAGRA_BUS_URL`, the shared static account. Turn it on only where the callout is enabled: with the callout off, a poller announcing its own id matches no static account and the bus refuses it. |
 | **Observability** | | |
 | `YAGRA_DISK_WATCH_PATHS` | `/=root` | Filesystems host self-metrics report capacity for (comma-separated `path` or `path=alias`); read by core **and** poller |
 | `YAGRA_OTEL_ENDPOINT` | unset ⇒ logs only | OTLP/HTTP endpoint for OpenTelemetry trace export (falls back to `OTEL_EXPORTER_OTLP_ENDPOINT`) |

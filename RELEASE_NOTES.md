@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.1 — the bus can be opened to remote pollers, and a remote poller can now start against it
+
 ### Bug Fixes
 
 - **Settings ▸ Pollers ▸ "Accept remote pollers" now works. It had never once succeeded since it
@@ -22,7 +24,10 @@
   that directory mounted — the upgrade path runs the same commands inside a container that does, and
   only this path lacked it. (3) With that fixed, the switch completed in 11 seconds and then put core
   into a crash loop: the first TLS bus URL this product has ever run with hit a rustls configuration
-  that no code path had reached before. (4) With that fixed, the bus itself refused to start roughly
+  that no code path had reached before. The same defect stopped a **remote** poller dead — measured
+  2026-08-26, a poller from the previous release crash-looped against the encrypted bus before it
+  reached authentication at all, so no published release could take on a remote site. (4) With
+  that fixed, the bus itself refused to start roughly
   three times in ten: the generated password is substituted into the NATS server configuration and
   parsed there, so one beginning with a digit is read as a number and rejected. Generated bus
   passwords now always begin with a letter. (5) With that fixed, the bus came up and the WebUI

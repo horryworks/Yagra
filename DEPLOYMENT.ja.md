@@ -470,6 +470,7 @@ export RUST_LOG=info
 | `YAGRA_NATS_CALLOUT_SEED_FILE` | 未設定 ⇒ callout 無効 | マウントした NATS アカウント nkey シードへのパス。設定すると core がポーラごとにスコープしたバスユーザを発行 |
 | `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | 発行したポーラユーザを配置する NATS アカウント（サーバの `auth_callout` アカウントと一致必須） |
 | `YAGRA_NATS_POLLER_PASSWORD` | 未設定 ⇒ callout 無効 | callout が検証するポーラ共有のブートストラップシークレット（NATS サーバ設定も消費） |
+| `YAGRA_BUS_AUTH_CALLOUT` | 未設定 ⇒ 無効 | ポーラーのみ。`1` または `true` にすると、ポーラーは バスのユーザー名として自分の `YAGRA_POLLER_ID` を名乗ります。Auth Callout はこの名前で権限を絞ります。無効のまま（既定であり、リモートポーラーのスイッチが設定する状態）なら、`YAGRA_BUS_URL` に書かれた ユーザー名 —— 共有の静的アカウント —— を名乗ります。callout を有効にした環境でのみ ON にしてください。callout が無効な状態で自分の id を名乗ると、どの静的アカウントにも一致せずバスに拒否されます。 |
 | **可観測性** | | |
 | `YAGRA_DISK_WATCH_PATHS` | `/=root` | ホスト自己メトリクスが容量を報告するファイルシステム（カンマ区切りの `path` または `path=alias`）。core と poller の**両方**が読む |
 | `YAGRA_OTEL_ENDPOINT` | 未設定 ⇒ ログのみ | OpenTelemetry トレース送出先の OTLP/HTTP エンドポイント（`OTEL_EXPORTER_OTLP_ENDPOINT` にフォールバック） |
