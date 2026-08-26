@@ -1312,4 +1312,61 @@ mod tests {
             token_issued_at: None,
         }
     }
+
+    /// Every image a shipped composition pulls goes through `${YAGRA_IMAGE_REPO:-…}`.
+    ///
+    /// `docker-compose.poller.yml` is the one this module hands to a site (`COMPOSE_IN_IMAGE`,
+    /// travelling inside the bundle), and it named `ghcr.io/horryworks/yagra-poller` outright for
+    /// its whole life while the published reference documentation listed `YAGRA_IMAGE_REPO` as
+    /// applying to "deploy, poller". A site pulling Yagra from an internal mirror could therefore
+    /// redirect the central stack and not its own pollers — and nothing said so: compose resolves a
+    /// literal perfectly happily, and the only symptom is a registry reached that the operator
+    /// thought they had switched away from.
+    ///
+    /// The deploy composition is read here too, and not for symmetry: the two must spell the
+    /// reference the same way or the variable means different things on the two ends of one
+    /// deployment. This is the only test that reads the poller one at all.
+    ///
+    /// 🚨 It asserts how many lines it *checked*. A rename, a moved file or a pattern that stops
+    /// matching would otherwise leave a scan of zero lines reporting success.
+    #[test]
+    fn every_shipped_composition_pulls_its_images_through_the_repo_variable() {
+        const WANT: &str = "${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}";
+        let mut checked = 0;
+        for file in ["docker-compose.deploy.yml", "docker-compose.poller.yml"] {
+            let text = std::fs::read_to_string(format!("../../{file}"))
+                .unwrap_or_else(|e| panic!("{file} ships with the product: {e}"));
+            let mut in_file = 0;
+            for (n, line) in text.lines().enumerate() {
+                let trimmed = line.trim_start();
+                // A commented-out service is not something compose pulls.
+                if trimmed.starts_with('#') || !trimmed.starts_with("image:") {
+                    continue;
+                }
+                if !trimmed.contains("yagra-") {
+                    continue; // docker:28-cli and the like are not ours to redirect.
+                }
+                assert!(
+                    trimmed.contains(WANT),
+                    "{file}:{} pulls a Yagra image without {WANT}, so a deployment on a private \
+                     mirror cannot redirect it: {trimmed}",
+                    n + 1,
+                );
+                in_file += 1;
+            }
+            assert!(
+                in_file > 0,
+                "{file} named no Yagra image at all — this check scanned nothing and would have \
+                 passed on an empty file",
+            );
+            checked += in_file;
+        }
+        assert_eq!(
+            checked, 5,
+            "expected 5 Yagra image references: four in the deploy composition (core, core again \
+             for bus-init, the co-located poller, web) and one in the remote-site poller's. A \
+             changed count means a service was added or removed, so decide this number again \
+             rather than raising it to whatever was measured",
+        );
+    }
 }

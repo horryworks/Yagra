@@ -5,24 +5,33 @@
 # docker-compose.deploy.yml (which run the whole stack), this file runs ONLY a poller
 # and connects out to a central core's bus.
 #
-# The bus carries PLAINTEXT device credentials (ADR-020), so a remote/WAN bus MUST be
-# TLS + authenticated: the central `nats` has to be started with
-# docker/nats/nats-server.conf (see docker-compose.deploy.yml → "accept remote-site
-# pollers"), and YAGRA_BUS_URL below must be a `tls://user:pass@host:4222` URL.
-#
-# ── Three env vars are REQUIRED (compose errors out if unset) ───────────────────────
-#   YAGRA_BUS_URL     — tls://poller:<password>@<core-host>:4222
-#   YAGRA_POLLER_ID   — stable identity for this poller (e.g. edge-tokyo-1)
-#   YAGRA_POLLER_POOL — pool this poller serves; nodes are assigned to pollers by pool
-#
-# The WebUI ▸ Settings ▸ Pollers ▸ "Register poller" dialog generates a ready-to-use
-# `.env` for this file (id / pool / bus URL). Put that `.env` next to this file, drop
-# the CA cert the central operator gave you into ./certs, then:
+# ── If this came in a site bundle, read README.txt beside it ────────────────────────
+# The central deployment builds that bundle at Settings ▸ Pollers ▸ "Issue token &
+# download": one .tar.gz holding this file, a `.env` carrying the site's id, pool and
+# bus token, `certs/server-cert.pem` for it to pin, and a README. Unpack it and run
 #
 #   docker compose -f docker-compose.poller.yml up -d
 #
-# Pin/rollback the image with YAGRA_IMAGE_TAG. The default, `latest`, is the latest stable
-# release — remote pollers only ever pull published releases from GHCR.
+# The README is the instructions for a site; everything below is what this file itself
+# does, so the two do not have to be kept in step.
+#
+# ── If you are holding this file on its own ─────────────────────────────────────────
+# Ask the central operator for a bundle rather than assembling one. The bus carries
+# PLAINTEXT device credentials (ADR-020), so it is TLS-authenticated before it leaves
+# the host, and the certificate and the per-site token only exist centrally. Turning
+# that on is one switch there — Settings ▸ Pollers ▸ "Accept remote pollers" — and not
+# a hand-edited nats-server.conf: an in-place upgrade reinstalls the composition from
+# the target image, so a hand edit lasts until the next one.
+#
+# ── Three env vars are REQUIRED (compose errors out if unset) ───────────────────────
+# The bundle's `.env` sets all three:
+#   YAGRA_BUS_URL     — tls://<poller-id>:<token>@<core-host>:4222
+#   YAGRA_POLLER_ID   — stable identity for this poller (e.g. edge-tokyo-1)
+#   YAGRA_POLLER_POOL — pool this poller serves; nodes are assigned to pollers by pool
+#
+# Pin/rollback the image with YAGRA_IMAGE_TAG; point it at a mirror of your own with
+# YAGRA_IMAGE_REPO. The defaults are `latest` from ghcr.io/horryworks — the latest
+# stable release, since remote pollers only ever run published releases.
 #
 # That means a remote poller can be a release behind (or ahead of) a central core running an
 # unreleased build, so the usual N/N-1 bus-compatibility rules are doing real work here: new
@@ -34,7 +43,7 @@ name: yagra-poller
 
 services:
   poller:
-    image: ghcr.io/horryworks/yagra-poller:${YAGRA_IMAGE_TAG:-latest}
+    image: ${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}/yagra-poller:${YAGRA_IMAGE_TAG:-latest}
     pull_policy: always
     restart: unless-stopped
     # Host networking (no bridge): passive syslog/trap correlation keys on the datagram
@@ -45,7 +54,10 @@ services:
       - NET_RAW        # raw-socket ICMP (surge-ping) — granted to this poller only
     environment:
       # ── Required ──────────────────────────────────────────────────────────────────
-      # Central bus URL. A remote site crosses a trust boundary ⇒ TLS + auth mandatory:
+      # Central bus URL. A remote site crosses a trust boundary ⇒ TLS + auth mandatory.
+      # The username is this site's own poller id when it has been issued a token (what the
+      # bundle writes), and the shared `poller` account when it has not:
+      #   tls://<poller-id>:<token>@<core-host-or-ip>:4222
       #   tls://poller:<YAGRA_NATS_POLLER_PASSWORD>@<core-host-or-ip>:4222
       YAGRA_BUS_URL: ${YAGRA_BUS_URL:?set YAGRA_BUS_URL, e.g. tls://poller:PASSWORD@core.example.com:4222}
       # Stable, human-meaningful identity (shown on the Pollers page, sanitized for the
@@ -117,8 +129,8 @@ services:
       # it never runs anything itself.
       # YAGRA_UPGRADE_DIR: /data/upgrade
     volumes:
-      # CA / server cert for the TLS bus (read-only). Place the cert the central operator
-      # handed you here; YAGRA_BUS_CA_FILE points at it inside the container.
+      # CA / server cert for the TLS bus (read-only). The site bundle unpacks it to
+      # ./certs/server-cert.pem, which is what YAGRA_BUS_CA_FILE defaults to above.
       - ${YAGRA_CERT_DIR:-./certs}:/etc/yagra/certs:ro
       # Store-and-forward spill (Phase 3) — persists the result buffer across restarts.
       - pollerbuf:/var/lib/yagra/buffer

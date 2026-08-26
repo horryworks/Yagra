@@ -10,6 +10,21 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+- **The remote-site poller composition now honours `YAGRA_IMAGE_REPO`.** The reference
+  documentation has listed that variable as applying to `deploy, poller` for as long as it has
+  existed, but `docker-compose.poller.yml` named `ghcr.io/horryworks/yagra-poller` outright — so a
+  site serving Yagra from an internal mirror could redirect the central stack and not its own
+  pollers, with nothing to say so. It now reads `${YAGRA_IMAGE_REPO:-ghcr.io/horryworks}`, the same
+  spelling `docker-compose.deploy.yml` uses, and the default is unchanged.
+- **The remote-site composition's own header described the procedure from before v0.2.13**, and
+  that file travels inside every site bundle — so each new site was handed instructions telling it
+  to start the central bus from a hand-edited `nats-server.conf` and to assemble a `.env` from a
+  dialog. Both were replaced when the "Accept remote pollers" switch and the downloadable site
+  bundle shipped. The header now points at the README beside it and at that switch. Bundles already
+  downloaded keep the old text; issue a new one to replace it.
+
 ## v0.3.1 — the bus can be opened to remote pollers, and a remote poller can now start against it
 
 ### Bug Fixes
