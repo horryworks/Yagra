@@ -439,7 +439,10 @@ pub(crate) fn open(pool: PgPool, kek: Kek) -> std::sync::Arc<BusTlsRepo> {
 
 /// Create restrictively, write, fsync, then rename — so no reader ever sees a partial file and the
 /// private key is never briefly readable by anyone the final mode would exclude.
-fn write_atomically(dst: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
+/// Write, fsync, then rename — shared with [`crate::bus_callout`], which materializes the other
+/// half of this volume from the same one-shot and must not carry a second copy of the durability
+/// rules (`extensibility.md` §3).
+pub(crate) fn write_atomically(dst: &Path, body: &[u8], mode: u32) -> std::io::Result<()> {
     use std::io::Write;
 
     let tmp = dst.with_extension("tmp");

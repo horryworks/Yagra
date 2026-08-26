@@ -379,6 +379,24 @@ pub enum Decision {
     Denied { reason: DenyReason },
 }
 
+/// Mint a fresh NATS **account** nkey seed (`SA…`).
+///
+/// The signing key for every per-poller credential this crate issues, so it is the one secret whose
+/// disclosure would let anyone mint a credential for any poller. It lives here rather than in core
+/// because this crate already owns `nkeys` and the seed format is meaningless outside it.
+///
+/// Until ADR-065 Inc.7 this existed only inside this module's tests: the shipped procedure had an
+/// operator run `nk -gen account -pubout` and mount the result. Nobody ever did, because the other
+/// half of that procedure could not survive an upgrade — see `migrations/0099_bus_callout.sql`.
+///
+/// # Errors
+/// [`AuthzError::Nkey`] if the platform RNG refuses, which is not a recoverable condition here.
+pub fn new_account_seed() -> Result<String, AuthzError> {
+    nkeys::KeyPair::new_account()
+        .seed()
+        .map_err(|_| AuthzError::Nkey)
+}
+
 impl AccountSigner {
     /// Build a signer from an account seed (`SA...`). `account` is the NATS account minted users join.
     pub fn from_seed(seed: &str, account: impl Into<String>) -> Result<Self, AuthzError> {

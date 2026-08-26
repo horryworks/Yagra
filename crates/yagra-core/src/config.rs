@@ -189,8 +189,7 @@ impl Config {
             nats_callout_seed_file: parse_optional(
                 std::env::var("YAGRA_NATS_CALLOUT_SEED_FILE").ok(),
             ),
-            nats_callout_account: parse_optional(std::env::var("YAGRA_NATS_CALLOUT_ACCOUNT").ok())
-                .unwrap_or_else(|| "$G".to_owned()),
+            nats_callout_account: callout_account(),
             nats_poller_password: parse_optional(std::env::var("YAGRA_NATS_POLLER_PASSWORD").ok()),
             // Signed session tokens (ADR-016 Increment 2a): opt-in via a mounted key file. Unset ⇒
             // opaque per-process tokens (byte-identical to today).
@@ -199,6 +198,18 @@ impl Config {
             enable_mcp: parse_bool(std::env::var("YAGRA_ENABLE_MCP").ok()),
         })
     }
+}
+
+/// The NATS account minted Auth Callout users join (`YAGRA_NATS_CALLOUT_ACCOUNT`, default `$G`).
+///
+/// A free function because the `bus-cert` one-shot needs it without building a whole [`Config`] —
+/// and because the answer has to be **the same one** in both places: the account written into
+/// `callout.conf` and the account core's signer names live on opposite sides of the broker, and a
+/// disagreement refuses every poller connection with nothing in either log to say why.
+#[must_use]
+pub fn callout_account() -> String {
+    parse_optional(std::env::var("YAGRA_NATS_CALLOUT_ACCOUNT").ok())
+        .unwrap_or_else(|| "$G".to_owned())
 }
 
 /// Normalize an optional string env var: unset, empty, or all-whitespace ⇒ `None`; otherwise the

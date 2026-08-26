@@ -153,6 +153,13 @@ services:
       # switch reissues the certificate with the address the operator types, so this is only for a
       # deployment that has to set it from a shell.
       YAGRA_BUS_TLS_SANS: ${YAGRA_BUS_TLS_SANS:-}
+      # The NATS account minted Auth Callout users join (ADR-065 Inc.7). This container writes it
+      # into `callout.conf`; `core` below reads the same variable when it signs. They are given the
+      # identical expression on purpose — the two live on opposite sides of the broker, and a
+      # disagreement refuses every remote poller with nothing in either log to say why.
+      # ⚠️ `$$G` is the literal `$G`. A single `$` here would be substituted by Compose (as an
+      # undefined variable, i.e. to nothing) before either process ever saw it.
+      YAGRA_NATS_CALLOUT_ACCOUNT: ${YAGRA_NATS_CALLOUT_ACCOUNT:-$$G}
       RUST_LOG: ${RUST_LOG:-info}
     volumes:
       - kekdata:/kek:ro
@@ -271,13 +278,26 @@ services:
       # on all cores and survives a restart/failover. Unset ⇒ opaque per-process tokens (today's
       # behavior). Uncomment together with the session-key volume mount below.
       # YAGRA_SESSION_KEY_FILE: /etc/yagra/session/session.key
-      # Per-poller credential scoping via Auth Callout (ADR-030). Enable only with the remote-bus
-      # TLS+auth setup (see the `nats` service, step 6). Core signs each poller a scoped NATS JWT
-      # using the account SEED mounted below; the account is $G by default (must match the server's
-      # auth_callout account). Core also validates the poller bootstrap secret against this password.
+      # Per-poller credential scoping via Auth Callout (ADR-030, wired up by ADR-065 Inc.7). Core
+      # signs each connecting poller a NATS credential scoped to that poller's own subjects, using
+      # an account key it generates and keeps sealed in PostgreSQL — there is no key to mount and
+      # no issuer to copy anywhere. See docker/nats/nats-server.conf.
+      #
+      # This one variable is what turns it on, and it is not a switch of its own: the remote-poller
+      # switch writes it into `.env` in the same change that puts the bus on TLS, so "the bus is the
+      # secured one" and "the callout governs it" are one fact. Empty (the default here) means the
+      # plaintext internal bus, and core neither answers callouts nor gates poller registration.
+      #
+      # 🚨 It was commented out until v0.3.2, which is why the responder had never run in
+      # production: core could not see the secret it validates against, so it returned immediately
+      # on every deployment there has ever been.
+      YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:-}
+      # The NATS account minted poller users join — the same expression `bus-cert-init` above is
+      # given, so what core signs for and what `callout.conf` names cannot come apart.
+      YAGRA_NATS_CALLOUT_ACCOUNT: ${YAGRA_NATS_CALLOUT_ACCOUNT:-$$G}
+      # Only for a deployment that mounted an account seed under ADR-030 before Inc.7 existed. It
+      # takes precedence over the stored key; nothing new should set it.
       # YAGRA_NATS_CALLOUT_SEED_FILE: /etc/yagra/callout/account.seed
-      # YAGRA_NATS_CALLOUT_ACCOUNT: ${YAGRA_NATS_CALLOUT_ACCOUNT:-$G}
-      # YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:?set the poller bus password in .env}
     volumes:
       - kekdata:/kek:ro
       # Read-only view of the metrics data volume so core can statvfs its backing disk for the
@@ -480,11 +500,11 @@ services:
   # Server-wide TLS leaves no plaintext port, which is why the last three are not optional: the
   # co-located core and poller move to `tls://` in the same change.
   #
-  # (RECOMMENDED, ADR-030) Scope credentials per poller as well: generate an account nkey pair
-  # (`nk -gen account -pubout`), give core the SEED file + YAGRA_NATS_CALLOUT_SEED_FILE (see the
-  # `core` service above), set YAGRA_NATS_CALLOUT_ISSUER=<the A... public key> here, and uncomment
-  # the `auth_callout` block in the shipped nats-server.conf. Then a compromised poller can read
-  # only its OWN pool's device credentials, not the fleet's.
+  # Per-poller credential scoping (ADR-030) comes with it and needs no step of its own: the same
+  # `YAGRA_NATS_POLLER_PASSWORD` makes core answer Auth Callout requests, and the account key it
+  # signs with is generated on first start and kept sealed in PostgreSQL. A compromised site then
+  # reads only its OWN pool's device credentials, not the fleet's. Until v0.3.2 this was four manual
+  # steps ending in an edit to nats-server.conf that the next `up` erased, so it had never run.
   nats:
     image: nats:2-alpine
     # `-js` alone = JetStream on a plaintext bus. The switch appends `-c /etc/nats/nats-server.conf`.
@@ -503,9 +523,12 @@ services:
       # `-c` absent the configuration is not read at all, so the value is inert.
       YAGRA_NATS_CORE_PASSWORD: ${YAGRA_NATS_CORE_PASSWORD:-bus-disabled}
       YAGRA_NATS_POLLER_PASSWORD: ${YAGRA_NATS_POLLER_PASSWORD:-bus-disabled}
-      # Per-poller scoping (ADR-030) — the account PUBLIC key core logs on startup. Inert unless the
-      # `auth_callout` block in nats-server.conf is uncommented.
-      YAGRA_NATS_CALLOUT_ISSUER: ${YAGRA_NATS_CALLOUT_ISSUER:-}
+      # 🚨 There is deliberately no YAGRA_NATS_CALLOUT_ISSUER here any more (ADR-065 Inc.7). The
+      # account public key is written as a literal into `callout.conf` on the bus volume, by the
+      # same one-shot and the same run that writes nats-server.conf. Through `.env` it would be one
+      # value two files must agree about across an upgrade — and the default above was the EMPTY
+      # STRING rather than unset, so a deployment that upgraded into an `auth_callout` block would
+      # have handed nats-server an empty issuer to parse and lost the bus.
     # nats runs as uid 1000 and the private key on the bus volume is 0640 owned by core's uid 10001,
     # so it reads the key as a supplementary group member — the same mechanism `web` uses for the
     # WebUI certificate, and for the same reason. See `bus-init` above for who arranges the volume.

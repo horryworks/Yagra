@@ -244,6 +244,30 @@ async fn set_bus_remote(
         }
         let by_id = caller.as_ref().map(|c| c.0.user_id);
         let cert = bus.reissue(&names, by_id).await.map_err(to_api_error)?;
+        // 🚨 Before the bus changes, not after: turning this on also turns poller auto-registration
+        // off (ADR-065 Inc.7), because from then on the Auth Callout is what refuses an id nobody
+        // registered. The pollers inside this composition bypass the callout on a static account,
+        // so they are never refused — they would simply stop being able to *appear*. On a fresh
+        // deployment where this switch is the first thing pressed, that is a fleet with no poller
+        // rows and therefore no assignments, on a deployment that has just been told the change
+        // succeeded.
+        //
+        // The updater is the only thing that knows which ids are local; core cannot work it out,
+        // because nothing on the bus says which compose project a poller belongs to. Failure is
+        // logged and ignored: this is preparation for the change, not the change.
+        if let Some(local) = upgrade.heartbeat().and_then(|h| h.local_pollers) {
+            match admin.pollers.ensure_registered(&local, yagra_bus::DEFAULT_POOL).await {
+                Ok(n) => tracing::info!(
+                    created = n, known = local.len(),
+                    "registered this deployment's own pollers before the callout starts refusing unknown ids"
+                ),
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    "could not pre-register the co-located pollers; one that has never heartbeated \
+                     will not appear until remote acceptance is turned off again"
+                ),
+            }
+        }
         let core_secret = random_secret();
         let poller_secret = random_secret();
         (

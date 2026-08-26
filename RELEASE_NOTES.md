@@ -10,6 +10,36 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **On a deployment that accepts remote pollers, a poller that has never been registered can no
+  longer register itself by connecting.** Auth Callout is now switched on with remote acceptance
+  (see below), and it refuses a poller id that has no row in the inventory — which is what makes
+  "remove this poller" stick, and what stops one site's leaked `.env` from being used to claim
+  another site's identity and receive its device credentials. That gate was written in v0.2.13 and
+  had never once closed, because the callout it depends on could not be enabled.
+  **Every poller connecting today keeps working**: it already has an inventory row, because its own
+  heartbeats created one. What changes is the future — a *new* site is registered by issuing it a
+  token at Settings ▸ Pollers, not by starting it. The pollers inside the central deployment are
+  registered for you when you turn remote acceptance on.
+
+### New Features
+
+- **Per-poller bus credentials now actually work, and there is nothing to set up.** Job messages on
+  the bus carry plaintext device credentials, and the shared `poller` account that authenticated
+  remote sites could read *every* pool's assignments — so one site's credential was, in effect, the
+  whole fleet's. NATS Auth Callout closes that by having core mint each connecting poller a
+  credential scoped to exactly its own subjects, and it is now enabled by the same switch that opens
+  the bus. Core generates the signing key on first start and keeps it sealed in the database with
+  the same envelope encryption as every other secret; its public half is written into the bus's own
+  configuration by the same one-shot that writes the rest of it.
+  This capability has been documented as available since v0.1.x and **had never run anywhere**.
+  Enabling it took four manual steps, and the last of them was an edit to a configuration file that
+  Yagra reinstalls from its image on every start — so the setup erased itself. The variable core
+  needed in order to answer a callout at all was also commented out of the shipped composition.
+  Both are fixed. A deployment that mounted an account key by hand keeps using it:
+  `YAGRA_NATS_CALLOUT_SEED_FILE` still takes precedence.
+
 ### Bug Fixes
 
 - **The remote-site poller composition now honours `YAGRA_IMAGE_REPO`.** The reference

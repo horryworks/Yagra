@@ -304,6 +304,40 @@ impl PollerRepo {
         Ok(())
     }
 
+    /// Make sure a poller has an inventory row, without giving it a token (ADR-065 Inc.7).
+    ///
+    /// 🚨 This exists for exactly one caller and one moment: the remote-poller switch, applied to
+    /// the ids the updater reports as belonging to its own compose project. Turning that switch on
+    /// also turns [`Self::with_auto_register`] off, so from that moment a heartbeat from an id with
+    /// no row no longer creates one — and a co-located poller that had never heartbeated (a fresh
+    /// deployment where the switch is the first thing pressed) would connect, be authorized by the
+    /// static account it bypasses the callout with, and then sit there with no assignment forever.
+    /// Nothing would say so: the Pollers page would show an empty fleet on a deployment that had
+    /// just reported the change as succeeding.
+    ///
+    /// `DO NOTHING`, not an upsert: a poller that already has a row keeps its pool, its anchor, its
+    /// token and its history. This may only ever *add*.
+    ///
+    /// Returns how many rows it created, so the caller can log a number rather than an intention.
+    ///
+    /// # Errors
+    /// A database failure. Callers treat it as non-fatal — the switch has a bus to reconfigure and
+    /// this is preparation for it, not the change itself.
+    pub async fn ensure_registered(&self, ids: &[String], pool: &str) -> anyhow::Result<u64> {
+        let mut created = 0;
+        for id in ids.iter().filter(|i| !i.trim().is_empty()) {
+            created += sqlx::query(
+                "INSERT INTO pollers (id, pool) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING",
+            )
+            .bind(id.trim())
+            .bind(pool)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        }
+        Ok(created)
+    }
+
     /// Drop a poller's token, returning it to the deployment-wide bootstrap secret.
     ///
     /// Deliberately **not** the same thing as deleting the poller: an operator revoking a leaked

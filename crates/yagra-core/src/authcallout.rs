@@ -33,41 +33,62 @@ fn unix_now_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// Start the responder when a callout account seed is mounted **and** the poller bootstrap secret
-/// is set. Moved here from `run_live` by ADR-090, together with the seed-file read.
+/// Is this deployment's bus one the callout governs?
+///
+/// The bootstrap secret (`YAGRA_NATS_POLLER_PASSWORD`) is the signal, and it is not a proxy for
+/// something else: the remote-poller switch is the only thing that sets it, in the same change that
+/// puts the bus on TLS and loads `nats-server.conf`. Unset ⇒ the bus is the plaintext internal one,
+/// no configuration file is read, and nothing is delegated to core.
+///
+/// It is a named function because **two** decisions hang off it — whether to answer callouts, and
+/// whether an unheard-of poller id may still create its own inventory row (`main.rs`). Those two
+/// must never come apart: with the callout answering, an insert on the heartbeat path is what made
+/// "delete this poller" not stick (ADR-065 Inc.3), and without it, refusing the insert would make a
+/// poller invisible while it happily polled.
+#[must_use]
+pub(crate) fn is_governed(poller_password: Option<&str>) -> bool {
+    poller_password.is_some_and(|p| !p.trim().is_empty())
+}
+
+/// Start the responder when this deployment's bus is governed by the callout and an account key is
+/// available. Moved here from `run_live` by ADR-090, together with the seed read.
 ///
 /// **Runs on EVERY core, deliberately not leader-gated** — it is queue-subscribed (see
 /// [`AUTH_QUEUE`]), so one core always answers and authentication survives a failover.
 ///
-/// Either input unset ⇒ NATS uses its static account config and this is a no-op, byte-identical to
-/// a deployment that never enabled ADR-030. A seed that is unreadable or invalid is logged at
-/// `error` and leaves scoping disabled rather than aborting startup: refusing to boot would take
-/// the whole deployment down over a feature that is off by default.
+/// Not governed ⇒ NATS uses its static account config and this is a no-op, byte-identical to a
+/// deployment that never enabled ADR-030. A key that is unreadable or invalid is logged at `error`
+/// and leaves scoping disabled rather than aborting startup: refusing to boot would take the whole
+/// deployment down over one feature.
 ///
 /// ⚠️ The seed itself is never logged. What *is* logged is the issuer **public** key, which is not a
-/// secret — the operator has to paste it into `nats-server.conf`'s `auth_callout { issuer }`, and
-/// startup is the only place it can be read from.
+/// secret — it is what the broker was told to trust, and the two disagreeing is the one failure an
+/// operator cannot diagnose from either side, so it belongs in core's log.
+///
+/// # The seed has two sources, and the file one is legacy
+///
+/// `seed` is whatever the caller resolved: since ADR-065 Inc.7 that is normally the row in
+/// `bus_callout_config`, written by the same one-shot that writes the broker's own configuration.
+/// `YAGRA_NATS_CALLOUT_SEED_FILE` still wins when set, for a deployment that mounted one under
+/// ADR-030 — but that path was never usable end to end, because its other half told the operator to
+/// hand-edit a file `bus-cert-init` rewrites on every `up`.
 pub(crate) fn start(
-    seed_file: Option<&str>,
+    seed: Option<String>,
     account: &str,
     poller_password: Option<String>,
     client: Client,
     pollers: Arc<crate::pollers::PollerRepo>,
     shutdown: &yagra_telemetry::CancellationToken,
 ) {
-    let (Some(seed_path), Some(secret)) = (seed_file, poller_password) else {
+    if !is_governed(poller_password.as_deref()) {
         return;
-    };
-    let seed = match std::fs::read_to_string(seed_path) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!(
-                error = %e,
-                path = %seed_path,
-                "auth-callout: cannot read seed file; per-poller credential scoping disabled"
-            );
-            return;
-        }
+    }
+    let (Some(seed), Some(secret)) = (seed, poller_password) else {
+        tracing::error!(
+            "auth-callout: the bus is configured for remote pollers but no account key is \
+             available; per-poller credential scoping disabled"
+        );
+        return;
     };
     let signer = match AccountSigner::from_seed(seed.trim(), account.to_owned()) {
         Ok(s) => s,
@@ -250,6 +271,41 @@ mod tests {
             "the signer's reason must stay a typed token"
         );
         assert!(src.contains("yagra_core_authz_issued_total"));
+    }
+
+    /// The bootstrap secret decides, and empty is not set.
+    #[test]
+    fn only_a_real_bootstrap_secret_governs_the_bus() {
+        assert!(is_governed(Some("s3cret")));
+        assert!(!is_governed(None));
+        // `.env` clearing is `set_env KEY ""`, and the composition's own default for an unset
+        // switch is the empty string — so blank has to read as "off" or turning remote acceptance
+        // back OFF would leave the callout answering and poller registration gated.
+        assert!(!is_governed(Some("")));
+        assert!(!is_governed(Some("   ")));
+    }
+
+    /// 🚨 Answering callouts and gating poller registration must be **one** decision.
+    ///
+    /// They were two before ADR-065 Inc.7 and the pair was never exercised: the responder asked for
+    /// a mounted seed file the shipped composition never set, so both were permanently off. Split
+    /// them again and the failure is silent in either direction — a gate that closes with nothing
+    /// refusing unregistered ids makes a working poller invisible; a gate that opens while the
+    /// callout answers lets a deleted poller recreate its own row from an established connection,
+    /// which is the bug Inc.3 fixed.
+    #[test]
+    fn the_registration_gate_asks_this_module_the_same_question() {
+        let main_rs = crate::module_source::code_no_comments("src", "main");
+        assert!(
+            main_rs.contains("authcallout::is_governed(cfg.nats_poller_password.as_deref())"),
+            "main.rs decides poller auto-registration from something other than \
+             `authcallout::is_governed`; the two halves of one rule have come apart"
+        );
+        // And the responder is handed the same value, so neither can be reached without the other.
+        assert!(
+            main_rs.contains("cfg.nats_poller_password.clone()"),
+            "the responder is no longer given the secret the gate reads"
+        );
     }
 
     #[test]

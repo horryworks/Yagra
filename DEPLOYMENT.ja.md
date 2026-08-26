@@ -370,18 +370,34 @@ docker compose -f docker-compose.poller.yml up -d
 
 プールをスケールするには、同じ `YAGRA_POLLER_POOL`（と異なる `YAGRA_POLLER_ID`）でポーラーを増やします。core がプール内で再配分し、喪失時にはフェイルオーバーします。稼働ポーラーが 0 のプールはレガシーな都度 publish にフォールバックするので、ローリング更新中もノードが暗くなりません。
 
-### 任意 — ポーラーごとにバス資格情報を絞る（Auth Callout）
+### ステップ 1 が同時に有効にするもの — ポーラーごとのバス資格情報（Auth Callout）
 
 NATS の静的アカウントは `core` に全権を、`poller` に最小権限を与えます（publish は結果・イベント・
 ハートビートのみ、subscribe は自分のジョブとワーキングセットのみ）。ただし **`poller` アカウントは
-1 つの共有**なので、認証済みのポーラーはどのプールの割り当ても読めます。テナント境界ではありません。
+1 つの共有**なので、認証済みのポーラーはどのプールの割り当ても読めてしまいます。テナント境界では
+ありません。
 
-**NATS Auth Callout** を有効にすると core がバスの認可サービスになり、接続してくるポーラーごとに
-その id 専用のスコープを持つ資格情報を発行します。ステップ 2 のポーラー別トークンを検査するのも
-この経路です。アカウントの nkey ペアを作り（`nk -gen account -pubout`）、core に
-`YAGRA_NATS_CALLOUT_SEED_FILE` でシードを渡し、`YAGRA_NATS_CALLOUT_ISSUER` に公開鍵を設定して、
-同梱の `nats-server.conf` の `auth_callout` ブロックのコメントを外します。有効にすると、core は
-ハートビートからポーラーの行を作り直さなくなるので、**WebUI でのポーラー削除が効くようになります。**
+**NATS Auth Callout** がそれを塞ぎます。ステップ 1 がこれを有効にします。core がバスの認可
+サービスになり、接続してくるポーラーごとに **その id 専用のスコープを持つ資格情報**を発行します。
+ステップ 2 のポーラー別トークンを検査するのもこの経路です。署名鍵は初回起動時に生成されて
+データベースに封じられ、公開鍵のほうは**バスの設定を書くのと同じ 1 回の実行**で書き込まれます。
+**生成する物・マウントする物・写す物は 1 つもありません。**
+
+知っておく価値のある結果が 2 つあります。
+
+- **core はハートビートからポーラーの行を作り直さなくなります。** つまり **WebUI での削除が効く
+  ようになります。** 裏返すと、ポーラーが台帳に載るのは**トークンを発行したとき**（ステップ 2）で
+  あって、接続したときではありません。このコンポーズの中のポーラーは、ステップ 1 を ON にした
+  ときに自動で登録されます。
+- **この環境自身の core と poller は対象外**で、上の静的アカウントを使い続けます。この 2 つは
+  固定の名前（`core` / `poller`）と、このホストの `.env` の中にしか存在しないパスワードを名乗り
+  ます。**外から来る接続はすべてポーラー id を名乗るので、core が認可するか、拒否されるかの
+  どちらかです。**
+
+> **v0.3.2 より前に手で設定していても壊れません。** `YAGRA_NATS_CALLOUT_SEED_FILE` は生成された
+> 鍵より優先されます。ただしどこかで外すことをおすすめします —— その手順は最後に
+> `nats-server.conf` を編集する形でしたが、あのファイルは起動のたびにイメージから入れ直される
+> ので、編集は次の起動までしか残りませんでした。
 
 ---
 
@@ -467,9 +483,9 @@ export RUST_LOG=info
 | `YAGRA_UPGRADE_ALLOW_BUNDLE` | `0` | アップロードされた `docker save` アーカイブからの導入を許可します。**Admin からホスト root への経路が「我々が公開した 3 イメージのいずれかのタグ」から「アーカイブに入っている任意のイメージ」へ広がります。** だからこそホスト側の設定で、WebUI からは有効にできません。到達できるレジストリが 1 つも無い環境でのみ設定してください。load 以降は通常経路と同一です — 同じバックアップ、同じ構成の差し替え、同じ provenance 検証を行い、アーカイブが操作者の名乗ったタグを含むことも照合します |
 | `YAGRA_DOCKER_GID` | `0` | サイドカーの実行グループ。uid を `0` 以外にする場合にのみ意味を持ちます（root は gid に関わらずソケットに届きます） |
 | **NATS Auth Callout（ポーラごとのバス資格情報）** | | |
-| `YAGRA_NATS_CALLOUT_SEED_FILE` | 未設定 ⇒ callout 無効 | マウントした NATS アカウント nkey シードへのパス。設定すると core がポーラごとにスコープしたバスユーザを発行 |
-| `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | 発行したポーラユーザを配置する NATS アカウント（サーバの `auth_callout` アカウントと一致必須） |
-| `YAGRA_NATS_POLLER_PASSWORD` | 未設定 ⇒ callout 無効 | callout が検証するポーラ共有のブートストラップシークレット（NATS サーバ設定も消費） |
+| `YAGRA_NATS_POLLER_PASSWORD` | 未設定 ⇒ callout 無効 | **この 3 つのうち設定しうるのはこれだけで、しかもリモートポーラーのスイッチが自動で設定します。** この値が在ることが、core が callout 要求に応答する条件そのものです（自分のトークンを持たないポーラーが名乗る共有のブートストラップシークレットだからです）。NATS サーバ設定も静的 `poller` アカウント用に同じ値を消費します |
+| `YAGRA_NATS_CALLOUT_SEED_FILE` | 未設定 ⇒ 保存された鍵を使う | **旧経路の上書き。** マウントした NATS アカウント nkey シードへのパス。v0.3.2 以降、core は初回起動時に署名鍵を自分で生成してデータベースに封じるので、マウントする物はありません。ここにパスを書けば今も優先されます（それ以前に設定していた環境のため） |
+| `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | 発行したポーラユーザを配置する NATS アカウント。バスの `callout.conf` が名乗るアカウントと一致必須ですが、**そのファイルはこの同じ値から書かれます**。ブローカのアカウントを独自に変えていない限り、触らないでください |
 | `YAGRA_BUS_AUTH_CALLOUT` | 未設定 ⇒ 無効 | ポーラーのみ。`1` または `true` にすると、ポーラーは バスのユーザー名として自分の `YAGRA_POLLER_ID` を名乗ります。Auth Callout はこの名前で権限を絞ります。無効のまま（既定であり、リモートポーラーのスイッチが設定する状態）なら、`YAGRA_BUS_URL` に書かれた ユーザー名 —— 共有の静的アカウント —— を名乗ります。callout を有効にした環境でのみ ON にしてください。callout が無効な状態で自分の id を名乗ると、どの静的アカウントにも一致せずバスに拒否されます。 |
 | **可観測性** | | |
 | `YAGRA_DISK_WATCH_PATHS` | `/=root` | ホスト自己メトリクスが容量を報告するファイルシステム（カンマ区切りの `path` または `path=alias`）。core と poller の**両方**が読む |
@@ -527,8 +543,8 @@ export RUST_LOG=info
 > - イメージとストア: `YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`
 > - ホストポートのマッピング: `YAGRA_API_PORT`, `YAGRA_API_BIND`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
 > - WebUI の TLS: `YAGRA_WEB_TLS`（compose）、`YAGRA_TLS_DIR`（core — 証明書の材料化先）
-> - バスの TLS + auth（D）: `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`（core も Auth Callout のブートストラップシークレットとして読む）, `YAGRA_NATS_CALLOUT_ISSUER`（NATS サーバが core の callout JWT を検証するアカウント公開鍵）
-> - マウントする鍵ディレクトリ: `YAGRA_SESSION_KEY_DIR`（`YAGRA_SESSION_KEY_FILE` 用の `session.key` を置く）, `YAGRA_CALLOUT_SEED_DIR`（`YAGRA_NATS_CALLOUT_SEED_FILE` 用の `account.seed` を置く）
+> - バスの TLS + auth（D）: `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD`（core も Auth Callout のブートストラップシークレットとして読み、callout を動かすかどうかもこれで決まる）。v0.3.2 以降 `YAGRA_NATS_CALLOUT_ISSUER` は**意図的にありません** —— アカウント公開鍵は、バスの残りの設定を書くのと同じ 1 回の実行で `callout.conf` に直接書かれるので、アップグレードをまたいで食い違うことがありません
+> - マウントする鍵ディレクトリ: `YAGRA_SESSION_KEY_DIR`（`YAGRA_SESSION_KEY_FILE` 用の `session.key` を置く）。`YAGRA_CALLOUT_SEED_DIR`（`YAGRA_NATS_CALLOUT_SEED_FILE` 用の `account.seed`）は旧経路で、今は不要です
 > - ポーラのログ出力先: `YAGRA_POLLER_LOG_DIR`（既定 `/var/log/yagra/pollers`）— `docker-compose.deploy.yml` が同居ポーラの `YAGRA_LOG_DIR` として渡す値。空にすればそのポーラは stdout のみになる
 > - IP→ASN 更新サイドカー: `YAGRA_IPASN_URL`（データセット URL）, `YAGRA_IPASN_REFRESH_SECS`（取得周期。既定 `604800` = 週次）
 

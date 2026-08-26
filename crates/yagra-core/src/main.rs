@@ -29,6 +29,7 @@ mod audit;
 mod auth;
 mod authcallout;
 mod bigquery;
+mod bus_callout;
 mod bus_cert;
 mod cadence;
 mod classification;
@@ -295,12 +296,27 @@ async fn run_bus_cert() -> anyhow::Result<()> {
     let repo = repo::NodeRepo::connect(&db).await?;
     repo.migrate().await?;
 
-    let bus_tls = bus_cert::BusTlsRepo::new(repo.pool(), kek, Some(dir));
+    let bus_tls = bus_cert::BusTlsRepo::new(repo.pool(), kek.clone(), Some(dir.clone()));
     bus_tls.ensure_ready(&bus_cert::configured_names()).await?;
     // The configuration travels with the image exactly as the composition does (ADR-050 decision 5),
     // so this is a copy on every run rather than a create-if-absent: an upgrade that changes the
     // file must not leave the previous release's copy in place.
     bus_tls.install_server_conf(std::path::Path::new(bus_cert::CONF_IN_IMAGE))?;
+
+    // The Auth Callout account key, and the block that names its public half (ADR-065 Inc.7).
+    // Written HERE, in the same run from the same image as the file that includes it — that is the
+    // whole design. Routing the issuer through `.env` would make it one value two files have to
+    // agree about across an upgrade, and the composition defaults it to the *empty string* rather
+    // than leaving it unset, so a disagreement is a bus that will not start.
+    //
+    // Unconditional, including on a deployment whose bus never leaves the host: it costs one row
+    // and one file nats only reads with `-c`. The alternative — generating the key at the moment
+    // the switch is pressed — puts a key generation inside the one request an operator is already
+    // watching restart their monitoring.
+    let callout = bus_callout::BusCalloutRepo::new(repo.pool(), kek, Some(dir));
+    let identity = callout.ensure_ready(&config::callout_account()).await?;
+    callout.install_conf(&identity)?;
+
     tracing::info!("bus TLS material is ready");
     Ok(())
 }
@@ -414,10 +430,17 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
     // consumer can attribute results to their poller.
     let volatile = Arc::new(VolatileStore::from_optional_url(cfg.redis_url.as_deref()));
     // Auto-registration is turned OFF exactly when the bus already refuses an unregistered id — i.e.
-    // when Auth Callout is configured (ADR-065 Inc.3). Keeping the two conditions the same one is
+    // when Auth Callout governs this bus (ADR-065 Inc.3). Keeping the two conditions the same one is
     // deliberate: with the callout off, refusing to create a row would make a poller invisible while
     // it happily polled, and with it on, creating one is what made "delete this poller" not stick.
-    let poller_registration_gated = cfg.nats_callout_seed_file.is_some();
+    //
+    // ⚠️ Inc.7 changed what "configured" means. It used to read `nats_callout_seed_file.is_some()`,
+    // an env var the shipped composition never set — so this gate had never once closed in
+    // production. It now asks `authcallout::is_governed`, the same question the responder asks, so
+    // the two cannot answer differently. The visible consequence on an existing deployment that has
+    // already accepted remote pollers: a heartbeat from an id with no inventory row stops creating
+    // one. That is the intended behaviour and it is new behaviour.
+    let poller_registration_gated = authcallout::is_governed(cfg.nats_poller_password.as_deref());
     let poller_repo =
         Arc::new(PollerRepo::new(repo.pool()).with_auto_register(!poller_registration_gated));
     let coordinator = Arc::new(Coordinator::new(
@@ -458,10 +481,27 @@ async fn run_live(cfg: Config, metrics: PrometheusHandle) -> anyhow::Result<()> 
         &shutdown,
     );
 
-    // Per-poller NATS credential scoping via Auth Callout (ADR-030). A no-op unless both inputs are
-    // set; on every core when they are. `authcallout::start` carries why it is queue-subscribed.
+    // Per-poller NATS credential scoping via Auth Callout (ADR-030, wired up by ADR-065 Inc.7). A
+    // no-op on a bus the callout does not govern; on every core when it does. `authcallout::start`
+    // carries why it is queue-subscribed.
+    //
+    // The key comes from the row the `bus-cert` one-shot established — the same run that wrote the
+    // broker's `callout.conf`, so the issuer NATS trusts and the key core signs with cannot come
+    // from different places. A mounted `YAGRA_NATS_CALLOUT_SEED_FILE` still wins, for a deployment
+    // that set one up under ADR-030 before this existed.
+    let callout_seed = match cfg.nats_callout_seed_file.as_deref() {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| tracing::error!(error = %e, path, "auth-callout: cannot read the mounted seed file"))
+            .ok(),
+        None => bus_callout::BusCalloutRepo::new(repo.pool(), kek.clone(), None)
+            .load_seed()
+            .await
+            .map_err(|e| tracing::error!(error = %e, "auth-callout: cannot read the stored account key"))
+            .ok()
+            .flatten(),
+    };
     authcallout::start(
-        cfg.nats_callout_seed_file.as_deref(),
+        callout_seed,
         &cfg.nats_callout_account,
         cfg.nats_poller_password.clone(),
         bus.client(),

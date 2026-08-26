@@ -382,19 +382,32 @@ real datagram source IP and raw ICMP reaches the host's interfaces) and grants `
 
 To scale a pool, run more pollers with the same `YAGRA_POLLER_POOL` (and distinct `YAGRA_POLLER_ID`s) — core rebalances the pool across them and fails over on loss. A pool with zero live pollers falls back to legacy per-job publish, so no nodes go dark during a rollout.
 
-### Optional — scope each poller's bus credential (Auth Callout)
+### What Step 1 also turned on — per-poller bus credentials (Auth Callout)
 
 The static NATS accounts give `core` full access and `poller` least privilege (publish only
 results/events/heartbeat; subscribe only to its jobs and working-set assignments). There is **one
-shared `poller` account**, though, so any authenticated poller can read any pool's assignments — it
-is not a tenant boundary.
+shared `poller` account**, though, so any authenticated poller could read any pool's assignments —
+which is not a tenant boundary.
 
-Enabling **NATS Auth Callout** makes core the bus's authorization service: it mints each connecting
-poller a credential scoped to exactly its own subjects, and it is the path that checks the per-poller
-tokens from Step 2. Generate an account nkey pair (`nk -gen account -pubout`), give core the seed
-file via `YAGRA_NATS_CALLOUT_SEED_FILE`, set `YAGRA_NATS_CALLOUT_ISSUER` to the public key, and
-uncomment the `auth_callout` block in the shipped `nats-server.conf`. With it on, core also stops
-recreating a poller row from a heartbeat, so removing a poller in the WebUI sticks.
+**NATS Auth Callout** closes that, and Step 1 enables it. Core becomes the bus's authorization
+service: it mints each connecting poller a credential scoped to exactly its own subjects, and it is
+what checks the per-poller tokens from Step 2. The signing key is generated on first start and kept
+sealed in the database; the public half is written into the bus's own configuration by the same
+one-shot that writes the rest of it. **There is nothing to generate, mount or copy.**
+
+Two consequences worth knowing:
+
+- **Core stops recreating a poller row from a heartbeat**, so removing a poller in the WebUI sticks.
+  The other side of that: a poller registers when you issue it a token (Step 2), not by connecting.
+  The pollers inside this composition are registered for you when you turn Step 1 on.
+- **This deployment's own core and poller are exempt** and keep using the static accounts above.
+  They present fixed names (`core`, `poller`) and a password that exists only in this host's `.env`;
+  everything arriving from outside presents a poller id and is authorized by core or not at all.
+
+> **If you set this up by hand before v0.3.2, nothing breaks.** `YAGRA_NATS_CALLOUT_SEED_FILE` still
+> takes precedence over the generated key. It is worth unsetting at some point: the procedure it
+> belonged to ended in an edit to `nats-server.conf`, and that file is reinstalled from the image on
+> every start, so the edit only ever survived until the next one.
 
 ---
 
@@ -480,9 +493,9 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | `YAGRA_UPGRADE_ALLOW_BUNDLE` | `0` | Allow installing an uploaded `docker save` archive. **Widens the Admin-to-host-root path** from "a published tag of our three images" to "any image the archive contains", which is why it is a host setting and cannot be turned on from the WebUI. Set it only for a site with no reachable registry at all. Everything after the load is unchanged — same backup, same composition swap, same provenance check, and the archive must contain the tag the operator claimed |
 | `YAGRA_DOCKER_GID` | `0` | Group the sidecar runs as. Only matters if you move its uid off `0`; root reaches the socket whatever the gid says |
 | **NATS Auth Callout (per-poller bus credentials)** | | |
-| `YAGRA_NATS_CALLOUT_SEED_FILE` | unset ⇒ callout off | Path to the mounted NATS account nkey seed; core then mints per-poller scoped bus users |
-| `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | NATS account minted poller users are placed into (must match the server's `auth_callout` account) |
-| `YAGRA_NATS_POLLER_PASSWORD` | unset ⇒ callout off | Shared poller bootstrap secret the callout validates (also consumed by the NATS server config) |
+| `YAGRA_NATS_POLLER_PASSWORD` | unset ⇒ callout off | **The only one of these you would ever set, and the remote-poller switch sets it for you.** Its presence is what makes core answer callout requests at all, because it is the shared bootstrap secret a poller with no token of its own presents. The NATS server config consumes the same value for its static `poller` account |
+| `YAGRA_NATS_CALLOUT_SEED_FILE` | unset ⇒ use the stored key | **Legacy override.** Path to a mounted NATS account nkey seed. Since v0.3.2 core generates its own signing key on first start and keeps it sealed in the database, so there is nothing to mount; a path here still takes precedence, for a deployment that set one up before that existed |
+| `YAGRA_NATS_CALLOUT_ACCOUNT` | `$G` | NATS account minted poller users are placed into. It has to match the account the bus's `callout.conf` names — and that file is written from this same value, so leave it alone unless the broker's accounts were customized |
 | `YAGRA_BUS_AUTH_CALLOUT` | unset ⇒ off | Poller only. `1` or `true` makes the poller present its own `YAGRA_POLLER_ID` as the bus username, which is the name Auth Callout scopes its permissions on. Left off — the default, and what the remote-poller switch configures — it presents the username written in `YAGRA_BUS_URL`, the shared static account. Turn it on only where the callout is enabled: with the callout off, a poller announcing its own id matches no static account and the bus refuses it. |
 | **Observability** | | |
 | `YAGRA_DISK_WATCH_PATHS` | `/=root` | Filesystems host self-metrics report capacity for (comma-separated `path` or `path=alias`); read by core **and** poller |
@@ -540,8 +553,8 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 > - Images & stores: `YAGRA_IMAGE_TAG`, `POSTGRES_PASSWORD`
 > - Host port mappings: `YAGRA_API_PORT`, `YAGRA_API_BIND`, `YAGRA_WEB_PORT`, `YAGRA_SYSLOG_PORT`, `YAGRA_TRAP_PORT`, `YAGRA_FLOW_PORT`, `YAGRA_SFLOW_PORT`, `YAGRA_NATS_PORT`
 > - WebUI TLS: `YAGRA_WEB_TLS` (compose), `YAGRA_TLS_DIR` (core — where the certificate is materialized)
-> - Bus TLS + auth (D): `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD` (also read by core as the Auth Callout bootstrap secret), `YAGRA_NATS_CALLOUT_ISSUER` (account public key the NATS server verifies core's callout JWTs against)
-> - Mounted key directories: `YAGRA_SESSION_KEY_DIR` (holds `session.key` for `YAGRA_SESSION_KEY_FILE`), `YAGRA_CALLOUT_SEED_DIR` (holds `account.seed` for `YAGRA_NATS_CALLOUT_SEED_FILE`)
+> - Bus TLS + auth (D): `YAGRA_CERT_DIR`, `YAGRA_NATS_CORE_PASSWORD`, `YAGRA_NATS_POLLER_PASSWORD` (also read by core as the Auth Callout bootstrap secret, and what decides whether the callout runs). There is deliberately **no** `YAGRA_NATS_CALLOUT_ISSUER` since v0.3.2: the account public key is written straight into the bus's `callout.conf` by the same one-shot that writes the rest of its configuration, so the two cannot drift apart across an upgrade
+> - Mounted key directories: `YAGRA_SESSION_KEY_DIR` (holds `session.key` for `YAGRA_SESSION_KEY_FILE`); `YAGRA_CALLOUT_SEED_DIR` (holds `account.seed` for `YAGRA_NATS_CALLOUT_SEED_FILE`) is legacy — nothing needs it now
 > - Poller log directory: `YAGRA_POLLER_LOG_DIR` (default `/var/log/yagra/pollers`) — what `docker-compose.deploy.yml` passes to the co-located poller as its `YAGRA_LOG_DIR`. Set it empty to keep that poller on stdout only
 > - IP→ASN updater sidecar: `YAGRA_IPASN_URL` (dataset URL), `YAGRA_IPASN_REFRESH_SECS` (fetch cadence; default `604800` = weekly)
 
