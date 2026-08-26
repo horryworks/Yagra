@@ -212,6 +212,20 @@ pub fn callout_account() -> String {
         .unwrap_or_else(|| "$G".to_owned())
 }
 
+/// The id of the poller running inside this deployment (ADR-065 Inc.8).
+///
+/// The shipped composition gives `core` and `poller` the SAME expression, so this is the id that
+/// poller claims — not a second opinion about it. Core needs its own copy because the updater
+/// heartbeat is a file refreshed on a timer: at startup it still names the container that was
+/// replaced, so adopting from it alone creates a row for an id no poller claims and leaves the
+/// live one unregistered. Measured on 192.168.1.211, 2026-08-26 — that is exactly what happened.
+///
+/// `None` on a deployment whose composition predates this, where the updater list is all there is.
+#[must_use]
+pub fn local_poller_id() -> Option<String> {
+    parse_optional(std::env::var("YAGRA_LOCAL_POLLER_ID").ok())
+}
+
 /// Normalize an optional string env var: unset, empty, or all-whitespace ⇒ `None`; otherwise the
 /// trimmed value. Keeps a blank `YAGRA_REDIS_URL=` from being treated as a real URL.
 fn parse_optional(raw: Option<String>) -> Option<String> {

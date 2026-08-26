@@ -442,7 +442,7 @@ impl PollerRepo {
     }
 }
 
-/// Give this deployment's **own** pollers an inventory row, if the updater has named them.
+/// Give this deployment's **own** pollers an inventory row, if anything can name them.
 ///
 /// The one place that decision is made, called from the two moments it has to hold at
 /// (ADR-065 Inc.8): core startup, and the "Accept remote pollers" switch. Both matter and neither
@@ -452,28 +452,50 @@ impl PollerRepo {
 /// # Why a co-located poller needs this at all
 ///
 /// Accepting remote pollers turns [`PollerRepo::with_auto_register`] off, on the grounds that the
-/// Auth Callout now refuses an id nobody registered. 🚨 **That grounds does not cover the pollers
+/// Auth Callout now refuses an id nobody registered. 🚨 **Those grounds do not cover the pollers
 /// inside this composition.** They connect on the static `poller` account, which the callout
 /// deliberately bypasses (`auth_users`), so the bus never refuses them — leaving them neither
 /// refused nor registered. They keep polling off their Redis liveness and disappear from
 /// Settings ▸ Pollers, which is the one outcome the gate's own comment set out to prevent.
 ///
-/// The updater is the only thing that knows which ids are local: nothing on the bus says which
-/// compose project a poller belongs to. `None` means the sidecar is absent or too old to report
-/// them, and is not the same as an empty list — with no updater there is nothing to adopt.
+/// # Two sources, and the second one alone is not enough
 ///
-/// Failure is the caller's to log, never fatal: this is preparation, not the change itself.
+/// `YAGRA_LOCAL_POLLER_ID` is the id the composition gives its own poller — the same expression the
+/// poller itself is given, so the two cannot disagree. The updater's `local_pollers` is the only
+/// thing that can name *several*, or one whose id an operator set per container.
+///
+/// 🚨 **The updater's list is not usable on its own, and this was measured rather than reasoned.**
+/// Its heartbeat is a file refreshed on a timer, so at core startup it still names the container
+/// that compose has just replaced. On 192.168.1.211 (2026-08-26) that created a row for a dead id —
+/// `last_version` NULL, `last_seen` equal to the adoption instant — while the live poller stayed
+/// unregistered with 13 nodes assigned to it. Reading the env var first is what makes startup
+/// adoption correct on the one run where it matters: the upgrade that changes the id.
+///
+/// Ids are unioned, not preferred: `ensure_registered` is `ON CONFLICT DO NOTHING`, so naming an id
+/// twice costs nothing and naming a stale one costs a row an operator can delete — whereas missing
+/// the live one costs a poller that no page in the product lists.
+///
+/// `Ok(None)` means nothing named a poller at all: no env var and no updater. Failure is the
+/// caller's to log, never fatal — this is preparation, not the change itself.
 pub async fn register_local(
     pollers: &PollerRepo,
     upgrade: &crate::upgrade::UpgradeRepo,
 ) -> anyhow::Result<Option<(u64, usize)>> {
-    let Some(local) = upgrade.heartbeat().and_then(|h| h.local_pollers) else {
+    let mut ids: Vec<String> = crate::config::local_poller_id().into_iter().collect();
+    if let Some(from_updater) = upgrade.heartbeat().and_then(|h| h.local_pollers) {
+        for id in from_updater {
+            if !ids.iter().any(|k| k == &id) {
+                ids.push(id);
+            }
+        }
+    }
+    if ids.is_empty() {
         return Ok(None);
-    };
+    }
     let created = pollers
-        .ensure_registered(&local, yagra_bus::DEFAULT_POOL)
+        .ensure_registered(&ids, yagra_bus::DEFAULT_POOL)
         .await?;
-    Ok(Some((created, local.len())))
+    Ok(Some((created, ids.len())))
 }
 
 /// Format Unix milliseconds as RFC 3339 UTC (matching how the rest of this repo exposes timestamps).

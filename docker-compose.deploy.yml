@@ -295,6 +295,12 @@ services:
       # The NATS account minted poller users join — the same expression `bus-cert-init` above is
       # given, so what core signs for and what `callout.conf` names cannot come apart.
       YAGRA_NATS_CALLOUT_ACCOUNT: ${YAGRA_NATS_CALLOUT_ACCOUNT:-$$G}
+      # The id of the poller inside this composition, given to core as well as to the poller —
+      # the SAME expression, so the two cannot name different pollers (ADR-065 Inc.8). Core needs
+      # its own copy because the updater heartbeat it would otherwise read is a file on a timer:
+      # at startup it still names the container compose has just replaced, so adopting from it
+      # alone registers a dead id and leaves the live poller invisible. Measured on 192.168.1.211.
+      YAGRA_LOCAL_POLLER_ID: ${YAGRA_POLLER_ID:-local}
       # Only for a deployment that mounted an account seed under ADR-030 before Inc.7 existed. It
       # takes precedence over the stored key; nothing new should set it.
       # YAGRA_NATS_CALLOUT_SEED_FILE: /etc/yagra/callout/account.seed

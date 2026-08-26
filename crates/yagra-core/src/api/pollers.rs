@@ -1458,4 +1458,50 @@ mod tests {
              adopt an id no poller claims",
         );
     }
+
+    /// Core and the poller beside it are handed the *same* id expression (ADR-065 Inc.8).
+    ///
+    /// Core adopts `YAGRA_LOCAL_POLLER_ID` at startup and the poller claims `YAGRA_POLLER_ID`. If
+    /// the two defaults ever drift apart, core registers one id and the poller uses another: the
+    /// row exists, the poller polls, and Settings ▸ Pollers shows a poller that is not the one
+    /// doing the work — which is the original bug wearing a different hat, and nothing at runtime
+    /// would say so.
+    ///
+    /// Comparing the expressions rather than the values is the point: `${YAGRA_POLLER_ID:-local}`
+    /// resolves per deployment, and what has to hold is that both resolve the *same way*.
+    #[test]
+    fn core_and_its_poller_are_given_the_same_id_expression() {
+        let text = std::fs::read_to_string("../../docker-compose.deploy.yml")
+            .expect("the deploy composition ships with the product");
+        let value_of = |key: &str| -> String {
+            let live: Vec<&str> = text
+                .lines()
+                .map(str::trim_start)
+                .filter(|l| !l.starts_with('#'))
+                .filter(|l| l.starts_with(key))
+                .collect();
+            assert_eq!(
+                live.len(),
+                1,
+                "{key} must be set exactly once, live; got {live:?}"
+            );
+            live[0]
+                .split_once(':')
+                .expect("a compose environment entry is key: value")
+                .1
+                .trim()
+                .to_owned()
+        };
+        let poller = value_of("YAGRA_POLLER_ID:");
+        let core = value_of("YAGRA_LOCAL_POLLER_ID:");
+        assert_eq!(
+            core, poller,
+            "core is told to adopt {core} while the poller calls itself {poller}; core would \
+             register a poller that does not exist and leave the real one invisible",
+        );
+        assert!(
+            poller.contains("${"),
+            "the id must stay overridable per deployment, not be hardcoded: {poller}",
+        );
+    }
 }
