@@ -511,7 +511,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 |---|---|---|
 | **Identity & bus** | | |
 | `YAGRA_BUS_URL` | unset ⇒ idle | NATS bus URL (only backing-service connection the poller makes) |
-| `YAGRA_POLLER_ID` | hostname, else `poller-<hex>` | Stable, unique, subject-safe poller identity |
+| `YAGRA_POLLER_ID` | `local` in `docker-compose.deploy.yml`; standalone: hostname, else `poller-<hex>` | Stable, unique, subject-safe poller identity. Core is given the same value, so both halves name the same poller |
 | `YAGRA_POLLER_POOL` | `default` | Pool this poller serves |
 | `YAGRA_BUS_CA_FILE` | unset ⇒ plaintext | CA/server cert pinned for the `tls://` bus |
 | `YAGRA_MAX_CONCURRENT_POLLS` | `64` | Max concurrent in-flight probes |

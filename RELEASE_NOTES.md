@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.2 — per-poller bus credentials finally run, and the co-located poller is back in the inventory
+
 ### Breaking changes
 
 - **On a deployment that accepts remote pollers, a poller that has never been registered can no
@@ -32,8 +34,11 @@
   account that Auth Callout deliberately does not challenge — so it was neither refused nor
   registered. After upgrading it appears once, as `local`, and stays there across restarts.
   **The rows left by its earlier identities are not removed for you**: they are offline, so delete
-  them from Settings ▸ Pollers when you are ready. Set `YAGRA_POLLER_ID` in `.env` to choose a
-  different name.
+  them from Settings ▸ Pollers when you are ready. Expect this upgrade to add one last one of those
+  beside `local` — core also asks the updater which pollers belong to this deployment, and that
+  answer is a file refreshed on a timer, so at the moment core starts it still names the container
+  compose has just replaced. It is created alongside `local`, not instead of it, and it is offline
+  like the rest. Set `YAGRA_POLLER_ID` in `.env` to choose a different name.
 
 ### New Features
 
