@@ -200,6 +200,7 @@ export function UpgradePage() {
   // Aligning the pollers (ADR-051 Inc.4). Its own busy flag and its own poll: it starts nothing in
   // this deployment, so it must not borrow the run machinery above, which exists to survive core
   // restarting underneath it.
+  const [confirmingAlign, setConfirmingAlign] = useState(false);
   const [aligning, setAligning] = useState(false);
   const [alignError, setAlignError] = useState<string | null>(null);
   const [aligned, setAligned] = useState(false);
@@ -267,7 +268,7 @@ export function UpgradePage() {
   /** Bring every self-upgrading poller onto this core's build (ADR-051 Inc.4).
    *
    *  Nothing in this deployment restarts, so unlike `apply` this does not arm the run poll or set
-   *  `pending` — it watches the fleet instead, and the progress it shows is `poller_skew` shrinking
+   *  `pending` — it watches the fleet instead, and the progress it shows is the skew list shrinking
    *  as sites come back. `aligned` is the "you pressed it and it took" acknowledgement, which the
    *  skew list alone cannot give: a pool's first site can be minutes into a prefetch before
    *  anything on this page changes. */
@@ -277,6 +278,7 @@ export function UpgradePage() {
     setAligned(false);
     try {
       await api.alignPollers();
+      setConfirmingAlign(false);
       setAligned(true);
       if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
       const started = Date.now();
@@ -466,6 +468,10 @@ export function UpgradePage() {
   const ref = shortRef(status.current.source_ref);
   const back = rollback(status);
   const plan = pollerPlan(status);
+  // What the align button would do. Always present — core always knows its own version and always
+  // has a live registry, so unlike `plan` there is no "nobody asked" state to render.
+  const alignment = status.poller_alignment;
+  const ahead = alignment.pollers.filter((p) => alignment.downgrades.includes(p.id));
   const state = mechanism(status);
   const last = status.last_run;
   const lastState = runState(last?.state);
@@ -577,16 +583,16 @@ export function UpgradePage() {
           Absent when the fleet is aligned. A disabled button with a tooltip would be the other
           option and is the one ADR-056 forbids: there is nothing to do, so there is nothing to
           draw. */}
-      {status.poller_skew.length > 0 && (
+      {alignment.pollers.length > 0 && (
         <Card title={t('pollers.align.heading')}>
           <p className="upgrade-note">
             {t('pollers.align.behind', {
-              count: status.poller_skew.length,
+              count: alignment.pollers.length,
               version: status.current.core_version,
             })}
           </p>
           <ul className="upgrade-releases">
-            {status.poller_skew.map((p) => (
+            {alignment.pollers.map((p) => (
               <li key={p.id} className="upgrade-release">
                 <span className="mono">{p.id}</span>
                 <span className="muted">{p.version ?? t('build.unknown')}</span>
@@ -599,7 +605,11 @@ export function UpgradePage() {
               a caller who can see this card can press this. Adding a hook would be a second,
               weaker copy of a check the server already made. */}
           <div className="upgrade-checked">
-            <Button variant="outline" onClick={() => void alignPollers()} disabled={aligning}>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmingAlign(true)}
+              disabled={aligning}
+            >
               {t('pollers.align.action', { version: status.current.core_version })}
             </Button>
           </div>
@@ -826,12 +836,77 @@ export function UpgradePage() {
               })}
             </p>
           )}
+          {/* The consequence an operator cannot find out afterwards except from an alert: no
+              maintenance window silences pool coverage, deliberately (ADR-051 decision 13). It is
+              in the card above too, but a card is read once and a confirmation is read now. */}
+          {plan && plan.dark_pools.length > 0 && (
+            <p className="upgrade-note">
+              {t('pollers.darkPools', {
+                count: plan.dark_pools.length,
+                pools: plan.dark_pools.join(', '),
+              })}
+            </p>
+          )}
           {back.kind === 'floored' && (
             <p className="upgrade-hint muted">
               {t('apply.confirmFloor', { minCore: back.minCore })}
             </p>
           )}
           {applyError && <p className="upgrade-hint">{applyError}</p>}
+        </Modal>
+      )}
+
+      {/* Aligning the pollers asks too, and for the reason every other write on this page does:
+          it recreates a container at each remote site, and where a pool has a single poller that
+          site stops being monitored until it returns. Nothing here restarts core — which is
+          exactly why the confirmation has to say what it *does* do, or "no, core is untouched"
+          would read as "nothing happens". */}
+      {confirmingAlign && (
+        <Modal
+          title={t('pollers.align.confirmTitle', { version: status.current.core_version })}
+          onClose={() => setConfirmingAlign(false)}
+          footer={
+            <>
+              <Button onClick={() => setConfirmingAlign(false)} disabled={aligning}>
+                {t('apply.cancel')}
+              </Button>
+              <Button
+                variant="danger"
+                onClick={() => void alignPollers()}
+                disabled={aligning}
+              >
+                {t('pollers.align.confirm')}
+              </Button>
+            </>
+          }
+        >
+          <p className="upgrade-note">
+            {t('pollers.align.confirmBody', {
+              count: alignment.pollers.length,
+              version: status.current.core_version,
+              names: alignment.pollers.map((p) => p.id).join(', '),
+            })}
+          </p>
+          <p className="upgrade-hint muted">{t('pollers.align.confirmCore')}</p>
+          {/* A poller ahead of core is moved *back*. Named individually, because "upgrade" is what
+              the button says and a downgrade is not what it promised. */}
+          {ahead.length > 0 && (
+            <p className="upgrade-note">
+              {t('pollers.align.confirmDowngrade', {
+                count: ahead.length,
+                names: ahead.map((p) => p.id).join(', '),
+              })}
+            </p>
+          )}
+          {alignment.dark_pools.length > 0 && (
+            <p className="upgrade-note">
+              {t('pollers.darkPools', {
+                count: alignment.dark_pools.length,
+                pools: alignment.dark_pools.join(', '),
+              })}
+            </p>
+          )}
+          {alignError && <p className="upgrade-hint">{alignError}</p>}
         </Modal>
       )}
     </div>

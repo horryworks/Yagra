@@ -1397,7 +1397,7 @@ export const api = {
   /** Bring every self-upgrading poller onto this core's build (ADR-051 Inc.4).
    *
    *  Nothing in this deployment restarts — the work happens at the sites, one poller at a time per
-   *  pool. Accepted asynchronously and answered by `poller_skew` shrinking on later
+   *  pool. Accepted asynchronously and answered by `poller_alignment.pollers` shrinking on later
    *  `getUpgradeStatus` calls; a convergence takes minutes, so nothing waits on this promise. */
   alignPollers: (): Promise<AlignPollersAccepted> =>
     apiPost('/api/v1/system/upgrade/pollers', {}),

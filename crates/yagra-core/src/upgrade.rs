@@ -367,15 +367,63 @@ fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
     out
 }
 
-/// The pools `POST /api/v1/system/upgrade/pollers` would leave uncovered, for its confirmation.
+/// What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4 decision 17).
 ///
-/// Separate from [`poller_upgrade_plan`] because the two act on different sets: that one moves every
-/// cap-holder, this one moves only those off `core_version`. Answering with the plan's list would
-/// name a single-poller site that is already aligned and will not be touched.
+/// **One type rather than two loose fields, because the two facts are about one operation** and an
+/// operator reads them together: which sites move, and which pools stop being monitored while they
+/// do. Split across the response they would drift apart the first time either was computed from a
+/// different set — which is exactly the bug this replaced, where the dark-pool list was derived from
+/// every cap-holder rather than from the ones actually being moved.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct PollerAlignment {
+    /// The pollers it would move, and what each runs now. Empty means the fleet is aligned — there
+    /// is no "nobody asked" here, unlike [`PollerUpgradePlan`], because core always knows its own
+    /// version and always has a live registry.
+    pub pollers: Vec<PollerLag>,
+    /// Pools left with no live poller for the length of one recreate. Named **before** the press:
+    /// `pool_coverage`'s 300-second debounce is the whole budget and no maintenance window silences
+    /// it, so this is the one consequence an operator cannot discover afterwards without an alert.
+    pub dark_pools: Vec<String>,
+    /// Of `pollers`, the ones **ahead** of core — which this operation moves *back*.
+    ///
+    /// A subset rather than a flag on each row, because the row type is shared with
+    /// [`PollerUpgradePlan::manual`] where the direction has no meaning.
+    ///
+    /// Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
+    /// comes after `0.2.9`, and this repository already keeps that comparison in one place because
+    /// the other thing deciding from it is whether a rollback is allowed. A second implementation
+    /// in TypeScript would be a second answer to "which is newer".
+    pub downgrades: Vec<String>,
+}
+
+/// Work out that operation from the live fleet.
+///
+/// Separate from [`poller_upgrade_plan`] because the two act on different sets: that one carries
+/// every cap-holder, this one moves only those off `core_version`. Answering with the plan's dark
+/// pools would name a single-poller site that is already aligned and will not be touched.
 #[must_use]
-pub fn dark_pools_when_aligning(fleet: &[PollerBuild], moving: &[PollerLag]) -> Vec<String> {
-    let ids: Vec<&str> = moving.iter().map(|p| p.id.as_str()).collect();
-    dark_pools(fleet, &ids)
+pub fn poller_alignment(fleet: &[PollerBuild], core_version: &str) -> PollerAlignment {
+    let pollers = pollers_off_version(fleet, core_version);
+    let ids: Vec<&str> = pollers.iter().map(|p| p.id.as_str()).collect();
+    // A version this core cannot parse is not called a downgrade. It is still moved — being
+    // unreadable is not a reason to leave a site on an unknown build — but the confirmation only
+    // promises what it can prove, and "we could not read it" is not evidence of direction.
+    let core = parse_version(core_version);
+    let downgrades: Vec<String> = pollers
+        .iter()
+        .filter(
+            |p| match (&core, p.version.as_deref().and_then(parse_version)) {
+                (Some(c), Some(v)) => v > *c,
+                _ => false,
+            },
+        )
+        .map(|p| p.id.clone())
+        .collect();
+    PollerAlignment {
+        dark_pools: dark_pools(fleet, &ids),
+        downgrades,
+        pollers,
+    }
 }
 
 /// Pollers that can replace themselves and are not on `core_version` (ADR-051 Inc.4 decision 17).
@@ -2344,6 +2392,40 @@ mod tests {
             2,
             "the `v` is a tag convention and must not change who is targeted"
         );
+    }
+
+    /// Which of the targets go *backwards*, so the confirmation can name them.
+    ///
+    /// 🚨 **`0.3.10` is newer than `0.3.9`**, and comparing the two as text says the opposite. That
+    /// is the one comparison in this module that must not be subtly wrong — it is the same
+    /// `semver` ordering `binding_floor` uses to decide whether a rollback is offered at all, which
+    /// is exactly why the WebUI is not allowed a second implementation of it.
+    #[test]
+    fn a_poller_ahead_of_core_is_named_as_a_downgrade_and_text_order_is_not_used() {
+        let fleet = vec![
+            build("behind", Some("0.3.1"), true),
+            build("ahead", Some("0.4.0"), true),
+            // Text order puts "0.3.10" before "0.3.9"; semver does not. Core is 0.3.9 here, so this
+            // one is ahead — a string comparison would call it behind and quietly downgrade a site
+            // while the dialog promised an upgrade.
+            build("double-digit", Some("0.3.10"), true),
+            // Unreadable: still moved (a site on an unknown build is the thing being fixed), but
+            // not *claimed* to be a downgrade, because nothing here proves the direction.
+            build("gibberish", Some("nightly"), true),
+        ];
+        let a = poller_alignment(&fleet, "0.3.9");
+        assert_eq!(
+            a.pollers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            vec!["ahead", "behind", "double-digit", "gibberish"],
+            "everything off this version is moved, readable or not"
+        );
+        assert_eq!(
+            a.downgrades,
+            vec!["ahead".to_owned(), "double-digit".to_owned()]
+        );
+
+        // And with core ahead of everyone, nothing is a downgrade.
+        assert!(poller_alignment(&fleet, "9.9.9").downgrades.is_empty());
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

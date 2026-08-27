@@ -28381,6 +28381,38 @@
           }
         }
       },
+      "PollerAlignment": {
+        "type": "object",
+        "description": "What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4 decision 17).\n\n**One type rather than two loose fields, because the two facts are about one operation** and an\noperator reads them together: which sites move, and which pools stop being monitored while they\ndo. Split across the response they would drift apart the first time either was computed from a\ndifferent set — which is exactly the bug this replaced, where the dark-pool list was derived from\nevery cap-holder rather than from the ones actually being moved.",
+        "required": [
+          "pollers",
+          "dark_pools",
+          "downgrades"
+        ],
+        "properties": {
+          "dark_pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pools left with no live poller for the length of one recreate. Named **before** the press:\n`pool_coverage`'s 300-second debounce is the whole budget and no maintenance window silences\nit, so this is the one consequence an operator cannot discover afterwards without an alert."
+          },
+          "downgrades": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Of `pollers`, the ones **ahead** of core — which this operation moves *back*.\n\nA subset rather than a flag on each row, because the row type is shared with\n[`PollerUpgradePlan::manual`] where the direction has no meaning.\n\nComputed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`\ncomes after `0.2.9`, and this repository already keeps that comparison in one place because\nthe other thing deciding from it is whether a rollback is allowed. A second implementation\nin TypeScript would be a second answer to \"which is newer\"."
+          },
+          "pollers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PollerLag"
+            },
+            "description": "The pollers it would move, and what each runs now. Empty means the fleet is aligned — there\nis no \"nobody asked\" here, unlike [`PollerUpgradePlan`], because core always knows its own\nversion and always has a live registry."
+          }
+        }
+      },
       "PollerAnchorRequest": {
         "type": "object",
         "description": "Where a poller attaches to the monitored network.",
@@ -32275,7 +32307,7 @@
           "current",
           "schema",
           "offers",
-          "poller_skew"
+          "poller_alignment"
         ],
         "properties": {
           "available": {
@@ -32315,12 +32347,9 @@
             },
             "description": "The moves this deployment could make, each with its direction and whether it is allowed.\nExcludes the running version. Empty when the updater has found nothing."
           },
-          "poller_skew": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/PollerLag"
-            },
-            "description": "Pollers that can replace themselves and are not on `current.core_version` — what\n`POST /api/v1/system/upgrade/pollers` would act on right now (ADR-051 Inc.4).\n\n**Not derived from `pollers`, and that is the point.** That plan is `null` until the central\nupdater has named its own compose project, while this list only needs the live registry and\ncore's own version. A deployment with no central updater at all still has remote sites worth\naligning, and the button that does it has to be renderable there.\n\nEmpty means aligned — unlike `pollers`, there is no third state here, because \"nobody asked\"\ncannot arise: core always knows its own version and always has a registry."
+          "poller_alignment": {
+            "$ref": "#/components/schemas/PollerAlignment",
+            "description": "What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4): which\nself-upgrading pollers are off `current.core_version`, and which pools that operation would\nleave uncovered while it runs.\n\n**Not derived from `pollers`, and that is the point.** That plan is `null` until the central\nupdater has named its own compose project, while this needs only the live registry and\ncore's own version. A deployment with no central updater at all still has remote sites worth\naligning, and the button that does it has to be renderable there.\n\nAn empty `pollers` means aligned — unlike `pollers` above, there is no third state here,\nbecause \"nobody asked\" cannot arise: core always knows its own version and always has a\nlive registry."
           },
           "pollers": {
             "oneOf": [

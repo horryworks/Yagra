@@ -102,6 +102,13 @@
       "behind_other": "{{count}} pollers are not on {{version}}:",
       "hint": "Nothing in this deployment restarts. Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout. A poller ahead of this core is moved back to it.",
       "action": "Bring them to {{version}}",
+      "confirmTitle": "Bring the pollers to {{version}}?",
+      "confirmBody": "{{count}} poller is recreated at its own site: {{names}}. Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout.",
+      "confirmBody_other": "{{count}} pollers are recreated at their own sites: {{names}}. Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout.",
+      "confirmCore": "Nothing in this deployment restarts. No image is pulled here and no maintenance window is opened.",
+      "confirmDowngrade": "{{count}} poller is ahead of this core and is moved back to it: {{names}}. A poller holds no state, so this costs it a restart.",
+      "confirmDowngrade_other": "{{count}} pollers are ahead of this core and are moved back to it: {{names}}. A poller holds no state, so this costs each one a restart.",
+      "confirm": "Bring them across",
       "started": "Started. Each site pulls the image first and is recreated only once it has it, so this list can take several minutes to shrink.",
       "failed": "Could not start the poller upgrade."
     },

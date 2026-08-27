@@ -7741,6 +7741,41 @@ export interface components {
             /** @description One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`. */
             state: string;
         };
+        /**
+         * @description What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4 decision 17).
+         *
+         *     **One type rather than two loose fields, because the two facts are about one operation** and an
+         *     operator reads them together: which sites move, and which pools stop being monitored while they
+         *     do. Split across the response they would drift apart the first time either was computed from a
+         *     different set — which is exactly the bug this replaced, where the dark-pool list was derived from
+         *     every cap-holder rather than from the ones actually being moved.
+         */
+        PollerAlignment: {
+            /**
+             * @description Pools left with no live poller for the length of one recreate. Named **before** the press:
+             *     `pool_coverage`'s 300-second debounce is the whole budget and no maintenance window silences
+             *     it, so this is the one consequence an operator cannot discover afterwards without an alert.
+             */
+            dark_pools: string[];
+            /**
+             * @description Of `pollers`, the ones **ahead** of core — which this operation moves *back*.
+             *
+             *     A subset rather than a flag on each row, because the row type is shared with
+             *     [`PollerUpgradePlan::manual`] where the direction has no meaning.
+             *
+             *     Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
+             *     comes after `0.2.9`, and this repository already keeps that comparison in one place because
+             *     the other thing deciding from it is whether a rollback is allowed. A second implementation
+             *     in TypeScript would be a second answer to "which is newer".
+             */
+            downgrades: string[];
+            /**
+             * @description The pollers it would move, and what each runs now. Empty means the fleet is aligned — there
+             *     is no "nobody asked" here, unlike [`PollerUpgradePlan`], because core always knows its own
+             *     version and always has a live registry.
+             */
+            pollers: components["schemas"]["PollerLag"][];
+        };
         /** @description Where a poller attaches to the monitored network. */
         PollerAnchorRequest: {
             /**
@@ -9611,18 +9646,20 @@ export interface components {
              */
             offers: components["schemas"]["ReleaseOffer"][];
             /**
-             * @description Pollers that can replace themselves and are not on `current.core_version` — what
-             *     `POST /api/v1/system/upgrade/pollers` would act on right now (ADR-051 Inc.4).
+             * @description What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4): which
+             *     self-upgrading pollers are off `current.core_version`, and which pools that operation would
+             *     leave uncovered while it runs.
              *
              *     **Not derived from `pollers`, and that is the point.** That plan is `null` until the central
-             *     updater has named its own compose project, while this list only needs the live registry and
+             *     updater has named its own compose project, while this needs only the live registry and
              *     core's own version. A deployment with no central updater at all still has remote sites worth
              *     aligning, and the button that does it has to be renderable there.
              *
-             *     Empty means aligned — unlike `pollers`, there is no third state here, because "nobody asked"
-             *     cannot arise: core always knows its own version and always has a registry.
+             *     An empty `pollers` means aligned — unlike `pollers` above, there is no third state here,
+             *     because "nobody asked" cannot arise: core always knows its own version and always has a
+             *     live registry.
              */
-            poller_skew: components["schemas"]["PollerLag"][];
+            poller_alignment: components["schemas"]["PollerAlignment"];
             pollers?: null | components["schemas"]["PollerUpgradePlan"];
             /** @description Applied migrations and the compatibility floor they imply. */
             schema: components["schemas"]["SchemaState"];

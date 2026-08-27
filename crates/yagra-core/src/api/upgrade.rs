@@ -214,17 +214,19 @@ pub(crate) struct UpgradeStatusResponse {
     /// core cannot tell a co-located poller from a remote one on its own, and an invented answer
     /// would read as fact.
     pollers: Option<crate::upgrade::PollerUpgradePlan>,
-    /// Pollers that can replace themselves and are not on `current.core_version` — what
-    /// `POST /api/v1/system/upgrade/pollers` would act on right now (ADR-051 Inc.4).
+    /// What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4): which
+    /// self-upgrading pollers are off `current.core_version`, and which pools that operation would
+    /// leave uncovered while it runs.
     ///
     /// **Not derived from `pollers`, and that is the point.** That plan is `null` until the central
-    /// updater has named its own compose project, while this list only needs the live registry and
+    /// updater has named its own compose project, while this needs only the live registry and
     /// core's own version. A deployment with no central updater at all still has remote sites worth
     /// aligning, and the button that does it has to be renderable there.
     ///
-    /// Empty means aligned — unlike `pollers`, there is no third state here, because "nobody asked"
-    /// cannot arise: core always knows its own version and always has a registry.
-    poller_skew: Vec<crate::upgrade::PollerLag>,
+    /// An empty `pollers` means aligned — unlike `pollers` above, there is no third state here,
+    /// because "nobody asked" cannot arise: core always knows its own version and always has a
+    /// live registry.
+    poller_alignment: crate::upgrade::PollerAlignment,
 }
 
 /// A request to move this deployment to a particular release.
@@ -358,7 +360,7 @@ pub(crate) async fn upgrade_status(
             }),
         ),
         pollers: plan,
-        poller_skew: crate::upgrade::pollers_off_version(fleet, p.core_version),
+        poller_alignment: crate::upgrade::poller_alignment(fleet, p.core_version),
         schema,
         last_run: upgrade.last_run(),
     })
@@ -500,7 +502,10 @@ async fn align_pollers(
     })?;
     let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
     let fleet = poller_builds(&admin);
-    let behind = crate::upgrade::pollers_off_version(&fleet, env!("CARGO_PKG_VERSION"));
+    // The same call `GET` answers with, so the confirmation the operator read names exactly the
+    // sites this acts on. Two computations here would be two chances to disagree about who moves.
+    let alignment = crate::upgrade::poller_alignment(&fleet, env!("CARGO_PKG_VERSION"));
+    let behind = alignment.pollers;
     if behind.is_empty() {
         // A 409 rather than an empty 202, because "nothing to do" and "done" are answers a page
         // must render differently — and because a 202 here would leave the operator watching for a
@@ -518,9 +523,6 @@ async fn align_pollers(
             "a poller upgrade is already running; wait for it to finish",
         )
     })?;
-    // Over the pollers this operation actually moves, not over every cap-holder: a single-poller
-    // site already on the target version is not touched and must not be named as going dark.
-    let dark_pools = crate::upgrade::dark_pools_when_aligning(&fleet, &behind);
     let now = std::time::Instant::now();
     let targets: Vec<crate::poller_upgrade::Target> = admin
         .coordinator
@@ -540,7 +542,7 @@ async fn align_pollers(
         id: id.clone(),
         target_tag: tag.clone(),
         pollers: behind,
-        dark_pools,
+        dark_pools: alignment.dark_pools,
     };
     let run = crate::poller_upgrade::Run {
         bus,
