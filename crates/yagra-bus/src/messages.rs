@@ -84,6 +84,30 @@ pub const CAP_HTTP_BODY: &str = "http-body";
 /// it, and never a version skew nobody was told about.
 pub const CAP_SELF_UPGRADE: &str = "self-upgrade";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it carries its site
+/// updater's status on the beat — [`HeartbeatMsg::upgrade`] (ADR-051 Inc.5).
+///
+/// A claim about the **build**, not about the site, and that is the difference from
+/// [`CAP_SELF_UPGRADE`] right beside it: this says "if there is a status file, this poller relays
+/// it", so it is unconditional the way [`CAP_RAW_CAPTURE`] is. Core only ever asks it of pollers
+/// that have already claimed `CAP_SELF_UPGRADE`, so one with no sidecar claiming it costs nothing.
+///
+/// It exists because the capability list was byte-identical across v0.3.2 and v0.3.3 while the
+/// behaviour changed underneath it. Inc.4 made core wait for a site to say it had the image instead
+/// of sleeping out a fifteen-minute budget — but a build that reports nothing and a build that has
+/// not reported *yet* look the same on the bus, so core spent the whole budget on both. Measured on
+/// 192.168.1.212, 2026-08-27: the site's prefetch succeeded in **six seconds** and core applied
+/// **870 seconds** later.
+///
+/// Absence therefore means "no report is coming", and core stops waiting for one — **unless** the
+/// pool would go dark, where the blind wait is the only remaining stand-in for pulling before the
+/// outage rather than during it (ADR-051 decision 13).
+///
+/// ⚠️ **A site's first self-upgrade cannot benefit from this.** The poller being replaced is by
+/// definition the older build, so it neither reports nor claims this. What the claim buys on that
+/// first run is that core reads the silence correctly instead of reading it as "not yet".
+pub const CAP_UPGRADE_REPORT: &str = "upgrade-report";
+
 /// Capability token a poller advertises in [`HeartbeatMsg::caps`] when it can answer a
 /// [`PollerLogRequest`] with its own on-disk log (ADR-045 Inc.4).
 ///

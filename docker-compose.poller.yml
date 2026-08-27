@@ -191,10 +191,18 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - upgradedata:/data/upgrade
-      # The site's own compose project directory, so `up -d` runs where this file lives.
-      # Interpolated on the HOST, by the shell that ran `up -d` there. The guard in
-      # `handle()` below is what notices when that assumption has been broken.
-      - ${PWD}:/project
+      # The site's deployment directory, mounted at THE PATH THE HOST KNOWS IT BY — not at a
+      # tidy /project, and that is the whole of ADR-051 Inc.5 decision 20. `docker compose`
+      # resolves a relative bind source against ITS OWN working directory and hands the result
+      # to the daemon as a HOST path, which Docker then creates empty rather than failing. Run
+      # from a container-local mount point, the poller's `./certs` therefore became an empty
+      # /certs on the host: the replacement poller started, could not read its CA, and never
+      # reached the bus — while `up -d` exited 0 and this script reported success (measured on
+      # 192.168.1.212, 2026-08-27). The same reasoning stamps a working_dir label naming a path
+      # that exists only inside a container which is already gone. Mounting it at its own name
+      # makes the two spellings the same string, so neither can be wrong. The central updater
+      # passes `-v "$WORKDIR:$WORKDIR"` to its throwaway containers for exactly this reason.
+      - ${PWD}:${PWD}
     command:
       - sh
       - -c
@@ -204,6 +212,15 @@ services:
         mkdir -p "$$D" && chown -R 10002:10002 "$$D"
         REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
         PROJ=yagra-poller
+        # Where this site lives, as the HOST spells it. `docker compose up -d` stamps its own
+        # working directory onto every container it creates, so reading that label back is the
+        # one way to learn a host path from inside a container without being told. Read once:
+        # this container is not recreated by an apply (see `up -d poller` below), so the value
+        # cannot change under us — and when it is wrong it is wrong from the first command,
+        # which is where `handle()` refuses.
+        SELF="$$(hostname)"
+        label() { docker inspect -f "{{index .Config.Labels \"$$1\"}}" "$$SELF" 2>/dev/null || true; }
+        WORKDIR="$$(label com.docker.compose.project.working_dir)"
         # NOTHING IN THE SHARED VOLUME IS EXECUTED. The poller writes data there and this
         # container reads it; the script itself lives in this file and is passed as an
         # argument, so a writable volume can never become a writable script (ADR-050).
@@ -229,15 +246,17 @@ services:
           echo "$$TAG" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' || return 0
           echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
           NOW=$$(date +%s)
-          # The deployment directory, at the path the HOST knows it by. `${PWD}` above is
-          # interpolated by the shell that ran `up -d` on the host, so /project holds this
-          # site's compose file. When it does not, this container was created from some
-          # other working directory and `up -d` would run against a directory Docker
-          # helpfully created empty. Refuse and say which, rather than half-executing.
-          # The central updater reads a compose label for exactly this reason; measured
-          # there 2026-08-12, where three consecutive applies died reporting a failed backup.
-          if [ ! -f /project/docker-compose.poller.yml ]; then
-            say "$$ID" "$$CMD" "$$TAG" failed start "/project does not hold docker-compose.poller.yml, so this container was created from the wrong working directory; recreate this stack from the directory that holds it" "$$NOW" "$$(date +%s)"
+          # The deployment directory, at the path the HOST knows it by. Everything below
+          # addresses this site through it — the composition is written there and compose is
+          # run from there — so a relative bind source in this file resolves to the same host
+          # path the operator sees. When the label names a directory that does not hold this
+          # site's compose file, this container was created somewhere else, and an `up -d`
+          # from here would run against a directory Docker helpfully created empty. Refuse and
+          # name the repair rather than half-executing. The central updater has read this label
+          # since 2026-08-12, where three consecutive applies died reporting a failed backup;
+          # its absence here is what emptied a site's certificates on 2026-08-27.
+          if [ -z "$${WORKDIR:-}" ] || [ ! -f "$$WORKDIR/docker-compose.poller.yml" ]; then
+            say "$$ID" "$$CMD" "$$TAG" failed start "the compose label this reads names $${WORKDIR:-nothing}, which does not hold this site's docker-compose.poller.yml; on this host, from the directory that does, run: docker compose -p $$PROJ -f docker-compose.poller.yml up -d --force-recreate yagra-poller-updater" "$$NOW" "$$(date +%s)"
             return 0
           fi
           case "$$CMD" in
@@ -261,20 +280,36 @@ services:
               say "$$ID" apply "$$TAG" running compose "installing $$TAG" "$$NOW" null
               C=$$(docker create "$$REPO/yagra-poller:$$TAG" true 2>/dev/null) || C=""
               if [ -n "$$C" ]; then
-                docker cp "$$C:/usr/share/yagra/docker-compose.poller.yml" /project/ 2>/dev/null || true
+                docker cp "$$C:/usr/share/yagra/docker-compose.poller.yml" "$$WORKDIR/" 2>/dev/null || true
                 docker rm -f "$$C" >/dev/null 2>&1 || true
               fi
-              # `poller` is NAMED, and that is not tidiness. A bare `up -d` includes THIS
-              # service, so the container running this script would recreate itself — and
-              # `${PWD}` would then be re-interpolated from the cwd INSIDE this container
-              # (/project), leaving the next generation bind-mounting a host /project that
-              # Docker creates empty. That is the failure measured centrally on 2026-08-12,
-              # and the guard above is what would report it rather than a failed backup.
-              # Naming the service has one cost, the same one centrally: a changed updater
-              # definition is not picked up here, so recreate it by hand at the site.
-              # `-p` is not optional either: without it compose derives the project from the
-              # directory name, forks a second empty stack and orphans `pollerbuf`.
-              if ( cd /project && YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.poller.yml up -d poller ); then
+              # The bind a wrong working directory silently empties, checked BEFORE anything is
+              # recreated. Docker creates a missing bind source as an empty directory instead of
+              # failing, so the poller would start, find no CA, and never reach the bus — while
+              # `up -d` exits 0 and the line below would report success. Checked for CONTENT
+              # rather than existence, because an empty directory exists. Only checked when it
+              # resolves inside this deployment directory: an operator who pointed
+              # YAGRA_CERT_DIR elsewhere has a path this container cannot see, and refusing on
+              # a path we cannot read would be worse than not looking.
+              CERTS=$$(sed -n 's/^YAGRA_CERT_DIR=//p' "$$WORKDIR/.env" 2>/dev/null | head -1)
+              [ -n "$$CERTS" ] || CERTS="$$WORKDIR/certs"
+              case "$$CERTS" in
+                "$$WORKDIR"/*)
+                  if [ -z "$$(ls -A "$$CERTS" 2>/dev/null)" ]; then
+                    say "$$ID" apply "$$TAG" failed compose "$$CERTS holds no certificate, so the replacement poller would start with nothing to trust the bus with; restore this site's certs directory, or re-issue its bundle from Settings > Pollers, before upgrading" "$$NOW" "$$(date +%s)"
+                    return 0
+                  fi
+                  ;;
+              esac
+              # Run from the HOST's own spelling of this directory, never from a mount point —
+              # see the volume comment above. `poller` is NAMED, and that is not tidiness
+              # either: a bare `up -d` includes THIS service, so the container running this
+              # script would recreate itself mid-apply and never write the result. Naming it has
+              # one cost, the same one centrally — a changed updater definition is not picked up
+              # here, so an operator recreates it by hand at the site.
+              # `-p` is not optional: without it compose derives the project from the directory
+              # name, forks a second empty stack and orphans `pollerbuf`.
+              if ( cd "$$WORKDIR" && YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.poller.yml up -d poller ); then
                 say "$$ID" apply "$$TAG" succeeded verify "now running $$TAG" "$$NOW" "$$(date +%s)"
               else
                 say "$$ID" apply "$$TAG" failed compose "could not recreate the poller" "$$NOW" "$$(date +%s)"

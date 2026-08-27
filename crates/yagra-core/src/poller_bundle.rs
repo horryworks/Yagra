@@ -242,6 +242,15 @@ fn readme_self_upgrade(on: bool) -> String {
      composition from the release being installed, so an edit there lasts until the next one;\n\
      .env is never replaced. With it off, this poller stays on whatever version you last\n\
      pulled, and the central Settings > Upgrade page lists it by name as left behind.\n\
+     \n\
+     If this site was ALREADY RUNNING before you unpacked this bundle, run the up -d at the\n\
+     top of this file now rather than leaving it until the next central upgrade. A container\n\
+     keeps the definition it was created with, and an updater created before v0.3.4 ran the\n\
+     compose command from inside its own filesystem. Anything the composition mounts by a\n\
+     relative path then resolves against a directory that exists only in that container, and\n\
+     Docker creates the missing host path empty: this poller comes back with no certificate\n\
+     and never reaches the bus again, while the upgrade reports success. Recreating the\n\
+     updater once, from this bundle, is the whole of the fix.\n\
      \n"
     .to_owned()
 }

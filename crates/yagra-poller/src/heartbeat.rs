@@ -140,6 +140,14 @@ async fn run_heartbeat_loop<B>(
                 // operator, before they press Stop, whether every poller that might be running the
                 // sweep understands the command.
                 yagra_bus::CAP_DISCOVERY_CANCEL.to_owned(),
+                // This build puts `upgrade_report()` on the beat (ADR-051 Inc.5). Unconditional
+                // like the five above, because it is a claim about the build and not about the
+                // site: whether there is anything to report is what `upgrade` itself answers.
+                // Core reads its absence as "no report is coming" and stops waiting for one, which
+                // is the whole point — until this existed, a build that could report and a build
+                // that could not were indistinguishable on the bus, so core waited out its full
+                // budget on both.
+                yagra_bus::CAP_UPGRADE_REPORT.to_owned(),
             ]
             .into_iter()
             // Unlike the four above, this one is conditional: it says a site updater is deployed

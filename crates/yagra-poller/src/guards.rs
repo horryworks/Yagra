@@ -63,7 +63,7 @@ fn main_runs_no_loop_of_its_own() {
 /// that defines it rather than listed here, exactly as `sql_tables` derives table names from
 /// `migrations/`.
 ///
-/// ⚠️ Claiming is not the same as claiming *unconditionally*: two of the seven are earned at
+/// ⚠️ Claiming is not the same as claiming *unconditionally*: two of the eight are earned at
 /// runtime, and `heartbeat.rs` naming them is all this check asks. Whether the condition is right is
 /// a question no source scan can answer.
 #[test]

@@ -10,6 +10,36 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **A remote site that was already running must have its stack recreated once, before the next
+  central upgrade.** On the machine at each site:
+  `docker compose -p yagra-poller -f docker-compose.poller.yml up -d`. That replaces the site
+  updater with this release's definition. An updater created by v0.3.3 or earlier runs
+  `docker compose` from inside its own filesystem, so the poller's certificate directory — mounted
+  by a relative path — resolves to a host directory Docker then creates empty. The replacement
+  poller starts, has nothing to trust the bus with, and never reconnects, while both the site and
+  Settings ▸ Upgrade report success. A pool with other live pollers keeps monitoring, because its
+  nodes move; a single-poller pool goes dark until this is done by hand. Sites brought up from a
+  bundle issued by this release are unaffected, and re-issuing a bundle and unpacking it performs
+  the same repair.
+
+### Bug Fixes
+
+- **The site updater now runs `docker compose` from the directory the host knows the site by.** It
+  reads that path back from the `com.docker.compose.project.working_dir` label, the way the central
+  updater already does, instead of from a container-local mount point. It also refuses — naming the
+  repair command — when that label points at a directory holding no `docker-compose.poller.yml`,
+  and refuses to recreate a poller whose certificate directory is empty rather than replacing a
+  working site with one that cannot reach the bus.
+- **A remote poller upgrade no longer waits out the full prefetch budget when the site cannot
+  report progress.** Pollers now advertise `upgrade-report`, so core can tell a build that will
+  relay its site updater's status from one that never will. Without that claim core stops waiting
+  immediately whenever the pool still has another live poller — the apply pulls anyway, so the cost
+  is a longer outage at a site something else is covering — and keeps the blind wait only for a
+  single-poller pool, where pulling before the outage is the only thing keeping the gap short.
+  Measured: a site whose prefetch finished in six seconds still waited 870 seconds for its apply.
+
 ## v0.3.3 — remote-site pollers upgrade with the deployment, and a button brings back the ones that drifted
 
 ### New Features

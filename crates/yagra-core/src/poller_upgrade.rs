@@ -103,6 +103,19 @@ pub fn goes_dark(live_in_pool: usize) -> bool {
     live_in_pool <= 1
 }
 
+/// Whether this site's prefetch is worth waiting for, decided before any waiting happens.
+///
+/// Two inputs, three cases, and the third is the one Inc.4 got wrong by not asking the first
+/// question at all — see [`wait_for_prefetch`]. Pure, so the rule can be read and tested without a
+/// bus, a coordinator or a clock; the waiting itself is the part that needs all three.
+#[must_use]
+fn should_wait_for_prefetch(will_report: bool, pool_goes_dark: bool) -> bool {
+    // A report ends the wait early, so waiting costs nothing and buys the shorter outage. With no
+    // report the wait is blind, and blind is only worth a quarter of an hour when there is no peer
+    // left to poll the pool while this site is recreated.
+    will_report || pool_goes_dark
+}
+
 /// Whether a convergence is running in this process.
 ///
 /// Two things start one — the tail of core's own upgrade, and `POST /api/v1/system/upgrade/pollers`
@@ -233,7 +246,8 @@ async fn converge_pool(run: &Run, pool: &str, queue: Vec<Target>) {
         .into_iter()
         .filter(|v| v.online && v.pool == pool)
         .count();
-    if goes_dark(live_in_pool) {
+    let pool_goes_dark = goes_dark(live_in_pool);
+    if pool_goes_dark {
         tracing::warn!(
             %pool,
             "this pool has one live poller, so upgrading it stops monitoring at that site until it \
@@ -245,7 +259,7 @@ async fn converge_pool(run: &Run, pool: &str, queue: Vec<Target>) {
     // applies — but a pool whose sites cannot pull at all spends this once rather than once each.
     let prefetch_deadline = tokio::time::Instant::now() + PREFETCH_TIMEOUT - SETTLE_DELAY;
     for target in queue {
-        wait_for_prefetch(run, &target, prefetch_deadline).await;
+        wait_for_prefetch(run, &target, prefetch_deadline, pool_goes_dark).await;
         send(run, &target.id, UpgradeStep::Apply).await;
         let ok = wait_for_return(&run.coordinator, &target, &run.tag).await;
         let action = format!(
@@ -309,10 +323,48 @@ async fn send(run: &Run, poller_id: &str, step: UpgradeStep) {
 /// asymmetry `PREFETCH_TIMEOUT` was written for. Waiting out the budget after a reported failure
 /// would spend fifteen minutes to reach the same place.
 ///
-/// A poller that reports nothing — an N-1 build, or one whose updater has not written a status yet —
-/// falls back to the budget, which is exactly the old behaviour for exactly the old reason.
-async fn wait_for_prefetch(run: &Run, target: &Target, deadline: tokio::time::Instant) {
+/// **A site that cannot report at all is a third case, and Inc.4 got it wrong.** Decision 18 shipped
+/// the report without a capability saying who sends one, so a build that reports nothing and a build
+/// that has not reported *yet* were the same silence — and core spent the full budget on both. That
+/// is not hypothetical: on 192.168.1.212 the prefetch succeeded in **six seconds** and the apply
+/// followed **870 seconds** later, which is every remote site's first self-upgrade by construction,
+/// since the poller being replaced is always the older build. `CAP_UPGRADE_REPORT` (Inc.5) names the
+/// difference, and the rule it enables is:
+///
+/// * **The site will report** ⇒ wait for it, with the budget as the backstop. Unchanged.
+/// * **It will not, and the pool keeps a live poller** ⇒ do not wait. The apply pulls, so the cost
+///   is a longer outage at a site whose pool is still being polled by someone else — and a blind
+///   quarter of an hour buys nothing there.
+/// * **It will not, and the pool goes dark** ⇒ spend the budget. With no report and no peer, the
+///   blind wait is the only remaining way to pull *before* the outage rather than during it, which
+///   is the whole of decision 13.
+///
+/// ⚠️ The capability is read **once, on entry**. A build does not learn to report halfway through,
+/// and re-reading each tick would let a site that merely went quiet flip the rule under itself.
+async fn wait_for_prefetch(
+    run: &Run,
+    target: &Target,
+    deadline: tokio::time::Instant,
+    pool_goes_dark: bool,
+) {
     use yagra_bus::{UpgradeReportCommand, UpgradeReportState};
+    // Asked before waiting rather than while waiting — see the ⚠️ above. An offline poller answers
+    // `false` here, which is the right answer: nothing is coming from a site that is not on the bus.
+    let will_report = run
+        .coordinator
+        .poller_views(std::time::Instant::now())
+        .into_iter()
+        .find(|v| v.id == target.id)
+        .is_some_and(|v| v.caps.iter().any(|c| c == yagra_bus::CAP_UPGRADE_REPORT));
+    if !should_wait_for_prefetch(will_report, pool_goes_dark) {
+        tracing::info!(
+            poller = %target.id,
+            "this site's build does not report its prefetch and its pool has another live poller; \
+             applying now rather than waiting the budget out blind — the apply pulls, and the \
+             longer outage is covered"
+        );
+        return;
+    }
     loop {
         let report = run
             .coordinator
@@ -413,6 +465,32 @@ mod tests {
         assert!(goes_dark(1));
         assert!(goes_dark(0));
         assert!(!goes_dark(2));
+    }
+
+    #[test]
+    fn a_site_that_cannot_report_is_only_waited_for_when_its_pool_would_go_dark() {
+        // Both accepting cases first, deliberately: a rule tested only by what it refuses is
+        // satisfied by an implementation that refuses everything, and this one decides whether a
+        // remote site pulls before its outage or during it.
+        assert!(
+            should_wait_for_prefetch(true, false),
+            "a site that reports ends the wait itself, so waiting costs nothing and buys the \
+             shorter outage even where a peer would have covered it"
+        );
+        assert!(
+            should_wait_for_prefetch(true, true),
+            "reporting and alone: the case the whole prefetch/apply split exists for"
+        );
+        assert!(
+            should_wait_for_prefetch(false, true),
+            "no report and no peer — the blind budget is the only remaining way to pull before the \
+             outage rather than during it (decision 13)"
+        );
+        assert!(
+            !should_wait_for_prefetch(false, false),
+            "no report and a peer still polling the pool: 870 blind seconds buy nothing. This is \
+             the case measured on 192.168.1.212, where the site had the image after six"
+        );
     }
 
     #[test]

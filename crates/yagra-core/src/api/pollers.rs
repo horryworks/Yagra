@@ -1525,6 +1525,129 @@ mod tests {
         );
     }
 
+    /// Every updater addresses its deployment directory by the name the **host** knows it by
+    /// (ADR-051 Inc.5 decision 20).
+    ///
+    /// 🚨 This is the check standing between one tidy-looking compose edit and a remote site that
+    /// silently loses its certificates. `docker compose` resolves a *relative* bind source against
+    /// its own working directory and hands the result to the daemon as a **host** path, which
+    /// Docker then creates empty rather than refusing. So an updater that runs compose from a
+    /// container-local mount point (`- ${PWD}:/project`, then `cd /project`) gives the
+    /// replacement poller an empty `/certs` on the host: the container starts, finds no CA, never
+    /// reaches the bus — and `up -d` still exits 0, so the site reports `succeeded` and core's
+    /// alignment card reads "aligned" while that site is dark. Measured on 192.168.1.212,
+    /// 2026-08-27, on the first real self-upgrade of a remote site. The same reasoning stamps a
+    /// `com.docker.compose.project.working_dir` label naming a path that exists only inside a
+    /// container that is already gone, which is what broke the central updater on 2026-08-12.
+    ///
+    /// Two properties, and neither is visible at the point somebody would break it:
+    ///
+    /// * **No bind in an updater means two different things on its two sides.** A path that is
+    ///   spelled one way on the host and another inside the container is exactly the bug; when the
+    ///   two spellings are the same string, neither can be wrong.
+    /// * **Every `cd` goes to `$WORKDIR`** — the directory read back from the compose label,
+    ///   which is the one way to learn a host path from inside a container without being told.
+    ///
+    /// Named volumes are skipped: they have no host path to disagree about.
+    #[test]
+    fn every_updater_addresses_its_deployment_directory_by_the_hosts_own_name() {
+        let mut binds = 0;
+        let mut cds = 0;
+        for (file, service) in [
+            ("docker-compose.deploy.yml", "yagra-updater:"),
+            ("docker-compose.poller.yml", "yagra-poller-updater:"),
+        ] {
+            let text = std::fs::read_to_string(format!("../../{file}"))
+                .unwrap_or_else(|e| panic!("{file} ships with the product: {e}"));
+            // Everything from this service up to the next key at the same indent. Cutting by
+            // service is what keeps the answer about the updater: the compositions hold other
+            // services that legitimately bind a host path somewhere else.
+            let mut inside = false;
+            let mut body = Vec::new();
+            for line in text.lines() {
+                if line.starts_with("  ")
+                    && !line.starts_with("   ")
+                    && line.trim_end().ends_with(':')
+                {
+                    inside = line.trim() == service;
+                    continue;
+                }
+                if !line.starts_with(' ') && !line.is_empty() {
+                    inside = false;
+                }
+                if inside {
+                    body.push(line);
+                }
+            }
+            assert!(
+                !body.is_empty(),
+                "{file} no longer defines {service}, so this check read nothing and would have \
+                 passed on any content at all",
+            );
+
+            for line in &body {
+                let t = line.trim_start();
+                let Some(spec) = t.strip_prefix("- ") else {
+                    continue;
+                };
+                // A host bind starts with a path or an interpolation; a named volume does not.
+                if !(spec.starts_with('/') || spec.starts_with('$')) {
+                    continue;
+                }
+                let spec = spec
+                    .trim_end()
+                    .trim_end_matches(":ro")
+                    .trim_end_matches(":rw");
+                let Some((src, dst)) = spec.rsplit_once(':') else {
+                    continue;
+                };
+                assert_eq!(
+                    src, dst,
+                    "{file}'s {service} binds {src} at {dst}. An updater runs `docker compose` for \
+                     the host, so a directory it knows by a different name is a directory whose \
+                     relative bind sources resolve to host paths that do not exist — Docker \
+                     creates them empty and the site starts without its certificates. Mount it at \
+                     its own name.",
+                );
+                binds += 1;
+            }
+
+            assert!(
+                body.iter()
+                    .any(|l| l.contains("com.docker.compose.project.working_dir")),
+                "{file}'s {service} never reads the working_dir label, so it has no way to learn \
+                 the host's spelling of this deployment directory",
+            );
+
+            for line in &body {
+                for (i, _) in line.match_indices("cd ") {
+                    let rest = &line[i + 3..];
+                    assert!(
+                        rest.starts_with("\"$$WORKDIR\""),
+                        "{file}'s {service} changes directory to something other than \
+                         \"$$WORKDIR\": {}. Every path this script runs compose from has to be \
+                         the one the host knows, or the binds inside the composition resolve \
+                         against a directory that only exists in a container.",
+                        line.trim(),
+                    );
+                    cds += 1;
+                }
+            }
+        }
+        assert_eq!(
+            binds, 3,
+            "expected 3 host binds across the two updaters: the Docker socket in each, plus the \
+             remote site's own deployment directory. A different count means a mount was added or \
+             removed, so decide this number again rather than raising it to whatever was measured",
+        );
+        assert_eq!(
+            cds, 4,
+            "expected 4 directory changes: three in the central updater (backup, apply, bus) and \
+             one in the site updater's apply. A lower number means a pattern stopped matching and \
+             this check passed over the line it exists to read",
+        );
+    }
+
     /// The updater resolves a poller id the way the poller itself does: env var first (ADR-065
     /// Inc.8).
     ///
