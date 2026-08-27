@@ -8,7 +8,8 @@
 // page builds actually resolves — a `t()` key is a string, so a mistyped namespace prefix compiles,
 // passes EN/JA parity (it is missing from both locales), passes Vitest (which never executes a
 // `.tsx`), and reaches the operator as the raw key. Verified by mistyping `system:` here: both
-// assertions below fail.
+// assertions below fail. (Reaching across namespaces without declaring one is the house style —
+// 434 call sites do it, because `i18n.ts` inits with `ns: NAMESPACES`.)
 //
 // What it asserts, and the last one is the reason the file exists. Each row says what its **own**
 // site is doing — pulling, silent, or stuck — because a check that only ever sees populated rows
