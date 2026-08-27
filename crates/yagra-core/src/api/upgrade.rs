@@ -289,6 +289,13 @@ pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::Po
         .into_iter()
         .filter(|v| v.online)
         .map(|v| crate::upgrade::PollerBuild {
+            // Whatever its site updater last said, carried on the build so the set that decides
+            // *who moves* and the set that shows *how each is going* are one list and cannot
+            // disagree about which row is which poller.
+            upgrade: v
+                .upgrade
+                .as_ref()
+                .map(crate::upgrade::PollerUpgradeProgress::from),
             self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
             version: (!v.version.is_empty()).then_some(v.version),
             pool: v.pool,
@@ -454,7 +461,13 @@ pub(crate) struct AlignAccepted {
     id: String,
     /// The release every target is being moved to — this core's own build.
     target_tag: String,
-    /// The pollers commands were published for, in the order the queues will take them.
+    /// The pollers commands were published for, in the order the queues will take them, and what
+    /// each was running when the button was pressed.
+    ///
+    /// **No progress here, deliberately**: nothing has reached a site yet, so any report these
+    /// pollers carry belongs to an earlier run and echoing it would put a stale "installing" in the
+    /// acknowledgement of a command that has only just been published. Poll
+    /// `GET /api/v1/system/upgrade` for how each site is getting on.
     pollers: Vec<crate::upgrade::PollerLag>,
     /// Pools that will have no live poller for the length of one recreate. Named so an operator
     /// reads it before the alert does; not a refusal (ADR-051 decision 13).
@@ -541,7 +554,15 @@ async fn align_pollers(
     let accepted = AlignAccepted {
         id: id.clone(),
         target_tag: tag.clone(),
-        pollers: behind,
+        // Down to id + version: see the field's own note. What each site *does* next is answered by
+        // `GET`, from heartbeats that have not arrived yet at this point in the request.
+        pollers: behind
+            .iter()
+            .map(|p| crate::upgrade::PollerLag {
+                id: p.id.clone(),
+                version: p.version.clone(),
+            })
+            .collect(),
         dark_pools: alignment.dark_pools,
     };
     let run = crate::poller_upgrade::Run {

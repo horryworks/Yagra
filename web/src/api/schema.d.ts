@@ -4219,10 +4219,38 @@ export interface components {
             dark_pools: string[];
             /** @description Correlation id, shared with every site's own audit line for this operation. */
             id: string;
-            /** @description The pollers commands were published for, in the order the queues will take them. */
+            /**
+             * @description The pollers commands were published for, in the order the queues will take them, and what
+             *     each was running when the button was pressed.
+             *
+             *     **No progress here, deliberately**: nothing has reached a site yet, so any report these
+             *     pollers carry belongs to an earlier run and echoing it would put a stale "installing" in the
+             *     acknowledgement of a command that has only just been published. Poll
+             *     `GET /api/v1/system/upgrade` for how each site is getting on.
+             */
             pollers: components["schemas"]["PollerLag"][];
             /** @description The release every target is being moved to — this core's own build. */
             target_tag: string;
+        };
+        /**
+         * @description One poller the align button would move, with what it is doing about it right now.
+         *
+         *     `progress` is a **progress indicator and never a completion signal**. A site pulls its image
+         *     over whatever link it has, which is minutes; without this the operator who pressed the button
+         *     watches a card that does not change until a version flips, and cannot tell a site that is
+         *     working from one that is stuck. But it is carried on heartbeats and read by polling, so it goes
+         *     stale between them. **`version` is what says a site is done.**
+         */
+        AligningPoller: {
+            /** @description Sanitized poller id. */
+            id: string;
+            progress?: null | components["schemas"]["PollerUpgradeProgress"];
+            /**
+             * @description What it is running now. Never `null` in practice: a poller that has never reported a version
+             *     cannot be judged off-version and so is never in this set. Optional so it reads the same way
+             *     as every other row that names a build.
+             */
+            version?: string | null;
         };
         /** @description One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row). */
         AnalysisFinding: {
@@ -7760,9 +7788,6 @@ export interface components {
             /**
              * @description Of `pollers`, the ones **ahead** of core — which this operation moves *back*.
              *
-             *     A subset rather than a flag on each row, because the row type is shared with
-             *     [`PollerUpgradePlan::manual`] where the direction has no meaning.
-             *
              *     Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
              *     comes after `0.2.9`, and this repository already keeps that comparison in one place because
              *     the other thing deciding from it is whether a rollback is allowed. A second implementation
@@ -7770,11 +7795,12 @@ export interface components {
              */
             downgrades: string[];
             /**
-             * @description The pollers it would move, and what each runs now. Empty means the fleet is aligned — there
-             *     is no "nobody asked" here, unlike [`PollerUpgradePlan`], because core always knows its own
-             *     version and always has a live registry.
+             * @description The pollers it would move, what each runs now, and what its site updater is doing about it.
+             *     Empty means the fleet is aligned — there is no "nobody asked" here, unlike
+             *     [`PollerUpgradePlan`], because core always knows its own version and always has a live
+             *     registry.
              */
-            pollers: components["schemas"]["PollerLag"][];
+            pollers: components["schemas"]["AligningPoller"][];
         };
         /** @description Where a poller attaches to the monitored network. */
         PollerAnchorRequest: {

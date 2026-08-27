@@ -20191,11 +20191,42 @@
             "items": {
               "$ref": "#/components/schemas/PollerLag"
             },
-            "description": "The pollers commands were published for, in the order the queues will take them."
+            "description": "The pollers commands were published for, in the order the queues will take them, and what\neach was running when the button was pressed.\n\n**No progress here, deliberately**: nothing has reached a site yet, so any report these\npollers carry belongs to an earlier run and echoing it would put a stale \"installing\" in the\nacknowledgement of a command that has only just been published. Poll\n`GET /api/v1/system/upgrade` for how each site is getting on."
           },
           "target_tag": {
             "type": "string",
             "description": "The release every target is being moved to — this core's own build."
+          }
+        }
+      },
+      "AligningPoller": {
+        "type": "object",
+        "description": "One poller the align button would move, with what it is doing about it right now.\n\n`progress` is a **progress indicator and never a completion signal**. A site pulls its image\nover whatever link it has, which is minutes; without this the operator who pressed the button\nwatches a card that does not change until a version flips, and cannot tell a site that is\nworking from one that is stuck. But it is carried on heartbeats and read by polling, so it goes\nstale between them. **`version` is what says a site is done.**",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Sanitized poller id."
+          },
+          "progress": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PollerUpgradeProgress",
+                "description": "Its site updater's last word, or `null` when it has none, has never been asked, or predates\nthe field."
+              }
+            ]
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What it is running now. Never `null` in practice: a poller that has never reported a version\ncannot be judged off-version and so is never in this set. Optional so it reads the same way\nas every other row that names a build."
           }
         }
       },
@@ -28402,14 +28433,14 @@
             "items": {
               "type": "string"
             },
-            "description": "Of `pollers`, the ones **ahead** of core — which this operation moves *back*.\n\nA subset rather than a flag on each row, because the row type is shared with\n[`PollerUpgradePlan::manual`] where the direction has no meaning.\n\nComputed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`\ncomes after `0.2.9`, and this repository already keeps that comparison in one place because\nthe other thing deciding from it is whether a rollback is allowed. A second implementation\nin TypeScript would be a second answer to \"which is newer\"."
+            "description": "Of `pollers`, the ones **ahead** of core — which this operation moves *back*.\n\nComputed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`\ncomes after `0.2.9`, and this repository already keeps that comparison in one place because\nthe other thing deciding from it is whether a rollback is allowed. A second implementation\nin TypeScript would be a second answer to \"which is newer\"."
           },
           "pollers": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/PollerLag"
+              "$ref": "#/components/schemas/AligningPoller"
             },
-            "description": "The pollers it would move, and what each runs now. Empty means the fleet is aligned — there\nis no \"nobody asked\" here, unlike [`PollerUpgradePlan`], because core always knows its own\nversion and always has a live registry."
+            "description": "The pollers it would move, what each runs now, and what its site updater is doing about it.\nEmpty means the fleet is aligned — there is no \"nobody asked\" here, unlike\n[`PollerUpgradePlan`], because core always knows its own version and always has a live\nregistry."
           }
         }
       },

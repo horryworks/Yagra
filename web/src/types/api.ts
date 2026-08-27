@@ -353,7 +353,8 @@ export const TOKEN_SURFACES = ['mcp', 'rest'] as const;
 /** An auth surface (snake_case). Pinned to `schemas.TokenSurface`. */
 export type TokenSurface = (typeof TOKEN_SURFACES)[number];
 
-/** Which half of an upgrade a site is in, as the Pollers page labels it (ADR-051 Inc.4).
+/** Which half of an upgrade a site is in, as the Pollers page and the Upgrade page's align card
+ *  both label it (ADR-051 Inc.4).
  *
  *  An `as const` array rather than the bare union, because the badge builds its `t()` key from the
  *  value: a union alone is not iterable at runtime, so a new variant would reach the operator as a

@@ -16,6 +16,7 @@ import { classifyLoadError, type LoadBlock } from '../lib/loadState';
 import { Card } from '../components/ui/Card';
 import { Button } from '../components/ui/Button';
 import { Modal } from '../components/ui/Modal';
+import { Badge } from '../components/ui/Badge';
 import { ProgressBar } from '../components/ui/ProgressBar';
 import { api, errMsg } from '../services/api';
 import { formatTimestamp, relativeTime } from '../lib/format';
@@ -164,7 +165,17 @@ function uptime(seconds: number): string {
 }
 
 export function UpgradePage() {
-  const { t } = useTranslation('settings-upgrade');
+  // Two namespaces, because the align card's progress badge reuses the Pollers page's
+  // `pollers.upgradeStep.*` labels, which live in `system` and are what `i18nEnumKeys.test.ts` pins
+  // to `UPGRADE_PROGRESS_COMMANDS`. Copying those three strings into `settings-upgrade` would put
+  // the same fact in two files with one test, and the copy nobody checks is the one that rots.
+  //
+  // ⚠️ Declaring it here does **not** make it load — `i18n.ts` inits with `ns: NAMESPACES`, so every
+  // namespace is fetched for the active language whatever a component asks for, and a
+  // cross-namespace `t()` resolves without this line. It is here to state the dependency, so that if
+  // that eager list is ever narrowed this page says what it needs. The first element stays the
+  // default namespace, so every other `t()` on this page is unchanged.
+  const { t } = useTranslation(['settings-upgrade', 'system']);
   const [status, setStatus] = useState<UpgradeStatus | null>(null);
   const [failed, setFailed] = useState(false);
   // An upgrade changes the deployment, so an operator is refused the whole page. Distinguish that
@@ -595,7 +606,31 @@ export function UpgradePage() {
             {alignment.pollers.map((p) => (
               <li key={p.id} className="upgrade-release">
                 <span className="mono">{p.id}</span>
-                <span className="muted">{p.version ?? t('build.unknown')}</span>
+                <span className="upgrade-release-action">
+                  <span className="muted">{p.version ?? t('build.unknown')}</span>
+                  {/* What that site is doing about it, from its own heartbeat (ADR-051 Inc.4
+                      decision 18). Only the two states an operator can act on are drawn:
+                      `running` says the site is moving, `failed` says it is stuck and this
+                      queue has stopped. `succeeded` is left blank on purpose — the version
+                      beside it is the completion signal, and a badge that stays up after the
+                      work is done reads as work still in flight.
+
+                      `message` is written at the site: rendered as a tooltip string, never as
+                      a key. The key comes from `command`, which is a closed enum, and its
+                      labels live in the `system` namespace beside the Pollers page's copy —
+                      declared on the hook above rather than duplicated here, so there is one
+                      set of strings and one test pinning it. */}
+                  {p.progress?.state === 'running' && (
+                    <Badge tone="neutral" title={p.progress.message || undefined}>
+                      {t(`system:pollers.upgradeStep.${p.progress.command}`)}
+                    </Badge>
+                  )}
+                  {p.progress?.state === 'failed' && (
+                    <Badge tone="critical" title={p.progress.message || undefined}>
+                      {t('pollers.align.failedAt', { step: p.progress.step || '—' })}
+                    </Badge>
+                  )}
+                </span>
               </li>
             ))}
           </ul>

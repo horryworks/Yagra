@@ -41,8 +41,10 @@
   a prefetch (the site pulls the image, monitoring continues) and an apply (the container is
   recreated — the outage), but had no way to learn the prefetch had finished, so it slept out the
   whole budget before the first apply of every pool. Sites now report their updater's progress on
-  the heartbeat, and the apply starts as soon as the image is local. The Pollers page shows
-  `fetching` / `installing` against a site while it works.
+  the heartbeat, and the apply starts as soon as the image is local. **Both places that list a
+  poller show that progress**: the Pollers page, and the rows of the align button's own card at
+  Settings ▸ Upgrade — `fetching` / `installing` while a site works, and `stuck at <step>` when its
+  updater gave up, which is the only place the stalled pool is named.
 - **"This pool will go dark" is now said before the button is pressed, and said correctly.** The
   warning counted pollers being upgraded rather than pollers in the pool, so a pool of three where
   one site could replace itself was announced as losing coverage while two pollers polled

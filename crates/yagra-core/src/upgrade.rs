@@ -256,6 +256,87 @@ pub enum OfferBlock {
     PollersBehind,
 }
 
+/// A site updater's last word about an upgrade, as this API reports it.
+///
+/// A DTO rather than `yagra_bus::UpgradeReport` served straight through, for two reasons that point
+/// the same way. `yagra-bus` has no `utoipa` dependency and should not grow one to describe a
+/// screen; and the wire type carries the site's `run_id`, which is core's internal correlation
+/// handle and nothing a page can do anything with.
+///
+/// `message` is **site-authored text**. It is rendered as a string and never used as a key.
+// Why it lives in this module rather than in `api/pollers.rs`, where it started: **two screens read
+// it** — the poller list, and the rows of the align card that names the sites a press is about to
+// move (ADR-051 Inc.4). Both reach it through `PollerBuild`, which is this module's vocabulary, so
+// leaving it at the API edge would have meant a domain type importing the edge's, the one direction
+// the layering does not allow. This stays in `//`: a `///` on a `ToSchema` is published verbatim to
+// API clients, and where a Rust type sits in this repository is not a fact about the API.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct PollerUpgradeProgress {
+    /// Which half of the upgrade the site is in.
+    command: UpgradeProgressCommand,
+    /// How it is going.
+    state: UpgradeProgressState,
+    /// Where in the command it is: `pull`, `compose`, `verify`, `start`. Free text on purpose — it
+    /// is shown as a detail, never keyed on, so a site updater may add a step without this core
+    /// needing a name for it.
+    step: String,
+    /// A sentence for the operator, written at the site.
+    message: String,
+}
+
+/// Which half of an upgrade a site is in, as this API reports it.
+///
+/// An enum rather than a string because **the WebUI builds a `t()` key from it**
+/// (`pollers.upgradeStep.<command>`), which is the shape `extensibility.md` §4 is about: a raw
+/// string gives a union nothing iterates, so a new variant reaches the operator as a raw key with
+/// EN/JA parity still passing. `web/src/i18nEnumKeys.test.ts` carries its row.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeProgressCommand {
+    /// Fetching the image. The poller keeps polling throughout.
+    Prefetch,
+    /// Recreating the container. This is the outage.
+    Apply,
+    /// Something this core has no name for — an updater newer than it.
+    Other,
+}
+
+/// How the half described by [`PollerUpgradeProgress`] is going.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeProgressState {
+    /// Still going. **The only one the page draws a badge for**: a finished report is what the
+    /// version column already answers, and leaving it up reads as work still in flight.
+    Running,
+    /// Finished, and did what it said.
+    Succeeded,
+    /// Finished, and did not.
+    Failed,
+    /// Unrecognised — neither treated as done nor waited on.
+    Unknown,
+}
+
+impl From<&yagra_bus::UpgradeReport> for PollerUpgradeProgress {
+    fn from(r: &yagra_bus::UpgradeReport) -> Self {
+        use yagra_bus::{UpgradeReportCommand as C, UpgradeReportState as S};
+        Self {
+            command: match r.command {
+                C::Prefetch => UpgradeProgressCommand::Prefetch,
+                C::Apply => UpgradeProgressCommand::Apply,
+                C::Other => UpgradeProgressCommand::Other,
+            },
+            state: match r.state {
+                S::Running => UpgradeProgressState::Running,
+                S::Succeeded => UpgradeProgressState::Succeeded,
+                S::Failed => UpgradeProgressState::Failed,
+                S::Unknown => UpgradeProgressState::Unknown,
+            },
+            step: r.step.clone(),
+            message: r.message.clone(),
+        }
+    }
+}
+
 /// One poller as the upgrade view needs to see it: what it runs, and whether it can replace itself.
 #[derive(Debug, Clone)]
 pub struct PollerBuild {
@@ -270,6 +351,13 @@ pub struct PollerBuild {
     /// It advertises `CAP_SELF_UPGRADE` — a site updater is deployed beside it and core can hand it
     /// the same release (ADR-051).
     pub self_upgrades: bool,
+    /// What its site updater last reported, when it carries one and has said anything.
+    ///
+    /// Carried on the *build* rather than looked up beside it, because every consumer that asks
+    /// "which pollers are off this version" is the same one that then asks "and how is each one
+    /// doing" — and a second lookup keyed by id is where the two answers get to disagree about
+    /// which poller a row is.
+    pub upgrade: Option<PollerUpgradeProgress>,
 }
 
 /// A poller a single press of Upgrade would leave on its current build.
@@ -279,6 +367,31 @@ pub struct PollerLag {
     pub id: String,
     /// What it is running now; `null` when it has never reported a version.
     pub version: Option<String>,
+}
+
+/// One poller the align button would move, with what it is doing about it right now.
+///
+/// `progress` is a **progress indicator and never a completion signal**. A site pulls its image
+/// over whatever link it has, which is minutes; without this the operator who pressed the button
+/// watches a card that does not change until a version flips, and cannot tell a site that is
+/// working from one that is stuck. But it is carried on heartbeats and read by polling, so it goes
+/// stale between them. **`version` is what says a site is done.**
+// Why it is a type of its own rather than a field on `PollerLag`, the row `PollerUpgradePlan` uses:
+// nothing is being asked of a `manual` poller, so progress there could only ever be `null`, and an
+// always-null field on a shared row teaches a reader to ignore the one place it means something.
+// In `//` because it is a fact about this repository's types, not about the API (ADR-051 Inc.4
+// decision 18).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct AligningPoller {
+    /// Sanitized poller id.
+    pub id: String,
+    /// What it is running now. Never `null` in practice: a poller that has never reported a version
+    /// cannot be judged off-version and so is never in this set. Optional so it reads the same way
+    /// as every other row that names a build.
+    pub version: Option<String>,
+    /// Its site updater's last word, or `null` when it has none, has never been asked, or predates
+    /// the field.
+    pub progress: Option<PollerUpgradeProgress>,
 }
 
 /// Who an upgrade carries along, and who it leaves behind.
@@ -376,23 +489,26 @@ fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
 /// every cap-holder rather than from the ones actually being moved.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct PollerAlignment {
-    /// The pollers it would move, and what each runs now. Empty means the fleet is aligned — there
-    /// is no "nobody asked" here, unlike [`PollerUpgradePlan`], because core always knows its own
-    /// version and always has a live registry.
-    pub pollers: Vec<PollerLag>,
+    /// The pollers it would move, what each runs now, and what its site updater is doing about it.
+    /// Empty means the fleet is aligned — there is no "nobody asked" here, unlike
+    /// [`PollerUpgradePlan`], because core always knows its own version and always has a live
+    /// registry.
+    pub pollers: Vec<AligningPoller>,
     /// Pools left with no live poller for the length of one recreate. Named **before** the press:
     /// `pool_coverage`'s 300-second debounce is the whole budget and no maintenance window silences
     /// it, so this is the one consequence an operator cannot discover afterwards without an alert.
     pub dark_pools: Vec<String>,
     /// Of `pollers`, the ones **ahead** of core — which this operation moves *back*.
     ///
-    /// A subset rather than a flag on each row, because the row type is shared with
-    /// [`PollerUpgradePlan::manual`] where the direction has no meaning.
-    ///
     /// Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
     /// comes after `0.2.9`, and this repository already keeps that comparison in one place because
     /// the other thing deciding from it is whether a rollback is allowed. A second implementation
     /// in TypeScript would be a second answer to "which is newer".
+    // Why a subset rather than a flag on each row: the screen reads it as one — the confirmation
+    // names them together in a single sentence, and no row anywhere renders a direction. Until
+    // Inc.4's progress rows it *could* not be a per-row flag, because the row type was shared with
+    // `PollerUpgradePlan::manual` where direction has no meaning; that constraint is gone now that
+    // `AligningPoller` is its own type, so what keeps it a subset is the sentence, not the type.
     pub downgrades: Vec<String>,
 }
 
@@ -442,9 +558,9 @@ pub fn poller_alignment(fleet: &[PollerBuild], core_version: &str) -> PollerAlig
 /// A poller that has never reported a version is excluded: it cannot be judged, and acting on it
 /// would mean recreating a container to find out.
 #[must_use]
-pub fn pollers_off_version(fleet: &[PollerBuild], core_version: &str) -> Vec<PollerLag> {
+pub fn pollers_off_version(fleet: &[PollerBuild], core_version: &str) -> Vec<AligningPoller> {
     let want = core_version.trim_start_matches('v');
-    let mut out: Vec<PollerLag> = fleet
+    let mut out: Vec<AligningPoller> = fleet
         .iter()
         .filter(|p| p.self_upgrades)
         .filter(|p| {
@@ -452,9 +568,10 @@ pub fn pollers_off_version(fleet: &[PollerBuild], core_version: &str) -> Vec<Pol
                 .as_deref()
                 .is_some_and(|v| v.trim_start_matches('v') != want)
         })
-        .map(|p| PollerLag {
+        .map(|p| AligningPoller {
             id: p.id.clone(),
             version: p.version.clone(),
+            progress: p.upgrade.clone(),
         })
         .collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -2195,6 +2312,7 @@ mod tests {
             id: id.to_owned(),
             pool: pool.to_owned(),
             version: version.map(str::to_owned),
+            upgrade: None,
             self_upgrades,
         }
     }
@@ -2426,6 +2544,68 @@ mod tests {
 
         // And with core ahead of everyone, nothing is a downgrade.
         assert!(poller_alignment(&fleet, "9.9.9").downgrades.is_empty());
+    }
+
+    /// The visible half of Inc.4 decision 18: the row an operator watches carries that site's own
+    /// report, and only that site's.
+    ///
+    /// The failure this refuses is not "no progress shows" — it is progress showing against the
+    /// **wrong poller**, which is what a second lookup keyed by id would eventually produce and
+    /// which reads as a working site while the stuck one looks idle. So the assertion is per row,
+    /// and it includes a row that must be `None`: a set where every row is populated cannot tell a
+    /// correct join from one that hands the same report to everybody.
+    #[test]
+    fn each_alignment_row_carries_its_own_sites_report_and_no_others() {
+        let report = |state: yagra_bus::UpgradeReportState, step: &str| {
+            Some(PollerUpgradeProgress::from(&yagra_bus::UpgradeReport {
+                run_id: "run-1".to_owned(),
+                command: yagra_bus::UpgradeReportCommand::Prefetch,
+                state,
+                step: step.to_owned(),
+                message: "pulling".to_owned(),
+            }))
+        };
+        let with = |id: &str, version: &str, upgrade: Option<PollerUpgradeProgress>| PollerBuild {
+            id: id.to_owned(),
+            pool: "default".to_owned(),
+            version: Some(version.to_owned()),
+            self_upgrades: true,
+            upgrade,
+        };
+        let fleet = vec![
+            with(
+                "pulling",
+                "0.3.1",
+                report(yagra_bus::UpgradeReportState::Running, "pull"),
+            ),
+            with("quiet", "0.3.1", None),
+            // Already on the target *and* mid-report. It is not in the set at all, so its report
+            // has nowhere to leak to — which is the property that makes the row's progress mean
+            // "this site, this press" rather than "someone, some time".
+            with(
+                "aligned",
+                "0.3.2",
+                report(yagra_bus::UpgradeReportState::Succeeded, "start"),
+            ),
+        ];
+
+        let a = poller_alignment(&fleet, "0.3.2");
+        let row = |id: &str| {
+            a.pollers
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("{id} should be a target"))
+        };
+        assert_eq!(a.pollers.len(), 2, "only the two off 0.3.2 are targets");
+        assert_eq!(
+            row("pulling").progress,
+            report(yagra_bus::UpgradeReportState::Running, "pull")
+        );
+        assert_eq!(
+            row("quiet").progress,
+            None,
+            "a site with no updater must stay blank, not inherit its neighbour's report"
+        );
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

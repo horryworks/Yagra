@@ -23,6 +23,7 @@ use super::{AdminState, ApiState};
 use crate::coordinator::PollerView;
 use crate::pollers::PollerRow;
 use crate::poolres::PoolSource;
+use crate::upgrade::PollerUpgradeProgress;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -152,81 +153,6 @@ pub(crate) struct PollerInfo {
     /// who pressed "bring them to this build" watches an unchanged screen and cannot tell a site
     /// that is working from one that is stuck.
     upgrade: Option<PollerUpgradeProgress>,
-}
-
-/// A site updater's last word about an upgrade, as this API reports it.
-///
-/// A DTO rather than `yagra_bus::UpgradeReport` served straight through, for two reasons that point
-/// the same way. `yagra-bus` has no `utoipa` dependency and should not grow one to describe a
-/// screen; and the wire type carries the site's `run_id`, which is core's internal correlation
-/// handle and nothing a page can do anything with.
-///
-/// `message` is **site-authored text**. It is rendered as a string and never used as a key.
-#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
-pub(super) struct PollerUpgradeProgress {
-    /// Which half of the upgrade the site is in.
-    command: UpgradeProgressCommand,
-    /// How it is going.
-    state: UpgradeProgressState,
-    /// Where in the command it is: `pull`, `compose`, `verify`, `start`. Free text on purpose — it
-    /// is shown as a detail, never keyed on, so a site updater may add a step without this core
-    /// needing a name for it.
-    step: String,
-    /// A sentence for the operator, written at the site.
-    message: String,
-}
-
-/// Which half of an upgrade a site is in, as this API reports it.
-///
-/// An enum rather than a string because **the WebUI builds a `t()` key from it**
-/// (`pollers.upgradeStep.<command>`), which is the shape `extensibility.md` §4 is about: a raw
-/// string gives a union nothing iterates, so a new variant reaches the operator as a raw key with
-/// EN/JA parity still passing. `web/src/i18nEnumKeys.test.ts` carries its row.
-#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum UpgradeProgressCommand {
-    /// Fetching the image. The poller keeps polling throughout.
-    Prefetch,
-    /// Recreating the container. This is the outage.
-    Apply,
-    /// Something this core has no name for — an updater newer than it.
-    Other,
-}
-
-/// How the half described by [`PollerUpgradeProgress`] is going.
-#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub(super) enum UpgradeProgressState {
-    /// Still going. **The only one the page draws a badge for**: a finished report is what the
-    /// version column already answers, and leaving it up reads as work still in flight.
-    Running,
-    /// Finished, and did what it said.
-    Succeeded,
-    /// Finished, and did not.
-    Failed,
-    /// Unrecognised — neither treated as done nor waited on.
-    Unknown,
-}
-
-impl From<&yagra_bus::UpgradeReport> for PollerUpgradeProgress {
-    fn from(r: &yagra_bus::UpgradeReport) -> Self {
-        use yagra_bus::{UpgradeReportCommand as C, UpgradeReportState as S};
-        Self {
-            command: match r.command {
-                C::Prefetch => UpgradeProgressCommand::Prefetch,
-                C::Apply => UpgradeProgressCommand::Apply,
-                C::Other => UpgradeProgressCommand::Other,
-            },
-            state: match r.state {
-                S::Running => UpgradeProgressState::Running,
-                S::Succeeded => UpgradeProgressState::Succeeded,
-                S::Failed => UpgradeProgressState::Failed,
-                S::Unknown => UpgradeProgressState::Unknown,
-            },
-            step: r.step.clone(),
-            message: r.message.clone(),
-        }
-    }
 }
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,

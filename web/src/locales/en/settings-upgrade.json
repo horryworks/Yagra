@@ -110,7 +110,8 @@
       "confirmDowngrade_other": "{{count}} pollers are ahead of this core and are moved back to it: {{names}}. A poller holds no state, so this costs each one a restart.",
       "confirm": "Bring them across",
       "started": "Started. Each site pulls the image first and is recreated only once it has it, so this list can take several minutes to shrink.",
-      "failed": "Could not start the poller upgrade."
+      "failed": "Could not start the poller upgrade.",
+      "failedAt": "stuck at {{step}}"
     },
     "confirmSplit": "{{withCore}} poller upgrades with this deployment; {{count}} does not and stays on its current version: {{names}}",
     "confirmSplit_other": "{{withCore}} pollers upgrade with this deployment; {{count}} do not and stay on their current version: {{names}}"
