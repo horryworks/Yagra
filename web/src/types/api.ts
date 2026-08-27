@@ -60,6 +60,10 @@ const schemaEnumPins: {
   ForwardDestKind: AssertEqual<ForwardDestKind, components['schemas']['DestKind']>;
   ForwardFilterMode: AssertEqual<ForwardFilterMode, components['schemas']['FilterMode']>;
   NodeKind: AssertEqual<NodeKind, components['schemas']['NodeKind']>;
+  UpgradeProgressCommand: AssertEqual<
+    UpgradeProgressCommand,
+    components['schemas']['UpgradeProgressCommand']
+  >;
   ReportRunState: AssertEqual<ReportRunState, components['schemas']['ReportRunState']>;
   ReportTrigger: AssertEqual<ReportTrigger, components['schemas']['ReportRunTrigger']>;
   Cadence: AssertEqual<Cadence, components['schemas']['Cadence']>;
@@ -93,6 +97,7 @@ const schemaEnumPins: {
   ForwardDestKind: true,
   ForwardFilterMode: true,
   NodeKind: true,
+  UpgradeProgressCommand: true,
   ReportRunState: true,
   ReportTrigger: true,
   Cadence: true,
@@ -347,6 +352,16 @@ export const TOKEN_SURFACES = ['mcp', 'rest'] as const;
 
 /** An auth surface (snake_case). Pinned to `schemas.TokenSurface`. */
 export type TokenSurface = (typeof TOKEN_SURFACES)[number];
+
+/** Which half of an upgrade a site is in, as the Pollers page labels it (ADR-051 Inc.4).
+ *
+ *  An `as const` array rather than the bare union, because the badge builds its `t()` key from the
+ *  value: a union alone is not iterable at runtime, so a new variant would reach the operator as a
+ *  raw key with EN/JA parity still green (`extensibility.md` §4). `i18nEnumKeys.test.ts` walks it. */
+export const UPGRADE_PROGRESS_COMMANDS = ['prefetch', 'apply', 'other'] as const;
+
+/** One half of an upgrade. Pinned to `schemas.UpgradeProgressCommand` in the table at the top. */
+export type UpgradeProgressCommand = (typeof UPGRADE_PROGRESS_COMMANDS)[number];
 
 /** Create payload for an API token. `scope` is omitted for global (`"All"`) visibility — the only
  *  scope either surface accepts today. */
@@ -889,6 +904,8 @@ export type CompatFloor = components['schemas']['CompatFloor'];
 
 /** The accepted upgrade run (`POST /api/v1/system/upgrade`). */
 export type UpgradeRunAccepted = components['schemas']['RunAccepted'];
+/** What a press of "bring the pollers up to this build" set in motion (ADR-051 Inc.4). */
+export type AlignPollersAccepted = components['schemas']['AlignAccepted'];
 
 // ── Host self-observability (Yagra monitoring its own core + pollers) ──────────
 

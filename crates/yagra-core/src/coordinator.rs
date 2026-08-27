@@ -130,6 +130,10 @@ struct PollerEntry {
     /// Capabilities its build advertises, e.g. `raw-capture` (ADR-034). Empty from an N-1 poller,
     /// which is exactly what lets the Forwarding page say "this poller cannot do byte-exact yet".
     caps: Vec<String>,
+    /// What its site updater last reported about an upgrade (ADR-051 Inc.4). `None` from a
+    /// poller with no site updater and from any N-1 build. Read by `poller_upgrade` to start
+    /// an apply the moment the image is local rather than sleeping out the prefetch budget.
+    upgrade: Option<yagra_bus::UpgradeReport>,
     /// When core last wrote this poller to the durable PG inventory (throttle bookkeeping).
     last_upserted: Option<Instant>,
 }
@@ -177,6 +181,9 @@ pub struct PollerView {
     pub listeners: Vec<String>,
     /// Capabilities its build advertises (empty from an N-1 poller).
     pub caps: Vec<String>,
+    /// What its site updater last reported about an upgrade (ADR-051 Inc.4); `None` when it
+    /// has none, has never been asked, or predates the field.
+    pub upgrade: Option<yagra_bus::UpgradeReport>,
 }
 
 /// Live poller registry + working-set publisher (ADR-009/020).
@@ -306,6 +313,7 @@ impl Coordinator {
                     host: None,
                     listeners: Vec::new(),
                     caps: Vec::new(),
+                    upgrade: None,
                     last_upserted: None,
                 });
             if known {
@@ -343,6 +351,7 @@ impl Coordinator {
             entry.results_total = hb.results_total;
             entry.listeners.clone_from(&hb.listeners);
             entry.caps.clone_from(&hb.caps);
+            entry.upgrade.clone_from(&hb.upgrade);
             if hb.host.is_some() {
                 entry.host = hb.host.clone(); // keep the last known sample if a beat omits it
             }
@@ -453,6 +462,7 @@ impl Coordinator {
                     host: None,
                     listeners: Vec::new(),
                     caps: Vec::new(),
+                    upgrade: None,
                     last_upserted: None,
                 });
             entry.needs_snapshot = true;
@@ -844,6 +854,7 @@ impl Coordinator {
                 host: e.host.clone(),
                 listeners: e.listeners.clone(),
                 caps: e.caps.clone(),
+                upgrade: e.upgrade.clone(),
             })
             .collect();
         views.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1105,6 +1116,7 @@ mod tests {
             host: None,
             leaving: false,
             mgmt_addrs: Vec::new(),
+            upgrade: None,
         }
     }
 

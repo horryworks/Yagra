@@ -47,6 +47,7 @@ use crate::upgrade::MAINTENANCE_WINDOW_SECS;
     get_upgrade,
     apply_upgrade,
     check_upgrades,
+    align_pollers,
     upload_bundle,
     set_upgrade_enabled
 ))]
@@ -60,6 +61,7 @@ pub(super) fn routes() -> Router<ApiState> {
             get(get_upgrade).post(apply_upgrade),
         )
         .route("/api/v1/system/upgrade/check", post(check_upgrades))
+        .route("/api/v1/system/upgrade/pollers", post(align_pollers))
         .route(
             "/api/v1/system/upgrade/enabled",
             axum::routing::put(set_upgrade_enabled),
@@ -212,6 +214,17 @@ pub(crate) struct UpgradeStatusResponse {
     /// core cannot tell a co-located poller from a remote one on its own, and an invented answer
     /// would read as fact.
     pollers: Option<crate::upgrade::PollerUpgradePlan>,
+    /// Pollers that can replace themselves and are not on `current.core_version` — what
+    /// `POST /api/v1/system/upgrade/pollers` would act on right now (ADR-051 Inc.4).
+    ///
+    /// **Not derived from `pollers`, and that is the point.** That plan is `null` until the central
+    /// updater has named its own compose project, while this list only needs the live registry and
+    /// core's own version. A deployment with no central updater at all still has remote sites worth
+    /// aligning, and the button that does it has to be renderable there.
+    ///
+    /// Empty means aligned — unlike `pollers`, there is no third state here, because "nobody asked"
+    /// cannot arise: core always knows its own version and always has a registry.
+    poller_skew: Vec<crate::upgrade::PollerLag>,
 }
 
 /// A request to move this deployment to a particular release.
@@ -276,6 +289,7 @@ pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::Po
         .map(|v| crate::upgrade::PollerBuild {
             self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
             version: (!v.version.is_empty()).then_some(v.version),
+            pool: v.pool,
             id: v.id,
         })
         .collect()
@@ -344,6 +358,7 @@ pub(crate) async fn upgrade_status(
             }),
         ),
         pollers: plan,
+        poller_skew: crate::upgrade::pollers_off_version(fleet, p.core_version),
         schema,
         last_run: upgrade.last_run(),
     })
@@ -428,6 +443,123 @@ async fn check_upgrades(_auth: UpgradeCheck, upgrade: Upgrade) -> ApiResult<Stat
             )
         })?;
     Ok(StatusCode::ACCEPTED)
+}
+
+/// What an align request set in motion.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub(crate) struct AlignAccepted {
+    /// Correlation id, shared with every site's own audit line for this operation.
+    id: String,
+    /// The release every target is being moved to — this core's own build.
+    target_tag: String,
+    /// The pollers commands were published for, in the order the queues will take them.
+    pollers: Vec<crate::upgrade::PollerLag>,
+    /// Pools that will have no live poller for the length of one recreate. Named so an operator
+    /// reads it before the alert does; not a refusal (ADR-051 decision 13).
+    dark_pools: Vec<String>,
+}
+
+/// Bring every self-upgrading poller onto this core's build.
+///
+/// The half of ADR-051 that was missing: commands went out only as the tail of core's own upgrade,
+/// so a site stood up afterwards — or one that failed and was fixed, or one that only enabled its
+/// updater today — stayed on its old build until the *next* release. This is the same convergence,
+/// with an operator as its trigger instead of a finished run.
+///
+/// **core is not touched.** No image is pulled here, no container of this deployment restarts, and
+/// no maintenance window opens: the work happens at the sites, one poller at a time per pool, and
+/// `pool_coverage` is what would notice if a pool went quiet. That is also why this route does not
+/// take the [`Upgrade`] extractor — a deployment with no central updater at all can still align its
+/// remote sites.
+///
+/// ⚠️ **A poller ahead of this core is moved back.** That is the point rather than an oversight:
+/// N/N-1 promises new-core-with-old-poller and says nothing about the reverse (ADR-009), so a
+/// poller ahead of core is the unsupported skew. Pollers hold no state, so it costs a recreate.
+#[utoipa::path(
+    post, path = "/api/v1/system/upgrade/pollers", tag = "system",
+    responses(
+        (status = 202, description = "Accepted; the pollers are converging, one at a time per pool", body = AlignAccepted),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks ManageSystem", body = super::error::ErrorBody),
+        (status = 409, description = "A poller convergence is already running (`convergence_in_flight`), or every poller is already on this build (`pollers_aligned`)", body = super::error::ErrorBody),
+        (status = 503, description = "This core is not the leader, or this deployment has no bus (`bus_unavailable`)", body = super::error::ErrorBody),
+    ),
+)]
+async fn align_pollers(
+    _guard: RequireManageSystem,
+    _leader: Leader,
+    admin: Admin,
+    caller: Option<Caller>,
+    State(st): State<ApiState>,
+) -> ApiResult<(StatusCode, Json<AlignAccepted>)> {
+    let bus = st.upgrade_bus.clone().ok_or_else(|| {
+        ApiError::unavailable(
+            "bus_unavailable",
+            "this deployment has no bus, so no poller can be reached",
+        )
+    })?;
+    let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let fleet = poller_builds(&admin);
+    let behind = crate::upgrade::pollers_off_version(&fleet, env!("CARGO_PKG_VERSION"));
+    if behind.is_empty() {
+        // A 409 rather than an empty 202, because "nothing to do" and "done" are answers a page
+        // must render differently — and because a 202 here would leave the operator watching for a
+        // convergence that never started.
+        return Err(ApiError::conflict(
+            "pollers_aligned",
+            "every poller that can replace itself is already on this build",
+        ));
+    }
+    // One lock with the post-upgrade convergence (ADR-051 Inc.4 decision 17). Held by the spawned
+    // task, so it is released when that task ends however it ends.
+    let lock = crate::poller_upgrade::try_begin().ok_or_else(|| {
+        ApiError::conflict(
+            "convergence_in_flight",
+            "a poller upgrade is already running; wait for it to finish",
+        )
+    })?;
+    // Over the pollers this operation actually moves, not over every cap-holder: a single-poller
+    // site already on the target version is not touched and must not be named as going dark.
+    let dark_pools = crate::upgrade::dark_pools_when_aligning(&fleet, &behind);
+    let now = std::time::Instant::now();
+    let targets: Vec<crate::poller_upgrade::Target> = admin
+        .coordinator
+        .poller_views(now)
+        .into_iter()
+        .filter(|v| behind.iter().any(|b| b.id == v.id))
+        .map(|v| crate::poller_upgrade::Target {
+            id: v.id,
+            pool: v.pool,
+            version: v.version,
+            incarnation: v.incarnation,
+        })
+        .collect();
+    let id = crate::upgrade::new_run_id();
+    let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
+    let accepted = AlignAccepted {
+        id: id.clone(),
+        target_tag: tag.clone(),
+        pollers: behind,
+        dark_pools,
+    };
+    let run = crate::poller_upgrade::Run {
+        bus,
+        coordinator: admin.coordinator.clone(),
+        audit: admin.audit.clone(),
+        tag,
+        run_id: id,
+        requested_by: by,
+    };
+    // Detached from the request on purpose: a convergence outlives any sane HTTP timeout — the
+    // prefetch budget alone is 15 minutes. Plain `tokio::spawn`, the same shape an analysis job and
+    // a report run take when a handler starts them, and for the same reason: there is no useful
+    // shutdown behaviour to attach. Killed mid-run, the sites already reached are on the new build
+    // and the rest are on the old one, which is exactly where a failed convergence leaves them
+    // anyway (decision 9). The lock moves into the task, so it is released however the task ends.
+    tokio::spawn(async move {
+        crate::poller_upgrade::converge(run, targets, lock).await;
+    });
+    Ok((StatusCode::ACCEPTED, Json(accepted)))
 }
 
 /// Where an uploaded archive is going.

@@ -18174,6 +18174,68 @@
         }
       }
     },
+    "/api/v1/system/upgrade/pollers": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "Bring every self-upgrading poller onto this core's build.",
+        "description": "The half of ADR-051 that was missing: commands went out only as the tail of core's own upgrade,\nso a site stood up afterwards — or one that failed and was fixed, or one that only enabled its\nupdater today — stayed on its old build until the *next* release. This is the same convergence,\nwith an operator as its trigger instead of a finished run.\n\n**core is not touched.** No image is pulled here, no container of this deployment restarts, and\nno maintenance window opens: the work happens at the sites, one poller at a time per pool, and\n`pool_coverage` is what would notice if a pool went quiet. That is also why this route does not\ntake the [`Upgrade`] extractor — a deployment with no central updater at all can still align its\nremote sites.\n\n⚠️ **A poller ahead of this core is moved back.** That is the point rather than an oversight:\nN/N-1 promises new-core-with-old-poller and says nothing about the reverse (ADR-009), so a\npoller ahead of core is the unsupported skew. Pollers hold no state, so it costs a recreate.",
+        "operationId": "align_pollers",
+        "responses": {
+          "202": {
+            "description": "Accepted; the pollers are converging, one at a time per pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlignAccepted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks ManageSystem",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A poller convergence is already running (`convergence_in_flight`), or every poller is already on this build (`pollers_aligned`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This core is not the leader, or this deployment has no bus (`bus_unavailable`)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/thresholds": {
       "get": {
         "tags": [
@@ -20100,6 +20162,40 @@
           },
           "state": {
             "$ref": "#/components/schemas/NodeState"
+          }
+        }
+      },
+      "AlignAccepted": {
+        "type": "object",
+        "description": "What an align request set in motion.",
+        "required": [
+          "id",
+          "target_tag",
+          "pollers",
+          "dark_pools"
+        ],
+        "properties": {
+          "dark_pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pools that will have no live poller for the length of one recreate. Named so an operator\nreads it before the alert does; not a refusal (ADR-051 decision 13)."
+          },
+          "id": {
+            "type": "string",
+            "description": "Correlation id, shared with every site's own audit line for this operation."
+          },
+          "pollers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PollerLag"
+            },
+            "description": "The pollers commands were published for, in the order the queues will take them."
+          },
+          "target_tag": {
+            "type": "string",
+            "description": "The release every target is being moved to — this core's own build."
           }
         }
       },
@@ -28411,6 +28507,17 @@
             ],
             "description": "When its token was issued, RFC 3339. `null` when it has none."
           },
+          "upgrade": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PollerUpgradeProgress",
+                "description": "What its site updater last reported about an upgrade (ADR-051 Inc.4); `null` when it has no\nupdater, has never been asked, or predates the field.\n\nThis is the visible half of decision 18: a WAN pull is minutes, so without it the operator\nwho pressed \"bring them to this build\" watches an unchanged screen and cannot tell a site\nthat is working from one that is stuck."
+              }
+            ]
+          },
           "version": {
             "type": [
               "string",
@@ -28537,6 +28644,13 @@
             "format": "int32",
             "description": "The bus port at that address. Defaults to 4222.",
             "minimum": 0
+          },
+          "self_upgrade": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether this site should upgrade itself when the deployment does (ADR-051 Inc.4).\n\n**Defaults to `true`**, which is why it is an `Option` rather than a plain `bool`: `false`\nand \"the caller said nothing\" have to be told apart, and `#[serde(default)]` on a `bool`\ngives both of them `false`. An older client that has never heard of this field therefore\ngets the same archive a current one does with the box ticked.\n\nIt becomes a `COMPOSE_PROFILES` line in the generated `.env`, which is the only file at the\nsite that an upgrade does not replace — so the answer given here survives the site's own\nupgrades, and can be changed there without waiting for a new bundle."
           }
         }
       },
@@ -28545,9 +28659,17 @@
         "description": "Who an upgrade carries along, and who it leaves behind.\n\n`null` on the response rather than an empty plan when the updater has not said which pollers\nshare its compose project: \"no poller is left behind\" and \"nobody asked\" are different answers,\nand only one of them is safe to render as a reassuring zero (the lesson ADR-045 paid for).",
         "required": [
           "with_core",
-          "manual"
+          "manual",
+          "dark_pools"
         ],
         "properties": {
+          "dark_pools": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Pools that lose monitoring for the length of one recreate, **while core is up**.\n\nA pool with two or more live pollers never appears here: the rolling upgrade takes one out at\na time, so the survivors carry its nodes (`leaving` hands them over in about a second). A\npool with a single remote poller has nobody to hand to, and its whole budget is\n`pool_coverage`'s 300-second debounce — which no maintenance window silences, deliberately.\n\n⚠️ **A pool whose only poller is co-located is deliberately absent**, even though it does go\ndown. It goes down *with core*, so it is not a fact that distinguishes one press from\nanother — and listing it would fire on the commonest deployment there is, which is how a\nwarning stops being read."
+          },
           "manual": {
             "type": "array",
             "items": {
@@ -28561,6 +28683,34 @@
               "type": "string"
             },
             "description": "Pollers this operation replaces: the ones in core's own compose project, plus any that\nadvertise `CAP_SELF_UPGRADE`."
+          }
+        }
+      },
+      "PollerUpgradeProgress": {
+        "type": "object",
+        "description": "A site updater's last word about an upgrade, as this API reports it.\n\nA DTO rather than `yagra_bus::UpgradeReport` served straight through, for two reasons that point\nthe same way. `yagra-bus` has no `utoipa` dependency and should not grow one to describe a\nscreen; and the wire type carries the site's `run_id`, which is core's internal correlation\nhandle and nothing a page can do anything with.\n\n`message` is **site-authored text**. It is rendered as a string and never used as a key.",
+        "required": [
+          "command",
+          "state",
+          "step",
+          "message"
+        ],
+        "properties": {
+          "command": {
+            "$ref": "#/components/schemas/UpgradeProgressCommand",
+            "description": "Which half of the upgrade the site is in."
+          },
+          "message": {
+            "type": "string",
+            "description": "A sentence for the operator, written at the site."
+          },
+          "state": {
+            "$ref": "#/components/schemas/UpgradeProgressState",
+            "description": "How it is going."
+          },
+          "step": {
+            "type": "string",
+            "description": "Where in the command it is: `pull`, `compose`, `verify`, `start`. Free text on purpose — it\nis shown as a detail, never keyed on, so a site updater may add a step without this core\nneeding a name for it."
           }
         }
       },
@@ -32096,6 +32246,25 @@
           }
         }
       },
+      "UpgradeProgressCommand": {
+        "type": "string",
+        "description": "Which half of an upgrade a site is in, as this API reports it.\n\nAn enum rather than a string because **the WebUI builds a `t()` key from it**\n(`pollers.upgradeStep.<command>`), which is the shape `extensibility.md` §4 is about: a raw\nstring gives a union nothing iterates, so a new variant reaches the operator as a raw key with\nEN/JA parity still passing. `web/src/i18nEnumKeys.test.ts` carries its row.",
+        "enum": [
+          "prefetch",
+          "apply",
+          "other"
+        ]
+      },
+      "UpgradeProgressState": {
+        "type": "string",
+        "description": "How the half described by [`PollerUpgradeProgress`] is going.",
+        "enum": [
+          "running",
+          "succeeded",
+          "failed",
+          "unknown"
+        ]
+      },
       "UpgradeStatusResponse": {
         "type": "object",
         "description": "The state of the upgrade mechanism and of this deployment's schema.",
@@ -32105,7 +32274,8 @@
           "updater",
           "current",
           "schema",
-          "offers"
+          "offers",
+          "poller_skew"
         ],
         "properties": {
           "available": {
@@ -32144,6 +32314,13 @@
               "$ref": "#/components/schemas/ReleaseOffer"
             },
             "description": "The moves this deployment could make, each with its direction and whether it is allowed.\nExcludes the running version. Empty when the updater has found nothing."
+          },
+          "poller_skew": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PollerLag"
+            },
+            "description": "Pollers that can replace themselves and are not on `current.core_version` — what\n`POST /api/v1/system/upgrade/pollers` would act on right now (ADR-051 Inc.4).\n\n**Not derived from `pollers`, and that is the point.** That plan is `null` until the central\nupdater has named its own compose project, while this list only needs the live registry and\ncore's own version. A deployment with no central updater at all still has remote sites worth\naligning, and the button that does it has to be renderable there.\n\nEmpty means aligned — unlike `pollers`, there is no third state here, because \"nobody asked\"\ncannot arise: core always knows its own version and always has a registry."
           },
           "pollers": {
             "oneOf": [

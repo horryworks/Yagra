@@ -51,6 +51,7 @@ import {
   METRIC_STATUSES,
   METRIC_DIMENSIONS,
   NODE_KINDS,
+  UPGRADE_PROGRESS_COMMANDS,
 } from './types/api';
 import { NODE_KIND_SPEC } from './lib/nodeKind';
 import {
@@ -558,6 +559,18 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     const locales = { en: enSettingsTokens, ja: jaSettingsTokens };
     expectKeys('token surface', locales, 'surface.', TOKEN_SURFACES);
     expectKeys('token surface hint', locales, 'surfaceHint.', TOKEN_SURFACES);
+  });
+
+  it('every upgrade half has a badge label (system:pollers.upgradeStep.*)', () => {
+    // The badge is the only thing on screen while a site pulls an image over a WAN link, which is
+    // minutes (ADR-051 Inc.4). A variant with no strings would put a raw key there at the one
+    // moment an operator is checking whether the upgrade they started is moving at all.
+    expectKeys(
+      'upgrade progress',
+      { en: enSystem, ja: jaSystem },
+      'pollers.upgradeStep.',
+      UPGRADE_PROGRESS_COMMANDS,
+    );
   });
 
   it('every IdP product has a name and setup guidance (settings-auth:idp.*)', () => {

@@ -179,3 +179,14 @@
   outline: none;
   border-bottom: 1px solid var(--accent-color);
 }
+
+/* Checkbox row in the issue-token dialog (ADR-051 Inc.4). Same shape as `.ai-check`, local because
+   a checkbox row is three declarations and a shared class for it would be a fifth surface to keep
+   in step for no behaviour. */
+.poller-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-secondary);
+  cursor: pointer;
+}

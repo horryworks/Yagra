@@ -1527,6 +1527,15 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ),
     (
         "POST",
+        "/api/v1/system/upgrade/pollers",
+        Global(
+            "moves every self-upgrading poller in the fleet onto this core's build; a poller pool \
+             is not a node group, and a scoped operator has no slice of it to be given",
+        ),
+        NO_MCP_WRITE,
+    ),
+    (
+        "POST",
         "/api/v1/system/upgrade/bundle",
         Global("installs an uploaded release across every container in the deployment"),
         NO_MCP_WRITE,

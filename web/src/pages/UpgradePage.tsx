@@ -60,6 +60,18 @@ const POLL_CEILING_MS = 15 * 60_000;
  *  sidecar's request beat is five seconds and two `wget`s follow it. */
 const CHECK_TIMEOUT_MS = 45_000;
 
+/** How often to re-read the fleet while pollers converge (ADR-051 Inc.4).
+ *
+ *  Slower than the run poll, because nothing here is being recreated underneath this browser and
+ *  the thing being watched moves on the scale of a site pulling an image. The progress *is* the
+ *  skew list shrinking, so a beat that outpaces it just re-renders the same rows. */
+const ALIGN_POLL_MS = 5_000;
+
+/** Stop watching a convergence. One site's prefetch budget is 15 minutes and its return timeout is
+ *  10, so a pool of a few sites can legitimately run past half an hour; past this the page returns
+ *  to reporting whatever the fleet currently says, which is the honest answer either way. */
+const ALIGN_CEILING_MS = 45 * 60_000;
+
 /** A poll has to fail for this long during a run before the page says the connection is gone.
  *  One missed request is normal; a run of them is core being recreated. */
 const STALE_AFTER_MS = 6_000;
@@ -185,6 +197,19 @@ export function UpgradePage() {
   const [stale, setStale] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
+  // Aligning the pollers (ADR-051 Inc.4). Its own busy flag and its own poll: it starts nothing in
+  // this deployment, so it must not borrow the run machinery above, which exists to survive core
+  // restarting underneath it.
+  const [aligning, setAligning] = useState(false);
+  const [alignError, setAlignError] = useState<string | null>(null);
+  const [aligned, setAligned] = useState(false);
+  const alignWatch = useRef<number | null>(null);
+  useEffect(
+    () => () => {
+      if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
+    },
+    [],
+  );
   // Sticky: once a run starts, a failed poll means core is restarting — which is the operation
   // working, not an error. Without this the page would flip to "could not read" mid-upgrade.
   const everSeen = useRef(false);
@@ -238,6 +263,37 @@ export function UpgradePage() {
     }, POLL_RUNNING_MS);
     return () => window.clearInterval(h);
   }, [polling, load]);
+
+  /** Bring every self-upgrading poller onto this core's build (ADR-051 Inc.4).
+   *
+   *  Nothing in this deployment restarts, so unlike `apply` this does not arm the run poll or set
+   *  `pending` — it watches the fleet instead, and the progress it shows is `poller_skew` shrinking
+   *  as sites come back. `aligned` is the "you pressed it and it took" acknowledgement, which the
+   *  skew list alone cannot give: a pool's first site can be minutes into a prefetch before
+   *  anything on this page changes. */
+  const alignPollers = async () => {
+    setAligning(true);
+    setAlignError(null);
+    setAligned(false);
+    try {
+      await api.alignPollers();
+      setAligned(true);
+      if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
+      const started = Date.now();
+      alignWatch.current = window.setInterval(() => {
+        if (Date.now() - started > ALIGN_CEILING_MS) {
+          if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
+          alignWatch.current = null;
+          return;
+        }
+        void load();
+      }, ALIGN_POLL_MS);
+    } catch (e) {
+      setAlignError(errMsg(e, t('pollers.align.failed')));
+    } finally {
+      setAligning(false);
+    }
+  };
 
   const apply = async (tag: string) => {
     setSubmitting(true);
@@ -499,6 +555,56 @@ export function UpgradePage() {
               <p className="upgrade-hint muted">{t('pollers.manualHint')}</p>
             </>
           )}
+          {/* Said before the press, because the alert it predicts is one no maintenance window
+              silences (ADR-051 decision 13). Not a refusal: a one-poller site is a normal
+              deployment, and refusing would mean it is never upgraded at all. */}
+          {plan.dark_pools.length > 0 && (
+            <p className="upgrade-note">
+              {t('pollers.darkPools', {
+                count: plan.dark_pools.length,
+                pools: plan.dark_pools.join(', '),
+              })}
+            </p>
+          )}
+        </Card>
+      )}
+
+      {/* Aligning the pollers (ADR-051 Inc.4). Its own card, and deliberately not folded into the
+          plan above: that one is `null` until the central updater names its own compose project,
+          while this needs nothing but the live registry — a deployment with no central updater at
+          all still has remote sites worth bringing up to date.
+
+          Absent when the fleet is aligned. A disabled button with a tooltip would be the other
+          option and is the one ADR-056 forbids: there is nothing to do, so there is nothing to
+          draw. */}
+      {status.poller_skew.length > 0 && (
+        <Card title={t('pollers.align.heading')}>
+          <p className="upgrade-note">
+            {t('pollers.align.behind', {
+              count: status.poller_skew.length,
+              version: status.current.core_version,
+            })}
+          </p>
+          <ul className="upgrade-releases">
+            {status.poller_skew.map((p) => (
+              <li key={p.id} className="upgrade-release">
+                <span className="mono">{p.id}</span>
+                <span className="muted">{p.version ?? t('build.unknown')}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="upgrade-hint muted">{t('pollers.align.hint')}</p>
+          {/* No `useCan` here, and that is the same answer every other button on this page gives:
+              the whole screen is refused without `manage_system` (the `LoadBlockNotice` above), so
+              a caller who can see this card can press this. Adding a hook would be a second,
+              weaker copy of a check the server already made. */}
+          <div className="upgrade-checked">
+            <Button variant="outline" onClick={() => void alignPollers()} disabled={aligning}>
+              {t('pollers.align.action', { version: status.current.core_version })}
+            </Button>
+          </div>
+          {aligned && <p className="upgrade-hint muted">{t('pollers.align.started')}</p>}
+          {alignError && <p className="form-error">{alignError}</p>}
         </Card>
       )}
 

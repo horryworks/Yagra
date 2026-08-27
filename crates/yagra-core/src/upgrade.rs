@@ -261,6 +261,10 @@ pub enum OfferBlock {
 pub struct PollerBuild {
     /// Sanitized poller id.
     pub id: String,
+    /// Pool it serves. Carried because a pool is the unit of coverage: the rolling upgrade takes one
+    /// poller out at a time *per pool*, so whether that costs monitoring is a question about the
+    /// pool and never about the poller (ADR-051 Inc.4 decision 19).
+    pub pool: String,
     /// Version from its latest heartbeat, when it has reported one.
     pub version: Option<String>,
     /// It advertises `CAP_SELF_UPGRADE` — a site updater is deployed beside it and core can hand it
@@ -289,6 +293,18 @@ pub struct PollerUpgradePlan {
     pub with_core: Vec<String>,
     /// Pollers that stay on their current build until someone upgrades them by hand.
     pub manual: Vec<PollerLag>,
+    /// Pools that lose monitoring for the length of one recreate, **while core is up**.
+    ///
+    /// A pool with two or more live pollers never appears here: the rolling upgrade takes one out at
+    /// a time, so the survivors carry its nodes (`leaving` hands them over in about a second). A
+    /// pool with a single remote poller has nobody to hand to, and its whole budget is
+    /// `pool_coverage`'s 300-second debounce — which no maintenance window silences, deliberately.
+    ///
+    /// ⚠️ **A pool whose only poller is co-located is deliberately absent**, even though it does go
+    /// down. It goes down *with core*, so it is not a fact that distinguishes one press from
+    /// another — and listing it would fire on the commonest deployment there is, which is how a
+    /// warning stops being read.
+    pub dark_pools: Vec<String>,
 }
 
 /// Split the fleet into what an upgrade carries and what it leaves behind.
@@ -311,7 +327,90 @@ pub fn poller_upgrade_plan(pollers: &[PollerBuild], local: &[String]) -> PollerU
             });
         }
     }
-    PollerUpgradePlan { with_core, manual }
+    // The rolling path takes out exactly the cap-holders that are not in core's own project; a
+    // co-located poller goes down with core, which is a different operation on a different page.
+    let moving: Vec<&str> = pollers
+        .iter()
+        .filter(|p| p.self_upgrades && !local.iter().any(|l| l == &p.id))
+        .map(|p| p.id.as_str())
+        .collect();
+    PollerUpgradePlan {
+        with_core,
+        manual,
+        dark_pools: dark_pools(pollers, &moving),
+    }
+}
+
+/// Pools that lose their last live poller while one of `moving` is recreated.
+///
+/// Two sets, and confusing them is how the previous answer was wrong in both directions.
+///
+/// * `moving` decides **which pools are at risk at all** — only a pool something is being taken out
+///   of can go dark. Passing the whole fleet would warn about pools this operation never touches,
+///   which is what the "align the pollers" button would have done for a site already on the target
+///   version.
+/// * `fleet` decides **whether that costs coverage** — the count is every live poller in the pool,
+///   not the moving ones in it. A pool of three where one site can replace itself loses nothing,
+///   because the other two poll throughout, and the version this replaces announced it as dark.
+///
+/// A warning that fires when nothing happens is worse than no warning, because the time it matters
+/// it reads exactly the same.
+fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
+    let mut out: Vec<String> = fleet
+        .iter()
+        .filter(|p| moving.contains(&p.id.as_str()))
+        .filter(|p| fleet.iter().filter(|q| q.pool == p.pool).count() <= 1)
+        .map(|p| p.pool.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The pools `POST /api/v1/system/upgrade/pollers` would leave uncovered, for its confirmation.
+///
+/// Separate from [`poller_upgrade_plan`] because the two act on different sets: that one moves every
+/// cap-holder, this one moves only those off `core_version`. Answering with the plan's list would
+/// name a single-poller site that is already aligned and will not be touched.
+#[must_use]
+pub fn dark_pools_when_aligning(fleet: &[PollerBuild], moving: &[PollerLag]) -> Vec<String> {
+    let ids: Vec<&str> = moving.iter().map(|p| p.id.as_str()).collect();
+    dark_pools(fleet, &ids)
+}
+
+/// Pollers that can replace themselves and are not on `core_version` (ADR-051 Inc.4 decision 17).
+///
+/// The set `POST /api/v1/system/upgrade/pollers` acts on, and the set the button that calls it is
+/// rendered from. Computed straight off the live registry, **not** from [`PollerUpgradePlan`]: that
+/// one is `None` until the central updater has named its own compose project, and a deployment with
+/// no central updater at all still has remote sites worth aligning.
+///
+/// ⚠️ **A poller ahead of core is included, and that is a downgrade.** It is the right answer — the
+/// supported state is one release of skew in the direction N/N-1 promises (new core, old poller),
+/// and a poller ahead of core is the unsupported direction (ADR-009). Pollers hold no state
+/// (decision 7), so moving one back costs a recreate. The confirmation is what must say so, not
+/// this function.
+///
+/// A poller that has never reported a version is excluded: it cannot be judged, and acting on it
+/// would mean recreating a container to find out.
+#[must_use]
+pub fn pollers_off_version(fleet: &[PollerBuild], core_version: &str) -> Vec<PollerLag> {
+    let want = core_version.trim_start_matches('v');
+    let mut out: Vec<PollerLag> = fleet
+        .iter()
+        .filter(|p| p.self_upgrades)
+        .filter(|p| {
+            p.version
+                .as_deref()
+                .is_some_and(|v| v.trim_start_matches('v') != want)
+        })
+        .map(|p| PollerLag {
+            id: p.id.clone(),
+            version: p.version.clone(),
+        })
+        .collect();
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
 }
 
 // Why it is computed here rather than in the WebUI: the comparison is semver — `0.2.10` is newer
@@ -946,6 +1045,15 @@ pub(crate) async fn start(
                     incarnation: v.incarnation,
                 })
                 .collect();
+            // Shares one lock with the "align the pollers" button (ADR-051 Inc.4 decision 17).
+            // Losing it here is not an error: somebody pressed that button while core was coming
+            // back, and their run is already moving the same fleet to the same place.
+            let Some(lock) = crate::poller_upgrade::try_begin() else {
+                tracing::info!(
+                    "a poller convergence is already running; not starting the post-upgrade one"
+                );
+                return;
+            };
             crate::poller_upgrade::converge(
                 crate::poller_upgrade::Run {
                     bus,
@@ -956,6 +1064,7 @@ pub(crate) async fn start(
                     requested_by: run.requested_by.unwrap_or_else(|| "unknown".to_owned()),
                 },
                 targets,
+                lock,
             )
             .await;
         });
@@ -2029,8 +2138,14 @@ mod tests {
     // ── The N-2 gate (ADR-050 decision 8, made real by ADR-051 decision 10) ─────────────────────
 
     fn build(id: &str, version: Option<&str>, self_upgrades: bool) -> PollerBuild {
+        in_pool("default", id, version, self_upgrades)
+    }
+
+    /// The same, when the test is about coverage rather than about versions.
+    fn in_pool(pool: &str, id: &str, version: Option<&str>, self_upgrades: bool) -> PollerBuild {
         PollerBuild {
             id: id.to_owned(),
+            pool: pool.to_owned(),
             version: version.map(str::to_owned),
             self_upgrades,
         }
@@ -2152,6 +2267,82 @@ mod tests {
                     version: None,
                 },
             ]
+        );
+    }
+
+    /// A pool is dark only when the rolling upgrade leaves it with nobody, and "nobody" counts
+    /// *live pollers*, not upgrade targets (ADR-051 Inc.4 decision 19).
+    ///
+    /// The version this replaces asked `queue.len() <= 1` — the number of pollers being upgraded —
+    /// so a three-poller pool where one site could replace itself was reported as going dark while
+    /// two pollers kept polling throughout. Both directions are asserted here: the false positive
+    /// that made the old answer wrong, and the true positive that is the reason to report anything.
+    #[test]
+    fn a_pool_is_dark_only_when_its_last_live_poller_is_the_one_being_replaced() {
+        let fleet = vec![
+            // One site, nobody to hand to — the case the warning exists for.
+            in_pool("tokyo", "edge-tokyo-1", Some("0.2.1"), true),
+            // Three in Osaka, one of which self-upgrades. Two keep polling: not dark.
+            in_pool("osaka", "edge-osaka-1", Some("0.2.1"), true),
+            in_pool("osaka", "edge-osaka-2", Some("0.2.1"), false),
+            in_pool("osaka", "edge-osaka-3", Some("0.2.1"), false),
+            // Two in Nagoya, both self-upgrading. Serial, so one always survives.
+            in_pool("nagoya", "edge-nagoya-1", Some("0.2.1"), true),
+            in_pool("nagoya", "edge-nagoya-2", Some("0.2.1"), true),
+            // A lone co-located poller. It *does* go down — with core — so it is not this
+            // operation's distinguishing fact, and naming it would fire on every deployment.
+            in_pool("default", "local", Some("0.2.2"), false),
+        ];
+        let plan = poller_upgrade_plan(&fleet, &["local".to_owned()]);
+        assert_eq!(plan.dark_pools, vec!["tokyo".to_owned()]);
+    }
+
+    /// A pool whose only poller is co-located stays absent even when it claims the capability.
+    ///
+    /// Split from the case above because it is the one that reverses: `local` wins over
+    /// `self_upgrades`, so the deployment's own poller is never counted as a rolling target.
+    #[test]
+    fn a_lone_co_located_poller_is_not_a_dark_pool_even_if_it_can_self_upgrade() {
+        let fleet = vec![in_pool("default", "local", Some("0.2.2"), true)];
+        assert!(poller_upgrade_plan(&fleet, &["local".to_owned()])
+            .dark_pools
+            .is_empty());
+        // …and with nobody claiming it as local, the same poller is a remote single-poller site.
+        assert_eq!(
+            poller_upgrade_plan(&fleet, &[]).dark_pools,
+            vec!["default".to_owned()]
+        );
+    }
+
+    /// Who the "align the pollers" button acts on (ADR-051 Inc.4 decision 17).
+    ///
+    /// 🚨 The accepting case is first and is the load-bearing one: a filter that returned nothing
+    /// would satisfy every exclusion below while making the button permanently absent — which looks
+    /// exactly like a fleet that is already aligned.
+    #[test]
+    fn aligning_targets_every_self_upgrading_poller_not_on_this_core_version() {
+        let fleet = vec![
+            build("behind", Some("0.3.1"), true),
+            // Ahead of core: still a target, because that skew is the direction the bus does not
+            // promise. Moving it back is a downgrade, and the confirmation says so — not this.
+            build("ahead", Some("0.3.3"), true),
+            build("aligned", Some("0.3.2"), true),
+            // The tag spelling must not decide it; `v0.3.2` and `0.3.2` are one version.
+            build("aligned-tagged", Some("v0.3.2"), true),
+            // No sidecar: core would send a command nothing reads.
+            build("no-updater", Some("0.3.1"), false),
+            // Never reported a version: cannot be judged, so it is not acted on.
+            build("silent", None, true),
+        ];
+        let off = pollers_off_version(&fleet, "0.3.2");
+        let ids: Vec<&str> = off.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, vec!["ahead", "behind"]);
+
+        // The same answer from the release-tag spelling of core's own version.
+        assert_eq!(
+            pollers_off_version(&fleet, "v0.3.2").len(),
+            2,
+            "the `v` is a tag convention and must not change who is targeted"
         );
     }
 

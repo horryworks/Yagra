@@ -854,6 +854,80 @@ pub struct HeartbeatMsg {
     /// both are handled the same way.
     #[serde(default)]
     pub mgmt_addrs: Vec<IpAddr>,
+    /// What this poller's site updater last reported about an upgrade (ADR-051 Inc.4 decision 18).
+    ///
+    /// `None` from a poller with no site updater, from one that has never been asked to upgrade,
+    /// and from any N-1 build. Core matches [`UpgradeReport::run_id`] against its own run, so a
+    /// stale report from a previous upgrade is inert rather than misleading — which is what makes
+    /// it safe to send the last one unconditionally instead of tracking whether it is current.
+    ///
+    /// **A field on the heartbeat rather than a message of its own, for the same reason
+    /// [`HeartbeatMsg::leaving`] is one**: a new subject needs a matching grant in `yagra-authz`
+    /// *and* in the static `poller` account, neither of which is a compile error and each of which
+    /// covers exactly the deployments the other does not. The poller already publishes here.
+    #[serde(default)]
+    pub upgrade: Option<UpgradeReport>,
+}
+
+/// What a site updater is doing, or last did, about an upgrade (ADR-051 Inc.4).
+///
+/// **Deserializes directly from the site's `status.json`**, which is why `run_id` is spelled `id` on
+/// the wire: the poller reads that file, hands the value to the heartbeat, and nothing in between
+/// re-shapes it. One type instead of a private mirror plus a mapping, and the mapping is where a
+/// field silently stops being carried.
+///
+/// Every field defaults and both enums have a catch-all, so an updater newer than this binary is
+/// read as far as it makes sense and no further — never as a failed decode, which would cost the
+/// whole heartbeat rather than one field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpgradeReport {
+    /// The run this describes — core's own upgrade run id, echoed back from the site.
+    #[serde(rename = "id", default)]
+    pub run_id: String,
+    /// Which half of the upgrade it is about.
+    #[serde(default)]
+    pub command: UpgradeReportCommand,
+    /// How that half ended, or that it is still going.
+    #[serde(default)]
+    pub state: UpgradeReportState,
+    /// Where in the command it is (`pull`, `compose`, `verify`), for the page.
+    #[serde(default)]
+    pub step: String,
+    /// A sentence for the operator. Site-authored, so treat it as text and never as a key.
+    #[serde(default)]
+    pub message: String,
+}
+
+/// Which half of an upgrade an [`UpgradeReport`] describes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeReportCommand {
+    /// Fetching the image; the poller keeps polling throughout.
+    Prefetch,
+    /// Recreating the container. This is the outage.
+    Apply,
+    /// Something this build has no name for. **The default**, so a report core cannot classify is
+    /// never mistaken for a prefetch it may act on.
+    #[serde(other)]
+    #[default]
+    Other,
+}
+
+/// How the half described by an [`UpgradeReport`] is going.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeReportState {
+    /// Still going.
+    Running,
+    /// Finished, and did what it said.
+    Succeeded,
+    /// Finished, and did not.
+    Failed,
+    /// Unrecognised. **The default**, and deliberately not `Running`: an unknown state must not be
+    /// something core waits out, and must not be something core treats as done either.
+    #[serde(other)]
+    #[default]
+    Unknown,
 }
 
 /// A poller's request for a fresh full snapshot, published on [`crate::subjects::sync_request`]
@@ -3704,6 +3778,70 @@ mod tests {
         assert!(back.leaving);
     }
 
+    /// The site's `status.json` is read straight into [`UpgradeReport`] (ADR-051 Inc.4).
+    ///
+    /// This is the property that removes a mapping step, so it is the property worth pinning: the
+    /// literal below is the shape `docker-compose.poller.yml`'s updater writes, extra fields and
+    /// all. If the two ever part company, the field core waits on is silently always `None` and the
+    /// prefetch wait quietly goes back to being a fifteen-minute sleep.
+    #[test]
+    fn a_site_status_file_is_an_upgrade_report_verbatim() {
+        let status = r#"{
+            "id": "1a2b3c4d-0000-0000-0000-00000000abcd",
+            "command": "prefetch",
+            "target": "v0.3.3",
+            "state": "succeeded",
+            "step": "pull",
+            "message": "fetched v0.3.3",
+            "started_at": 1786444236,
+            "finished_at": 1786444291
+        }"#;
+        let r: UpgradeReport = serde_json::from_str(status).unwrap();
+        assert_eq!(r.run_id, "1a2b3c4d-0000-0000-0000-00000000abcd");
+        assert_eq!(r.command, UpgradeReportCommand::Prefetch);
+        assert_eq!(r.state, UpgradeReportState::Succeeded);
+        assert_eq!(r.step, "pull");
+
+        // It rides the heartbeat, so it must survive that round trip too.
+        let mut hb: HeartbeatMsg = serde_json::from_str(
+            r#"{"poller_id":"edge-1","pool":"default","incarnation":"00000000-0000-0000-0000-000000000000"}"#,
+        )
+        .unwrap();
+        hb.upgrade = Some(r);
+        let back: HeartbeatMsg =
+            serde_json::from_str(&serde_json::to_string(&hb).unwrap()).unwrap();
+        assert_eq!(back.upgrade, hb.upgrade);
+    }
+
+    /// An updater newer than this binary costs one field, never the whole beat.
+    ///
+    /// 🚨 **Both enums default to their catch-all, and that is the safety property.** `Unknown` must
+    /// not be `Running` (core would wait out a budget for a report it cannot read) and must not be
+    /// `Succeeded` (core would start the outage on a pull that may not have happened). `Other` must
+    /// not be `Prefetch` for the same reason from the other side. An N-1 poller sends no `upgrade`
+    /// at all and must read as a normal beat — a heartbeat that fails to decode is a poller core
+    /// believes is dead.
+    #[test]
+    fn an_upgrade_report_tolerates_missing_and_unknown_fields() {
+        let hb: HeartbeatMsg = serde_json::from_str(
+            r#"{"poller_id":"edge-1","pool":"default","incarnation":"00000000-0000-0000-0000-000000000000"}"#,
+        )
+        .unwrap();
+        assert!(hb.upgrade.is_none(), "an N-1 poller reports nothing here");
+
+        let newer: UpgradeReport =
+            serde_json::from_str(r#"{"id":"x","command":"rollback","state":"paused","extra":1}"#)
+                .unwrap();
+        assert_eq!(newer.command, UpgradeReportCommand::Other);
+        assert_eq!(newer.state, UpgradeReportState::Unknown);
+        assert!(newer.message.is_empty());
+
+        // An empty object is the minimum, and still decodes.
+        let bare: UpgradeReport = serde_json::from_str("{}").unwrap();
+        assert_eq!(bare.state, UpgradeReportState::Unknown);
+        assert!(bare.run_id.is_empty());
+    }
+
     #[test]
     fn poller_upgrade_tolerates_missing_and_unknown_fields() {
         // The mandatory three are what a command means; everything else defaults. `step` defaulting
@@ -4004,6 +4142,7 @@ mod tests {
             caps: vec![CAP_RAW_CAPTURE.to_owned()],
             leaving: false,
             mgmt_addrs: Vec::new(),
+            upgrade: None,
             host: Some(yagra_common::HostSample {
                 cpu_pct: 12.5,
                 mem_used_bytes: 2,

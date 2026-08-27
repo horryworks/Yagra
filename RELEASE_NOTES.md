@@ -10,6 +10,44 @@
 
 ## Unreleased
 
+### New Features
+
+- **Remote-site pollers now upgrade with the deployment.** The site updater that installs a release
+  at a monitored site has shipped commented out since ADR-051, so no remote poller ever advertised
+  `self-upgrade` and a press of Settings ▸ Upgrade silently moved core and the co-located poller
+  only. It now ships as a real service behind the compose profile `self-upgrade`, and the site
+  bundle (Settings ▸ Pollers ▸ "Issue token & download") writes `COMPOSE_PROFILES=self-upgrade` into
+  the generated `.env` — **the checkbox on that dialog is ticked by default**. Untick it, or empty
+  the value in the site's `.env` later, and nothing at that site holds a Docker socket. Change it in
+  `.env` rather than in the composition: an upgrade reinstalls the composition from the release
+  being installed, and never touches `.env`.
+  ⚠️ **Read what this grants before rolling it out.** The sidecar runs as root with the host's
+  Docker socket. It listens on no network, a command carries a version tag and never a repository
+  (so the worst a forged one installs is a published Yagra poller release), and the bus permits a
+  poller to *receive* upgrade commands and never to send one — so no site can act on another. What
+  it does mean is that whoever controls the central deployment can replace the Yagra poller at every
+  site. Existing sites keep their current behaviour until they are handed a re-issued bundle.
+- **A button to bring pollers onto core's build**, at Settings ▸ Upgrade, when any self-upgrading
+  poller is on a different version. Until now commands went out only as the tail of core's own
+  upgrade, so a site stood up afterwards — or one that failed and was fixed, or one that only
+  enabled its updater today — stayed behind until the *next* release. **Nothing in this deployment
+  restarts**: each pool is brought across one poller at a time, so a pool with more than one keeps
+  monitoring throughout. A poller *ahead* of core is moved back to it, because that skew is the
+  direction the bus does not promise.
+
+### Improvements
+
+- **A poller upgrade no longer waits fifteen minutes before it starts.** Core split an upgrade into
+  a prefetch (the site pulls the image, monitoring continues) and an apply (the container is
+  recreated — the outage), but had no way to learn the prefetch had finished, so it slept out the
+  whole budget before the first apply of every pool. Sites now report their updater's progress on
+  the heartbeat, and the apply starts as soon as the image is local. The Pollers page shows
+  `fetching` / `installing` against a site while it works.
+- **"This pool will go dark" is now said before the button is pressed, and said correctly.** The
+  warning counted pollers being upgraded rather than pollers in the pool, so a pool of three where
+  one site could replace itself was announced as losing coverage while two pollers polled
+  throughout. It now names the pools that genuinely have a single poller, on the confirmation.
+
 ## v0.3.2 — per-poller bus credentials finally run, and the co-located poller is back in the inventory
 
 ### Breaking changes

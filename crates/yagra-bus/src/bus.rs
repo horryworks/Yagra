@@ -734,6 +734,7 @@ mod tests {
             host: None,
             leaving: false,
             mgmt_addrs: Vec::new(),
+            upgrade: None,
         };
         SyncBus::publish_heartbeat(&bus, hb.clone()).await.unwrap();
 

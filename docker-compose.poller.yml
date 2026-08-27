@@ -29,6 +29,15 @@
 #   YAGRA_POLLER_ID   — stable identity for this poller (e.g. edge-tokyo-1)
 #   YAGRA_POLLER_POOL — pool this poller serves; nodes are assigned to pollers by pool
 #
+# ── One optional variable decides whether this poller upgrades itself ───────────────
+# COMPOSE_PROFILES=self-upgrade  turns on the `yagra-poller-updater` service at the
+# bottom of this file, so a single press of Settings ▸ Upgrade centrally replaces this
+# poller too (ADR-051). The site bundle writes it for you; the checkbox on the issuing
+# dialog is ON by default. Empty the value to switch it off — and switch it off THERE,
+# in `.env`, not by editing this file: an apply reinstalls this file from the target
+# image, so an edit here lasts until the next upgrade. Read the block beside the service
+# for what enabling it grants (short version: a container here holds the Docker socket).
+#
 # Pin/rollback the image with YAGRA_IMAGE_TAG; point it at a mirror of your own with
 # YAGRA_IMAGE_REPO. The defaults are `latest` from ghcr.io/horryworks — the latest
 # stable release, since remote pollers only ever run published releases.
@@ -122,12 +131,14 @@ services:
       YAGRA_STORE_FORWARD_DISK_MAX_MB: ${YAGRA_STORE_FORWARD_DISK_MAX_MB:-512}
       YAGRA_STORE_FORWARD_MAX_AGE_SECS: ${YAGRA_STORE_FORWARD_MAX_AGE_SECS:-86400}
       YAGRA_STORE_FORWARD_DISK_FREE_FLOOR_MB: ${YAGRA_STORE_FORWARD_DISK_FREE_FLOOR_MB:-1024}
-      # ── Self-upgrade (ADR-051) ────────────────────────────────────────────────────
-      # Uncomment together with the `yagra-poller-updater` service and the `upgradedata`
-      # volume below. With it set, this poller subscribes to its upgrade subject, tells
-      # core it can replace itself, and writes the command into the hand-off directory —
-      # it never runs anything itself.
-      # YAGRA_UPGRADE_DIR: /data/upgrade
+      # ── Self-upgrade (ADR-051 Inc.4) ──────────────────────────────────────────────
+      # The hand-off directory this poller writes an upgrade request into. Set
+      # UNCONDITIONALLY — the `yagra-poller-updater` service below is the optional half.
+      # With no sidecar there is no `current.json`, so the poller does NOT advertise
+      # `self-upgrade` and core never sends it a command (heartbeat.rs::self_upgrade_cap
+      # checks that file's freshness, not just this variable). Writing it here costs
+      # nothing and keeps the volume reference below valid either way.
+      YAGRA_UPGRADE_DIR: ${YAGRA_UPGRADE_DIR:-/data/upgrade}
     volumes:
       # CA / server cert for the TLS bus (read-only). The site bundle unpacks it to
       # ./certs/server-cert.pem, which is what YAGRA_BUS_CA_FILE defaults to above.
@@ -136,124 +147,153 @@ services:
       - pollerbuf:/var/lib/yagra/buffer
       # Rotated log files, so a run that crashed leaves a trace on this box (ADR-045).
       - pollerlogs:/var/log/yagra
-      # Hand-off with the site updater (ADR-051). Uncomment with the block below.
-      # - upgradedata:/data/upgrade
+      # Hand-off with the site updater (ADR-051). The poller only ever WRITES here.
+      - upgradedata:/data/upgrade
 
-  # ── Site updater (ADR-051) — COMMENTED OUT, and that default is deliberate ─────────
+  # ── Site updater (ADR-051) — shipped, and switched on from `.env` ──────────────────
   #
-  # Uncomment this service (plus the two lines above and the volume at the bottom) to let a
-  # single press of Settings ▸ Upgrade at the central deployment replace this poller too.
-  # Core sends the release tag over the bus, the poller writes it into the shared volume,
-  # and this container — the only one here holding the Docker socket — installs it.
+  # Lets a single press of Settings ▸ Upgrade at the central deployment replace this poller
+  # too. Core sends the release tag over the bus, the poller writes it into the shared
+  # volume, and this container — the only one here holding the Docker socket — installs it.
   #
-  # WHY THIS IS OFF WHILE THE CENTRAL ONE (docker-compose.deploy.yml) IS ON. That asymmetry
-  # is a decision, not an oversight. Centrally, shipping the updater disabled meant the one
-  # deployment shape with no shell access — "we only have the WebUI" — had to edit a compose
-  # file to turn on the feature that exists so they need not edit compose files. No such
-  # contradiction exists here: standing up a remote poller is already shell work (write
-  # `.env`, place the CA cert, `up -d`), so uncommenting a block is one more line in a job
-  # someone is already doing. And the cost is higher: this opens a path to host root at
-  # every monitored site rather than at one central host, and a site host is usually less
-  # closely administered and less physically protected than the core's.
+  # HOW TO TURN IT OFF, AND WHY THE SWITCH IS IN `.env` (ADR-051 Inc.4, decision 15).
+  # `COMPOSE_PROFILES` decides whether this service exists at all. The site bundle writes
+  # `COMPOSE_PROFILES=self-upgrade` into `.env`; empty that value (or delete the line) and
+  # compose stops creating this container entirely — nothing here mounts the Docker socket.
   #
-  # ⚠️ Once enabled, the next apply overwrites this file from the target image (the same
-  # rule as centrally, ADR-050 decision 5) — so the durable way to keep it off is to leave
-  # it commented, not to delete it later. Site-specific settings belong in `.env`.
+  #   COMPOSE_PROFILES=              # off: no container here holds the Docker socket
+  #   COMPOSE_PROFILES=self-upgrade  # on  (what the site bundle writes by default)
   #
-  # yagra-poller-updater:
-  #   image: docker:28-cli
-  #   restart: unless-stopped
-  #   # uid 0 so it can drive the socket; `YAGRA_DOCKER_GID` matches the host's docker group.
-  #   user: "0:${YAGRA_DOCKER_GID:-0}"
-  #   environment:
-  #     # Fixed HERE, never over the API or the bus: a command can name a tag, never a
-  #     # repository. The worst a forged command can do is install a published Yagra poller
-  #     # release — a downgrade or a restart, not arbitrary code.
-  #     YAGRA_UPGRADE_REPO: ${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - upgradedata:/data/upgrade
-  #     # The site's own compose project directory, so `up -d` runs where this file lives.
-  #     - ${PWD}:/project
-  #   command:
-  #     - sh
-  #     - -c
-  #     - |
-  #       set -eu
-  #       D=/data/upgrade
-  #       mkdir -p "$$D" && chown -R 10002:10002 "$$D"
-  #       REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
-  #       PROJ=yagra-poller
-  #       # NOTHING IN THE SHARED VOLUME IS EXECUTED. The poller writes data there and this
-  #       # container reads it; the script itself lives in this file and is passed as an
-  #       # argument, so a writable volume can never become a writable script (ADR-050).
-  #       say() {
-  #         printf '{"id":"%s","command":"%s","target":"%s","state":"%s","step":"%s","message":"%s","started_at":%s,"finished_at":%s}\n' \
-  #           "$$1" "$$2" "$$3" "$$4" "$$5" "$$6" "$$7" "$$8" > "$$D/status.json.tmp"
-  #         mv "$$D/status.json.tmp" "$$D/status.json"
-  #       }
-  #       heartbeat() {
-  #         printf '{"written_at":%s,"repo":"%s","check_interval_secs":5,"allow_bundle":false,"paused":false}\n' \
-  #           "$$(date +%s)" "$$REPO" > "$$D/current.json.tmp"
-  #         mv "$$D/current.json.tmp" "$$D/current.json"
-  #       }
-  #       field() { sed -n "s/^$$1=//p" "$$D/request" | head -1; }
-  #       handle() {
-  #         SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
-  #         TAG=$$(field tag); BY=$$(field requested_by)
-  #         rm -f "$$D/request"
-  #         [ "$$SCHEMA" = "1" ] || return 0
-  #         echo "$$ID" | grep -Eq '^[0-9a-f-]{36}$$' || return 0
-  #         # Checked again here even though the poller checked it: this side is what pastes
-  #         # the value into a `docker` invocation, so it does not get to assume.
-  #         echo "$$TAG" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' || return 0
-  #         echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
-  #         NOW=$$(date +%s)
-  #         case "$$CMD" in
-  #           prefetch)
-  #             # Pull while the poller keeps running. A WAN pull is minutes; the outage is
-  #             # only the recreate, so splitting them is what keeps a single-poller site's
-  #             # gap to seconds (ADR-051 decision 13).
-  #             say "$$ID" prefetch "$$TAG" running pull "fetching $$TAG" "$$NOW" null
-  #             if docker pull "$$REPO/yagra-poller:$$TAG" >/dev/null 2>&1; then
-  #               say "$$ID" prefetch "$$TAG" succeeded pull "fetched $$TAG" "$$NOW" "$$(date +%s)"
-  #             else
-  #               say "$$ID" prefetch "$$TAG" failed pull "could not fetch $$TAG" "$$NOW" "$$(date +%s)"
-  #             fi
-  #             ;;
-  #           apply)
-  #             say "$$ID" apply "$$TAG" running pull "fetching $$TAG" "$$NOW" null
-  #             docker pull "$$REPO/yagra-poller:$$TAG" >/dev/null 2>&1 || true
-  #             # The composition comes out of the image being installed, not from what is on
-  #             # this host — the same rule as centrally, so a site cannot drift into a file
-  #             # the release never shipped with.
-  #             say "$$ID" apply "$$TAG" running compose "installing $$TAG" "$$NOW" null
-  #             C=$$(docker create "$$REPO/yagra-poller:$$TAG" true 2>/dev/null) || C=""
-  #             if [ -n "$$C" ]; then
-  #               docker cp "$$C:/usr/share/yagra/docker-compose.poller.yml" /project/ 2>/dev/null || true
-  #               docker rm -f "$$C" >/dev/null 2>&1 || true
-  #             fi
-  #             # `-p` is not optional: without it compose derives the project from the
-  #             # directory name, forks a second empty stack and orphans `pollerbuf`.
-  #             if ( cd /project && YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.poller.yml up -d ); then
-  #               say "$$ID" apply "$$TAG" succeeded verify "now running $$TAG" "$$NOW" "$$(date +%s)"
-  #             else
-  #               say "$$ID" apply "$$TAG" failed compose "could not recreate the poller" "$$NOW" "$$(date +%s)"
-  #             fi
-  #             ;;
-  #           *) return 0 ;;
-  #         esac
-  #       }
-  #       heartbeat
-  #       while true; do
-  #         [ -f "$$D/request" ] && handle
-  #         sleep 5
-  #         heartbeat
-  #       done
+  # ⚠️ Do NOT switch it off by deleting this block. An apply reinstalls this file from the
+  # target image (the same rule as centrally, ADR-050 decision 5), so a local edit lasts
+  # only until the next upgrade. `.env` is the one file no upgrade replaces — which is
+  # exactly why the switch lives there and not here.
+  #
+  # WHAT IT GRANTS, stated plainly. The Docker socket is host root: anything that can write
+  # to it can start a privileged container. Three things bound that, and all three are
+  # load-bearing rather than reassuring: this container listens on NO network (its only
+  # input is the `request` file the poller writes); a command carries a TAG and never a
+  # repository, so the worst a forged one achieves is installing a published Yagra poller
+  # release; and the upgrade subject is subscribe-only in BOTH bus allow-lists
+  # (`yagra-authz` and `docker/nats/nats-server.conf`), so one site can never order an
+  # upgrade at another. What is NOT bounded: whoever controls core can move every site.
+  yagra-poller-updater:
+    image: docker:28-cli
+    profiles: ["self-upgrade"]
+    restart: unless-stopped
+    # uid 0 so it can drive the socket; `YAGRA_DOCKER_GID` matches the host's docker group.
+    user: "0:${YAGRA_DOCKER_GID:-0}"
+    environment:
+      # Fixed HERE, never over the API or the bus: a command can name a tag, never a
+      # repository. The worst a forged command can do is install a published Yagra poller
+      # release — a downgrade or a restart, not arbitrary code.
+      YAGRA_UPGRADE_REPO: ${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - upgradedata:/data/upgrade
+      # The site's own compose project directory, so `up -d` runs where this file lives.
+      # Interpolated on the HOST, by the shell that ran `up -d` there. The guard in
+      # `handle()` below is what notices when that assumption has been broken.
+      - ${PWD}:/project
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        D=/data/upgrade
+        mkdir -p "$$D" && chown -R 10002:10002 "$$D"
+        REPO="$${YAGRA_UPGRADE_REPO:-ghcr.io/horryworks}"
+        PROJ=yagra-poller
+        # NOTHING IN THE SHARED VOLUME IS EXECUTED. The poller writes data there and this
+        # container reads it; the script itself lives in this file and is passed as an
+        # argument, so a writable volume can never become a writable script (ADR-050).
+        say() {
+          printf '{"id":"%s","command":"%s","target":"%s","state":"%s","step":"%s","message":"%s","started_at":%s,"finished_at":%s}\n' \
+            "$$1" "$$2" "$$3" "$$4" "$$5" "$$6" "$$7" "$$8" > "$$D/status.json.tmp"
+          mv "$$D/status.json.tmp" "$$D/status.json"
+        }
+        heartbeat() {
+          printf '{"written_at":%s,"repo":"%s","check_interval_secs":5,"allow_bundle":false,"paused":false}\n' \
+            "$$(date +%s)" "$$REPO" > "$$D/current.json.tmp"
+          mv "$$D/current.json.tmp" "$$D/current.json"
+        }
+        field() { sed -n "s/^$$1=//p" "$$D/request" | head -1; }
+        handle() {
+          SCHEMA=$$(field schema); ID=$$(field id); CMD=$$(field command)
+          TAG=$$(field tag); BY=$$(field requested_by)
+          rm -f "$$D/request"
+          [ "$$SCHEMA" = "1" ] || return 0
+          echo "$$ID" | grep -Eq '^[0-9a-f-]{36}$$' || return 0
+          # Checked again here even though the poller checked it: this side is what pastes
+          # the value into a `docker` invocation, so it does not get to assume.
+          echo "$$TAG" | grep -Eq '^v[0-9]{1,6}\.[0-9]{1,6}\.[0-9]{1,6}(-[0-9a-zA-Z]{1,16})?$$' || return 0
+          echo "$$BY" | grep -Eq '^[0-9A-Za-z._@-]{1,64}$$' || BY=unknown
+          NOW=$$(date +%s)
+          # The deployment directory, at the path the HOST knows it by. `${PWD}` above is
+          # interpolated by the shell that ran `up -d` on the host, so /project holds this
+          # site's compose file. When it does not, this container was created from some
+          # other working directory and `up -d` would run against a directory Docker
+          # helpfully created empty. Refuse and say which, rather than half-executing.
+          # The central updater reads a compose label for exactly this reason; measured
+          # there 2026-08-12, where three consecutive applies died reporting a failed backup.
+          if [ ! -f /project/docker-compose.poller.yml ]; then
+            say "$$ID" "$$CMD" "$$TAG" failed start "/project does not hold docker-compose.poller.yml, so this container was created from the wrong working directory; recreate this stack from the directory that holds it" "$$NOW" "$$(date +%s)"
+            return 0
+          fi
+          case "$$CMD" in
+            prefetch)
+              # Pull while the poller keeps running. A WAN pull is minutes; the outage is
+              # only the recreate, so splitting them is what keeps a single-poller site's
+              # gap to seconds (ADR-051 decision 13).
+              say "$$ID" prefetch "$$TAG" running pull "fetching $$TAG" "$$NOW" null
+              if docker pull "$$REPO/yagra-poller:$$TAG" >/dev/null 2>&1; then
+                say "$$ID" prefetch "$$TAG" succeeded pull "fetched $$TAG" "$$NOW" "$$(date +%s)"
+              else
+                say "$$ID" prefetch "$$TAG" failed pull "could not fetch $$TAG" "$$NOW" "$$(date +%s)"
+              fi
+              ;;
+            apply)
+              say "$$ID" apply "$$TAG" running pull "fetching $$TAG" "$$NOW" null
+              docker pull "$$REPO/yagra-poller:$$TAG" >/dev/null 2>&1 || true
+              # The composition comes out of the image being installed, not from what is on
+              # this host — the same rule as centrally, so a site cannot drift into a file
+              # the release never shipped with.
+              say "$$ID" apply "$$TAG" running compose "installing $$TAG" "$$NOW" null
+              C=$$(docker create "$$REPO/yagra-poller:$$TAG" true 2>/dev/null) || C=""
+              if [ -n "$$C" ]; then
+                docker cp "$$C:/usr/share/yagra/docker-compose.poller.yml" /project/ 2>/dev/null || true
+                docker rm -f "$$C" >/dev/null 2>&1 || true
+              fi
+              # `poller` is NAMED, and that is not tidiness. A bare `up -d` includes THIS
+              # service, so the container running this script would recreate itself — and
+              # `${PWD}` would then be re-interpolated from the cwd INSIDE this container
+              # (/project), leaving the next generation bind-mounting a host /project that
+              # Docker creates empty. That is the failure measured centrally on 2026-08-12,
+              # and the guard above is what would report it rather than a failed backup.
+              # Naming the service has one cost, the same one centrally: a changed updater
+              # definition is not picked up here, so recreate it by hand at the site.
+              # `-p` is not optional either: without it compose derives the project from the
+              # directory name, forks a second empty stack and orphans `pollerbuf`.
+              if ( cd /project && YAGRA_IMAGE_TAG="$$TAG" docker compose -p "$$PROJ" -f docker-compose.poller.yml up -d poller ); then
+                say "$$ID" apply "$$TAG" succeeded verify "now running $$TAG" "$$NOW" "$$(date +%s)"
+              else
+                say "$$ID" apply "$$TAG" failed compose "could not recreate the poller" "$$NOW" "$$(date +%s)"
+              fi
+              ;;
+            *) return 0 ;;
+          esac
+        }
+        heartbeat
+        while true; do
+          [ -f "$$D/request" ] && handle
+          sleep 5
+          heartbeat
+        done
 
 volumes:
   pollerbuf:   # store-and-forward result buffer (Phase 3)
   pollerlogs:  # this poller's rotated log files (ADR-045). Read here by you, and sent to core on
                # request for the central support bundle (Inc.4) — core cannot mount this disk, so
                # the bus is the only crossing. A run that has already ended is readable here only.
-  # upgradedata:   # poller ⇄ site-updater hand-off (ADR-051; uncomment with the block above)
+  upgradedata: # poller ⇄ site-updater hand-off (ADR-051). The poller writes, the updater reads.
+               # Present whether or not the updater is enabled; an unread request is inert.

@@ -20,6 +20,11 @@
     "skewHint": "This poller is not on core's version ({{core}}). A remote-site poller is upgraded on its own host.",
     "selfUpgrade": "self-upgrades",
     "selfUpgradeHint": "A site updater is deployed beside this poller, so an upgrade of this deployment replaces it too.",
+    "upgradeStep": {
+      "prefetch": "fetching",
+      "apply": "installing",
+      "other": "upgrading"
+    },
     "lastSeen": {
       "live": "Live"
     },
@@ -212,6 +217,10 @@
       "host": {
         "label": "Address this site will dial",
         "hint": "Leave empty to use the address on the bus certificate. It must be one the certificate covers, or the site cannot connect."
+      },
+      "selfUpgrade": {
+        "label": "Let this site upgrade with the deployment",
+        "hint": "Adds a second container at the site that holds its Docker socket, so pressing Upgrade here replaces this poller too. Without it the site stays on whatever version it last pulled and is listed as left behind. The site can change this later in its own .env — that file is the one an upgrade never replaces."
       }
     }
   },

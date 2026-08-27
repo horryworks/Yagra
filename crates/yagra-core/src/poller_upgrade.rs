@@ -85,16 +85,61 @@ pub fn queues(targets: Vec<Target>) -> BTreeMap<String, Vec<Target>> {
     by_pool
 }
 
-/// Would taking this poller out leave its pool with no live poller?
+/// Would taking one poller out leave this pool with no live poller?
 ///
 /// Not a reason to refuse — a single-poller site is a normal deployment and refusing to upgrade it
 /// would mean it is never upgraded at all. It is a reason to *say so*: the pool goes dark for the
 /// recreate, `pool_coverage`'s 300s debounce is the entire budget, and no maintenance window
 /// silences that alert (deliberately — "the upgrade left a site unmonitored" is the outcome most
 /// worth hearing about).
+///
+/// ⚠️ **`live_in_pool` is every live poller in the pool, not the length of this pool's queue.**
+/// Until ADR-051 Inc.4 the caller passed the queue, so a pool of three where one site could replace
+/// itself was announced as going dark while two pollers polled throughout. The queue is a subset —
+/// pollers with no site updater are never in it — and a subset cannot answer a question about
+/// coverage.
 #[must_use]
-pub fn goes_dark(pool_size: usize) -> bool {
-    pool_size <= 1
+pub fn goes_dark(live_in_pool: usize) -> bool {
+    live_in_pool <= 1
+}
+
+/// Whether a convergence is running in this process.
+///
+/// Two things start one — the tail of core's own upgrade, and `POST /api/v1/system/upgrade/pollers`
+/// — and they must not overlap: both would publish `apply` to the same pollers, and the second
+/// would count the first's restarts as its own returns, then move on to the next poller in a pool
+/// that has just lost one.
+///
+/// A process-wide flag rather than a field on some state, because the thing being serialized *is*
+/// process-wide: there is one fleet, one bus connection and (under HA) one leader driving it. A
+/// lock threaded through `ApiState` would be the same single value wearing a longer path.
+static CONVERGING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Proof that this task, and no other, is converging the fleet.
+///
+/// [`converge`] takes one by value, so "did you take the lock?" is a question the compiler asks
+/// rather than a rule to remember. Released on drop, including on panic.
+#[derive(Debug)]
+pub struct ConvergeGuard(());
+
+impl Drop for ConvergeGuard {
+    fn drop(&mut self) {
+        CONVERGING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Claim the fleet, or `None` if a convergence is already under way.
+///
+/// The caller turns `None` into a 409; there is no queueing, deliberately. A second press is nearly
+/// always the same intent repeated, and running it afterwards would recreate every poller a second
+/// time for no version change.
+#[must_use]
+pub fn try_begin() -> Option<ConvergeGuard> {
+    use std::sync::atomic::Ordering;
+    CONVERGING
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+        .then_some(ConvergeGuard(()))
 }
 
 /// Has this poller come back on the target build?
@@ -139,9 +184,11 @@ pub struct Run {
 
 /// Drive every pool's queue to the target release. Returns once every pool has finished or given up.
 ///
-/// Spawned by the same task that settles a finished run, so it starts only after core's own upgrade
-/// is known to have succeeded.
-pub async fn converge(run: Run, targets: Vec<Target>) {
+/// Started either by the task that settles a finished run — so, only after core's own upgrade is
+/// known to have succeeded — or by `POST /api/v1/system/upgrade/pollers`, which aligns a fleet that
+/// has drifted since (ADR-051 Inc.4 decision 17). The [`ConvergeGuard`] is what makes those two
+/// mutually exclusive, and it is taken by value so that cannot be forgotten.
+pub async fn converge(run: Run, targets: Vec<Target>, _lock: ConvergeGuard) {
     if targets.is_empty() {
         return;
     }
@@ -177,19 +224,28 @@ pub async fn converge(run: Run, targets: Vec<Target>) {
 /// One pool's queue, strictly serially. Stops at the first poller that does not come back.
 async fn converge_pool(run: &Run, pool: &str, queue: Vec<Target>) {
     let size = queue.len();
-    if goes_dark(size) {
+    // Ask the registry how many pollers this pool actually has, rather than how many are in the
+    // queue. A pool can hold pollers with no site updater; they are not upgraded and they are also
+    // not going anywhere, so they are exactly the ones that decide whether this costs coverage.
+    let live_in_pool = run
+        .coordinator
+        .poller_views(std::time::Instant::now())
+        .into_iter()
+        .filter(|v| v.online && v.pool == pool)
+        .count();
+    if goes_dark(live_in_pool) {
         tracing::warn!(
             %pool,
-            "this pool has one poller, so upgrading it stops monitoring at that site until it \
+            "this pool has one live poller, so upgrading it stops monitoring at that site until it \
              returns; the prefetch above is what keeps that to the recreate"
         );
     }
-    for (i, target) in queue.into_iter().enumerate() {
-        // The prefetch has had `SETTLE_DELAY` plus every earlier poller's turn to land; wait out the
-        // rest of its budget only for the first one, where nothing else has passed.
-        if i == 0 {
-            wait_for_prefetch(&target).await;
-        }
+    // One budget for the whole pool, started when the pool's turn does. Every poller waits for its
+    // *own* prefetch — the earlier ones return instantly, having finished during their predecessors'
+    // applies — but a pool whose sites cannot pull at all spends this once rather than once each.
+    let prefetch_deadline = tokio::time::Instant::now() + PREFETCH_TIMEOUT - SETTLE_DELAY;
+    for target in queue {
+        wait_for_prefetch(run, &target, prefetch_deadline).await;
         send(run, &target.id, UpgradeStep::Apply).await;
         let ok = wait_for_return(&run.coordinator, &target, &run.tag).await;
         let action = format!(
@@ -239,11 +295,61 @@ async fn send(run: &Run, poller_id: &str, step: UpgradeStep) {
     }
 }
 
-/// Give the first poller of a pool the rest of the prefetch budget before its outage starts.
-async fn wait_for_prefetch(target: &Target) {
-    let remaining = PREFETCH_TIMEOUT.saturating_sub(SETTLE_DELAY);
-    tracing::debug!(poller = %target.id, "waiting out the prefetch budget before the first apply");
-    tokio::time::sleep(remaining.min(PREFETCH_TIMEOUT)).await;
+/// Wait until this site has the image, or until the pool's prefetch budget runs out.
+///
+/// 🚨 **This used to be `sleep(870s)`, unconditionally, before the first apply of every pool.** The
+/// budget was the only thing available: the updater writes `status.json` into a volume at the site,
+/// and core could not see it. So an upgrade whose pull finished in twenty seconds still took a
+/// quarter of an hour to start, and an operator watching the page had no signal in between.
+/// ADR-051 Inc.4 decision 18 carries that file on the heartbeat, so the wait now ends when the site
+/// says it is ready.
+///
+/// **A failed prefetch stops the wait too, and does not stop the upgrade.** The apply pulls as well,
+/// so a site that could not fetch ahead of time pays a longer outage rather than a failed run — the
+/// asymmetry `PREFETCH_TIMEOUT` was written for. Waiting out the budget after a reported failure
+/// would spend fifteen minutes to reach the same place.
+///
+/// A poller that reports nothing — an N-1 build, or one whose updater has not written a status yet —
+/// falls back to the budget, which is exactly the old behaviour for exactly the old reason.
+async fn wait_for_prefetch(run: &Run, target: &Target, deadline: tokio::time::Instant) {
+    use yagra_bus::{UpgradeReportCommand, UpgradeReportState};
+    loop {
+        let report = run
+            .coordinator
+            .poller_views(std::time::Instant::now())
+            .into_iter()
+            .find(|v| v.id == target.id)
+            .and_then(|v| v.upgrade);
+        // Keyed on the run id, so a report left over from a previous upgrade cannot end this wait.
+        // That is what makes it safe for the poller to send its last status on every beat.
+        if let Some(r) =
+            report.filter(|r| r.run_id == run.run_id && r.command == UpgradeReportCommand::Prefetch)
+        {
+            match r.state {
+                UpgradeReportState::Succeeded => {
+                    tracing::info!(poller = %target.id, "site has the image; starting its apply");
+                    return;
+                }
+                UpgradeReportState::Failed => {
+                    tracing::warn!(
+                        poller = %target.id,
+                        message = %r.message,
+                        "site could not prefetch; applying anyway, which pulls — expect a longer outage"
+                    );
+                    return;
+                }
+                UpgradeReportState::Running | UpgradeReportState::Unknown => {}
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::debug!(
+                poller = %target.id,
+                "prefetch budget spent without a report; applying anyway"
+            );
+            return;
+        }
+        tokio::time::sleep(POLL_TICK).await;
+    }
 }
 
 /// Wait for `target` to reappear on `tag`. `false` on timeout.

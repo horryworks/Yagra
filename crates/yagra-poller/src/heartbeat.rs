@@ -158,6 +158,11 @@ async fn run_heartbeat_loop<B>(
             leaving,
             // Where this poller sits, so core can root the derived dependency graph (ADR-043).
             mgmt_addrs: mgmt_addrs.clone(),
+            // What the site updater last said about an upgrade (ADR-051 Inc.4). Sent on every beat
+            // rather than only while one is running: core keys on the run id, so a stale report is
+            // inert, and tracking "is this still current" here would be a second answer to a
+            // question the run id already settles.
+            upgrade: upgrade_report(),
         };
         if let Err(e) = bus.publish_heartbeat(hb).await {
             tracing::warn!(error = %e, "failed to publish heartbeat");
@@ -208,6 +213,28 @@ fn self_upgrade_cap() -> Option<String> {
     // containers on the same host without ever calling a dead updater alive. A beat from the future
     // is skew, not staleness — it was clearly written.
     (now.saturating_sub(written_at) <= 60).then(|| yagra_bus::CAP_SELF_UPGRADE.to_owned())
+}
+
+/// What the site updater last wrote about an upgrade, for core to read off the beat (ADR-051 Inc.4).
+///
+/// **This is what turns a fifteen-minute sleep into a wait.** Core splits an upgrade into a prefetch
+/// (the site pulls the image, nothing stops) and an apply (the container is recreated, which *is*
+/// the outage), and until now had no way to learn the prefetch had finished — the updater writes
+/// `status.json` to a volume core cannot reach. So it slept out the whole budget before starting the
+/// first apply of every pool. Carrying the file on the beat costs one small read every ten seconds.
+///
+/// Deliberately **not** gated on `self_upgrade_cap`: those answer different questions. The capability
+/// asks whether a sidecar is alive *now*, and a report is worth carrying from one that has since
+/// stopped — that is exactly the case where core is waiting to hear how it went. Reading the same
+/// env var is the shared part; the freshness test is not.
+///
+/// Any failure is `None`: no directory, no file yet, a half-written one, a shape this build cannot
+/// read. All of them mean the same thing to core — nothing to report — and none of them is worth
+/// failing a heartbeat over.
+fn upgrade_report() -> Option<yagra_bus::UpgradeReport> {
+    let dir = crate::env_nonempty("YAGRA_UPGRADE_DIR")?;
+    let raw = std::fs::read_to_string(Path::new(&dir).join("status.json")).ok()?;
+    serde_json::from_str(&raw).ok()
 }
 
 /// [`yagra_bus::CAP_LOG_SHIP`], but only when there is a log file to ship (ADR-045 Inc.4).

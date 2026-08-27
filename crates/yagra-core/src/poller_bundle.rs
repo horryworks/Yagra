@@ -49,6 +49,14 @@ pub struct SiteBundleInput<'a> {
     /// `docker-compose.poller.yml`, read out of this image so the site runs the composition that
     /// shipped with the core it will talk to.
     pub compose: &'a str,
+    /// Whether this site should upgrade itself when the deployment does (ADR-051 Inc.4).
+    ///
+    /// Written as a `COMPOSE_PROFILES` line, which is what decides whether the composition's
+    /// `yagra-poller-updater` service exists at all. It goes in the `.env` and **not** in the
+    /// composition because an apply reinstalls the composition from the target image (ADR-050
+    /// decision 5) and leaves the `.env` alone — so this is the only file where the site's answer
+    /// survives its own upgrades.
+    pub self_upgrade: bool,
     /// Core's version, for the README.
     pub core_version: &'a str,
     /// Archive mtime, Unix seconds. Injected — `tar` needs one and a test must not depend on now.
@@ -102,9 +110,12 @@ pub fn build(input: &SiteBundleInput<'_>) -> std::io::Result<Vec<u8>> {
 
 /// The `.env` that sits beside `docker-compose.poller.yml`.
 ///
-/// Only the four values the composition *requires* plus nothing else — every other setting has a
-/// working default in the compose file, and copying those defaults here would create a second place
-/// they are written down, in a file no upgrade ever replaces.
+/// Only the values the composition *requires*, plus the one switch that has nowhere else to live —
+/// every other setting has a working default in the compose file, and copying those defaults here
+/// would create a second place they are written down, in a file no upgrade ever replaces.
+///
+/// That last clause is exactly why `COMPOSE_PROFILES` belongs here and not there: being the file no
+/// upgrade replaces is a *liability* for a default and the whole point for a switch.
 fn render_env(i: &SiteBundleInput<'_>) -> String {
     format!(
         "# Yagra remote poller — generated for {id} on core {ver}.\n\
@@ -113,14 +124,34 @@ fn render_env(i: &SiteBundleInput<'_>) -> String {
          YAGRA_POLLER_POOL={pool}\n\
          # The username is the poller id: the central Auth Callout scopes this connection's\n\
          # permissions on it, so it may not be changed without the token becoming invalid.\n\
-         YAGRA_BUS_URL=tls://{id}:{token}@{host}:{port}\n",
+         YAGRA_BUS_URL=tls://{id}:{token}@{host}:{port}\n\
+         {upgrade}",
         id = i.poller_id,
         pool = i.pool,
         token = i.token,
         host = i.host,
         port = i.port,
         ver = i.core_version,
+        upgrade = env_self_upgrade(i.self_upgrade),
     )
+}
+
+/// The `COMPOSE_PROFILES` stanza, or nothing at all.
+///
+/// **Off writes no line rather than an empty one.** An empty `COMPOSE_PROFILES=` would work, but it
+/// would also silently override a value the site's operator had set for some other purpose, and it
+/// reads as "Yagra has an opinion here" when the opinion is "not ours to hold". Absent means the
+/// composition's own default applies, which is off.
+fn env_self_upgrade(on: bool) -> String {
+    if !on {
+        return String::new();
+    }
+    "# Runs the `yagra-poller-updater` sidecar, so a single press of Settings > Upgrade at the\n\
+     # central deployment replaces this poller too (ADR-051). That sidecar holds this host's\n\
+     # Docker socket; empty the value below to switch it off. Switch it off HERE and not in the\n\
+     # composition — an upgrade reinstalls that file and would undo the edit.\n\
+     COMPOSE_PROFILES=self-upgrade\n"
+        .to_owned()
 }
 
 fn render_readme(i: &SiteBundleInput<'_>) -> String {
@@ -149,6 +180,7 @@ fn render_readme(i: &SiteBundleInput<'_>) -> String {
          it cannot be shown again. If you lose this file, issue a new token at\n\
          Settings > Pollers — the old one stops working the moment you do.\n\
          \n\
+         {upgrade}\
          If it does not connect\n\
          ----------------------\n\
          `docker compose -f docker-compose.poller.yml logs poller` is the first place to look;\n\
@@ -172,7 +204,46 @@ fn render_readme(i: &SiteBundleInput<'_>) -> String {
         host = i.host,
         port = i.port,
         ver = i.core_version,
+        upgrade = readme_self_upgrade(i.self_upgrade),
     )
+}
+
+/// The README's account of the self-upgrade sidecar, or nothing at all.
+///
+/// Written for the person standing up the site, who did not choose this and may be the one who has
+/// to answer for it — so it says what runs, what that grants, and how to refuse, in that order. The
+/// "off" case says nothing rather than reassuring: a paragraph explaining an absent container is a
+/// paragraph nobody needs, and every line here competes with the two failure modes below it that
+/// people actually hit.
+fn readme_self_upgrade(on: bool) -> String {
+    if !on {
+        return String::new();
+    }
+    "Upgrading with the central deployment\n\
+     ------------------------------------\n\
+     COMPOSE_PROFILES=self-upgrade in .env runs a second container here, yagra-poller-updater.\n\
+     When someone presses Settings > Upgrade centrally, core sends this poller the release tag\n\
+     over the bus, the poller writes it into a shared volume, and that container installs it.\n\
+     The poller itself never runs anything; the updater is the only thing here holding the\n\
+     Docker socket, which on any host means it can start a privileged container.\n\
+     \n\
+     Bounds worth knowing: the updater listens on no network, a command carries a version tag\n\
+     and never a repository (so the worst a forged one installs is a published Yagra poller\n\
+     release), and the bus permits this poller to receive upgrade commands but never to send\n\
+     one, so no site can order an upgrade at another. Whoever controls the central deployment\n\
+     can, by design, replace the Yagra poller on this host.\n\
+     \n\
+     To refuse it, empty the value:\n\
+     \n\
+       COMPOSE_PROFILES=\n\
+       docker compose -p yagra-poller -f docker-compose.poller.yml up -d --remove-orphans\n\
+     \n\
+     Do that in .env, not by editing docker-compose.poller.yml. An upgrade reinstalls the\n\
+     composition from the release being installed, so an edit there lasts until the next one;\n\
+     .env is never replaced. With it off, this poller stays on whatever version you last\n\
+     pulled, and the central Settings > Upgrade page lists it by name as left behind.\n\
+     \n"
+    .to_owned()
 }
 
 fn append<W: Write>(
@@ -208,6 +279,7 @@ mod tests {
             token,
             ca_certificate: "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
             compose: "name: yagra-poller\nservices:\n  poller: {}\n",
+            self_upgrade: true,
             core_version: "0.2.12",
             mtime: 1_786_444_236,
         }
@@ -360,5 +432,104 @@ mod tests {
         // The static `poller` account must NOT be what a site is pointed at: it is one shared
         // password for the whole fleet, which is the tenant boundary this feature exists to draw.
         assert!(!env.contains("tls://poller:"), "{env}");
+    }
+
+    /// The switch lands in the `.env`, and only there (ADR-051 Inc.4 decision 15).
+    ///
+    /// 🚨 **The accepting case comes first and carries the weight.** A `render_env` that never
+    /// wrote the line at all would satisfy every "must not contain" below while making the whole
+    /// increment inert — the failure mode this repository has already paid for
+    /// (`rejection-only-tests-pass-when-everything-rejects`). So the first assertion is that the
+    /// line is *present*, spelled exactly as the composition's `profiles:` entry.
+    #[test]
+    fn the_self_upgrade_switch_is_an_env_line_that_appears_and_disappears() {
+        let mut i = input("T0kenT0kenT0ken", "yagra.example.net");
+
+        i.self_upgrade = true;
+        let on = render_env(&i);
+        assert!(
+            on.contains("COMPOSE_PROFILES=self-upgrade\n"),
+            "an enabled site gets no profile line, so its updater is never created: {on}"
+        );
+
+        i.self_upgrade = false;
+        let off = render_env(&i);
+        assert!(
+            !off.contains("COMPOSE_PROFILES"),
+            "a site that declined still gets the line: {off}"
+        );
+        // Not an empty assignment either — that would override a value the site set for something
+        // else of its own, which is not this bundle's business.
+        assert!(!off.contains("COMPOSE_PROFILES="), "{off}");
+
+        // Whichever way it goes, the identity half is untouched: the switch must not be able to
+        // cost a site its connection.
+        for env in [&on, &off] {
+            assert!(env.contains("YAGRA_POLLER_ID=edge-tokyo-1\n"), "{env}");
+            assert!(env.contains("YAGRA_BUS_URL=tls://edge-tokyo-1:"), "{env}");
+        }
+    }
+
+    /// The profile name here and the one in the shipped composition are the same string.
+    ///
+    /// They are two files with no compiler between them, and the failure is silent in the worst
+    /// way: compose accepts an unknown profile name without complaint, creates nothing, and the
+    /// site comes up looking exactly like a healthy one that declined. Core would then list it as
+    /// left behind forever while its `.env` says it opted in.
+    #[test]
+    fn the_env_names_the_profile_the_shipped_composition_actually_declares() {
+        let compose = std::fs::read_to_string("../../docker-compose.poller.yml")
+            .expect("the remote-site composition ships with the product");
+        let env = render_env(&input("T0kenT0kenT0ken", "yagra.example.net"));
+        let name = env
+            .lines()
+            .find_map(|l| l.strip_prefix("COMPOSE_PROFILES="))
+            .expect("the bundle writes a profile line by default");
+        assert!(
+            compose
+                .lines()
+                .map(str::trim)
+                .any(|l| l == format!("profiles: [\"{name}\"]")),
+            "the bundle enables the profile {name:?}, which no service in \
+             docker-compose.poller.yml declares — compose would create nothing and say nothing"
+        );
+        // And the service that carries it is the updater, not something incidental.
+        assert!(
+            compose.contains("yagra-poller-updater:"),
+            "the composition no longer defines the site updater, so this check is reading a file \
+             that can no longer honour the switch the bundle writes"
+        );
+    }
+
+    /// A site is told what it is being asked to run, in the archive that asks it.
+    ///
+    /// The person unpacking this did not choose it and may be the one who has to justify it, so
+    /// the README states the socket plainly rather than only the convenience. The `off` direction
+    /// is asserted too: an absent container needs no paragraph, and every line here competes with
+    /// the two connection failures people actually hit.
+    #[test]
+    fn the_readme_names_the_docker_socket_when_the_sidecar_runs_and_stays_quiet_when_it_does_not() {
+        let mut i = input("T0kenT0kenT0ken", "yagra.example.net");
+
+        i.self_upgrade = true;
+        let on = render_readme(&i);
+        assert!(on.contains("yagra-poller-updater"), "{on}");
+        assert!(
+            on.contains("Docker socket"),
+            "the README sells the convenience without naming what it grants: {on}"
+        );
+        assert!(
+            on.contains("COMPOSE_PROFILES=\n"),
+            "the README must show how to refuse, not only how to accept: {on}"
+        );
+
+        i.self_upgrade = false;
+        let off = render_readme(&i);
+        assert!(!off.contains("yagra-poller-updater"), "{off}");
+        // The parts every site needs survive either way — the section is additive, not a fork.
+        for r in [&on, &off] {
+            assert!(r.contains("If it does not connect"), "{r}");
+            assert!(r.contains("Ports this poller listens on"), "{r}");
+        }
     }
 }

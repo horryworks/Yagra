@@ -145,6 +145,88 @@ pub(crate) struct PollerInfo {
     has_token: bool,
     /// When its token was issued, RFC 3339. `null` when it has none.
     token_issued_at: Option<String>,
+    /// What its site updater last reported about an upgrade (ADR-051 Inc.4); `null` when it has no
+    /// updater, has never been asked, or predates the field.
+    ///
+    /// This is the visible half of decision 18: a WAN pull is minutes, so without it the operator
+    /// who pressed "bring them to this build" watches an unchanged screen and cannot tell a site
+    /// that is working from one that is stuck.
+    upgrade: Option<PollerUpgradeProgress>,
+}
+
+/// A site updater's last word about an upgrade, as this API reports it.
+///
+/// A DTO rather than `yagra_bus::UpgradeReport` served straight through, for two reasons that point
+/// the same way. `yagra-bus` has no `utoipa` dependency and should not grow one to describe a
+/// screen; and the wire type carries the site's `run_id`, which is core's internal correlation
+/// handle and nothing a page can do anything with.
+///
+/// `message` is **site-authored text**. It is rendered as a string and never used as a key.
+#[derive(Debug, Serialize, PartialEq, utoipa::ToSchema)]
+pub(super) struct PollerUpgradeProgress {
+    /// Which half of the upgrade the site is in.
+    command: UpgradeProgressCommand,
+    /// How it is going.
+    state: UpgradeProgressState,
+    /// Where in the command it is: `pull`, `compose`, `verify`, `start`. Free text on purpose — it
+    /// is shown as a detail, never keyed on, so a site updater may add a step without this core
+    /// needing a name for it.
+    step: String,
+    /// A sentence for the operator, written at the site.
+    message: String,
+}
+
+/// Which half of an upgrade a site is in, as this API reports it.
+///
+/// An enum rather than a string because **the WebUI builds a `t()` key from it**
+/// (`pollers.upgradeStep.<command>`), which is the shape `extensibility.md` §4 is about: a raw
+/// string gives a union nothing iterates, so a new variant reaches the operator as a raw key with
+/// EN/JA parity still passing. `web/src/i18nEnumKeys.test.ts` carries its row.
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum UpgradeProgressCommand {
+    /// Fetching the image. The poller keeps polling throughout.
+    Prefetch,
+    /// Recreating the container. This is the outage.
+    Apply,
+    /// Something this core has no name for — an updater newer than it.
+    Other,
+}
+
+/// How the half described by [`PollerUpgradeProgress`] is going.
+#[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum UpgradeProgressState {
+    /// Still going. **The only one the page draws a badge for**: a finished report is what the
+    /// version column already answers, and leaving it up reads as work still in flight.
+    Running,
+    /// Finished, and did what it said.
+    Succeeded,
+    /// Finished, and did not.
+    Failed,
+    /// Unrecognised — neither treated as done nor waited on.
+    Unknown,
+}
+
+impl From<&yagra_bus::UpgradeReport> for PollerUpgradeProgress {
+    fn from(r: &yagra_bus::UpgradeReport) -> Self {
+        use yagra_bus::{UpgradeReportCommand as C, UpgradeReportState as S};
+        Self {
+            command: match r.command {
+                C::Prefetch => UpgradeProgressCommand::Prefetch,
+                C::Apply => UpgradeProgressCommand::Apply,
+                C::Other => UpgradeProgressCommand::Other,
+            },
+            state: match r.state {
+                S::Running => UpgradeProgressState::Running,
+                S::Succeeded => UpgradeProgressState::Succeeded,
+                S::Failed => UpgradeProgressState::Failed,
+                S::Unknown => UpgradeProgressState::Unknown,
+            },
+            step: r.step.clone(),
+            message: r.message.clone(),
+        }
+    }
 }
 
 /// One pool in the `GET /api/v1/pollers` response — node count vs. live pollers, its dispatch mode,
@@ -249,6 +331,13 @@ fn build_pollers_response(
                 // Durable-only: a token is a property of the inventory row, not of the connection.
                 has_token: inv.is_some_and(|r| r.has_token),
                 token_issued_at: inv.and_then(|r| r.token_issued_at.clone()),
+                // Live-only, for the same reason `caps` is: a report describes what a *running*
+                // sidecar last did, and showing the last one seen would attribute it to a process
+                // that has since gone.
+                upgrade: lv
+                    .filter(|_| online)
+                    .and_then(|v| v.upgrade.as_ref())
+                    .map(PollerUpgradeProgress::from),
             }
         })
         .collect();
@@ -694,6 +783,18 @@ pub(super) struct PollerTokenRequest {
     /// The bus port at that address. Defaults to 4222.
     #[serde(default)]
     port: Option<u16>,
+    /// Whether this site should upgrade itself when the deployment does (ADR-051 Inc.4).
+    ///
+    /// **Defaults to `true`**, which is why it is an `Option` rather than a plain `bool`: `false`
+    /// and "the caller said nothing" have to be told apart, and `#[serde(default)]` on a `bool`
+    /// gives both of them `false`. An older client that has never heard of this field therefore
+    /// gets the same archive a current one does with the box ticked.
+    ///
+    /// It becomes a `COMPOSE_PROFILES` line in the generated `.env`, which is the only file at the
+    /// site that an upgrade does not replace — so the answer given here survives the site's own
+    /// upgrades, and can be changed there without waiting for a new bundle.
+    #[serde(default)]
+    self_upgrade: Option<bool>,
 }
 
 /// How long a generated poller token is, in characters of `[A-Za-z0-9]`.
@@ -840,6 +941,7 @@ async fn issue_poller_token(
         token: &token,
         ca_certificate: &cert.certificate,
         compose: &compose,
+        self_upgrade: req.self_upgrade.unwrap_or(true),
         core_version: env!("CARGO_PKG_VERSION"),
         mtime: u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0),
     })
@@ -851,7 +953,13 @@ async fn issue_poller_token(
         )
     })?;
 
-    tracing::warn!(poller = %id, %pool, %host, "issued a bus token for a poller");
+    tracing::warn!(
+        poller = %id,
+        %pool,
+        %host,
+        self_upgrade = req.self_upgrade.unwrap_or(true),
+        "issued a bus token for a poller"
+    );
     use axum::response::IntoResponse;
     Ok((
         [
@@ -1294,6 +1402,7 @@ mod tests {
             host: None,
             listeners: Vec::new(),
             caps: Vec::new(),
+            upgrade: None,
         }
     }
 
@@ -1412,6 +1521,74 @@ mod tests {
                 live[0].contains(want),
                 "{file} sets YAGRA_POLLER_ID without {want}, so the id is not pinned: {}",
                 live[0],
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 3,
+            "expected all three shipped compositions to be inspected; a lower number means one \
+             stopped matching and this check passed over it",
+        );
+    }
+
+    /// Only a **remote-site** poller may hold an upgrade hand-off directory (ADR-051 Inc.4).
+    ///
+    /// 🚨 This is the check standing between one plausible-looking compose edit and a button that
+    /// restarts the whole deployment. `POST /api/v1/system/upgrade/pollers` targets every online
+    /// poller advertising `self-upgrade`, and a poller advertises it when `YAGRA_UPGRADE_DIR` names
+    /// a directory holding a fresh sidecar heartbeat. Centrally that directory is **core's**, read
+    /// by `yagra-updater`, whose apply replaces core, web and the poller together. So giving the
+    /// co-located `poller` service the same variable would make it claim the capability, and
+    /// "align the pollers" would write a request into core's hand-off and take the deployment down
+    /// — from a page whose whole promise is that it does not.
+    ///
+    /// The direction is therefore **per file**, not global: the remote composition must set it (its
+    /// hand-off is the site's own, read by a sidecar that only ever recreates the poller), and the
+    /// two central ones must not. Nothing about that is visible at the point somebody would add the
+    /// line, which is exactly why it is a test and not a comment.
+    #[test]
+    fn only_the_remote_composition_gives_a_poller_an_upgrade_hand_off() {
+        let mut checked = 0;
+        for (file, want) in [
+            ("docker-compose.deploy.yml", false),
+            ("docker-compose.yml", false),
+            ("docker-compose.poller.yml", true),
+        ] {
+            let text = std::fs::read_to_string(format!("../../{file}"))
+                .unwrap_or_else(|e| panic!("{file} ships with the product: {e}"));
+            // Everything from the `poller:` service up to the next service at the same indent.
+            // Cutting by service is what makes this answer about the poller rather than about the
+            // file: core legitimately sets the same variable a few lines above.
+            let mut in_poller = false;
+            let mut body = Vec::new();
+            for line in text.lines() {
+                if line.starts_with("  ")
+                    && !line.starts_with("   ")
+                    && line.trim_end().ends_with(':')
+                {
+                    in_poller = line.trim() == "poller:";
+                    continue;
+                }
+                if in_poller {
+                    body.push(line.trim_start());
+                }
+            }
+            assert!(
+                !body.is_empty(),
+                "{file} no longer defines a poller service, so this check read nothing and would \
+                 have passed on any content at all",
+            );
+            let has = body
+                .iter()
+                .filter(|l| !l.starts_with('#'))
+                .any(|l| l.starts_with("YAGRA_UPGRADE_DIR:") || l.starts_with("- upgradedata:"));
+            assert_eq!(
+                has, want,
+                "{file}'s poller service {} an upgrade hand-off. Central pollers must not have one \
+                 — the directory there belongs to core, and a poller claiming `self-upgrade` would \
+                 make `POST /api/v1/system/upgrade/pollers` restart the deployment. A remote site's \
+                 hand-off is its own and must be present.",
+                if has { "has" } else { "lacks" },
             );
             checked += 1;
         }

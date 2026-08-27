@@ -450,6 +450,7 @@ mod tests {
             host: None,
             listeners: Vec::new(),
             caps: Vec::new(),
+            upgrade: None,
         }
     }
 

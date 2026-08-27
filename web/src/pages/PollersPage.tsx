@@ -219,6 +219,9 @@ function PollerTokenModal({
 }) {
   const { t } = useTranslation('system');
   const [host, setHost] = useState('');
+  // On by default (ADR-051 Inc.4 decision 15). The site can turn it off later in its own `.env`,
+  // which is the file no upgrade replaces — so this is a starting point rather than a commitment.
+  const [selfUpgrade, setSelfUpgrade] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
@@ -230,6 +233,7 @@ function PollerTokenModal({
       .issuePollerToken(poller.id, {
         pool: poller.pool || undefined,
         host: host.trim() || undefined,
+        self_upgrade: selfUpgrade,
       })
       .then(({ blob, filename }) => {
         saveBlob(blob, filename || `yagra-poller-${poller.id}.tar.gz`);
@@ -286,6 +290,20 @@ function PollerTokenModal({
           />
         </label>
         <FieldHint>{t('pollers.token.host.hint')}</FieldHint>
+        {/* What the site is being asked to run is said here, before the download — not in the
+            README alone, which is read at the site by whoever unpacks it and not by whoever
+            decided. Ticked by default; the hint names the Docker socket rather than only the
+            convenience, and says where the site can change its mind (ADR-055 R6). */}
+        <label className="poller-check">
+          <input
+            type="checkbox"
+            checked={selfUpgrade}
+            disabled={busy}
+            onChange={(e) => setSelfUpgrade(e.target.checked)}
+          />
+          <span>{t('pollers.token.selfUpgrade.label')}</span>
+        </label>
+        <FieldHint>{t('pollers.token.selfUpgrade.hint')}</FieldHint>
         {/* Said before the click. Re-issuing invalidates the archive the site is currently using. */}
         {poller.has_token && <p className="form-hint">{t('pollers.token.reissueWarning')}</p>}
         {done && <p className="form-hint">{t('pollers.token.downloaded')}</p>}
@@ -635,6 +653,20 @@ export function PollersPage() {
                   {' '}
                   <Badge tone="neutral" title={t('pollers.selfUpgradeHint')}>
                     {t('pollers.selfUpgrade')}
+                  </Badge>
+                </>
+              )}
+              {/* What the site is doing right now (ADR-051 Inc.4). A WAN pull is minutes, so
+                  without this the operator who pressed "bring them to this build" watches an
+                  unchanged screen and cannot tell a site that is working from one that is stuck.
+                  Only while it is happening: a finished report is what the version column above
+                  already answers, and leaving it up would read as an operation still in flight.
+                  `message` is written at the site — rendered as text, never as a key. */}
+              {online && p.upgrade?.state === 'running' && (
+                <>
+                  {' '}
+                  <Badge tone="neutral" title={p.upgrade.message || undefined}>
+                    {t(`pollers.upgradeStep.${p.upgrade.command}`)}
                   </Badge>
                 </>
               )}

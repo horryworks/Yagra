@@ -335,6 +335,7 @@ mod tests {
             webtls: None,
             bus_tls: None,
             upgrade: None,
+            upgrade_bus: None,
             metrics: None,
             started: std::time::SystemTime::now(),
             poller_logs: None,

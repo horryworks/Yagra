@@ -316,6 +316,17 @@ pub struct ApiState {
     /// Migration history and the compatibility floor it implies (ADR-050); `None` in skeleton mode.
     /// Read-only, so every core answers — there is nothing here for a standby to double-do.
     pub upgrade: Option<Arc<crate::upgrade::UpgradeRepo>>,
+    /// The bus, for the one API path that publishes on it: aligning remote pollers to this core's
+    /// build (ADR-051 Inc.4). `None` in skeleton mode.
+    ///
+    /// Narrowed to [`yagra_bus::UpgradeBus`] rather than held as the whole client, so this state
+    /// cannot become the way any other handler reaches the bus. Core⇄poller traffic belongs to the
+    /// scheduler and the coordinator; an upgrade command is the exception because the operator
+    /// presses a button and the command must leave with them, not on the next sweep.
+    ///
+    /// ⚠️ Publishing on it is leader-gated at the handler (`Leader`), not here — two cores driving
+    /// one convergence would each count the other's restarts as its own returns.
+    pub upgrade_bus: Option<Arc<dyn yagra_bus::UpgradeBus>>,
     /// The process's Prometheus registry handle, so the support bundle (ADR-045) can carry the same
     /// scrape `/metrics` serves. `None` only where there is no recorder to read (the API tests).
     ///
@@ -644,6 +655,7 @@ mod tests {
             webtls: None,
             bus_tls: None,
             upgrade: None,
+            upgrade_bus: None,
             metrics: None,
             started: std::time::SystemTime::now(),
             poller_logs: None,
@@ -683,6 +695,7 @@ mod tests {
             webtls: None,
             bus_tls: None,
             upgrade: None,
+            upgrade_bus: None,
             metrics: None,
             started: std::time::SystemTime::now(),
             poller_logs: None,
@@ -720,6 +733,7 @@ mod tests {
             webtls: None,
             bus_tls: None,
             upgrade: None,
+            upgrade_bus: None,
             metrics: None,
             started: std::time::SystemTime::now(),
             poller_logs: None,

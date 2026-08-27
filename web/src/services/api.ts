@@ -96,6 +96,7 @@ import type {
   HostMetricRange,
   VersionInfo,
   UpgradeStatus,
+  AlignPollersAccepted,
   UpgradeRunAccepted,
   ProfileSummary,
   ProfileInput,
@@ -1393,6 +1394,14 @@ export const api = {
    *  `getUpgradeStatus`, so callers watch that rather than this promise. */
   checkUpgrades: (): Promise<void> => apiPost('/api/v1/system/upgrade/check', {}),
 
+  /** Bring every self-upgrading poller onto this core's build (ADR-051 Inc.4).
+   *
+   *  Nothing in this deployment restarts — the work happens at the sites, one poller at a time per
+   *  pool. Accepted asynchronously and answered by `poller_skew` shrinking on later
+   *  `getUpgradeStatus` calls; a convergence takes minutes, so nothing waits on this promise. */
+  alignPollers: (): Promise<AlignPollersAccepted> =>
+    apiPost('/api/v1/system/upgrade/pollers', {}),
+
   /** Turn upgrading from the WebUI on or off for this deployment (ADR-050). Stored in the
    *  database, so it survives the upgrades it governs; the updater picks it up within one beat. */
   setUpgradeEnabled: (enabled: boolean): Promise<void> =>
@@ -2105,7 +2114,7 @@ export const api = {
    *  prepared before anything runs there. Returns the blob and the filename the server chose. */
   issuePollerToken: (
     id: string,
-    body: { pool?: string; host?: string; port?: number },
+    body: { pool?: string; host?: string; port?: number; self_upgrade?: boolean },
   ): Promise<Download> =>
     fetchBlob(`/api/v1/pollers/${encodeURIComponent(id)}/token`, 'poller_token_failed', {
       method: 'POST',
