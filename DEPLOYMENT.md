@@ -339,10 +339,18 @@ To turn it back off, delete those lines and bring the stack up again.
 On **Settings ▸ Pollers**, each poller's **Token** column says whether it has one of its own or is
 using the deployment-wide bootstrap secret. Click it and press **Issue token & download**.
 
-You get a `.tar.gz` holding everything the site needs: `.env` (its id, pool and bus token),
-`certs/server-cert.pem` (the certificate it pins), `docker-compose.poller.yml` taken from this core's
-own image, and a README. The poller does not have to exist yet — issuing a token registers it, which
-is how you prepare a site before anything is running there.
+You get a `.tar.gz` holding everything the site needs: `.env` (its id, pool, bus token and
+`COMPOSE_PROFILES`), `certs/server-cert.pem` (the certificate it pins), `docker-compose.poller.yml`
+taken from this core's own image, and a README. The poller does not have to exist yet — issuing a
+token registers it, which is how you prepare a site before anything is running there.
+
+> **The dialog's "let this site install releases" box is ticked by default (v0.3.3+).** It writes
+> `COMPOSE_PROFILES=self-upgrade` into that `.env`, which starts a `yagra-poller-updater` beside the
+> poller — a container running as **root** with that site host's Docker socket, so Settings ▸ Upgrade
+> can replace the poller there. Untick it before issuing, or empty `COMPOSE_PROFILES` in the site's
+> `.env` later, and no container at that site holds a socket. Change it in `.env` and not in the
+> composition: an upgrade reinstalls the composition from the release being installed and never
+> touches `.env`. A site issued its bundle before v0.3.3 is unaffected until it is re-issued one.
 
 > **The token is in that file and nowhere else.** Yagra stores only a SHA-256 digest of it. If the
 > archive is lost, issue a new token — the old one stops working the moment you do.
@@ -557,6 +565,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 > - Mounted key directories: `YAGRA_SESSION_KEY_DIR` (holds `session.key` for `YAGRA_SESSION_KEY_FILE`); `YAGRA_CALLOUT_SEED_DIR` (holds `account.seed` for `YAGRA_NATS_CALLOUT_SEED_FILE`) is legacy — nothing needs it now
 > - Poller log directory: `YAGRA_POLLER_LOG_DIR` (default `/var/log/yagra/pollers`) — what `docker-compose.deploy.yml` passes to the co-located poller as its `YAGRA_LOG_DIR`. Set it empty to keep that poller on stdout only
 > - IP→ASN updater sidecar: `YAGRA_IPASN_URL` (dataset URL), `YAGRA_IPASN_REFRESH_SECS` (fetch cadence; default `604800` = weekly)
+> - Remote-site self-upgrade (D): `COMPOSE_PROFILES` — Docker's own variable, and at a monitored site the switch that decides whether that site can install a release. `self-upgrade` starts the `yagra-poller-updater` sidecar and makes the poller advertise the capability; an empty value leaves no container there holding a Docker socket. An issued bundle writes it
 
 ---
 

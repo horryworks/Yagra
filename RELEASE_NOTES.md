@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.3 — remote-site pollers upgrade with the deployment, and a button brings back the ones that drifted
+
 ### New Features
 
 - **Remote-site pollers now upgrade with the deployment.** The site updater that installs a release

@@ -329,10 +329,19 @@ YAGRA_BUS_TLS_SANS=core.example.com,192.168.1.2
 ブートストラップシークレットを使っているのかが出ます。クリックして「トークンを発行してダウンロード」を
 押してください。
 
-拠点に必要なものが `.tar.gz` で 1 つ落ちます。`.env`（id・pool・バストークン）、
-`certs/server-cert.pem`（拠点が固定する証明書）、この core のイメージから取り出した
-`docker-compose.poller.yml`、そして手順書です。**ポーラーがまだ存在しなくても構いません** —
-トークンの発行が登録を兼ねるので、拠点でまだ何も動いていない段階で準備できます。
+拠点に必要なものが `.tar.gz` で 1 つ落ちます。`.env`（id・pool・バストークン・
+`COMPOSE_PROFILES`）、`certs/server-cert.pem`（拠点が固定する証明書）、この core のイメージから
+取り出した `docker-compose.poller.yml`、そして手順書です。**ポーラーがまだ存在しなくても構いません**
+— トークンの発行が登録を兼ねるので、拠点でまだ何も動いていない段階で準備できます。
+
+> **発行ダイアログの「この拠点にリリースを導入させる」チェック欄は、既定でオンです（v0.3.3 以降）。**
+> この欄は `.env` に `COMPOSE_PROFILES=self-upgrade` を書きます。すると拠点でポーラーの隣に
+> `yagra-poller-updater` が起動します。これは **root** で動き、その拠点ホストの Docker ソケットを
+> 持つコンテナで、Settings ▸ Upgrade から拠点のポーラーを入れ替えられるようになります。発行前に
+> チェックを外すか、あとから拠点の `.env` で `COMPOSE_PROFILES` を空にすれば、その拠点で
+> ソケットを持つコンテナは 1 つも動きません。切り替えは compose ではなく `.env` で行ってください。
+> アップグレードは compose を導入するリリースのものに入れ替えますが、`.env` には触れません。
+> v0.3.3 より前にキットを渡した拠点は、再発行して渡すまで影響を受けません。
 
 > **トークンはそのファイルの中だけにあります。** Yagra は SHA-256 のダイジェストしか保存しません。
 > アーカイブを失くしたら新しいトークンを発行してください。発行した時点で古いものは無効になります。
@@ -547,6 +556,7 @@ export RUST_LOG=info
 > - マウントする鍵ディレクトリ: `YAGRA_SESSION_KEY_DIR`（`YAGRA_SESSION_KEY_FILE` 用の `session.key` を置く）。`YAGRA_CALLOUT_SEED_DIR`（`YAGRA_NATS_CALLOUT_SEED_FILE` 用の `account.seed`）は旧経路で、今は不要です
 > - ポーラのログ出力先: `YAGRA_POLLER_LOG_DIR`（既定 `/var/log/yagra/pollers`）— `docker-compose.deploy.yml` が同居ポーラの `YAGRA_LOG_DIR` として渡す値。空にすればそのポーラは stdout のみになる
 > - IP→ASN 更新サイドカー: `YAGRA_IPASN_URL`（データセット URL）, `YAGRA_IPASN_REFRESH_SECS`（取得周期。既定 `604800` = 週次）
+> - 拠点の自己アップグレード (D): `COMPOSE_PROFILES` — Docker 自身の変数で、監視拠点では「その拠点がリリースを導入できるか」を決めるスイッチです。`self-upgrade` が入っていると `yagra-poller-updater` サイドカーが起動し、ポーラーがその能力を名乗ります。値を空にすれば、その拠点で Docker ソケットを持つコンテナは 1 つも動きません。発行されたキットがこれを書きます
 
 ---
 
