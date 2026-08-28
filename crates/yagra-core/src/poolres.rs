@@ -121,6 +121,50 @@ impl PoolResolver {
     }
 }
 
+/// What a pool move has to know about the nodes currently resolving to `pool` (ADR-107 増分 3).
+///
+/// 🚨 **The two fields are not the same question, and conflating them is the defect this type was
+/// added to end.** `total` is *who is affected* — what the confirmation dialog counts and what the
+/// `409` reports. `fall_through` is *who has to be written* — the nodes that resolve to the pool
+/// with no column anywhere naming it, so no `UPDATE … WHERE pool = $1` can reach them. The
+/// original move used one literal count for both and therefore moved nothing in the one state
+/// every deployment starts in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PoolMembers {
+    /// How many nodes this pool is polling, by any of the three routes in [`PoolSource`].
+    pub total: usize,
+    /// The nodes that resolve here **only** by falling through to the implicit default
+    /// ([`PoolSource::Default`]) — nothing on the node and nothing on any ancestor folder names a
+    /// pool. Moving the pool has to pin these explicitly; there is no row to rewrite otherwise.
+    ///
+    /// Necessarily empty unless `pool` is [`yagra_bus::DEFAULT_POOL`], since that is the only
+    /// name a fall-through can produce.
+    pub fall_through: Vec<Uuid>,
+}
+
+impl PoolResolver {
+    /// Everything a move of `pool` needs: how many nodes it is polling, and which of them no
+    /// column names.
+    ///
+    /// Takes the node list rather than a repo so it stays pure and testable without a database —
+    /// the caller supplies [`crate::pool_coverage::pool_dependent_nodes`], which is also what the
+    /// coverage strip counts, so `total` is the number already on the operator’s screen.
+    #[must_use]
+    pub fn members(&self, nodes: &[Node], pool: &str) -> PoolMembers {
+        let mut out = PoolMembers::default();
+        for n in nodes {
+            let resolved = self.resolve(n);
+            if resolved.pool != pool {
+                continue;
+            }
+            out.total += 1;
+            if resolved.source == PoolSource::Default {
+                out.fall_through.push(n.id.as_uuid());
+            }
+        }
+        out
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +370,71 @@ mod tests {
                 "group {id} resolved differently from a naive walk"
             );
         }
+    }
+    /// The defect ADR-107 増分 3 fixes, stated as the thing that has to stay true.
+    ///
+    /// 🚨 A pool whose members all *inherit* is the state a fresh deployment is in — nothing writes
+    /// a pool on a node until somebody does. `SELECT count(*) FROM nodes WHERE pool = 'default'`
+    /// answers 0 there, which is what let the move's safety check pass while the strip beside it
+    /// showed 32 and the operator's answer was discarded.
+    #[test]
+    fn a_pool_of_purely_inheriting_nodes_is_not_empty() {
+        // folder 1 says `default`; folder 2 says nothing.
+        let r = PoolResolver::build(vec![
+            row(g(1), None, Some("default")),
+            row(g(2), None, None),
+        ]);
+        let nodes = [
+            node(None, Some(g(1))), // inherits `default` from its folder
+            node(None, Some(g(2))), // folder has no pool → falls through
+            node(None, None),       // no folder at all → falls through
+        ];
+        let m = r.members(&nodes, yagra_bus::DEFAULT_POOL);
+        assert_eq!(
+            m.total, 3,
+            "every one of them is polled by the default pool"
+        );
+        assert_eq!(
+            m.fall_through.len(),
+            2,
+            "only the two with no pool named anywhere have to be pinned; the third travels with \
+             its folder"
+        );
+        assert!(m.fall_through.contains(&nodes[1].id.as_uuid()));
+        assert!(m.fall_through.contains(&nodes[2].id.as_uuid()));
+        assert!(
+            !m.fall_through.contains(&nodes[0].id.as_uuid()),
+            "pinning a node whose folder is moving would write a row for nothing"
+        );
+    }
+
+    /// The acceptance half: a node that names the pool itself is counted but never pinned — the
+    /// existing `UPDATE nodes … WHERE pool = $1` already reaches it, and pinning it again would
+    /// make `moved.0` count it twice.
+    #[test]
+    fn a_node_that_names_the_pool_is_counted_but_not_pinned() {
+        let r = PoolResolver::empty();
+        let nodes = [node(Some("default"), None), node(Some("tokyo"), None)];
+        let m = r.members(&nodes, yagra_bus::DEFAULT_POOL);
+        assert_eq!(m.total, 1, "the tokyo node is in another pool");
+        assert!(m.fall_through.is_empty());
+    }
+
+    /// A non-default pool can never have a fall-through member: inheritance bottoming out always
+    /// produces `DEFAULT_POOL`. So moving `tokyo` is entirely served by the two column rewrites.
+    #[test]
+    fn only_the_default_pool_can_have_fall_through_members() {
+        let r = PoolResolver::build(vec![row(g(1), None, Some("tokyo"))]);
+        let nodes = [
+            node(None, Some(g(1))),    // inherits tokyo
+            node(Some("tokyo"), None), // names tokyo
+            node(None, None),          // falls through to default, not tokyo
+        ];
+        let m = r.members(&nodes, "tokyo");
+        assert_eq!(m.total, 2);
+        assert!(
+            m.fall_through.is_empty(),
+            "nothing falls through to a named pool, so nothing needs pinning"
+        );
     }
 }

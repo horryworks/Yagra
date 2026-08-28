@@ -14302,7 +14302,7 @@
           "pollers"
         ],
         "summary": "`PUT /api/v1/pools/{name}` — rename a pool and/or replace its description.",
-        "description": "🚨 **A rename is refused while a poller serving the old name cannot follow a pool change**, and\nthat refusal is the whole safety of this endpoint. Renaming moves `nodes.pool`,\n`node_groups.pool` **and `pollers.pool`** in one transaction (ADR-107 Inc.2 — before core owned\nthe last of those, this had to refuse for *any* poller at all). What is still refused is a\npoller that will not act on the change: one that is offline, or whose build predates\n[`yagra_bus::CAP_POOL_FOLLOW`]. Rename out from under one of those and it goes on listening for\nthe old name while the new name's nodes are published to a subject nobody subscribes to —\n**plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces\nit until `pool_coverage`'s 300s debounce.",
+        "description": "🚨 **A rename is refused while a poller serving the old name cannot follow a pool change**, and\nthat refusal is the whole safety of this endpoint. Renaming moves `nodes.pool`,\n`node_groups.pool` **and `pollers.pool`** in one transaction (ADR-107 Inc.2 — before core owned\nthe last of those, this had to refuse for *any* poller at all). What is still refused is a\npoller that will not act on the change: one that is offline, or whose build predates\n[`yagra_bus::CAP_POOL_FOLLOW`]. Rename out from under one of those and it goes on listening for\nthe old name while the new name's nodes are published to a subject nobody subscribes to —\n**plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces\nit until `pool_coverage`'s 300s debounce.\n\n🚨 **The default pool is refused outright** (ADR-107 増分 3). Its name is a constant in the\ncode, not a row here, so renaming the row renames the description and nothing else: every\nnode that is in the pool only by inheritance keeps resolving to the constant and is left\nbehind by the pollers that follow the new name — the same hole, through a different door.",
         "operationId": "update_pool",
         "parameters": [
           {
@@ -14370,7 +14370,7 @@
             }
           },
           "409": {
-            "description": "A poller still reports the old name, or the new name is taken",
+            "description": "A poller serving the old name cannot follow the change, the new name is taken, or the pool is the default one (which cannot be renamed)",
             "content": {
               "application/json": {
                 "schema": {

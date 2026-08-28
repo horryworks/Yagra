@@ -294,6 +294,11 @@ pub(crate) struct PoolInUse {
 /// the old name while the new name's nodes are published to a subject nobody subscribes to —
 /// **plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces
 /// it until `pool_coverage`'s 300s debounce.
+///
+/// 🚨 **The default pool is refused outright** (ADR-107 増分 3). Its name is a constant in the
+/// code, not a row here, so renaming the row renames the description and nothing else: every
+/// node that is in the pool only by inheritance keeps resolving to the constant and is left
+/// behind by the pollers that follow the new name — the same hole, through a different door.
 #[utoipa::path(
     put, path = "/api/v1/pools/{name}", tag = "pollers",
     params(("name" = String, Path, description = "The pool to update")),
@@ -302,7 +307,7 @@ pub(crate) struct PoolInUse {
         (status = 204, description = "The pool was updated"),
         (status = 400, description = "The new name is not a valid subject token", body = super::error::ErrorBody),
         (status = 404, description = "No pool of that name is described", body = super::error::ErrorBody),
-        (status = 409, description = "A poller still reports the old name, or the new name is taken", body = super::error::ErrorBody),
+        (status = 409, description = "A poller serving the old name cannot follow the change, the new name is taken, or the pool is the default one (which cannot be renamed)", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the ManageSystem permission", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
@@ -330,6 +335,21 @@ async fn update_pool(
     if let Some(raw) = req.name {
         let to = validate_pool_name(&raw)?;
         if to != name {
+            // 🚨 **The default pool's name is a constant, not data** (`yagra_bus::DEFAULT_POOL`),
+            // so renaming its row does not rename the pool — it detaches the description and
+            // leaves a hole. `rename_pool` re-points every row that *names* `default`, pollers
+            // included, but a node that names nothing resolves to the constant and stays behind:
+            // the pollers would follow the new name while the inventory that is in the pool only
+            // by inheritance keeps waiting on the old one, unpolled and unreported. That is the
+            // same failure ADR-107 増分 3 fixes in the move path, reached by another door, and the
+            // delete path already refuses this name for the mirror-image reason.
+            if name == yagra_bus::DEFAULT_POOL {
+                return Err(ApiError::conflict(
+                    "pool_in_use",
+                    "the default pool cannot be renamed — it is where an unassigned node lands, \
+                     and those nodes would be left behind in it",
+                ));
+            }
             let claimants = admin
                 .repo
                 .pollers_reporting_pool(&name)

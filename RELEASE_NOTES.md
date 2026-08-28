@@ -100,6 +100,24 @@
 
 ### Bug Fixes
 
+- **Moving a poller with "bring what it monitors along" now actually brings it.** The choice was
+  discarded whenever the source pool held only nodes that inherit their pool — which is every
+  node in a deployment until somebody assigns one explicitly. The confirmation dialog counted a
+  node's effective pool (its own setting, else the nearest ancestor folder's, else the default)
+  while the server counted only nodes whose own `pool` column named it, so the dialog appeared,
+  the answer was taken, and no node moved. Moving the last poller out of such a pool left its
+  nodes unpolled with a success message on screen.
+
+- **`PUT /api/v1/pollers/{id}/pool` counts nodes the way the rest of the product does.** The
+  `source_pool_would_empty` conflict now triggers on — and reports — the number of nodes the pool
+  actually polls, including inherited ones. It previously reported only explicitly-assigned
+  nodes, so an API caller could empty a pool of thousands of nodes and never see the conflict.
+
+- **The default pool can no longer be renamed.** Its name is fixed in the code, so renaming its
+  row moved the pollers to the new name and left every node that is in the pool only by
+  inheritance behind in the old one, unpolled. `PUT /api/v1/pools/{name}` now returns `409`
+  `pool_in_use` for it, as deleting it already did.
+
 - **The site updater now runs `docker compose` from the directory the host knows the site by.** It
   reads that path back from the `com.docker.compose.project.working_dir` label, the way the central
   updater already does, instead of from a container-local mount point. It also refuses — naming the

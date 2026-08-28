@@ -1112,7 +1112,7 @@ async fn set_poller_pool(
     }
 
     let from = admin.coordinator.pool_of(&id, now);
-    let mut take_from = None;
+    let mut carry: Option<(String, Vec<Uuid>)> = None;
     if let Some(from) = from.as_deref().filter(|f| *f != to) {
         // Would this move take the pool's last live poller away from nodes that still need one?
         let others = admin
@@ -1127,6 +1127,13 @@ async fn set_poller_pool(
             // so refusing there would raise a question the operator cannot act on. The WebUI's own
             // check (`moveEmptiesSourcePool`) uses the same trigger, which is what keeps a client
             // that shows no dialog from being surprised by a 409 it cannot explain.
+            //
+            // 🚨 **Nodes are counted by effective pool, folders by the column, and the asymmetry
+            // is the point** (ADR-107 増分 3). A folder either names a pool or does not; a node can
+            // be in one three ways, and the two that no column records — inheriting from a folder,
+            // or falling through to the default — are the majority in every deployment. Counting
+            // nodes with `pool_references` made this check answer 0 for a pool the strip beside it
+            // was calling 32, so the dialog fired and the enforcement did not.
             let refs = admin.repo.pool_references(from).await.map_err(|e| {
                 ApiError::from_internal(
                     e.as_ref(),
@@ -1134,7 +1141,12 @@ async fn set_poller_pool(
                     "failed to check what the source pool still holds",
                 )
             })?;
-            if refs.nodes > 0 {
+            let resolver = super::util::pool_resolver(&admin).await;
+            let inventory =
+                crate::pool_coverage::pool_dependent_nodes(&admin.repo, &admin.meraki_devices)
+                    .await;
+            let members = resolver.members(&inventory, from);
+            if members.total > 0 {
                 match req.on_source_empty {
                     None => {
                         return Err(ApiError::conflict(
@@ -1144,11 +1156,13 @@ async fn set_poller_pool(
                                  {} node(s) and {} folder(s) are still assigned to it, so they \
                                  would stop being polled; resend with on_source_empty set to \
                                  \"move_nodes\" or \"leave\"",
-                                refs.nodes, refs.folders
+                                members.total, refs.folders
                             ),
                         ));
                     }
-                    Some(OnSourceEmpty::MoveNodes) => take_from = Some(from.to_owned()),
+                    Some(OnSourceEmpty::MoveNodes) => {
+                        carry = Some((from.to_owned(), members.fall_through));
+                    }
                     Some(OnSourceEmpty::Leave) => {
                         // Recorded rather than merely permitted: this is the branch that ends with
                         // an unmonitored pool, and the audit trail is the only place that says a
@@ -1156,7 +1170,7 @@ async fn set_poller_pool(
                         tracing::warn!(
                             poller = %id,
                             pool = %from,
-                            nodes = refs.nodes,
+                            nodes = members.total,
                             folders = refs.folders,
                             "pool left with no live poller by an explicit operator choice"
                         );
@@ -1168,7 +1182,13 @@ async fn set_poller_pool(
 
     let moved = admin
         .repo
-        .move_poller_to_pool(&id, to, take_from.as_deref())
+        .move_poller_to_pool(
+            &id,
+            to,
+            carry
+                .as_ref()
+                .map(|(from, fall_through)| crate::repo::PoolCarry { from, fall_through }),
+        )
         .await
         .map_err(|e| {
             ApiError::from_internal(e.as_ref(), "move poller pool", "failed to move the poller")

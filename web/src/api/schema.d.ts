@@ -2834,6 +2834,11 @@ export interface paths {
          *     the old name while the new name's nodes are published to a subject nobody subscribes to —
          *     **plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces
          *     it until `pool_coverage`'s 300s debounce.
+         *
+         *     🚨 **The default pool is refused outright** (ADR-107 増分 3). Its name is a constant in the
+         *     code, not a row here, so renaming the row renames the description and nothing else: every
+         *     node that is in the pool only by inheritance keeps resolving to the constant and is left
+         *     behind by the pollers that follow the new name — the same hole, through a different door.
          */
         put: operations["update_pool"];
         post?: never;
@@ -21110,7 +21115,7 @@ export interface operations {
                     "application/json": components["schemas"]["ApiErrorBody"];
                 };
             };
-            /** @description A poller still reports the old name, or the new name is taken */
+            /** @description A poller serving the old name cannot follow the change, the new name is taken, or the pool is the default one (which cannot be renamed) */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -53,6 +53,22 @@ impl PoolReferences {
     }
 }
 
+/// What a pool move carries with it, when the operator answered that the inventory travels
+/// (ADR-107 増分 3).
+///
+/// The two fields are not redundant. `from` re-points every row that *names* the pool — nodes and
+/// folders alike — in one statement each. `fall_through` carries the ids that name nothing and
+/// resolve to the pool only by inheritance bottoming out; there is no predicate over the `nodes`
+/// table that finds them without re-implementing [`crate::poolres::PoolResolver`], so the resolver
+/// finds them and hands them over.
+#[derive(Debug, Clone, Copy)]
+pub struct PoolCarry<'a> {
+    /// The pool being emptied. Its named rows move to the destination.
+    pub from: &'a str,
+    /// Nodes to pin explicitly. Empty unless `from` is [`yagra_bus::DEFAULT_POOL`], which is the
+    /// only pool inheritance can fall through to.
+    pub fall_through: &'a [Uuid],
+}
 impl NodeRepo {
     /// Every described pool, name-ordered.
     ///
@@ -206,18 +222,27 @@ impl NodeRepo {
     /// without their poller is the same hole pointing the other way. Committing one and not the
     /// other is the outcome nobody would choose, so it is not reachable.
     ///
-    /// `take_from` is `Some(source pool)` when the caller has decided the inventory travels. The
-    /// source is passed rather than derived so this method cannot disagree with the pool the
-    /// caller measured and warned about — between the check and the write, the poller's row is the
-    /// only thing that has changed, and it is changed here.
+    /// `take` is `Some` when the caller has decided the inventory travels. The source pool is
+    /// passed rather than derived so this method cannot disagree with the pool the caller measured
+    /// and warned about — between the check and the write, the poller's row is the only thing that
+    /// has changed, and it is changed here.
     ///
-    /// Returns `(nodes, folders)` actually re-pointed — 0/0 when `take_from` is `None`.
+    /// 🚨 **Three writes, because a node can be in a pool three ways and only two of them are a
+    /// column this can rewrite** (ADR-107 増分 3). A node names the pool itself; or an ancestor
+    /// folder does; or **nothing anywhere does and it falls through to the implicit default**. The
+    /// first two are the `WHERE pool = $1` pair below. The third has no row to match, so it was
+    /// silently left behind — and since a fresh deployment writes a pool on nothing, that third
+    /// case was every node in it. Those ids arrive in [`PoolCarry::fall_through`], resolved by
+    /// `PoolResolver`, which stays the one implementation of the inheritance rule: a recursive CTE
+    /// here would be a second one, and the second copy is what rots.
+    ///
+    /// Returns `(nodes, folders)` actually re-pointed — 0/0 when `take` is `None`.
     /// `Ok(None)` ⇒ no such poller.
     pub async fn move_poller_to_pool(
         &self,
         id: &str,
         to: &str,
-        take_from: Option<&str>,
+        take: Option<PoolCarry<'_>>,
     ) -> anyhow::Result<Option<(u64, u64)>> {
         let mut tx = self.pool.begin().await?;
         let done = sqlx::query("UPDATE pollers SET pool = $2 WHERE id = $1")
@@ -230,19 +255,34 @@ impl NodeRepo {
             return Ok(None);
         }
         let mut moved = (0, 0);
-        if let Some(from) = take_from {
+        if let Some(take) = take {
             moved.0 = sqlx::query("UPDATE nodes SET pool = $2 WHERE pool = $1")
-                .bind(from)
+                .bind(take.from)
                 .bind(to)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
             moved.1 = sqlx::query("UPDATE node_groups SET pool = $2 WHERE pool = $1")
-                .bind(from)
+                .bind(take.from)
                 .bind(to)
                 .execute(&mut *tx)
                 .await?
                 .rows_affected();
+            if !take.fall_through.is_empty() {
+                // ⚠️ The `pool IS NULL OR trim(pool) = ''` guard is not the inheritance rule — it is
+                // a concurrency guard. The ids were resolved before this transaction opened, so a
+                // node that acquired its own pool in between must keep it rather than be dragged
+                // along by a decision made about a state it has left.
+                moved.0 += sqlx::query(
+                    "UPDATE nodes SET pool = $2 \
+                     WHERE id = ANY($1) AND (pool IS NULL OR trim(pool) = '')",
+                )
+                .bind(take.fall_through)
+                .bind(to)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            }
         }
         tx.commit().await?;
         Ok(Some(moved))

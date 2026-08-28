@@ -30,6 +30,7 @@ use crate::groups::GroupRepo;
 use crate::meraki::MerakiDeviceRepo;
 use crate::poolres::PoolResolver;
 use crate::repo::NodeRepo;
+use yagra_common::Node;
 // Self-import so the watch loop below keeps the `pool_coverage::` paths it was written with. It
 // lived in `main.rs` until ADR-083, where those paths were the only way to name this module; the
 // alternative was to strip 9 prefixes and make the move stop being verifiable by diff.
@@ -149,7 +150,6 @@ pub async fn node_counts_by_pool(
     meraki: &MerakiDeviceRepo,
     groups: &GroupRepo,
 ) -> HashMap<String, usize> {
-    let meraki_ids = meraki.node_ids().await.unwrap_or_default();
     let resolver = match groups.pool_rows().await {
         Ok(rows) => PoolResolver::build(rows),
         Err(e) => {
@@ -158,20 +158,42 @@ pub async fn node_counts_by_pool(
         }
     };
     let mut counts: HashMap<String, usize> = HashMap::new();
-    match repo.list_nodes().await {
-        Ok(nodes) => {
-            for n in nodes {
-                if meraki_ids.contains(&n.id.as_uuid()) {
-                    continue;
-                }
-                *counts
-                    .entry(resolver.resolve_pool(&n).to_owned())
-                    .or_insert(0) += 1;
-            }
-        }
-        Err(e) => tracing::error!(error = %e, "list nodes for pool coverage failed"),
+    for n in pool_dependent_nodes(repo, meraki).await {
+        *counts
+            .entry(resolver.resolve_pool(&n).to_owned())
+            .or_insert(0) += 1;
     }
     counts
+}
+
+/// The nodes whose polling depends on a pool having a live poller.
+///
+/// 🔑 **The Meraki exclusion is defined here and only here.** Core’s org collector polls
+/// Meraki-managed nodes directly, so no pool poller stands between them and their data — counting
+/// them would put a Meraki-only deployment into a permanent false alarm, and *moving* them with a
+/// pool would promise something the pool does not deliver.
+///
+/// Two callers ask "which nodes are in pool P": the coverage strip above, and the pool-move
+/// refusal in `api/pollers.rs`. **ADR-107 増分 3 exists because those two once counted different
+/// sets** — the strip resolved inheritance and the refusal read the column, so a pool of purely
+/// inheriting nodes was 32 on screen and 0 to the check that had to protect it. One
+/// implementation, so the dialog an operator answers and the `409` that enforces the answer
+/// cannot disagree.
+///
+/// Infallible for the same reason as its caller: this answers a question asked *while* something
+/// is broken. A read failure degrades to an empty list.
+pub async fn pool_dependent_nodes(repo: &NodeRepo, meraki: &MerakiDeviceRepo) -> Vec<Node> {
+    let meraki_ids = meraki.node_ids().await.unwrap_or_default();
+    match repo.list_nodes().await {
+        Ok(nodes) => nodes
+            .into_iter()
+            .filter(|n| !meraki_ids.contains(&n.id.as_uuid()))
+            .collect(),
+        Err(e) => {
+            tracing::error!(error = %e, "list nodes for pool coverage failed");
+            Vec::new()
+        }
+    }
 }
 
 /// A coverage edge worth telling someone about.

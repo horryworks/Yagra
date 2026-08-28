@@ -81,7 +81,7 @@ pub use nodes::TopologyRow;
 // `pub` method here and no caller writes either name (the API destructures them inline). Dropping
 // them would make `list_pools` and `pool_references` unnameable from outside `repo`.
 #[allow(unused_imports)]
-pub use pools::{PoolReferences, PoolRow};
+pub use pools::{PoolCarry, PoolReferences, PoolRow};
 pub use profiles::ProfileSummary;
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].
