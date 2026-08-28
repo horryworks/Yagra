@@ -382,6 +382,20 @@ services:
       # updater reads this variable before falling back to the hostname (see local_pollers below), so
       # the id core pre-registers and the id the poller claims stay the same one.
       YAGRA_POLLER_ID: ${YAGRA_POLLER_ID:-local}
+      # Which pool this poller serves. Absent ⇒ the binary's own default, `default` — so leaving
+      # this unset is byte-identical to every deployment before it existed.
+      #
+      # 🚨 **It is here because Settings ▸ Pollers hands the operator this exact line** (ADR-107
+      # 決定 5). Recording a destination in the WebUI cannot move a poller on its own: what a poller
+      # polls follows from this variable, read once at startup, and every bus subject it subscribes
+      # to — including the Auth Callout scope it is granted at connect — is derived from it there.
+      # So the dialog's answer is "put this in .env and restart", and without the line below that
+      # instruction is **inert on a co-located poller**: the value would sit in .env, reach nothing,
+      # and the operator would watch a move that never happens with no error anywhere. The
+      # remote-site composition has always passed it (`docker-compose.poller.yml`, where it is
+      # mandatory); this one had simply never needed to, because there was no way to ask for a move.
+      # Found by running the round trip on 192.168.1.211, 2026-08-28 — no test could see it.
+      YAGRA_POLLER_POOL: ${YAGRA_POLLER_POOL:-}
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
       # SUBDIRECTORY of core's log volume is load-bearing — core collects by filename prefix, and
       # keeping the two apart on disk means neither collector can sweep up the other's files. Each
