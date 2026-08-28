@@ -27,7 +27,9 @@
 # The bundle's `.env` sets all three:
 #   YAGRA_BUS_URL     — tls://<poller-id>:<token>@<core-host>:4222
 #   YAGRA_POLLER_ID   — stable identity for this poller (e.g. edge-tokyo-1)
-#   YAGRA_POLLER_POOL — pool this poller serves; nodes are assigned to pollers by pool
+#   YAGRA_POLLER_POOL — the pool this poller joins when core first sees it. Core owns it from then
+#                       on (ADR-107 Inc.2): moving a site between pools is done in Settings ▸
+#                       Pollers and takes effect without touching this file or restarting anything.
 #
 # ── One optional variable decides whether this poller upgrades itself ───────────────
 # COMPOSE_PROFILES=self-upgrade  turns on the `yagra-poller-updater` service at the

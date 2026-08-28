@@ -313,6 +313,7 @@ mod tests {
                 specs: vec![yagra_bus::JobSpec::from_job(&icmp_job())],
             }],
             total_nodes: 1,
+            pool: None,
         });
         let mut ws = WorkingSet::new();
         let now = Instant::now();

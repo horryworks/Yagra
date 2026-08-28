@@ -300,6 +300,8 @@ impl Coordinator {
                 .pollers
                 .entry(hb.poller_id.clone())
                 .or_insert_with(|| PollerEntry {
+                    // First contact: the poller's own environment is the only answer that exists
+                    // (ADR-107 Inc.2). Every later beat is a report, not an instruction.
                     pool: hb.pool.clone(),
                     incarnation: hb.incarnation,
                     last_seen: now,
@@ -327,7 +329,13 @@ impl Coordinator {
                 if hb.last_seq != entry.seq {
                     entry.needs_snapshot = true; // the poller is behind / gapped
                 }
-                entry.pool = hb.pool.clone();
+                // 🚨 **The reported pool is deliberately NOT adopted here** (ADR-107 Inc.2).
+                // `entry.pool` is what core has decided this poller serves, and the ring is built
+                // from it — so taking the beat's value back would revert an operator's move within
+                // one beat, with no error anywhere. A poller learns core's answer from
+                // `WorkingSetSnapshot::pool` and starts reporting it; until it does, the two
+                // disagree and core's side is the right one. The one place the beat still decides
+                // is first contact, below, where nothing else has an answer.
                 entry.version = hb.version.clone();
             }
             // Detect an offline→online transition: a *known* poller whose last contact predates the
@@ -428,11 +436,20 @@ impl Coordinator {
                 // Where the poller says it is, for ADR-043 anchor resolution. Rendered here rather
                 // than in the repo so the store keeps taking plain bound values.
                 let mgmt: Vec<String> = hb.mgmt_addrs.iter().map(ToString::to_string).collect();
-                if let Err(e) = repo
+                match repo
                     .upsert_seen(&hb.poller_id, &hb.pool, &hb.version, hb.incarnation, &mgmt)
                     .await
                 {
-                    tracing::warn!(error = %e, poller = %hb.poller_id, "poller inventory upsert failed");
+                    // The inventory is the durable answer, and on an HA pair it is the **only**
+                    // thing the two cores share: a move taken on the follower reaches the leader
+                    // here and nowhere else (ADR-107 Inc.2). That makes convergence bounded by
+                    // `PG_UPSERT_EVERY`, not instant — the single-core case is instant because
+                    // `set_pool` below updates this registry directly.
+                    Ok(Some(pool)) => self.adopt_pool(&hb.poller_id, &pool),
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, poller = %hb.poller_id, "poller inventory upsert failed");
+                    }
                 }
             }
         }
@@ -467,10 +484,13 @@ impl Coordinator {
                 });
             entry.needs_snapshot = true;
             entry.last_seen = now;
-            entry.pool = req.pool.clone();
+            // Not `req.pool`, for the reason in `observe_heartbeat`: a resync must not be a way
+            // for a poller to put itself back in the pool it used to serve. A newly-created entry
+            // above did take it, because there was nothing else to take.
             entry.incarnation = req.incarnation;
+            let pool = entry.pool.clone();
             PollerLiveDoc {
-                pool: req.pool.clone(),
+                pool: pool.clone(),
                 incarnation: req.incarnation,
                 version: entry.version.clone(),
                 last_seq: entry.seq,
@@ -758,6 +778,10 @@ impl Coordinator {
                                 chunk_total,
                                 nodes: chunk.to_vec(),
                                 total_nodes,
+                                // What this poller must serve (ADR-107 Inc.2). On every chunk, not
+                                // just the first: chunks are independent messages and the poller
+                                // may apply them in any order.
+                                pool: Some(pool.to_owned()),
                             }),
                         ));
                     }
@@ -899,6 +923,80 @@ impl Coordinator {
             .unwrap_or_default();
         ids.sort_unstable();
         Some(ids)
+    }
+
+    /// Move a poller into `pool` **now**: rewrite the registry entry, arm a full snapshot, and
+    /// wake the sweep (ADR-107 Inc.2).
+    ///
+    /// The caller has already written `pollers.pool`; this is the in-process half that makes the
+    /// change take effect before the next durable read. Between them: the ring rebuilds on the next
+    /// sweep (woken here, so within milliseconds), the poller receives a snapshot of the new pool's
+    /// nodes on `yagra.poller.assign.{id}` — **a subject that carries no pool token, which is why
+    /// none of this needs the poller's cooperation to start working** — and that snapshot tells it
+    /// which pool it is in so it can re-point the three subjects that *are* pool-derived.
+    ///
+    /// A no-op for a poller this core has not seen: it will pick the pool up from the inventory on
+    /// its first beat.
+    pub fn set_pool(&self, poller_id: &str, pool: &str) {
+        let moved = {
+            let mut st = self.state.lock().expect("coordinator state poisoned");
+            match st.pollers.get_mut(poller_id) {
+                Some(entry) if entry.pool != pool => {
+                    entry.pool = pool.to_owned();
+                    // A delta would describe a change to the *old* pool's set. The poller must
+                    // replace its whole working set, so the next message has to be a snapshot —
+                    // which is also what carries the new pool name to it.
+                    entry.needs_snapshot = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if moved {
+            tracing::info!(poller = poller_id, %pool, "poller moved to a new pool");
+            metrics::counter!("yagra_poller_pool_moves_total").increment(1);
+            self.wake_sweep();
+        }
+    }
+
+    /// Take the pool from the durable inventory, without the logging or the sweep nudge.
+    ///
+    /// Separate from [`Self::set_pool`] because this runs on the heartbeat path once a minute per
+    /// poller and is almost always a no-op; treating every beat as a move would put a log line and
+    /// a sweep behind each one.
+    fn adopt_pool(&self, poller_id: &str, pool: &str) {
+        let changed = {
+            let mut st = self.state.lock().expect("coordinator state poisoned");
+            match st.pollers.get_mut(poller_id) {
+                Some(entry) if entry.pool != pool => {
+                    entry.pool = pool.to_owned();
+                    entry.needs_snapshot = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+        if changed {
+            tracing::info!(
+                poller = poller_id,
+                %pool,
+                "adopted the pool from the inventory — another core moved this poller"
+            );
+            self.wake_sweep();
+        }
+    }
+
+    /// The capabilities a live poller advertises. `None` when it is unknown or offline.
+    ///
+    /// Read by the move path to refuse a poller that cannot follow a pool change — see
+    /// [`yagra_bus::CAP_POOL_FOLLOW`], where the failure that refusal exists for is spelled out.
+    #[must_use]
+    pub fn caps_of(&self, poller_id: &str, now: Instant) -> Option<Vec<String>> {
+        let st = self.state.lock().expect("coordinator state poisoned");
+        st.pollers
+            .get(poller_id)
+            .filter(|e| now.saturating_duration_since(e.last_seen) < OFFLINE_AFTER)
+            .map(|e| e.caps.clone())
     }
 
     /// The pool a live poller serves, from the registry (not the durable inventory row, which
@@ -1338,6 +1436,108 @@ mod tests {
 
     fn t0() -> Instant {
         Instant::now()
+    }
+
+    /// The whole of ADR-107 Inc.2 on core's side, in one pass: a move changes which pool's nodes
+    /// the poller is sent, forces a **snapshot** rather than a delta, and puts the new pool's name
+    /// on that snapshot so the poller can re-point its three pool-derived subjects.
+    ///
+    /// 🚨 The snapshot half is not cosmetic. A delta describes a change to the set the poller
+    /// already holds, and after a move that set belongs to a different pool — applying one would
+    /// leave it polling a union of both pools' nodes, which no page would show as wrong.
+    #[tokio::test]
+    async fn moving_a_poller_sends_it_the_new_pools_nodes_as_a_snapshot_naming_the_pool() {
+        let (coord, bus, _) = coordinator();
+        let mut rx = bus.subscribe_sync();
+        let now = t0();
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", Uuid::new_v4()), now)
+            .await;
+
+        let a = NodeId::new();
+        coord
+            .reconcile_pool("default", &desired(&[(a, 30)]), now)
+            .await;
+        let first = drain_syncs(&mut rx, "p1");
+        assert!(
+            matches!(first.first(), Some(SyncMsg::SnapshotChunk(_))),
+            "a new poller is snapshotted first: {first:?}"
+        );
+
+        // The move.
+        coord.set_pool("p1", "tokyo");
+        assert_eq!(
+            coord.pool_of("p1", now).as_deref(),
+            Some("tokyo"),
+            "the registry must follow immediately — the ring is built from it"
+        );
+
+        let b = NodeId::new();
+        coord
+            .reconcile_pool("tokyo", &desired(&[(b, 30)]), now)
+            .await;
+        let after = drain_syncs(&mut rx, "p1");
+        let Some(SyncMsg::SnapshotChunk(snap)) = after.first() else {
+            panic!("a move must be followed by a snapshot, not a delta: {after:?}");
+        };
+        assert_eq!(
+            snap.pool.as_deref(),
+            Some("tokyo"),
+            "the snapshot must name the pool, or the poller cannot re-point its subjects"
+        );
+        assert_eq!(
+            snap.nodes.iter().map(|nj| nj.node_id).collect::<Vec<_>>(),
+            vec![b],
+            "the poller must be handed the destination pool's nodes, and only those"
+        );
+
+        // 🚨 The acceptance side of the rule that makes the move stick: the poller goes on
+        // reporting its old pool until it has applied the snapshot, and core must ignore that.
+        // Adopting it would revert the move within one beat, with no error anywhere.
+        coord
+            .observe_heartbeat(heartbeat("p1", "default", Uuid::new_v4()), now)
+            .await;
+        assert_eq!(
+            coord.pool_of("p1", now).as_deref(),
+            Some("tokyo"),
+            "a heartbeat reporting the old pool must not undo the move"
+        );
+    }
+
+    /// First contact is the one time the poller's own answer is the only one there is, and it must
+    /// still be taken — otherwise a brand-new remote site lands in `default` whatever its kit said.
+    #[tokio::test]
+    async fn a_pollers_first_heartbeat_still_decides_its_pool() {
+        let (coord, _bus, _) = coordinator();
+        let now = t0();
+        coord
+            .observe_heartbeat(heartbeat("new-site", "osaka", Uuid::new_v4()), now)
+            .await;
+        assert_eq!(coord.pool_of("new-site", now).as_deref(), Some("osaka"));
+    }
+
+    /// The refusal core's API is built on: a build that cannot follow a pool change says nothing,
+    /// and one that can says so on every beat.
+    #[tokio::test]
+    async fn a_pollers_caps_are_readable_for_the_move_refusal() {
+        let (coord, _bus, _) = coordinator();
+        let now = t0();
+        let mut hb = heartbeat("old", "default", Uuid::new_v4());
+        hb.caps = Vec::new();
+        coord.observe_heartbeat(hb, now).await;
+        assert_eq!(coord.caps_of("old", now), Some(Vec::new()));
+
+        let mut hb = heartbeat("new", "default", Uuid::new_v4());
+        hb.caps = vec![yagra_bus::CAP_POOL_FOLLOW.to_owned()];
+        coord.observe_heartbeat(hb, now).await;
+        assert!(coord
+            .caps_of("new", now)
+            .is_some_and(|c| c.iter().any(|c| c == yagra_bus::CAP_POOL_FOLLOW)));
+
+        // Offline reads as "cannot", which is the answer the move path needs: there would be
+        // nobody to receive the snapshot that tells the poller where it went.
+        assert_eq!(coord.caps_of("new", now + OFFLINE_AFTER), None);
+        assert_eq!(coord.caps_of("nobody", now), None);
     }
 
     #[tokio::test]

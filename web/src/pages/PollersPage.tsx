@@ -49,15 +49,16 @@ import {
 } from '../lib/pollers';
 import { saveBlob } from '../lib/download';
 import {
-  hasPendingMove,
   isValidNewPoolName,
-  pendingArrivals,
+  moveEmptiesSourcePool,
   poolCellTitle,
-  poolEnvLine,
   poolIsRemovable,
   poolUsage,
-  renameBlockers,
+  pollerCanMove,
+  renamePassengers,
 } from '../lib/poolAdmin';
+import { DndContext, useDraggable, useDroppable, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
 import { decodeSet, toggleSetValue } from '../lib/columnFilter';
 import { BusPanel } from './BusPanel';
 import './PollersPage.css';
@@ -82,20 +83,24 @@ function PoolCard({
   selected,
   onSelect,
   actions,
+  droppable,
 }: {
   pool: PoolSummary;
   selected: boolean;
   onSelect: () => void;
   actions: { label: string; onSelect: () => void; danger?: boolean }[];
+  /** Accept a poller dropped on it. Off for a viewer, who cannot move anything. */
+  droppable: boolean;
 }) {
   const { t } = useTranslation('system');
+  const { setNodeRef, isOver } = useDroppable({ id: `pool:${pool.pool}`, disabled: !droppable });
   const warn = poolHasWarning(pool);
   // A pool with neither nodes nor a live poller is not a warning — it is one that has just been
   // created. Saying "no live poller" there would fire an alarm on every new pool the moment it is
   // named, and the operator has not done anything wrong yet.
   const idle = !warn && pool.nodes === 0 && pool.live_pollers === 0;
   return (
-    <div className="pool-slot">
+    <div ref={setNodeRef} className={`pool-slot${isOver ? ' is-over' : ''}`}>
       <button
         type="button"
         className={`pool-card${warn ? ' has-warn' : ''}`}
@@ -267,10 +272,11 @@ function EditPoolModal({
 
 /** Rename a pool — refused while any poller reports the old name (ADR-107 決定 6).
  *
- *  🚨 The refusal is the safety. A rename moves node and folder assignments in one transaction but
- *  cannot move a poller: its pool comes from `YAGRA_POLLER_POOL` at its own site. Rename out from
- *  under one and the old name stays live while the new name's nodes fall into legacy fan-out, where
- *  their jobs are published to a subject nobody subscribes to and plain NATS discards them. */
+ *  🚨 **This used to refuse while any poller reported the name, and no longer does.** A rename moves
+ *  node and folder assignments in one transaction, and since ADR-107 Inc.2 it moves the pollers with
+ *  them — core owns `pollers.pool`. What is left is the same question a move asks: whether each of
+ *  those pollers can *follow* one. A build that cannot would keep "poll now" and discovery pointed
+ *  at a subject that no longer exists, silently. */
 function RenamePoolModal({
   pool,
   pollers,
@@ -283,7 +289,10 @@ function RenamePoolModal({
   onDone: () => void;
 }) {
   const { t } = useTranslation('system');
-  const blockers = renameBlockers(pool.pool, pollers);
+  // Passengers, not blockers: the ones that come with the name. Only those that cannot follow a
+  // pool change stop the rename.
+  const passengers = renamePassengers(pool.pool, pollers);
+  const stuck = pollers.filter((p) => p.pool === pool.pool && !pollerCanMove(p)).map((p) => p.id);
   const [name, setName] = useState(pool.pool);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -307,7 +316,7 @@ function RenamePoolModal({
       title={t('pollers.pool.renameTitle', { pool: pool.pool })}
       onClose={onClose}
       footer={
-        blockers.length > 0 ? (
+        stuck.length > 0 ? (
           <Button variant="outline" onClick={onClose}>
             {t('common:actions.close')}
           </Button>
@@ -324,14 +333,14 @@ function RenamePoolModal({
       }
     >
       <div className="form-stack">
-        {blockers.length > 0 ? (
+        {stuck.length > 0 ? (
           <>
             <p className="pool-stop">
               <WarningIcon />
               {t('pollers.pool.renameBlocked')}
             </p>
             <ul className="pool-reflist">
-              {blockers.map((id) => (
+              {stuck.map((id) => (
                 <li key={id} className="mono">
                   {id}
                 </li>
@@ -346,7 +355,7 @@ function RenamePoolModal({
               <TextInput value={name} onChange={(e) => setName(e.target.value)} />
             </label>
             <FieldHint>
-              {t('pollers.pool.renameHint', { nodes: pool.nodes })}
+              {t('pollers.pool.renameHint', { nodes: pool.nodes, pollers: passengers.length })}
             </FieldHint>
             {error && <p className="form-error">{error}</p>}
           </>
@@ -417,59 +426,53 @@ function DeletePoolModal({
   );
 }
 
-/** Record where a poller should be, and hand over what the site needs to make it so (ADR-107 決定 5).
+/** The grip that drags one poller onto a pool card (ADR-107 Inc.2).
  *
- *  🚨 **This dialog does not move the poller and says so before the button.** Every bus subject a
- *  poller subscribes to is derived from `YAGRA_POLLER_POOL` at startup, including the Auth Callout
- *  scope it is granted at connect — so a destination recorded here takes effect when the site
- *  restarts, and not before. Two ways to make that happen are offered because a co-located poller
- *  has no site kit: the `.env` line works for both, the kit only for a poller that has a token. */
+ *  A handle rather than the whole row: the row's other cells hold their own controls (the id opens
+ *  the node drill-down, the anchor opens a picker), and making the row itself draggable would
+ *  swallow those clicks. `activationConstraint` on the sensor does the rest — a click stays a
+ *  click until the pointer has actually moved. */
+function PoolDragHandle({ poller }: { poller: PollerInfo }) {
+  const { t } = useTranslation('system');
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `poller:${poller.id}`,
+    data: { poller },
+  });
+  return (
+    <span
+      ref={setNodeRef}
+      className={`pool-grip${isDragging ? ' is-dragging' : ''}`}
+      aria-label={t('pollers.move.grip', { id: poller.id })}
+      {...listeners}
+      {...attributes}
+    >
+      ⠿
+    </span>
+  );
+}
+
+/** Pick where a poller should go (ADR-107 Inc.2).
+ *
+ *  🚨 **The screen says what happens, never how.** There is no `.env` line, no restart step and no
+ *  kit here: core owns `pollers.pool` now, so pressing the button moves the poller — the working
+ *  set follows on a subject that carries no pool name, and the poller re-points its three
+ *  pool-derived subjects and reconnects the bus by itself. That mechanism is not the operator's
+ *  problem and used to take up most of this dialog.
+ *
+ *  What *is* the operator's problem is the one consequence they cannot see: {@link ConfirmMoveModal}. */
 function MovePollerModal({
   poller,
   pools,
+  onPick,
   onClose,
-  onDone,
 }: {
   poller: PollerInfo;
   pools: PoolSummary[];
+  onPick: (to: string) => void;
   onClose: () => void;
-  onDone: () => void;
 }) {
   const { t } = useTranslation('system');
-  const [dest, setDest] = useState(poller.desired_pool ?? '');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const envLine = poolEnvLine(dest || poller.pool);
-
-  const record = () => {
-    setBusy(true);
-    setError(null);
-    api
-      .setPollerDesiredPool(poller.id, dest || null)
-      .then(() => {
-        onDone();
-        onClose();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.move.failed'))))
-      .finally(() => setBusy(false));
-  };
-
-  const reissue = () => {
-    setBusy(true);
-    setError(null);
-    // Record first, then build the kit: the kit reads the recorded destination, so issuing before
-    // recording would hand the site an archive naming the pool it is leaving.
-    api
-      .setPollerDesiredPool(poller.id, dest || null)
-      .then(() => api.issuePollerToken(poller.id, { pool: dest || undefined, self_upgrade: true }))
-      .then(({ blob, filename }) => {
-        saveBlob(blob, filename || `yagra-poller-${poller.id}.tar.gz`);
-        onDone();
-      })
-      .catch((e) => setError(errMsg(e, t('pollers.move.kitFailed'))))
-      .finally(() => setBusy(false));
-  };
+  const [dest, setDest] = useState('');
 
   return (
     <Modal
@@ -477,67 +480,111 @@ function MovePollerModal({
       onClose={onClose}
       footer={
         <>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose}>
             {t('common:actions.cancel')}
           </Button>
-          <Button variant="primary" onClick={record} disabled={busy}>
-            {t('pollers.move.record')}
+          <Button variant="primary" onClick={() => onPick(dest)} disabled={!dest || dest === poller.pool}>
+            {t('pollers.move.confirm')}
           </Button>
         </>
       }
     >
       <div className="form-stack">
-        <p className="modal-confirm-text">
-          <Trans
-            t={t}
-            i18nKey="pollers.move.current"
-            values={{ pool: poller.pool }}
-            components={{ code: <strong className="mono" /> }}
-          />
-        </p>
         <label className="form-label">
           {t('pollers.move.destLabel')}
           <select className="field mono" value={dest} onChange={(e) => setDest(e.target.value)}>
             <option value="">{t('pollers.move.destNone')}</option>
-            {pools.map((p) => (
-              <option key={p.pool} value={p.pool}>
-                {p.pool}
-              </option>
-            ))}
+            {pools
+              .filter((p) => p.pool !== poller.pool)
+              .map((p) => (
+                <option key={p.pool} value={p.pool}>
+                  {p.pool}
+                </option>
+              ))}
           </select>
         </label>
+        <FieldHint>{t('pollers.move.destHint', { pool: poller.pool })}</FieldHint>
+      </div>
+    </Modal>
+  );
+}
 
+/** The one question a move can raise: this was the last poller of its pool, and that pool still has
+ *  something to monitor (ADR-107 Inc.2 決定 6).
+ *
+ *  🚨 **The failure being prevented is the quietest one in the product.** A pool with no live poller
+ *  falls back to legacy per-job publish on `yagra.jobs.{pool}`, nothing is subscribed, and plain
+ *  NATS discards the jobs. The nodes decay to `unknown` rather than `down`, every dashboard reads
+ *  calm, and `pool_coverage` only pages after a five-minute debounce. So the operator is asked
+ *  *before*, with the count, and the API refuses a request that has not answered.
+ *
+ *  ⚠️ It is shown **only** in that case. A move that strands nothing goes straight through — the
+ *  drag lands and the row changes, with no dialog at all. */
+function ConfirmMoveModal({
+  poller,
+  to,
+  from,
+  nodes,
+  busy,
+  error,
+  onConfirm,
+  onClose,
+}: {
+  poller: PollerInfo;
+  to: string;
+  from: string;
+  nodes: number;
+  busy: boolean;
+  error: string | null;
+  onConfirm: (takeNodes: boolean) => void;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation('system');
+  // Defaults to bringing them along, which is the answer that keeps monitoring running. The other
+  // one is available and spelled out; it is not the one a distracted operator lands on.
+  const [take, setTake] = useState(true);
+
+  return (
+    <Modal
+      title={t('pollers.move.confirmTitle', { id: poller.id, pool: to })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={() => onConfirm(take)} disabled={busy}>
+            {t('pollers.move.confirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
         <p className="pool-stop">
           <WarningIcon />
-          {t('pollers.move.notYet')}
+          {t('pollers.move.emptyWarn', { pool: from })}
         </p>
-
-        <div className="pool-divider" />
-        <p className="pool-subhead">{t('pollers.move.applyHead')}</p>
-        <div className="poller-copyrow">
-          <pre className="poller-snippet">{envLine}</pre>
-          <Button
-            variant="outline"
-            onClick={() => {
-              void navigator.clipboard?.writeText(envLine);
-              setCopied(true);
-            }}
-          >
-            {copied ? t('pollers.register.copied') : t('pollers.register.copy')}
-          </Button>
-        </div>
-        {poller.has_token ? (
-          <>
-            <FieldHint>{t('pollers.move.kitHint')}</FieldHint>
-            <div>
-              <Button variant="outline" onClick={reissue} disabled={busy || !dest}>
-                {t('pollers.move.kitButton')}
-              </Button>
-            </div>
-          </>
-        ) : (
-          <FieldHint>{t('pollers.move.colocatedHint')}</FieldHint>
-        )}
+        <p className="modal-confirm-text">
+          {t('pollers.move.emptyHolds', { pool: from, count: nodes })}
+        </p>
+        <label className="form-choice">
+          <input type="radio" checked={take} onChange={() => setTake(true)} />
+          <span>
+            <strong>{t('pollers.move.takeNodes', { pool: to })}</strong>
+            <span className="form-choice-hint">
+              {t('pollers.move.takeNodesWhy', { pool: to, count: nodes })}
+            </span>
+          </span>
+        </label>
+        <label className="form-choice">
+          <input type="radio" checked={!take} onChange={() => setTake(false)} />
+          <span>
+            <strong>{t('pollers.move.leaveNodes', { pool: from })}</strong>
+            <span className="form-choice-hint danger">
+              {t('pollers.move.leaveNodesWhy', { count: nodes })}
+            </span>
+          </span>
+        </label>
         {error && <p className="form-error">{error}</p>}
       </div>
     </Modal>
@@ -1073,50 +1120,40 @@ export function PollersPage() {
         ),
       },
       {
-        // Editable like the anchor column and for the same reason: where a poller *should* be is
-        // the operator's answer, not the poller's. What it renders while a move is pending is the
-        // point — "default → tokyo, 移動待ち" says the record exists AND has not taken effect, which
-        // is the one thing a button alone could not say (ADR-107 決定 5).
+        // Which pool this poller serves, plus the two ways to change it (ADR-107 Inc.2): drag the
+        // grip onto a pool card above, or open the picker. Both end in the same `beginMove`, so
+        // the safety question is asked once however the move was started.
+        //
+        // ⚠️ **The grip is not the only entry point, deliberately.** Drag-and-drop cannot be
+        // driven from a keyboard here, and `ui-conventions` does not allow an action that exists
+        // only as a pointer gesture — so the link is the canonical control and the drag is a
+        // shortcut for it.
         key: 'pool',
         header: t('pollers.cols.pool'),
         width: '210px',
         render: (p) => {
-          const pending = hasPendingMove(p);
-          const body = (
-            <>
-              <Badge tone="neutral">{p.pool}</Badge>
-              {pending && (
-                <>
-                  <span className="pool-arrow">→</span>
-                  <Badge tone="neutral">{p.desired_pool}</Badge>
-                  <Badge tone="warning">{t('pollers.move.pending')}</Badge>
-                </>
-              )}
-            </>
-          );
-          // Carries every string the cell draws, because a 63-character pool name will clip
-          // and ADR-088 refuses clipped text with nothing to hover (it caught this one).
+          // `useCan` decides whether to draw a control at all (ADR-056); `can_change_pool` is the
+          // separate question of whether *this* poller could act on one. Both must hold.
+          const movable = canSystem && pollerCanMove(p);
+          // Carries every string the cell draws, because a 63-character pool name will clip and
+          // ADR-088 refuses clipped text with nothing to hover (it caught exactly that here).
           const title = poolCellTitle(p, {
-            pending: t('pollers.move.pending'),
-            hint: pending
-              ? t('pollers.move.pendingHint', { pool: p.pool })
-              : t('pollers.move.title', { id: p.id }),
+            hint: movable ? t('pollers.move.cellHint') : t('pollers.move.cannot'),
           });
-          if (!canSystem)
-            return (
-              <span className="pool-cell-static" title={title}>
-                {body}
-              </span>
-            );
           return (
-            <button
-              type="button"
-              className="pool-cell"
-              onClick={() => setMovingPoller(p)}
-              title={title}
-            >
-              {body}
-            </button>
+            <span className="pool-cell-wrap" title={title}>
+              {movable && <PoolDragHandle poller={p} />}
+              <Badge tone="neutral">{p.pool}</Badge>
+              {movable && (
+                <button
+                  type="button"
+                  className="pool-move-link"
+                  onClick={() => setMovingPoller(p)}
+                >
+                  {t('pollers.move.action')}
+                </button>
+              )}
+            </span>
           );
         },
       },
@@ -1338,7 +1375,83 @@ export function PollersPage() {
     },
     [filters, poolOrder, setFilters],
   );
-  const pending = useMemo(() => pendingArrivals(shown, selectedPools), [shown, selectedPools]);
+  // One move, however it was started. `movingPoller` is the picker; `confirmMove` is the safety
+  // question, which only appears when the move would strand the source pool's nodes.
+  const [confirmMove, setConfirmMove] = useState<{
+    poller: PollerInfo;
+    to: string;
+    from: string;
+    nodes: number;
+  } | null>(null);
+  const [moveBusy, setMoveBusy] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+
+  // 🚨 **The one place a move happens**, whichever entry point started it. The check below decides
+  // whether to ask; the API asks the same question again and refuses a request that has not
+  // answered (`409 source_pool_would_empty`), so this is the convenience half of a two-part
+  // safeguard rather than the safeguard itself.
+  const beginMove = useCallback(
+    (poller: PollerInfo, to: string) => {
+      setMovingPoller(null);
+      setMoveError(null);
+      const risk = moveEmptiesSourcePool(
+        poller,
+        to,
+        pollers,
+        (name) => pools.find((p) => p.pool === name)?.nodes ?? 0,
+      );
+      if (risk) {
+        setConfirmMove({ poller, to, from: risk.pool, nodes: risk.nodes });
+        return;
+      }
+      setMoveBusy(true);
+      api
+        .setPollerPool(poller.id, { pool: to })
+        .then(() => load())
+        .catch((e) => setMoveError(errMsg(e, t('pollers.move.failed'))))
+        .finally(() => setMoveBusy(false));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is defined below and stable
+    [pollers, pools, t],
+  );
+
+  const applyConfirmedMove = useCallback(
+    (takeNodes: boolean) => {
+      if (!confirmMove) return;
+      setMoveBusy(true);
+      setMoveError(null);
+      api
+        .setPollerPool(confirmMove.poller.id, {
+          pool: confirmMove.to,
+          on_source_empty: takeNodes ? 'move_nodes' : 'leave',
+        })
+        .then(() => {
+          setConfirmMove(null);
+          load();
+        })
+        .catch((e) => setMoveError(errMsg(e, t('pollers.move.failed'))))
+        .finally(() => setMoveBusy(false));
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `load` is defined below and stable
+    [confirmMove, t],
+  );
+
+  // A drop is the same move as the link, so it resolves the poller and hands off immediately.
+  const onDragEnd = useCallback(
+    (e: DragEndEvent) => {
+      const to = String(e.over?.id ?? '');
+      if (!to.startsWith('pool:')) return;
+      const poller = (e.active.data.current as { poller?: PollerInfo } | undefined)?.poller;
+      const dest = to.slice('pool:'.length);
+      if (!poller || poller.pool === dest) return;
+      beginMove(poller, dest);
+    },
+    [beginMove],
+  );
+
+  // A few pixels before a press becomes a drag: without it the grip would swallow a plain click,
+  // and the row's other controls sit right beside it.
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
   // Refresh without flashing the initial loading state on every poll (loading only gates the very
   // first paint, like the sibling list pages).
@@ -1421,11 +1534,17 @@ export function PollersPage() {
             {t('pollers.pool.count', { count: pools.length })}{' '}
             <span className="section-label-sub">{t('pollers.pool.stripNote')}</span>
           </p>
+          {/* A move started by a drag has no dialog to fail into, so its refusal is shown here.
+              The likely one is the server declining a poller it considers offline — the row was
+              drawn from a snapshot a few seconds old. */}
+          {moveError && !confirmMove && <p className="form-error pool-move-error">{moveError}</p>}
+          <DndContext sensors={sensors} onDragEnd={onDragEnd}>
           <div className="pool-strip">
             {pools.map((p) => (
               <PoolCard
                 key={p.pool}
                 pool={p}
+                droppable={canSystem}
                 selected={selectedPools.includes(p.pool)}
                 onSelect={() => togglePool(p.pool)}
                 actions={
@@ -1459,13 +1578,6 @@ export function PollersPage() {
               total={anyFiltered ? pollers.length : undefined}
               noun={t('common:noun.poller', { count: shown.length })}
             />
-            {/* Without this, "2 pollers" claims a pool has two when one is still serving elsewhere
-                — a quietly wrong number an operator would plan capacity from. */}
-            {pending > 0 && (
-              <span className="pool-pending-note">
-                {t('pollers.move.pendingCount', { count: pending })}
-              </span>
-            )}
             {canSystem && (
               <Button variant="primary" onClick={() => setRegistering(true)}>
                 {t('pollers.registerButton')}
@@ -1483,6 +1595,7 @@ export function PollersPage() {
             loading={loading}
             empty={anyFiltered ? t('common:filter.noMatch') : t('pollers.empty.title')}
           />
+          </DndContext>
           {sheet && (
             <MobileFilterSheet
               columns={filterCols}
@@ -1520,8 +1633,20 @@ export function PollersPage() {
             <MovePollerModal
               poller={movingPoller}
               pools={pools}
+              onPick={(to) => beginMove(movingPoller, to)}
               onClose={() => setMovingPoller(null)}
-              onDone={load}
+            />
+          )}
+          {confirmMove && (
+            <ConfirmMoveModal
+              poller={confirmMove.poller}
+              to={confirmMove.to}
+              from={confirmMove.from}
+              nodes={confirmMove.nodes}
+              busy={moveBusy}
+              error={moveError}
+              onConfirm={applyConfirmedMove}
+              onClose={() => setConfirmMove(null)}
             />
           )}
 

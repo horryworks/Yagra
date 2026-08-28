@@ -659,12 +659,28 @@ async fn try_candidate(
 pub(crate) async fn start(
     bus: &Arc<NatsBus>,
     transport: &Arc<dyn Transport>,
-    pool: &str,
+    pool: &Arc<crate::pool::PoolState>,
     queue: &str,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<()> {
     let legacy = Box::pin(bus.subscribe_discovery_jobs(queue).await?);
-    let pooled = Box::pin(bus.subscribe_discovery_jobs_for_pool(pool, queue).await?);
+    // The pool-scoped half goes behind a relay (ADR-107 Inc.2): its subject carries the pool name,
+    // so a move has to re-point it. The legacy subject does not and is subscribed directly.
+    //
+    // 🚨 Getting this wrong is not a lost sweep, it is a sweep run **from the wrong network**: a
+    // discovery job is queue-delivered across a pool, so a poller still listening on its old pool's
+    // subject can be handed a sweep meant for a site it is no longer at.
+    let pooled = {
+        let bus_c = bus.clone();
+        let queue_c = queue.to_owned();
+        Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            crate::pool::relay("discovery-jobs", pool, shutdown, move |p| {
+                let bus = bus_c.clone();
+                let queue = queue_c.clone();
+                async move { bus.subscribe_discovery_jobs_for_pool(&p, &queue).await }
+            }),
+        ))
+    };
     let merged = Box::pin(futures::stream::select(legacy, pooled));
     // Stop commands (ADR-068 Inc.2), on the two routes a sweep can arrive by and mirroring the
     // job subscriptions above. **No queue group**, unlike those: core cannot know which poller
@@ -675,7 +691,17 @@ pub(crate) async fn start(
     // sweep it is meant to interrupt.
     let cancels = Arc::new(CancelSet::new());
     let cancel_global = Box::pin(bus.subscribe_discovery_cancels(None).await?);
-    let cancel_pooled = Box::pin(bus.subscribe_discovery_cancels(Some(pool)).await?);
+    // Relayed for the same reason as the sweeps it mirrors: a stop must reach the poller on
+    // whichever route the job took, and after a move that route has a different name.
+    let cancel_pooled = {
+        let bus_c = bus.clone();
+        Box::pin(tokio_stream::wrappers::ReceiverStream::new(
+            crate::pool::relay("discovery-cancels", pool, shutdown, move |p| {
+                let bus = bus_c.clone();
+                async move { bus.subscribe_discovery_cancels(Some(&p)).await }
+            }),
+        ))
+    };
     spawn_cancellable(
         shutdown,
         run_cancel_stream(

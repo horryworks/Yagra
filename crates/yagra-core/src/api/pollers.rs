@@ -45,7 +45,7 @@ use yagra_common::{HostSample, NodeId};
     node_assignment,
     list_monitoring_gaps,
     set_poller_anchor,
-    set_poller_desired_pool,
+    set_poller_pool,
     issue_poller_token,
     revoke_poller_token
 ))]
@@ -63,8 +63,8 @@ pub(super) fn routes() -> Router<ApiState> {
             axum::routing::put(set_poller_anchor),
         )
         .route(
-            "/api/v1/pollers/:id/desired-pool",
-            axum::routing::put(set_poller_desired_pool),
+            "/api/v1/pollers/:id/pool",
+            axum::routing::put(set_poller_pool),
         )
         // Issue returns the whole site bundle rather than a token (ADR-065 Inc.4): the token exists
         // only at this instant, and every other thing the site needs is derivable here and nowhere
@@ -132,15 +132,17 @@ pub(crate) struct PollerInfo {
     /// The node this poller attaches to, naming where it sits in the derived dependency graph.
     /// `null` ⇒ core places it from `mgmt_addrs` instead.
     anchor_node_id: Option<Uuid>,
-    /// Where an operator asked this poller to be, when that is not where it reports being
-    /// (ADR-107). `null` under normal operation.
+    /// Whether this poller can be moved to another pool from the WebUI (ADR-107 Inc.2).
     ///
-    /// ⚠️ **Set, this poller has not moved.** It is still serving `pool` and will keep doing so
-    /// until its own site restarts it with a changed `YAGRA_POLLER_POOL`; every subject it
-    /// subscribes to is derived from that value at startup. The field exists so the UI can say
-    /// "移動待ち" rather than showing a destination as though it had taken effect. Cleared by the
-    /// first heartbeat that reports having arrived.
-    desired_pool: Option<String>,
+    /// `true` when the build advertises `pool-follow`: it reads its pool off the working set,
+    /// re-points the three pool-derived subjects and reconnects the bus, so a move takes effect
+    /// without anyone touching the site.
+    ///
+    /// ⚠️ **`false` for every poller that is offline, and for every build older than this one.**
+    /// Derived here rather than left to the client to look for in `caps`, so the token itself is
+    /// written down once — and because "cannot" and "cannot be asked right now" are the same
+    /// answer to the only question the UI has, which is whether to offer the control.
+    can_change_pool: bool,
     /// Optional capabilities this poller's build advertises (`raw-capture`, `flow-relay`,
     /// `http-auth`, `http-body`, `self-upgrade`). Empty when the poller is offline, and empty from
     /// an N-1 build — **absence means "cannot", never "unknown"**, which is the same reading core
@@ -264,9 +266,12 @@ fn build_pollers_response(
                 // addresses, and the anchor is not the poller's to report at all.
                 mgmt_addrs: inv.map(|r| r.mgmt_addrs.clone()).unwrap_or_default(),
                 anchor_node_id: inv.and_then(|r| r.anchor_node_id),
-                // Same source and same reason as the anchor: this is the operator's record, and
-                // the live registry carries nothing about it.
-                desired_pool: inv.and_then(|r| r.desired_pool.clone()),
+                // Live-only, like `caps` below and for the same reason: it is a fact about the
+                // process that is running. An offline poller cannot be moved, because nothing
+                // would receive the snapshot that tells it where it went.
+                can_change_pool: lv
+                    .filter(|_| online)
+                    .is_some_and(|v| v.caps.iter().any(|c| c == yagra_bus::CAP_POOL_FOLLOW)),
                 // Live-only, and deliberately empty rather than stale when the poller is offline: a
                 // capability describes the build that is *running*, so reporting the last one seen
                 // would answer for a process that no longer exists.
@@ -855,21 +860,22 @@ async fn issue_poller_token(
         ));
     }
 
-    // Which pool the kit's `.env` names, most explicit first (ADR-107 決定 5).
+    // Which pool the kit's `.env` names: the caller's choice, else what core already has this
+    // poller serving (ADR-107 Inc.2).
     //
-    // The recorded destination sits between the caller's choice and the poller's own report on
-    // purpose: re-issuing a kit is *how* a recorded move reaches the site, so a kit built while a
-    // move is pending must carry the destination rather than the pool the site is leaving. Getting
-    // this backwards would hand the operator an archive that undoes the move they just recorded,
-    // and the poller would come back reporting the old pool — clearing the badge as though it had
-    // arrived.
+    // ⚠️ **The `.env` line only decides anything on first contact.** Once the inventory row
+    // exists, `pollers.pool` is the answer and a beat cannot change it — so a kit re-issued for an
+    // existing poller cannot move it by accident, which is what the pre-Inc.2 ordering had to be
+    // careful about. It is still written, because a kit is also how a *replacement* box at the same
+    // site introduces itself, and then there is no row.
     let recorded = admin
         .pollers
         .list()
         .await
         .ok()
         .and_then(|rows| rows.into_iter().find(|r| r.id == id))
-        .and_then(|r| r.desired_pool.filter(|p| !p.trim().is_empty()));
+        .map(|r| r.pool)
+        .filter(|p| !p.trim().is_empty());
     let pool = req
         .pool
         .as_deref()
@@ -1009,75 +1015,179 @@ async fn revoke_poller_token(
     }
 }
 
-/// What a caller may record as a poller's destination pool.
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub(crate) struct DesiredPoolRequest {
-    /// The pool the operator wants this poller to serve. `null` clears a pending move.
-    #[serde(default)]
-    pool: Option<String>,
+/// What to do when the move would leave the poller's current pool with nothing to poll it
+/// (ADR-107 Inc.2).
+///
+/// The caller must say. There is no default, and that is the point: the two answers have opposite
+/// consequences and only the operator knows which they want.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+enum OnSourceEmpty {
+    /// Bring the source pool's nodes and folders along, in the same transaction. Nothing stops
+    /// being monitored.
+    MoveNodes,
+    /// Leave them where they are. **They stop being polled** until a poller serves that pool again:
+    /// the scheduler falls back to legacy per-job publish on `yagra.jobs.{pool}`, nothing is
+    /// subscribed, and plain NATS discards the jobs. `pool_coverage` raises an alert after its
+    /// debounce; until then the nodes decay to `unknown` rather than `down`.
+    Leave,
 }
 
-/// `PUT /api/v1/pollers/{id}/desired-pool` — record where this poller should be (ADR-107 決定 5).
+/// Move a poller to another pool.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+struct MovePoolRequest {
+    /// The destination pool. Validated as a NATS subject token.
+    pool: String,
+    /// Required **only** when the move empties the poller's current pool of live pollers while
+    /// monitored inventory is still assigned to it; ignored otherwise. Omitting it in that case is
+    /// a `409`, not a default.
+    #[serde(default)]
+    on_source_empty: Option<OnSourceEmpty>,
+}
+
+/// `PUT /api/v1/pollers/{id}/pool` — move this poller to another pool (ADR-107 Inc.2).
 ///
-/// 🚨 **This does not move the poller, and saying so is half the feature.** What a poller polls
-/// follows from the pool it *reports*, which comes from `YAGRA_POLLER_POOL` in its own `.env`. Every
-/// subject it subscribes to is derived from that at startup — the job subject, both discovery
-/// subjects, and the Auth Callout scope it is granted at connect. If core decided otherwise, the
-/// poller would go on listening to the old pool's subject while `poll_now` published to the new
-/// one, and plain NATS would **discard those jobs silently**.
+/// **This moves it, now.** Core owns `pollers.pool`; the write here plus
+/// [`crate::coordinator::Coordinator::set_pool`] rebuild the pool's hash ring on the next sweep
+/// (woken immediately) and the poller receives a snapshot of the new pool's nodes on
+/// `yagra.poller.assign.{id}` — a subject with no pool token in it, which is why the primary work
+/// path needs no cooperation from the poller at all. The snapshot also carries the pool name, which
+/// is how the poller re-points the three subjects that *are* pool-derived and reconnects the bus so
+/// Auth Callout re-mints its credential. Nothing restarts.
 ///
-/// So what this writes is a record of intent. It drives three things and nothing else: the pending
-/// badge in the UI, the `.env` line the move dialog offers, and the pool baked into a re-issued
-/// site kit. The move happens when the site restarts; the first heartbeat reporting the new pool
-/// clears the record by itself (`crate::pollers::SEEN_UPSERT_SQL`).
+/// Two refusals, and both exist because the failure they prevent is silent:
 ///
-/// Validated as a subject token for the same reason an assignment is: a name carrying a `.`
-/// partitions the subject and the jobs land where nothing subscribes.
+/// * `poller_cannot_change_pool` — the build does not advertise `pool-follow`
+///   ([`yagra_bus::CAP_POOL_FOLLOW`]), or it is offline. Moving it anyway would look like it
+///   worked: the working set would arrive and the screens would agree, while `poll_now` and
+///   discovery kept going to the old pool's subject, where nothing is listening.
+/// * `source_pool_would_empty` — this is the last live poller of its current pool and that pool
+///   still has **nodes** assigned. The caller must choose explicitly with `on_source_empty`, because
+///   the alternative is an entire pool that stops being monitored with no error anywhere. Folders
+///   alone do not trigger it: a folder with no nodes under it strands nothing, and it travels with
+///   a `move_nodes` answer anyway.
+///
+/// ⚠️ **The second check is deliberately duplicated in the WebUI, and is not a mirror.** The UI
+/// asks "should I show the confirmation?"; this asks "did the caller answer?". This side is the
+/// authority — a client that skips the dialog gets the `409`, not the hole.
 #[utoipa::path(
-    put, path = "/api/v1/pollers/{id}/desired-pool", tag = "pollers",
+    put, path = "/api/v1/pollers/{id}/pool", tag = "pollers",
     params(("id" = String, Path, description = "Poller id")),
-    request_body = DesiredPoolRequest,
+    request_body = MovePoolRequest,
     responses(
-        (status = 204, description = "The destination was recorded or cleared"),
+        (status = 204, description = "The poller was moved"),
         (status = 400, description = "The pool name is not a valid subject token", body = super::error::ErrorBody),
         (status = 404, description = "No such poller", body = super::error::ErrorBody),
+        (status = 409, description = "The poller cannot follow a pool change, or the move would leave its current pool unmonitored and the caller did not say what to do", body = super::error::ErrorBody),
         (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
         (status = 403, description = "Role lacks the ManageSystem permission", body = super::error::ErrorBody),
         (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
     ),
 )]
-async fn set_poller_desired_pool(
+async fn set_poller_pool(
     _perm: RequireManageSystem,
     admin: Admin,
     axum::extract::Path(id): axum::extract::Path<String>,
-    Json(req): Json<DesiredPoolRequest>,
+    Json(req): Json<MovePoolRequest>,
 ) -> ApiResult<axum::http::StatusCode> {
-    let pool = match req.pool.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        None => None,
-        Some(p) => {
-            if yagra_bus::subjects::sanitize_token(p) != p || p.len() > 63 {
-                return Err(ApiError::bad_request(
-                    "invalid_pool",
-                    "pool name may contain only letters, digits, '_' or '-'",
-                ));
+    // The same validator the pool CRUD uses, not a second copy of the rule: a name that partitions
+    // the NATS subject sends jobs where nothing subscribes, and one edge deciding that differently
+    // from another is how the two come apart.
+    let to = super::pools::validate_pool_name(&req.pool)?;
+    let to = to.as_str();
+    let now = std::time::Instant::now();
+
+    // Refuse a poller that cannot follow — before anything is written, so a refusal leaves nothing
+    // half-done. Offline reads the same as "cannot": there is nobody to receive the snapshot.
+    let follows = admin
+        .coordinator
+        .caps_of(&id, now)
+        .is_some_and(|caps| caps.iter().any(|c| c == yagra_bus::CAP_POOL_FOLLOW));
+    if !follows {
+        return Err(ApiError::conflict(
+            "poller_cannot_change_pool",
+            "this poller is offline or its build cannot follow a pool change; upgrade it first \
+             (moving it anyway would silently strand poll-now and discovery on the old pool)",
+        ));
+    }
+
+    let from = admin.coordinator.pool_of(&id, now);
+    let mut take_from = None;
+    if let Some(from) = from.as_deref().filter(|f| *f != to) {
+        // Would this move take the pool's last live poller away from nodes that still need one?
+        let others = admin
+            .coordinator
+            .poller_views(now)
+            .into_iter()
+            .filter(|v| v.online && v.id != id && v.pool == from)
+            .count();
+        if others == 0 {
+            // ⚠️ **Nodes decide the refusal; folders only travel with it.** A folder assigned to a
+            // pool with no nodes under it strands nothing — it decides where future nodes land —
+            // so refusing there would raise a question the operator cannot act on. The WebUI's own
+            // check (`moveEmptiesSourcePool`) uses the same trigger, which is what keeps a client
+            // that shows no dialog from being surprised by a 409 it cannot explain.
+            let refs = admin.repo.pool_references(from).await.map_err(|e| {
+                ApiError::from_internal(
+                    e.as_ref(),
+                    "pool references",
+                    "failed to check what the source pool still holds",
+                )
+            })?;
+            if refs.nodes > 0 {
+                match req.on_source_empty {
+                    None => {
+                        return Err(ApiError::conflict(
+                            "source_pool_would_empty",
+                            format!(
+                                "moving '{id}' leaves pool '{from}' with no live poller while \
+                                 {} node(s) and {} folder(s) are still assigned to it, so they \
+                                 would stop being polled; resend with on_source_empty set to \
+                                 \"move_nodes\" or \"leave\"",
+                                refs.nodes, refs.folders
+                            ),
+                        ));
+                    }
+                    Some(OnSourceEmpty::MoveNodes) => take_from = Some(from.to_owned()),
+                    Some(OnSourceEmpty::Leave) => {
+                        // Recorded rather than merely permitted: this is the branch that ends with
+                        // an unmonitored pool, and the audit trail is the only place that says a
+                        // person chose it.
+                        tracing::warn!(
+                            poller = %id,
+                            pool = %from,
+                            nodes = refs.nodes,
+                            folders = refs.folders,
+                            "pool left with no live poller by an explicit operator choice"
+                        );
+                    }
+                }
             }
-            Some(p.to_owned())
         }
-    };
-    let found = admin
-        .pollers
-        .set_desired_pool(&id, pool.as_deref())
+    }
+
+    let moved = admin
+        .repo
+        .move_poller_to_pool(&id, to, take_from.as_deref())
         .await
         .map_err(|e| {
-            ApiError::from_internal(
-                e.as_ref(),
-                "set desired pool",
-                "failed to record the destination",
-            )
+            ApiError::from_internal(e.as_ref(), "move poller pool", "failed to move the poller")
         })?;
-    if !found {
+    let Some((nodes, folders)) = moved else {
         return Err(ApiError::not_found("poller_not_found", "no such poller"));
-    }
+    };
+    // In-process half: the durable write above is what survives a restart, this is what makes the
+    // move take effect before the next heartbeat's read. On an HA pair the other core picks it up
+    // from the inventory on its own throttle (`PollerRepo::upsert_seen`).
+    admin.coordinator.set_pool(&id, to);
+    tracing::info!(
+        poller = %id,
+        from = from.as_deref().unwrap_or("(unknown)"),
+        to,
+        nodes,
+        folders,
+        "poller moved between pools"
+    );
     Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
@@ -1439,6 +1549,76 @@ mod tests {
         );
     }
 
+    /// Same shape as [`status_of`] but with a JSON body, for the move endpoint.
+    async fn put_json(st: ApiState, path: &str, token: &str, body: &str) -> StatusCode {
+        router(st)
+            .oneshot(
+                Request::builder()
+                    .method("PUT")
+                    .uri(path)
+                    .header(AUTHORIZATION, format!("Bearer {token}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_owned()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status()
+    }
+
+    /// The move endpoint's gate and its edge validation, in the order they are applied.
+    ///
+    /// 🚨 **The name check runs before anything is looked up**, and it has to: a pool name is a
+    /// NATS subject token, so a `.` in it would partition the subject and the jobs would be
+    /// published where nothing subscribes — plain NATS, so discarded rather than queued.
+    #[tokio::test]
+    async fn moving_a_poller_needs_manage_system_and_a_legal_pool_name() {
+        let st = private_state();
+        assert_eq!(
+            status_of(st.clone(), "PUT", "/api/v1/pollers/edge-1/pool", None).await,
+            StatusCode::UNAUTHORIZED,
+            "anonymous is refused before the body is read"
+        );
+        for role in [Role::Viewer, Role::Operator] {
+            let token = st
+                .sessions
+                .issue(Uuid::new_v4(), Principal::new(role, Scope::All), "u");
+            assert_eq!(
+                put_json(
+                    st.clone(),
+                    "/api/v1/pollers/edge-1/pool",
+                    &token,
+                    r#"{"pool":"tokyo"}"#
+                )
+                .await,
+                StatusCode::FORBIDDEN,
+                "{role:?}"
+            );
+        }
+        // The positive control: an Admin gets **past** the RBAC gate and is stopped by the write
+        // side being absent (503), the same shape as `removing_a_poller_needs_manage_config`. A
+        // test with only refusals would pass with everything refused.
+        //
+        // ⚠️ It cannot reach the body, so the name validation and the two 409s are not testable
+        // here — the first is `pools::validate_pool_name`'s own tests (this handler calls it rather
+        // than re-deciding), and the second pair needs a database.
+        let admin = st.sessions.issue(
+            Uuid::new_v4(),
+            Principal::new(Role::Admin, Scope::All),
+            "admin1",
+        );
+        assert_eq!(
+            put_json(
+                st,
+                "/api/v1/pollers/edge-1/pool",
+                &admin,
+                r#"{"pool":"tokyo"}"#
+            )
+            .await,
+            StatusCode::SERVICE_UNAVAILABLE,
+        );
+    }
+
     /// A live registry view for the merge tests (online → recent, offline → stale).
     fn live_view(id: &str, pool: &str, online: bool) -> PollerView {
         PollerView {
@@ -1464,7 +1644,6 @@ mod tests {
         PollerRow {
             id: id.to_owned(),
             pool: pool.to_owned(),
-            desired_pool: None,
             first_seen: "2026-07-06T00:00:00+00:00".to_owned(),
             last_seen: "2026-07-06T01:00:00+00:00".to_owned(),
             last_version: Some("0.1.1".to_owned()),

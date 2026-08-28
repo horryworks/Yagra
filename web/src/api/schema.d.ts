@@ -2691,39 +2691,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/pollers/{id}/desired-pool": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /**
-         * `PUT /api/v1/pollers/{id}/desired-pool` — record where this poller should be (ADR-107 決定 5).
-         * @description 🚨 **This does not move the poller, and saying so is half the feature.** What a poller polls
-         *     follows from the pool it *reports*, which comes from `YAGRA_POLLER_POOL` in its own `.env`. Every
-         *     subject it subscribes to is derived from that at startup — the job subject, both discovery
-         *     subjects, and the Auth Callout scope it is granted at connect. If core decided otherwise, the
-         *     poller would go on listening to the old pool's subject while `poll_now` published to the new
-         *     one, and plain NATS would **discard those jobs silently**.
-         *
-         *     So what this writes is a record of intent. It drives three things and nothing else: the pending
-         *     badge in the UI, the `.env` line the move dialog offers, and the pool baked into a re-issued
-         *     site kit. The move happens when the site restarts; the first heartbeat reporting the new pool
-         *     clears the record by itself (`crate::pollers::SEEN_UPSERT_SQL`).
-         *
-         *     Validated as a subject token for the same reason an assignment is: a name carrying a `.`
-         *     partitions the subject and the jobs land where nothing subscribes.
-         */
-        put: operations["set_poller_desired_pool"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/pollers/{id}/nodes": {
         parameters: {
             query?: never;
@@ -2738,6 +2705,48 @@ export interface paths {
          */
         get: operations["poller_nodes"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pollers/{id}/pool": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * `PUT /api/v1/pollers/{id}/pool` — move this poller to another pool (ADR-107 Inc.2).
+         * @description **This moves it, now.** Core owns `pollers.pool`; the write here plus
+         *     [`crate::coordinator::Coordinator::set_pool`] rebuild the pool's hash ring on the next sweep
+         *     (woken immediately) and the poller receives a snapshot of the new pool's nodes on
+         *     `yagra.poller.assign.{id}` — a subject with no pool token in it, which is why the primary work
+         *     path needs no cooperation from the poller at all. The snapshot also carries the pool name, which
+         *     is how the poller re-points the three subjects that *are* pool-derived and reconnects the bus so
+         *     Auth Callout re-mints its credential. Nothing restarts.
+         *
+         *     Two refusals, and both exist because the failure they prevent is silent:
+         *
+         *     * `poller_cannot_change_pool` — the build does not advertise `pool-follow`
+         *       ([`yagra_bus::CAP_POOL_FOLLOW`]), or it is offline. Moving it anyway would look like it
+         *       worked: the working set would arrive and the screens would agree, while `poll_now` and
+         *       discovery kept going to the old pool's subject, where nothing is listening.
+         *     * `source_pool_would_empty` — this is the last live poller of its current pool and that pool
+         *       still has **nodes** assigned. The caller must choose explicitly with `on_source_empty`, because
+         *       the alternative is an entire pool that stops being monitored with no error anywhere. Folders
+         *       alone do not trigger it: a folder with no nodes under it strands nothing, and it travels with
+         *       a `move_nodes` answer anyway.
+         *
+         *     ⚠️ **The second check is deliberately duplicated in the WebUI, and is not a mirror.** The UI
+         *     asks "should I show the confirmation?"; this asks "did the caller answer?". This side is the
+         *     authority — a client that skips the dialog gets the `409`, not the hole.
+         */
+        put: operations["set_poller_pool"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2816,13 +2825,15 @@ export interface paths {
         get?: never;
         /**
          * `PUT /api/v1/pools/{name}` — rename a pool and/or replace its description.
-         * @description 🚨 **A rename is refused while any poller reports the old name, and that refusal is the whole
-         *     safety of this endpoint.** Renaming moves `nodes.pool` and `node_groups.pool` in one transaction,
-         *     but it cannot move a poller: a poller's pool comes from `YAGRA_POLLER_POOL` in its own `.env`, at
-         *     its own site, and every subject it subscribes to is derived from that at startup. Rename out from
-         *     under one and the old name stays in `live_pools` while the new name's nodes drop into legacy
-         *     fan-out, publishing to a subject nobody subscribes to — **plain NATS discards them**. That is a
-         *     monitoring hole opened by a button, and nothing surfaces it until `pool_coverage`'s 300s debounce.
+         * @description 🚨 **A rename is refused while a poller serving the old name cannot follow a pool change**, and
+         *     that refusal is the whole safety of this endpoint. Renaming moves `nodes.pool`,
+         *     `node_groups.pool` **and `pollers.pool`** in one transaction (ADR-107 Inc.2 — before core owned
+         *     the last of those, this had to refuse for *any* poller at all). What is still refused is a
+         *     poller that will not act on the change: one that is offline, or whose build predates
+         *     [`yagra_bus::CAP_POOL_FOLLOW`]. Rename out from under one of those and it goes on listening for
+         *     the old name while the new name's nodes are published to a subject nobody subscribes to —
+         *     **plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces
+         *     it until `pool_coverage`'s 300s debounce.
          */
         put: operations["update_pool"];
         post?: never;
@@ -5510,11 +5521,6 @@ export interface components {
             /** @description How many there are in total — kept separately so truncation is visible rather than silent. */
             total: number;
         };
-        /** @description What a caller may record as a poller's destination pool. */
-        DesiredPoolRequest: {
-            /** @description The pool the operator wants this poller to serve. `null` clears a pending move. */
-            pool?: string | null;
-        };
         /**
          * @description How a destination is spoken to.
          * @enum {string}
@@ -7364,6 +7370,12 @@ export interface components {
             /** @description Start of the gap window (RFC 3339 — core's last contact before the outage). */
             started_at: string;
         };
+        /** @description Move a poller to another pool. */
+        MovePoolRequest: {
+            on_source_empty?: null | components["schemas"]["OnSourceEmpty"];
+            /** @description The destination pool. Validated as a NATS subject token. */
+            pool: string;
+        };
         /**
          * @description Whether a mute targets a single node or a whole folder group (recursive).
          * @enum {string}
@@ -7933,6 +7945,15 @@ export interface components {
             ok: boolean;
         };
         /**
+         * @description What to do when the move would leave the poller's current pool with nothing to poll it
+         *     (ADR-107 Inc.2).
+         *
+         *     The caller must say. There is no default, and that is the point: the two answers have opposite
+         *     consequences and only the operator knows which they want.
+         * @enum {string}
+         */
+        OnSourceEmpty: "move_nodes" | "leave";
+        /**
          * @description A discrete capability checked at the API edge.
          * @enum {string}
          */
@@ -7986,6 +8007,19 @@ export interface components {
              */
             anchor_node_id?: string | null;
             /**
+             * @description Whether this poller can be moved to another pool from the WebUI (ADR-107 Inc.2).
+             *
+             *     `true` when the build advertises `pool-follow`: it reads its pool off the working set,
+             *     re-points the three pool-derived subjects and reconnects the bus, so a move takes effect
+             *     without anyone touching the site.
+             *
+             *     ⚠️ **`false` for every poller that is offline, and for every build older than this one.**
+             *     Derived here rather than left to the client to look for in `caps`, so the token itself is
+             *     written down once — and because "cannot" and "cannot be asked right now" are the same
+             *     answer to the only question the UI has, which is whether to offer the control.
+             */
+            can_change_pool: boolean;
+            /**
              * @description Optional capabilities this poller's build advertises (`raw-capture`, `flow-relay`,
              *     `http-auth`, `http-body`, `self-upgrade`). Empty when the poller is offline, and empty from
              *     an N-1 build — **absence means "cannot", never "unknown"**, which is the same reading core
@@ -7998,17 +8032,6 @@ export interface components {
              *     offline or on an N-1 build without host telemetry.
              */
             cpu_pct?: number | null;
-            /**
-             * @description Where an operator asked this poller to be, when that is not where it reports being
-             *     (ADR-107). `null` under normal operation.
-             *
-             *     ⚠️ **Set, this poller has not moved.** It is still serving `pool` and will keep doing so
-             *     until its own site restarts it with a changed `YAGRA_POLLER_POOL`; every subject it
-             *     subscribes to is derived from that value at startup. The field exists so the UI can say
-             *     "移動待ち" rather than showing a destination as though it had taken effect. Cleared by the
-             *     first heartbeat that reports having arrived.
-             */
-            desired_pool?: string | null;
             /**
              * Format: double
              * @description Highest watched-filesystem used % (0–100); `null` when unavailable.
@@ -20663,76 +20686,6 @@ export interface operations {
             };
         };
     };
-    set_poller_desired_pool: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Poller id */
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DesiredPoolRequest"];
-            };
-        };
-        responses: {
-            /** @description The destination was recorded or cleared */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description The pool name is not a valid subject token */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No valid bearer token */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description Role lacks the ManageSystem permission */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description No such poller */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-            /** @description This deployment has no write side (skeleton mode) */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ApiErrorBody"];
-                };
-            };
-        };
-    };
     poller_nodes: {
         parameters: {
             query?: {
@@ -20775,6 +20728,85 @@ export interface operations {
                 };
             };
             /** @description Skeleton mode: no coordinator to read the working set from */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+        };
+    };
+    set_poller_pool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Poller id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MovePoolRequest"];
+            };
+        };
+        responses: {
+            /** @description The poller was moved */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The pool name is not a valid subject token */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No valid bearer token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description Role lacks the ManageSystem permission */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description No such poller */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description The poller cannot follow a pool change, or the move would leave its current pool unmonitored and the caller did not say what to do */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApiErrorBody"];
+                };
+            };
+            /** @description This deployment has no write side (skeleton mode) */
             503: {
                 headers: {
                     [name: string]: unknown;

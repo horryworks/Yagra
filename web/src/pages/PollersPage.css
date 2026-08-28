@@ -320,41 +320,101 @@
 }
 
 /* ── the pool cell in the fleet table ── */
-.pool-cell,
-.pool-cell-static {
+.pool-cell-wrap {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
 }
 
-.pool-cell {
-  padding: 3px 5px;
-  margin-left: -5px;
+/* The drag grip. Sized for a pointer target rather than for the glyph, and `touch-action: none`
+   because without it a touch drag scrolls the page instead of picking the row up. */
+.pool-grip {
+  flex: none;
+  padding: 0 2px;
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.pool-grip:hover {
+  color: var(--text-secondary);
+}
+
+.pool-grip.is-dragging {
+  cursor: grabbing;
+  color: var(--accent-color);
+}
+
+/* The keyboard-reachable half of the same action (ui-conventions: no action exists only as a
+   pointer gesture — drag-and-drop cannot be driven from a keyboard).
+   🚨 **Always visible, deliberately not a hover-reveal.** Playwright counts an `opacity: 0`
+   element as visible, so ADR-088's walk would click a control no human can find; and a
+   hover-revealed rule has to name every row class it can appear under, which is how the last one
+   went quietly wrong. Subdued instead of hidden. */
+.pool-move-link {
+  flex: none;
+  padding: 1px 5px;
   border: var(--border-width) solid transparent;
   border-radius: var(--radius-sm);
   background: none;
+  color: var(--text-tertiary);
   font: inherit;
+  font-size: var(--font-sm);
   cursor: pointer;
-  text-align: left;
-  transition: border-color var(--transition), background var(--transition);
+  transition: color var(--transition), border-color var(--transition);
 }
 
-.pool-cell:hover {
-  border-color: var(--border-color);
-  background: var(--bg-primary);
+.pool-move-link:hover,
+.pool-move-link:focus-visible {
+  border-color: var(--accent-color);
+  color: var(--accent-color);
 }
 
-.pool-arrow {
-  color: var(--text-tertiary);
+.pool-move-error {
+  margin: 0 0 var(--space-2);
+}
+
+/* The card a poller is being dragged over. Accent, never a status colour — "this is where it will
+   land" is not a network state (design-system §1.1/§1.3). */
+.pool-slot.is-over .pool-card {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 14%, var(--bg-secondary));
+}
+
+/* The two answers in the move confirmation. A radio plus its consequence, because the consequence
+   is the part the operator is actually choosing between. */
+.form-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 10px 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.form-choice:hover {
+  border-color: var(--text-tertiary);
+}
+
+.form-choice > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.form-choice-hint {
+  color: var(--text-secondary);
   font-size: var(--font-sm);
-  flex: none;
 }
 
-.pool-pending-note {
-  font-size: var(--font-sm);
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
+.form-choice-hint.danger {
+  color: var(--status-critical);
 }
 
 /* ── refusals and the move dialog ── */

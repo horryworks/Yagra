@@ -47,6 +47,7 @@ mod mau;
 mod module_source;
 mod neighbors;
 mod optical;
+mod pool;
 mod routing;
 mod store_forward;
 mod support_logs;
@@ -83,7 +84,13 @@ struct PollerIdentity {
     /// Sanitized, subject-safe poller id — stable across restarts (from `YAGRA_POLLER_ID` else the
     /// hostname else a random fallback).
     id: String,
-    /// Pool this poller serves (`YAGRA_POLLER_POOL` else `"default"`).
+    /// The pool this poller **starts** in (`YAGRA_POLLER_POOL` else `"default"`).
+    ///
+    /// ⚠️ **Not the pool it serves.** Core decides that (ADR-107 Inc.2) and sends it on the
+    /// working-set snapshot; `pool::PoolState` holds the live answer and everything that needs one
+    /// reads it there. This field is only the value core adopts when it has never seen this poller
+    /// before — after the inventory row exists it is ignored, which is what lets a move survive a
+    /// container restart.
     pool: String,
     /// Fresh per boot — lets core detect a restart and force a resync.
     incarnation: Uuid,
@@ -228,6 +235,11 @@ async fn main() -> anyhow::Result<()> {
     // each enabled per site via env. They publish on `yagra.events` / `yagra.flows`; core does
     // the matching and the storing. The returned labels advertise which ones actually bound
     // (heartbeat telemetry), and the two share only how a UDP edge socket is opened.
+    // Which pool this poller serves, from here on. `identity.pool` is only the starting value —
+    // core owns the answer (ADR-107 Inc.2) and hands it over on the working-set snapshot, at which
+    // point this state re-points the three pool-derived subscriptions and reconnects the bus.
+    let pool = pool::PoolState::new(identity.pool.clone(), Some(bus.clone()));
+
     let tuning = listeners::EdgeTuning::from_env();
     let mut listener_labels = listeners::start(&bus, &shutdown, &tuning).await;
     listener_labels
@@ -235,7 +247,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Discovery sweeps run alongside polling and need the same raw-socket ICMP + SNMP
     // transport this poller already holds.
-    discovery::start(&bus, &transport, &identity.pool, &queue, &shutdown).await?;
+    discovery::start(&bus, &transport, &pool, &queue, &shutdown).await?;
 
     // Working-set sync (ADR-020) and the local scheduler that drains it: two loops around one
     // set, started together because they are one program. Hands back the receiving half of the
@@ -244,13 +256,14 @@ async fn main() -> anyhow::Result<()> {
     // ⚠️ The scheduler now spawns a few subscribes earlier than it used to, and that cannot
     // matter: the working set is empty until the first snapshot lands, so `due()` has nothing
     // to hand over, and the channel it feeds is bounded and awaits rather than dropping.
-    let jobs_rx = assignment::start(&bus, &identity, &working_set, &shutdown).await?;
+    let jobs_rx = assignment::start(&bus, &identity, &pool, &working_set, &shutdown).await?;
 
     // Heartbeat (ADR-009): liveness + telemetry every HEARTBEAT_SECS, ending in the `leaving`
     // beat this function joins below. Deliberately not cancellable — see the module doc.
     let heartbeat_task = heartbeat::start(
         &bus,
         &identity,
+        &pool,
         &working_set,
         &results_total,
         &inflight,
@@ -269,14 +282,26 @@ async fn main() -> anyhow::Result<()> {
     // Legacy / pool-scoped jobs: consume only this poller's pool (no more `yagra.jobs.*` wildcard)
     // so work stays local (ADR-009). Merge with the locally-scheduled jobs into one stream driving
     // the shared worker loop (PollLimiter + execution + result publish are shared).
-    let legacy_jobs = Box::pin(bus.subscribe_jobs_for_pool(&identity.pool, &queue).await?);
+    //
+    // Behind a relay since ADR-107 Inc.2, because this subject's name contains the pool: the
+    // stream below must survive a move, and what changes is the subscription feeding it. This is
+    // the subject "poll now" arrives on, so getting it wrong is a control that does nothing.
+    let legacy_jobs = {
+        let bus = bus.clone();
+        let queue = queue.clone();
+        pool::relay("jobs", &pool, &shutdown, move |p| {
+            let bus = bus.clone();
+            let queue = queue.clone();
+            async move { bus.subscribe_jobs_for_pool(&p, &queue).await }
+        })
+    };
     let unified = Box::pin(futures::stream::select(
-        legacy_jobs,
+        ReceiverStream::new(legacy_jobs),
         ReceiverStream::new(jobs_rx),
     ));
     let poller_id: Arc<str> = Arc::from(identity.id.as_str());
     tracing::info!(
-        pool = %identity.pool,
+        pool = %pool.current(),
         %queue,
         max_concurrent,
         "Yagra-poller running (working-set + legacy jobs)"

@@ -385,16 +385,19 @@ services:
       # Which pool this poller serves. Absent ⇒ the binary's own default, `default` — so leaving
       # this unset is byte-identical to every deployment before it existed.
       #
-      # 🚨 **It is here because Settings ▸ Pollers hands the operator this exact line** (ADR-107
-      # 決定 5). Recording a destination in the WebUI cannot move a poller on its own: what a poller
-      # polls follows from this variable, read once at startup, and every bus subject it subscribes
-      # to — including the Auth Callout scope it is granted at connect — is derived from it there.
-      # So the dialog's answer is "put this in .env and restart", and without the line below that
-      # instruction is **inert on a co-located poller**: the value would sit in .env, reach nothing,
-      # and the operator would watch a move that never happens with no error anywhere. The
-      # remote-site composition has always passed it (`docker-compose.poller.yml`, where it is
-      # mandatory); this one had simply never needed to, because there was no way to ask for a move.
-      # Found by running the round trip on 192.168.1.211, 2026-08-28 — no test could see it.
+      # ⚠️ **It decides where this poller lands the FIRST time core sees it, and nothing after that**
+      # (ADR-107 Inc.2). Core owns `pollers.pool` once the inventory row exists, so editing this and
+      # recreating the container does *not* move a poller — Settings ▸ Pollers does, immediately and
+      # without restarting anything. Setting it to disagree with core is harmless: the value is used
+      # for the insert and ignored on every heartbeat after.
+      #
+      # 💡 It arrived here for the opposite reason, and the story is worth keeping. Under ADR-107
+      # Inc.1 the WebUI could only *record* a destination and hand the operator this line to apply —
+      # and this composition did not pass the variable at all, so that instruction was inert on the
+      # co-located poller: the value sat in .env, reached nothing, and the operator waited for a move
+      # that never happened with no error anywhere. Found by running the round trip on
+      # 192.168.1.211, 2026-08-28; no test could see it. Inc.2 removed the instruction rather than
+      # the trap, which is the better fix, but the line stays because first contact still needs it.
       YAGRA_POLLER_POOL: ${YAGRA_POLLER_POOL:-}
       # On-disk rotated logs (ADR-045 Inc.3), read back by core's support bundle. The pollers/
       # SUBDIRECTORY of core's log volume is load-bearing — core collects by filename prefix, and

@@ -431,7 +431,10 @@ impl AccountSigner {
         iat: i64,
     ) -> Result<Handled, AuthzError> {
         let pending = Self::parse(request_jwt)?;
-        self.decide(&pending, Expected::Shared(bootstrap_secret), iat)
+        // `None`: this entry point has no inventory to consult, so the pool can only be what the
+        // connection claims. That is the pre-ADR-107 behaviour, and it is right *here* — a
+        // deployment with no lookup has no better answer.
+        self.decide(&pending, Expected::Shared(bootstrap_secret), None, iat)
     }
 
     /// Parse a callout request far enough to learn **who is claiming to connect**, without deciding
@@ -451,12 +454,24 @@ impl AccountSigner {
 
     /// Decide a parsed request: check the secret against `expected` → scope → mint + wrap.
     ///
+    /// `assigned_pool` is **core's** answer to "which pool does this poller serve" — the inventory
+    /// row's `pollers.pool` (ADR-107 Inc.2). `None` means core has no row and therefore no opinion,
+    /// and only then does the pool fall back to the `CONNECT` name the connection claims.
+    ///
+    /// 🚨 **The precedence is the security half of ADR-065 decision 4, not a convenience.** Until
+    /// this argument existed the pool came from `connect_name` alone, so a poller could name any
+    /// pool it liked and be granted `yagra.jobs.{that pool}` — and job messages carry **plaintext
+    /// device credentials**. Registering an id no longer implies trusting what it says about itself.
+    /// The bootstrap case still trusts the claim, because there is nothing else to go on; that is
+    /// the one connection where an operator has just handed over the deployment-wide secret.
+    ///
     /// # Errors
     /// Signing or encoding failed. A refusal is a `Decision::Denied`, not an error.
     pub fn decide(
         &self,
         pending: &PendingRequest,
         expected: Expected<'_>,
+        assigned_pool: Option<&str>,
         iat: i64,
     ) -> Result<Handled, AuthzError> {
         let req = &pending.req;
@@ -492,7 +507,9 @@ impl AccountSigner {
         let Some(id) = req.connect_user.as_deref() else {
             return deny(self, DenyReason::MissingId);
         };
-        let pool = req.connect_name.as_deref().unwrap_or("default");
+        let pool = assigned_pool
+            .or(req.connect_name.as_deref())
+            .unwrap_or("default");
         let scope = PollerScope::new(id, pool);
         let perms = allow_list(&scope);
         let user_jwt = self.mint_user_jwt(&req.user_nkey, &perms, iat)?;
@@ -879,7 +896,7 @@ mod tests {
         let pending = AccountSigner::parse(&req).unwrap();
         assert_eq!(pending.poller_id(), Some("nobody"));
         assert_eq!(pending.pool(), "tokyo");
-        let out = s.decide(&pending, Expected::Unknown, 1).unwrap();
+        let out = s.decide(&pending, Expected::Unknown, None, 1).unwrap();
         assert_eq!(
             out.decision,
             Decision::Denied {
@@ -908,6 +925,7 @@ mod tests {
             .decide(
                 &AccountSigner::parse(&good).unwrap(),
                 Expected::TokenHash(&hash),
+                None,
                 1,
             )
             .unwrap();
@@ -928,6 +946,7 @@ mod tests {
             s.decide(
                 &AccountSigner::parse(&shared).unwrap(),
                 Expected::TokenHash(&hash),
+                None,
                 1
             )
             .unwrap()
@@ -935,6 +954,70 @@ mod tests {
             Decision::Denied {
                 reason: DenyReason::BadSecret
             }
+        );
+    }
+
+    /// Core's inventory outranks the `CONNECT` name, so a poller cannot talk itself into another
+    /// pool's job subject — and that subject carries plaintext device credentials (ADR-107 Inc.2,
+    /// closing the pool half of ADR-065 decision 4).
+    ///
+    /// 🚨 **Both directions are asserted on purpose.** A test that only proved the claim is ignored
+    /// would also pass if `decide` had stopped granting a pool-scoped subject at all, and a poller
+    /// granted nothing looks exactly like a poller granted the right thing until a job is sent.
+    #[test]
+    fn the_inventorys_pool_outranks_the_one_the_connection_claims() {
+        let s = signer();
+        let user = nkeys::KeyPair::new_user().public_key();
+        let token = "ypt_ThisIsAPollerToken";
+        let hash = secret_hash(token);
+        // The connection still says `tokyo` — a stale .env at the site, or a hostile claim.
+        let req = fake_request_jwt("NDX1", &user, Some("edge-1"), Some(token), Some("tokyo"));
+        let pending = AccountSigner::parse(&req).unwrap();
+        assert_eq!(pending.pool(), "tokyo", "the claim is still on the wire");
+
+        let out = s
+            .decide(&pending, Expected::TokenHash(&hash), Some("osaka"), 1)
+            .unwrap();
+        assert_eq!(
+            out.decision,
+            Decision::Issued {
+                poller_id: "edge-1".to_owned(),
+                pool: "osaka".to_owned()
+            },
+            "core's row must win over the connection's claim"
+        );
+
+        let allow = body(&out.response_jwt);
+        let jwt = allow["nats"]["jwt"]
+            .as_str()
+            .expect("a user jwt was minted");
+        let claims = body(jwt);
+        let subs: Vec<String> = claims["nats"]["sub"]["allow"]
+            .as_array()
+            .expect("subscribe allow-list")
+            .iter()
+            .map(|v| v.as_str().unwrap_or_default().to_owned())
+            .collect();
+        assert!(
+            subs.contains(&subjects::jobs_for_pool("osaka")),
+            "the granted job subject must be the assigned pool's: {subs:?}"
+        );
+        assert!(
+            !subs.iter().any(|s| s.contains("tokyo")),
+            "nothing may be granted for the pool the connection merely claimed: {subs:?}"
+        );
+
+        // With no row, the claim is all there is — the bootstrap case, unchanged.
+        let boot = s
+            .decide(&pending, Expected::Shared(token), None, 1)
+            .unwrap();
+        assert_eq!(
+            boot.decision,
+            Decision::Issued {
+                poller_id: "edge-1".to_owned(),
+                pool: "tokyo".to_owned()
+            },
+            "with no inventory row the connection's claim is still the only answer"
         );
     }
 

@@ -227,6 +227,27 @@ impl NatsBus {
         })
     }
 
+    /// Drop this connection and open a new one, keeping every subscription (ADR-107 Inc.2).
+    ///
+    /// The one thing that re-runs **Auth Callout** without restarting the process. A per-poller JWT
+    /// is minted once per connection and scoped to one pool, so after core moves a poller the
+    /// running connection still holds the old pool's grant and a subscription to the new pool's job
+    /// subject would be denied — silently, from the subscriber's side. `async_nats` re-establishes
+    /// every existing subscription on the new connection itself, and buffers publishes across the
+    /// gap, so the cost is tens of milliseconds and nothing else.
+    ///
+    /// A no-op in effect on a deployment whose bus does not use the callout: there is no credential
+    /// to re-mint, and the caller does not know which configuration it is on.
+    ///
+    /// # Errors
+    /// The client's command channel is closed, i.e. the connection task is already gone.
+    pub async fn force_reconnect(&self) -> Result<(), BusError> {
+        self.client
+            .force_reconnect()
+            .await
+            .map_err(|e| BusError::Publish(format!("force reconnect: {e}")))
+    }
+
     /// A clone of the underlying NATS client, for control-plane traffic that doesn't fit the [`Bus`]
     /// job/result seam — specifically core's Auth Callout responder, which request-replies on the
     /// NATS system subject `$SYS.REQ.USER.AUTH` (ADR-030). `async_nats::Client` is a cheap Arc handle.

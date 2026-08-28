@@ -28,6 +28,7 @@ use uuid::Uuid;
 use yagra_bus::{HeartbeatMsg, NatsBus, SyncBus, HEARTBEAT_SECS};
 use yagra_telemetry::CancellationToken;
 
+use crate::pool::PoolState;
 use crate::working_set::WorkingSet;
 use crate::{location, PollerIdentity};
 
@@ -38,9 +39,18 @@ const LEAVE_FLUSH_TIMEOUT: Duration = Duration::from_secs(1);
 ///
 /// ⚠️ **`tokio::spawn`, not `spawn_cancellable`** — see the module doc. The handle is the other half
 /// of that decision: without joining it the final beat is lost with the runtime.
+//
+// Eight arguments because a beat reports on eight independent things, each already a shared handle
+// its owner also uses elsewhere: the bus, who this poller is, which pool it now serves (ADR-107
+// Inc.2), the working set, two counters, the listener labels and the shutdown token. Bundling them
+// would produce a struct whose only member in common is "the heartbeat reads it", built at one call
+// site and destructured at the next — a type that exists to satisfy a lint rather than to name
+// something. The loop below carries the same allow for the same reason.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start(
     bus: &Arc<NatsBus>,
     identity: &PollerIdentity,
+    pool: &Arc<PoolState>,
     working_set: &Arc<Mutex<WorkingSet>>,
     results_total: &Arc<AtomicU64>,
     inflight: &Arc<AtomicU64>,
@@ -53,7 +63,7 @@ pub(crate) fn start(
     tokio::spawn(run_heartbeat_loop(
         bus.clone(),
         identity.id.clone(),
-        identity.pool.clone(),
+        pool.clone(),
         identity.incarnation,
         identity.version,
         working_set.clone(),
@@ -77,7 +87,7 @@ pub(crate) fn start(
 async fn run_heartbeat_loop<B>(
     bus: Arc<B>,
     poller_id: String,
-    pool: String,
+    pool: Arc<PoolState>,
     incarnation: Uuid,
     version: &'static str,
     working_set: Arc<Mutex<WorkingSet>>,
@@ -108,7 +118,11 @@ async fn run_heartbeat_loop<B>(
         metrics::gauge!("yagra_working_set_specs").set(f64::from(specs));
         let hb = HeartbeatMsg {
             poller_id: poller_id.clone(),
-            pool: pool.clone(),
+            // Read per beat, not captured once: core moves this poller by telling it a new pool
+            // (ADR-107 Inc.2), and the beat is how core sees that the move landed. A captured
+            // value would report the boot-time pool forever, and the Pollers page would show a
+            // poller in the pool it used to serve while it polled the one it does.
+            pool: pool.current(),
             incarnation,
             version: version.to_owned(),
             epoch,
@@ -148,6 +162,16 @@ async fn run_heartbeat_loop<B>(
                 // that could not were indistinguishable on the bus, so core waited out its full
                 // budget on both.
                 yagra_bus::CAP_UPGRADE_REPORT.to_owned(),
+                // This build follows a pool change core sends on the working-set snapshot: it
+                // re-points the three pool-derived subjects and reconnects the bus, without
+                // restarting (ADR-107 Inc.2). Unconditional, like the six above, because it is a
+                // claim about the build.
+                //
+                // 🚨 Core **refuses** to move a poller that does not claim this, and the refusal is
+                // the whole point: a move without it half-works — the working set arrives on the
+                // id-keyed subject and every screen reads correct, while "poll now" and discovery
+                // keep going to the old pool's subject where nothing is listening.
+                yagra_bus::CAP_POOL_FOLLOW.to_owned(),
             ]
             .into_iter()
             // Unlike the four above, this one is conditional: it says a site updater is deployed

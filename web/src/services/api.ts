@@ -1637,15 +1637,17 @@ export const api = {
   setPollerAnchor: (id: string, nodeId: string | null): Promise<void> =>
     apiPut('/api/v1/pollers/{id}/anchor', { path: { id }, body: { node_id: nodeId } }),
 
-  /** Record where a poller should be, or clear it with `null` (ADR-107).
+  /** Move a poller to another pool (ADR-107 Inc.2). Takes effect immediately; nothing restarts.
    *
-   *  🚨 **This does not move the poller.** What it polls follows from the pool it *reports*, which
-   *  comes from `YAGRA_POLLER_POOL` in its own `.env`; every bus subject it subscribes to is
-   *  derived from that at startup. The record drives the pending badge, the `.env` line the move
-   *  dialog offers, and the pool baked into a re-issued site kit — nothing else. The move happens
-   *  when the site restarts, and the first heartbeat reporting the new pool clears the record. */
-  setPollerDesiredPool: (id: string, pool: string | null): Promise<void> =>
-    apiPut('/api/v1/pollers/{id}/desired-pool', { path: { id }, body: { pool } }),
+   *  `on_source_empty` is required **only** when the move would leave the poller's current pool
+   *  with monitored inventory and no live poller — the server refuses with `409` otherwise, on
+   *  purpose, so a caller that skipped the confirmation gets the refusal rather than an entire pool
+   *  that silently stops being polled. `move_nodes` brings that pool's nodes and folders along in
+   *  the same transaction; `leave` accepts that they go dark. */
+  setPollerPool: (
+    id: string,
+    body: { pool: string; on_source_empty?: 'move_nodes' | 'leave' },
+  ): Promise<void> => apiPut('/api/v1/pollers/{id}/pool', { path: { id }, body }),
 
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
    *  status widgets are correct over the whole fleet, not the first page of nodes. */

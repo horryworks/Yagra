@@ -162,14 +162,24 @@ pub async fn run_auth_callout(
         // hunting for an inventory row for a connection that never named one.
         let material = match pending.poller_id() {
             Some(id) => pollers.auth_material(id).await,
-            None => Some(crate::pollers::PollerAuth::Bootstrap),
+            None => Some(crate::pollers::PollerRegistration {
+                auth: crate::pollers::PollerAuth::Bootstrap,
+                pool: None,
+            }),
         };
-        let expected = match &material {
+        let expected = match material.as_ref().map(|m| &m.auth) {
             Some(crate::pollers::PollerAuth::Token(hash)) => Expected::TokenHash(hash),
             Some(crate::pollers::PollerAuth::Bootstrap) => Expected::Shared(&bootstrap_secret),
             None => Expected::Unknown,
         };
-        match signer.decide(&pending, expected, unix_now_secs()) {
+        // 🚨 **The scope comes from the inventory, not from what the connection says about itself**
+        // (ADR-107 Inc.2, closing the pool half of ADR-065 decision 4). The row is already in hand
+        // — it is what admitted the connection a line ago — so this costs nothing, and without it
+        // a registered poller could name any pool at CONNECT and be granted that pool's job
+        // subject, which carries plaintext device credentials. `None` only where there is no row,
+        // i.e. the bootstrap case, where the claim is still the only answer there is.
+        let assigned_pool = material.as_ref().and_then(|m| m.pool.as_deref());
+        match signer.decide(&pending, expected, assigned_pool, unix_now_secs()) {
             Ok(handled) => {
                 match &handled.decision {
                     Decision::Issued { pool, .. } => {

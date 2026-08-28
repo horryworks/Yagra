@@ -30,7 +30,6 @@ pub struct PollerRow {
     /// recorded and the site has not been restarted yet — the poller is still serving [`Self::pool`]
     /// and will keep doing so until its own `.env` changes. Cleared by the first heartbeat that
     /// reports having arrived.
-    pub desired_pool: Option<String>,
     /// When this poller was first seen (RFC 3339).
     pub first_seen: String,
     /// When this poller was last seen (RFC 3339).
@@ -90,6 +89,21 @@ pub struct MonitoringGapRow {
 ///
 /// Absence of this value — `Option::None` from [`PollerRepo::auth_material`] — is the third answer
 /// and the important one: the id is in no inventory, so it is refused.
+/// What core's inventory knows about a connecting poller: how to admit it, and where it belongs.
+///
+/// The two travel together because the callout needs both at the same moment and there is exactly
+/// one row to read them from. Keeping the pool out of it would mean a second query on the
+/// connection path, or — the thing ADR-107 Inc.2 exists to stop — taking the pool from what the
+/// connection says about itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PollerRegistration {
+    /// The credential that admits this id.
+    pub auth: PollerAuth,
+    /// The pool core has it serving. `None` on a row written before the column meant anything,
+    /// in which case the connection's own claim is still the only answer.
+    pub pool: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PollerAuth {
     /// This poller has its own token; only `hex(sha256(token))` matching this admits it.
@@ -101,28 +115,36 @@ pub enum PollerAuth {
 /// The heartbeat write when an unknown id may register itself.
 ///
 /// A named constant, with its sibling below, so the invariants both must hold —
-/// **`anchor_node_id` and `first_seen` are never touched by a heartbeat** — are assertable against
-/// the statements themselves rather than against a slice of this file's source. The earlier test
-/// did the latter and broke the moment a second statement appeared beside the first, which is
-/// exactly when it most needed to still work.
+/// **`anchor_node_id`, `first_seen` and now `pool` are never touched by a heartbeat** — are
+/// assertable against the statements themselves rather than against a slice of this file's source.
+/// The earlier test did the latter and broke the moment a second statement appeared beside the
+/// first, which is exactly when it most needed to still work.
+///
+/// 🚨 **`pool` is written on INSERT and never on UPDATE, and that asymmetry is the whole of
+/// ADR-107 Inc.2.** The insert is a poller introducing itself, where its own `YAGRA_POLLER_POOL`
+/// is the only answer anyone has. Every beat after that is a *report*, and letting a report win
+/// would put the pool back under the site's control: an operator's move would be reverted inside
+/// the sixty-second write throttle, looking exactly like the click never took. Same shape, same
+/// reason, as `anchor_node_id` — see [`PollerRepo::set_anchor`].
 const SEEN_UPSERT_SQL: &str =
     "INSERT INTO pollers (id, pool, last_version, last_incarnation, mgmt_addrs) \
      VALUES ($1, $2, $3, $4, $5::text[]::inet[]) \
      ON CONFLICT (id) DO UPDATE SET \
        last_seen = now(), \
-       pool = EXCLUDED.pool, \
        last_version = EXCLUDED.last_version, \
        last_incarnation = EXCLUDED.last_incarnation, \
-       mgmt_addrs = EXCLUDED.mgmt_addrs, \
-       desired_pool = CASE WHEN EXCLUDED.pool = pollers.desired_pool \
-                           THEN NULL ELSE pollers.desired_pool END";
+       mgmt_addrs = EXCLUDED.mgmt_addrs \
+     RETURNING pool";
 
 /// The heartbeat write when only an already-registered poller may be refreshed (ADR-065 Inc.3).
+///
+/// Four binds, not five: with `pool` no longer assignable there is nothing for the reported pool to
+/// bind to, and PostgreSQL refuses a statement handed a parameter it does not name.
 const SEEN_UPDATE_SQL: &str = "UPDATE pollers SET \
-       last_seen = now(), pool = $2, last_version = $3, last_incarnation = $4, \
-       mgmt_addrs = $5::text[]::inet[], \
-       desired_pool = CASE WHEN $2 = desired_pool THEN NULL ELSE desired_pool END \
-     WHERE id = $1";
+       last_seen = now(), last_version = $2, last_incarnation = $3, \
+       mgmt_addrs = $4::text[]::inet[] \
+     WHERE id = $1 \
+     RETURNING pool";
 
 /// PostgreSQL-backed durable poller inventory (`pollers`).
 pub struct PollerRepo {
@@ -166,12 +188,16 @@ impl PollerRepo {
     /// heartbeat overwriting it would silently undo the fix for an unplaceable poller on the next
     /// beat.
     ///
-    /// `desired_pool` is the operator's column too (ADR-107 決定 4) and is preserved for the same
-    /// reason — with **one one-directional exception**: a beat whose reported `pool` equals it
-    /// clears it. That is the recorded destination having been reached, not the poller overruling
-    /// it, and it is the whole mechanism by which the "移動待ち" badge goes away on its own once
-    /// the site has been restarted. A beat reporting anything else leaves it untouched, so the
-    /// destination survives the sixty-second write throttle that would otherwise erase it.
+    /// **`pool` is written only when the row is created** (ADR-107 Inc.2). After that core owns it
+    /// and the beat's `pool` argument is used for nothing but the insert — see [`SEEN_UPSERT_SQL`].
+    ///
+    /// Returns the pool the inventory now holds, which is what the caller must actually serve. On
+    /// a single core that is the value it just set itself; **across an HA pair it is how the leader
+    /// learns about a move made on the follower**, since the two share only PostgreSQL. That makes
+    /// convergence bounded by the caller's throttle rather than instant — say so wherever the
+    /// feature promises "immediately".
+    ///
+    /// `Ok(None)` ⇒ no row and none created (auto-register off).
     ///
     /// Call-site throttling (so a 10s heartbeat isn't a write per beat) is the coordinator's job.
     ///
@@ -186,56 +212,40 @@ impl PollerRepo {
         version: &str,
         incarnation: Uuid,
         mgmt_addrs: &[String],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<String>> {
         // Two statements rather than one with a conditional clause: the difference IS whether a row
         // may be created, and expressing that as `WHERE EXISTS` inside an upsert is the kind of SQL
         // that reads as equivalent to a future editor and is not.
-        let sql = if self.auto_register {
-            SEEN_UPSERT_SQL
+        //
+        // They no longer take the same binds either: only the insert names `pool`.
+        let row = if self.auto_register {
+            sqlx::query(SEEN_UPSERT_SQL)
+                .bind(id)
+                .bind(pool)
+                .bind(version)
+                .bind(incarnation)
+                .bind(mgmt_addrs)
+                .fetch_optional(&self.pool)
+                .await?
         } else {
-            SEEN_UPDATE_SQL
+            sqlx::query(SEEN_UPDATE_SQL)
+                .bind(id)
+                .bind(version)
+                .bind(incarnation)
+                .bind(mgmt_addrs)
+                .fetch_optional(&self.pool)
+                .await?
         };
-        let res = sqlx::query(sql)
-            .bind(id)
-            .bind(pool)
-            .bind(version)
-            .bind(incarnation)
-            .bind(mgmt_addrs)
-            .execute(&self.pool)
-            .await?;
-        if !self.auto_register && res.rows_affected() == 0 {
+        let Some(row) = row else {
             // Not an error: the poller was deleted while its connection was still up, which is
             // exactly what this mode exists to make stick. Logged so it is not a silent no-op.
             tracing::debug!(
                 poller = id,
                 "heartbeat from a poller that is not in the inventory — not recreating it"
             );
-        }
-        Ok(())
-    }
-
-    /// Record where the operator wants this poller to be (ADR-107 決定 4), or clear it with
-    /// `None`.
-    ///
-    /// ⚠️ **This does not move the poller, and the UI says so.** What a poller polls follows from
-    /// the pool it *reports*, which comes from `YAGRA_POLLER_POOL` in its own `.env`; every subject
-    /// it subscribes to is derived from that value at startup, including the Auth Callout scope it
-    /// is granted at connect. Core deciding otherwise would leave it listening to the old pool's
-    /// job subject while `poll_now` published to the new one — discarded by plain NATS, silently.
-    /// So this column is a *record of intent*: it drives the site kit's `.env`, the pending badge,
-    /// and nothing else until the site restarts.
-    ///
-    /// A statement of its own rather than a clause on the heartbeat, for [`Self::set_anchor`]'s
-    /// reason: one statement writing both would make the poller the last writer.
-    ///
-    /// `Ok(false)` ⇒ no such poller.
-    pub async fn set_desired_pool(&self, id: &str, pool: Option<&str>) -> anyhow::Result<bool> {
-        let done = sqlx::query("UPDATE pollers SET desired_pool = $2 WHERE id = $1")
-            .bind(id)
-            .bind(pool)
-            .execute(&self.pool)
-            .await?;
-        Ok(done.rows_affected() > 0)
+            return Ok(None);
+        };
+        Ok(row.try_get::<Option<String>, _>("pool")?)
     }
 
     /// Point a poller at the node it attaches to, or clear it (`None`).
@@ -257,7 +267,7 @@ impl PollerRepo {
         let rows = sqlx::query(
             // `token_hash IS NOT NULL` rather than the column itself: the digest has no use outside
             // the callout, and a list endpoint is the wrong place to start carrying one around.
-            "SELECT id, pool, desired_pool, first_seen, last_seen, last_version, last_incarnation, \
+            "SELECT id, pool, first_seen, last_seen, last_version, last_incarnation, \
                     anchor_node_id, token_issued_at, (token_hash IS NOT NULL) AS has_token, \
                     ARRAY(SELECT host(a) FROM unnest(mgmt_addrs) AS a) AS mgmt_addrs \
              FROM pollers ORDER BY id",
@@ -272,7 +282,6 @@ impl PollerRepo {
                 Ok(PollerRow {
                     id: row.try_get("id")?,
                     pool: row.try_get("pool")?,
-                    desired_pool: row.try_get("desired_pool")?,
                     first_seen: first_seen.to_rfc3339(),
                     last_seen: last_seen.to_rfc3339(),
                     last_version: row.try_get("last_version")?,
@@ -296,17 +305,25 @@ impl PollerRepo {
     /// On a database error this returns `Ok(None)` — *deny*. A callout that cannot reach PostgreSQL
     /// must not fall open onto the shared secret: that would turn a database blip into the exact
     /// pre-token behaviour, silently, at the moment nobody is watching.
-    pub async fn auth_material(&self, id: &str) -> Option<PollerAuth> {
-        match sqlx::query("SELECT token_hash FROM pollers WHERE id = $1")
+    pub async fn auth_material(&self, id: &str) -> Option<PollerRegistration> {
+        match sqlx::query("SELECT token_hash, pool FROM pollers WHERE id = $1")
             .bind(id)
             .fetch_optional(&self.pool)
             .await
         {
-            Ok(Some(row)) => match row.try_get::<Option<String>, _>("token_hash") {
-                Ok(Some(hash)) => Some(PollerAuth::Token(hash)),
-                Ok(None) => Some(PollerAuth::Bootstrap),
-                Err(_) => None,
-            },
+            Ok(Some(row)) => {
+                let auth = match row.try_get::<Option<String>, _>("token_hash") {
+                    Ok(Some(hash)) => PollerAuth::Token(hash),
+                    Ok(None) => PollerAuth::Bootstrap,
+                    Err(_) => return None,
+                };
+                // A read failure here is not a denial: the credential check above already
+                // succeeded, and refusing the whole connection because one column would not decode
+                // would take a site offline over a display value. Falling back to the claimed pool
+                // is the pre-ADR-107 behaviour.
+                let pool = row.try_get::<Option<String>, _>("pool").ok().flatten();
+                Some(PollerRegistration { auth, pool })
+            }
             Ok(None) => None,
             Err(e) => {
                 tracing::warn!(error = %e, poller = id, "could not read poller auth material — denying");
@@ -654,48 +671,89 @@ mod tests {
         assert!(src.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")));
     }
 
-    /// **The recorded destination is the operator's column too, with one one-directional
-    /// exception.** `desired_pool` cannot simply be excluded from the two heartbeat statements the
-    /// way `anchor_node_id` is: the badge has to disappear once the site *has* been restarted, and
-    /// the only thing that knows it has is the beat itself. So the statements name the column — and
-    /// the whole safety of that rests on **what they are allowed to assign**: `NULL` when the beat
-    /// reports having arrived, otherwise the column's own value.
+    /// **The pool became the operator's column too** (ADR-107 Inc.2), and it is a harder case than
+    /// the anchor: the insert *must* write it, because a poller introducing itself is the only
+    /// source there is. So the rule is not "never named" but "named on the way in and never again".
     ///
-    /// 🚨 Assigning it a bind or `EXCLUDED.desired_pool` would make the poller the last writer, and
-    /// a destination recorded in the UI would vanish inside the sixty-second write throttle — the
-    /// same failure `set_anchor` exists to avoid, but harder to see, because it looks like the
-    /// operator's click simply did not take.
+    /// 🚨 What this stops is subtle and was the whole reason the move could not work before. A
+    /// heartbeat arrives every ten seconds; if its update assigned `pool`, an operator's move would
+    /// be reverted within the sixty-second write throttle and the UI would look as though the click
+    /// had simply not registered — no error, no log line, nothing to search for.
+    ///
+    /// Both directions, deliberately. The refusal alone would pass on a pair of statements that
+    /// never mention `pool` at all, and a poller that never records a pool is one core can never
+    /// assign work to.
     #[test]
-    fn a_heartbeat_may_only_clear_the_recorded_destination_never_set_one() {
-        let src = production_source();
-        let col = format!("desired{}", "_pool");
+    fn only_a_first_contact_may_set_the_pool_a_later_heartbeat_never_does() {
+        // Built at runtime so this needle cannot match the line it is written on
+        // (`self-matching-needle-has-two-directions`).
+        let col = format!("po{}", "ol");
 
-        // Refusal side: neither statement may take the value from anywhere but the column itself.
+        // Refusal: no assignment to the column in either statement, by any route.
+        for (name, sql) in [
+            ("SEEN_UPSERT_SQL", SEEN_UPSERT_SQL),
+            ("SEEN_UPDATE_SQL", SEEN_UPDATE_SQL),
+        ] {
+            for bad in [
+                format!("{col} = EXCLUDED.{col}"),
+                format!("{col} = $"),
+                format!("{col} = pollers.{col}"),
+            ] {
+                assert!(
+                    !sql.contains(&bad),
+                    "{name} assigns the pool on a heartbeat (\"{bad}\"), so the poller overrules \
+                     core's assignment within one write throttle: {sql}"
+                );
+            }
+        }
+
+        // Acceptance 1: the insert still carries it, so a brand-new poller lands in the pool its
+        // own environment names. Without this the two assertions above are satisfied by a pair of
+        // statements that never record a pool at all.
+        assert!(
+            SEEN_UPSERT_SQL.contains(&format!("INSERT INTO pollers (id, {col},")),
+            "first contact no longer records the poller's own pool: {SEEN_UPSERT_SQL}"
+        );
+
+        // Acceptance 2: both statements hand the authoritative value back, which is how an HA
+        // leader learns about a move a follower took.
         for (name, sql) in [
             ("SEEN_UPSERT_SQL", SEEN_UPSERT_SQL),
             ("SEEN_UPDATE_SQL", SEEN_UPDATE_SQL),
         ] {
             assert!(
-                !sql.contains(&format!("{col} = EXCLUDED.{col}")),
-                "{name} lets a heartbeat set the destination: {sql}"
-            );
-            assert!(
-                !sql.contains(&format!("{col} = $")),
-                "{name} binds the destination, so the poller writes the operator's column: {sql}"
+                sql.trim_end().ends_with(&format!("RETURNING {col}")),
+                "{name} no longer returns the authoritative pool: {sql}"
             );
         }
-        // Acceptance side — without this the two assertions above pass on a statement that never
-        // mentions the column at all, and the badge would then never clear.
+
+        // Acceptance 3: the writer exists — **in repo/pools.rs, not here**, and that placement is
+        // itself the rule. A pool change may travel with a node/folder re-pointing, and the two
+        // have to commit together: a poller moved without its nodes leaves them in a pool with no
+        // poller, which is a silent monitoring hole. So the only writer is inside a transaction,
+        // and this file must not offer a second, non-transactional one.
+        let src = production_source();
         assert!(
-            SEEN_UPSERT_SQL.contains(&format!("{col} = CASE WHEN EXCLUDED.pool = pollers.{col}")),
-            "the upsert no longer clears a fulfilled destination: {SEEN_UPSERT_SQL}"
+            !src.contains(&format!("UPDATE pollers SET {col}")),
+            "a second, non-transactional pool writer has appeared here; the move must stay atomic \
+             with the node/folder re-pointing in repo/pools.rs"
         );
+        let repo = crate::module_source::files(&crate::module_source::roots("src", "repo"))
+            .into_iter()
+            .map(|(_, text)| text)
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(
-            SEEN_UPDATE_SQL.contains(&format!("{col} = CASE WHEN $2 = {col}")),
-            "the gated update no longer clears a fulfilled destination: {SEEN_UPDATE_SQL}"
+            repo.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")),
+            "the transactional pool writer is gone from repo/, so nothing can move a poller"
         );
-        // And the operator's own writer exists, touching only that column.
-        assert!(src.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")));
+
+        // And the bind counts differ, because only one statement names the pool. Getting this
+        // wrong is not a compile error — PostgreSQL refuses at runtime with "bind message supplies
+        // N parameters, but prepared statement requires M", on the heartbeat path, in production.
+        let binds = |sql: &str| (1..=9).filter(|i| sql.contains(&format!("${i}"))).count();
+        assert_eq!(binds(SEEN_UPSERT_SQL), 5, "{SEEN_UPSERT_SQL}");
+        assert_eq!(binds(SEEN_UPDATE_SQL), 4, "{SEEN_UPDATE_SQL}");
     }
 
     /// The truth table those two `CASE` expressions encode, so the intent is pinned in Rust and not

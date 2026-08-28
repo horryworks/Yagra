@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //! The `pools` table: poller pools that have been named deliberately (ADR-107).
 //!
-//! ⚠️ **This file holds the pool's *description*, never its membership.** Which nodes are in a pool
-//! is `nodes.pool` / `node_groups.pool` (`nodes.rs`, `groups.rs`) and which poller serves one is
-//! what that poller reports (`crate::pollers`). A method here that answered "who is in this pool"
-//! would be a second answer to a question those files already answer, which is precisely the shape
-//! ADR-094 cut this module up to prevent.
+//! ⚠️ **This file holds the pool's *description*, and the two writes that move membership between
+//! pools — never membership itself.** Which nodes are in a pool is `nodes.pool` /
+//! `node_groups.pool` (`nodes.rs`, `groups.rs`) and which pool a poller serves is
+//! `pollers.pool` (`crate::pollers`). A method here that answered "who is in this pool" would be
+//! a second answer to a question those files already answer, which is precisely the shape ADR-094
+//! cut this module up to prevent.
+//!
+//! [`NodeRepo::rename_pool`] and [`NodeRepo::move_poller_to_pool`] are here anyway, and for one
+//! reason: each has to touch three tables **atomically**, and an atomic write has to live in one
+//! place. Splitting either across the owning files would mean three transactions that can half
+//! commit, and the half-committed state of both is the same one — monitored inventory in a pool
+//! with no poller, which is a silent monitoring hole.
 //!
 //! The one apparent exception is [`NodeRepo::pool_references`], which counts rows in three tables it
 //! does not own. It is a *refusal*: delete has to say what is still using the name, and a count that
@@ -103,14 +110,17 @@ impl NodeRepo {
         Ok(done.rows_affected() > 0)
     }
 
-    /// Rename a pool, moving every node and folder assignment with it, in one transaction.
+    /// Rename a pool, moving every node, folder **and poller** assignment with it, in one
+    /// transaction.
     ///
-    /// 🚨 **Pollers are deliberately NOT moved, and the caller must refuse the rename when any
-    /// reports the old name** (`api/pools.rs`). A poller's pool comes from `YAGRA_POLLER_POOL` at
-    /// its own site; this transaction cannot reach it. Renaming out from under one leaves the old
-    /// name in `live_pools` and drops the new name's nodes into legacy fan-out, where their jobs are
-    /// published to a subject nobody subscribes to and **plain NATS discards them**. That is a
-    /// monitoring hole opened by a button, visible only after `pool_coverage`'s 300s debounce.
+    /// 🚨 **The pollers used to be left behind, and the caller had to refuse the rename because of
+    /// it.** Before ADR-107 Inc.2 a poller's pool came from `YAGRA_POLLER_POOL` at its own site and
+    /// this transaction could not reach it, so renaming out from under one left the old name in
+    /// `live_pools` while the new name's nodes dropped into legacy fan-out, published to a subject
+    /// nobody subscribed to and **discarded by plain NATS** — a monitoring hole opened by a button,
+    /// visible only after `pool_coverage`'s 300s debounce. Core owns `pollers.pool` now, so they
+    /// come along. What the caller must still check is whether each of them *can* follow a change
+    /// (`api/pools.rs`); an offline or older poller would reproduce exactly that hole.
     ///
     /// `Ok(false)` ⇒ no such row. A name collision surfaces as the primary key's error.
     pub async fn rename_pool(&self, from: &str, to: &str) -> anyhow::Result<bool> {
@@ -130,6 +140,16 @@ impl NodeRepo {
             .execute(&mut *tx)
             .await?;
         sqlx::query("UPDATE node_groups SET pool = $2 WHERE pool = $1")
+            .bind(from)
+            .bind(to)
+            .execute(&mut *tx)
+            .await?;
+        // The pollers come with it (ADR-107 Inc.2). Before core owned `pollers.pool` this was
+        // impossible — a poller's pool lived in its own `.env` — so a rename had to be **refused**
+        // while anything reported the old name, or the renamed nodes would drop into legacy
+        // fan-out on a subject nobody subscribed to. Now the rename is just a move, and the
+        // caller's remaining job is to check that each of them *can* follow one.
+        sqlx::query("UPDATE pollers SET pool = $2 WHERE pool = $1")
             .bind(from)
             .bind(to)
             .execute(&mut *tx)
@@ -162,14 +182,14 @@ impl NodeRepo {
             .bind(name)
             .fetch_one(&self.pool)
             .await?;
-        // Both directions: one that reports the pool now, and one recorded as heading there. A
-        // pending move is a reason to refuse a delete — the site is about to start using the name.
-        let pollers: Vec<String> = sqlx::query_scalar(
-            "SELECT id FROM pollers WHERE pool = $1 OR desired_pool = $1 ORDER BY id",
-        )
-        .bind(name)
-        .fetch_all(&self.pool)
-        .await?;
+        // One direction now: `pollers.pool` **is** where the poller belongs (ADR-107 Inc.2), so
+        // there is no separate "heading there" state left to consider. Before Inc.2 a recorded
+        // destination was a second, pending answer and both had to block a delete.
+        let pollers: Vec<String> =
+            sqlx::query_scalar("SELECT id FROM pollers WHERE pool = $1 ORDER BY id")
+                .bind(name)
+                .fetch_all(&self.pool)
+                .await?;
         Ok(PoolReferences {
             nodes,
             folders,
@@ -177,10 +197,62 @@ impl NodeRepo {
         })
     }
 
-    /// Poller ids currently *reporting* `name` — the set a rename must be refused for.
+    /// Move one poller into `to`, optionally bringing `from`'s monitored inventory with it
+    /// (ADR-107 Inc.2).
     ///
-    /// Narrower than [`Self::pool_references`] on purpose: a poller merely *heading* to a name does
-    /// not block renaming it away, because its `.env` has not been changed yet either.
+    /// 🚨 **One transaction, and that is the safety property.** The two halves fail differently:
+    /// a poller moved without its nodes leaves `from` with monitored inventory and no poller, which
+    /// is a silent monitoring hole `pool_coverage` only reports after a 300s debounce; nodes moved
+    /// without their poller is the same hole pointing the other way. Committing one and not the
+    /// other is the outcome nobody would choose, so it is not reachable.
+    ///
+    /// `take_from` is `Some(source pool)` when the caller has decided the inventory travels. The
+    /// source is passed rather than derived so this method cannot disagree with the pool the
+    /// caller measured and warned about — between the check and the write, the poller's row is the
+    /// only thing that has changed, and it is changed here.
+    ///
+    /// Returns `(nodes, folders)` actually re-pointed — 0/0 when `take_from` is `None`.
+    /// `Ok(None)` ⇒ no such poller.
+    pub async fn move_poller_to_pool(
+        &self,
+        id: &str,
+        to: &str,
+        take_from: Option<&str>,
+    ) -> anyhow::Result<Option<(u64, u64)>> {
+        let mut tx = self.pool.begin().await?;
+        let done = sqlx::query("UPDATE pollers SET pool = $2 WHERE id = $1")
+            .bind(id)
+            .bind(to)
+            .execute(&mut *tx)
+            .await?;
+        if done.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        let mut moved = (0, 0);
+        if let Some(from) = take_from {
+            moved.0 = sqlx::query("UPDATE nodes SET pool = $2 WHERE pool = $1")
+                .bind(from)
+                .bind(to)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+            moved.1 = sqlx::query("UPDATE node_groups SET pool = $2 WHERE pool = $1")
+                .bind(from)
+                .bind(to)
+                .execute(&mut *tx)
+                .await?
+                .rows_affected();
+        }
+        tx.commit().await?;
+        Ok(Some(moved))
+    }
+
+    /// Poller ids currently reporting `name`.
+    ///
+    /// Since ADR-107 Inc.2 this is "the pollers core has serving `name`" — the column is core's,
+    /// not the site's. Callers use it to ask whether each of them can follow a pool change before
+    /// starting one.
     pub async fn pollers_reporting_pool(&self, name: &str) -> anyhow::Result<Vec<String>> {
         Ok(
             sqlx::query_scalar("SELECT id FROM pollers WHERE pool = $1 ORDER BY id")

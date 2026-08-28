@@ -21,6 +21,7 @@ use uuid::Uuid;
 use yagra_bus::{NatsBus, PollJob, SyncBus, SyncMsg, SyncRequest};
 use yagra_telemetry::{spawn_cancellable, CancellationToken};
 
+use crate::pool::PoolState;
 use crate::working_set::{self, ApplyOutcome, WorkingSet};
 use crate::PollerIdentity;
 
@@ -38,13 +39,14 @@ const JOB_CHANNEL_DEPTH: usize = 256;
 pub(crate) async fn start(
     bus: &Arc<NatsBus>,
     identity: &PollerIdentity,
+    pool: &Arc<PoolState>,
     working_set: &Arc<Mutex<WorkingSet>>,
     shutdown: &CancellationToken,
 ) -> anyhow::Result<mpsc::Receiver<PollJob>> {
     let sync_sub = Box::pin(bus.subscribe_sync(&identity.id).await?);
     let initial = SyncRequest {
         poller_id: identity.id.clone(),
-        pool: identity.pool.clone(),
+        pool: pool.current(),
         incarnation: identity.incarnation,
     };
     if let Err(e) = bus.publish_sync_request(initial).await {
@@ -57,7 +59,7 @@ pub(crate) async fn start(
             working_set.clone(),
             bus.clone(),
             identity.id.clone(),
-            identity.pool.clone(),
+            pool.clone(),
             identity.incarnation,
         ),
     );
@@ -75,7 +77,7 @@ async fn run_sync_loop<B, S>(
     working_set: Arc<Mutex<WorkingSet>>,
     bus: Arc<B>,
     poller_id: String,
-    pool: String,
+    pool: Arc<PoolState>,
     incarnation: Uuid,
 ) where
     B: SyncBus + 'static,
@@ -93,6 +95,18 @@ async fn run_sync_loop<B, S>(
     };
     while let Some(msg) = sync.next().await {
         let is_snapshot = matches!(msg, SyncMsg::SnapshotChunk(_));
+        // Core's answer to "which pool is this poller in" rides the snapshot (ADR-107 Inc.2), so
+        // it is read here rather than in `working_set.rs` — that module is a pure state machine
+        // with no I/O, and adopting a pool reconnects the bus. `None` from an N-1 core leaves the
+        // pool exactly as the environment set it, which is the pre-Inc.2 behaviour.
+        //
+        // Read **before** the apply: the snapshot's nodes are the new pool's, so a reader watching
+        // both would otherwise see this poller holding another pool's work for an instant.
+        if let SyncMsg::SnapshotChunk(s) = &msg {
+            if let Some(assigned) = s.pool.clone() {
+                pool.adopt(&assigned).await;
+            }
+        }
         let outcome = {
             let mut ws = working_set.lock().expect("working set mutex poisoned");
             ws.apply(msg, Instant::now(), &mut rng)
@@ -115,7 +129,7 @@ async fn run_sync_loop<B, S>(
                 tracing::info!("working-set gap/epoch mismatch — requesting a fresh snapshot");
                 let req = SyncRequest {
                     poller_id: poller_id.clone(),
-                    pool: pool.clone(),
+                    pool: pool.current(),
                     incarnation,
                 };
                 if let Err(e) = bus.publish_sync_request(req).await {

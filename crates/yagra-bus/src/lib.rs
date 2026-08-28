@@ -26,8 +26,8 @@ pub use messages::{
     SnmpV3L3Check, SnmpV3MauCheck, SnmpV3NeighborCheck, SnmpV3OpticalCheck, SnmpV3RoutingCheck,
     SnmpV3TableCheck, SyncMsg, SyncRequest, TraceContext, UpgradeReport, UpgradeReportCommand,
     UpgradeReportState, UpgradeStep, WorkingSetDelta, WorkingSetSnapshot, CAP_DISCOVERY_CANCEL,
-    CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_HTTP_BODY, CAP_LOG_SHIP, CAP_RAW_CAPTURE, CAP_SELF_UPGRADE,
-    CAP_UPGRADE_REPORT, HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
+    CAP_FLOW_RELAY, CAP_HTTP_AUTH, CAP_HTTP_BODY, CAP_LOG_SHIP, CAP_POOL_FOLLOW, CAP_RAW_CAPTURE,
+    CAP_SELF_UPGRADE, CAP_UPGRADE_REPORT, HEARTBEAT_SECS, OFFLINE_AFTER_SECS, SNAPSHOT_CHUNK_NODES,
 };
 #[cfg(feature = "nats")]
 pub use nats::{

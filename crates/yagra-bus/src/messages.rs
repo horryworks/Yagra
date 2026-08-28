@@ -134,6 +134,24 @@ pub const CAP_LOG_SHIP: &str = "log-ship";
 /// [`DiscoveryResult::cancelled`].
 pub const CAP_DISCOVERY_CANCEL: &str = "discovery-cancel";
 
+/// Capability token a poller advertises in [`HeartbeatMsg::caps`] when core — not the poller's own
+/// environment — decides which pool it serves (ADR-107 Inc.2).
+///
+/// A poller that claims it reads [`WorkingSetSnapshot::pool`], re-subscribes its three pool-derived
+/// subjects, and forces a NATS reconnect so Auth Callout re-mints its credential for the new pool.
+///
+/// 🚨 **Core must refuse to move a poller that does not claim it, and the refusal is the point.**
+/// Moving one anyway half-works in the worst possible way: the working set arrives on
+/// `yagra.poller.assign.{id}`, which carries no pool token, so the poller *does* start polling the
+/// new pool's nodes and every screen reads correct — while `poll_now` and discovery sweeps keep
+/// going to `yagra.jobs.{old}` / `yagra.discovery.jobs.{old}`, where nobody is listening any more
+/// and plain NATS discards them. **No error is produced anywhere.**
+///
+/// ⚠️ Every poller predating this release is such a poller, so immediately after upgrading core
+/// nothing can be moved until the pollers are upgraded too. The UI has to say that; "the drag did
+/// nothing" is the failure mode if it does not.
+pub const CAP_POOL_FOLLOW: &str = "pool-follow";
+
 /// W3C trace-context carrier (`traceparent`/`tracestate`) propagated across the bus so one poll is
 /// a single distributed trace (yagra-telemetry). An opaque `String`→`String` header bag: the bus
 /// contract carries it **without depending on OpenTelemetry**, and it serializes to nothing when
@@ -730,6 +748,22 @@ pub struct WorkingSetSnapshot {
     /// for N-1 compatibility (ADR-017).
     #[serde(default)]
     pub total_nodes: u32,
+    /// The pool core has this poller serving (ADR-107 Inc.2). `None` from an N-1 core, and from
+    /// any snapshot built before pools became core's to decide — the poller then keeps whatever
+    /// its own environment said, which is the pre-Inc.2 behaviour exactly.
+    ///
+    /// 🔑 **This rides the snapshot instead of getting its own subject, and that is the whole
+    /// reason the feature is cheap.** `yagra.poller.assign.{id}` is already granted to this poller
+    /// in *both* allow-lists — `yagra-authz`'s minted JWT and `nats-server.conf`'s static `poller`
+    /// account — so nothing has to be added to either. A new subject family would need an entry in
+    /// both, neither is a compile error, and missing either one is a silent runtime denial on
+    /// exactly the deployments the other does not cover (extensibility.md §6).
+    ///
+    /// Sent on every snapshot rather than only on a change: core arms `needs_snapshot` when it
+    /// moves a poller, so a snapshot is what a move *is*, and a poller that resyncs for any other
+    /// reason (restart, epoch bump, gap) then re-learns its pool for free.
+    #[serde(default)]
+    pub pool: Option<String>,
 }
 
 /// An incremental working-set change for a poller, applied only when it lands exactly at the next
@@ -4071,6 +4105,7 @@ mod tests {
             chunk_total: 1,
             nodes: vec![sample_node_jobs()],
             total_nodes: 1,
+            pool: None,
         });
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("\"type\":\"snapshot_chunk\""));
@@ -4293,6 +4328,7 @@ mod tests {
             chunk_index: 0,
             chunk_total: 1,
             total_nodes: SNAPSHOT_CHUNK_NODES as u32,
+            pool: None,
             nodes,
         });
         let bytes = serde_json::to_vec(&snap).unwrap();

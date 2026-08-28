@@ -38,30 +38,47 @@
   exist only as a side effect of typing an unknown string into a node's assignment; there is now a
   card at the end of the pool strip that creates one, and a ⋮ on each card to edit its description,
   rename it or remove it. Deleting is refused while nodes, folders or pollers still name the pool,
-  and renaming is refused while any poller reports it — a rename moves node and folder assignments
-  but cannot move a poller, so the renamed pool would have nothing serving it.
+  and renaming carries the pool's nodes, folders **and pollers** to the new name in one step. It is
+  refused only when a poller serving the pool cannot follow a change — it is offline, or its build
+  predates this release.
 
-- **A poller's destination pool can be recorded from the same screen, and the list says it has not
-  taken effect yet.** The Pool column opens a dialog that records where the poller should be, hands
-  over the `YAGRA_POLLER_POOL` line the site needs and, for a poller with its own bus token,
-  re-issues the site kit with that pool in it. Until the site applies it and restarts, the row shows
-  `old → new` with a "Move pending" badge; the first heartbeat reporting the new pool clears it.
-  **The button does not move the poller** — every bus subject a poller subscribes to is derived from
-  its own `.env` at startup, so a destination set centrally would leave it listening to the old
-  pool's job subject.
+- **A poller can be moved between pools from the WebUI, and it moves immediately.** Drag a poller's
+  grip onto a pool card, or use Move in its Pool cell; it starts polling the new pool at once.
+  **Nothing restarts** — not core, not the poller, and nothing at the remote site: core is now the
+  authority for which pool a poller serves, tells the poller on its next working-set snapshot, and
+  the poller re-points its bus subscriptions in place. `YAGRA_POLLER_POOL` still decides where a
+  poller lands the first time core sees it, and is ignored after that, so restarting a container no
+  longer reverts a move.
+
+- **A move that would leave a pool unmonitored asks first.** When the poller being moved is the last
+  live one of its pool and that pool still has nodes, the move stops and offers two answers: bring
+  those nodes to the destination as well (one transaction, monitoring never stops), or leave them
+  and accept that they stop being polled. Every other move goes straight through with no dialog.
+  `PUT /api/v1/pollers/{id}/pool` refuses with `409` unless the request says which, so a client
+  that skips the question gets the refusal rather than a pool that silently goes dark.
+
+- **A poller older than this release cannot be moved, and the screen says so.** Its Pool cell offers
+  no control and explains why. Moving one would half-work: it would take the new pool's working set
+  while "poll now" and discovery kept going to the old pool's subject, where nothing is listening
+  and the messages are discarded with no error. Upgrade the poller first — Settings ▸ Upgrade does
+  it. Offline pollers are refused for the same reason.
 
 - **The pool strip is now labelled and selects.** It carries a heading naming what those cards are,
-  and pressing one narrows the table to that pool's pollers. A poller recorded as heading to the
-  pool is included and the count discloses it ("2 pollers (1 awaiting its move)"). Pressing the card
-  again, the filter chip's ✕, or Escape clears it. The cards write the screen's existing pool column
+  and pressing one narrows the table to that pool's pollers. Pressing the card again, the filter
+  chip's ✕, or Escape clears it. A card is also a drop target for a poller being dragged. The cards write the screen's existing pool column
   filter rather than a selection of their own, so the two cannot disagree.
 
 - **`GET /api/v1/pools` gains an optional `description` per pool**, and `GET /api/v1/pollers`
-  gains `desired_pool` per poller and `description` per pool summary. New endpoints:
-  `POST /api/v1/pools`, `PUT|DELETE /api/v1/pools/{name}` and
-  `PUT /api/v1/pollers/{id}/desired-pool` (all Admin). The pool option list still merges the pools
-  nodes use, the pools folders assign and the pools live pollers report — a pool with no row keeps
-  appearing.
+  gains `can_change_pool` per poller and `description` per pool summary. New endpoints:
+  `POST /api/v1/pools`, `PUT|DELETE /api/v1/pools/{name}` and `PUT /api/v1/pollers/{id}/pool`
+  (all Admin). The pool option list still merges the pools nodes use, the pools folders assign and
+  the pools live pollers report — a pool with no row keeps appearing.
+
+- **A poller connecting over an authenticated bus is now scoped by the inventory, not by what it
+  says about itself.** With Auth Callout enabled, the pool a poller is granted access to comes from
+  its `pollers` row rather than from the name it presents at connect, so a registered poller can no
+  longer name another pool and be issued that pool's job subject — which carries plaintext device
+  credentials. A poller with no inventory row (first contact, bootstrap secret) is unchanged.
 
 
 - **Upgrading now asks what to move.** Pressing Upgrade opens the components list — core, the

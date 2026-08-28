@@ -175,7 +175,7 @@ pub(crate) async fn pool_options(admin: &super::AdminState) -> PoolOptions {
 /// the subject and the jobs are published where nothing subscribes — plain NATS, so they are
 /// discarded rather than queued. See `api/nodes.rs::validate_pool_update`, which enforces this on
 /// the assignment side; a pool created here that could not be assigned would be a trap.
-fn validate_pool_name(name: &str) -> Result<String, ApiError> {
+pub(super) fn validate_pool_name(name: &str) -> Result<String, ApiError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
         return Err(ApiError::bad_request(
@@ -285,13 +285,15 @@ pub(crate) struct PoolInUse {
 
 /// `PUT /api/v1/pools/{name}` — rename a pool and/or replace its description.
 ///
-/// 🚨 **A rename is refused while any poller reports the old name, and that refusal is the whole
-/// safety of this endpoint.** Renaming moves `nodes.pool` and `node_groups.pool` in one transaction,
-/// but it cannot move a poller: a poller's pool comes from `YAGRA_POLLER_POOL` in its own `.env`, at
-/// its own site, and every subject it subscribes to is derived from that at startup. Rename out from
-/// under one and the old name stays in `live_pools` while the new name's nodes drop into legacy
-/// fan-out, publishing to a subject nobody subscribes to — **plain NATS discards them**. That is a
-/// monitoring hole opened by a button, and nothing surfaces it until `pool_coverage`'s 300s debounce.
+/// 🚨 **A rename is refused while a poller serving the old name cannot follow a pool change**, and
+/// that refusal is the whole safety of this endpoint. Renaming moves `nodes.pool`,
+/// `node_groups.pool` **and `pollers.pool`** in one transaction (ADR-107 Inc.2 — before core owned
+/// the last of those, this had to refuse for *any* poller at all). What is still refused is a
+/// poller that will not act on the change: one that is offline, or whose build predates
+/// [`yagra_bus::CAP_POOL_FOLLOW`]. Rename out from under one of those and it goes on listening for
+/// the old name while the new name's nodes are published to a subject nobody subscribes to —
+/// **plain NATS discards them**. That is a monitoring hole opened by a button, and nothing surfaces
+/// it until `pool_coverage`'s 300s debounce.
 #[utoipa::path(
     put, path = "/api/v1/pools/{name}", tag = "pollers",
     params(("name" = String, Path, description = "The pool to update")),
@@ -335,14 +337,29 @@ async fn update_pool(
                 .map_err(|e| {
                     ApiError::from_internal(e.as_ref(), "pool claimants", "failed to read pollers")
                 })?;
-            if !claimants.is_empty() {
+            // Only the ones that cannot follow the change (ADR-107 Inc.2). The rename carries
+            // `pollers.pool` now, so serving the old name is no longer a reason to refuse — but a
+            // poller that will not act on the new name is, and for exactly the reason the old
+            // blanket refusal existed: it would keep listening for a subject that no longer
+            // receives anything, silently.
+            let now = std::time::Instant::now();
+            let stuck: Vec<String> = claimants
+                .into_iter()
+                .filter(|id| {
+                    !admin
+                        .coordinator
+                        .caps_of(id, now)
+                        .is_some_and(|caps| caps.iter().any(|c| c == yagra_bus::CAP_POOL_FOLLOW))
+                })
+                .collect();
+            if !stuck.is_empty() {
                 return Err(ApiError::conflict(
                     "pool_claimed_by_poller",
                     format!(
-                        "cannot rename: {} still report this pool. Move them first — a rename \
-                         moves nodes and folders but not pollers, and the nodes would stop being \
-                         polled.",
-                        claimants.join(", ")
+                        "cannot rename: {} cannot follow a pool change — offline, or a build older \
+                         than this release. Bring them back or upgrade them first; renaming would \
+                         leave them listening for the old name with no error shown.",
+                        stuck.join(", ")
                     ),
                 ));
             }

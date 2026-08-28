@@ -522,6 +522,7 @@ mod tests {
             chunk_total: total,
             nodes,
             total_nodes: 0,
+            pool: None,
         })
     }
 

@@ -9,52 +9,26 @@
 
 import type { PollerInfo } from '../types/api';
 
-/** The line a site has to change for a recorded move to take effect. */
-export function poolEnvLine(pool: string): string {
-  return `YAGRA_POLLER_POOL=${pool}`;
-}
-
 /**
  * Which pools this poller answers to.
  *
- * **Either it reports the pool, or it is recorded as heading there.** Somebody who selects `tokyo`
- * is asking which pollers will serve tokyo, so a poller on its way is part of that answer — and the
- * row carries its own "pending" badge, so including it cannot be mistaken for having arrived.
+ * Exactly one since ADR-107 Inc.2 — the pool core has it serving. Before that a poller could also
+ * be *recorded as heading* somewhere, and this returned both; a move is now instantaneous, so there
+ * is no in-between state left to represent.
  *
- * ⚠️ The consequence is that a poller with a pending move appears under **both** pools. That is the
- * truth: it is serving the first and has been told to serve the second.
- *
- * 🚨 **This is the only implementation of that rule.** `pollerFilters.ts` reads the pool column
- * through it, so the cards in the strip and the column filter cannot disagree — they are not two
- * mechanisms that happen to agree, they are one state written from two places (ui-conventions:
- * a second control editing one state is how a filter forks).
+ * 🚨 **Kept as a function anyway, because it is the only implementation of the rule.**
+ * `pollerFilters.ts` reads the pool column through it, so the cards in the strip and the column
+ * filter cannot disagree — they are not two mechanisms that happen to agree, they are one state
+ * written from two places (ui-conventions: a second control editing one state is how a filter
+ * forks). Inlining `p.pool` at both call sites is how that comes apart again.
  */
 export function poolValuesOf(p: PollerInfo): string[] {
-  const desired = p.desired_pool;
-  return desired && desired !== p.pool ? [p.pool, desired] : [p.pool];
+  return [p.pool];
 }
 
 /** Does this poller answer to `pool`? */
 export function pollerInPool(p: PollerInfo, pool: string): boolean {
   return poolValuesOf(p).includes(pool);
-}
-
-/**
- * How many of `shown` are there only because of a pending move — the number the count line
- * discloses.
- *
- * Without it, "ポーラー 2 台" claims a pool has two pollers when one of them is still serving
- * somewhere else, which is exactly the kind of quietly-wrong number an operator plans capacity from.
- * Takes the selected set rather than one name, because the pool filter is multi-select.
- */
-export function pendingArrivals(shown: readonly PollerInfo[], pools: readonly string[]): number {
-  if (pools.length === 0) return 0;
-  return shown.filter((p) => !pools.includes(p.pool)).length;
-}
-
-/** A poller has a move recorded that has not taken effect yet. */
-export function hasPendingMove(p: PollerInfo): boolean {
-  return !!p.desired_pool && p.desired_pool !== p.pool;
 }
 
 /**
@@ -103,16 +77,68 @@ export function poolIsRemovable(u: PoolUsage): boolean {
 }
 
 /**
- * Pollers blocking a rename — the ones *reporting* the name.
+ * Pollers a rename will carry with it — the ones serving the name.
  *
- * 🚨 Narrower than {@link poolUsage} on purpose. A poller merely recorded as heading to a name does
- * not block renaming it away, because its `.env` has not been changed yet either; one that reports
- * it does, because a rename moves nodes and folders and cannot move the poller. Leave it and the
- * old name stays live while the new name's nodes drop into legacy fan-out, where their jobs go to a
- * subject nobody subscribes to and are silently discarded.
+ * 🚨 **This used to be a list of blockers and is now a list of passengers**, and the difference is
+ * ADR-107 Inc.2. A rename moves nodes and folders; before core owned `pollers.pool` it could not
+ * move the poller, so the old name stayed live while the new name's nodes dropped into legacy
+ * fan-out and their jobs went to a subject nobody subscribed to. The rename transaction now
+ * re-points the pollers too — so the only remaining question is whether each of them *can* follow
+ * one, which is {@link pollerCanMove}.
  */
-export function renameBlockers(pool: string, rows: readonly PollerInfo[]): string[] {
+export function renamePassengers(pool: string, rows: readonly PollerInfo[]): string[] {
   return rows.filter((p) => p.pool === pool).map((p) => p.id);
+}
+
+/**
+ * Can this poller be moved to another pool at all?
+ *
+ * 🚨 **Read the server's derived answer, never `caps`.** `can_change_pool` is true only for a build
+ * that advertises `pool-follow` *and* is online, and both halves matter: an offline poller has
+ * nobody to receive the snapshot that tells it where it went, and an older build would take the new
+ * pool's working set while leaving "poll now" and discovery pointed at the old pool's subjects —
+ * where nothing listens and plain NATS discards them, with no error anywhere.
+ *
+ * Every poller is `false` immediately after this release until its own build is upgraded, so the
+ * UI has to say *why* rather than simply not offering the control.
+ */
+export function pollerCanMove(p: PollerInfo): boolean {
+  return p.can_change_pool;
+}
+
+/**
+ * Would moving `poller` out of its pool leave that pool with monitored inventory and nobody to
+ * poll it? Returns the count that would go dark, or `null` when the move is safe.
+ *
+ * 🚨 **This decides whether to ask, and nothing more.** The API asks the same question again and
+ * refuses with `409 source_pool_would_empty` unless the caller has answered it — so this is not a
+ * mirror of that check, it is the other half of a two-part question ("should I show the dialog?"
+ * here, "did the caller answer?" there). The server is the authority; a client that skipped this
+ * gets the refusal rather than the hole.
+ *
+ * The failure being prevented is the quietest one in the product: a pool with no live poller falls
+ * back to legacy per-job publish on `yagra.jobs.{pool}`, nothing is subscribed, and the jobs are
+ * discarded. The nodes decay to `unknown` rather than `down`, every dashboard reads calm, and
+ * `pool_coverage` only raises an alert after a five-minute debounce.
+ */
+export function moveEmptiesSourcePool(
+  poller: PollerInfo,
+  to: string,
+  rows: readonly PollerInfo[],
+  nodesInPool: (pool: string) => number,
+): { pool: string; nodes: number } | null {
+  const from = poller.pool;
+  if (!from || from === to) return null;
+  const othersLeft = rows.some(
+    (p) => p.id !== poller.id && p.pool === from && p.status === 'online',
+  );
+  if (othersLeft) return null;
+  const nodes = nodesInPool(from);
+  // 🚨 **Nodes, not folders**, and the server's refusal uses the same trigger deliberately. A
+  // folder assigned to the pool with no nodes under it strands nothing today — it only decides
+  // where future nodes land — so refusing there would be a dialog nobody could act on. The folder
+  // count is still reported by the API and still travels with a `move_nodes` answer.
+  return nodes > 0 ? { pool: from, nodes } : null;
 }
 
 /**
@@ -132,18 +158,9 @@ export function newPoolIsIdle(nodes: number, livePollers: number): boolean {
  *
  * 🚨 **Not decoration.** A pool name may be 63 characters and the column is not, so the cell will
  * sometimes clip — and ADR-088's geometry check refuses clipped text unless a `title` on it or an
- * ancestor carries the whole string. It caught exactly that here: with a long destination the
- * badges were cut by 41px and 132px with nothing to hover. So this must contain **both pool names
- * and the pending label**, not a paraphrase of them.
- *
- * `pending` is the localized badge text; `hint` is the sentence explaining the state.
+ * ancestor carries the whole string. It caught exactly that here once, with the badges cut by 41px
+ * and 132px and nothing to hover. So this must contain the pool name verbatim, never a paraphrase.
  */
-export function poolCellTitle(
-  p: PollerInfo,
-  labels: { pending: string; hint: string },
-): string {
-  const head = hasPendingMove(p)
-    ? `${p.pool} → ${p.desired_pool} (${labels.pending})`
-    : p.pool;
-  return `${head} — ${labels.hint}`;
+export function poolCellTitle(p: PollerInfo, labels: { hint: string }): string {
+  return `${p.pool} — ${labels.hint}`;
 }

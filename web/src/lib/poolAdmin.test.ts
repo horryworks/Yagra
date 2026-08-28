@@ -2,17 +2,16 @@
 import { describe, expect, it } from 'vitest';
 import type { PollerInfo } from '../types/api';
 import {
-  hasPendingMove,
   isValidNewPoolName,
+  moveEmptiesSourcePool,
   newPoolIsIdle,
-  pendingArrivals,
   poolCellTitle,
-  poolEnvLine,
   poolIsRemovable,
   poolUsage,
   poolValuesOf,
+  pollerCanMove,
   pollerInPool,
-  renameBlockers,
+  renamePassengers,
 } from './poolAdmin';
 import { applyFilters } from './filterPredicate';
 import { pollerFilters } from '../pages/pollerFilters';
@@ -26,7 +25,6 @@ function poller(
   return {
     id,
     pool,
-    desired_pool: null,
     status: 'online',
     last_seen: null,
     first_seen: null,
@@ -39,6 +37,7 @@ function poller(
     disk_used_pct: null,
     mgmt_addrs: [],
     anchor_node_id: null,
+    can_change_pool: true,
     caps: [],
     listeners: [],
     has_token: false,
@@ -50,15 +49,15 @@ function poller(
 
 const FLEET = [
   poller('aio1', 'default'),
-  poller('core2', 'default', { desired_pool: 'tokyo' }),
+  poller('core2', 'default'),
   poller('tok1', 'tokyo'),
-  poller('osa1', 'osaka', { status: 'offline' }),
+  poller('osa1', 'osaka', { status: 'offline', can_change_pool: false }),
 ];
 
 /** The real filter, driven the way a pool card drives it: one token in the `pool` column. */
 function shownFor(pool: string | null) {
   const cols = Object.entries(
-    pollerFilters(((k: string) => k) as never, ['default', 'tokyo', 'osaka', 'lab-move']),
+    pollerFilters(((k: string) => k) as never, ['default', 'tokyo', 'osaka', 'lab']),
   ).map(([key, filter]) => ({ key, filter }));
   return applyFilters(FLEET, cols, { pool: pool ?? '' }, Date.now());
 }
@@ -69,81 +68,43 @@ describe('pool membership', () => {
   });
 
   it('narrows to one pool', () => {
-    expect(shownFor('osaka').map((p) => p.id)).toEqual(['osa1']);
-  });
-
-  // The design decision, pinned **through the real filter** rather than through a helper that only
-  // the test calls: a card sets the same `pool` filter the column does, so if the two ever forked
-  // this assertion is what notices.
-  it('includes a poller recorded as heading to the pool', () => {
-    expect(shownFor('tokyo').map((p) => p.id)).toEqual(['core2', 'tok1']);
-  });
-
-  // ...and it therefore appears under both. That is the truth, not a bug.
-  it('keeps a pending poller under the pool it is still serving', () => {
     expect(shownFor('default').map((p) => p.id)).toEqual(['aio1', 'core2']);
   });
 
   it('is empty for a pool nothing serves yet', () => {
-    expect(shownFor('lab-move')).toEqual([]);
+    expect(shownFor('lab').map((p) => p.id)).toEqual([]);
   });
 
   it('answers membership both ways round', () => {
-    const c = FLEET[1];
-    expect(poolValuesOf(c)).toEqual(['default', 'tokyo']);
-    expect(pollerInPool(c, 'default')).toBe(true);
-    expect(pollerInPool(c, 'tokyo')).toBe(true);
-    expect(pollerInPool(c, 'osaka')).toBe(false);
+    const p = poller('x', 'tokyo');
+    expect(pollerInPool(p, 'tokyo')).toBe(true);
+    expect(pollerInPool(p, 'default')).toBe(false);
   });
 
-  it('lists one pool for a poller with no move pending', () => {
-    expect(poolValuesOf(FLEET[0])).toEqual(['default']);
-  });
-});
-
-describe('the count line discloses pending arrivals', () => {
-  it('counts only the ones not yet serving the pool', () => {
-    const shown = shownFor('tokyo');
-    expect(shown).toHaveLength(2);
-    expect(pendingArrivals(shown, ['tokyo'])).toBe(1);
-  });
-
-  it('counts nothing when every shown poller is already there', () => {
-    expect(pendingArrivals(shownFor('osaka'), ['osaka'])).toBe(0);
-  });
-
-  it('counts nothing with no selection — the unfiltered list makes no claim about a pool', () => {
-    expect(pendingArrivals(FLEET, [])).toBe(0);
-  });
-
-  it('counts across a multi-pool selection, since the filter is a set', () => {
-    // Selecting default AND tokyo: core2 reports default, so it is not pending for that selection.
-    expect(pendingArrivals(FLEET, ['default', 'tokyo'])).toBe(1);
-  });
-});
-
-describe('a pending move', () => {
-  it('is recorded only when the destination differs from where the poller is', () => {
-    expect(hasPendingMove(FLEET[1])).toBe(true);
-    expect(hasPendingMove(FLEET[0])).toBe(false);
-    // A record naming the pool it already serves is not pending — this is the state the heartbeat
-    // clears, and the badge must not flicker on in the window before it does.
-    expect(hasPendingMove(poller('x', 'tokyo', { desired_pool: 'tokyo' }))).toBe(false);
+  /**
+   * A poller is in exactly one pool since ADR-107 Inc.2 — a move is instantaneous, so there is no
+   * "recorded as heading there" state to represent any more. Kept as a test because the *shape*
+   * matters: `pollerFilters.ts` reads the pool column through `poolValuesOf`, so the cards in the
+   * strip and the column filter cannot disagree.
+   */
+  it('lists exactly the pool a poller serves', () => {
+    expect(poolValuesOf(poller('x', 'tokyo'))).toEqual(['tokyo']);
   });
 });
 
 describe('pool names are one subject token', () => {
   it('accepts what an operator types', () => {
     expect(isValidNewPoolName('tokyo')).toBe(true);
-    expect(isValidNewPoolName(' edge-01_a ')).toBe(true);
-    expect(isValidNewPoolName('x'.repeat(63))).toBe(true);
+    expect(isValidNewPoolName('east-dc_2')).toBe(true);
+    expect(isValidNewPoolName('  padded  ')).toBe(true);
   });
 
   it('refuses anything that would partition the NATS subject or overflow the token', () => {
-    // `yagra.jobs.tokyo.1` is subscribed by nothing, and plain NATS discards rather than queues.
     expect(isValidNewPoolName('tokyo.1')).toBe(false);
     expect(isValidNewPoolName('east dc')).toBe(false);
+    expect(isValidNewPoolName('a*b')).toBe(false);
     expect(isValidNewPoolName('x'.repeat(64))).toBe(false);
+    expect(isValidNewPoolName('x'.repeat(63))).toBe(true);
   });
 
   it('refuses blank — naming a new pool has no "inherit" case', () => {
@@ -152,40 +113,92 @@ describe('pool names are one subject token', () => {
   });
 });
 
-describe('what blocks removing or renaming a pool', () => {
-  it('reports every poller that names it, in either direction', () => {
-    const u = poolUsage('tokyo', 40, FLEET);
-    expect(u.nodes).toBe(40);
-    expect(u.pollers).toEqual(['core2', 'tok1']);
-    // Live counts only the ones actually serving it and online.
-    expect(u.livePollers).toBe(1);
+describe('what blocks removing a pool, and what a rename carries', () => {
+  it('reports every poller that names it', () => {
+    const u = poolUsage('default', 32, FLEET);
+    expect(u.pollers).toEqual(['aio1', 'core2']);
+    expect(u.livePollers).toBe(2);
+    expect(u.nodes).toBe(32);
     expect(poolIsRemovable(u)).toBe(false);
   });
 
   it('removes a pool nothing points at', () => {
-    const u = poolUsage('lab-move', 0, FLEET);
+    const u = poolUsage('lab', 0, FLEET);
     expect(u.pollers).toEqual([]);
     expect(poolIsRemovable(u)).toBe(true);
   });
 
   it('refuses removal for nodes alone, with no poller in sight', () => {
-    expect(poolIsRemovable(poolUsage('lab-move', 3, FLEET))).toBe(false);
+    const u = poolUsage('lab', 4, FLEET);
+    expect(u.pollers).toEqual([]);
+    expect(poolIsRemovable(u)).toBe(false);
   });
 
-  // 🚨 The asymmetry that matters: a rename is blocked by a poller *reporting* the name, not by one
-  // merely heading there. Getting this wrong in the lenient direction opens a monitoring hole; in
-  // the strict direction it merely refuses a rename that would have been safe.
-  it('blocks a rename only on pollers that report the name', () => {
-    expect(renameBlockers('tokyo', FLEET)).toEqual(['tok1']);
-    expect(renameBlockers('default', FLEET)).toEqual(['aio1', 'core2']);
-    expect(renameBlockers('lab-move', FLEET)).toEqual([]);
+  /**
+   * 🚨 The list changed meaning in ADR-107 Inc.2 and the name changed with it: these pollers are
+   * carried by the rename, not blocking it. A rename re-points `pollers.pool` in the same
+   * transaction as the nodes and folders.
+   */
+  it('names the pollers a rename will carry with it', () => {
+    expect(renamePassengers('default', FLEET)).toEqual(['aio1', 'core2']);
+    expect(renamePassengers('lab', FLEET)).toEqual([]);
+  });
+});
+
+describe('whether a poller can be moved at all', () => {
+  /**
+   * 🚨 Read the server's derived answer, never `caps`. It is false for an offline poller *and* for
+   * an older build, and the UI needs the same reply for both: there is nothing to offer.
+   */
+  it('follows the server, for both reasons it can say no', () => {
+    expect(pollerCanMove(poller('new', 'default'))).toBe(true);
+    expect(pollerCanMove(poller('old', 'default', { can_change_pool: false }))).toBe(false);
+    expect(pollerCanMove(poller('off', 'default', { status: 'offline', can_change_pool: false }))).toBe(
+      false,
+    );
+  });
+});
+
+describe('a move that would strand the pool it leaves', () => {
+  const nodes = (counts: Record<string, number>) => (pool: string) => counts[pool] ?? 0;
+
+  /**
+   * 🚨 The quietest failure in the product: a pool with no live poller falls back to legacy
+   * per-job publish on a subject nobody subscribes to, plain NATS discards the jobs, the nodes
+   * decay to `unknown` rather than `down`, and every dashboard reads calm.
+   */
+  it('is caught when the last live poller leaves nodes behind', () => {
+    const fleet = [poller('only', 'tokyo'), poller('other', 'default')];
+    expect(
+      moveEmptiesSourcePool(fleet[0], 'default', fleet, nodes({ tokyo: 40 })),
+    ).toEqual({ pool: 'tokyo', nodes: 40 });
   });
 
-  it('lets a pool be renamed away from a poller that has only been told to go there', () => {
-    // `core2` is recorded as heading to tokyo but still serves default, so its `.env` still says
-    // default — renaming tokyo cannot strand it.
-    const blockers = renameBlockers('tokyo', [poller('core2', 'default', { desired_pool: 'tokyo' })]);
-    expect(blockers).toEqual([]);
+  it('is not raised while another live poller stays behind', () => {
+    const fleet = [poller('a', 'tokyo'), poller('b', 'tokyo')];
+    expect(moveEmptiesSourcePool(fleet[0], 'default', fleet, nodes({ tokyo: 40 }))).toBeNull();
+  });
+
+  /** An offline poller cannot poll anything, so it does not count as cover. */
+  it('ignores an offline poller when asking who is left', () => {
+    const fleet = [poller('a', 'tokyo'), poller('b', 'tokyo', { status: 'offline' })];
+    expect(
+      moveEmptiesSourcePool(fleet[0], 'default', fleet, nodes({ tokyo: 40 })),
+    ).toEqual({ pool: 'tokyo', nodes: 40 });
+  });
+
+  /**
+   * Nothing goes dark when there is nothing to poll, and asking anyway would be a dialog the
+   * operator cannot act on. The API's refusal uses the same trigger for exactly that reason.
+   */
+  it('is not raised for a pool with no nodes', () => {
+    const fleet = [poller('only', 'tokyo')];
+    expect(moveEmptiesSourcePool(fleet[0], 'default', fleet, nodes({}))).toBeNull();
+  });
+
+  it('is not raised for a move to the pool it is already in', () => {
+    const fleet = [poller('only', 'tokyo')];
+    expect(moveEmptiesSourcePool(fleet[0], 'tokyo', fleet, nodes({ tokyo: 40 }))).toBeNull();
   });
 });
 
@@ -194,10 +207,8 @@ describe('a freshly created pool is idle, not broken', () => {
     expect(newPoolIsIdle(0, 0)).toBe(true);
   });
 
-  // The distinction the strip draws: nodes with no live poller is the real warning, because those
-  // nodes' jobs are being published to a subject nobody subscribes to and discarded.
   it('is not idle once nodes are assigned to it', () => {
-    expect(newPoolIsIdle(12, 0)).toBe(false);
+    expect(newPoolIsIdle(4, 0)).toBe(false);
   });
 
   it('is not idle once a poller serves it', () => {
@@ -205,37 +216,16 @@ describe('a freshly created pool is idle, not broken', () => {
   });
 });
 
-describe('the line a site has to change', () => {
-  it('is the env var the poller reads at startup', () => {
-    expect(poolEnvLine('tokyo')).toBe('YAGRA_POLLER_POOL=tokyo');
-  });
-});
-
 describe('the pool cell says everything it draws', () => {
-  const labels = { pending: 'Move pending', hint: 'Change pool' };
-
-  // 🚨 ADR-088's geometry check found this: a long destination clipped both badges with nothing to
-  // hover. The title must therefore carry the *whole* rendered string, not a paraphrase — so these
-  // assertions name each substring the cell draws.
-  it('carries both pool names and the pending label while a move is recorded', () => {
-    const title = poolCellTitle(
-      poller('core2', 'default', { desired_pool: 'a-very-long-destination-pool-name' }),
-      labels,
-    );
-    expect(title).toContain('default');
-    expect(title).toContain('a-very-long-destination-pool-name');
-    expect(title).toContain('Move pending');
-    expect(title).toContain('Change pool');
-  });
-
-  it('carries just the pool and the hint when nothing is pending', () => {
-    const title = poolCellTitle(poller('aio1', 'default'), labels);
-    expect(title).toContain('default');
-    expect(title).not.toContain('Move pending');
-  });
-
-  // A record naming the pool it already serves draws no arrow, so the title must not claim one.
-  it('draws no arrow for a record that has already been fulfilled', () => {
-    expect(poolCellTitle(poller('x', 'tokyo', { desired_pool: 'tokyo' }), labels)).not.toContain('→');
+  /**
+   * 🚨 ADR-088's geometry check refuses clipped text unless a `title` carries the whole string, and
+   * it caught exactly this cell: a long pool name was cut with nothing to hover. So the title must
+   * contain the name verbatim, never a paraphrase of it.
+   */
+  it('carries the pool name verbatim, however long', () => {
+    const long = 'ymock-a-very-long-pool-name-that-will-not-fit';
+    const title = poolCellTitle(poller('p', long), { hint: 'Move this poller' });
+    expect(title).toContain(long);
+    expect(title).toContain('Move this poller');
   });
 });

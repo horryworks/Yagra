@@ -1185,15 +1185,10 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
     ("POST", "/api/v1/pools", INFRA, NO_MCP_WRITE),
     ("PUT", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
     ("DELETE", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
-    // Where the operator wants a poller to be, as opposed to where it reports being (ADR-107).
-    // It moves nothing on its own — the site's own `.env` still decides — so this is a record of
-    // intent that the kit download and the pending badge read.
-    (
-        "PUT",
-        "/api/v1/pollers/:id/desired-pool",
-        INFRA,
-        NO_MCP_WRITE,
-    ),
+    // Move a poller to another pool (ADR-107 Inc.2). Core owns `pollers.pool`, so this takes
+    // effect immediately and nothing at the site is touched. Refuses a build that cannot follow a
+    // pool change, and refuses to strand the source pool's nodes unless the caller says so.
+    ("PUT", "/api/v1/pollers/:id/pool", INFRA, NO_MCP_WRITE),
     (
         "GET",
         "/api/v1/preferences",
