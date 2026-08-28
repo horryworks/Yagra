@@ -272,6 +272,20 @@ const fn yes() -> bool {
     true
 }
 
+/// The release tag for the version this core is running.
+///
+/// 🚨 A *running version* is spelled bare (`0.3.4`); a *release tag* carries the `v` (`v0.3.4`).
+/// The difference is invisible everywhere on this side: `movable_to`, `version_matches` and the
+/// WebUI's `rowPlan` all strip the prefix before comparing, so a bare value crosses the whole core
+/// without meeting anything that objects. The poller's validator is the first thing that does, and
+/// it refuses — after the run has been accepted, opened a window and started reporting progress.
+///
+/// Both doors build the tag here rather than trusting the spelling that arrived, so a caller cannot
+/// choose one the far end will not accept.
+fn own_release_tag() -> String {
+    format!("v{}", env!("CARGO_PKG_VERSION"))
+}
+
 /// The accepted run.
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub(crate) struct RunAccepted {
@@ -456,18 +470,22 @@ async fn apply_upgrade(
                 "a poller may only be moved to the release this core is running; upgrade core first",
             ));
         }
+        // The check above is v-agnostic on purpose — it asks *which release*, and the WebUI holds
+        // that as core's running version, which is spelled without the `v`. What goes on the bus
+        // must be the tag, so shadow the caller's spelling here and let nothing below reach it.
+        let tag = own_release_tag();
         let bus = st.upgrade_bus.clone().ok_or_else(|| {
             ApiError::unavailable(
                 "bus_unavailable",
                 "this deployment has no bus, so no poller can be reached",
             )
         })?;
-        start_convergence(&admin, bus, tag, &id, &by, body.pollers.as_deref()).await?;
+        start_convergence(&admin, bus, &tag, &id, &by, body.pollers.as_deref()).await?;
         return Ok((
             StatusCode::ACCEPTED,
             Json(RunAccepted {
                 id,
-                target_tag: tag.to_owned(),
+                target_tag: tag,
                 // None, and not a failure to open one: no container on this host is recreated, so
                 // there is nothing here to silence.
                 maintenance_window_id: None,
@@ -603,7 +621,7 @@ async fn align_pollers(
             "this deployment has no bus, so no poller can be reached",
         )
     })?;
-    let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
+    let tag = own_release_tag();
     let id = crate::upgrade::new_run_id();
     let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
     // No selection: this route is "bring everything that can move onto my build", which is what it
@@ -647,6 +665,16 @@ async fn start_convergence(
     by: &str,
     selected: Option<&[String]>,
 ) -> Result<Converging, ApiError> {
+    // Unreachable from either door now that both call `own_release_tag`, and here anyway because
+    // this is where a tag becomes a bus message: every site validates it with the same rule and
+    // drops what it cannot parse, so a malformed one buys an accepted run that reports progress
+    // and moves nothing — the most expensive way for this to fail.
+    if !crate::upgrade::is_valid_tag(tag) {
+        return Err(ApiError::bad_request(
+            "invalid_tag",
+            "not a release tag; a poller is moved to a published release, not to a bare version",
+        ));
+    }
     let fleet = poller_builds(admin);
     // `local` is `None` here rather than the updater's list, and that is not a shortcut: this route
     // must work on a deployment with no central updater at all, and a co-located poller does not
@@ -1097,6 +1125,33 @@ mod tests {
         .expect("parse");
         assert!(!explicit.include_core);
         assert_eq!(explicit.pollers, Some(vec!["edge-1".to_owned()]));
+    }
+
+    /// What core puts on the bus must be a tag every site will accept.
+    ///
+    /// 🚨 **Only one end of this is strict, and it is the far one.** Core compares versions
+    /// v-agnostically everywhere — the `include_core` check strips the prefix, so does
+    /// `movable_to`, so does `version_matches`, so does the WebUI's `rowPlan` — so a bare
+    /// `0.3.4` travels the entire core side without meeting anything that objects, and a request
+    /// carrying one is answered 202. The poller's `is_release_tag` requires the `v` and drops the
+    /// command; the run then reports a site that "did not come back" from an upgrade it never
+    /// started.
+    ///
+    /// Not hypothetical. The poller-only door handed `start_convergence` the caller's spelling and
+    /// the WebUI sends core's *running version*, so a site logged `refusing an upgrade command with
+    /// an invalid release tag tag=0.3.3` twice while Settings ▸ Upgrade reported the failure — with
+    /// 2,718 backend tests green, because every one of them compares the two forms as equal.
+    #[test]
+    fn the_tag_a_poller_is_sent_is_one_a_poller_accepts() {
+        assert!(
+            crate::upgrade::is_valid_tag(&super::own_release_tag()),
+            "both doors send this, and every site checks it with this same rule"
+        );
+        // The needle that would have caught the bug: what the WebUI actually holds is not a tag.
+        assert!(
+            !crate::upgrade::is_valid_tag(env!("CARGO_PKG_VERSION")),
+            "a running version is not a release tag — forwarding one is the failure this pins"
+        );
     }
 
     use super::super::tests_support::{private_state, public_state};
