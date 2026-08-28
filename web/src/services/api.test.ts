@@ -188,8 +188,12 @@ describe('api client', () => {
       json: async () => ({ id: 'run-1', target_tag: 'v0.2.2' }),
     } as unknown as Response);
     globalThis.fetch = spy;
-    const run = await api.applyUpgrade('v0.2.2');
+    const run = await api.applyUpgrade('v0.2.2', true, ['edge-1']);
     expect(run.id).toBe('run-1');
+    // 🚨 The selection has to reach the wire. An omitted `pollers` means *every* poller that can
+    // move, so a client that quietly dropped it would upgrade rows the operator unticked.
+    const body = JSON.parse(String((spy.mock.calls[0][1] as RequestInit).body));
+    expect(body).toEqual({ target_tag: 'v0.2.2', include_core: true, pollers: ['edge-1'] });
   });
 
   it('posts a profile with its poll-interval override in the body', async () => {

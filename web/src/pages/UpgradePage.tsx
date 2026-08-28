@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Upgrade (Settings ▸ Upgrade, ADR-050). What this deployment is running, and how far back it can
-// be taken. Manage-configuration — it reports build provenance rather than a health counter.
+// Upgrade (Settings ▸ Upgrade, ADR-050/ADR-051). What this deployment is running, what it is made
+// of, and how far back it can be taken. Manage-configuration — it reports build provenance rather
+// than a health counter.
+//
+// **One entrance, two steps** (ADR-051 Inc.6). Pressing Upgrade opens the components list — core
+// and every poller, with what each runs and a checkbox — and pressing it again starts the work.
+// There used to be three entrances, none of which could be told what to move: the release list, a
+// separate "align the pollers" card, and the archive upload. The first two are now one dialog.
 //
 // The privileged updater sidecar is off by default, so the page says so plainly rather than
 // rendering an empty version list, which would read as "you are up to date".
@@ -21,23 +27,32 @@ import { ProgressBar } from '../components/ui/ProgressBar';
 import { api, errMsg } from '../services/api';
 import { formatTimestamp, relativeTime } from '../lib/format';
 import type { UpgradeStatus } from '../types/api';
-import type { Offer, RunPhase } from './upgradeStatus';
+import type { ComponentRow, ConvergePhase, Offer, RunPhase } from './upgradeStatus';
 import {
   buildKind,
   bundleTagFromFilename,
   canOffer,
   canUploadBundle,
+  componentReason,
+  convergePhase,
+  convergeProgress,
+  convergeState,
+  CORE_ID,
+  darkPools,
+  defaultSelection,
   isRunning,
   lastChecked,
   looksLikeReleaseTag,
   mechanism,
-  pollerPlan,
   rollback,
   rollbacks,
+  rowLocked,
+  rowPlan,
   runPhase,
   runState,
   shortRef,
   shouldPoll,
+  shouldPollConvergence,
   stepProgress,
   switchPending,
   UPGRADE_PROGRESS_STEPS,
@@ -61,17 +76,12 @@ const POLL_CEILING_MS = 15 * 60_000;
  *  sidecar's request beat is five seconds and two `wget`s follow it. */
 const CHECK_TIMEOUT_MS = 45_000;
 
-/** How often to re-read the fleet while pollers converge (ADR-051 Inc.4).
+/** How often to re-read while pollers converge (ADR-051 Inc.4/Inc.6).
  *
- *  Slower than the run poll, because nothing here is being recreated underneath this browser and
- *  the thing being watched moves on the scale of a site pulling an image. The progress *is* the
- *  skew list shrinking, so a beat that outpaces it just re-renders the same rows. */
+ *  Slower than the run poll, and for the opposite reason: nothing here is being recreated
+ *  underneath this browser, and the thing being watched moves on the scale of a site pulling an
+ *  image over a WAN link. A beat that outpaces it just re-renders the same rows. */
 const ALIGN_POLL_MS = 5_000;
-
-/** Stop watching a convergence. One site's prefetch budget is 15 minutes and its return timeout is
- *  10, so a pool of a few sites can legitimately run past half an hour; past this the page returns
- *  to reporting whatever the fleet currently says, which is the honest answer either way. */
-const ALIGN_CEILING_MS = 45 * 60_000;
 
 /** A poll has to fail for this long during a run before the page says the connection is gone.
  *  One missed request is normal; a run of them is core being recreated. */
@@ -85,6 +95,13 @@ function Row({ label, children, mono }: { label: string; children: React.ReactNo
       <div className={mono ? 'upgrade-value mono' : 'upgrade-value'}>{children}</div>
     </div>
   );
+}
+
+/** A section divider inside a card. The cards were merged from eight to five, so what used to be a
+ *  card title has to survive as something — a word an operator has learned to look for must stay
+ *  findable after the box around it is gone (ADR-055 R1). */
+function Sub({ children, first }: { children: React.ReactNode; first?: boolean }) {
+  return <div className={first ? 'upgrade-subhead first' : 'upgrade-subhead'}>{children}</div>;
 }
 
 /**
@@ -153,6 +170,74 @@ function Progress({
   );
 }
 
+/**
+ * The remote sites, while they are being replaced and after (ADR-051 Inc.6).
+ *
+ * The other half of the same press, and the half that had no progress at all: core's own track ends
+ * at `verify`, and everything after it — a site pulling over whatever link it has, one container
+ * recreated at a time per pool — was invisible for as long as half an hour.
+ *
+ * ⚠️ **More than one row can be `applying` at once.** Pools converge in parallel and only the queue
+ * *within* a pool is serial, so a headline naming a single site is wrong on any deployment with two
+ * pools. The list is what carries the answer; the sentence above it counts.
+ */
+function ConvergeProgress({
+  phase,
+  t,
+}: {
+  phase: Extract<ConvergePhase, { kind: 'running' | 'done' }>;
+  t: (k: string, o?: Record<string, unknown>) => string;
+}) {
+  const mark: Record<string, string> = {
+    waiting: '·',
+    prefetching: '·',
+    applying: '▸',
+    returned: '✓',
+    failed: '✗',
+    skipped: '·',
+  };
+  return (
+    <div className="upgrade-progress">
+      <p className="upgrade-note">
+        {t('converge.count', {
+          done: phase.done,
+          total: phase.total,
+          version: phase.conv.tag,
+        })}
+      </p>
+      <ProgressBar value={convergeProgress(phase)} label={t('converge.heading')} />
+      <ul className="upgrade-sites">
+        {phase.conv.targets.map((s) => {
+          const st = convergeState(s.state);
+          const cls =
+            st === 'returned'
+              ? 'upgrade-site upgrade-site-done'
+              : st === 'applying'
+                ? 'upgrade-site upgrade-site-now'
+                : st === 'failed'
+                  ? 'upgrade-site upgrade-site-bad'
+                  : 'upgrade-site upgrade-site-wait';
+          return (
+            <li key={s.id} className={cls}>
+              <span className="upgrade-site-mark" aria-hidden="true">
+                {(st && mark[st]) ?? '·'}
+              </span>
+              <span className="mono">{s.id}</span>
+              <span className="upgrade-site-pool muted">{s.pool}</span>
+              <span className="upgrade-site-state">
+                {/* A state this build has never heard of still renders as *something*: the value
+                    comes from a core that may be newer than this bundle. */}
+                {st ? t(`convergeState.${st}`) : s.state}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="upgrade-hint muted">{t('converge.serial')}</p>
+    </div>
+  );
+}
+
 /** Seconds → a coarse "3d 4h" / "12m" string. Coarse on purpose: this answers "did core restart
  *  while nobody was looking?", not "how long exactly". */
 function uptime(seconds: number): string {
@@ -172,7 +257,10 @@ export function UpgradePage() {
   // from "the updater is unreachable" — they need different fixes, and telling one as the other
   // sends an operator looking for a broken container (ADR-056).
   const [block, setBlock] = useState<LoadBlock | null>(null);
-  const [confirming, setConfirming] = useState<string | null>(null);
+  // The release the selection dialog is open for, or `null`. It replaces the old yes/no
+  // confirmation: the dialog *is* the confirmation, and it is also where what-moves is decided.
+  const [picking, setPicking] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string[]>([]);
   const [applyError, setApplyError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [bundleFile, setBundleFile] = useState<File | null>(null);
@@ -191,6 +279,10 @@ export function UpgradePage() {
   // run. Arming the poll from `isRunning` therefore never armed it at all, and the page sat silent
   // through the entire upgrade. See `runPhase` for the full account.
   const [pending, setPending] = useState<string | null>(null);
+  // The same, for the poller half. Separate because the two can be in flight at once — a core
+  // upgrade converges the fleet afterwards — and because only one of them destroys this browser's
+  // connection.
+  const [pendingAlign, setPendingAlign] = useState<string | null>(null);
   // The tag that was asked for, so the progress card can name it before the server can.
   const [requestedTag, setRequestedTag] = useState<string | null>(null);
   // Set when polls start failing during a run: core is being recreated. Distinct from `failed`,
@@ -198,20 +290,6 @@ export function UpgradePage() {
   const [stale, setStale] = useState(false);
   const [checking, setChecking] = useState(false);
   const [checkError, setCheckError] = useState<string | null>(null);
-  // Aligning the pollers (ADR-051 Inc.4). Its own busy flag and its own poll: it starts nothing in
-  // this deployment, so it must not borrow the run machinery above, which exists to survive core
-  // restarting underneath it.
-  const [confirmingAlign, setConfirmingAlign] = useState(false);
-  const [aligning, setAligning] = useState(false);
-  const [alignError, setAlignError] = useState<string | null>(null);
-  const [aligned, setAligned] = useState(false);
-  const alignWatch = useRef<number | null>(null);
-  useEffect(
-    () => () => {
-      if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
-    },
-    [],
-  );
   // Sticky: once a run starts, a failed poll means core is restarting — which is the operation
   // working, not an error. Without this the page would flip to "could not read" mid-upgrade.
   const everSeen = useRef(false);
@@ -266,46 +344,41 @@ export function UpgradePage() {
     return () => window.clearInterval(h);
   }, [polling, load]);
 
-  /** Bring every self-upgrading poller onto this core's build (ADR-051 Inc.4).
-   *
-   *  Nothing in this deployment restarts, so unlike `apply` this does not arm the run poll or set
-   *  `pending` — it watches the fleet instead, and the progress it shows is the skew list shrinking
-   *  as sites come back. `aligned` is the "you pressed it and it took" acknowledgement, which the
-   *  skew list alone cannot give: a pool's first site can be minutes into a prefetch before
-   *  anything on this page changes. */
-  const alignPollers = async () => {
-    setAligning(true);
-    setAlignError(null);
-    setAligned(false);
-    try {
-      await api.alignPollers();
-      setConfirmingAlign(false);
-      setAligned(true);
-      if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
-      const started = Date.now();
-      alignWatch.current = window.setInterval(() => {
-        if (Date.now() - started > ALIGN_CEILING_MS) {
-          if (alignWatch.current !== null) window.clearInterval(alignWatch.current);
-          alignWatch.current = null;
-          return;
-        }
-        void load();
-      }, ALIGN_POLL_MS);
-    } catch (e) {
-      setAlignError(errMsg(e, t('pollers.align.failed')));
-    } finally {
-      setAligning(false);
-    }
-  };
+  // The convergence has its own, slower beat — and, unlike the run poll, it is armed by **what the
+  // server says**, not only by what this browser did. That is the whole point of the snapshot
+  // moving to the backend (ADR-051 Inc.6): a second tab, or the same tab after a reload, watches
+  // the same convergence. There is no ceiling here for the same reason: the server ends it by
+  // stamping `finished_at`, so there is nothing to time out on.
+  const converging = status ? shouldPollConvergence(status, pendingAlign) : false;
+  useEffect(() => {
+    if (!converging) return undefined;
+    const h = window.setInterval(() => void load(), ALIGN_POLL_MS);
+    return () => window.clearInterval(h);
+  }, [converging, load]);
 
-  const apply = async (tag: string) => {
+  /** Start the upgrade the dialog is showing.
+   *
+   *  One call for both halves: `include_core` decides whether this deployment restarts, and the
+   *  server refuses a poller-only request that names a release core is not on. Which `pending` is
+   *  set follows from that — only a core upgrade destroys this browser's connection. */
+  const submit = async () => {
+    if (picking === null) return;
+    const includeCore = selected.includes(CORE_ID);
     setSubmitting(true);
     setApplyError(null);
     try {
-      const accepted = await api.applyUpgrade(tag);
-      setPending(accepted.id);
-      setRequestedTag(tag);
-      setConfirming(null);
+      const accepted = await api.applyUpgrade(
+        picking,
+        includeCore,
+        selected.filter((id) => id !== CORE_ID),
+      );
+      if (includeCore) {
+        setPending(accepted.id);
+        setRequestedTag(picking);
+      } else {
+        setPendingAlign(accepted.id);
+      }
+      setPicking(null);
       await load();
     } catch (e) {
       setApplyError(errMsg(e, t('apply.failed')));
@@ -441,6 +514,43 @@ export function UpgradePage() {
     );
   }
 
+  const kind = buildKind(status.current.build_profile);
+  const ref = shortRef(status.current.source_ref);
+  const back = rollback(status);
+  const rows: ComponentRow[] = status.components;
+  const state = mechanism(status);
+  const last = status.last_run;
+  const lastState = runState(last?.state);
+  const newer = upgrades(status);
+  const older = rollbacks(status);
+  const phase = runPhase(status, pending);
+  const inFlight = phase.kind === 'starting' || phase.kind === 'running';
+  const cphase = convergePhase(status, pendingAlign);
+  // Which release is being installed. Prefer the server's answer, but fall back to the tag this
+  // browser asked for: during `starting` the server is still describing the *previous* run, so
+  // reading `last.target` alone would name the wrong version on the one screen that must not.
+  const pendingTarget =
+    (last?.id === pending ? last?.target : null) ?? requestedTag ?? last?.target ?? null;
+  const checkedAt = lastChecked(status);
+  const uploading = uploaded !== null;
+  const tagOk = looksLikeReleaseTag(bundleTag);
+  const bundleReady =
+    !uploading && canUploadBundle(status, pending) && bundleFile !== null && tagOk;
+  const maxBytes = status.updater.bundle_max_bytes ?? null;
+  const maxGib = maxBytes === null ? null : Math.round((maxBytes / 1024 ** 3) * 10) / 10;
+  // The pollers that are off this core's own build. When there are any, the running release gets a
+  // row of its own in the list below — that row is the way in when core is current and only the
+  // sites have drifted, and it opens the same dialog with core already excluded.
+  const behind = rows.filter(
+    (r) => r.kind === 'poller' && rowPlan(r, status.current.core_version) === 'moves',
+  );
+
+  const open = (tag: string) => {
+    setApplyError(null);
+    setSelected(defaultSelection(rows, tag));
+    setPicking(tag);
+  };
+
   // One row per release. The button says which way it goes — "upgrade to this" on a release older
   // than the running one is simply false, and this page is where an operator decides whether to
   // touch production.
@@ -454,10 +564,7 @@ export function UpgradePage() {
         <Button
           variant={offer.direction === 'upgrade' ? 'primary' : undefined}
           disabled={!canOffer(status, offer, pending)}
-          onClick={() => {
-            setApplyError(null);
-            setConfirming(offer.tag);
-          }}
+          onClick={() => open(offer.tag)}
         >
           {t(`offerAction.${offer.direction}`)}
         </Button>
@@ -465,42 +572,55 @@ export function UpgradePage() {
     </li>
   );
 
-  const kind = buildKind(status.current.build_profile);
-  const ref = shortRef(status.current.source_ref);
-  const back = rollback(status);
-  const plan = pollerPlan(status);
-  // What the align button would do. Always present — core always knows its own version and always
-  // has a live registry, so unlike `plan` there is no "nobody asked" state to render.
-  const alignment = status.poller_alignment;
-  const ahead = alignment.pollers.filter((p) => alignment.downgrades.includes(p.id));
-  const state = mechanism(status);
-  const last = status.last_run;
-  const lastState = runState(last?.state);
-  const newer = upgrades(status);
-  const older = rollbacks(status);
-  // The dialog has to say the same thing the button did. Falls back to `upgrade` only if the offer
-  // vanished between the click and the render, which cannot happen without a reload.
-  const confirmingDir =
-    status.offers.find((o) => o.tag === confirming)?.direction ?? 'upgrade';
-  const phase = runPhase(status, pending);
-  const inFlight = phase.kind === 'starting' || phase.kind === 'running';
-  // Which release is being installed. Prefer the server's answer, but fall back to the tag this
-  // browser asked for: during `starting` the server is still describing the *previous* run, so
-  // reading `last.target` alone would name the wrong version on the one screen that must not.
-  const pendingTarget =
-    (last?.id === pending ? last?.target : null) ?? requestedTag ?? last?.target ?? null;
-  const checkedAt = lastChecked(status);
-  const uploading = uploaded !== null;
-  const tagOk = looksLikeReleaseTag(bundleTag);
-  const bundleReady =
-    !uploading && canUploadBundle(status, pending) && bundleFile !== null && tagOk;
-  const maxBytes = status.updater.bundle_max_bytes ?? null;
-  const maxGib = maxBytes === null ? null : Math.round((maxBytes / 1024 ** 3) * 10) / 10;
+  /** One row of the components list, read-only. The checkboxes live in the dialog: before the
+   *  press this is a statement of fact, and only after it is a choice. */
+  const component = (r: ComponentRow) => {
+    const why = componentReason(r.reason);
+    return (
+      <li key={r.id} className="upgrade-release">
+        <span className="upgrade-release-action">
+          <span className="mono">{r.kind === 'core' ? t('components.core') : r.id}</span>
+          {r.pool && <span className="upgrade-site-pool muted">{r.pool}</span>}
+        </span>
+        <span className="upgrade-release-action">
+          <span className="muted mono">{r.version ?? t('build.unknown')}</span>
+          {/* What that site is doing about it, from its own heartbeat (ADR-051 Inc.4 decision 18).
+              Only the two states an operator can act on are drawn: `running` says the site is
+              moving, `failed` says it is stuck. `succeeded` is left blank on purpose — the version
+              beside it is the completion signal, and a badge that stays up after the work is done
+              reads as work still in flight.
+
+              `message` is written at the site: rendered as a tooltip string, never as a key. The
+              key comes from `command`, a closed enum whose labels live in the `system` namespace
+              beside the Pollers page's copy — reached across namespaces rather than copied here,
+              because `i18nEnumKeys.test.ts` pins only the `system` set and a duplicate would rot
+              unchecked. */}
+          {r.progress?.state === 'running' && (
+            <Badge tone="neutral" title={r.progress.message || undefined}>
+              {t(`system:pollers.upgradeStep.${r.progress.command}`)}
+            </Badge>
+          )}
+          {r.progress?.state === 'failed' && (
+            <Badge tone="critical" title={r.progress.message || undefined}>
+              {t('converge.stuckAt', { step: r.progress.step || '—' })}
+            </Badge>
+          )}
+          {why && <span className="upgrade-why muted">{t(`componentReason.${why}`)}</span>}
+        </span>
+      </li>
+    );
+  };
+
+  const picked = picking;
+  const pickedDark = picked === null ? [] : darkPools(rows, selected);
+  const pickedBack = picked === null ? [] : rows.filter((r) => r.moves_back && selected.includes(r.id));
+  const movable = picked === null ? [] : rows.filter((r) => !rowLocked(r, picked));
 
   return (
     <div>
       {header}
 
+      {/* ── 1. What is running, and what schema it is on ─────────────────────────────────── */}
       <Card title={t('build.heading')}>
         <div className="upgrade-grid">
           <Row label={t('build.coreVersion')} mono>
@@ -525,9 +645,8 @@ export function UpgradePage() {
           </Row>
           <Row label={t('build.uptime')}>{uptime(status.current.uptime_seconds)}</Row>
         </div>
-      </Card>
 
-      <Card title={t('schema.heading')}>
+        <Sub>{t('schema.heading')}</Sub>
         <div className="upgrade-grid">
           <Row label={t('schema.applied')}>
             {t('schema.appliedValue', { count: status.schema.applied_count })}
@@ -538,134 +657,10 @@ export function UpgradePage() {
         </div>
       </Card>
 
-      {/* Who comes along. Rendered only once the updater has named the pollers in its own compose
-          project: without that list core cannot tell a co-located poller from a remote one, and a
-          count it guessed would read as a fact (ADR-051). */}
-      {plan && (
-        <Card title={t('pollers.heading')}>
-          <p className="upgrade-note">
-            {t('pollers.withCore', { count: plan.with_core.length })}
-          </p>
-          {plan.manual.length === 0 ? (
-            <p className="upgrade-hint muted">{t('pollers.noneLeft')}</p>
-          ) : (
-            <>
-              <p className="upgrade-note">{t('pollers.manual', { count: plan.manual.length })}</p>
-              <ul className="upgrade-releases">
-                {plan.manual.map((p) => (
-                  <li key={p.id} className="upgrade-release">
-                    <span className="mono">{p.id}</span>
-                    <span className="muted">{p.version ?? t('build.unknown')}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="upgrade-hint muted">{t('pollers.manualHint')}</p>
-            </>
-          )}
-          {/* Said before the press, because the alert it predicts is one no maintenance window
-              silences (ADR-051 decision 13). Not a refusal: a one-poller site is a normal
-              deployment, and refusing would mean it is never upgraded at all. */}
-          {plan.dark_pools.length > 0 && (
-            <p className="upgrade-note">
-              {t('pollers.darkPools', {
-                count: plan.dark_pools.length,
-                pools: plan.dark_pools.join(', '),
-              })}
-            </p>
-          )}
-        </Card>
-      )}
-
-      {/* Aligning the pollers (ADR-051 Inc.4). Its own card, and deliberately not folded into the
-          plan above: that one is `null` until the central updater names its own compose project,
-          while this needs nothing but the live registry — a deployment with no central updater at
-          all still has remote sites worth bringing up to date.
-
-          Absent when the fleet is aligned. A disabled button with a tooltip would be the other
-          option and is the one ADR-056 forbids: there is nothing to do, so there is nothing to
-          draw. */}
-      {alignment.pollers.length > 0 && (
-        <Card title={t('pollers.align.heading')}>
-          <p className="upgrade-note">
-            {t('pollers.align.behind', {
-              count: alignment.pollers.length,
-              version: status.current.core_version,
-            })}
-          </p>
-          <ul className="upgrade-releases">
-            {alignment.pollers.map((p) => (
-              <li key={p.id} className="upgrade-release">
-                <span className="mono">{p.id}</span>
-                <span className="upgrade-release-action">
-                  <span className="muted">{p.version ?? t('build.unknown')}</span>
-                  {/* What that site is doing about it, from its own heartbeat (ADR-051 Inc.4
-                      decision 18). Only the two states an operator can act on are drawn:
-                      `running` says the site is moving, `failed` says it is stuck and this
-                      queue has stopped. `succeeded` is left blank on purpose — the version
-                      beside it is the completion signal, and a badge that stays up after the
-                      work is done reads as work still in flight.
-
-                      `message` is written at the site: rendered as a tooltip string, never as
-                      a key. The key comes from `command`, a closed enum whose labels live in
-                      the `system` namespace beside the Pollers page's copy — reached across
-                      namespaces rather than copied here, because `i18nEnumKeys.test.ts` pins
-                      only the `system` set and a duplicate would rot unchecked. */}
-                  {p.progress?.state === 'running' && (
-                    <Badge tone="neutral" title={p.progress.message || undefined}>
-                      {t(`system:pollers.upgradeStep.${p.progress.command}`)}
-                    </Badge>
-                  )}
-                  {p.progress?.state === 'failed' && (
-                    <Badge tone="critical" title={p.progress.message || undefined}>
-                      {t('pollers.align.failedAt', { step: p.progress.step || '—' })}
-                    </Badge>
-                  )}
-                </span>
-              </li>
-            ))}
-          </ul>
-          <p className="upgrade-hint muted">{t('pollers.align.hint')}</p>
-          {/* No `useCan` here, and that is the same answer every other button on this page gives:
-              the whole screen is refused without `manage_system` (the `LoadBlockNotice` above), so
-              a caller who can see this card can press this. Adding a hook would be a second,
-              weaker copy of a check the server already made. */}
-          <div className="upgrade-checked">
-            <Button
-              variant="outline"
-              onClick={() => setConfirmingAlign(true)}
-              disabled={aligning}
-            >
-              {t('pollers.align.action', { version: status.current.core_version })}
-            </Button>
-          </div>
-          {aligned && <p className="upgrade-hint muted">{t('pollers.align.started')}</p>}
-          {alignError && <p className="form-error">{alignError}</p>}
-        </Card>
-      )}
-
-      <Card title={t('rollback.heading')}>
-        {back.kind === 'unrestricted' ? (
-          <>
-            <p className="upgrade-note">{t('rollback.unrestricted')}</p>
-          </>
-        ) : (
-          <>
-            <p className="upgrade-note">{t('rollback.floored', { minCore: back.minCore })}</p>
-            <p className="upgrade-hint muted">
-              {t('rollback.flooredReason', { version: back.sinceVersion, reason: back.reason })}
-            </p>
-            <p className="upgrade-hint muted">{t('rollback.flooredHint')}</p>
-          </>
-        )}
-      </Card>
-
+      {/* ── 2. The one entrance ──────────────────────────────────────────────────────────── */}
       <Card title={t('mechanism.heading')}>
         {/* Five distinct answers — no mechanism here, not deployed, dead, switched off, ready —
-            because they call for five different actions. See `mechanism()`.
-
-            Only the first one needs suppressing by hand: every other control on this page is
-            already gated on `updater.present`, `state === 'ready'` or a `last_run` that an
-            uninstalled deployment does not have, so they are absent for free. */}
+            because they call for five different actions. See `mechanism()`. */}
         {status.updater.present && (
           <label className="upgrade-switch">
             <input
@@ -763,10 +758,40 @@ export function UpgradePage() {
             )}
           </>
         )}
+
+        {/* What this deployment is made of. Present whatever state the mechanism is in — a
+            deployment that cannot upgrade itself from here still has an inventory worth reading,
+            and a remote site can still be brought across, since that touches nothing on this
+            host. */}
+        <Sub>{t('components.heading')}</Sub>
+        <ul className="upgrade-releases upgrade-components">{rows.map(component)}</ul>
+        <p className="upgrade-hint muted">{t('components.hint')}</p>
+        {/* 🚨 The way in when core is current and only the sites have drifted. It opens the same
+            dialog with core's row already excluded, so there is one entrance rather than two.
+
+            **Deliberately outside `state === 'ready'`**, and this is the one placement on the page
+            that must not drift: this operation touches nothing on this host, so it needs no central
+            updater — gating it on the mechanism would remove a working button from exactly the
+            deployments that have remote sites and no updater of their own. `tests/ui/            upgradePick.spec.ts` pins it with the mechanism switched off. */}
+        {behind.length > 0 && (
+          <div className="upgrade-checked">
+            <span className="upgrade-hint muted">
+              {t('components.behindHint', {
+                count: behind.length,
+                version: status.current.core_version,
+              })}
+            </span>
+            <Button
+              disabled={cphase.kind === 'running' || cphase.kind === 'starting'}
+              onClick={() => open(status.current.core_version)}
+            >
+              {t('components.bring', { version: status.current.core_version })}
+            </Button>
+          </div>
+        )}
       </Card>
 
-      {/* Only where the deployment has opted in. A site with a registry never sees this — and a
-          site without one has no other way in, since the release list above will be empty. */}
+      {/* ── 3. The other way in, for a site with no registry ─────────────────────────────── */}
       {state === 'ready' && status.updater.allow_bundle && (
         <Card title={t('bundle.heading')}>
           <p className="upgrade-hint muted">{t('bundle.intro')}</p>
@@ -787,20 +812,14 @@ export function UpgradePage() {
               onChange={(e) => setBundleTag(e.target.value)}
               aria-label={t('bundle.tagLabel')}
             />
-            <Button
-              variant="primary"
-              disabled={!bundleReady}
-              onClick={() => void upload()}
-            >
+            <Button variant="primary" disabled={!bundleReady} onClick={() => void upload()}>
               {t('bundle.button')}
             </Button>
           </div>
           {maxGib !== null && (
             <p className="upgrade-hint muted">{t('bundle.limit', { size: maxGib })}</p>
           )}
-          {bundleFile && !tagOk && (
-            <p className="upgrade-hint muted">{t('bundle.needTag')}</p>
-          )}
+          {bundleFile && !tagOk && <p className="upgrade-hint muted">{t('bundle.needTag')}</p>}
           {uploading && (
             <p className="upgrade-hint muted">
               {t('bundle.uploading', { percent: Math.round((uploaded ?? 0) * 100) })}
@@ -810,18 +829,28 @@ export function UpgradePage() {
         </Card>
       )}
 
-      {inFlight && (
+      {/* ── 4. What is happening, or what happened ───────────────────────────────────────── */}
+      {(inFlight || cphase.kind === 'running' || cphase.kind === 'starting') && (
         <Card title={t('run.inFlight')}>
-          <Progress phase={phase} stale={stale} target={pendingTarget} t={t} />
+          {inFlight && (
+            <>
+              <Sub first>{t('converge.thisHost')}</Sub>
+              <Progress phase={phase} stale={stale} target={pendingTarget} t={t} />
+            </>
+          )}
+          <Sub first={!inFlight}>{t('converge.heading')}</Sub>
+          {cphase.kind === 'running' ? (
+            <ConvergeProgress phase={cphase} t={t} />
+          ) : (
+            <p className="upgrade-note muted">{t('converge.starting')}</p>
+          )}
         </Card>
       )}
 
       {!inFlight && last && (
         <Card title={t('run.heading')}>
           <div className="upgrade-grid">
-            <Row label={t('run.state')}>
-              {lastState ? t(`runState.${lastState}`) : last.state}
-            </Row>
+            <Row label={t('run.state')}>{lastState ? t(`runState.${lastState}`) : last.state}</Row>
             <Row label={t('run.target')} mono>
               {last.target ?? '—'}
             </Row>
@@ -831,107 +860,164 @@ export function UpgradePage() {
         </Card>
       )}
 
-      {confirming && (
+      {/* The poller half's own outcome, kept after it finishes. This is the only place "this site
+          did not come back" reaches a screen: a site killed by its own upgrade drops off the live
+          registry, so it used to vanish from every list and the deployment read as aligned. */}
+      {cphase.kind === 'done' && (
+        <Card title={t('converge.lastHeading')}>
+          <div className="upgrade-grid">
+            <Row label={t('run.state')}>
+              {t('converge.outcome', { done: cphase.done, failed: cphase.failed })}
+              {cphase.failed > 0 && (
+                <>
+                  {' '}
+                  <Badge tone="critical">{t('converge.attention')}</Badge>
+                </>
+              )}
+            </Row>
+            <Row label={t('run.target')} mono>
+              {cphase.conv.tag}
+            </Row>
+            <Row label={t('run.requestedBy')}>{cphase.conv.requested_by}</Row>
+          </div>
+          <ConvergeProgress phase={cphase} t={t} />
+        </Card>
+      )}
+
+      {/* ── 5. How far back this can be taken ────────────────────────────────────────────── */}
+      <Card title={t('rollback.heading')}>
+        {back.kind === 'unrestricted' ? (
+          <p className="upgrade-note">{t('rollback.unrestricted')}</p>
+        ) : (
+          <>
+            <p className="upgrade-note">{t('rollback.floored', { minCore: back.minCore })}</p>
+            <p className="upgrade-hint muted">
+              {t('rollback.flooredReason', { version: back.sinceVersion, reason: back.reason })}
+            </p>
+            <p className="upgrade-hint muted">{t('rollback.flooredHint')}</p>
+          </>
+        )}
+      </Card>
+
+      {/* ── The dialog: what moves, decided before anything moves ────────────────────────── */}
+      {picked !== null && (
         <Modal
-          title={t(`apply.confirmTitle.${confirmingDir}`, { tag: confirming })}
-          onClose={() => setConfirming(null)}
+          title={t('pick.title', { tag: picked })}
+          onClose={() => setPicking(null)}
+          size="wide"
           footer={
             <>
-              <Button onClick={() => setConfirming(null)} disabled={submitting}>
+              <span className="upgrade-count muted">
+                {t('pick.count', { count: selected.length, total: movable.length })}
+              </span>
+              <Button onClick={() => setPicking(null)} disabled={submitting}>
                 {t('apply.cancel')}
               </Button>
-              <Button variant="danger" onClick={() => void apply(confirming)} disabled={submitting}>
-                {t(`apply.confirm.${confirmingDir}`)}
+              <Button
+                variant="danger"
+                onClick={() => void submit()}
+                disabled={submitting || selected.length === 0}
+              >
+                {t('pick.confirm', { count: selected.length })}
               </Button>
             </>
           }
         >
-          <p className="upgrade-note">
-            {t(`apply.confirmBody.${confirmingDir}`, { tag: confirming })}
-          </p>
-          <p className="upgrade-hint muted">{t('apply.confirmBackup')}</p>
-          {/* Never let a left-behind poller be silent (ADR-051). The worst property of the old
-              behaviour was not that remote pollers stayed put — it was that nothing said so. */}
-          {plan && plan.manual.length > 0 && (
+          <p className="upgrade-note">{t('pick.intro', { tag: picked })}</p>
+
+          <div className="upgrade-pick">
+            <div className="upgrade-pick-head">
+              <span />
+              <span>{t('pick.component')}</span>
+              <span>{t('pick.pool')}</span>
+              <span>{t('pick.now')}</span>
+              <span />
+              <span>{t('pick.next')}</span>
+              <span />
+            </div>
+            {rows.map((r) => {
+              const plan = rowPlan(r, picked);
+              const locked = rowLocked(r, picked);
+              const on = selected.includes(r.id) || (r.co_located && selected.includes(CORE_ID));
+              const why = componentReason(r.reason);
+              return (
+                <label
+                  key={r.id}
+                  className={
+                    r.co_located
+                      ? 'upgrade-pick-row upgrade-pick-child'
+                      : plan === 'moves'
+                        ? 'upgrade-pick-row'
+                        : 'upgrade-pick-row upgrade-pick-off'
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={locked}
+                    onChange={(e) =>
+                      setSelected((cur) =>
+                        e.target.checked
+                          ? [...cur, r.id]
+                          : cur.filter((id) => id !== r.id),
+                      )
+                    }
+                  />
+                  <span className="mono">{r.kind === 'core' ? t('components.core') : r.id}</span>
+                  <span className="muted">{r.pool ?? '—'}</span>
+                  <span className="mono">{r.version ?? '—'}</span>
+                  <span className="upgrade-pick-arrow">{plan === 'moves' ? '→' : '—'}</span>
+                  <span className="mono">{plan === 'moves' ? picked : '—'}</span>
+                  {/* The reason lives in the row, never in a tooltip: a control whose explanation
+                      is hover-only is one a touch device never explains (ADR-055 R4). */}
+                  <span className="upgrade-why muted">
+                    {plan === 'already'
+                      ? t('componentReason.already', { version: picked })
+                      : why
+                        ? t(`componentReason.${why}`)
+                        : r.moves_back
+                          ? t('componentReason.moves_back')
+                          : ''}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+
+          {selected.includes(CORE_ID) && (
+            <p className="upgrade-hint muted">{t('apply.confirmBackup')}</p>
+          )}
+          {!selected.includes(CORE_ID) && (
+            <p className="upgrade-hint muted">{t('pick.coreUntouched')}</p>
+          )}
+          {/* A poller ahead of core is moved *back*. Named individually, because "upgrade" is what
+              the button says and a downgrade is not what it promised. */}
+          {pickedBack.length > 0 && (
             <p className="upgrade-note">
-              {t('pollers.confirmSplit', {
-                count: plan.manual.length,
-                withCore: plan.with_core.length,
-                names: plan.manual.map((p) => p.id).join(', '),
+              {t('pick.downgrade', {
+                count: pickedBack.length,
+                names: pickedBack.map((r) => r.id).join(', '),
               })}
             </p>
           )}
           {/* The consequence an operator cannot find out afterwards except from an alert: no
               maintenance window silences pool coverage, deliberately (ADR-051 decision 13). It is
-              in the card above too, but a card is read once and a confirmation is read now. */}
-          {plan && plan.dark_pools.length > 0 && (
+              recomputed from the checkboxes — a warning that does not follow them reads exactly the
+              same when it matters as when it does not. */}
+          {pickedDark.length > 0 && (
             <p className="upgrade-note">
               {t('pollers.darkPools', {
-                count: plan.dark_pools.length,
-                pools: plan.dark_pools.join(', '),
+                count: pickedDark.length,
+                pools: pickedDark.join(', '),
               })}
             </p>
           )}
-          {back.kind === 'floored' && (
+          {back.kind === 'floored' && selected.includes(CORE_ID) && (
             <p className="upgrade-hint muted">
               {t('apply.confirmFloor', { minCore: back.minCore })}
             </p>
           )}
-          {applyError && <p className="upgrade-hint">{applyError}</p>}
-        </Modal>
-      )}
-
-      {/* Aligning the pollers asks too, and for the reason every other write on this page does:
-          it recreates a container at each remote site, and where a pool has a single poller that
-          site stops being monitored until it returns. Nothing here restarts core — which is
-          exactly why the confirmation has to say what it *does* do, or "no, core is untouched"
-          would read as "nothing happens". */}
-      {confirmingAlign && (
-        <Modal
-          title={t('pollers.align.confirmTitle', { version: status.current.core_version })}
-          onClose={() => setConfirmingAlign(false)}
-          footer={
-            <>
-              <Button onClick={() => setConfirmingAlign(false)} disabled={aligning}>
-                {t('apply.cancel')}
-              </Button>
-              <Button
-                variant="danger"
-                onClick={() => void alignPollers()}
-                disabled={aligning}
-              >
-                {t('pollers.align.confirm')}
-              </Button>
-            </>
-          }
-        >
-          <p className="upgrade-note">
-            {t('pollers.align.confirmBody', {
-              count: alignment.pollers.length,
-              version: status.current.core_version,
-              names: alignment.pollers.map((p) => p.id).join(', '),
-            })}
-          </p>
-          <p className="upgrade-hint muted">{t('pollers.align.confirmCore')}</p>
-          {/* A poller ahead of core is moved *back*. Named individually, because "upgrade" is what
-              the button says and a downgrade is not what it promised. */}
-          {ahead.length > 0 && (
-            <p className="upgrade-note">
-              {t('pollers.align.confirmDowngrade', {
-                count: ahead.length,
-                names: ahead.map((p) => p.id).join(', '),
-              })}
-            </p>
-          )}
-          {alignment.dark_pools.length > 0 && (
-            <p className="upgrade-note">
-              {t('pollers.darkPools', {
-                count: alignment.dark_pools.length,
-                pools: alignment.dark_pools.join(', '),
-              })}
-            </p>
-          )}
-          {alignError && <p className="upgrade-hint">{alignError}</p>}
+          {applyError && <p className="form-error">{applyError}</p>}
         </Modal>
       )}
     </div>

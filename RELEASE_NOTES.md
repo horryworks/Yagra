@@ -12,6 +12,14 @@
 
 ### Breaking changes
 
+- **`GET /api/v1/system/upgrade` no longer returns `pollers` or `poller_alignment`.** They are
+  replaced by one `components` list — core and every poller, with what each runs, whether an
+  upgrade can move it and why not. The two fields answered the same question from opposite ends
+  (who an upgrade carried and stranded; who was off core's build) and could disagree about which
+  poller a row was. `GET /api/v1/system/upgrade` also gains `poller_convergence`, and
+  `POST /api/v1/system/upgrade` accepts `include_core` and `pollers` — both optional, and a body
+  that omits them means exactly what it meant before.
+
 - **A remote site that was already running must have its stack recreated once, before the next
   central upgrade.** On the machine at each site:
   `docker compose -p yagra-poller -f docker-compose.poller.yml up -d`. That replaces the site
@@ -23,6 +31,25 @@
   nodes move; a single-poller pool goes dark until this is done by hand. Sites brought up from a
   bundle issued by this release are unaffected, and re-issuing a bundle and unpacking it performs
   the same repair.
+
+### New Features
+
+- **Upgrading now asks what to move.** Pressing Upgrade opens the components list — core, the
+  co-located poller and every remote site, each with its current version, the version it would move
+  to and a checkbox, all ticked. Pressing Upgrade again starts the work. Unticking a row leaves that
+  component on its build; unticking core makes it a poller-only upgrade, which is how a deployment
+  whose sites have drifted brings them across without restarting anything of its own. The separate
+  "Pollers on a different build" card is gone — it was the same operation with no choices.
+- **The poller half of an upgrade has a progress bar.** Core's own track ended at "Verifying", and
+  everything after it — a site fetching the image over its own link, one container recreated at a
+  time per pool — was invisible for as long as half an hour. Each site now shows where it is, and
+  the record is kept after the run, so **a site that did not come back is named**. Before this it
+  reached only the audit log: a site killed by its own upgrade dropped off the live poller registry,
+  so it vanished from the screen and the deployment reported itself aligned.
+- **Settings ▸ Upgrade is five cards instead of eight**, in the order the questions arise: what is
+  running, how to upgrade it, installing from a file, what is happening now, and how far back it can
+  be taken. The database schema moved inside "Running build" and "Upgrading from here" is now
+  "System upgrade".
 
 ### Bug Fixes
 

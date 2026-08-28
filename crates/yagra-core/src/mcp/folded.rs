@@ -247,7 +247,12 @@ pub(crate) const FOLDED_READS: &[FoldedRead] = &[
         // resolved digests and the store images the target compose pins. That is the deployment's
         // configuration, not a health counter (ADR-050 decision 13).
         perm: Some(Permission::ManageSystem),
-        inventory_ids_ok: None,
+        inventory_ids_ok: Some(
+            "the components list is about pollers, so a pool is the subject rather than noise: it \
+             is what says which sites lose monitoring while one of them is recreated (ADR-051 \
+             Inc.6). The rule guards a row describing monitored equipment, where a pool answers \
+             the question 'which poller owns this node' for free; here there is no node.",
+        ),
         opaque_ok: None,
         lowered_to: None,
     },

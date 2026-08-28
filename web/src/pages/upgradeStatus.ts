@@ -203,22 +203,155 @@ export type OfferBlock = (typeof UPGRADE_OFFER_BLOCKS)[number];
 
 export type Offer = UpgradeStatus['offers'][number];
 
-/** Who this operation would carry and who it would leave behind (ADR-051), or `null` while the
- *  updater has not reported the pollers in its own compose project.
- *
- *  `null` is not "nobody" and must not render as one: core cannot tell a co-located poller from a
- *  remote one without that list, so an empty count would be an invention rather than an answer. */
-export type PollerPlan = NonNullable<UpgradeStatus['pollers']>;
+/** The id the core+WebUI row carries. Mirrors `CORE_COMPONENT_ID` in `crates/yagra-core/src/upgrade.rs`. */
+export const CORE_ID = 'core';
 
-export function pollerPlan(status: UpgradeStatus): PollerPlan | null {
-  return status.pollers ?? null;
+/** What a components row describes. `as const` so `i18nEnumKeys.test.ts` can iterate it. */
+export const COMPONENT_KINDS = ['core', 'poller'] as const;
+export type ComponentKind = (typeof COMPONENT_KINDS)[number];
+
+/** Why a row is not an ordinary, independently selectable one. */
+export const COMPONENT_REASONS = ['no_site_updater', 'co_located', 'offline'] as const;
+export type ComponentReason = (typeof COMPONENT_REASONS)[number];
+
+/** Where one poller has got to in a convergence. */
+export const CONVERGE_STATES = [
+  'waiting',
+  'prefetching',
+  'applying',
+  'returned',
+  'failed',
+  'skipped',
+] as const;
+export type ConvergeState = (typeof CONVERGE_STATES)[number];
+
+export type ComponentRow = UpgradeStatus['components'][number];
+export type Convergence = NonNullable<UpgradeStatus['poller_convergence']>;
+export type ConvergingTarget = Convergence['targets'][number];
+
+/** Read a reason defensively — a newer core may name one this build has never heard of.
+ *
+ *  Not decoration: the Tier1 mocks are generated from the OpenAPI document and fill enums with
+ *  whatever the generator produces, so a reader that trusts the value renders a raw `t()` key and
+ *  the walk stays green. Same discipline as `runState` and `runStep`. */
+export function componentReason(raw: string | null | undefined): ComponentReason | null {
+  return COMPONENT_REASONS.includes(raw as ComponentReason) ? (raw as ComponentReason) : null;
 }
 
-/** Pollers this operation will not touch. The count the confirmation must not stay silent about:
- *  the failure everyone has already had is not "the upgrade missed a poller", it is "the upgrade
- *  missed a poller and nothing said so". */
-export function leftBehind(status: UpgradeStatus): PollerPlan['manual'] {
-  return status.pollers?.manual ?? [];
+/** The same, for a convergence row's state. */
+export function convergeState(raw: string | null | undefined): ConvergeState | null {
+  return CONVERGE_STATES.includes(raw as ConvergeState) ? (raw as ConvergeState) : null;
+}
+
+/**
+ * What one row would do in an upgrade to `target`.
+ *
+ * `already` is decided here rather than by the server, and deliberately: it depends on which
+ * release the operator picked, so a row's meaning would otherwise change with the target while the
+ * row itself did not. It is a string comparison — the `v` is a tag convention, not part of the
+ * version — and every comparison that needs *ordering* stays in Rust (see `moves_back`).
+ */
+export type RowPlan = 'moves' | 'already' | 'blocked';
+
+export function rowPlan(row: ComponentRow, target: string): RowPlan {
+  if (!row.upgradable) return 'blocked';
+  const bare = (v: string) => v.replace(/^v/, '');
+  if (typeof row.version === 'string' && bare(row.version) === bare(target)) return 'already';
+  return 'moves';
+}
+
+/**
+ * Whether the operator may change this row's checkbox.
+ *
+ * Two reasons, and they read differently on screen: a co-located poller is replaced by core's own
+ * compose project, so it follows core's box rather than having one of its own; anything else locked
+ * here simply cannot move. Both are rendered with the reason **in the row** — a control whose
+ * explanation is only in a tooltip is one a touch device never explains (ADR-055 R4).
+ */
+export function rowLocked(row: ComponentRow, target: string): boolean {
+  return row.co_located || rowPlan(row, target) !== 'moves';
+}
+
+/**
+ * The checkboxes as the dialog opens: everything that would move, ticked.
+ *
+ * The co-located poller is not in the set — it has no independent state, it follows core. Rows that
+ * cannot move are not in it either, which is what makes "selected" mean the same thing as "will be
+ * upgraded" and keeps the footer count honest.
+ */
+export function defaultSelection(rows: ComponentRow[], target: string): string[] {
+  return rows.filter((r) => !rowLocked(r, target)).map((r) => r.id);
+}
+
+/**
+ * Pools that lose their last live poller for **this** selection.
+ *
+ * 🚨 This used to be a field on the response, computed once from everything that could move. That
+ * stops being true the moment a row can be unchecked, and a warning that does not follow the
+ * checkboxes is worse than no warning: it reads exactly the same when it matters as when it does
+ * not (ADR-051 Inc.6).
+ *
+ * Safe to compute here because it is **counting, not ordering** — `live_in_pool` arrives per row.
+ * Anything that needs semver stays in Rust, for the reason `moves_back` gives.
+ */
+export function darkPools(rows: ComponentRow[], selected: string[]): string[] {
+  const out = new Set<string>();
+  for (const r of rows) {
+    const pool = r.pool;
+    if (typeof pool !== 'string' || !selected.includes(r.id)) continue;
+    if (r.live_in_pool <= 1) out.add(pool);
+  }
+  return [...out].sort();
+}
+
+/**
+ * How the poller half of an upgrade is going.
+ *
+ * `pending` is the run id the last press returned, and it does the same job it does for core's own
+ * run: **there is a window in which the server can say nothing at all.** The convergence is started
+ * by a spawned task, so for a moment after the 202 the snapshot is still the *previous* one — or
+ * absent. Reading the server alone there would render "nothing is happening" over a press that was
+ * accepted.
+ *
+ * ⚠️ It never decides the outcome. It only separates "asked, not visible yet" from "idle", and it
+ * is matched by id, so a stale `pending` cannot make an older convergence look like this one.
+ */
+export type ConvergePhase =
+  | { kind: 'idle' }
+  | { kind: 'starting' }
+  | { kind: 'running'; conv: Convergence; done: number; failed: number; total: number }
+  | { kind: 'done'; conv: Convergence; done: number; failed: number; total: number };
+
+export function convergePhase(status: UpgradeStatus, pending: string | null): ConvergePhase {
+  const conv = status.poller_convergence ?? null;
+  if (conv === null) return pending === null ? { kind: 'idle' } : { kind: 'starting' };
+  const done = conv.targets.filter((t) => t.state === 'returned').length;
+  const failed = conv.targets.filter(
+    (t) => t.state === 'failed' || t.state === 'skipped',
+  ).length;
+  const counts = { conv, done, failed, total: conv.targets.length };
+  if (conv.finished_at === null) return { kind: 'running', ...counts };
+  // A press this browser made that the server has not caught up with yet: the snapshot on screen
+  // is the *previous*, finished convergence, so saying "done" would report someone else's outcome
+  // as the answer to the button just pressed.
+  if (pending !== null && conv.run_id !== pending) return { kind: 'starting' };
+  return { kind: 'done', ...counts };
+}
+
+/** How far along, 0…1, or `null` when there is no determinate position yet. */
+export function convergeProgress(phase: ConvergePhase): number | null {
+  if (phase.kind === 'idle' || phase.kind === 'starting') return null;
+  if (phase.total === 0) return null;
+  return (phase.done + phase.failed) / phase.total;
+}
+
+/** Should the page keep re-reading while pollers converge?
+ *
+ *  Its own beat, slower than the run poll: nothing here is being recreated underneath this browser,
+ *  and a convergence runs for minutes to tens of minutes. */
+export function shouldPollConvergence(status: UpgradeStatus, pending: string | null): boolean {
+  const phase = convergePhase(status, pending);
+  return phase.kind === 'starting' || phase.kind === 'running';
 }
 
 /** The releases newer than the running one. */

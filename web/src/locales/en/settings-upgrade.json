@@ -3,7 +3,6 @@
   "subtitle": "What this deployment is running, and how far back it can be taken.",
   "loading": "Loading…",
   "error": "Could not read the upgrade status.",
-
   "build": {
     "heading": "Running build",
     "coreVersion": "Core version",
@@ -24,14 +23,12 @@
     "development": "Built straight to this server, bypassing the release pipeline.",
     "unknown": "No build markers, so this core was started outside a container."
   },
-
   "schema": {
     "heading": "Database schema",
     "applied": "Migrations applied",
     "latest": "Newest migration",
     "appliedValue": "{{count}}"
   },
-
   "rollback": {
     "heading": "Going back",
     "unrestricted": "Every migration here is reversible, so an earlier release still runs — and nothing is deleted by going back.",
@@ -39,7 +36,6 @@
     "flooredReason": "Set by migration {{version}}: {{reason}}",
     "flooredHint": "Anything older needs a restore from backup."
   },
-
   "mechanism": {
     "heading": "Upgrading from here",
     "switch": "Allow upgrading from the WebUI",
@@ -64,7 +60,6 @@
     "noNewer": "No release newer than the one running.",
     "noRegistry": "The updater could not reach a registry. Expected on a closed network."
   },
-
   "bundle": {
     "heading": "Install from a file",
     "intro": "For a site with no registry. Save the release's images elsewhere and bring the file here; the rest of the upgrade is identical.",
@@ -76,7 +71,6 @@
     "uploading": "Uploading… {{percent}}%",
     "failed": "The archive could not be uploaded."
   },
-
   "offerAction": {
     "upgrade": "Upgrade",
     "rollback": "Downgrade"
@@ -87,59 +81,19 @@
     "pollers_behind": "This jump would leave a poller more than one release behind, which the bus does not support. Upgrade to the release in between first."
   },
   "pollers": {
-    "heading": "Pollers",
-    "withCore": "{{count}} poller is replaced by this operation.",
-    "withCore_other": "{{count}} pollers are replaced by this operation.",
-    "noneLeft": "No poller is left behind.",
-    "manual": "{{count}} poller stays on its current version:",
-    "manual_other": "{{count}} pollers stay on their current version:",
-    "manualHint": "A remote-site poller upgrades itself only when a site updater is deployed beside it. Until then, upgrade it on its own host.",
     "darkPools": "{{count}} pool has only one poller, so monitoring stops there while its container is recreated: {{pools}}",
-    "darkPools_other": "{{count}} pools have only one poller, so monitoring stops there while their containers are recreated: {{pools}}",
-    "align": {
-      "heading": "Pollers on a different build",
-      "behind": "{{count}} poller is not on {{version}}:",
-      "behind_other": "{{count}} pollers are not on {{version}}:",
-      "hint": "Nothing in this deployment restarts. Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout. A poller ahead of this core is moved back to it.",
-      "action": "Bring them to {{version}}",
-      "confirmTitle": "Bring the pollers to {{version}}?",
-      "confirmBody": "{{count}} poller is recreated at its own site: {{names}}. Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout.",
-      "confirmBody_other": "{{count}} pollers are recreated at their own sites: {{names}}. Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout.",
-      "confirmCore": "Nothing in this deployment restarts. No image is pulled here and no maintenance window is opened.",
-      "confirmDowngrade": "{{count}} poller is ahead of this core and is moved back to it: {{names}}. A poller holds no state, so this costs it a restart.",
-      "confirmDowngrade_other": "{{count}} pollers are ahead of this core and are moved back to it: {{names}}. A poller holds no state, so this costs each one a restart.",
-      "confirm": "Bring them across",
-      "started": "Started. Each site pulls the image first and is recreated only once it has it, so this list can take several minutes to shrink.",
-      "failed": "Could not start the poller upgrade.",
-      "failedAt": "stuck at {{step}}"
-    },
-    "confirmSplit": "{{withCore}} poller upgrades with this deployment; {{count}} does not and stays on its current version: {{names}}",
-    "confirmSplit_other": "{{withCore}} pollers upgrade with this deployment; {{count}} do not and stay on their current version: {{names}}"
+    "darkPools_other": "{{count}} pools have only one poller, so monitoring stops there while their containers are recreated: {{pools}}"
   },
   "rollbackList": {
     "show": "Show {{count}} earlier releases",
     "hide": "Hide earlier releases"
   },
-
   "apply": {
-    "confirmTitle": {
-      "upgrade": "Upgrade to {{tag}}?",
-      "rollback": "Downgrade to {{tag}}?"
-    },
-    "confirmBody": {
-      "upgrade": "Every Yagra container is replaced with {{tag}}. Monitoring stops and this page loses its connection until the new version is up.",
-      "rollback": "Every Yagra container is replaced with {{tag}}, which is older. Nothing is deleted, but anything only the newer version understood stops being visible until you come forward again. Monitoring stops and this page loses its connection."
-    },
     "confirmBackup": "A backup is taken first. It lands on this host, so it is a rollback aid, not disaster recovery.",
     "confirmFloor": "This database cannot be taken back past {{minCore}}.",
-    "confirm": {
-      "upgrade": "Upgrade",
-      "rollback": "Downgrade"
-    },
     "cancel": "Cancel",
     "failed": "The upgrade could not be started."
   },
-
   "run": {
     "heading": "Last run",
     "inFlight": "Upgrade in progress",
@@ -165,5 +119,55 @@
     "compose": "Replacing containers",
     "verify": "Verifying",
     "validate": "Checking the request"
+  },
+  "components": {
+    "heading": "Components",
+    "core": "core + web",
+    "behind": "running · {{count}} poller is not on it",
+    "behind_other": "running · {{count}} pollers are not on it",
+    "hint": "A remote-site poller upgrades itself only when a site updater is deployed beside it. Until then, upgrade it on its own host.",
+    "behindHint": "{{count}} poller is not on {{version}}.",
+    "behindHint_other": "{{count}} pollers are not on {{version}}.",
+    "bring": "Bring them to {{version}}"
+  },
+  "componentReason": {
+    "no_site_updater": "no site updater — upgrade it on its own host",
+    "co_located": "shares this host with core, and is replaced with it",
+    "offline": "not on the bus, so nothing can be handed to it",
+    "already": "already on {{version}}",
+    "moves_back": "ahead of core; this moves it back"
+  },
+  "pick": {
+    "title": "Upgrade to {{tag}}",
+    "intro": "Everything that can take {{tag}} is selected. Core goes first; the remote pollers follow, one at a time per pool.",
+    "component": "Component",
+    "pool": "Pool",
+    "now": "Now",
+    "next": "New",
+    "count": "{{count}} of {{total}} selected",
+    "confirm": "Upgrade {{count}} component",
+    "confirm_other": "Upgrade {{count}} components",
+    "coreUntouched": "Nothing on this host restarts. No image is pulled here and no maintenance window is opened.",
+    "downgrade": "{{count}} poller is ahead of this core and is moved back to it: {{names}}. A poller holds no state, so this costs it a restart.",
+    "downgrade_other": "{{count}} pollers are ahead of this core and are moved back to it: {{names}}. A poller holds no state, so this costs each one a restart."
+  },
+  "converge": {
+    "heading": "Remote-site pollers",
+    "thisHost": "This host",
+    "lastHeading": "Last poller run",
+    "starting": "Handed to the sites; waiting for the first one to report.",
+    "count": "{{done}} of {{total}} sites on {{version}}",
+    "serial": "Each pool is brought across one poller at a time, so a pool with more than one keeps monitoring throughout. Pools run in parallel, so more than one site can be replacing its container at once.",
+    "outcome": "{{done}} returned, {{failed}} did not",
+    "attention": "attention",
+    "stuckAt": "stuck at {{step}}"
+  },
+  "convergeState": {
+    "waiting": "waiting",
+    "prefetching": "fetching image",
+    "applying": "replacing container",
+    "returned": "done",
+    "failed": "did not come back",
+    "skipped": "not reached"
   }
 }

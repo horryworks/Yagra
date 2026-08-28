@@ -118,6 +118,8 @@ import jaSettingsTls from './locales/ja/settings-tls.json';
 import enSettingsUpgrade from './locales/en/settings-upgrade.json';
 import jaSettingsUpgrade from './locales/ja/settings-upgrade.json';
 import {
+  COMPONENT_REASONS,
+  CONVERGE_STATES,
   MECHANISM_KEYS,
   MECHANISMS,
   UPGRADE_BUILD_KINDS,
@@ -720,12 +722,7 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
     // "upgrade to this" while offering versions older than the running one. Four key families are
     // keyed off it now, and a missing one would put a raw key on the button that replaces a
     // production deployment.
-    for (const prefix of [
-      'offerAction.',
-      'apply.confirmTitle.',
-      'apply.confirmBody.',
-      'apply.confirm.',
-    ]) {
+    for (const prefix of ['offerAction.']) {
       expectKeys(
         `upgrade offer direction (${prefix})`,
         { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
@@ -733,6 +730,23 @@ describe('i18n coverage for enum-driven dynamic keys', () => {
         UPGRADE_OFFER_DIRECTIONS,
       );
     }
+    // Why a component cannot move, or moves differently. Rendered in the row rather than in a
+    // tooltip, so a missing key is a raw string an operator reads rather than one they hover.
+    expectKeys(
+      'upgrade component reason',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'componentReason.',
+      COMPONENT_REASONS,
+    );
+    // Where a site has got to. A core newer than this bundle can name a state this build has never
+    // heard of — `convergeState()` catches that — but a state this build *declares* and has no
+    // string for would render as a raw key with EN/JA parity still passing.
+    expectKeys(
+      'poller convergence state',
+      { en: enSettingsUpgrade, ja: jaSettingsUpgrade },
+      'convergeState.',
+      CONVERGE_STATES,
+    );
     expectKeys(
       'upgrade offer block',
       { en: enSettingsUpgrade, ja: jaSettingsUpgrade },

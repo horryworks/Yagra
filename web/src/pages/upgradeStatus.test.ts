@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from 'vitest';
 import type { UpgradeStatus } from '../types/api';
+import type { ComponentRow, Convergence } from './upgradeStatus';
 import {
   buildKind,
+  componentReason,
+  convergePhase,
+  convergeProgress,
+  convergeState,
+  CORE_ID,
+  darkPools,
+  defaultSelection,
   bundleTagFromFilename,
   canApply,
   canOffer,
   canUploadBundle,
   isRunning,
   lastChecked,
-  leftBehind,
   looksLikeReleaseTag,
   mechanism,
-  pollerPlan,
+  rowLocked,
+  rowPlan,
   rollback,
   rollbacks,
   runPhase,
@@ -23,6 +31,7 @@ import {
   stepProgress,
   switchPending,
   UPGRADE_PROGRESS_STEPS,
+  shouldPollConvergence,
   UPGRADE_RUN_STEPS,
   upgrades,
 } from './upgradeStatus';
@@ -56,6 +65,8 @@ function status(over: Partial<UpgradeStatus> = {}): UpgradeStatus {
       uptime_seconds: 42,
     },
     schema: { applied_count: 78, latest_version: 78, compat: null },
+    components: [],
+    poller_convergence: null,
     ...over,
   } as UpgradeStatus;
 }
@@ -413,24 +424,172 @@ describe('lastChecked', () => {
   });
 });
 
-describe('pollerPlan / leftBehind', () => {
-  // The distinction the whole feature turns on: core cannot tell a co-located poller from a remote
-  // one without the updater naming its own compose project, so "nobody is left behind" and "nobody
-  // asked" must not render the same. An invented zero is the failure mode here -- a reassuring
-  // number is worse than a blank (ADR-045's lesson, applied to ADR-051).
-  it('reports nothing rather than an empty plan when the updater has not said', () => {
-    expect(pollerPlan(status())).toBeNull();
-    expect(leftBehind(status())).toEqual([]);
+describe('components', () => {
+  const row = (over: Partial<ComponentRow>): ComponentRow =>
+    ({
+      id: 'edge-1',
+      kind: 'poller',
+      pool: 'default',
+      version: '0.2.0',
+      upgradable: true,
+      reason: null,
+      co_located: false,
+      moves_back: false,
+      live_in_pool: 2,
+      progress: null,
+      ...over,
+    }) as ComponentRow;
+
+  const core = row({ id: CORE_ID, kind: 'core', pool: null, version: '0.2.1', live_in_pool: 0 });
+
+  // 🚨 The accepting case is asserted first and is the load-bearing one. A `rowPlan` that answered
+  // `blocked` for everything would satisfy every exclusion below while making the dialog empty and
+  // the button dead -- which looks exactly like a deployment with nothing to do.
+  it('says what each row would do, and the `v` is a tag convention rather than a version', () => {
+    expect(rowPlan(row({ version: '0.2.0' }), '0.2.1')).toBe('moves');
+    expect(rowPlan(row({ version: '0.2.1' }), '0.2.1')).toBe('already');
+    expect(rowPlan(row({ version: 'v0.2.1' }), '0.2.1')).toBe('already');
+    expect(rowPlan(row({ version: '0.2.1' }), 'v0.2.1')).toBe('already');
+    expect(rowPlan(row({ upgradable: false }), '0.2.1')).toBe('blocked');
   });
 
-  it('separates the pollers this run replaces from the ones it strands', () => {
+  // The two reasons a checkbox is closed read differently on screen and must not be conflated: a
+  // co-located poller *does* move (with core), it just has no box of its own; a blocked row does
+  // not move at all.
+  it('locks a co-located row and a blocked row, and leaves an ordinary one open', () => {
+    expect(rowLocked(row({}), '0.2.1')).toBe(false);
+    expect(rowLocked(row({ co_located: true }), '0.2.1')).toBe(true);
+    expect(rowLocked(row({ upgradable: false }), '0.2.1')).toBe(true);
+    expect(rowLocked(row({ version: '0.2.1' }), '0.2.1')).toBe(true);
+  });
+
+  // The dialog opens with everything that would move ticked. What must NOT be in it is anything
+  // whose box is closed: the footer counts this list, so a locked row in it would promise work the
+  // request cannot ask for.
+  it('opens with every movable row selected, and nothing else', () => {
+    const rows = [
+      core,
+      row({ id: 'moves' }),
+      row({ id: 'co-located', co_located: true }),
+      row({ id: 'blocked', upgradable: false }),
+      row({ id: 'already', version: '0.2.1' }),
+    ];
+    // Core is on 0.2.1 here, so a newer target moves everything that can move.
+    expect(defaultSelection(rows, '0.2.2')).toEqual([CORE_ID, 'moves', 'already']);
+    // 🚨 And the target core is *already on* excludes core — which is the poller-only entrance,
+    // reached from the running release's own row. Getting this wrong would send a request core
+    // refuses (`core_not_on_target`), or worse, restart a deployment nobody asked to restart.
+    expect(defaultSelection(rows, '0.2.1')).toEqual(['moves']);
+    expect(defaultSelection(rows, '0.2.0')).toEqual([CORE_ID, 'already']);
+  });
+
+  // 🚨 The warning follows the checkboxes, which is the whole reason it stopped being a field on
+  // the response. Computed once from everything that could move, it reads exactly the same when it
+  // matters as when it does not.
+  it('names the pools that go dark for this selection, not for the whole fleet', () => {
+    const rows = [
+      core,
+      row({ id: 'lone', pool: 'tokyo', live_in_pool: 1 }),
+      row({ id: 'paired-a', pool: 'osaka', live_in_pool: 2 }),
+      row({ id: 'paired-b', pool: 'osaka', live_in_pool: 2 }),
+    ];
+    expect(darkPools(rows, ['lone', 'paired-a', 'paired-b'])).toEqual(['tokyo']);
+    expect(darkPools(rows, ['paired-a'])).toEqual([]);
+    expect(darkPools(rows, [])).toEqual([]);
+    // core has no pool, so selecting it can never darken one.
+    expect(darkPools(rows, [CORE_ID])).toEqual([]);
+  });
+
+  // A value from a core newer than this bundle must render as *something*. Not manners: the Tier1
+  // mocks are generated from the OpenAPI document and fill enums with whatever the generator
+  // produces, so a reader that trusts the string paints a raw `t()` key and the walk stays green.
+  it('reads a reason and a converge state defensively', () => {
+    expect(componentReason('offline')).toBe('offline');
+    expect(componentReason('teleported')).toBeNull();
+    expect(componentReason(null)).toBeNull();
+    expect(convergeState('applying')).toBe('applying');
+    expect(convergeState('ymock-0')).toBeNull();
+  });
+});
+
+describe('convergePhase', () => {
+  const conv = (over: Partial<Convergence> = {}): Convergence =>
+    ({
+      run_id: 'run-1',
+      tag: 'v0.2.2',
+      requested_by: 'horry',
+      started_at: 1,
+      finished_at: null,
+      targets: [
+        { id: 'a', pool: 'default', state: 'returned' },
+        { id: 'b', pool: 'default', state: 'applying' },
+      ],
+      ...over,
+    }) as Convergence;
+
+  // The window the server cannot answer in: the convergence is started by a spawned task, so for a
+  // moment after the 202 the snapshot is absent or still the previous one. Reading the server alone
+  // there renders "nothing is happening" over a press that was accepted.
+  it('separates asked-and-not-visible-yet from idle', () => {
+    expect(convergePhase(status(), null).kind).toBe('idle');
+    expect(convergePhase(status(), 'run-1').kind).toBe('starting');
+  });
+
+  it('counts what has returned and what has not, while it runs', () => {
+    const p = convergePhase(status({ poller_convergence: conv() } as Partial<UpgradeStatus>), null);
+    expect(p.kind).toBe('running');
+    if (p.kind !== 'running') return;
+    expect(p.done).toBe(1);
+    expect(p.total).toBe(2);
+    expect(convergeProgress(p)).toBe(0.5);
+  });
+
+  // Failed and skipped both count as finished-with-nothing-more-coming, or the bar would sit short
+  // of the end for ever on a pool that stopped.
+  it('finishes the bar when a pool stops rather than leaving it short', () => {
+    const p = convergePhase(
+      status({
+        poller_convergence: conv({
+          finished_at: 9,
+          targets: [
+            { id: 'a', pool: 'default', state: 'returned' },
+            { id: 'b', pool: 'default', state: 'failed' },
+            { id: 'c', pool: 'default', state: 'skipped' },
+          ],
+        }),
+      } as Partial<UpgradeStatus>),
+      null,
+    );
+    expect(p.kind).toBe('done');
+    if (p.kind !== 'done') return;
+    expect(p.done).toBe(1);
+    expect(p.failed).toBe(2);
+    expect(convergeProgress(p)).toBe(1);
+  });
+
+  // 🚨 A finished convergence is kept, so the page must not report the *previous* one as the
+  // outcome of the press just made. Matched by id, exactly as the core run's `pending` is.
+  it('does not report an older convergence as the answer to this press', () => {
     const st = status({
-      pollers: {
-        with_core: ['core-host-poller', 'edge-tokyo-1'],
-        manual: [{ id: 'edge-osaka-1', version: '0.2.0' }],
-      },
+      poller_convergence: conv({ finished_at: 9 }),
     } as Partial<UpgradeStatus>);
-    expect(pollerPlan(st)?.with_core).toHaveLength(2);
-    expect(leftBehind(st).map((p) => p.id)).toEqual(['edge-osaka-1']);
+    expect(convergePhase(st, null).kind).toBe('done');
+    expect(convergePhase(st, 'run-2').kind).toBe('starting');
+    expect(convergePhase(st, 'run-1').kind).toBe('done');
+  });
+
+  // The beat is armed by what the SERVER says, not only by what this browser did -- which is the
+  // point of the snapshot living in core. A second tab watches the same convergence.
+  it('keeps polling a convergence this browser did not start', () => {
+    expect(shouldPollConvergence(status({ poller_convergence: conv() } as Partial<UpgradeStatus>), null)).toBe(
+      true,
+    );
+    expect(
+      shouldPollConvergence(
+        status({ poller_convergence: conv({ finished_at: 9 }) } as Partial<UpgradeStatus>),
+        null,
+      ),
+    ).toBe(false);
+    expect(shouldPollConvergence(status(), null)).toBe(false);
   });
 });

@@ -351,6 +351,12 @@ pub struct PollerBuild {
     /// It advertises `CAP_SELF_UPGRADE` — a site updater is deployed beside it and core can hand it
     /// the same release (ADR-051).
     pub self_upgrades: bool,
+    /// Whether core has heard from it recently enough to call it live.
+    ///
+    /// Carried rather than filtered at the call site: an upgrade may only act on a poller that is
+    /// running, but the **screen** must still show one that is not — a site that died during its
+    /// own upgrade used to vanish from the list, which read as "aligned" (ADR-051 Inc.6).
+    pub online: bool,
     /// What its site updater last reported, when it carries one and has said anything.
     ///
     /// Carried on the *build* rather than looked up beside it, because every consumer that asks
@@ -369,89 +375,189 @@ pub struct PollerLag {
     pub version: Option<String>,
 }
 
-/// One poller the align button would move, with what it is doing about it right now.
+/// Which kind of thing a row of the components list describes.
 ///
-/// `progress` is a **progress indicator and never a completion signal**. A site pulls its image
-/// over whatever link it has, which is minutes; without this the operator who pressed the button
-/// watches a card that does not change until a version flips, and cannot tell a site that is
-/// working from one that is stuck. But it is carried on heartbeats and read by polling, so it goes
-/// stale between them. **`version` is what says a site is done.**
-// Why it is a type of its own rather than a field on `PollerLag`, the row `PollerUpgradePlan` uses:
-// nothing is being asked of a `manual` poller, so progress there could only ever be `null`, and an
-// always-null field on a shared row teaches a reader to ignore the one place it means something.
-// In `//` because it is a fact about this repository's types, not about the API (ADR-051 Inc.4
-// decision 18).
+/// An enum rather than a string because **the WebUI builds a `t()` key from it**, which is the
+/// shape a raw string gets wrong: a union nothing iterates lets a new variant reach the operator
+/// as a raw key with EN/JA parity still passing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentKind {
+    /// core and the WebUI, which share a compose project and are replaced together.
+    Core,
+    /// A poller, co-located or at a remote site.
+    Poller,
+}
+
+/// Why a component is not an ordinary, independently selectable row.
+///
+/// `null` is the common case. Every value here is rendered **in the row**, never in a tooltip: a
+/// reason an operator can only reach by hovering is a reason a touch device never shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ComponentReason {
+    /// No site updater is deployed beside it, so it cannot replace itself.
+    NoSiteUpdater,
+    /// It shares core's compose project, so `docker compose up` replaces it with core. Not a
+    /// refusal — it moves, it just cannot move *separately*.
+    CoLocated,
+    /// It is not on the bus. An upgrade acts on what is running, so nothing can be handed to it.
+    Offline,
+}
+
+/// One row of the components list: something this deployment is made of, and what it runs.
+///
+/// Replaces the two types that answered the same question from opposite ends — one said which
+/// pollers an upgrade carried and which it stranded, the other said which were off core's build.
+/// Both were views of one table, and keeping them apart was two chances to disagree about which
+/// poller a row was.
+///
+/// **Deliberately does not say whether the row is already on the target.** That depends on which
+/// release the operator picked, which this does not know; it is a string comparison the caller
+/// makes.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct AligningPoller {
-    /// Sanitized poller id.
+pub struct ComponentRow {
+    /// Sanitized poller id, or `core` for the core+WebUI row.
     pub id: String,
-    /// What it is running now. Never `null` in practice: a poller that has never reported a version
-    /// cannot be judged off-version and so is never in this set. Optional so it reads the same way
-    /// as every other row that names a build.
+    /// Which kind of thing this is.
+    pub kind: ComponentKind,
+    /// The pool it serves; `null` for core, which serves none.
+    pub pool: Option<String>,
+    /// What it is running now, when it has reported a version.
     pub version: Option<String>,
-    /// Its site updater's last word, or `null` when it has none, has never been asked, or predates
-    /// the field.
+    /// Whether an upgrade can move it at all. A `false` row is still listed — dropping it would
+    /// read as "that poller is gone" rather than "that poller cannot come".
+    pub upgradable: bool,
+    /// Why it is not an ordinary row, or `null`.
+    pub reason: Option<ComponentReason>,
+    /// It shares core's compose project, so it follows core's own checkbox and cannot be
+    /// unselected on its own.
+    pub co_located: bool,
+    /// It is **ahead** of this core, so moving it to core's build is a downgrade.
+    ///
+    /// Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
+    /// comes after `0.2.9`, and this repository already keeps that comparison in one place because
+    /// the other thing deciding from it is whether a rollback is allowed.
+    pub moves_back: bool,
+    /// How many live pollers this row's pool has, including this one; `0` for core.
+    ///
+    /// Carried so the caller can say **which pools go dark for the selection actually made**. It
+    /// used to be a `dark_pools` field computed from "everything that could move", which stops
+    /// being true the moment a row can be unchecked — and a warning that does not follow the
+    /// checkboxes is worse than none, because it reads the same when it matters.
+    pub live_in_pool: usize,
+    /// Its site updater's last word, or `null` when it has none or has never been asked.
     pub progress: Option<PollerUpgradeProgress>,
 }
 
-/// Who an upgrade carries along, and who it leaves behind.
+/// The id the core+WebUI row carries.
 ///
-/// `null` on the response rather than an empty plan when the updater has not said which pollers
-/// share its compose project: "no poller is left behind" and "nobody asked" are different answers,
-/// and only one of them is safe to render as a reassuring zero (the lesson ADR-045 paid for).
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct PollerUpgradePlan {
-    /// Pollers this operation replaces: the ones in core's own compose project, plus any that
-    /// advertise `CAP_SELF_UPGRADE`.
-    pub with_core: Vec<String>,
-    /// Pollers that stay on their current build until someone upgrades them by hand.
-    pub manual: Vec<PollerLag>,
-    /// Pools that lose monitoring for the length of one recreate, **while core is up**.
-    ///
-    /// A pool with two or more live pollers never appears here: the rolling upgrade takes one out at
-    /// a time, so the survivors carry its nodes (`leaving` hands them over in about a second). A
-    /// pool with a single remote poller has nobody to hand to, and its whole budget is
-    /// `pool_coverage`'s 300-second debounce — which no maintenance window silences, deliberately.
-    ///
-    /// ⚠️ **A pool whose only poller is co-located is deliberately absent**, even though it does go
-    /// down. It goes down *with core*, so it is not a fact that distinguishes one press from
-    /// another — and listing it would fire on the commonest deployment there is, which is how a
-    /// warning stops being read.
-    pub dark_pools: Vec<String>,
+/// One spelling, because the WebUI matches on it **and** the request body's `pollers` list must
+/// never be able to name it: core is moved by `include_core`, so a poller id colliding with this
+/// would be a second, unaudited way to ask for a core upgrade.
+pub const CORE_COMPONENT_ID: &str = "core";
+
+/// The whole of what this deployment is made of, in a stable order (core first, then pollers by id).
+///
+/// `local` is the set the central updater reported from its own compose project — the only
+/// trustworthy answer to "is this poller co-located", because nothing on the bus distinguishes a
+/// poller sharing core's host from one at a remote site. `None` means it has not said; then no row
+/// is marked co-located and a poller with no `CAP_SELF_UPGRADE` reads as `no_site_updater`, which
+/// is exactly what the previous `manual` list did in that state.
+///
+/// ⚠️ **Offline pollers are included.** The previous types were built from live pollers only, so a
+/// site that died during its own upgrade vanished from the screen and the deployment read as
+/// aligned. A row that cannot be acted on is still a row an operator has to see.
+#[must_use]
+pub fn components(
+    fleet: &[PollerBuild],
+    local: Option<&[String]>,
+    core_version: &str,
+    core_upgradable: bool,
+) -> Vec<ComponentRow> {
+    let core = parse_version(core_version);
+    let mut rows = vec![ComponentRow {
+        id: CORE_COMPONENT_ID.to_owned(),
+        kind: ComponentKind::Core,
+        pool: None,
+        version: Some(core_version.to_owned()),
+        upgradable: core_upgradable,
+        reason: None,
+        co_located: false,
+        moves_back: false,
+        live_in_pool: 0,
+        progress: None,
+    }];
+    let mut pollers: Vec<ComponentRow> = fleet
+        .iter()
+        .map(|p| {
+            let co_located = local.is_some_and(|l| l.iter().any(|x| x == &p.id));
+            // Ordered by what the operator can do about it: an offline site cannot be handed
+            // anything whatever else is true of it, and being co-located outranks having no site
+            // updater because it does not need one.
+            let reason = if !p.online {
+                Some(ComponentReason::Offline)
+            } else if co_located {
+                Some(ComponentReason::CoLocated)
+            } else if p.self_upgrades {
+                None
+            } else {
+                Some(ComponentReason::NoSiteUpdater)
+            };
+            ComponentRow {
+                upgradable: p.online && (co_located || p.self_upgrades),
+                reason,
+                co_located,
+                moves_back: match (&core, p.version.as_deref().and_then(parse_version)) {
+                    (Some(c), Some(v)) => v > *c,
+                    _ => false,
+                },
+                live_in_pool: fleet
+                    .iter()
+                    .filter(|q| q.online && q.pool == p.pool)
+                    .count(),
+                pool: Some(p.pool.clone()),
+                version: p.version.clone(),
+                progress: p.upgrade.clone(),
+                kind: ComponentKind::Poller,
+                id: p.id.clone(),
+            }
+        })
+        .collect();
+    pollers.sort_by(|a, b| a.id.cmp(&b.id));
+    rows.append(&mut pollers);
+    rows
 }
 
-/// Split the fleet into what an upgrade carries and what it leaves behind.
+/// The pollers a convergence would actually move.
 ///
-/// `local` is the set the updater reported from its own compose project — the only trustworthy
-/// answer to "is this poller co-located", because nothing on the bus distinguishes a poller sharing
-/// core's host from one at a remote site (a container's id *is* its hostname *is* its poller id, and
-/// neither `mgmt_addrs` nor the pool says which project it belongs to).
+/// Split out from the handler so the rule is testable without a coordinator, a bus or a clock — it
+/// is the one place that decides who a press touches, and the previous version of it lived inside
+/// two different handlers.
+///
+/// * `selected` is `None` for "every poller that can move". An empty slice moves nothing, and the
+///   two must stay distinguishable all the way up to the request body.
+/// * A row already on `tag` is never included, whatever the caller asked. Recreating a container
+///   for no version change is what a second press would do.
+/// * Co-located pollers are excluded: they are replaced by core's own compose project, so sending
+///   one a command would be asking a site updater that does not exist.
 #[must_use]
-pub fn poller_upgrade_plan(pollers: &[PollerBuild], local: &[String]) -> PollerUpgradePlan {
-    let mut with_core = Vec::new();
-    let mut manual = Vec::new();
-    for p in pollers {
-        if p.self_upgrades || local.iter().any(|l| l == &p.id) {
-            with_core.push(p.id.clone());
-        } else {
-            manual.push(PollerLag {
-                id: p.id.clone(),
-                version: p.version.clone(),
-            });
-        }
-    }
-    // The rolling path takes out exactly the cap-holders that are not in core's own project; a
-    // co-located poller goes down with core, which is a different operation on a different page.
-    let moving: Vec<&str> = pollers
-        .iter()
-        .filter(|p| p.self_upgrades && !local.iter().any(|l| l == &p.id))
-        .map(|p| p.id.as_str())
-        .collect();
-    PollerUpgradePlan {
-        with_core,
-        manual,
-        dark_pools: dark_pools(pollers, &moving),
-    }
+pub fn movable_to<'a>(
+    rows: &'a [ComponentRow],
+    tag: &str,
+    selected: Option<&[String]>,
+) -> Vec<&'a ComponentRow> {
+    let want = tag.trim_start_matches('v');
+    rows.iter()
+        .filter(|r| r.kind == ComponentKind::Poller)
+        .filter(|r| r.upgradable && !r.co_located)
+        .filter(|r| {
+            r.version
+                .as_deref()
+                .is_some_and(|v| v.trim_start_matches('v') != want)
+        })
+        .filter(|r| selected.is_none_or(|s| s.iter().any(|id| id == &r.id)))
+        .collect()
 }
 
 /// Pools that lose their last live poller while one of `moving` is recreated.
@@ -468,113 +574,21 @@ pub fn poller_upgrade_plan(pollers: &[PollerBuild], local: &[String]) -> PollerU
 ///
 /// A warning that fires when nothing happens is worse than no warning, because the time it matters
 /// it reads exactly the same.
-fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
+pub fn dark_pools(fleet: &[PollerBuild], moving: &[&str]) -> Vec<String> {
     let mut out: Vec<String> = fleet
         .iter()
         .filter(|p| moving.contains(&p.id.as_str()))
-        .filter(|p| fleet.iter().filter(|q| q.pool == p.pool).count() <= 1)
+        .filter(|p| {
+            fleet
+                .iter()
+                .filter(|q| q.online && q.pool == p.pool)
+                .count()
+                <= 1
+        })
         .map(|p| p.pool.clone())
         .collect();
     out.sort();
     out.dedup();
-    out
-}
-
-/// What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4 decision 17).
-///
-/// **One type rather than two loose fields, because the two facts are about one operation** and an
-/// operator reads them together: which sites move, and which pools stop being monitored while they
-/// do. Split across the response they would drift apart the first time either was computed from a
-/// different set — which is exactly the bug this replaced, where the dark-pool list was derived from
-/// every cap-holder rather than from the ones actually being moved.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub struct PollerAlignment {
-    /// The pollers it would move, what each runs now, and what its site updater is doing about it.
-    /// Empty means the fleet is aligned — there is no "nobody asked" here, unlike
-    /// [`PollerUpgradePlan`], because core always knows its own version and always has a live
-    /// registry.
-    pub pollers: Vec<AligningPoller>,
-    /// Pools left with no live poller for the length of one recreate. Named **before** the press:
-    /// `pool_coverage`'s 300-second debounce is the whole budget and no maintenance window silences
-    /// it, so this is the one consequence an operator cannot discover afterwards without an alert.
-    pub dark_pools: Vec<String>,
-    /// Of `pollers`, the ones **ahead** of core — which this operation moves *back*.
-    ///
-    /// Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
-    /// comes after `0.2.9`, and this repository already keeps that comparison in one place because
-    /// the other thing deciding from it is whether a rollback is allowed. A second implementation
-    /// in TypeScript would be a second answer to "which is newer".
-    // Why a subset rather than a flag on each row: the screen reads it as one — the confirmation
-    // names them together in a single sentence, and no row anywhere renders a direction. Until
-    // Inc.4's progress rows it *could* not be a per-row flag, because the row type was shared with
-    // `PollerUpgradePlan::manual` where direction has no meaning; that constraint is gone now that
-    // `AligningPoller` is its own type, so what keeps it a subset is the sentence, not the type.
-    pub downgrades: Vec<String>,
-}
-
-/// Work out that operation from the live fleet.
-///
-/// Separate from [`poller_upgrade_plan`] because the two act on different sets: that one carries
-/// every cap-holder, this one moves only those off `core_version`. Answering with the plan's dark
-/// pools would name a single-poller site that is already aligned and will not be touched.
-#[must_use]
-pub fn poller_alignment(fleet: &[PollerBuild], core_version: &str) -> PollerAlignment {
-    let pollers = pollers_off_version(fleet, core_version);
-    let ids: Vec<&str> = pollers.iter().map(|p| p.id.as_str()).collect();
-    // A version this core cannot parse is not called a downgrade. It is still moved — being
-    // unreadable is not a reason to leave a site on an unknown build — but the confirmation only
-    // promises what it can prove, and "we could not read it" is not evidence of direction.
-    let core = parse_version(core_version);
-    let downgrades: Vec<String> = pollers
-        .iter()
-        .filter(
-            |p| match (&core, p.version.as_deref().and_then(parse_version)) {
-                (Some(c), Some(v)) => v > *c,
-                _ => false,
-            },
-        )
-        .map(|p| p.id.clone())
-        .collect();
-    PollerAlignment {
-        dark_pools: dark_pools(fleet, &ids),
-        downgrades,
-        pollers,
-    }
-}
-
-/// Pollers that can replace themselves and are not on `core_version` (ADR-051 Inc.4 decision 17).
-///
-/// The set `POST /api/v1/system/upgrade/pollers` acts on, and the set the button that calls it is
-/// rendered from. Computed straight off the live registry, **not** from [`PollerUpgradePlan`]: that
-/// one is `None` until the central updater has named its own compose project, and a deployment with
-/// no central updater at all still has remote sites worth aligning.
-///
-/// ⚠️ **A poller ahead of core is included, and that is a downgrade.** It is the right answer — the
-/// supported state is one release of skew in the direction N/N-1 promises (new core, old poller),
-/// and a poller ahead of core is the unsupported direction (ADR-009). Pollers hold no state
-/// (decision 7), so moving one back costs a recreate. The confirmation is what must say so, not
-/// this function.
-///
-/// A poller that has never reported a version is excluded: it cannot be judged, and acting on it
-/// would mean recreating a container to find out.
-#[must_use]
-pub fn pollers_off_version(fleet: &[PollerBuild], core_version: &str) -> Vec<AligningPoller> {
-    let want = core_version.trim_start_matches('v');
-    let mut out: Vec<AligningPoller> = fleet
-        .iter()
-        .filter(|p| p.self_upgrades)
-        .filter(|p| {
-            p.version
-                .as_deref()
-                .is_some_and(|v| v.trim_start_matches('v') != want)
-        })
-        .map(|p| AligningPoller {
-            id: p.id.clone(),
-            version: p.version.clone(),
-            progress: p.upgrade.clone(),
-        })
-        .collect();
-    out.sort_by(|a, b| a.id.cmp(&b.id));
     out
 }
 
@@ -1076,6 +1090,76 @@ impl UpgradeRepo {
         Some(run)
     }
 
+    /// Remember which pollers this run is allowed to move, so the answer survives core itself.
+    ///
+    /// 🚨 **The process that reads this is not the process that wrote it.** core is replaced by its
+    /// own upgrade, and the poller convergence is started afterwards by the core that came back
+    /// (`start` → `settle_finished_run`). That core has no memory of the dialog, so without this it
+    /// derives the targets itself — "every live poller that can replace itself" — and moves the
+    /// very rows the operator unchecked.
+    ///
+    /// The hand-off directory is the right home for the same reason `status.json` lives there: it
+    /// is a volume that outlives the container. The central updater neither reads nor deletes it
+    /// (it removes only `request`), so nothing else can consume it by accident.
+    ///
+    /// **Written only when the selection is narrower than "everything".** Absence therefore means
+    /// "all", which is exactly the behaviour before this existed — so a wiped volume, a `None` dir
+    /// or an unreadable file all degrade to the old, working default rather than to "nothing moves".
+    ///
+    /// # Errors
+    /// Only a filesystem failure; a deployment with no hand-off directory is a silent no-op,
+    /// because there is then no core upgrade for the selection to survive.
+    pub fn write_poller_selection(&self, run_id: &str, pollers: &[String]) -> anyhow::Result<()> {
+        let Some(dir) = self.dir.as_deref() else {
+            return Ok(());
+        };
+        let body = serde_json::to_string(&PollerSelection {
+            run_id: run_id.to_owned(),
+            pollers: pollers.to_vec(),
+        })?;
+        let tmp = dir.join("poller-selection.tmp");
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(&tmp, dir.join(POLLER_SELECTION_FILE))?;
+        Ok(())
+    }
+
+    /// Read back the selection for `run_id`, and delete the file either way.
+    ///
+    /// `None` means "no selection was recorded for this run", and every caller must read that as
+    /// **all** rather than as none — see [`Self::write_poller_selection`].
+    ///
+    /// Deleting on a mismatch is deliberate: a file naming a different run is left over from an
+    /// upgrade that never settled, and keeping it would let it be applied to some later run whose
+    /// id happened to be read first. It is checked against the run id rather than trusted because
+    /// the file outlives the decision that produced it.
+    #[must_use]
+    pub fn take_poller_selection(&self, run_id: &str) -> Option<Vec<String>> {
+        let sel: Option<PollerSelection> = self.read_json(POLLER_SELECTION_FILE);
+        if let Some(dir) = self.dir.as_deref() {
+            let _ = std::fs::remove_file(dir.join(POLLER_SELECTION_FILE));
+        }
+        let sel = sel?;
+        if sel.run_id != run_id {
+            tracing::warn!(
+                file_run = %sel.run_id,
+                settling = %run_id,
+                "a poller selection was left over from another run; ignoring it and upgrading every poller that can move"
+            );
+            return None;
+        }
+        // The ids only ever filter a list core already holds, so a bogus one matches nothing rather
+        // than doing anything. Bound the input anyway: this file lives in a volume a
+        // root-privileged container mounts, and "it cannot do harm today" is not a property to
+        // depend on the next person preserving.
+        Some(
+            sel.pollers
+                .into_iter()
+                .filter(|p| is_request_value(p))
+                .take(MAX_SELECTED_POLLERS)
+                .collect(),
+        )
+    }
+
     fn read_json<T: serde::de::DeserializeOwned>(&self, name: &str) -> Option<T> {
         let path: &Path = self.dir.as_deref()?;
         let text = std::fs::read_to_string(path.join(name)).ok()?;
@@ -1133,6 +1217,22 @@ impl UpgradeRepo {
 
 /// Where staged image archives live inside the hand-off volume.
 const BUNDLE_SUBDIR: &str = "bundle";
+
+/// Where a run's poller selection is kept between the core that chose it and the core that acts on
+/// it. A sibling of `status.json` in the hand-off directory, for the same reason.
+const POLLER_SELECTION_FILE: &str = "poller-selection.json";
+
+/// A ceiling on how many ids one selection may name. Far above any real fleet's *self-upgrading*
+/// poller count; it exists so a corrupted file cannot become an unbounded allocation.
+const MAX_SELECTED_POLLERS: usize = 4096;
+
+/// The selection as it is written to disk. Keyed by run id, because the file outlives the decision
+/// that produced it and a stale one must be recognisable rather than merely old.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+struct PollerSelection {
+    run_id: String,
+    pollers: Vec<String>,
+}
 
 /// The file core materialises the operator's switch into, for the sidecar to read.
 const SETTINGS_FILE: &str = "settings";
@@ -1199,10 +1299,29 @@ pub(crate) async fn start(
             let Some(tag) = run.target.clone() else {
                 return;
             };
+            // 🚨 Which pollers the operator actually ticked, recorded by the core this one
+            // replaced. Deriving the set here instead — which is what this did before ADR-051
+            // Inc.6 — moves the rows they unchecked, because that decision was made in a process
+            // that no longer exists. `None` means no selection was recorded, and that must read as
+            // **every poller that can move**: it is the behaviour this route has always had, so a
+            // wiped volume degrades to the old, working default rather than to a silent no-op.
+            let selection = upgrade.take_poller_selection(&run.id);
+            if let Some(sel) = selection.as_deref() {
+                tracing::info!(
+                    run = %run.id,
+                    chosen = sel.len(),
+                    "this upgrade named the pollers it may move; the rest stay on their current build"
+                );
+            }
             let targets: Vec<crate::poller_upgrade::Target> = coordinator
                 .poller_views(std::time::Instant::now())
                 .into_iter()
                 .filter(|v| v.online && v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE))
+                .filter(|v| {
+                    selection
+                        .as_deref()
+                        .is_none_or(|sel| sel.iter().any(|id| id == &v.id))
+                })
                 .map(|v| crate::poller_upgrade::Target {
                     id: v.id,
                     pool: v.pool,
@@ -2314,6 +2433,9 @@ mod tests {
             version: version.map(str::to_owned),
             upgrade: None,
             self_upgrades,
+            // Live unless a test says otherwise: the offline case is the exception and is worth
+            // spelling out at the one call site that wants it.
+            online: true,
         }
     }
 
@@ -2406,43 +2528,104 @@ mod tests {
     /// The split core cannot make on its own: a co-located poller is upgraded by the same `up -d`,
     /// a remote one is not, and nothing on the bus tells them apart. Only the updater's own project
     /// listing does.
+    ///
+    /// 🚨 **The accepting case is asserted first.** A `components` that returned an empty list, or
+    /// one that marked nothing upgradable, would satisfy every exclusion below while making the
+    /// whole dialog empty — which looks exactly like a deployment with nothing to upgrade.
     #[test]
-    fn the_plan_splits_the_fleet_by_project_and_by_capability() {
+    fn the_components_list_splits_the_fleet_by_project_and_by_capability() {
         let fleet = vec![
             build("core-host-poller", Some("0.2.2"), false),
             build("edge-tokyo-1", Some("0.2.1"), true),
             build("edge-osaka-1", Some("0.2.0"), false),
             build("edge-nagoya-1", None, false),
         ];
-        let plan = poller_upgrade_plan(&fleet, &["core-host-poller".to_owned()]);
+        let rows = components(
+            &fleet,
+            Some(&["core-host-poller".to_owned()]),
+            "0.2.2",
+            true,
+        );
 
+        // core is always the first row, and it is the only one of its kind.
+        assert_eq!(rows[0].id, CORE_COMPONENT_ID);
+        assert_eq!(rows[0].kind, ComponentKind::Core);
         assert_eq!(
-            plan.with_core,
-            vec!["core-host-poller".to_owned(), "edge-tokyo-1".to_owned()],
-            "in core's project, or able to replace itself"
+            rows.iter()
+                .filter(|r| r.kind == ComponentKind::Core)
+                .count(),
+            1
+        );
+
+        let row = |id: &str| {
+            rows.iter()
+                .find(|r| r.id == id)
+                .unwrap_or_else(|| panic!("{id} should be listed"))
+        };
+        assert!(
+            row("edge-tokyo-1").upgradable && !row("edge-tokyo-1").co_located,
+            "a remote site with a updater is an ordinary, selectable row"
+        );
+        assert!(
+            row("core-host-poller").upgradable && row("core-host-poller").co_located,
+            "in core's project: it moves, but not separately"
         );
         assert_eq!(
-            plan.manual,
-            vec![
-                PollerLag {
-                    id: "edge-osaka-1".to_owned(),
-                    version: Some("0.2.0".to_owned()),
-                },
-                PollerLag {
-                    id: "edge-nagoya-1".to_owned(),
-                    version: None,
-                },
-            ]
+            row("core-host-poller").reason,
+            Some(ComponentReason::CoLocated)
+        );
+        assert!(!row("edge-osaka-1").upgradable);
+        assert_eq!(
+            row("edge-osaka-1").reason,
+            Some(ComponentReason::NoSiteUpdater)
+        );
+        assert!(
+            !row("edge-nagoya-1").upgradable,
+            "never reported a version and has no updater either"
+        );
+    }
+
+    /// With no project listing, nothing is co-located — and that has to be the *cautious* answer.
+    ///
+    /// The previous types answered `None` for the whole plan in this state, which the page then had
+    /// to render as "nobody asked". Making it a property of a row means the list is always
+    /// complete; what it must not do is *invent* a co-location, because that would exclude a real
+    /// remote site from every upgrade with nothing on screen saying so.
+    #[test]
+    fn without_the_updaters_project_listing_no_row_claims_to_be_co_located() {
+        let fleet = vec![build("local", Some("0.2.2"), false)];
+        let rows = components(&fleet, None, "0.2.2", true);
+        assert!(!rows[1].co_located);
+        assert_eq!(rows[1].reason, Some(ComponentReason::NoSiteUpdater));
+    }
+
+    /// A poller core has not heard from is listed, and cannot be acted on.
+    ///
+    /// 🚨 This is the row that used to be missing entirely. The fleet was filtered to live pollers
+    /// before it reached the screen, so a site killed by its own upgrade dropped out of the list and
+    /// the deployment reported itself **aligned** — the most misleading answer available.
+    #[test]
+    fn an_offline_poller_is_listed_and_is_not_upgradable() {
+        let fleet = vec![PollerBuild {
+            online: false,
+            ..build("edge-gone", Some("0.2.1"), true)
+        }];
+        let rows = components(&fleet, None, "0.2.2", true);
+        assert_eq!(rows.len(), 2, "core plus the offline site");
+        assert_eq!(rows[1].id, "edge-gone");
+        assert!(!rows[1].upgradable);
+        assert_eq!(rows[1].reason, Some(ComponentReason::Offline));
+        assert!(
+            movable_to(&rows, "0.2.2", None).is_empty(),
+            "nothing can be handed to a site that is not on the bus"
         );
     }
 
     /// A pool is dark only when the rolling upgrade leaves it with nobody, and "nobody" counts
     /// *live pollers*, not upgrade targets (ADR-051 Inc.4 decision 19).
     ///
-    /// The version this replaces asked `queue.len() <= 1` — the number of pollers being upgraded —
-    /// so a three-poller pool where one site could replace itself was reported as going dark while
-    /// two pollers kept polling throughout. Both directions are asserted here: the false positive
-    /// that made the old answer wrong, and the true positive that is the reason to report anything.
+    /// Both directions are asserted: the false positive that made an older answer wrong, and the
+    /// true positive that is the reason to report anything at all.
     #[test]
     fn a_pool_is_dark_only_when_its_last_live_poller_is_the_one_being_replaced() {
         let fleet = vec![
@@ -2455,38 +2638,62 @@ mod tests {
             // Two in Nagoya, both self-upgrading. Serial, so one always survives.
             in_pool("nagoya", "edge-nagoya-1", Some("0.2.1"), true),
             in_pool("nagoya", "edge-nagoya-2", Some("0.2.1"), true),
-            // A lone co-located poller. It *does* go down — with core — so it is not this
-            // operation's distinguishing fact, and naming it would fire on every deployment.
-            in_pool("default", "local", Some("0.2.2"), false),
         ];
-        let plan = poller_upgrade_plan(&fleet, &["local".to_owned()]);
-        assert_eq!(plan.dark_pools, vec!["tokyo".to_owned()]);
+        let rows = components(&fleet, None, "0.2.2", true);
+        let moving: Vec<&str> = movable_to(&rows, "0.2.2", None)
+            .iter()
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(dark_pools(&fleet, &moving), vec!["tokyo".to_owned()]);
     }
 
-    /// A pool whose only poller is co-located stays absent even when it claims the capability.
+    /// The warning follows the checkboxes, which is the whole reason it stopped being a field.
     ///
-    /// Split from the case above because it is the one that reverses: `local` wins over
-    /// `self_upgrades`, so the deployment's own poller is never counted as a rolling target.
+    /// 🚨 A pool of two where **both** are ticked survives, because the queue is serial; the same
+    /// pool where the operator unticked one is not dark either. But a pool of two whose second
+    /// poller is offline *is* dark the moment its live one is ticked — and none of those three
+    /// answers is reachable from a list computed once, before anything was selected.
     #[test]
-    fn a_lone_co_located_poller_is_not_a_dark_pool_even_if_it_can_self_upgrade() {
-        let fleet = vec![in_pool("default", "local", Some("0.2.2"), true)];
-        assert!(poller_upgrade_plan(&fleet, &["local".to_owned()])
-            .dark_pools
-            .is_empty());
-        // …and with nobody claiming it as local, the same poller is a remote single-poller site.
+    fn dark_pools_are_recomputed_from_the_selection_not_from_everything_that_could_move() {
+        let fleet = vec![
+            in_pool("nagoya", "edge-nagoya-1", Some("0.2.1"), true),
+            in_pool("nagoya", "edge-nagoya-2", Some("0.2.1"), true),
+            in_pool("kobe", "edge-kobe-1", Some("0.2.1"), true),
+            PollerBuild {
+                online: false,
+                ..in_pool("kobe", "edge-kobe-2", Some("0.2.1"), true)
+            },
+        ];
+        let rows = components(&fleet, None, "0.2.2", true);
+        let ids = |sel: Option<&[String]>| -> Vec<String> {
+            let m: Vec<&str> = movable_to(&rows, "0.2.2", sel)
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect();
+            dark_pools(&fleet, &m)
+        };
         assert_eq!(
-            poller_upgrade_plan(&fleet, &[]).dark_pools,
-            vec!["default".to_owned()]
+            ids(None),
+            vec!["kobe".to_owned()],
+            "kobe's other poller is offline, so moving the live one leaves nobody"
+        );
+        assert!(
+            ids(Some(&["edge-nagoya-1".to_owned()])).is_empty(),
+            "one of two live pollers: the other keeps polling"
+        );
+        assert!(
+            ids(Some(&[])).is_empty(),
+            "nothing selected, nothing goes dark"
         );
     }
 
-    /// Who the "align the pollers" button acts on (ADR-051 Inc.4 decision 17).
+    /// Who a press acts on (ADR-051 Inc.4 decision 17, ADR-051 Inc.6 decision 22).
     ///
     /// 🚨 The accepting case is first and is the load-bearing one: a filter that returned nothing
     /// would satisfy every exclusion below while making the button permanently absent — which looks
     /// exactly like a fleet that is already aligned.
     #[test]
-    fn aligning_targets_every_self_upgrading_poller_not_on_this_core_version() {
+    fn a_press_moves_every_self_upgrading_poller_not_on_the_target() {
         let fleet = vec![
             build("behind", Some("0.3.1"), true),
             // Ahead of core: still a target, because that skew is the direction the bus does not
@@ -2500,26 +2707,38 @@ mod tests {
             // Never reported a version: cannot be judged, so it is not acted on.
             build("silent", None, true),
         ];
-        let off = pollers_off_version(&fleet, "0.3.2");
-        let ids: Vec<&str> = off.iter().map(|p| p.id.as_str()).collect();
-        assert_eq!(ids, vec!["ahead", "behind"]);
-
-        // The same answer from the release-tag spelling of core's own version.
+        let rows = components(&fleet, None, "0.3.2", true);
+        let ids = |tag: &str, sel: Option<&[String]>| -> Vec<String> {
+            movable_to(&rows, tag, sel)
+                .iter()
+                .map(|r| r.id.clone())
+                .collect()
+        };
+        assert_eq!(ids("0.3.2", None), vec!["ahead", "behind"]);
         assert_eq!(
-            pollers_off_version(&fleet, "v0.3.2").len(),
+            ids("v0.3.2", None).len(),
             2,
             "the `v` is a tag convention and must not change who is targeted"
         );
+
+        // The selection narrows it, and an id naming nothing is simply not there.
+        assert_eq!(
+            ids("0.3.2", Some(&["behind".to_owned(), "ghost".to_owned()])),
+            vec!["behind"]
+        );
+        // 🚨 An empty selection is not the same as no selection. Confusing the two would upgrade the
+        // whole fleet the moment an operator unticked every row.
+        assert!(ids("0.3.2", Some(&[])).is_empty());
     }
 
-    /// Which of the targets go *backwards*, so the confirmation can name them.
+    /// Which rows go *backwards*, so the confirmation can name them.
     ///
     /// 🚨 **`0.3.10` is newer than `0.3.9`**, and comparing the two as text says the opposite. That
     /// is the one comparison in this module that must not be subtly wrong — it is the same
     /// `semver` ordering `binding_floor` uses to decide whether a rollback is offered at all, which
     /// is exactly why the WebUI is not allowed a second implementation of it.
     #[test]
-    fn a_poller_ahead_of_core_is_named_as_a_downgrade_and_text_order_is_not_used() {
+    fn a_poller_ahead_of_core_is_marked_as_a_downgrade_and_text_order_is_not_used() {
         let fleet = vec![
             build("behind", Some("0.3.1"), true),
             build("ahead", Some("0.4.0"), true),
@@ -2531,19 +2750,26 @@ mod tests {
             // not *claimed* to be a downgrade, because nothing here proves the direction.
             build("gibberish", Some("nightly"), true),
         ];
-        let a = poller_alignment(&fleet, "0.3.9");
+        let rows = components(&fleet, None, "0.3.9", true);
         assert_eq!(
-            a.pollers.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(),
+            movable_to(&rows, "0.3.9", None)
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["ahead", "behind", "double-digit", "gibberish"],
             "everything off this version is moved, readable or not"
         );
-        assert_eq!(
-            a.downgrades,
-            vec!["ahead".to_owned(), "double-digit".to_owned()]
-        );
+        let back: Vec<&str> = rows
+            .iter()
+            .filter(|r| r.moves_back)
+            .map(|r| r.id.as_str())
+            .collect();
+        assert_eq!(back, vec!["ahead", "double-digit"]);
 
         // And with core ahead of everyone, nothing is a downgrade.
-        assert!(poller_alignment(&fleet, "9.9.9").downgrades.is_empty());
+        assert!(components(&fleet, None, "9.9.9", true)
+            .iter()
+            .all(|r| !r.moves_back));
     }
 
     /// The visible half of Inc.4 decision 18: the row an operator watches carries that site's own
@@ -2555,7 +2781,7 @@ mod tests {
     /// and it includes a row that must be `None`: a set where every row is populated cannot tell a
     /// correct join from one that hands the same report to everybody.
     #[test]
-    fn each_alignment_row_carries_its_own_sites_report_and_no_others() {
+    fn each_component_row_carries_its_own_sites_report_and_no_others() {
         let report = |state: yagra_bus::UpgradeReportState, step: &str| {
             Some(PollerUpgradeProgress::from(&yagra_bus::UpgradeReport {
                 run_id: "run-1".to_owned(),
@@ -2570,6 +2796,7 @@ mod tests {
             pool: "default".to_owned(),
             version: Some(version.to_owned()),
             self_upgrades: true,
+            online: true,
             upgrade,
         };
         let fleet = vec![
@@ -2579,9 +2806,6 @@ mod tests {
                 report(yagra_bus::UpgradeReportState::Running, "pull"),
             ),
             with("quiet", "0.3.1", None),
-            // Already on the target *and* mid-report. It is not in the set at all, so its report
-            // has nowhere to leak to — which is the property that makes the row's progress mean
-            // "this site, this press" rather than "someone, some time".
             with(
                 "aligned",
                 "0.3.2",
@@ -2589,14 +2813,12 @@ mod tests {
             ),
         ];
 
-        let a = poller_alignment(&fleet, "0.3.2");
+        let rows = components(&fleet, None, "0.3.2", true);
         let row = |id: &str| {
-            a.pollers
-                .iter()
-                .find(|p| p.id == id)
-                .unwrap_or_else(|| panic!("{id} should be a target"))
+            rows.iter()
+                .find(|r| r.id == id)
+                .unwrap_or_else(|| panic!("{id} should be listed"))
         };
-        assert_eq!(a.pollers.len(), 2, "only the two off 0.3.2 are targets");
         assert_eq!(
             row("pulling").progress,
             report(yagra_bus::UpgradeReportState::Running, "pull")
@@ -2606,6 +2828,77 @@ mod tests {
             None,
             "a site with no updater must stay blank, not inherit its neighbour's report"
         );
+        assert_eq!(
+            movable_to(&rows, "0.3.2", None).len(),
+            2,
+            "the site already on the target is listed, and is not a target"
+        );
+    }
+
+    /// The selection has to survive core's own restart, and only for the run it was made for.
+    ///
+    /// 🚨 **This is the one claim in this increment that a unit test can only half-reach.** The real
+    /// failure needs two processes: the core that writes the file is replaced by the upgrade, and
+    /// the core that reads it is the one that came back. What is testable here is the contract
+    /// between them — write, read once, and never let a leftover file speak for a different run.
+    /// The other half is an on-hardware check: untick a site, upgrade core, and see that the site
+    /// did **not** move.
+    #[tokio::test]
+    async fn a_poller_selection_is_returned_once_and_only_to_its_own_run() {
+        let dir = std::env::temp_dir().join(format!("yagra-sel-{}", new_run_id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let repo = UpgradeRepo::new(
+            PgPool::connect_lazy("postgres://unused").expect("lazy pool"),
+            Some(dir.clone()),
+            DEFAULT_BUNDLE_MAX_BYTES,
+        );
+
+        // Nothing recorded reads as "every poller that can move" — the behaviour this route had
+        // before the field existed, and the state a wiped volume degrades to.
+        assert_eq!(repo.take_poller_selection("run-a"), None);
+
+        repo.write_poller_selection("run-a", &["edge-1".to_owned(), "edge-2".to_owned()])
+            .expect("write");
+        assert_eq!(
+            repo.take_poller_selection("run-a"),
+            Some(vec!["edge-1".to_owned(), "edge-2".to_owned()]),
+        );
+        // Consumed: a second settle of the same run must not re-apply it.
+        assert_eq!(repo.take_poller_selection("run-a"), None);
+
+        // 🚨 A file left over from a run that never settled must not steer the next one. Without the
+        // id check it would, and the rows the operator unticked *this* time would be decided by a
+        // dialog from last week.
+        repo.write_poller_selection("run-a", &["edge-1".to_owned()])
+            .expect("write");
+        assert_eq!(repo.take_poller_selection("run-b"), None);
+        assert_eq!(
+            repo.take_poller_selection("run-a"),
+            None,
+            "a mismatch consumes the file too, or it would wait for a run whose id happens to match"
+        );
+
+        // An empty selection is not the same as no selection: it means nothing moves. Reading it as
+        // `None` would upgrade the whole fleet the moment an operator unticked every row.
+        repo.write_poller_selection("run-c", &[]).expect("write");
+        assert_eq!(repo.take_poller_selection("run-c"), Some(vec![]));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A deployment with no hand-off directory has no core upgrade for a selection to survive, so
+    /// writing one is a no-op rather than an error — the poller-only path must not fail there.
+    #[tokio::test]
+    async fn a_deployment_with_no_hand_off_directory_records_nothing_and_does_not_fail() {
+        let repo = UpgradeRepo::new(
+            PgPool::connect_lazy("postgres://unused").expect("lazy pool"),
+            None,
+            DEFAULT_BUNDLE_MAX_BYTES,
+        );
+        assert!(repo
+            .write_poller_selection("run-a", &["edge-1".to_owned()])
+            .is_ok());
+        assert_eq!(repo.take_poller_selection("run-a"), None);
     }
 
     /// Release tags carry a `v`; the column holds bare semver. Both must read.

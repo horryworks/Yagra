@@ -211,3 +211,211 @@
   width: 1em;
   text-align: center;
 }
+
+/* ── Section dividers, since eight cards became five ─────────────────────────────────────── */
+.upgrade-subhead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--font-2xs);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--text-tertiary);
+  font-weight: var(--weight-medium);
+}
+
+.upgrade-subhead::after {
+  content: '';
+  flex: 1;
+  height: var(--border-width);
+  background: var(--border-color);
+}
+
+.upgrade-subhead.first {
+  margin-top: 0;
+}
+
+/* Why a row cannot move, or what it will do. Beside the row rather than in a `title` — a control
+   whose explanation is hover-only is one a touch device never explains (ADR-055 R4). */
+.upgrade-why {
+  font-size: var(--font-xs);
+  line-height: 1.35;
+  text-align: right;
+  max-width: 34ch;
+}
+
+/* ── The convergence: one line per site ──────────────────────────────────────────────────── */
+.upgrade-sites {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 560px;
+}
+
+.upgrade-site {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  font-size: var(--font-sm);
+}
+
+.upgrade-site-mark {
+  width: 1em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.upgrade-site-pool {
+  font-size: var(--font-xs);
+}
+
+.upgrade-site-state {
+  margin-left: auto;
+}
+
+.upgrade-site-done .upgrade-site-mark {
+  color: var(--status-ok);
+}
+
+.upgrade-site-now {
+  border-color: var(--accent-color);
+}
+
+.upgrade-site-now .upgrade-site-mark,
+.upgrade-site-now .upgrade-site-state {
+  color: var(--accent-color);
+}
+
+.upgrade-site-bad .upgrade-site-mark {
+  color: var(--status-critical);
+}
+
+.upgrade-site-wait {
+  opacity: 0.62;
+}
+
+/* ── The selection table ─────────────────────────────────────────────────────────────────── */
+/* A grid, so the header and every row share one template — the alignment rule `styles/table.css`
+   spells out. Not `DataTable`: this list is bounded by the deployment's own size, it is inside a
+   modal (where `DataTable`'s `flex: 1` inner scroller would need an invented height), and its rows
+   are form controls rather than data cells. */
+.upgrade-pick {
+  margin-top: 14px;
+  border: var(--border-width) solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.upgrade-pick-head,
+.upgrade-pick-row {
+  display: grid;
+  grid-template-columns: 24px minmax(140px, 1.4fr) 84px 68px 20px 68px minmax(0, 1.5fr);
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  font-size: var(--font-sm);
+}
+
+.upgrade-pick-head {
+  height: 28px;
+  background: var(--bg-tertiary);
+  color: var(--text-tertiary);
+  font-size: var(--font-2xs);
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  font-weight: var(--weight-medium);
+}
+
+.upgrade-pick-row {
+  min-height: 38px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  background: var(--bg-primary);
+  border-top: var(--border-width) solid var(--border-color);
+  cursor: pointer;
+}
+
+.upgrade-pick-row:hover {
+  background: var(--bg-tertiary);
+}
+
+.upgrade-pick-row input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent-color);
+  cursor: pointer;
+}
+
+.upgrade-pick-row input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A locked row is still readable: the value matters even when the control is closed, which is the
+   one place `ui-conventions.md` permits `disabled` — on a form input, never on the action. */
+.upgrade-pick-off {
+  color: var(--text-tertiary);
+  cursor: default;
+}
+
+.upgrade-pick-off:hover {
+  background: var(--bg-primary);
+}
+
+/* The co-located poller hangs off core's row: it is replaced by the same `docker compose up`, so
+   it has no checkbox of its own to be wrong about. */
+.upgrade-pick-child .mono {
+  padding-left: 14px;
+  position: relative;
+}
+
+.upgrade-pick-child .mono::before {
+  content: '└';
+  position: absolute;
+  left: 0;
+  color: var(--text-tertiary);
+}
+
+.upgrade-pick-arrow {
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.upgrade-count {
+  margin-right: auto;
+  font-size: var(--font-sm);
+}
+
+/* Under a phone, the seven-column grid becomes two: the name keeps its own line and everything
+   else stacks under it, rather than each column shrinking to nothing. */
+@media (max-width: 720px) {
+  .upgrade-pick-head {
+    display: none;
+  }
+
+  .upgrade-pick-row {
+    grid-template-columns: 24px 1fr;
+    row-gap: 2px;
+  }
+
+  .upgrade-pick-row > .muted,
+  .upgrade-pick-row > .mono,
+  .upgrade-pick-arrow,
+  .upgrade-why {
+    grid-column: 2 / -1;
+  }
+
+  .upgrade-pick-arrow,
+  .upgrade-why {
+    text-align: left;
+    max-width: none;
+  }
+}

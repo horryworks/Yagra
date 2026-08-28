@@ -1386,8 +1386,23 @@ export const api = {
 
   /** Move this deployment to a release. Returns as soon as the updater has the request — the work
    *  outlives core, which restarts partway through, so poll `getUpgradeStatus` for the outcome. */
-  applyUpgrade: (targetTag: string): Promise<UpgradeRunAccepted> =>
-    apiPost('/api/v1/system/upgrade', { body: { target_tag: targetTag } }),
+  /** Move this deployment, and the pollers named, to `targetTag` (ADR-050, ADR-051 Inc.6).
+   *
+   *  `includeCore` false moves only the pollers, and then `targetTag` must be the version this core
+   *  already runs — a poller may not be sent to a release core has not reached (ADR-009).
+   *
+   *  ⚠️ `pollers` is sent even when it names everything. Omitting it means "every poller that can
+   *  move", which is what the route meant before the field existed; `[]` means none. Letting the
+   *  caller decide between those two by passing `undefined` would make unticking every row upgrade
+   *  the whole fleet. */
+  applyUpgrade: (
+    targetTag: string,
+    includeCore: boolean,
+    pollers: string[],
+  ): Promise<UpgradeRunAccepted> =>
+    apiPost('/api/v1/system/upgrade', {
+      body: { target_tag: targetTag, include_core: includeCore, pollers },
+    }),
 
   /** Ask the updater to re-read the registry now rather than on its own 24-hour clock (ADR-050).
    *  Accepted asynchronously — the answer arrives as a newer `available.written_at` on the next

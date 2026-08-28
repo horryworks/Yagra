@@ -137,6 +137,17 @@ pub struct ConvergeGuard(());
 
 impl Drop for ConvergeGuard {
     fn drop(&mut self) {
+        // Stamp the end rather than clearing the snapshot: this is the only place every ending goes
+        // through, panic included, and a record that survives the run is what puts "this site did
+        // not come back" on a screen for the first time. A target left `applying` under a
+        // `finished_at` reads as "it stopped here", which is exactly what happened.
+        with_progress(|p| {
+            if let Some(c) = p.as_mut() {
+                if c.finished_at.is_none() {
+                    c.finished_at = Some(crate::api::util::now_unix_s());
+                }
+            }
+        });
         CONVERGING.store(false, std::sync::atomic::Ordering::Release);
     }
 }
@@ -153,6 +164,131 @@ pub fn try_begin() -> Option<ConvergeGuard> {
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_ok()
         .then_some(ConvergeGuard(()))
+}
+
+/// Where one poller has got to in a convergence.
+///
+/// An enum rather than a string because **the WebUI builds a `t()` key from it**: a union nothing
+/// iterates lets a new variant reach the operator as a raw key with EN/JA parity still passing
+/// (`.claude/rules/extensibility.md` §4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConvergeState {
+    /// Its pool has not reached it yet.
+    Waiting,
+    /// Told to fetch the image. It keeps polling throughout — this is not an outage.
+    Prefetching,
+    /// Being recreated. **This is the outage**, and the only state that costs monitoring.
+    Applying,
+    /// Back on the target build. The end state that means it worked.
+    Returned,
+    /// It did not come back within the budget. Its pool's queue stopped here.
+    Failed,
+    /// Its pool stopped before reaching it, because an earlier poller in that pool failed.
+    Skipped,
+}
+
+/// One poller of a convergence, and where it has got to.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct ConvergingTarget {
+    /// Sanitized poller id.
+    pub id: String,
+    /// The pool whose queue it is in. Pools converge in parallel, so **more than one row can be
+    /// `applying` at once** — a screen that says "now upgrading <one poller>" is wrong on any
+    /// deployment with two pools.
+    pub pool: String,
+    /// What it is doing about this run.
+    pub state: ConvergeState,
+}
+
+/// A convergence, running or finished.
+///
+/// Held in memory, and that is a deliberate limit rather than an oversight: the case that matters —
+/// core upgrades itself, then converges the fleet — starts in the process that reports this, so it
+/// is covered. A core restart *during* a convergence loses the record. Persisting it would be a
+/// table and a migration for a value whose whole life is minutes.
+///
+/// ⚠️ **Under HA only the leader has one.** A follower answers `null`, which reads as "nothing is
+/// happening". HA is off by default, so this is a difference the lab cannot see.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+pub struct Convergence {
+    /// The upgrade run this belongs to; the same id every site stamps its own audit line with.
+    pub run_id: String,
+    /// The release every target is being moved to.
+    pub tag: String,
+    /// Who asked for it.
+    pub requested_by: String,
+    /// Unix seconds it began.
+    pub started_at: i64,
+    /// Unix seconds it ended; `null` while it is still going.
+    pub finished_at: Option<i64>,
+    /// Every poller in the run, in the order the queues take them.
+    pub targets: Vec<ConvergingTarget>,
+}
+
+/// The convergence this process is running, or the last one it ran.
+///
+/// Beside [`CONVERGING`] and for the same reason: the thing being described *is* process-wide —
+/// one fleet, one bus connection, one leader driving it.
+///
+/// **Not cleared when the run ends.** `finished_at` is stamped instead, so the page can say what
+/// happened — which is the only place "this site did not come back" has ever reached a screen. The
+/// convergence used to leave nothing behind but an audit row and an error log, and a site killed by
+/// its own upgrade then read as *aligned*, because it had dropped off the live registry the
+/// alignment was computed from.
+static PROGRESS: std::sync::RwLock<Option<Convergence>> = std::sync::RwLock::new(None);
+
+/// Read the convergence, for the API. `None` before the first one of this process's life.
+#[must_use]
+pub fn snapshot() -> Option<Convergence> {
+    PROGRESS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// Replace the snapshot, or edit it in place.
+///
+/// Takes the poisoned lock rather than panicking on it: a panic somewhere in a convergence must not
+/// make every later read of this page fail too.
+fn with_progress<T>(f: impl FnOnce(&mut Option<Convergence>) -> T) -> T {
+    let mut guard = PROGRESS
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    f(&mut guard)
+}
+
+/// Move one target to a new state, if this run still owns the snapshot.
+///
+/// A no-op when the ids do not match, which is what keeps a task that outlived its own run from
+/// writing over a newer one.
+fn mark(run_id: &str, poller_id: &str, state: ConvergeState) {
+    with_progress(|p| {
+        let Some(c) = p.as_mut() else { return };
+        if c.run_id != run_id {
+            return;
+        }
+        if let Some(t) = c.targets.iter_mut().find(|t| t.id == poller_id) {
+            t.state = state;
+        }
+    });
+}
+
+/// Move every target still in `from` to `to`, for this run.
+fn mark_all(run_id: &str, pool: &str, from: ConvergeState, to: ConvergeState) {
+    with_progress(|p| {
+        let Some(c) = p.as_mut() else { return };
+        if c.run_id != run_id {
+            return;
+        }
+        for t in c
+            .targets
+            .iter_mut()
+            .filter(|t| t.pool == pool && t.state == from)
+        {
+            t.state = to;
+        }
+    });
 }
 
 /// Has this poller come back on the target build?
@@ -206,6 +342,27 @@ pub async fn converge(run: Run, targets: Vec<Target>, _lock: ConvergeGuard) {
         return;
     }
     let by_pool = queues(targets);
+    // Published before the first command goes out, so a page that polls in the next second already
+    // knows a convergence exists. `waiting` is the honest starting state: nothing has been asked of
+    // any site yet.
+    with_progress(|p| {
+        *p = Some(Convergence {
+            run_id: run.run_id.clone(),
+            tag: run.tag.clone(),
+            requested_by: run.requested_by.clone(),
+            started_at: crate::api::util::now_unix_s(),
+            finished_at: None,
+            targets: by_pool
+                .values()
+                .flatten()
+                .map(|t| ConvergingTarget {
+                    id: t.id.clone(),
+                    pool: t.pool.clone(),
+                    state: ConvergeState::Waiting,
+                })
+                .collect(),
+        });
+    });
     tracing::info!(
         pools = by_pool.len(),
         pollers = by_pool.values().map(Vec::len).sum::<usize>(),
@@ -218,6 +375,7 @@ pub async fn converge(run: Run, targets: Vec<Target>, _lock: ConvergeGuard) {
     // own outage. Only the *apply* step is one-at-a-time.
     for t in by_pool.values().flatten() {
         send(&run, &t.id, UpgradeStep::Prefetch).await;
+        mark(&run.run_id, &t.id, ConvergeState::Prefetching);
     }
 
     tokio::time::sleep(SETTLE_DELAY).await;
@@ -260,8 +418,18 @@ async fn converge_pool(run: &Run, pool: &str, queue: Vec<Target>) {
     let prefetch_deadline = tokio::time::Instant::now() + PREFETCH_TIMEOUT - SETTLE_DELAY;
     for target in queue {
         wait_for_prefetch(run, &target, prefetch_deadline, pool_goes_dark).await;
+        mark(&run.run_id, &target.id, ConvergeState::Applying);
         send(run, &target.id, UpgradeStep::Apply).await;
         let ok = wait_for_return(&run.coordinator, &target, &run.tag).await;
+        mark(
+            &run.run_id,
+            &target.id,
+            if ok {
+                ConvergeState::Returned
+            } else {
+                ConvergeState::Failed
+            },
+        );
         let action = format!(
             "upgrade poller {} -> {} ({})",
             target.id,
@@ -283,6 +451,20 @@ async fn converge_pool(run: &Run, pool: &str, queue: Vec<Target>) {
                 %pool,
                 poller = %target.id,
                 "poller did not come back on the target version; stopping this pool's upgrade"
+            );
+            // The rest of this pool is not waiting any more — nothing will reach it. Leaving them
+            // `prefetching` would read as work still in flight for as long as the record lives.
+            mark_all(
+                &run.run_id,
+                pool,
+                ConvergeState::Prefetching,
+                ConvergeState::Skipped,
+            );
+            mark_all(
+                &run.run_id,
+                pool,
+                ConvergeState::Waiting,
+                ConvergeState::Skipped,
             );
             return;
         }
@@ -429,6 +611,62 @@ async fn wait_for_return(coordinator: &Arc<Coordinator>, target: &Target, tag: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A finished convergence is **kept**, with an end stamped on it.
+    ///
+    /// 🚨 The record surviving the run is what puts "this site did not come back" on a screen for
+    /// the first time. A site killed by its own upgrade drops off the live poller registry, so it
+    /// vanishes from every list built from that registry and the deployment reports itself aligned;
+    /// the audit row was the only trace. Clearing the snapshot on drop would restore exactly that.
+    ///
+    /// The stamp goes in `Drop` because it is the one place every ending goes through — a pool that
+    /// gave up, a task that was killed, a panic. A target left `applying` under a `finished_at`
+    /// reads as "it stopped here", which is what happened.
+    #[test]
+    fn a_finished_convergence_is_stamped_rather_than_cleared() {
+        let lock = try_begin().expect("nothing else is converging in this test binary");
+        with_progress(|p| {
+            *p = Some(Convergence {
+                run_id: "run-1".to_owned(),
+                tag: "v9.9.9".to_owned(),
+                requested_by: "horry".to_owned(),
+                started_at: 1,
+                finished_at: None,
+                targets: vec![ConvergingTarget {
+                    id: "edge-1".to_owned(),
+                    pool: "default".to_owned(),
+                    state: ConvergeState::Applying,
+                }],
+            });
+        });
+        assert!(snapshot().expect("published").finished_at.is_none());
+
+        drop(lock);
+
+        let after = snapshot().expect("a finished convergence is kept, not cleared");
+        assert!(after.finished_at.is_some(), "the ending is stamped");
+        assert_eq!(
+            after.targets[0].state,
+            ConvergeState::Applying,
+            "a target that never finished stays where it stopped, rather than being tidied to a \
+             state nothing observed"
+        );
+
+        // `mark` is addressed by run id, so a task that outlived its own run cannot write over a
+        // newer one — the same discipline the page's `pending` applies from the other side.
+        mark("run-2", "edge-1", ConvergeState::Returned);
+        assert_eq!(
+            snapshot().expect("still there").targets[0].state,
+            ConvergeState::Applying
+        );
+        mark("run-1", "edge-1", ConvergeState::Returned);
+        assert_eq!(
+            snapshot().expect("still there").targets[0].state,
+            ConvergeState::Returned
+        );
+
+        with_progress(|p| *p = None);
+    }
 
     fn target(id: &str, pool: &str) -> Target {
         Target {

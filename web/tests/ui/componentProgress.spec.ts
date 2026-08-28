@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// The align card's rows show what each site is doing about the upgrade (ADR-051 Inc.4 decision 18).
+// The components list shows what each site is doing about the upgrade (ADR-051 Inc.4 decision 18,
+// moved into the one components list by Inc.6).
 //
 // This exists for a seam nothing else in the repository reaches. The badge's label comes from
 // `system:pollers.upgradeStep.*`, a **different i18n namespace** from the rest of the Upgrade page:
@@ -30,36 +31,52 @@ import { defaultBodyFor, type Json } from '../support/openapi';
 function upgradeStatus(): Json {
   const body = defaultBodyFor('/api/v1/system/upgrade') as {
     current: { core_version: string };
-    poller_alignment: { pollers: unknown[]; dark_pools: string[]; downgrades: string[] };
+    components: unknown[];
+    poller_convergence: unknown;
   };
   body.current.core_version = '9.9.9';
-  body.poller_alignment = {
-    pollers: [
-      {
-        id: 'site-pulling',
-        version: '9.9.8',
-        progress: {
-          command: 'prefetch',
-          state: 'running',
-          step: 'pull',
-          message: 'pulling the image',
-        },
-      },
-      { id: 'site-quiet', version: '9.9.8', progress: null },
-      {
-        id: 'site-stuck',
-        version: '9.9.8',
-        progress: {
-          command: 'apply',
-          state: 'failed',
-          step: 'compose',
-          message: 'the site updater could not recreate the container',
-        },
-      },
-    ],
-    dark_pools: [],
-    downgrades: [],
-  };
+  const site = (id: string, progress: unknown) => ({
+    id,
+    kind: 'poller',
+    pool: 'default',
+    version: '9.9.8',
+    upgradable: true,
+    reason: null,
+    co_located: false,
+    moves_back: false,
+    live_in_pool: 3,
+    progress,
+  });
+  body.components = [
+    {
+      id: 'core',
+      kind: 'core',
+      pool: null,
+      version: '9.9.9',
+      upgradable: true,
+      reason: null,
+      co_located: false,
+      moves_back: false,
+      live_in_pool: 0,
+      progress: null,
+    },
+    site('site-pulling', {
+      command: 'prefetch',
+      state: 'running',
+      step: 'pull',
+      message: 'pulling the image',
+    }),
+    site('site-quiet', null),
+    site('site-stuck', {
+      command: 'apply',
+      state: 'failed',
+      step: 'compose',
+      message: 'the site updater could not recreate the container',
+    }),
+  ];
+  // The generated body would otherwise put a convergence on screen, which is a different card and
+  // not what this file is about.
+  body.poller_convergence = null;
   return body as unknown as Json;
 }
 
@@ -70,19 +87,20 @@ test.use({
   },
 });
 
-/** The rows of the align card, in order. Located by a poller id inside the card, so the release
- *  list further down the same page cannot be mistaken for it. */
+/** The rows of the components list, in order.
+ *
+ *  Located by the list's own class rather than by the card: since Inc.6 the release list and this
+ *  one are both `li.upgrade-release` inside the same card, so anything coarser would count rows
+ *  that are not sites and read as a healthy list of the wrong thing. */
 function alignRows(page: import('@playwright/test').Page) {
-  return page
-    .locator('.card', { has: page.locator('li:has-text("site-pulling")') })
-    .locator('li.upgrade-release');
+  return page.locator('ul.upgrade-components li.upgrade-release');
 }
 
 test('each row says what its own site is doing, and the silent one says nothing', async ({
   page,
 }) => {
   await page.goto('/settings/upgrade');
-  const rows = alignRows(page);
+  const rows = alignRows(page).filter({ hasNotText: 'core + web' });
   await expect(rows).toHaveCount(3);
 
   // Guard the guard: if `.badge` stops matching, an empty list must not read as "no raw keys".
@@ -117,6 +135,6 @@ test('the badge reads as Japanese in Japanese', async ({ page }) => {
   });
   await page.goto('/settings/upgrade');
 
-  const badge = alignRows(page).nth(0).locator('.badge');
+  const badge = alignRows(page).filter({ hasNotText: 'core + web' }).nth(0).locator('.badge');
   await expect(badge).toHaveText('取得中');
 });

@@ -4232,26 +4232,6 @@ export interface components {
             /** @description The release every target is being moved to — this core's own build. */
             target_tag: string;
         };
-        /**
-         * @description One poller the align button would move, with what it is doing about it right now.
-         *
-         *     `progress` is a **progress indicator and never a completion signal**. A site pulls its image
-         *     over whatever link it has, which is minutes; without this the operator who pressed the button
-         *     watches a card that does not change until a version flips, and cannot tell a site that is
-         *     working from one that is stuck. But it is carried on heartbeats and read by polling, so it goes
-         *     stale between them. **`version` is what says a site is done.**
-         */
-        AligningPoller: {
-            /** @description Sanitized poller id. */
-            id: string;
-            progress?: null | components["schemas"]["PollerUpgradeProgress"];
-            /**
-             * @description What it is running now. Never `null` in practice: a poller that has never reported a version
-             *     cannot be judged off-version and so is never in this set. Optional so it reads the same way
-             *     as every other row that names a build.
-             */
-            version?: string | null;
-        };
         /** @description One finding produced by an analysis (anomaly card / correlation pair / capacity / flap row). */
         AnalysisFinding: {
             detail: unknown;
@@ -4471,6 +4451,28 @@ export interface components {
         };
         /** @description A request to move this deployment to a particular release. */
         ApplyUpgrade: {
+            /**
+             * @description Whether to replace core, the WebUI and the co-located poller — everything in core's own
+             *     compose project. Defaults to **true**, which is what a request that omits it has always
+             *     meant, so an older client and the MCP surface keep working unchanged.
+             *
+             *     `false` moves only the pollers named below, and then `target_tag` must be the version this
+             *     core is already running: N/N-1 promises new-core-with-old-poller and says nothing about the
+             *     reverse (ADR-009), so a poller may not be sent to a release core has not reached.
+             */
+            include_core?: boolean;
+            /**
+             * @description Which remote-site pollers to move. **Absent means every poller that can move**, which is
+             *     what this route did before the field existed; an empty array means none.
+             *
+             *     That distinction is the reason this is nullable rather than a plain list: `[]` and "not
+             *     specified" have to be different answers, or unchecking every row would silently upgrade the
+             *     whole fleet.
+             *
+             *     Ids that name nothing are ignored. Core is not addressable here — it is moved by
+             *     `include_core`, so naming it in this list does nothing.
+             */
+            pollers?: string[] | null;
             /**
              * @description The release tag to move to, e.g. `v0.2.2`. Must be a published release tag; the repository
              *     it is fetched from is fixed by the deployment and cannot be set here.
@@ -4987,6 +4989,74 @@ export interface components {
             since_version: number;
         };
         /**
+         * @description Which kind of thing a row of the components list describes.
+         *
+         *     An enum rather than a string because **the WebUI builds a `t()` key from it**, which is the
+         *     shape a raw string gets wrong: a union nothing iterates lets a new variant reach the operator
+         *     as a raw key with EN/JA parity still passing.
+         * @enum {string}
+         */
+        ComponentKind: "core" | "poller";
+        /**
+         * @description Why a component is not an ordinary, independently selectable row.
+         *
+         *     `null` is the common case. Every value here is rendered **in the row**, never in a tooltip: a
+         *     reason an operator can only reach by hovering is a reason a touch device never shows.
+         * @enum {string}
+         */
+        ComponentReason: "no_site_updater" | "co_located" | "offline";
+        /**
+         * @description One row of the components list: something this deployment is made of, and what it runs.
+         *
+         *     Replaces the two types that answered the same question from opposite ends — one said which
+         *     pollers an upgrade carried and which it stranded, the other said which were off core's build.
+         *     Both were views of one table, and keeping them apart was two chances to disagree about which
+         *     poller a row was.
+         *
+         *     **Deliberately does not say whether the row is already on the target.** That depends on which
+         *     release the operator picked, which this does not know; it is a string comparison the caller
+         *     makes.
+         */
+        ComponentRow: {
+            /**
+             * @description It shares core's compose project, so it follows core's own checkbox and cannot be
+             *     unselected on its own.
+             */
+            co_located: boolean;
+            /** @description Sanitized poller id, or `core` for the core+WebUI row. */
+            id: string;
+            /** @description Which kind of thing this is. */
+            kind: components["schemas"]["ComponentKind"];
+            /**
+             * @description How many live pollers this row's pool has, including this one; `0` for core.
+             *
+             *     Carried so the caller can say **which pools go dark for the selection actually made**. It
+             *     used to be a `dark_pools` field computed from "everything that could move", which stops
+             *     being true the moment a row can be unchecked — and a warning that does not follow the
+             *     checkboxes is worse than none, because it reads the same when it matters.
+             */
+            live_in_pool: number;
+            /**
+             * @description It is **ahead** of this core, so moving it to core's build is a downgrade.
+             *
+             *     Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
+             *     comes after `0.2.9`, and this repository already keeps that comparison in one place because
+             *     the other thing deciding from it is whether a rollback is allowed.
+             */
+            moves_back: boolean;
+            /** @description The pool it serves; `null` for core, which serves none. */
+            pool?: string | null;
+            progress?: null | components["schemas"]["PollerUpgradeProgress"];
+            reason?: null | components["schemas"]["ComponentReason"];
+            /**
+             * @description Whether an upgrade can move it at all. A `false` row is still listed — dropping it would
+             *     read as "that poller is gone" rather than "that poller cannot come".
+             */
+            upgradable: boolean;
+            /** @description What it is running now, when it has reported a version. */
+            version?: string | null;
+        };
+        /**
          * @description One `field op value` test. `value` is always a string so the config has a single JSON shape;
          *     [`compile`] parses it according to the field's type.
          */
@@ -5039,6 +5109,59 @@ export interface components {
             version: number;
             /** @description The Yagra version that produced it. */
             yagra_version: string;
+        };
+        /**
+         * @description Where one poller has got to in a convergence.
+         *
+         *     An enum rather than a string because **the WebUI builds a `t()` key from it**: a union nothing
+         *     iterates lets a new variant reach the operator as a raw key with EN/JA parity still passing
+         *     (`.claude/rules/extensibility.md` §4).
+         * @enum {string}
+         */
+        ConvergeState: "waiting" | "prefetching" | "applying" | "returned" | "failed" | "skipped";
+        /**
+         * @description A convergence, running or finished.
+         *
+         *     Held in memory, and that is a deliberate limit rather than an oversight: the case that matters —
+         *     core upgrades itself, then converges the fleet — starts in the process that reports this, so it
+         *     is covered. A core restart *during* a convergence loses the record. Persisting it would be a
+         *     table and a migration for a value whose whole life is minutes.
+         *
+         *     ⚠️ **Under HA only the leader has one.** A follower answers `null`, which reads as "nothing is
+         *     happening". HA is off by default, so this is a difference the lab cannot see.
+         */
+        Convergence: {
+            /**
+             * Format: int64
+             * @description Unix seconds it ended; `null` while it is still going.
+             */
+            finished_at?: number | null;
+            /** @description Who asked for it. */
+            requested_by: string;
+            /** @description The upgrade run this belongs to; the same id every site stamps its own audit line with. */
+            run_id: string;
+            /**
+             * Format: int64
+             * @description Unix seconds it began.
+             */
+            started_at: number;
+            /** @description The release every target is being moved to. */
+            tag: string;
+            /** @description Every poller in the run, in the order the queues take them. */
+            targets: components["schemas"]["ConvergingTarget"][];
+        };
+        /** @description One poller of a convergence, and where it has got to. */
+        ConvergingTarget: {
+            /** @description Sanitized poller id. */
+            id: string;
+            /**
+             * @description The pool whose queue it is in. Pools converge in parallel, so **more than one row can be
+             *     `applying` at once** — a screen that says "now upgrading <one poller>" is wrong on any
+             *     deployment with two pools.
+             */
+            pool: string;
+            /** @description What it is doing about this run. */
+            state: components["schemas"]["ConvergeState"];
         };
         /** @description Request body to launch an analysis (launch drawer / report config bar). */
         CreateAnalysisJob: {
@@ -7769,39 +7892,6 @@ export interface components {
             /** @description One of `assigned`, `legacy_fanout`, `pending`, `meraki`, `unknown`. */
             state: string;
         };
-        /**
-         * @description What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4 decision 17).
-         *
-         *     **One type rather than two loose fields, because the two facts are about one operation** and an
-         *     operator reads them together: which sites move, and which pools stop being monitored while they
-         *     do. Split across the response they would drift apart the first time either was computed from a
-         *     different set — which is exactly the bug this replaced, where the dark-pool list was derived from
-         *     every cap-holder rather than from the ones actually being moved.
-         */
-        PollerAlignment: {
-            /**
-             * @description Pools left with no live poller for the length of one recreate. Named **before** the press:
-             *     `pool_coverage`'s 300-second debounce is the whole budget and no maintenance window silences
-             *     it, so this is the one consequence an operator cannot discover afterwards without an alert.
-             */
-            dark_pools: string[];
-            /**
-             * @description Of `pollers`, the ones **ahead** of core — which this operation moves *back*.
-             *
-             *     Computed here and not in the WebUI on purpose: ordering versions is semver, where `0.2.10`
-             *     comes after `0.2.9`, and this repository already keeps that comparison in one place because
-             *     the other thing deciding from it is whether a rollback is allowed. A second implementation
-             *     in TypeScript would be a second answer to "which is newer".
-             */
-            downgrades: string[];
-            /**
-             * @description The pollers it would move, what each runs now, and what its site updater is doing about it.
-             *     Empty means the fleet is aligned — there is no "nobody asked" here, unlike
-             *     [`PollerUpgradePlan`], because core always knows its own version and always has a live
-             *     registry.
-             */
-            pollers: components["schemas"]["AligningPoller"][];
-        };
         /** @description Where a poller attaches to the monitored network. */
         PollerAnchorRequest: {
             /**
@@ -7958,36 +8048,6 @@ export interface components {
              *     upgrades, and can be changed there without waiting for a new bundle.
              */
             self_upgrade?: boolean | null;
-        };
-        /**
-         * @description Who an upgrade carries along, and who it leaves behind.
-         *
-         *     `null` on the response rather than an empty plan when the updater has not said which pollers
-         *     share its compose project: "no poller is left behind" and "nobody asked" are different answers,
-         *     and only one of them is safe to render as a reassuring zero (the lesson ADR-045 paid for).
-         */
-        PollerUpgradePlan: {
-            /**
-             * @description Pools that lose monitoring for the length of one recreate, **while core is up**.
-             *
-             *     A pool with two or more live pollers never appears here: the rolling upgrade takes one out at
-             *     a time, so the survivors carry its nodes (`leaving` hands them over in about a second). A
-             *     pool with a single remote poller has nobody to hand to, and its whole budget is
-             *     `pool_coverage`'s 300-second debounce — which no maintenance window silences, deliberately.
-             *
-             *     ⚠️ **A pool whose only poller is co-located is deliberately absent**, even though it does go
-             *     down. It goes down *with core*, so it is not a fact that distinguishes one press from
-             *     another — and listing it would fire on the commonest deployment there is, which is how a
-             *     warning stops being read.
-             */
-            dark_pools: string[];
-            /** @description Pollers that stay on their current build until someone upgrades them by hand. */
-            manual: components["schemas"]["PollerLag"][];
-            /**
-             * @description Pollers this operation replaces: the ones in core's own compose project, plus any that
-             *     advertise `CAP_SELF_UPGRADE`.
-             */
-            with_core: string[];
         };
         /**
          * @description A site updater's last word about an upgrade, as this API reports it.
@@ -9658,6 +9718,22 @@ export interface components {
         /** @description The state of the upgrade mechanism and of this deployment's schema. */
         UpgradeStatusResponse: {
             available?: null | components["schemas"]["AvailableVersions"];
+            /**
+             * @description Everything this deployment is made of — core and every poller — with what each runs and
+             *     whether an upgrade can move it (ADR-051 Inc.6).
+             *
+             *     Replaces the two fields that answered the same question from opposite ends (`pollers`, which
+             *     said who an upgrade carried and who it stranded, and `poller_alignment`, which said who was
+             *     off core's build). They were views of one table and could disagree about which poller a row
+             *     was; a selection dialog needs the table.
+             *
+             *     **There is no "nobody asked" state here.** The old `pollers` field was `null` until the
+             *     central updater named its own compose project, because without that list core cannot tell a
+             *     co-located poller from a remote one. That is now a property of a *row* (`co_located`), so a
+             *     deployment with no central updater still gets a full list — and still gets the button, since
+             *     aligning remote sites touches nothing on this host.
+             */
+            components: components["schemas"]["ComponentRow"][];
             /** @description The running build. */
             current: components["schemas"]["RunningBuild"];
             /**
@@ -9671,22 +9747,7 @@ export interface components {
              *     Excludes the running version. Empty when the updater has found nothing.
              */
             offers: components["schemas"]["ReleaseOffer"][];
-            /**
-             * @description What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4): which
-             *     self-upgrading pollers are off `current.core_version`, and which pools that operation would
-             *     leave uncovered while it runs.
-             *
-             *     **Not derived from `pollers`, and that is the point.** That plan is `null` until the central
-             *     updater has named its own compose project, while this needs only the live registry and
-             *     core's own version. A deployment with no central updater at all still has remote sites worth
-             *     aligning, and the button that does it has to be renderable there.
-             *
-             *     An empty `pollers` means aligned — unlike `pollers` above, there is no third state here,
-             *     because "nobody asked" cannot arise: core always knows its own version and always has a
-             *     live registry.
-             */
-            poller_alignment: components["schemas"]["PollerAlignment"];
-            pollers?: null | components["schemas"]["PollerUpgradePlan"];
+            poller_convergence?: null | components["schemas"]["Convergence"];
             /** @description Applied migrations and the compatibility floor they imply. */
             schema: components["schemas"]["SchemaState"];
             /** @description The updater container's own state. */

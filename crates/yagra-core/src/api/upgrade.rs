@@ -209,24 +209,34 @@ pub(crate) struct UpgradeStatusResponse {
     offers: Vec<crate::upgrade::ReleaseOffer>,
     /// The most recent run, finished or in flight; `null` when none has ever been requested.
     last_run: Option<RunStatus>,
-    /// Which pollers this operation would replace and which it would leave on their current build
-    /// (ADR-051). `null` when the updater has not reported the pollers in its own compose project —
-    /// core cannot tell a co-located poller from a remote one on its own, and an invented answer
-    /// would read as fact.
-    pollers: Option<crate::upgrade::PollerUpgradePlan>,
-    /// What `POST /api/v1/system/upgrade/pollers` would do right now (ADR-051 Inc.4): which
-    /// self-upgrading pollers are off `current.core_version`, and which pools that operation would
-    /// leave uncovered while it runs.
+    /// Everything this deployment is made of — core and every poller — with what each runs and
+    /// whether an upgrade can move it (ADR-051 Inc.6).
     ///
-    /// **Not derived from `pollers`, and that is the point.** That plan is `null` until the central
-    /// updater has named its own compose project, while this needs only the live registry and
-    /// core's own version. A deployment with no central updater at all still has remote sites worth
-    /// aligning, and the button that does it has to be renderable there.
+    /// Replaces the two fields that answered the same question from opposite ends (`pollers`, which
+    /// said who an upgrade carried and who it stranded, and `poller_alignment`, which said who was
+    /// off core's build). They were views of one table and could disagree about which poller a row
+    /// was; a selection dialog needs the table.
     ///
-    /// An empty `pollers` means aligned — unlike `pollers` above, there is no third state here,
-    /// because "nobody asked" cannot arise: core always knows its own version and always has a
-    /// live registry.
-    poller_alignment: crate::upgrade::PollerAlignment,
+    /// **There is no "nobody asked" state here.** The old `pollers` field was `null` until the
+    /// central updater named its own compose project, because without that list core cannot tell a
+    /// co-located poller from a remote one. That is now a property of a *row* (`co_located`), so a
+    /// deployment with no central updater still gets a full list — and still gets the button, since
+    /// aligning remote sites touches nothing on this host.
+    components: Vec<crate::upgrade::ComponentRow>,
+    /// The poller convergence this core is running, or the last one it ran; `null` when it has run
+    /// none (ADR-051 Inc.6).
+    ///
+    /// **The half of an upgrade that had no progress at all.** core's own run reports through
+    /// `last_run` and ends at `verify`; everything after that — a site pulling over a WAN link, one
+    /// container recreated at a time per pool — was invisible, so an operator who pressed the button
+    /// watched a page that did not change for as long as half an hour.
+    ///
+    /// Kept after it finishes, which is what puts **"this site did not come back"** on a screen for
+    /// the first time: a site killed by its own upgrade drops off the live registry, so it used to
+    /// vanish from the list and the deployment reported itself aligned.
+    ///
+    /// ⚠️ In memory, so a core restart loses it — and under HA only the leader has one.
+    poller_convergence: Option<crate::poller_upgrade::Convergence>,
 }
 
 /// A request to move this deployment to a particular release.
@@ -235,6 +245,31 @@ pub(crate) struct ApplyUpgrade {
     /// The release tag to move to, e.g. `v0.2.2`. Must be a published release tag; the repository
     /// it is fetched from is fixed by the deployment and cannot be set here.
     target_tag: String,
+    /// Whether to replace core, the WebUI and the co-located poller — everything in core's own
+    /// compose project. Defaults to **true**, which is what a request that omits it has always
+    /// meant, so an older client and the MCP surface keep working unchanged.
+    ///
+    /// `false` moves only the pollers named below, and then `target_tag` must be the version this
+    /// core is already running: N/N-1 promises new-core-with-old-poller and says nothing about the
+    /// reverse (ADR-009), so a poller may not be sent to a release core has not reached.
+    #[serde(default = "yes")]
+    include_core: bool,
+    /// Which remote-site pollers to move. **Absent means every poller that can move**, which is
+    /// what this route did before the field existed; an empty array means none.
+    ///
+    /// That distinction is the reason this is nullable rather than a plain list: `[]` and "not
+    /// specified" have to be different answers, or unchecking every row would silently upgrade the
+    /// whole fleet.
+    ///
+    /// Ids that name nothing are ignored. Core is not addressable here — it is moved by
+    /// `include_core`, so naming it in this list does nothing.
+    #[serde(default)]
+    pollers: Option<Vec<String>>,
+}
+
+/// `serde(default)` needs a function, and the default for `include_core` is not `bool`'s.
+const fn yes() -> bool {
+    true
 }
 
 /// The accepted run.
@@ -277,17 +312,18 @@ async fn get_upgrade(
         })
 }
 
-/// The live poller fleet, reduced to what the upgrade view asks of it.
+/// The poller fleet, reduced to what the upgrade view asks of it.
 ///
-/// Live registry only: an upgrade acts on pollers that are running now, and a poller core has not
-/// heard from cannot be handed a release whatever the durable inventory last recorded about it.
+/// ⚠️ **Offline pollers are included, and used to be filtered out here.** An upgrade may only act on
+/// a poller that is running — that filter still exists, but it belongs where the acting happens.
+/// Applying it to the *view* meant a site that died during its own upgrade dropped out of the list
+/// and the deployment reported itself aligned (ADR-051 Inc.6).
 pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::PollerBuild> {
     let now = std::time::Instant::now();
     admin
         .coordinator
         .poller_views(now)
         .into_iter()
-        .filter(|v| v.online)
         .map(|v| crate::upgrade::PollerBuild {
             // Whatever its site updater last said, carried on the build so the set that decides
             // *who moves* and the set that shows *how each is going* are one list and cannot
@@ -298,6 +334,7 @@ pub(crate) fn poller_builds(admin: &super::AdminState) -> Vec<crate::upgrade::Po
                 .map(crate::upgrade::PollerUpgradeProgress::from),
             self_upgrades: v.caps.iter().any(|c| c == yagra_bus::CAP_SELF_UPGRADE),
             version: (!v.version.is_empty()).then_some(v.version),
+            online: v.online,
             pool: v.pool,
             id: v.id,
         })
@@ -323,15 +360,19 @@ pub(crate) async fn upgrade_status(
     let fresh = beat.as_ref().is_some_and(|h| {
         crate::upgrade::heartbeat_is_fresh(h.written_at, h.check_interval_secs, now)
     });
-    // Who this operation would carry and who it would strand. `None` — not an empty plan — while the
-    // updater has not named the pollers in its own project, because core has no other way to tell a
-    // co-located poller from a remote one and a wrong answer here is worse than no answer.
-    let plan = beat
-        .as_ref()
-        .and_then(|h| h.local_pollers.as_ref())
-        .map(|local| crate::upgrade::poller_upgrade_plan(fleet, local));
+    // Whether the central updater has named the pollers in its own compose project. `None` is not
+    // "no co-located poller" — it is "core cannot tell", which is why co-location is a property of a
+    // row rather than a shape of the whole answer (ADR-051 Inc.6).
+    let local = beat.as_ref().and_then(|h| h.local_pollers.as_ref());
+    let mechanism_ready = beat.is_some() && fresh && switched_on;
+    let components = crate::upgrade::components(
+        fleet,
+        local.map(Vec::as_slice),
+        p.core_version,
+        mechanism_ready,
+    );
     Ok(UpgradeStatusResponse {
-        enabled: beat.is_some() && fresh && switched_on,
+        enabled: mechanism_ready,
         upgrade_enabled: switched_on,
         updater: UpdaterInfo {
             installed: upgrade.installed(),
@@ -362,12 +403,14 @@ pub(crate) async fn upgrade_status(
             // Only pollers this operation leaves behind can be stranded on an unsupported version,
             // and an unreported project means an empty slice — the gate stays open rather than
             // guessing (see `PollerUpgradePlan`).
-            &plan.as_ref().map_or_else(Vec::new, |p| {
-                p.manual.iter().filter_map(|m| m.version.clone()).collect()
-            }),
+            &components
+                .iter()
+                .filter(|r| r.kind == crate::upgrade::ComponentKind::Poller && !r.upgradable)
+                .filter_map(|r| r.version.clone())
+                .collect::<Vec<_>>(),
         ),
-        pollers: plan,
-        poller_alignment: crate::upgrade::poller_alignment(fleet, p.core_version),
+        components,
+        poller_convergence: crate::poller_upgrade::snapshot(),
         schema,
         last_run: upgrade.last_run(),
     })
@@ -391,16 +434,63 @@ pub(crate) async fn upgrade_status(
 )]
 async fn apply_upgrade(
     _auth: UpgradeWrite,
-    upgrade: Upgrade,
     admin: Admin,
     caller: Option<Caller>,
+    State(st): State<ApiState>,
     Json(body): Json<ApplyUpgrade>,
 ) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let tag = body.target_tag.trim();
     let now = super::util::now_unix_s();
-    preflight(&upgrade, tag, now).await?;
     let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
     let id = crate::upgrade::new_run_id();
+
+    if !body.include_core {
+        // Pollers only. Nothing on this host restarts, so the central updater is not needed — and
+        // demanding it would refuse the operation on exactly the deployments that have remote sites
+        // and no updater of their own. This is why the `Upgrade` extractor is not in the signature:
+        // absence is a normal branch here, the same judgement `POST /auth/login` makes about
+        // `Ldap`.
+        if tag.trim_start_matches('v') != env!("CARGO_PKG_VERSION") {
+            return Err(ApiError::bad_request(
+                "core_not_on_target",
+                "a poller may only be moved to the release this core is running; upgrade core first",
+            ));
+        }
+        let bus = st.upgrade_bus.clone().ok_or_else(|| {
+            ApiError::unavailable(
+                "bus_unavailable",
+                "this deployment has no bus, so no poller can be reached",
+            )
+        })?;
+        start_convergence(&admin, bus, tag, &id, &by, body.pollers.as_deref()).await?;
+        return Ok((
+            StatusCode::ACCEPTED,
+            Json(RunAccepted {
+                id,
+                target_tag: tag.to_owned(),
+                // None, and not a failure to open one: no container on this host is recreated, so
+                // there is nothing here to silence.
+                maintenance_window_id: None,
+            }),
+        ));
+    }
+
+    let upgrade = st.upgrade.clone().ok_or_else(ApiError::admin_unavailable)?;
+    preflight(&upgrade, tag, now).await?;
+    // 🚨 Record the selection **before** handing the request over, because after that this process
+    // has seconds to live. The core that converges the pollers is the one that comes back, and
+    // without this file it recomputes the targets itself — moving the very rows the operator
+    // unchecked. Best effort: a failure here costs the selection, not the upgrade, and losing it
+    // degrades to "move every poller that can move", which is what this route did before the field
+    // existed.
+    if let Some(sel) = body.pollers.as_deref() {
+        if let Err(e) = upgrade.write_poller_selection(&id, sel) {
+            tracing::warn!(
+                error = %e, run = %id,
+                "could not record which pollers this upgrade may move; every poller that can move will be upgraded"
+            );
+        }
+    }
     Ok((
         StatusCode::ACCEPTED,
         Json(dispatch(&upgrade, &admin, Command::Apply, &id, tag, &by, now).await?),
@@ -514,18 +604,63 @@ async fn align_pollers(
         )
     })?;
     let tag = format!("v{}", env!("CARGO_PKG_VERSION"));
-    let fleet = poller_builds(&admin);
-    // The same call `GET` answers with, so the confirmation the operator read names exactly the
-    // sites this acts on. Two computations here would be two chances to disagree about who moves.
-    let alignment = crate::upgrade::poller_alignment(&fleet, env!("CARGO_PKG_VERSION"));
-    let behind = alignment.pollers;
-    if behind.is_empty() {
+    let id = crate::upgrade::new_run_id();
+    let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
+    // No selection: this route is "bring everything that can move onto my build", which is what it
+    // has always meant. `POST /system/upgrade` with `include_core: false` is the same call with one,
+    // and they share `start_convergence` so the two doors cannot come to disagree about who moves.
+    let started = start_convergence(&admin, bus, &tag, &id, &by, None).await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(AlignAccepted {
+            id,
+            target_tag: tag,
+            pollers: started.pollers,
+            dark_pools: started.dark_pools,
+        }),
+    ))
+}
+
+/// What a convergence was started with, for whichever route asked for it.
+struct Converging {
+    pollers: Vec<crate::upgrade::PollerLag>,
+    dark_pools: Vec<String>,
+}
+
+/// Publish an upgrade to a set of remote-site pollers and start the convergence. core is untouched.
+///
+/// **One implementation, two doors.** `POST /system/upgrade` reaches it when `include_core` is
+/// false, and `POST /system/upgrade/pollers` reaches it with no selection at all. That second route
+/// predates the selection and is kept because removing it would break a published contract — but it
+/// must not become a second answer to "which pollers move", which is the drift
+/// `.claude/rules/extensibility.md` §3 is about.
+///
+/// `selected` is `None` for "every poller that can move". A poller already on `tag` is never in the
+/// set whatever the caller asked for: recreating a container for no version change is exactly what
+/// a second press would do, and [`crate::poller_upgrade::try_begin`] refuses that for the same
+/// reason one layer down.
+async fn start_convergence(
+    admin: &Admin,
+    bus: std::sync::Arc<dyn yagra_bus::UpgradeBus>,
+    tag: &str,
+    run_id: &str,
+    by: &str,
+    selected: Option<&[String]>,
+) -> Result<Converging, ApiError> {
+    let fleet = poller_builds(admin);
+    // `local` is `None` here rather than the updater's list, and that is not a shortcut: this route
+    // must work on a deployment with no central updater at all, and a co-located poller does not
+    // advertise `CAP_SELF_UPGRADE` (only core is given `YAGRA_UPGRADE_DIR`), so `movable_to`
+    // excludes it either way.
+    let rows = crate::upgrade::components(&fleet, None, env!("CARGO_PKG_VERSION"), true);
+    let chosen = crate::upgrade::movable_to(&rows, tag, selected);
+    if chosen.is_empty() {
         // A 409 rather than an empty 202, because "nothing to do" and "done" are answers a page
         // must render differently — and because a 202 here would leave the operator watching for a
         // convergence that never started.
         return Err(ApiError::conflict(
             "pollers_aligned",
-            "every poller that can replace itself is already on this build",
+            "no poller that can replace itself is off this build",
         ));
     }
     // One lock with the post-upgrade convergence (ADR-051 Inc.4 decision 17). Held by the spawned
@@ -536,12 +671,28 @@ async fn align_pollers(
             "a poller upgrade is already running; wait for it to finish",
         )
     })?;
+    let ids: Vec<&str> = chosen.iter().map(|r| r.id.as_str()).collect();
+    let ack = Converging {
+        // Down to id + version: what each site *does* next is answered by `GET`, from heartbeats
+        // that have not arrived yet at this point in the request.
+        pollers: chosen
+            .iter()
+            .map(|r| crate::upgrade::PollerLag {
+                id: r.id.clone(),
+                version: r.version.clone(),
+            })
+            .collect(),
+        // Computed from what was actually chosen, not from everything that could move: a pool with
+        // two pollers where only one was ticked does not go dark, and a warning that does not
+        // follow the checkboxes reads the same when it matters as when it does not.
+        dark_pools: crate::upgrade::dark_pools(&fleet, &ids),
+    };
     let now = std::time::Instant::now();
     let targets: Vec<crate::poller_upgrade::Target> = admin
         .coordinator
         .poller_views(now)
         .into_iter()
-        .filter(|v| behind.iter().any(|b| b.id == v.id))
+        .filter(|v| ids.contains(&v.id.as_str()))
         .map(|v| crate::poller_upgrade::Target {
             id: v.id,
             pool: v.pool,
@@ -549,29 +700,13 @@ async fn align_pollers(
             incarnation: v.incarnation,
         })
         .collect();
-    let id = crate::upgrade::new_run_id();
-    let by = caller.map_or_else(|| "unknown".to_owned(), |c| c.0.username.clone());
-    let accepted = AlignAccepted {
-        id: id.clone(),
-        target_tag: tag.clone(),
-        // Down to id + version: see the field's own note. What each site *does* next is answered by
-        // `GET`, from heartbeats that have not arrived yet at this point in the request.
-        pollers: behind
-            .iter()
-            .map(|p| crate::upgrade::PollerLag {
-                id: p.id.clone(),
-                version: p.version.clone(),
-            })
-            .collect(),
-        dark_pools: alignment.dark_pools,
-    };
     let run = crate::poller_upgrade::Run {
         bus,
         coordinator: admin.coordinator.clone(),
         audit: admin.audit.clone(),
-        tag,
-        run_id: id,
-        requested_by: by,
+        tag: tag.to_owned(),
+        run_id: run_id.to_owned(),
+        requested_by: by.to_owned(),
     };
     // Detached from the request on purpose: a convergence outlives any sane HTTP timeout — the
     // prefetch budget alone is 15 minutes. Plain `tokio::spawn`, the same shape an analysis job and
@@ -582,7 +717,7 @@ async fn align_pollers(
     tokio::spawn(async move {
         crate::poller_upgrade::converge(run, targets, lock).await;
     });
-    Ok((StatusCode::ACCEPTED, Json(accepted)))
+    Ok(ack)
 }
 
 /// Where an uploaded archive is going.
@@ -927,6 +1062,43 @@ async fn dispatch(
 
 #[cfg(test)]
 mod tests {
+    /// A body that names only a tag still means what it always meant: everything.
+    ///
+    /// 🚨 N/N-1 rests on `#[serde(default)]` discipline and nothing lints it
+    /// (`.claude/rules/extensibility.md` §6). Two fields were added to this body; an older client,
+    /// the MCP surface and every script that has ever posted `{"target_tag": …}` send neither. If
+    /// `include_core` stopped defaulting to true, the whole upgrade would become a poller-only one
+    /// and core would never move — silently, with a 202 in hand.
+    ///
+    /// The empty list is asserted beside it because it is the distinction that made this field
+    /// nullable: `[]` and "not specified" have to be different answers, or unticking every row in
+    /// the dialog would upgrade the whole fleet.
+    #[test]
+    fn an_apply_body_without_the_selection_still_means_everything() {
+        let bare: super::ApplyUpgrade =
+            serde_json::from_str(r#"{"target_tag":"v9.9.9"}"#).expect("parse");
+        assert!(bare.include_core, "an omitted include_core moves core");
+        assert!(
+            bare.pollers.is_none(),
+            "an omitted list moves every poller that can move"
+        );
+
+        let none: super::ApplyUpgrade =
+            serde_json::from_str(r#"{"target_tag":"v9.9.9","pollers":[]}"#).expect("parse");
+        assert_eq!(
+            none.pollers,
+            Some(Vec::new()),
+            "an empty list moves no poller, and must not read as an omitted one"
+        );
+
+        let explicit: super::ApplyUpgrade = serde_json::from_str(
+            r#"{"target_tag":"v9.9.9","include_core":false,"pollers":["edge-1"]}"#,
+        )
+        .expect("parse");
+        assert!(!explicit.include_core);
+        assert_eq!(explicit.pollers, Some(vec!["edge-1".to_owned()]));
+    }
+
     use super::super::tests_support::{private_state, public_state};
     use super::ApiState;
     use crate::upgrade::BundleError;
