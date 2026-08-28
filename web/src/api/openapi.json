@@ -21837,7 +21837,7 @@
       },
       "ComponentKind": {
         "type": "string",
-        "description": "Which kind of thing a row of the components list describes.\n\nAn enum rather than a string because **the WebUI builds a `t()` key from it**, which is the\nshape a raw string gets wrong: a union nothing iterates lets a new variant reach the operator\nas a raw key with EN/JA parity still passing.",
+        "description": "Which kind of thing a row of the components list describes.",
         "enum": [
           "core",
           "poller"
@@ -21854,7 +21854,7 @@
       },
       "ComponentRow": {
         "type": "object",
-        "description": "One row of the components list: something this deployment is made of, and what it runs.\n\nReplaces the two types that answered the same question from opposite ends — one said which\npollers an upgrade carried and which it stranded, the other said which were off core's build.\nBoth were views of one table, and keeping them apart was two chances to disagree about which\npoller a row was.\n\n**Deliberately does not say whether the row is already on the target.** That depends on which\nrelease the operator picked, which this does not know; it is a string comparison the caller\nmakes.",
+        "description": "One row of the components list: something this deployment is made of, and what it runs.\n\n**Deliberately does not say whether the row is already on the target.** That depends on which\nrelease the operator picked, which this does not know; it is a string comparison the caller\nmakes.",
         "required": [
           "id",
           "kind",
@@ -22112,7 +22112,7 @@
       },
       "ConvergeState": {
         "type": "string",
-        "description": "Where one poller has got to in a convergence.\n\nAn enum rather than a string because **the WebUI builds a `t()` key from it**: a union nothing\niterates lets a new variant reach the operator as a raw key with EN/JA parity still passing\n(`.claude/rules/extensibility.md` §4).",
+        "description": "Where one poller has got to in a convergence.",
         "enum": [
           "waiting",
           "prefetching",
@@ -32402,7 +32402,7 @@
       },
       "UpgradeProgressCommand": {
         "type": "string",
-        "description": "Which half of an upgrade a site is in, as this API reports it.\n\nAn enum rather than a string because **the WebUI builds a `t()` key from it**\n(`pollers.upgradeStep.<command>`), which is the shape `extensibility.md` §4 is about: a raw\nstring gives a union nothing iterates, so a new variant reaches the operator as a raw key with\nEN/JA parity still passing. `web/src/i18nEnumKeys.test.ts` carries its row.",
+        "description": "Which half of an upgrade a site is in, as this API reports it.",
         "enum": [
           "prefetch",
           "apply",

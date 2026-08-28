@@ -166,11 +166,12 @@ pub fn try_begin() -> Option<ConvergeGuard> {
         .then_some(ConvergeGuard(()))
 }
 
+// Why it is an enum rather than a string: the WebUI builds a `t()` key from it, and a union
+// nothing iterates lets a new variant reach the operator as a raw key with EN/JA parity still
+// passing (`extensibility.md` §4). In `//` because a `///` on a `ToSchema` is published verbatim
+// to API clients, and where this repository keeps its conventions is not a fact about the API —
+// the file it named is gitignored, so a client had nothing to look at.
 /// Where one poller has got to in a convergence.
-///
-/// An enum rather than a string because **the WebUI builds a `t()` key from it**: a union nothing
-/// iterates lets a new variant reach the operator as a raw key with EN/JA parity still passing
-/// (`.claude/rules/extensibility.md` §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConvergeState {

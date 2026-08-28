@@ -4990,10 +4990,6 @@ export interface components {
         };
         /**
          * @description Which kind of thing a row of the components list describes.
-         *
-         *     An enum rather than a string because **the WebUI builds a `t()` key from it**, which is the
-         *     shape a raw string gets wrong: a union nothing iterates lets a new variant reach the operator
-         *     as a raw key with EN/JA parity still passing.
          * @enum {string}
          */
         ComponentKind: "core" | "poller";
@@ -5007,11 +5003,6 @@ export interface components {
         ComponentReason: "no_site_updater" | "co_located" | "offline";
         /**
          * @description One row of the components list: something this deployment is made of, and what it runs.
-         *
-         *     Replaces the two types that answered the same question from opposite ends — one said which
-         *     pollers an upgrade carried and which it stranded, the other said which were off core's build.
-         *     Both were views of one table, and keeping them apart was two chances to disagree about which
-         *     poller a row was.
          *
          *     **Deliberately does not say whether the row is already on the target.** That depends on which
          *     release the operator picked, which this does not know; it is a string comparison the caller
@@ -5112,10 +5103,6 @@ export interface components {
         };
         /**
          * @description Where one poller has got to in a convergence.
-         *
-         *     An enum rather than a string because **the WebUI builds a `t()` key from it**: a union nothing
-         *     iterates lets a new variant reach the operator as a raw key with EN/JA parity still passing
-         *     (`.claude/rules/extensibility.md` §4).
          * @enum {string}
          */
         ConvergeState: "waiting" | "prefetching" | "applying" | "returned" | "failed" | "skipped";
@@ -9702,11 +9689,6 @@ export interface components {
         };
         /**
          * @description Which half of an upgrade a site is in, as this API reports it.
-         *
-         *     An enum rather than a string because **the WebUI builds a `t()` key from it**
-         *     (`pollers.upgradeStep.<command>`), which is the shape `extensibility.md` §4 is about: a raw
-         *     string gives a union nothing iterates, so a new variant reaches the operator as a raw key with
-         *     EN/JA parity still passing. `web/src/i18nEnumKeys.test.ts` carries its row.
          * @enum {string}
          */
         UpgradeProgressCommand: "prefetch" | "apply" | "other";
