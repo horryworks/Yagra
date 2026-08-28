@@ -7,6 +7,7 @@
 
 import type { TFunction } from 'i18next';
 import type { ColumnFilterSpec } from '../lib/columnFilter';
+import { poolValuesOf } from '../lib/poolAdmin';
 import type { PollerInfo } from '../types/api';
 
 /** The two states a poller reports. A UI-owned union: the backend serializes `status` as a bare
@@ -41,10 +42,14 @@ export function pollerFilters(
       containsSemantics: 'substring',
       placeholder: t('pollers.cols.poller'),
     },
+    // ⚠️ Reads **both** the reported pool and a recorded destination (`lib/poolAdmin.ts`), so a
+    // poller on its way to a pool appears under it. That is what somebody asking "who serves
+    // tokyo" wants, and the row's own pending badge is what stops it reading as "already there".
+    // The pool cards in the strip write this same filter — one state, two ways to set it.
     pool: {
       kind: 'enum',
       options: pools.map((p) => ({ value: p, label: p })),
-      readValue: (p) => p.pool,
+      readValue: poolValuesOf,
       allLabel: t('pollers.filter.allPools'),
       counts: 'client',
     },

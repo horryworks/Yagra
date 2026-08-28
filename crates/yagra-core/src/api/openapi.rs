@@ -91,6 +91,7 @@ pub fn document() -> utoipa::openapi::OpenApi {
     for fragment in [
         Doc::openapi(),
         super::nodes::Doc::openapi(),
+        super::pools::Doc::openapi(),
         super::checks::Doc::openapi(),
         super::metrics::Doc::openapi(),
         super::thresholds::Doc::openapi(),

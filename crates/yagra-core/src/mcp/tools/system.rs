@@ -573,7 +573,7 @@ impl YagraMcp {
                 None => tool_unavailable(TOOL, "poll-loop counters require live mode"),
             },
             HealthSection::Pools => match admin {
-                Some(a) => ok_json(TOOL, &crate::api::nodes::pool_options(a).await),
+                Some(a) => ok_json(TOOL, &crate::api::pools::pool_options(a).await),
                 None => tool_unavailable(TOOL, "the pool list requires live mode"),
             },
             HealthSection::PollerNodes => {

@@ -56,6 +56,7 @@ mod interfaces;
 mod listing;
 mod migrate;
 mod nodes;
+mod pools;
 mod profiles;
 mod seed;
 mod settings;
@@ -76,6 +77,11 @@ pub use listing::{NodeListing, StaticNodeList, NODE_SCAN_MAX, NODE_SEARCH_MAX};
 pub use migrate::embedded_migrations;
 #[allow(unused_imports)]
 pub use nodes::TopologyRow;
+// Re-exported for `TopologyRow`'s reason above, not by oversight: both are the return type of a
+// `pub` method here and no caller writes either name (the API destructures them inline). Dropping
+// them would make `list_pools` and `pool_references` unnameable from outside `repo`.
+#[allow(unused_imports)]
+pub use pools::{PoolReferences, PoolRow};
 pub use profiles::ProfileSummary;
 
 /// Map a `nodes` row (selected via [`NodeRepo::NODE_COLUMNS`]) to a [`Node`].

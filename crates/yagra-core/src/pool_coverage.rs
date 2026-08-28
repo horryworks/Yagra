@@ -97,10 +97,20 @@ impl PoolCoverage {
 
 /// Merge the live poller registry with per-pool node counts. Pure: no I/O, no clock.
 ///
-/// Reports a pool that has nodes **or** a live poller, so a poller registered but not yet assigned
-/// work still appears (uncovered is false for it — no nodes are at risk).
+/// Reports a pool that has nodes, **or** a live poller, **or** a row describing it (ADR-107) — so a
+/// poller registered but not yet assigned work still appears, and so does a pool an operator has
+/// just created. Uncovered is false for both: no nodes are at risk in either.
+///
+/// ⚠️ **A described pool with neither nodes nor pollers must not raise the coverage alarm.** It is
+/// not a failure, it is a pool half-configured on purpose, and firing on it would mean every new
+/// pool pages somebody the moment it is named. `is_uncovered` already reads "has nodes and no live
+/// poller", which is exactly that distinction — do not widen it.
 #[must_use]
-pub fn coverage(live: &[PollerView], node_pools: &HashMap<String, usize>) -> Vec<PoolCoverage> {
+pub fn coverage(
+    live: &[PollerView],
+    node_pools: &HashMap<String, usize>,
+    described: &[String],
+) -> Vec<PoolCoverage> {
     // An offline poller cannot serve work, so it does not count towards coverage.
     let mut live_per_pool: HashMap<&str, usize> = HashMap::new();
     for v in live.iter().filter(|v| v.online) {
@@ -111,6 +121,7 @@ pub fn coverage(live: &[PollerView], node_pools: &HashMap<String, usize>) -> Vec
         .keys()
         .map(String::as_str)
         .chain(live_per_pool.keys().copied())
+        .chain(described.iter().map(String::as_str))
         .collect();
     names.sort_unstable();
     names.dedup();
@@ -386,8 +397,14 @@ pub(crate) async fn run_pool_coverage_watch(
             continue;
         };
 
+        // 🚨 **The alarm path deliberately does not read the `pools` table** (ADR-107, やらないこと).
+        // A pool that has been described but has neither nodes nor a poller is half-configured on
+        // purpose, not broken — `is_uncovered` would already answer false for it, but feeding it in
+        // would still put it in `publish_gauges`' output and make every freshly created pool show up
+        // in a metric an operator reads as "pools needing attention". The empty slice keeps this
+        // loop's behaviour byte-identical to before the table existed.
         let coverage =
-            pool_coverage::coverage(&coordinator.poller_views(Instant::now()), node_pools);
+            pool_coverage::coverage(&coordinator.poller_views(Instant::now()), node_pools, &[]);
         pool_coverage::publish_gauges(&coverage);
 
         for event in watch.observe(&coverage, Instant::now()) {
@@ -468,7 +485,7 @@ mod tests {
 
     #[test]
     fn nodes_with_no_live_poller_are_uncovered() {
-        let c = coverage(&[], &counts(&[("tokyo", 412)]));
+        let c = coverage(&[], &counts(&[("tokyo", 412)]), &[]);
         assert_eq!(c, vec![cov("tokyo", 412, 0)]);
         assert!(c[0].is_uncovered());
     }
@@ -476,14 +493,14 @@ mod tests {
     #[test]
     fn an_offline_poller_does_not_cover_a_pool() {
         // The whole point: a registered-but-dead poller must not read as coverage.
-        let c = coverage(&[view("p1", "tokyo", false)], &counts(&[("tokyo", 5)]));
+        let c = coverage(&[view("p1", "tokyo", false)], &counts(&[("tokyo", 5)]), &[]);
         assert_eq!(c, vec![cov("tokyo", 5, 0)]);
         assert!(c[0].is_uncovered());
     }
 
     #[test]
     fn a_live_poller_covers_its_pool() {
-        let c = coverage(&[view("p1", "tokyo", true)], &counts(&[("tokyo", 5)]));
+        let c = coverage(&[view("p1", "tokyo", true)], &counts(&[("tokyo", 5)]), &[]);
         assert_eq!(c, vec![cov("tokyo", 5, 1)]);
         assert!(!c[0].is_uncovered());
     }
@@ -491,7 +508,7 @@ mod tests {
     #[test]
     fn a_pool_with_a_poller_and_no_nodes_is_not_uncovered() {
         // A poller registered but not yet assigned work is reported, without a warning.
-        let c = coverage(&[view("p1", "spare", true)], &HashMap::new());
+        let c = coverage(&[view("p1", "spare", true)], &HashMap::new(), &[]);
         assert_eq!(c, vec![cov("spare", 0, 1)]);
         assert!(!c[0].is_uncovered());
     }

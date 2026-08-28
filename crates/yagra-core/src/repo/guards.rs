@@ -61,6 +61,10 @@ const TABLE_OWNERSHIP: &[(&str, &[&str])] = &[
     // `NodeListing for NodeRepo`. Separate from `nodes.rs` because this file is the *mirror*:
     // the SQL scope predicate and `StaticNodeList`'s in-memory twin, with the tests that pin them.
     ("listing.rs", &["nodes"]),
+    // The description of a pool, and - deliberately - the three tables a refused delete has to
+    // name. Counting what still points at a pool is part of that refusal, not a second answer to
+    // "who is in this pool": those live in nodes.rs and crate::pollers and stay there.
+    ("pools.rs", &["pools", "nodes", "node_groups", "pollers"]),
     ("interfaces.rs", &["interfaces"]),
     ("profiles.rs", &["profiles"]),
     ("settings.rs", &["app_settings"]),

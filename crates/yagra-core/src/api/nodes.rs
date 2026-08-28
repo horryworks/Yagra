@@ -36,7 +36,6 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
-use std::time::Instant;
 use uuid::Uuid;
 use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, UrlCheckConfig};
 
@@ -57,8 +56,7 @@ use yagra_common::{DnsCheckConfig, Node, NodeId, NodeKind, NodeRows, NodeState, 
     set_node_pool,
     set_node_parent,
     set_node_suppression_opt_out,
-    place_node,
-    list_pools
+    place_node
 ))]
 pub(super) struct Doc;
 
@@ -84,7 +82,6 @@ pub(crate) fn routes() -> Router<ApiState> {
             put(set_node_suppression_opt_out),
         )
         .route("/api/v1/nodes/:node_id/placement", put(place_node))
-        .route("/api/v1/pools", get(list_pools))
 }
 
 // ── Display state: the one answer to "how is this node doing?" ───────────────
@@ -1446,89 +1443,6 @@ async fn set_node_pool(
     node_write_result(found, id)
 }
 
-/// One pool offered by the pool picker.
-#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord, utoipa::ToSchema)]
-pub(crate) struct PoolOption {
-    /// Pool name.
-    name: String,
-    /// Whether a live poller currently serves it. A pool with none takes the legacy per-job path
-    /// onto a subject nothing subscribes to, so its jobs are silently discarded — the picker has to
-    /// say so rather than present it as an equivalent choice.
-    live: bool,
-}
-
-/// The pools that exist, for the assignment picker.
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub(crate) struct PoolOptions {
-    pools: Vec<PoolOption>,
-}
-
-/// Merge the pools nodes use, the pools folders assign, and the pools with a live poller into the
-/// picker's option list. Pure, so the union, the default-first ordering, and the `live` flag are
-/// unit-testable without a database or a coordinator.
-///
-/// [`yagra_bus::DEFAULT_POOL`] is always offered (it is where an unassigned node lands, whether or
-/// not anything references it explicitly); the rest follow alphabetically.
-fn build_pool_options(
-    node_pools: Vec<String>,
-    group_pools: Vec<String>,
-    live: &HashSet<String>,
-) -> Vec<PoolOption> {
-    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for p in node_pools.into_iter().chain(group_pools) {
-        let trimmed = p.trim();
-        if !trimmed.is_empty() {
-            names.insert(trimmed.to_owned());
-        }
-    }
-    names.extend(live.iter().cloned());
-    names.remove(yagra_bus::DEFAULT_POOL);
-
-    let option = |name: String| PoolOption {
-        live: live.contains(&name),
-        name,
-    };
-    std::iter::once(option(yagra_bus::DEFAULT_POOL.to_owned()))
-        .chain(names.into_iter().map(option))
-        .collect()
-}
-
-/// `GET /api/v1/pools` — the pools that exist, for the assignment picker. Names only, no telemetry.
-///
-/// Deliberately separate from `GET /pollers`, which scans the whole node table to build its
-/// per-pool counts; this is two indexed `DISTINCT`s and is loaded by an ordinary page.
-#[utoipa::path(
-    get, path = "/api/v1/pools", tag = "nodes",
-    responses(
-        (status = 200, description = "The pools on offer, default first, each flagged with whether a live poller serves it", body = PoolOptions),
-        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
-        (status = 403, description = "Role lacks the View permission", body = super::error::ErrorBody),
-        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
-    ),
-)]
-async fn list_pools(_perm: RequireView, admin: Admin) -> ApiResult<Json<PoolOptions>> {
-    Ok(Json(pool_options(&admin).await))
-}
-
-/// The known poller pools and whether each has a live poller — shared by `GET /api/v1/pools` and
-/// the MCP `get_system_health(section="pools")` tool (ADR-042 I3a).
-pub(crate) async fn pool_options(admin: &super::AdminState) -> PoolOptions {
-    // A read error degrades to "fewer suggestions", never to a failed picker — the operator can
-    // still type any pool via Custom.
-    let node_pools = admin.repo.distinct_pools().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "listing node pools failed");
-        Vec::new()
-    });
-    let group_pools = admin.groups.distinct_pools().await.unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "listing folder pools failed");
-        Vec::new()
-    });
-    let live = admin.coordinator.live_pools(Instant::now());
-    PoolOptions {
-        pools: build_pool_options(node_pools, group_pools, &live),
-    }
-}
-
 // ── Manual poll ──────────────────────────────────────────────────────────────
 
 /// What an out-of-schedule poll dispatched.
@@ -1720,46 +1634,6 @@ mod tests {
         // discarded (plain NATS, not JetStream).
         assert!(validate_pool_create(Some("tokyo.1".to_owned())).is_err());
         assert!(validate_pool_create(Some("east dc".to_owned())).is_err());
-    }
-
-    #[test]
-    fn pool_options_union_default_first_and_flag_liveness() {
-        let live: HashSet<String> = ["tokyo".to_owned(), "spare".to_owned()]
-            .into_iter()
-            .collect();
-        let opts = build_pool_options(
-            // Duplicates within and across the two sources, plus blank/whitespace junk from rows
-            // written before the API validated pool names.
-            vec![
-                "tokyo".to_owned(),
-                "osaka".to_owned(),
-                "tokyo".to_owned(),
-                "  ".to_owned(),
-            ],
-            vec!["osaka".to_owned(), "  edge  ".to_owned()],
-            &live,
-        );
-        let names: Vec<&str> = opts.iter().map(|o| o.name.as_str()).collect();
-        // Default always offered and always first (it is where an unassigned node lands, whether
-        // or not anything references it); the rest alphabetical, deduped, trimmed.
-        assert_eq!(names, vec!["default", "edge", "osaka", "spare", "tokyo"]);
-
-        let live_of = |n: &str| opts.iter().find(|o| o.name == n).map(|o| o.live);
-        // A pool only referenced by a live poller still appears (nothing is assigned to it yet).
-        assert_eq!(live_of("spare"), Some(true));
-        assert_eq!(live_of("tokyo"), Some(true));
-        // Assigned but with no live poller — the picker must be able to warn about these.
-        assert_eq!(live_of("osaka"), Some(false));
-        assert_eq!(live_of("edge"), Some(false));
-        assert_eq!(live_of("default"), Some(false));
-    }
-
-    #[test]
-    fn pool_options_are_offered_even_with_nothing_configured() {
-        let opts = build_pool_options(Vec::new(), Vec::new(), &HashSet::new());
-        assert_eq!(opts.len(), 1);
-        assert_eq!(opts[0].name, yagra_bus::DEFAULT_POOL);
-        assert!(!opts[0].live);
     }
 
     /// A store holding one RTT reading for `node`, and nothing else.

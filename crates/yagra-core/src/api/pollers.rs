@@ -45,6 +45,7 @@ use yagra_common::{HostSample, NodeId};
     node_assignment,
     list_monitoring_gaps,
     set_poller_anchor,
+    set_poller_desired_pool,
     issue_poller_token,
     revoke_poller_token
 ))]
@@ -60,6 +61,10 @@ pub(super) fn routes() -> Router<ApiState> {
         .route(
             "/api/v1/pollers/:id/anchor",
             axum::routing::put(set_poller_anchor),
+        )
+        .route(
+            "/api/v1/pollers/:id/desired-pool",
+            axum::routing::put(set_poller_desired_pool),
         )
         // Issue returns the whole site bundle rather than a token (ADR-065 Inc.4): the token exists
         // only at this instant, and every other thing the site needs is derivable here and nowhere
@@ -127,6 +132,15 @@ pub(crate) struct PollerInfo {
     /// The node this poller attaches to, naming where it sits in the derived dependency graph.
     /// `null` ⇒ core places it from `mgmt_addrs` instead.
     anchor_node_id: Option<Uuid>,
+    /// Where an operator asked this poller to be, when that is not where it reports being
+    /// (ADR-107). `null` under normal operation.
+    ///
+    /// ⚠️ **Set, this poller has not moved.** It is still serving `pool` and will keep doing so
+    /// until its own site restarts it with a changed `YAGRA_POLLER_POOL`; every subject it
+    /// subscribes to is derived from that value at startup. The field exists so the UI can say
+    /// "移動待ち" rather than showing a destination as though it had taken effect. Cleared by the
+    /// first heartbeat that reports having arrived.
+    desired_pool: Option<String>,
     /// Optional capabilities this poller's build advertises (`raw-capture`, `flow-relay`,
     /// `http-auth`, `http-body`, `self-upgrade`). Empty when the poller is offline, and empty from
     /// an N-1 build — **absence means "cannot", never "unknown"**, which is the same reading core
@@ -169,6 +183,10 @@ pub(crate) struct PoolSummary {
     mode: &'static str,
     /// `"nodes_without_live_poller"` when the pool has nodes but no live poller, else `null`.
     warning: Option<&'static str>,
+    /// Why this pool exists, in the operator's words (ADR-107). `null` for a pool nobody has
+    /// described — which is every pool that predates the `pools` table.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 /// The `GET /api/v1/pollers` body: the fleet of pollers + the per-pool summary.
@@ -192,6 +210,7 @@ fn build_pollers_response(
     inventory: Vec<PollerRow>,
     live: Vec<PollerView>,
     node_pools: std::collections::HashMap<String, usize>,
+    described: Vec<crate::repo::PoolRow>,
 ) -> PollersResponse {
     use std::collections::HashMap;
 
@@ -245,6 +264,9 @@ fn build_pollers_response(
                 // addresses, and the anchor is not the poller's to report at all.
                 mgmt_addrs: inv.map(|r| r.mgmt_addrs.clone()).unwrap_or_default(),
                 anchor_node_id: inv.and_then(|r| r.anchor_node_id),
+                // Same source and same reason as the anchor: this is the operator's record, and
+                // the live registry carries nothing about it.
+                desired_pool: inv.and_then(|r| r.desired_pool.clone()),
                 // Live-only, and deliberately empty rather than stale when the poller is offline: a
                 // capability describes the build that is *running*, so reporting the last one seen
                 // would answer for a process that no longer exists.
@@ -271,7 +293,12 @@ fn build_pollers_response(
     // The pool arithmetic lives in `pool_coverage`, which is also what the leader-side watch loop
     // notifies from — so the pill this endpoint renders and the page an operator receives are the
     // same judgement rather than two spellings of it.
-    let pools = crate::pool_coverage::coverage(&live, &node_pools)
+    let desc_by_name: HashMap<&str, &str> = described
+        .iter()
+        .filter_map(|r| r.description.as_deref().map(|d| (r.name.as_str(), d)))
+        .collect();
+    let names: Vec<String> = described.iter().map(|r| r.name.clone()).collect();
+    let pools = crate::pool_coverage::coverage(&live, &node_pools, &names)
         .into_iter()
         .map(|c| PoolSummary {
             mode: if c.live_pollers > 0 {
@@ -280,6 +307,7 @@ fn build_pollers_response(
                 "legacy"
             },
             warning: c.is_uncovered().then_some("nodes_without_live_poller"),
+            description: desc_by_name.get(c.pool.as_str()).map(|d| (*d).to_owned()),
             pool: c.pool,
             nodes: c.nodes,
             live_pollers: c.live_pollers,
@@ -328,7 +356,13 @@ pub(crate) async fn poller_inventory(admin: &AdminState) -> PollersResponse {
         &admin.groups,
     )
     .await;
-    build_pollers_response(inventory, live, node_pools)
+    // Descriptions are cosmetic, so this degrades to "no descriptions" rather than failing a page
+    // an operator is looking at because something is already broken (ADR-017).
+    let described = admin.repo.list_pools().await.unwrap_or_else(|e| {
+        tracing::warn!(error = %e, "described pools list failed; showing counts only");
+        Vec::new()
+    });
+    build_pollers_response(inventory, live, node_pools, described)
 }
 
 /// Which poller currently polls a node — the node detail's "Polled by" fact.
@@ -821,11 +855,27 @@ async fn issue_poller_token(
         ));
     }
 
+    // Which pool the kit's `.env` names, most explicit first (ADR-107 決定 5).
+    //
+    // The recorded destination sits between the caller's choice and the poller's own report on
+    // purpose: re-issuing a kit is *how* a recorded move reaches the site, so a kit built while a
+    // move is pending must carry the destination rather than the pool the site is leaving. Getting
+    // this backwards would hand the operator an archive that undoes the move they just recorded,
+    // and the poller would come back reporting the old pool — clearing the badge as though it had
+    // arrived.
+    let recorded = admin
+        .pollers
+        .list()
+        .await
+        .ok()
+        .and_then(|rows| rows.into_iter().find(|r| r.id == id))
+        .and_then(|r| r.desired_pool.filter(|p| !p.trim().is_empty()));
     let pool = req
         .pool
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty())
+        .or(recorded.as_deref())
         .unwrap_or(yagra_bus::DEFAULT_POOL);
     if yagra_bus::subjects::sanitize_token(pool) != pool {
         return Err(ApiError::bad_request(
@@ -959,6 +1009,78 @@ async fn revoke_poller_token(
     }
 }
 
+/// What a caller may record as a poller's destination pool.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub(crate) struct DesiredPoolRequest {
+    /// The pool the operator wants this poller to serve. `null` clears a pending move.
+    #[serde(default)]
+    pool: Option<String>,
+}
+
+/// `PUT /api/v1/pollers/{id}/desired-pool` — record where this poller should be (ADR-107 決定 5).
+///
+/// 🚨 **This does not move the poller, and saying so is half the feature.** What a poller polls
+/// follows from the pool it *reports*, which comes from `YAGRA_POLLER_POOL` in its own `.env`. Every
+/// subject it subscribes to is derived from that at startup — the job subject, both discovery
+/// subjects, and the Auth Callout scope it is granted at connect. If core decided otherwise, the
+/// poller would go on listening to the old pool's subject while `poll_now` published to the new
+/// one, and plain NATS would **discard those jobs silently**.
+///
+/// So what this writes is a record of intent. It drives three things and nothing else: the pending
+/// badge in the UI, the `.env` line the move dialog offers, and the pool baked into a re-issued
+/// site kit. The move happens when the site restarts; the first heartbeat reporting the new pool
+/// clears the record by itself (`crate::pollers::SEEN_UPSERT_SQL`).
+///
+/// Validated as a subject token for the same reason an assignment is: a name carrying a `.`
+/// partitions the subject and the jobs land where nothing subscribes.
+#[utoipa::path(
+    put, path = "/api/v1/pollers/{id}/desired-pool", tag = "pollers",
+    params(("id" = String, Path, description = "Poller id")),
+    request_body = DesiredPoolRequest,
+    responses(
+        (status = 204, description = "The destination was recorded or cleared"),
+        (status = 400, description = "The pool name is not a valid subject token", body = super::error::ErrorBody),
+        (status = 404, description = "No such poller", body = super::error::ErrorBody),
+        (status = 401, description = "No valid bearer token", body = super::error::ErrorBody),
+        (status = 403, description = "Role lacks the ManageSystem permission", body = super::error::ErrorBody),
+        (status = 503, description = "This deployment has no write side (skeleton mode)", body = super::error::ErrorBody),
+    ),
+)]
+async fn set_poller_desired_pool(
+    _perm: RequireManageSystem,
+    admin: Admin,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Json(req): Json<DesiredPoolRequest>,
+) -> ApiResult<axum::http::StatusCode> {
+    let pool = match req.pool.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        None => None,
+        Some(p) => {
+            if yagra_bus::subjects::sanitize_token(p) != p || p.len() > 63 {
+                return Err(ApiError::bad_request(
+                    "invalid_pool",
+                    "pool name may contain only letters, digits, '_' or '-'",
+                ));
+            }
+            Some(p.to_owned())
+        }
+    };
+    let found = admin
+        .pollers
+        .set_desired_pool(&id, pool.as_deref())
+        .await
+        .map_err(|e| {
+            ApiError::from_internal(
+                e.as_ref(),
+                "set desired pool",
+                "failed to record the destination",
+            )
+        })?;
+    if !found {
+        return Err(ApiError::not_found("poller_not_found", "no such poller"));
+    }
+    Ok(axum::http::StatusCode::NO_CONTENT)
+}
+
 /// Where a poller attaches to the monitored network.
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub(super) struct PollerAnchorRequest {
@@ -1085,7 +1207,7 @@ mod tests {
         let inventory = vec![inv_row("p1", "default"), inv_row("p2", "default")];
         let mut node_pools = std::collections::HashMap::new();
         node_pools.insert("default".to_owned(), 10usize);
-        let resp = build_pollers_response(inventory, live, node_pools);
+        let resp = build_pollers_response(inventory, live, node_pools, Vec::new());
 
         assert_eq!(
             resp.pollers
@@ -1138,8 +1260,12 @@ mod tests {
             }],
             ..Default::default()
         });
-        let resp =
-            build_pollers_response(Vec::new(), vec![online], std::collections::HashMap::new());
+        let resp = build_pollers_response(
+            Vec::new(),
+            vec![online],
+            std::collections::HashMap::new(),
+            Vec::new(),
+        );
         let p1 = &resp.pollers[0];
         assert_eq!(p1.cpu_pct, Some(40.0));
         assert_eq!(p1.mem_used_pct, Some(75.0));
@@ -1150,6 +1276,7 @@ mod tests {
             Vec::new(),
             vec![live_view("p2", "default", true)],
             std::collections::HashMap::new(),
+            Vec::new(),
         );
         assert_eq!(resp.pollers[0].cpu_pct, None);
         assert_eq!(resp.pollers[0].disk_used_pct, None);
@@ -1168,7 +1295,7 @@ mod tests {
         let mut node_pools = std::collections::HashMap::new();
         node_pools.insert("default".to_owned(), 10usize);
         node_pools.insert("legacy-pool".to_owned(), 4usize);
-        let resp = build_pollers_response(Vec::new(), live, node_pools);
+        let resp = build_pollers_response(Vec::new(), live, node_pools, Vec::new());
 
         assert_eq!(
             resp.pools
@@ -1216,8 +1343,8 @@ mod tests {
         node_pools.insert("legacy-pool".to_owned(), 4usize);
         node_pools.insert("empty-and-unserved".to_owned(), 0usize);
 
-        let coverage = crate::pool_coverage::coverage(&live, &node_pools);
-        let resp = build_pollers_response(Vec::new(), live.clone(), node_pools);
+        let coverage = crate::pool_coverage::coverage(&live, &node_pools, &[]);
+        let resp = build_pollers_response(Vec::new(), live.clone(), node_pools, Vec::new());
 
         assert_eq!(
             resp.pools.len(),
@@ -1337,6 +1464,7 @@ mod tests {
         PollerRow {
             id: id.to_owned(),
             pool: pool.to_owned(),
+            desired_pool: None,
             first_seen: "2026-07-06T00:00:00+00:00".to_owned(),
             last_seen: "2026-07-06T01:00:00+00:00".to_owned(),
             last_version: Some("0.1.1".to_owned()),

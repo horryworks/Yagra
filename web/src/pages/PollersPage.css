@@ -190,3 +190,213 @@
   color: var(--text-secondary);
   cursor: pointer;
 }
+
+/* ============================================================ pool management (ADR-107) */
+
+/* The strip's own heading. Paired with the toolbar's poller count below, so the screen reads as
+   two named lists rather than four unlabelled boxes above a table (ADR-055 R1). */
+.section-label {
+  margin: 0 0 10px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.section-label strong {
+  color: var(--text-primary);
+  font-weight: var(--weight-medium);
+}
+
+.section-label-sub {
+  color: var(--text-tertiary);
+}
+
+/* The card is a button and the ⋮ is its sibling: nesting an interactive element inside a <button>
+   is invalid markup, and the browser would hand the menu's clicks to the card. */
+.pool-slot {
+  position: relative;
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 280px;
+  display: flex;
+}
+
+.pool-slot .pool-card {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  padding-right: 34px;
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+  cursor: pointer;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.pool-slot .pool-card:hover {
+  border-color: var(--text-tertiary);
+}
+
+/* Selected = "the table below shows this pool". The accent channel, never a status colour: which
+   pool you are looking at is not a network state (design-system §1.1/§1.3). */
+.pool-slot .pool-card[aria-pressed='true'] {
+  border-color: var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 9%, var(--bg-secondary));
+}
+
+.pool-slot .pool-card[aria-pressed='true'] .pool-card-name {
+  color: var(--accent-color);
+}
+
+.pool-card-desc {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-card-desc.empty {
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+
+/* A pool with neither nodes nor a live poller is half-configured, not broken — so it gets the
+   tertiary ink rather than the warning colour that `.pool-warn` carries. */
+.pool-idle {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.pool-menu-btn {
+  position: absolute;
+  top: 9px;
+  right: 7px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: var(--font-lg);
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+
+.pool-menu-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+.pool-card-new {
+  flex: 1 1 200px;
+  min-width: 180px;
+  max-width: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 96px;
+  padding: 12px 14px;
+  border: var(--border-width) dashed var(--border-color);
+  border-radius: var(--radius);
+  background: none;
+  color: var(--accent-color);
+  font-family: var(--ui-font-family);
+  font-size: var(--font-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+  transition: border-color var(--transition), color var(--transition), background var(--transition);
+}
+
+.pool-card-new:hover {
+  border-color: var(--accent-color);
+  color: var(--accent-hover);
+  background: var(--bg-secondary);
+}
+
+/* ── the pool cell in the fleet table ── */
+.pool-cell,
+.pool-cell-static {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.pool-cell {
+  padding: 3px 5px;
+  margin-left: -5px;
+  border: var(--border-width) solid transparent;
+  border-radius: var(--radius-sm);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.pool-cell:hover {
+  border-color: var(--border-color);
+  background: var(--bg-primary);
+}
+
+.pool-arrow {
+  color: var(--text-tertiary);
+  font-size: var(--font-sm);
+  flex: none;
+}
+
+.pool-pending-note {
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── refusals and the move dialog ── */
+.pool-stop {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 2px solid var(--status-warning);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  font-size: var(--font-sm);
+  line-height: 1.65;
+  color: var(--text-primary);
+}
+
+.pool-stop svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 2px;
+  color: var(--status-warning);
+}
+
+.pool-reflist {
+  margin: 0;
+  padding-left: 20px;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  line-height: 1.9;
+}
+
+.pool-divider {
+  height: var(--border-width);
+  background: var(--border-color);
+}
+
+.pool-subhead {
+  margin: 0;
+  font-size: var(--font-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}

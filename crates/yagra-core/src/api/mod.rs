@@ -62,6 +62,7 @@ mod notifications;
 mod oidc;
 pub mod openapi;
 pub(crate) mod pollers;
+pub(crate) mod pools;
 mod preferences;
 mod profiles;
 pub(crate) mod rca;
@@ -424,6 +425,7 @@ pub fn router(state: ApiState) -> Router {
         .merge(profiles::routes())
         .merge(credentials::routes())
         .merge(pollers::routes())
+        .merge(pools::routes())
         .merge(health::routes())
         .merge(reports::routes())
         .merge(neighbors::routes())

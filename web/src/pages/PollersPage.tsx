@@ -34,6 +34,7 @@ import { FilterButton, MobileFilterSheet } from '../components/ui/MobileFilterSh
 import { useClientFilters } from '../lib/useClientFilters';
 import { pollerFilters } from './pollerFilters';
 import { TrashIcon, WarningIcon } from '../components/ui/icons';
+import { ActionMenu } from '../components/ui/ActionMenu';
 import { NodePicker } from '../components/NodePicker/NodePicker';
 import { EntityName, useEntityNames } from '../components/ui/EntityName';
 import { dateOnly, formatCount, formatUtil, formatExactTime, relativeTime } from '../lib/format';
@@ -47,6 +48,17 @@ import {
   POLLER_UP_COMMAND,
 } from '../lib/pollers';
 import { saveBlob } from '../lib/download';
+import {
+  hasPendingMove,
+  isValidNewPoolName,
+  pendingArrivals,
+  poolCellTitle,
+  poolEnvLine,
+  poolIsRemovable,
+  poolUsage,
+  renameBlockers,
+} from '../lib/poolAdmin';
+import { decodeSet, toggleSetValue } from '../lib/columnFilter';
 import { BusPanel } from './BusPanel';
 import './PollersPage.css';
 import { classifyLoadError, type LoadBlock } from '../lib/loadState';
@@ -54,34 +66,481 @@ import { LoadBlockNotice } from '../components/ui/LoadBlockNotice';
 
 const REFRESH_MS = 10_000;
 
-/** One pool card in the summary strip: name + node/poller counts + mode, with a warning chip when
- *  the pool has nodes but no live poller (icon + text, never color alone — a11y). */
-function PoolCard({ pool }: { pool: PoolSummary }) {
+/** One pool card in the summary strip: name + description + node/poller counts + mode, with a
+ *  warning chip when the pool has nodes but no live poller (icon + text, never color alone — a11y).
+ *
+ *  **The card is a button, and pressing it narrows the table to that pool** (ADR-107 決定 8). It does
+ *  that by writing the page's existing `pool` column filter rather than holding a selection of its
+ *  own: two controls editing one state is how a filter forks, and this screen already had the
+ *  column one. Pressing again clears it, which is the gesture that always works — the chip's ✕ and
+ *  Escape are the other two (ADR-073).
+ *
+ *  ⚠️ The ⋮ is a **sibling** of that button, not a child: nesting an interactive element inside a
+ *  `<button>` is invalid, and the browser would give the menu's click to the card. */
+function PoolCard({
+  pool,
+  selected,
+  onSelect,
+  actions,
+}: {
+  pool: PoolSummary;
+  selected: boolean;
+  onSelect: () => void;
+  actions: { label: string; onSelect: () => void; danger?: boolean }[];
+}) {
   const { t } = useTranslation('system');
   const warn = poolHasWarning(pool);
+  // A pool with neither nodes nor a live poller is not a warning — it is one that has just been
+  // created. Saying "no live poller" there would fire an alarm on every new pool the moment it is
+  // named, and the operator has not done anything wrong yet.
+  const idle = !warn && pool.nodes === 0 && pool.live_pollers === 0;
   return (
-    <div className={`pool-card${warn ? ' has-warn' : ''}`}>
-      <div className="pool-card-head">
-        <span className="pool-card-name mono">{pool.pool}</span>
-        <Badge tone={pool.mode === 'working_set' ? 'up' : 'neutral'}>{poolModeLabel(pool.mode, t)}</Badge>
-      </div>
-      <div className="pool-card-stats">
-        <span>
-          <strong>{formatCount(pool.nodes)}</strong> {t('common:noun.node', { count: pool.nodes })}
-        </span>
-        <span className="pool-card-sep">·</span>
-        <span>
-          <strong>{formatCount(pool.live_pollers)}</strong>{' '}
-          {t('pollers.pool.livePoller', { count: pool.live_pollers })}
-        </span>
-      </div>
-      {warn && (
-        <span className="pool-warn">
-          <WarningIcon />
-          {t('pollers.noLivePoller')}
-        </span>
+    <div className="pool-slot">
+      <button
+        type="button"
+        className={`pool-card${warn ? ' has-warn' : ''}`}
+        aria-pressed={selected}
+        onClick={onSelect}
+        title={selected ? t('pollers.pool.clearFilter') : t('pollers.pool.filterBy', { pool: pool.pool })}
+      >
+        <div className="pool-card-head">
+          <span className="pool-card-name mono">{pool.pool}</span>
+          <Badge tone={pool.mode === 'working_set' ? 'up' : 'neutral'}>{poolModeLabel(pool.mode, t)}</Badge>
+        </div>
+        <p className={`pool-card-desc${pool.description ? '' : ' empty'}`}>
+          {pool.description || t('pollers.pool.noDescription')}
+        </p>
+        <div className="pool-card-stats">
+          <span>
+            <strong>{formatCount(pool.nodes)}</strong> {t('common:noun.node', { count: pool.nodes })}
+          </span>
+          <span className="pool-card-sep">·</span>
+          <span>
+            <strong>{formatCount(pool.live_pollers)}</strong>{' '}
+            {t('pollers.pool.livePoller', { count: pool.live_pollers })}
+          </span>
+        </div>
+        {warn && (
+          <span className="pool-warn">
+            <WarningIcon />
+            {t('pollers.noLivePoller')}
+          </span>
+        )}
+        {idle && <span className="pool-idle">{t('pollers.pool.idle')}</span>}
+      </button>
+      {actions.length > 0 && (
+        <ActionMenu
+          items={actions.map((a) => ({ key: a.label, label: a.label, onSelect: a.onSelect, danger: a.danger }))}
+          label={t('pollers.pool.menuLabel', { pool: pool.pool })}
+          className="pool-menu"
+          trigger={(props) => (
+            <button type="button" className="pool-menu-btn" aria-label={t('pollers.pool.menuLabel', { pool: pool.pool })} {...props}>
+              ⋮
+            </button>
+          )}
+        />
       )}
     </div>
+  );
+}
+
+/** Describe a pool deliberately (ADR-107 決定 1). */
+function CreatePoolModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { t } = useTranslation('system');
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const valid = isValidNewPoolName(name);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .createPool({ name: name.trim(), description: description.trim() || null })
+      .then(() => {
+        onDone();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.pool.createFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.pool.createTitle')}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={busy || !valid}>
+            {t('pollers.pool.createConfirm')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <label className="form-label">
+          {t('pollers.pool.nameLabel')}
+          <TextInput value={name} onChange={(e) => setName(e.target.value)} placeholder="tokyo" />
+        </label>
+        <FieldHint>{t('pollers.pool.nameHint')}</FieldHint>
+        <label className="form-label">
+          {t('pollers.pool.descLabel')}
+          <TextInput
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={t('pollers.pool.descPlaceholder')}
+          />
+        </label>
+        {/* The load-bearing sentence. A pool needs BOTH halves to do anything, and the failure
+            modes of having one are silent: nodes with no poller have their jobs published to a
+            subject nobody subscribes to and discarded, a poller with no nodes simply idles. Said
+            here because this is where somebody is looking (ADR-055 R6). */}
+        <p className="form-hint">{t('pollers.pool.createNote')}</p>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Replace a pool's description. */
+function EditPoolModal({
+  pool,
+  onClose,
+  onDone,
+}: {
+  pool: PoolSummary;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [description, setDescription] = useState(pool.description ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .updatePool(pool.pool, { description: description.trim() || null })
+      .then(() => {
+        onDone();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.pool.editFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.pool.editTitle', { pool: pool.pool })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={submit} disabled={busy}>
+            {t('common:actions.save')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <label className="form-label">
+          {t('pollers.pool.descLabel')}
+          <TextInput
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={t('pollers.pool.descPlaceholder')}
+          />
+        </label>
+        <FieldHint>{t('pollers.pool.descHint')}</FieldHint>
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
+  );
+}
+
+/** Rename a pool — refused while any poller reports the old name (ADR-107 決定 6).
+ *
+ *  🚨 The refusal is the safety. A rename moves node and folder assignments in one transaction but
+ *  cannot move a poller: its pool comes from `YAGRA_POLLER_POOL` at its own site. Rename out from
+ *  under one and the old name stays live while the new name's nodes fall into legacy fan-out, where
+ *  their jobs are published to a subject nobody subscribes to and plain NATS discards them. */
+function RenamePoolModal({
+  pool,
+  pollers,
+  onClose,
+  onDone,
+}: {
+  pool: PoolSummary;
+  pollers: PollerInfo[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const blockers = renameBlockers(pool.pool, pollers);
+  const [name, setName] = useState(pool.pool);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const valid = isValidNewPoolName(name) && name.trim() !== pool.pool;
+
+  const submit = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .updatePool(pool.pool, { name: name.trim() })
+      .then(() => {
+        onDone();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.pool.renameFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.pool.renameTitle', { pool: pool.pool })}
+      onClose={onClose}
+      footer={
+        blockers.length > 0 ? (
+          <Button variant="outline" onClick={onClose}>
+            {t('common:actions.close')}
+          </Button>
+        ) : (
+          <>
+            <Button variant="outline" onClick={onClose} disabled={busy}>
+              {t('common:actions.cancel')}
+            </Button>
+            <Button variant="primary" onClick={submit} disabled={busy || !valid}>
+              {t('pollers.pool.renameConfirm')}
+            </Button>
+          </>
+        )
+      }
+    >
+      <div className="form-stack">
+        {blockers.length > 0 ? (
+          <>
+            <p className="pool-stop">
+              <WarningIcon />
+              {t('pollers.pool.renameBlocked')}
+            </p>
+            <ul className="pool-reflist">
+              {blockers.map((id) => (
+                <li key={id} className="mono">
+                  {id}
+                </li>
+              ))}
+            </ul>
+            <p className="modal-confirm-text">{t('pollers.pool.renameBlockedWhy')}</p>
+          </>
+        ) : (
+          <>
+            <label className="form-label">
+              {t('pollers.pool.newNameLabel')}
+              <TextInput value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <FieldHint>
+              {t('pollers.pool.renameHint', { nodes: pool.nodes })}
+            </FieldHint>
+            {error && <p className="form-error">{error}</p>}
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+/** Stop describing a pool — refused while anything still names it (ADR-107 決定 6). */
+function DeletePoolModal({
+  pool,
+  pollers,
+  onClose,
+  onDone,
+}: {
+  pool: PoolSummary;
+  pollers: PollerInfo[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const usage = poolUsage(pool.pool, pool.nodes, pollers);
+  if (!poolIsRemovable(usage)) {
+    return (
+      <Modal
+        title={t('pollers.pool.deleteTitle', { pool: pool.pool })}
+        onClose={onClose}
+        footer={
+          <Button variant="outline" onClick={onClose}>
+            {t('common:actions.close')}
+          </Button>
+        }
+      >
+        <div className="form-stack">
+          <p className="pool-stop">
+            <WarningIcon />
+            {t('pollers.pool.deleteBlocked')}
+          </p>
+          <ul className="pool-reflist">
+            {usage.nodes > 0 && <li>{t('pollers.pool.usedByNodes', { count: usage.nodes })}</li>}
+            {usage.pollers.map((id) => (
+              <li key={id} className="mono">
+                {id}
+              </li>
+            ))}
+          </ul>
+          <p className="modal-confirm-text">{t('pollers.pool.deleteBlockedWhy')}</p>
+        </div>
+      </Modal>
+    );
+  }
+  return (
+    <ConfirmDeleteModal
+      title={t('pollers.pool.deleteTitle', { pool: pool.pool })}
+      onConfirm={() => api.deletePool(pool.pool)}
+      errorFallback={t('pollers.pool.deleteFailed')}
+      onClose={onClose}
+      onDone={onDone}
+    >
+      <Trans
+        t={t}
+        i18nKey="pollers.pool.deleteConfirm"
+        values={{ pool: pool.pool }}
+        components={{ code: <strong className="mono" /> }}
+      />
+    </ConfirmDeleteModal>
+  );
+}
+
+/** Record where a poller should be, and hand over what the site needs to make it so (ADR-107 決定 5).
+ *
+ *  🚨 **This dialog does not move the poller and says so before the button.** Every bus subject a
+ *  poller subscribes to is derived from `YAGRA_POLLER_POOL` at startup, including the Auth Callout
+ *  scope it is granted at connect — so a destination recorded here takes effect when the site
+ *  restarts, and not before. Two ways to make that happen are offered because a co-located poller
+ *  has no site kit: the `.env` line works for both, the kit only for a poller that has a token. */
+function MovePollerModal({
+  poller,
+  pools,
+  onClose,
+  onDone,
+}: {
+  poller: PollerInfo;
+  pools: PoolSummary[];
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { t } = useTranslation('system');
+  const [dest, setDest] = useState(poller.desired_pool ?? '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+  const envLine = poolEnvLine(dest || poller.pool);
+
+  const record = () => {
+    setBusy(true);
+    setError(null);
+    api
+      .setPollerDesiredPool(poller.id, dest || null)
+      .then(() => {
+        onDone();
+        onClose();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.move.failed'))))
+      .finally(() => setBusy(false));
+  };
+
+  const reissue = () => {
+    setBusy(true);
+    setError(null);
+    // Record first, then build the kit: the kit reads the recorded destination, so issuing before
+    // recording would hand the site an archive naming the pool it is leaving.
+    api
+      .setPollerDesiredPool(poller.id, dest || null)
+      .then(() => api.issuePollerToken(poller.id, { pool: dest || undefined, self_upgrade: true }))
+      .then(({ blob, filename }) => {
+        saveBlob(blob, filename || `yagra-poller-${poller.id}.tar.gz`);
+        onDone();
+      })
+      .catch((e) => setError(errMsg(e, t('pollers.move.kitFailed'))))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <Modal
+      title={t('pollers.move.title', { id: poller.id })}
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {t('common:actions.cancel')}
+          </Button>
+          <Button variant="primary" onClick={record} disabled={busy}>
+            {t('pollers.move.record')}
+          </Button>
+        </>
+      }
+    >
+      <div className="form-stack">
+        <p className="modal-confirm-text">
+          <Trans
+            t={t}
+            i18nKey="pollers.move.current"
+            values={{ pool: poller.pool }}
+            components={{ code: <strong className="mono" /> }}
+          />
+        </p>
+        <label className="form-label">
+          {t('pollers.move.destLabel')}
+          <select className="field mono" value={dest} onChange={(e) => setDest(e.target.value)}>
+            <option value="">{t('pollers.move.destNone')}</option>
+            {pools.map((p) => (
+              <option key={p.pool} value={p.pool}>
+                {p.pool}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <p className="pool-stop">
+          <WarningIcon />
+          {t('pollers.move.notYet')}
+        </p>
+
+        <div className="pool-divider" />
+        <p className="pool-subhead">{t('pollers.move.applyHead')}</p>
+        <div className="poller-copyrow">
+          <pre className="poller-snippet">{envLine}</pre>
+          <Button
+            variant="outline"
+            onClick={() => {
+              void navigator.clipboard?.writeText(envLine);
+              setCopied(true);
+            }}
+          >
+            {copied ? t('pollers.register.copied') : t('pollers.register.copy')}
+          </Button>
+        </div>
+        {poller.has_token ? (
+          <>
+            <FieldHint>{t('pollers.move.kitHint')}</FieldHint>
+            <div>
+              <Button variant="outline" onClick={reissue} disabled={busy || !dest}>
+                {t('pollers.move.kitButton')}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <FieldHint>{t('pollers.move.colocatedHint')}</FieldHint>
+        )}
+        {error && <p className="form-error">{error}</p>}
+      </div>
+    </Modal>
   );
 }
 
@@ -577,6 +1036,11 @@ export function PollersPage() {
   const [deleting, setDeleting] = useState<PollerInfo | null>(null);
   const [anchoring, setAnchoring] = useState<PollerInfo | null>(null);
   const [tokenFor, setTokenFor] = useState<PollerInfo | null>(null);
+  const [movingPoller, setMovingPoller] = useState<PollerInfo | null>(null);
+  const [creatingPool, setCreatingPool] = useState(false);
+  /** The pool a ⋮ action is open for, and which action. One state rather than three booleans so
+   *  two dialogs can never be open at once. */
+  const [poolAction, setPoolAction] = useState<{ pool: PoolSummary; kind: 'edit' | 'rename' | 'delete' } | null>(null);
   const { nodeName } = useEntityNames();
   /** The poller whose node drill-down is open (`null` ⇒ closed), and its last loaded page. */
   const [drillId, setDrillId] = useState<string | null>(null);
@@ -609,10 +1073,52 @@ export function PollersPage() {
         ),
       },
       {
+        // Editable like the anchor column and for the same reason: where a poller *should* be is
+        // the operator's answer, not the poller's. What it renders while a move is pending is the
+        // point — "default → tokyo, 移動待ち" says the record exists AND has not taken effect, which
+        // is the one thing a button alone could not say (ADR-107 決定 5).
         key: 'pool',
         header: t('pollers.cols.pool'),
-        width: '120px',
-        render: (p) => <Badge tone="neutral">{p.pool}</Badge>,
+        width: '210px',
+        render: (p) => {
+          const pending = hasPendingMove(p);
+          const body = (
+            <>
+              <Badge tone="neutral">{p.pool}</Badge>
+              {pending && (
+                <>
+                  <span className="pool-arrow">→</span>
+                  <Badge tone="neutral">{p.desired_pool}</Badge>
+                  <Badge tone="warning">{t('pollers.move.pending')}</Badge>
+                </>
+              )}
+            </>
+          );
+          // Carries every string the cell draws, because a 63-character pool name will clip
+          // and ADR-088 refuses clipped text with nothing to hover (it caught this one).
+          const title = poolCellTitle(p, {
+            pending: t('pollers.move.pending'),
+            hint: pending
+              ? t('pollers.move.pendingHint', { pool: p.pool })
+              : t('pollers.move.title', { id: p.id }),
+          });
+          if (!canSystem)
+            return (
+              <span className="pool-cell-static" title={title}>
+                {body}
+              </span>
+            );
+          return (
+            <button
+              type="button"
+              className="pool-cell"
+              onClick={() => setMovingPoller(p)}
+              title={title}
+            >
+              {body}
+            </button>
+          );
+        },
       },
       {
         key: 'status',
@@ -634,7 +1140,19 @@ export function PollersPage() {
         // place to notice it (ADR-051).
         key: 'version',
         header: t('pollers.cols.version'),
-        width: '150px',
+        // Wide enough for the version PLUS the two badges that sit beside it at the same time:
+        // a remote site that is behind and can replace itself is the normal state right before an
+        // upgrade, so `0.3.3` + `behind` + `self-upgrades` is not an edge case. At 150px only the
+        // version fit and the badge was cut to a sliver — which reads as a stray character rather
+        // than as missing information, so nobody knows to widen it. `Badge` says a status chip
+        // must never be squeezed or clipped, but it says so with `flex-shrink: 0`, and this cell
+        // is an inline context (`.dt-cell > *` clips with `text-overflow: ellipsis`), so that
+        // guarantee does not reach here. 28px of cell padding + ~39px version + ~95px
+        // `self-upgrades` + ~51px `behind` + gaps ≈ 221px.
+        // ⚠️ A third badge appears while an upgrade runs; that one still clips. It is transient and
+        // carries a `title`, and sizing for it would make the column half again as wide for a
+        // state that is visible for minutes a month.
+        width: '230px',
         render: (p) => {
           const online = p.status === 'online';
           return (
@@ -806,6 +1324,22 @@ export function PollersPage() {
     { url: true },
   );
 
+  // 🚨 **The strip's selection IS the pool column filter.** Not a mirror of it and not a second
+  // piece of state that has to be kept in step: a card reads `filters.pool` to know whether it is
+  // pressed and writes it to toggle. That is what stops the two controls from forking — the failure
+  // ui-conventions names, where a screen ends up with two ways to narrow one list and only one of
+  // them clears. It also means the selection is in the URL for free, and that Clear-filters and the
+  // mobile filter sheet release the cards without knowing they exist.
+  const selectedPools = useMemo(() => decodeSet(filters.pool ?? ''), [filters.pool]);
+  const poolOrder = useMemo(() => pools.map((p) => p.pool), [pools]);
+  const togglePool = useCallback(
+    (name: string) => {
+      setFilters({ ...filters, pool: toggleSetValue(filters.pool ?? '', name, poolOrder) });
+    },
+    [filters, poolOrder, setFilters],
+  );
+  const pending = useMemo(() => pendingArrivals(shown, selectedPools), [shown, selectedPools]);
+
   // Refresh without flashing the initial loading state on every poll (loading only gates the very
   // first paint, like the sibling list pages).
   const load = useCallback(() => {
@@ -880,13 +1414,37 @@ export function PollersPage() {
               certificate store — so a viewer's page is unchanged. */}
           <BusPanel />
 
-          {pools.length > 0 && (
-            <div className="pool-strip">
-              {pools.map((p) => (
-                <PoolCard key={p.pool} pool={p} />
-              ))}
-            </div>
-          )}
+          {/* Named, because four unlabelled boxes say nothing about what they are (ADR-055 R1).
+              Paired with the toolbar's poller count below so the screen reads as two lists. */}
+          <p className="section-label">
+            <strong>{t('pollers.pool.stripTitle')}</strong>{' '}
+            {t('pollers.pool.count', { count: pools.length })}{' '}
+            <span className="section-label-sub">{t('pollers.pool.stripNote')}</span>
+          </p>
+          <div className="pool-strip">
+            {pools.map((p) => (
+              <PoolCard
+                key={p.pool}
+                pool={p}
+                selected={selectedPools.includes(p.pool)}
+                onSelect={() => togglePool(p.pool)}
+                actions={
+                  canSystem
+                    ? [
+                        { label: t('pollers.pool.editAction'), onSelect: () => setPoolAction({ pool: p, kind: 'edit' }) },
+                        { label: t('pollers.pool.renameAction'), onSelect: () => setPoolAction({ pool: p, kind: 'rename' }) },
+                        { label: t('common:actions.delete'), onSelect: () => setPoolAction({ pool: p, kind: 'delete' }), danger: true },
+                      ]
+                    : []
+                }
+              />
+            ))}
+            {canSystem && (
+              <button type="button" className="pool-card pool-card-new" onClick={() => setCreatingPool(true)}>
+                {t('pollers.pool.createButton')}
+              </button>
+            )}
+          </div>
 
           <TableToolbar>
             <FilterButton
@@ -901,6 +1459,13 @@ export function PollersPage() {
               total={anyFiltered ? pollers.length : undefined}
               noun={t('common:noun.poller', { count: shown.length })}
             />
+            {/* Without this, "2 pollers" claims a pool has two when one is still serving elsewhere
+                — a quietly wrong number an operator would plan capacity from. */}
+            {pending > 0 && (
+              <span className="pool-pending-note">
+                {t('pollers.move.pendingCount', { count: pending })}
+              </span>
+            )}
             {canSystem && (
               <Button variant="primary" onClick={() => setRegistering(true)}>
                 {t('pollers.registerButton')}
@@ -926,6 +1491,37 @@ export function PollersPage() {
               counts={counts}
               labels={Object.fromEntries(columns.map((c) => [c.key, String(c.header)]))}
               onClose={() => setSheet(false)}
+            />
+          )}
+
+          {creatingPool && (
+            <CreatePoolModal onClose={() => setCreatingPool(false)} onDone={load} />
+          )}
+          {poolAction?.kind === 'edit' && (
+            <EditPoolModal pool={poolAction.pool} onClose={() => setPoolAction(null)} onDone={load} />
+          )}
+          {poolAction?.kind === 'rename' && (
+            <RenamePoolModal
+              pool={poolAction.pool}
+              pollers={pollers}
+              onClose={() => setPoolAction(null)}
+              onDone={load}
+            />
+          )}
+          {poolAction?.kind === 'delete' && (
+            <DeletePoolModal
+              pool={poolAction.pool}
+              pollers={pollers}
+              onClose={() => setPoolAction(null)}
+              onDone={load}
+            />
+          )}
+          {movingPoller && (
+            <MovePollerModal
+              poller={movingPoller}
+              pools={pools}
+              onClose={() => setMovingPoller(null)}
+              onDone={load}
             />
           )}
 

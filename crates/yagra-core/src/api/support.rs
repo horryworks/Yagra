@@ -181,7 +181,7 @@ async fn build(
     b.add_json(
         "health/pools.json",
         "The pools nodes are assigned to",
-        &super::nodes::pool_options(admin).await,
+        &super::pools::pool_options(admin).await,
     )?;
     b.add_json(
         "health/monitoring_gaps.json",

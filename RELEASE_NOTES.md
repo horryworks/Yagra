@@ -34,6 +34,36 @@
 
 ### New Features
 
+- **Poller pools can be created, described and deleted from Settings ▸ Pollers.** A pool used to
+  exist only as a side effect of typing an unknown string into a node's assignment; there is now a
+  card at the end of the pool strip that creates one, and a ⋮ on each card to edit its description,
+  rename it or remove it. Deleting is refused while nodes, folders or pollers still name the pool,
+  and renaming is refused while any poller reports it — a rename moves node and folder assignments
+  but cannot move a poller, so the renamed pool would have nothing serving it.
+
+- **A poller's destination pool can be recorded from the same screen, and the list says it has not
+  taken effect yet.** The Pool column opens a dialog that records where the poller should be, hands
+  over the `YAGRA_POLLER_POOL` line the site needs and, for a poller with its own bus token,
+  re-issues the site kit with that pool in it. Until the site applies it and restarts, the row shows
+  `old → new` with a "Move pending" badge; the first heartbeat reporting the new pool clears it.
+  **The button does not move the poller** — every bus subject a poller subscribes to is derived from
+  its own `.env` at startup, so a destination set centrally would leave it listening to the old
+  pool's job subject.
+
+- **The pool strip is now labelled and selects.** It carries a heading naming what those cards are,
+  and pressing one narrows the table to that pool's pollers. A poller recorded as heading to the
+  pool is included and the count discloses it ("2 pollers (1 awaiting its move)"). Pressing the card
+  again, the filter chip's ✕, or Escape clears it. The cards write the screen's existing pool column
+  filter rather than a selection of their own, so the two cannot disagree.
+
+- **`GET /api/v1/pools` gains an optional `description` per pool**, and `GET /api/v1/pollers`
+  gains `desired_pool` per poller and `description` per pool summary. New endpoints:
+  `POST /api/v1/pools`, `PUT|DELETE /api/v1/pools/{name}` and
+  `PUT /api/v1/pollers/{id}/desired-pool` (all Admin). The pool option list still merges the pools
+  nodes use, the pools folders assign and the pools live pollers report — a pool with no row keeps
+  appearing.
+
+
 - **Upgrading now asks what to move.** Pressing Upgrade opens the components list — core, the
   co-located poller and every remote site, each with its current version, the version it would move
   to and a checkbox, all ticked. Pressing Upgrade again starts the work. Unticking a row leaves that

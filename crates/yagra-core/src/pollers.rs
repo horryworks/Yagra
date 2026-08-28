@@ -24,6 +24,13 @@ pub struct PollerRow {
     pub id: String,
     /// Pool the poller last reported serving.
     pub pool: String,
+    /// Where an operator asked this poller to be, when that is not where it says it is (ADR-107).
+    ///
+    /// `None` for every poller under normal operation. Set, it means the destination has been
+    /// recorded and the site has not been restarted yet — the poller is still serving [`Self::pool`]
+    /// and will keep doing so until its own `.env` changes. Cleared by the first heartbeat that
+    /// reports having arrived.
+    pub desired_pool: Option<String>,
     /// When this poller was first seen (RFC 3339).
     pub first_seen: String,
     /// When this poller was last seen (RFC 3339).
@@ -106,12 +113,15 @@ const SEEN_UPSERT_SQL: &str =
        pool = EXCLUDED.pool, \
        last_version = EXCLUDED.last_version, \
        last_incarnation = EXCLUDED.last_incarnation, \
-       mgmt_addrs = EXCLUDED.mgmt_addrs";
+       mgmt_addrs = EXCLUDED.mgmt_addrs, \
+       desired_pool = CASE WHEN EXCLUDED.pool = pollers.desired_pool \
+                           THEN NULL ELSE pollers.desired_pool END";
 
 /// The heartbeat write when only an already-registered poller may be refreshed (ADR-065 Inc.3).
 const SEEN_UPDATE_SQL: &str = "UPDATE pollers SET \
        last_seen = now(), pool = $2, last_version = $3, last_incarnation = $4, \
-       mgmt_addrs = $5::text[]::inet[] \
+       mgmt_addrs = $5::text[]::inet[], \
+       desired_pool = CASE WHEN $2 = desired_pool THEN NULL ELSE desired_pool END \
      WHERE id = $1";
 
 /// PostgreSQL-backed durable poller inventory (`pollers`).
@@ -156,6 +166,13 @@ impl PollerRepo {
     /// heartbeat overwriting it would silently undo the fix for an unplaceable poller on the next
     /// beat.
     ///
+    /// `desired_pool` is the operator's column too (ADR-107 決定 4) and is preserved for the same
+    /// reason — with **one one-directional exception**: a beat whose reported `pool` equals it
+    /// clears it. That is the recorded destination having been reached, not the poller overruling
+    /// it, and it is the whole mechanism by which the "移動待ち" badge goes away on its own once
+    /// the site has been restarted. A beat reporting anything else leaves it untouched, so the
+    /// destination survives the sixty-second write throttle that would otherwise erase it.
+    ///
     /// Call-site throttling (so a 10s heartbeat isn't a write per beat) is the coordinator's job.
     ///
     /// Addresses travel as text and are cast server-side: `INET` has no `sqlx` codec compiled in
@@ -197,6 +214,30 @@ impl PollerRepo {
         Ok(())
     }
 
+    /// Record where the operator wants this poller to be (ADR-107 決定 4), or clear it with
+    /// `None`.
+    ///
+    /// ⚠️ **This does not move the poller, and the UI says so.** What a poller polls follows from
+    /// the pool it *reports*, which comes from `YAGRA_POLLER_POOL` in its own `.env`; every subject
+    /// it subscribes to is derived from that value at startup, including the Auth Callout scope it
+    /// is granted at connect. Core deciding otherwise would leave it listening to the old pool's
+    /// job subject while `poll_now` published to the new one — discarded by plain NATS, silently.
+    /// So this column is a *record of intent*: it drives the site kit's `.env`, the pending badge,
+    /// and nothing else until the site restarts.
+    ///
+    /// A statement of its own rather than a clause on the heartbeat, for [`Self::set_anchor`]'s
+    /// reason: one statement writing both would make the poller the last writer.
+    ///
+    /// `Ok(false)` ⇒ no such poller.
+    pub async fn set_desired_pool(&self, id: &str, pool: Option<&str>) -> anyhow::Result<bool> {
+        let done = sqlx::query("UPDATE pollers SET desired_pool = $2 WHERE id = $1")
+            .bind(id)
+            .bind(pool)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
     /// Point a poller at the node it attaches to, or clear it (`None`).
     ///
     /// Separate from [`Self::upsert_seen`] on purpose: this column is written by an operator and
@@ -216,7 +257,7 @@ impl PollerRepo {
         let rows = sqlx::query(
             // `token_hash IS NOT NULL` rather than the column itself: the digest has no use outside
             // the callout, and a list endpoint is the wrong place to start carrying one around.
-            "SELECT id, pool, first_seen, last_seen, last_version, last_incarnation, \
+            "SELECT id, pool, desired_pool, first_seen, last_seen, last_version, last_incarnation, \
                     anchor_node_id, token_issued_at, (token_hash IS NOT NULL) AS has_token, \
                     ARRAY(SELECT host(a) FROM unnest(mgmt_addrs) AS a) AS mgmt_addrs \
              FROM pollers ORDER BY id",
@@ -231,6 +272,7 @@ impl PollerRepo {
                 Ok(PollerRow {
                     id: row.try_get("id")?,
                     pool: row.try_get("pool")?,
+                    desired_pool: row.try_get("desired_pool")?,
                     first_seen: first_seen.to_rfc3339(),
                     last_seen: last_seen.to_rfc3339(),
                     last_version: row.try_get("last_version")?,
@@ -610,6 +652,72 @@ mod tests {
         assert!(SEEN_UPDATE_SQL.starts_with("UPDATE pollers SET"));
         // And the operator's anchor writer exists and touches only that column.
         assert!(src.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")));
+    }
+
+    /// **The recorded destination is the operator's column too, with one one-directional
+    /// exception.** `desired_pool` cannot simply be excluded from the two heartbeat statements the
+    /// way `anchor_node_id` is: the badge has to disappear once the site *has* been restarted, and
+    /// the only thing that knows it has is the beat itself. So the statements name the column — and
+    /// the whole safety of that rests on **what they are allowed to assign**: `NULL` when the beat
+    /// reports having arrived, otherwise the column's own value.
+    ///
+    /// 🚨 Assigning it a bind or `EXCLUDED.desired_pool` would make the poller the last writer, and
+    /// a destination recorded in the UI would vanish inside the sixty-second write throttle — the
+    /// same failure `set_anchor` exists to avoid, but harder to see, because it looks like the
+    /// operator's click simply did not take.
+    #[test]
+    fn a_heartbeat_may_only_clear_the_recorded_destination_never_set_one() {
+        let src = production_source();
+        let col = format!("desired{}", "_pool");
+
+        // Refusal side: neither statement may take the value from anywhere but the column itself.
+        for (name, sql) in [
+            ("SEEN_UPSERT_SQL", SEEN_UPSERT_SQL),
+            ("SEEN_UPDATE_SQL", SEEN_UPDATE_SQL),
+        ] {
+            assert!(
+                !sql.contains(&format!("{col} = EXCLUDED.{col}")),
+                "{name} lets a heartbeat set the destination: {sql}"
+            );
+            assert!(
+                !sql.contains(&format!("{col} = $")),
+                "{name} binds the destination, so the poller writes the operator's column: {sql}"
+            );
+        }
+        // Acceptance side — without this the two assertions above pass on a statement that never
+        // mentions the column at all, and the badge would then never clear.
+        assert!(
+            SEEN_UPSERT_SQL.contains(&format!("{col} = CASE WHEN EXCLUDED.pool = pollers.{col}")),
+            "the upsert no longer clears a fulfilled destination: {SEEN_UPSERT_SQL}"
+        );
+        assert!(
+            SEEN_UPDATE_SQL.contains(&format!("{col} = CASE WHEN $2 = {col}")),
+            "the gated update no longer clears a fulfilled destination: {SEEN_UPDATE_SQL}"
+        );
+        // And the operator's own writer exists, touching only that column.
+        assert!(src.contains(&format!("UPDATE pollers SET {col} = $2 WHERE id = $1")));
+    }
+
+    /// The truth table those two `CASE` expressions encode, so the intent is pinned in Rust and not
+    /// only in a SQL string a reader has to evaluate in their head.
+    #[test]
+    fn a_destination_clears_on_arrival_and_survives_every_other_beat() {
+        // `reported` is what the beat says; `desired` is what the operator recorded.
+        let after = |reported: &str, desired: Option<&str>| -> Option<String> {
+            match desired {
+                Some(d) if d == reported => None,
+                other => other.map(str::to_owned),
+            }
+        };
+        // Arrived ⇒ the badge goes away by itself. This is the only write a beat may make.
+        assert_eq!(after("tokyo", Some("tokyo")), None);
+        // Still at the old pool ⇒ the destination survives, beat after beat, for as long as it
+        // takes somebody to reach the site. This is the case a bind would have destroyed.
+        assert_eq!(after("default", Some("tokyo")), Some("tokyo".to_owned()));
+        // Moved somewhere else entirely ⇒ still not the poller's call to erase the record.
+        assert_eq!(after("osaka", Some("tokyo")), Some("tokyo".to_owned()));
+        // No move pending ⇒ nothing to do, and nothing invented.
+        assert_eq!(after("default", None), None);
     }
 
     #[test]

@@ -1180,6 +1180,20 @@ pub(crate) const ROUTES: &[(&str, &str, Scoping, Mcp)] = &[
         Tool("get_system_health"),
     ),
     ("GET", "/api/v1/pools", INFRA, Tool("get_system_health")),
+    // Describing a pool is deployment topology, like the poller inventory above it: ManageSystem,
+    // global scope. Writes, so MCP stays out by decision (ADR-042) rather than by omission.
+    ("POST", "/api/v1/pools", INFRA, NO_MCP_WRITE),
+    ("PUT", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
+    ("DELETE", "/api/v1/pools/:name", INFRA, NO_MCP_WRITE),
+    // Where the operator wants a poller to be, as opposed to where it reports being (ADR-107).
+    // It moves nothing on its own — the site's own `.env` still decides — so this is a record of
+    // intent that the kit download and the pending badge read.
+    (
+        "PUT",
+        "/api/v1/pollers/:id/desired-pool",
+        INFRA,
+        NO_MCP_WRITE,
+    ),
     (
         "GET",
         "/api/v1/preferences",

@@ -13860,6 +13860,92 @@
         }
       }
     },
+    "/api/v1/pollers/{id}/desired-pool": {
+      "put": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "`PUT /api/v1/pollers/{id}/desired-pool` — record where this poller should be (ADR-107 決定 5).",
+        "description": "🚨 **This does not move the poller, and saying so is half the feature.** What a poller polls\nfollows from the pool it *reports*, which comes from `YAGRA_POLLER_POOL` in its own `.env`. Every\nsubject it subscribes to is derived from that at startup — the job subject, both discovery\nsubjects, and the Auth Callout scope it is granted at connect. If core decided otherwise, the\npoller would go on listening to the old pool's subject while `poll_now` published to the new\none, and plain NATS would **discard those jobs silently**.\n\nSo what this writes is a record of intent. It drives three things and nothing else: the pending\nbadge in the UI, the `.env` line the move dialog offers, and the pool baked into a re-issued\nsite kit. The move happens when the site restarts; the first heartbeat reporting the new pool\nclears the record by itself (`crate::pollers::SEEN_UPSERT_SQL`).\n\nValidated as a subject token for the same reason an assignment is: a name carrying a `.`\npartitions the subject and the jobs land where nothing subscribes.",
+        "operationId": "set_poller_desired_pool",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Poller id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DesiredPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The destination was recorded or cleared"
+          },
+          "400": {
+            "description": "The pool name is not a valid subject token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageSystem permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such poller",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/pollers/{id}/nodes": {
       "get": {
         "tags": [
@@ -14081,7 +14167,7 @@
           "nodes"
         ],
         "summary": "`GET /api/v1/pools` — the pools that exist, for the assignment picker. Names only, no telemetry.",
-        "description": "Deliberately separate from `GET /pollers`, which scans the whole node table to build its\nper-pool counts; this is two indexed `DISTINCT`s and is loaded by an ordinary page.",
+        "description": "Deliberately separate from `GET /pollers`, which scans the whole node table to build its\nper-pool counts; this is one small table plus two indexed `DISTINCT`s, and is loaded by an\nordinary page.",
         "operationId": "list_pools",
         "responses": {
           "200": {
@@ -14110,6 +14196,249 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "`POST /api/v1/pools` — describe a pool deliberately.",
+        "description": "Creating one starts nothing. A pool does work only once **both** halves exist: nodes assigned to\nit, and a poller reporting it. The UI says so at the point of creation rather than letting an\noperator discover it from a silent absence of data — with only nodes, the scheduler falls back to\nlegacy per-job publish onto a subject nobody subscribes to and the jobs are discarded; with only\na poller, nothing is scheduled at all.",
+        "operationId": "create_pool",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The pool was described"
+          },
+          "400": {
+            "description": "The name is not a valid subject token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageSystem permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A pool of that name is already described",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/pools/{name}": {
+      "put": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "`PUT /api/v1/pools/{name}` — rename a pool and/or replace its description.",
+        "description": "🚨 **A rename is refused while any poller reports the old name, and that refusal is the whole\nsafety of this endpoint.** Renaming moves `nodes.pool` and `node_groups.pool` in one transaction,\nbut it cannot move a poller: a poller's pool comes from `YAGRA_POLLER_POOL` in its own `.env`, at\nits own site, and every subject it subscribes to is derived from that at startup. Rename out from\nunder one and the old name stays in `live_pools` while the new name's nodes drop into legacy\nfan-out, publishing to a subject nobody subscribes to — **plain NATS discards them**. That is a\nmonitoring hole opened by a button, and nothing surfaces it until `pool_coverage`'s 300s debounce.",
+        "operationId": "update_pool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The pool to update",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "The pool was updated"
+          },
+          "400": {
+            "description": "The new name is not a valid subject token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageSystem permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pool of that name is described",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A poller still reports the old name, or the new name is taken",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "This deployment has no write side (skeleton mode)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "pollers"
+        ],
+        "summary": "`DELETE /api/v1/pools/{name}` — stop describing a pool.",
+        "description": "⚠️ **Refused while anything still names it**, and that is not caution: the name is *derived* from\nnodes, folders and pollers as well as from this table, so deleting the row of a pool still in use\nwould not free the name. The pool would keep appearing in the picker with its description gone —\na delete that appears to succeed and changes nothing.",
+        "operationId": "delete_pool",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "The pool to delete",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The pool is no longer described"
+          },
+          "401": {
+            "description": "No valid bearer token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Role lacks the ManageSystem permission",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No pool of that name is described",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Nodes, folders or pollers still name this pool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolInUse"
                 }
               }
             }
@@ -22605,6 +22934,25 @@
           }
         }
       },
+      "CreatePoolRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this pool exists, in the operator's words. Optional."
+          },
+          "name": {
+            "type": "string",
+            "description": "The pool name. Becomes a NATS subject token, so letters, digits, `_` and `-` only."
+          }
+        }
+      },
       "CreateRule": {
         "type": "object",
         "description": "Create-rule body: a name, an optional severity filter (absent = any), and target channels.",
@@ -22945,6 +23293,19 @@
             "type": "integer",
             "description": "How many there are in total — kept separately so truncation is visible rather than silent.",
             "minimum": 0
+          }
+        }
+      },
+      "DesiredPoolRequest": {
+        "type": "object",
+        "description": "What a caller may record as a poller's destination pool.",
+        "properties": {
+          "pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The pool the operator wants this poller to serve. `null` clears a pending move."
           }
         }
       },
@@ -28620,6 +28981,13 @@
             "format": "double",
             "description": "Current host CPU utilization % (0–100) from its latest heartbeat; `null` when the poller is\noffline or on an N-1 build without host telemetry."
           },
+          "desired_pool": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Where an operator asked this poller to be, when that is not where it reports being\n(ADR-107). `null` under normal operation.\n\n⚠️ **Set, this poller has not moved.** It is still serving `pool` and will keep doing so\nuntil its own site restarts it with a changed `YAGRA_POLLER_POOL`; every subject it\nsubscribes to is derived from that value at startup. The field exists so the UI can say\n\"移動待ち\" rather than showing a destination as though it had taken effect. Cleared by the\nfirst heartbeat that reports having arrived."
+          },
           "disk_used_pct": {
             "type": [
               "number",
@@ -28902,6 +29270,34 @@
           }
         }
       },
+      "PoolInUse": {
+        "type": "object",
+        "description": "What a refusal names, so the operator knows which thing to move first.",
+        "required": [
+          "nodes",
+          "folders",
+          "pollers"
+        ],
+        "properties": {
+          "folders": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Folders assigning this pool."
+          },
+          "nodes": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Nodes assigned to this pool directly."
+          },
+          "pollers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Poller ids reporting this pool, or recorded as heading to it."
+          }
+        }
+      },
       "PoolOption": {
         "type": "object",
         "description": "One pool offered by the pool picker.",
@@ -28910,6 +29306,13 @@
           "live"
         ],
         "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this pool exists, in the operator's words. `None` for a pool nobody has described —\nincluding every pool that predates the `pools` table, which is most of them on an existing\ndeployment."
+          },
           "live": {
             "type": "boolean",
             "description": "Whether a live poller currently serves it. A pool with none takes the legacy per-job path\nonto a subject nothing subscribes to, so its jobs are silently discarded — the picker has to\nsay so rather than present it as an equivalent choice."
@@ -28954,6 +29357,13 @@
           "mode"
         ],
         "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why this pool exists, in the operator's words (ADR-107). `null` for a pool nobody has\ndescribed — which is every pool that predates the `pools` table."
+          },
           "live_pollers": {
             "type": "integer",
             "description": "Live (online) pollers serving this pool.",
@@ -32331,6 +32741,25 @@
               "null"
             ],
             "format": "uuid"
+          }
+        }
+      },
+      "UpdatePoolRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replacement description. Omit to leave it unchanged; send `null` or `\"\"` to clear it."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A new name. Omit to leave it unchanged.\n\n⚠️ Renaming moves every node and folder assignment, and is **refused while any poller reports\nthe old name** — see the handler."
           }
         }
       },

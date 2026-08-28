@@ -1018,6 +1018,30 @@ export const api = {
    *  Separate from `listPollers` (which scans the whole node table to build its per-pool counts). */
   listPools: (): Promise<PoolsResponse> => apiGet('/api/v1/pools'),
 
+  /** Describe a pool deliberately (ADR-107). Admin-gated.
+   *
+   *  ⚠️ Creating one starts nothing: a pool does work only once nodes are assigned to it **and** a
+   *  poller reports it. With only nodes, the scheduler falls back to legacy per-job publish onto a
+   *  subject nobody subscribes to and the jobs are discarded; with only a poller, nothing is
+   *  scheduled. The create dialog says so — do not drop that sentence. */
+  createPool: (body: { name: string; description?: string | null }): Promise<void> =>
+    apiPost('/api/v1/pools', { body }),
+
+  /** Rename a pool and/or replace its description. Omit a field to leave it alone.
+   *
+   *  🚨 A rename is refused (409 `pool_claimed_by_poller`) while any poller reports the old name.
+   *  Renaming moves node and folder assignments but cannot move a poller — its pool comes from
+   *  `YAGRA_POLLER_POOL` at its own site — so the nodes would land in a pool nothing serves. */
+  updatePool: (
+    name: string,
+    body: { name?: string; description?: string | null },
+  ): Promise<void> => apiPut('/api/v1/pools/{name}', { path: { name }, body }),
+
+  /** Stop describing a pool. Refused (409 `pool_in_use`) while nodes, folders or pollers name it —
+   *  the name is derived from those too, so the delete would appear to work and change nothing. */
+  deletePool: (name: string): Promise<void> =>
+    apiDelete('/api/v1/pools/{name}', { path: { name } }),
+
   /** Move a node to a poll-pool. `''` clears it back to inherited (folder, else default pool).
    *
    *  Single-field on purpose — do NOT reach for `setNodeBindings({ pool })`: that endpoint
@@ -1612,6 +1636,16 @@ export const api = {
   /** Name the node a poller attaches to, rooting the derived graph. `null` clears it. */
   setPollerAnchor: (id: string, nodeId: string | null): Promise<void> =>
     apiPut('/api/v1/pollers/{id}/anchor', { path: { id }, body: { node_id: nodeId } }),
+
+  /** Record where a poller should be, or clear it with `null` (ADR-107).
+   *
+   *  🚨 **This does not move the poller.** What it polls follows from the pool it *reports*, which
+   *  comes from `YAGRA_POLLER_POOL` in its own `.env`; every bus subject it subscribes to is
+   *  derived from that at startup. The record drives the pending badge, the `.env` line the move
+   *  dialog offers, and the pool baked into a re-issued site kit — nothing else. The move happens
+   *  when the site restarts, and the first heartbeat reporting the new pool clears the record. */
+  setPollerDesiredPool: (id: string, pool: string | null): Promise<void> =>
+    apiPut('/api/v1/pollers/{id}/desired-pool', { path: { id }, body: { pool } }),
 
   /** Fleet-wide status summary (total + per-state counts), computed server-side so the dashboard
    *  status widgets are correct over the whole fleet, not the first page of nodes. */
