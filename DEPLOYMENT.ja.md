@@ -511,7 +511,7 @@ export RUST_LOG=info
 | **識別子とバス** | | |
 | `YAGRA_BUS_URL` | 未設定 ⇒ アイドル | NATS バス URL（ポーラが張る唯一のバックエンド接続） |
 | `YAGRA_POLLER_ID` | `docker-compose.deploy.yml` では `local`、単体ではホスト名、無ければ `poller-<hex>` | 安定・一意・subject 安全なポーラ識別子。core にも同じ値が渡るので、両者が同じポーラーを指す |
-| `YAGRA_POLLER_POOL` | `default` | このポーラが担当するプール |
+| `YAGRA_POLLER_POOL` | `default` | このポーラが**最初に所属する**プール。v0.3.4 以降、初回接続より後の所属は core が持つため、Settings ▸ Pollers での移動はコンテナを作り直しても戻らない |
 | `YAGRA_BUS_CA_FILE` | 未設定 ⇒ 平文 | `tls://` バスに固定する CA/サーバ証明書 |
 | `YAGRA_MAX_CONCURRENT_POLLS` | `64` | 同時実行プローブ数の上限 |
 | `YAGRA_ADOPT_RATE_PER_SEC` | `200` | 他ポーラーの作業を引き継ぐ際のジッタ窓を決めるレート（チェック数/秒）。`0` で間隔全体にジッタ（従来動作）|

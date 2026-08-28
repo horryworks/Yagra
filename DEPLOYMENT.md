@@ -520,7 +520,7 @@ Run it on the host network (not a private namespace) so passive event source-IP 
 | **Identity & bus** | | |
 | `YAGRA_BUS_URL` | unset ⇒ idle | NATS bus URL (only backing-service connection the poller makes) |
 | `YAGRA_POLLER_ID` | `local` in `docker-compose.deploy.yml`; standalone: hostname, else `poller-<hex>` | Stable, unique, subject-safe poller identity. Core is given the same value, so both halves name the same poller |
-| `YAGRA_POLLER_POOL` | `default` | Pool this poller serves |
+| `YAGRA_POLLER_POOL` | `default` | The pool this poller **starts** in. From v0.3.4 core owns the pool after first contact, so a move made at Settings ▸ Pollers survives a container recreate |
 | `YAGRA_BUS_CA_FILE` | unset ⇒ plaintext | CA/server cert pinned for the `tls://` bus |
 | `YAGRA_MAX_CONCURRENT_POLLS` | `64` | Max concurrent in-flight probes |
 | `YAGRA_ADOPT_RATE_PER_SEC` | `200` | Checks/sec used to size the jitter window when adopting another poller's work; `0` = jitter across the whole interval |

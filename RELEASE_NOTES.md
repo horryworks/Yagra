@@ -10,6 +10,8 @@
 
 ## Unreleased
 
+## v0.3.4 — an upgrade asks what to move and shows the sites moving, and a poller changes pool without a restart
+
 ### Breaking changes
 
 - **`GET /api/v1/system/upgrade` no longer returns `pollers` or `poller_alignment`.** They are
@@ -40,7 +42,9 @@
   rename it or remove it. Deleting is refused while nodes, folders or pollers still name the pool,
   and renaming carries the pool's nodes, folders **and pollers** to the new name in one step. It is
   refused only when a poller serving the pool cannot follow a change — it is offline, or its build
-  predates this release.
+  predates this release. The default pool is the one exception: it can be described but not renamed
+  or deleted, because its name is fixed in the code and every node that is in it only by inheritance
+  would be left behind under a new one.
 
 - **A poller can be moved between pools from the WebUI, and it moves immediately.** Drag a poller's
   grip onto a pool card, or use Move in its Pool cell; it starts polling the new pool at once.
@@ -54,8 +58,11 @@
   live one of its pool and that pool still has nodes, the move stops and offers two answers: bring
   those nodes to the destination as well (one transaction, monitoring never stops), or leave them
   and accept that they stop being polled. Every other move goes straight through with no dialog.
-  `PUT /api/v1/pollers/{id}/pool` refuses with `409` unless the request says which, so a client
-  that skips the question gets the refusal rather than a pool that silently goes dark.
+  `PUT /api/v1/pollers/{id}/pool` refuses with `409` `source_pool_would_empty` unless the request
+  says which, so a client that skips the question gets the refusal rather than a pool that silently
+  goes dark. Both the dialog and that refusal count the pool's **effective** nodes — a node's own
+  setting, else the nearest ancestor folder's, else the default — which is what the rest of the
+  product means by the nodes a pool polls.
 
 - **A poller older than this release cannot be moved, and the screen says so.** Its Pool cell offers
   no control and explains why. Moving one would half-work: it would take the new pool's working set
@@ -65,8 +72,9 @@
 
 - **The pool strip is now labelled and selects.** It carries a heading naming what those cards are,
   and pressing one narrows the table to that pool's pollers. Pressing the card again, the filter
-  chip's ✕, or Escape clears it. A card is also a drop target for a poller being dragged. The cards write the screen's existing pool column
-  filter rather than a selection of their own, so the two cannot disagree.
+  chip's ✕, or Escape clears it. A card is also a drop target for a poller being dragged. The
+  cards write the screen's existing pool column filter rather than a selection of their own, so the
+  two cannot disagree.
 
 - **`GET /api/v1/pools` gains an optional `description` per pool**, and `GET /api/v1/pollers`
   gains `can_change_pool` per poller and `description` per pool summary. New endpoints:
@@ -79,7 +87,6 @@
   its `pollers` row rather than from the name it presents at connect, so a registered poller can no
   longer name another pool and be issued that pool's job subject — which carries plaintext device
   credentials. A poller with no inventory row (first contact, bootstrap secret) is unchanged.
-
 
 - **Upgrading now asks what to move.** Pressing Upgrade opens the components list — core, the
   co-located poller and every remote site, each with its current version, the version it would move
@@ -98,25 +105,15 @@
   be taken. The database schema moved inside "Running build" and "Upgrading from here" is now
   "System upgrade".
 
+### Improvements
+
+- **The deployment composition passes `YAGRA_POLLER_POOL` through to the co-located poller.**
+  Setting it in `.env` now places that poller in a named pool the first time core sees it; before,
+  the value sat in the file and reached nothing. Leaving it unset is byte-identical to every
+  previous release — the binary's own default is `default`. The remote-site composition has always
+  passed it.
+
 ### Bug Fixes
-
-- **Moving a poller with "bring what it monitors along" now actually brings it.** The choice was
-  discarded whenever the source pool held only nodes that inherit their pool — which is every
-  node in a deployment until somebody assigns one explicitly. The confirmation dialog counted a
-  node's effective pool (its own setting, else the nearest ancestor folder's, else the default)
-  while the server counted only nodes whose own `pool` column named it, so the dialog appeared,
-  the answer was taken, and no node moved. Moving the last poller out of such a pool left its
-  nodes unpolled with a success message on screen.
-
-- **`PUT /api/v1/pollers/{id}/pool` counts nodes the way the rest of the product does.** The
-  `source_pool_would_empty` conflict now triggers on — and reports — the number of nodes the pool
-  actually polls, including inherited ones. It previously reported only explicitly-assigned
-  nodes, so an API caller could empty a pool of thousands of nodes and never see the conflict.
-
-- **The default pool can no longer be renamed.** Its name is fixed in the code, so renaming its
-  row moved the pollers to the new name and left every node that is in the pool only by
-  inheritance behind in the old one, unpolled. `PUT /api/v1/pools/{name}` now returns `409`
-  `pool_in_use` for it, as deleting it already did.
 
 - **The site updater now runs `docker compose` from the directory the host knows the site by.** It
   reads that path back from the `com.docker.compose.project.working_dir` label, the way the central
