@@ -239,7 +239,14 @@ async fn main() -> anyhow::Result<()> {
         ticker.tick().await;
         for _ in 0..per_tick {
             let node = nodes[(i as usize) % node_count];
-            let result = make_result(node, i, down_every, ifaces, iface_metrics, sys_descr.as_deref());
+            let result = make_result(
+                node,
+                i,
+                down_every,
+                ifaces,
+                iface_metrics,
+                sys_descr.as_deref(),
+            );
             // Fire-and-forget; a publish error means NATS is down — surface and stop.
             if let Err(e) = bus.publish_result(result).await {
                 anyhow::bail!("publish_result failed: {e}");

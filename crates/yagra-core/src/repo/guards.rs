@@ -165,31 +165,68 @@ fn every_statement_names_a_table_its_file_declares() {
     );
 }
 
-/// **The lazy `last_seen` touch cannot make a live interface look stale** (ADR-110 Increment 1).
+/// **No polling interval that can skip a write leaves a row old enough to look stale**
+/// (ADR-110 Increment 1).
 ///
-/// This is the entire safety argument for not writing a row whose values did not change, written
-/// as an assertion because the alternative is a paragraph. A row is skipped only while it is newer
-/// than `INTERFACE_TOUCH_SECS`, which can only happen on a node polled *faster* than that window;
-/// a node polled more slowly finds its row already older on every poll and is written exactly as
-/// before. So a skipped row is at most `TOUCH + interval` old with `interval < TOUCH`, i.e. under
-/// `2 * TOUCH` — and the staleness flag must not fire below that, or the fleet's Interfaces tabs
-/// would fill with "no longer reported" for ports that are answering perfectly.
+/// This is the entire safety argument for not writing a row whose values did not change, and it is
+/// enumerated rather than asserted as an inequality — partly because every interval is checked
+/// rather than the boundary alone, and partly because a bare `assert!` over two constants folds to
+/// `assert!(true)` and is optimised out, which clippy rightly refuses.
+///
+/// A row is skipped only while it is newer than `INTERFACE_TOUCH_SECS`, which can only happen on a
+/// node polled *faster* than that window; a node polled more slowly finds its row already older on
+/// every poll and is written exactly as before, so it cannot regress. The oldest such a row can get
+/// is the window plus one more interval — it is written by the first poll that finds it old
+/// enough. The staleness flag must not fire below that, or the fleet's Interfaces tabs would fill
+/// with "no longer reported" for ports that are answering perfectly.
 ///
 /// ⚠️ There is no live PostgreSQL in this suite, so nothing else in the workspace can catch a
 /// widened touch window. Raising `INTERFACE_TOUCH_SECS` to 450 keeps every other test green.
 #[test]
-fn the_touch_window_cannot_make_a_live_row_look_stale() {
+fn no_skippable_interval_leaves_a_row_old_enough_to_look_stale() {
     use super::interfaces::{INTERFACE_STALE_SECS, INTERFACE_TOUCH_SECS};
+    let mut checked = 0usize;
+    let mut worst = (0i64, 0i64);
+    // Exactly the cadences at which a skip is possible. 🚨 The bound is **inclusive**, and that one
+    // character is the whole case: the predicate skips while the row is *at most* the window old,
+    // so a node polled at exactly the window skips at age TOUCH and is written at 2*TOUCH — the
+    // worst age there is. An exclusive bound stops one short of it and happily passes a 450s window
+    // against a 900s threshold, which is precisely the widening this check exists to refuse. It was
+    // written exclusive first, and only breaking the check on purpose found it.
+    for interval in 1..=INTERFACE_TOUCH_SECS {
+        // The first poll whose multiple of the interval clears the window is the one that writes,
+        // so this is the exact oldest a row on this cadence can be observed, not an estimate.
+        let worst_age = (INTERFACE_TOUCH_SECS / interval + 1) * interval;
+        assert!(
+            worst_age < INTERFACE_STALE_SECS,
+            "a node polled every {interval}s can leave a row {worst_age}s old, and the staleness \
+             flag fires at {INTERFACE_STALE_SECS}s: a live port would be reported as stale on both \
+             the Interfaces tab and get_node_status"
+        );
+        if worst_age > worst.1 {
+            worst = (interval, worst_age);
+        }
+        checked += 1;
+    }
+    // Cadences above the window skip nothing — the first poll already finds the row old enough —
+    // so they behave exactly as they did before this existed and need no bound here.
+
+    // The floors. A zero or negative window makes that loop empty, and an empty loop is
+    // indistinguishable from a proof: it would report this check as passing while every row was
+    // written on every poll again.
     assert!(
-        INTERFACE_TOUCH_SECS > 0,
-        "a zero or negative touch window means every row is written on every poll, which is the \
-         behaviour ADR-110 Increment 1 removed"
+        checked > 0,
+        "no cadence was examined, so nothing was proved"
     );
-    assert!(
-        2 * INTERFACE_TOUCH_SECS < INTERFACE_STALE_SECS,
-        "INTERFACE_TOUCH_SECS = {INTERFACE_TOUCH_SECS} against INTERFACE_STALE_SECS = \
-         {INTERFACE_STALE_SECS}: a skipped row can reach 2x the touch window in age, so a live \
-         port would be reported as stale on both the Interfaces tab and get_node_status"
+    assert_eq!(
+        checked, INTERFACE_TOUCH_SECS as usize,
+        "the touch window is {INTERFACE_TOUCH_SECS}, so this check examined {checked} cadences"
+    );
+    assert_eq!(
+        worst,
+        (INTERFACE_TOUCH_SECS, 2 * INTERFACE_TOUCH_SECS),
+        "the worst cadence is no longer the one polled at exactly the window, so the reasoning in \
+         this test's doc has stopped describing what the loop measures"
     );
 }
 
