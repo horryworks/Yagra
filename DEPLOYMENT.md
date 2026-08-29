@@ -583,12 +583,32 @@ Every binary emits structured logs and a Prometheus `/metrics` endpoint out of t
 
 Upgrades are designed to be low-effort and **never** lose or corrupt data:
 
-- **Settings ▸ Upgrade does it for you — the ordinary way to upgrade (v0.2.2+, deployment **A**).** Every other way of installing Yagra — from source, natively, or from a composition without the `yagra-updater` sidecar — has no such mechanism, and the page says so plainly instead of offering controls that would fail. The page lists the releases this deployment can move to and runs backup → pull → install the composition carried inside the target image → recreate → verify. The work is done by a `yagra-updater` sidecar, which is the only container holding the Docker socket — core never has it. Requesting an upgrade needs **manage-configuration and manage-credentials**, it is audited, and it is not on the MCP surface. A switch on the same page turns the mechanism off; the setting lives in PostgreSQL, so it survives the upgrades it governs.
+- **Settings ▸ Upgrade does it for you — the ordinary way to upgrade (v0.2.2+, deployment **A**).** Every other way of installing Yagra — from source, natively, or from a composition without the `yagra-updater` sidecar — has no such mechanism, and the page says so plainly instead of offering controls that would fail. The page lists the releases this deployment can move to and runs backup → pull → install the composition carried inside the target image → recreate → verify. The work is done by a `yagra-updater` sidecar, which is the only container holding the Docker socket — core never has it. Requesting an upgrade needs **manage-the-deployment**, which only an Admin holds; it is audited, and it is not on the MCP surface. A switch on the same page turns the mechanism off; the setting lives in PostgreSQL, so it survives the upgrades it governs.
   - **A release older than the running one is a downgrade, and it is offered only when it can actually boot.** A migration may declare a *compatibility floor* — the oldest version that can still run once it has been applied — and anything below the current floor is shown greyed out with the reason rather than hidden. Nothing is deleted by going back: columns the newer version added stay in place, unread.
   - **No registry reachable?** Run `docker save` on the three release images where you can reach them, and upload the archive at the same page. It needs `YAGRA_UPGRADE_ALLOW_BUNDLE=1` on the host as a second, deliberate opt-in, because `docker load` installs whatever the archive contains — see the variable reference below before turning it on.
 - **DB migrations are expand-contract and run automatically** on core startup. N→N+1 is always supported; `yagra-core migrations` prints the set a binary embeds as JSON with no database and no configuration, so an upgrade can be planned by running it inside the target image first.
 - **The bus is version-tolerant (N/N-1).** A new core works with old pollers during a rollout, so you can upgrade core first and pollers after.
 - **Rolling upgrades.** Pollers are stateless — replace them in any order. For Docker, pull the new tag and `up -d` (see **A**). Remote pollers: pull and `up -d` per site; a pool briefly down falls back to legacy publish, so no node goes dark.
+- 🚨 **A remote site brought up before v0.3.4 must be recreated once, at the site, before the next central upgrade.** Run this in that site's deployment directory:
+
+  ```bash
+  docker compose -p yagra-poller -f docker-compose.poller.yml up -d
+  ```
+
+  The site updater is a **named** service, so an apply recreates only `poller` and never the updater
+  itself — a container keeps the definition it was created with. An updater created before v0.3.4
+  runs `docker compose` from inside its own filesystem, so the composition's certificate bind, which
+  defaults to the relative `./certs`, resolves to a directory that exists only in that container.
+  Docker creates the missing host path **empty** rather than failing, and the replacement poller
+  starts with nothing to trust the bus with and never reconnects — while the site reports
+  `apply … succeeded` and Settings ▸ Upgrade reports the deployment aligned. A pool with other live
+  pollers keeps monitoring because its nodes move; a single-poller pool goes dark until this is run
+  by hand. From v0.3.4 the updater resolves that bind against the host's own directory and refuses
+  to recreate a poller whose certificate directory is empty, so this is needed exactly once.
+  - ⚠️ **Check `YAGRA_IMAGE_TAG` in that site's `.env` first.** The updater passes the tag on its own
+    command line, so `.env` can be left pinned to something the registry does not have (a
+    development build, say) without anyone noticing — and this command, run by hand, *does* read
+    `.env`. Set it to the release you are on, or the recreate fails at the pull.
 - **Take a backup before a major upgrade** — see [Backup & restore](#backup--restore) below.
 
 ---
