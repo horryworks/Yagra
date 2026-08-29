@@ -445,7 +445,7 @@ impl YagraMcp {
                         m,
                         live.get(&m.ifindex).copied().unwrap_or_default(),
                         now_s,
-                        crate::api::collection::INTERFACE_STALE_SECS,
+                        crate::repo::INTERFACE_STALE_SECS,
                     )
                 })
                 .collect(),

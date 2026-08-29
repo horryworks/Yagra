@@ -164,3 +164,142 @@ fn every_statement_names_a_table_its_file_declares() {
          a module full of misplaced queries as clean"
     );
 }
+
+/// **The lazy `last_seen` touch cannot make a live interface look stale** (ADR-110 Increment 1).
+///
+/// This is the entire safety argument for not writing a row whose values did not change, written
+/// as an assertion because the alternative is a paragraph. A row is skipped only while it is newer
+/// than `INTERFACE_TOUCH_SECS`, which can only happen on a node polled *faster* than that window;
+/// a node polled more slowly finds its row already older on every poll and is written exactly as
+/// before. So a skipped row is at most `TOUCH + interval` old with `interval < TOUCH`, i.e. under
+/// `2 * TOUCH` — and the staleness flag must not fire below that, or the fleet's Interfaces tabs
+/// would fill with "no longer reported" for ports that are answering perfectly.
+///
+/// ⚠️ There is no live PostgreSQL in this suite, so nothing else in the workspace can catch a
+/// widened touch window. Raising `INTERFACE_TOUCH_SECS` to 450 keeps every other test green.
+#[test]
+fn the_touch_window_cannot_make_a_live_row_look_stale() {
+    use super::interfaces::{INTERFACE_STALE_SECS, INTERFACE_TOUCH_SECS};
+    assert!(
+        INTERFACE_TOUCH_SECS > 0,
+        "a zero or negative touch window means every row is written on every poll, which is the \
+         behaviour ADR-110 Increment 1 removed"
+    );
+    assert!(
+        2 * INTERFACE_TOUCH_SECS < INTERFACE_STALE_SECS,
+        "INTERFACE_TOUCH_SECS = {INTERFACE_TOUCH_SECS} against INTERFACE_STALE_SECS = \
+         {INTERFACE_STALE_SECS}: a skipped row can reach 2x the touch window in age, so a live \
+         port would be reported as stale on both the Interfaces tab and get_node_status"
+    );
+}
+
+/// **Every column the interface upsert inserts is also a column it updates and compares.**
+///
+/// The statement is generated from `interfaces::VALUE_COLUMNS`, so the `SET` list and the change
+/// predicate cannot disagree with each other. What they *can* disagree with is the INSERT column
+/// list, which is a literal because each column needs its own `unnest` cast. A column added there
+/// and forgotten in `VALUE_COLUMNS` would be written once, on the row's first insert, and **never
+/// updated again** — the device would report a new speed or a new alias forever and Yagra would
+/// keep the original, with no compile error, no runtime error, and no live PostgreSQL in this
+/// suite to notice.
+///
+/// It reads the **generated statement**, not the source text: that is the thing that actually runs,
+/// and it makes the check immune to how the SQL happens to be spelled. Needles are assembled at
+/// runtime for the usual reason — a literal `IS DISTINCT FROM` written out here would match this
+/// file's own text if the check ever moved to a source scan (testing.md).
+///
+/// 🚨 Floors on both ends: the column count and the placeholder count. This is a check whose
+/// healthy answer is "found nothing wrong", so it has to be able to tell that apart from "parsed
+/// nothing".
+#[test]
+fn every_inserted_column_is_updated_and_compared() {
+    use super::interfaces::{UPSERT_SQL, VALUE_COLUMNS};
+    let sql: &str = &UPSERT_SQL;
+
+    // The INSERT column list, verbatim from the statement.
+    let open = sql
+        .find("INSERT INTO interfaces (")
+        .expect("the statement inserts into interfaces");
+    let list_start = open + "INSERT INTO interfaces (".len();
+    let list_end = list_start
+        + sql[list_start..]
+            .find(')')
+            .expect("the INSERT column list is closed");
+    let inserted: Vec<&str> = sql[list_start..list_end]
+        .split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .collect();
+    // The key is not a value, and the clock is not something a device reports.
+    let key_or_clock = ["node_id", "ifindex", "last_seen"];
+    let values: Vec<&str> = inserted
+        .iter()
+        .copied()
+        .filter(|c| !key_or_clock.contains(c))
+        .collect();
+    assert_eq!(
+        inserted.len(),
+        values.len() + key_or_clock.len(),
+        "the INSERT list {inserted:?} no longer names all of {key_or_clock:?}, so the split \
+         between the row's key, its clock and its device-supplied values has moved"
+    );
+    assert_eq!(
+        values,
+        VALUE_COLUMNS.to_vec(),
+        "the statement inserts {values:?} but VALUE_COLUMNS is {:?}. A column in the first list \
+         and not the second is inserted once and never updated again",
+        VALUE_COLUMNS
+    );
+    assert_eq!(
+        VALUE_COLUMNS.len(),
+        11,
+        "the floor moved: {} device-supplied columns were compared, and a parse that stopped \
+         matching would report the same clean result as a correct statement",
+        VALUE_COLUMNS.len()
+    );
+
+    // Each of them is COALESCEd into the row and named on both sides of the change predicate.
+    let coalesce = |c: &str| format!("{c} = COALESCE(EXCLUDED.{c}, interfaces.{c})");
+    let compare = |c: &str| format!("interfaces.{c} IS DISTINCT FROM EXCLUDED.{c}");
+    let present = |c: &str| format!("EXCLUDED.{c} IS NOT NULL");
+    for c in VALUE_COLUMNS {
+        assert!(
+            sql.contains(&coalesce(c)),
+            "{c} is not COALESCEd into the row"
+        );
+        assert!(
+            sql.contains(&compare(c)),
+            "{c} is never compared, so a change to it is discarded"
+        );
+        assert!(
+            sql.contains(&present(c)),
+            "{c} is compared without the IS NOT NULL half, so a walk that stopped reporting it \
+             would count as a change and rewrite every row forever"
+        );
+    }
+
+    // The clock is written unconditionally *inside* the SET, and gated *outside* it by the touch
+    // window. Losing the second half puts the statement back to rewriting every polled row.
+    assert!(sql.contains("last_seen = now()"));
+    assert!(
+        sql.contains("interfaces.last_seen < now() - interval '1 second' * $14::float8"),
+        "the lazy touch is gone, so every polled row is written again on every poll"
+    );
+
+    // Fourteen placeholders, each used exactly once, and the touch window is the last — because the
+    // binds are positional and a mismatch between the two lists writes one column's values into
+    // another with no error of any kind.
+    for i in 1..=14 {
+        let needle = format!("${i}:");
+        assert_eq!(
+            sql.matches(&needle).count(),
+            1,
+            "placeholder ${i} is used {} times; the bind list is positional",
+            sql.matches(&needle).count()
+        );
+    }
+    assert!(
+        !sql.contains("$15"),
+        "a fifteenth placeholder has no bind behind it"
+    );
+}

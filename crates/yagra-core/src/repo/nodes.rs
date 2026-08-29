@@ -379,6 +379,14 @@ impl NodeRepo {
     /// for MANY nodes in one `UPDATE` (the async ingest writer, ADR-025). `COALESCE` preserves any
     /// existing value; a `None` leaves that column alone. `unnest` binds arrays, so the row count is
     /// unbounded by Postgres' parameter ceiling. Dedups keeping the last occurrence per node.
+    ///
+    /// ⚠️ **"Fill" is meant literally: a node whose vendor and model are already set is not
+    /// written** (ADR-110 Increment 1). It used to be — `updated_at = now()` was unconditional, so
+    /// every poll carrying a `sysDescr` rewrote its node's row with the values it already had, at
+    /// fleet scale 50,000 rows per cycle on a table with more indexes than `interfaces`. The
+    /// COALESCE meant the stored values never moved, so the write was pure cost. `updated_at` has
+    /// no reader — it is not in [`NodeRepo::NODE_COLUMNS`], so `node_from_row` never selects it and
+    /// no API or UI surface carries it — which is why not advancing it changes nothing observable.
     pub async fn fill_node_identity_batch(
         &self,
         rows: &[(Uuid, Option<String>, Option<String>)],
@@ -399,7 +407,9 @@ impl NodeRepo {
                 model = COALESCE(nodes.model, t.model), \
                 updated_at = now() \
              FROM unnest($1::uuid[], $2::text[], $3::text[]) AS t(id, vendor, model) \
-             WHERE nodes.id = t.id",
+             WHERE nodes.id = t.id \
+               AND ((nodes.vendor IS NULL AND t.vendor IS NOT NULL) \
+                 OR (nodes.model IS NULL AND t.model IS NOT NULL))",
         )
         .bind(&ids)
         .bind(&vendors)

@@ -27,6 +27,31 @@
 
 ### Improvements
 
+- **The interface table is only written when something actually changed.** An SNMP table walk
+  re-reports every port on every poll, and core rewrote every one of those rows every time —
+  1,159,864 row updates per cycle at 50,000 nodes × 24 ports — whether or not the device had said
+  anything new. Measured against a live firewall (16 ports, ten of them down) over five poll
+  cycles: **not one of the eleven device-supplied columns changed on any row.** Core now updates a
+  row only when a stored value would actually change, and advances the row's `last_seen` clock at
+  most once every five minutes instead of on every poll.
+
+  Nothing about *which* value ends up stored has changed, and no interface becomes stale that was
+  not stale before. The touch window is deliberately less than half the fifteen-minute staleness
+  threshold, so a port that is still being walked cannot age past it; a port that has genuinely
+  left the walk still goes stale on exactly the old schedule, because nothing writes its row at
+  all. Two new counters say what a fleet is costing the table:
+  `yagra_interface_upsert_rows_total{outcome="written"}` and `{outcome="skipped"}`.
+
+  ⚠️ One thing an API client can see: `last_seen` on `GET /api/v1/nodes/{id}/interfaces` now
+  advances at most once every five minutes rather than on every poll. The `stale` flag beside it is
+  computed from the same column and is unaffected.
+
+- **Filling a node's vendor/model no longer rewrites the row when there is nothing to fill.** Every
+  poll carrying a `sysDescr` updated its `nodes` row — 50,000 rows per cycle at fleet scale, on a
+  table with more indexes than `interfaces` — even though the statement only ever fills blanks and
+  so wrote the same values back. It now writes only when a blank is genuinely filled. Nothing reads
+  the `updated_at` this was advancing.
+
 - **`YAGRA_PG_MAX_CONNECTIONS` now actually reaches core.** Both compositions pass it through.
   Core has always read it and `.env.example` has always said to raise it to 50–80 at tens of
   thousands of nodes — but the variable appeared in neither `docker-compose.yml` nor

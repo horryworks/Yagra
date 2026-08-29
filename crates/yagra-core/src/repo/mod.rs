@@ -72,7 +72,10 @@ mod guards;
 // make those two signatures unnameable from outside `repo` — a narrowing of the surface disguised
 // as a warning fix, and the one difference this split would have made to a caller.
 #[allow(unused_imports)]
-pub use interfaces::{InterfaceBatchRow, InterfaceIdent, InterfaceMeta, InterfaceUpsert};
+pub use interfaces::{
+    InterfaceBatchRow, InterfaceIdent, InterfaceMeta, InterfaceUpsert, INTERFACE_STALE_SECS,
+    INTERFACE_TOUCH_SECS,
+};
 pub use listing::{NodeListing, StaticNodeList, NODE_SCAN_MAX, NODE_SEARCH_MAX};
 pub use migrate::embedded_migrations;
 #[allow(unused_imports)]

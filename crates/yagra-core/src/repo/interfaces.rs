@@ -7,8 +7,17 @@
 //! columns of it. The direct consequence is that a poller which starts sending `NULL` leaves the
 //! previous value in place forever: correcting a stored value takes the poller change **and** a
 //! one-time `UPDATE` (`extensibility.md` §6, migrations 0086 and 0088).
+//!
+//! ⚠️ **It also writes only the rows that would actually change** (ADR-110 Increment 1). A table
+//! walk re-reports every port every time and a live device changes none of these columns, so
+//! writing unconditionally was 1,159,864 row updates per cycle at fleet scale and was what broke
+//! the receiving side first. The clock column is on a lazy touch; [`INTERFACE_TOUCH_SECS`] carries
+//! the invariant that makes that safe, and `repo/guards.rs` holds both it and the statement's
+//! shape. **Nothing about which value ends up stored changed** — only how often a row is rewritten
+//! with the value it already had.
 
 use std::collections::{BTreeMap, HashMap};
+use std::sync::LazyLock;
 
 use serde::Serialize;
 use sqlx::Row;
@@ -17,6 +26,111 @@ use uuid::Uuid;
 // Only the settings struct: `retention::Row` would collide with `sqlx::Row` above.
 
 use super::*;
+
+/// An interface whose metadata has not been refreshed within this window is flagged stale. The UI
+/// shows the row either way — a switch that stopped answering SNMP still has ports.
+///
+/// It lives here, not at either reader, because it is a fact about this table's `last_seen` column
+/// and because it is one half of an invariant whose other half is [`INTERFACE_TOUCH_SECS`]: neither
+/// number means anything alone. Both the REST edge and the MCP node-status tool read it, so a
+/// second copy would let the two surfaces disagree about which interfaces are current (ADR-042 I4).
+pub const INTERFACE_STALE_SECS: i64 = 900;
+
+/// How stale a row's `last_seen` must be before a walk that changed **nothing** bothers to advance
+/// it (ADR-110 Increment 1).
+///
+/// **Why this exists.** `last_seen = now()` is a different value on every poll, so writing it
+/// unconditionally rewrote every polled port's row whether or not the device had said anything
+/// new. Measured at 50,000 nodes × 24 ports that is **1,159,864 row updates per cycle**, and it was
+/// the first thing to break the receiving side: the upsert held all twenty PostgreSQL connections
+/// while a zero-row `SELECT` took 74.6 s. A live device changes none of the other columns —
+/// `jpmyj01fw01` (16 ports, ten of them down) changed **0 of 16 rows** over five cycles, and only
+/// `last_seen` moved, identically on all sixteen because the walk is per node.
+///
+/// 🚨 **The safety argument is the invariant `2 * INTERFACE_TOUCH_SECS < INTERFACE_STALE_SECS`,
+/// and `repo/guards.rs` holds it.** A row is skipped only while it is newer than this window, which
+/// can only happen on a node polled *faster* than the window; a node polled more slowly finds its
+/// row already older on every poll and is written exactly as before, so it cannot regress. When a
+/// skip does happen the row reaches at most `TOUCH + interval` old, and `interval < TOUCH` in that
+/// branch, so at most `2 * TOUCH` — which the invariant keeps under the staleness threshold. A live
+/// port therefore is never wrongly called stale, and a port that has genuinely left the walk still
+/// ages out at `INTERFACE_STALE_SECS`, because nothing writes its row at all.
+///
+/// ⚠️ **Not the same as moving `last_seen` to node granularity.** That is cheaper still (one row
+/// per node rather than one per port) and was rejected: a per-row `last_seen` is the only evidence
+/// that a *particular* port was in the last walk, which is what makes a pulled line card visible.
+/// The lazy touch keeps both properties.
+pub const INTERFACE_TOUCH_SECS: i64 = 300;
+
+/// The device-supplied columns of `interfaces` — every column the upsert COALESCEs.
+///
+/// `node_id` and `ifindex` are the key and `last_seen` is the row's clock, so neither is here.
+/// Both the `DO UPDATE SET` list and the "would this row actually change" predicate are generated
+/// from this array, so those two cannot disagree. What still can drift is a column added to the
+/// INSERT list and forgotten here, which would leave that column **inserted once and never
+/// updated** — a change the device reports and Yagra silently discards, with no compile error and
+/// no runtime error. `repo/guards.rs` reads the generated statement back and refuses exactly that.
+pub(super) const VALUE_COLUMNS: [&str; 11] = [
+    "if_name",
+    "if_alias",
+    "if_speed",
+    "if_duplex",
+    "if_type",
+    "if_media",
+    "transceiver_model",
+    "rx_power_low_dbm",
+    "rx_power_high_dbm",
+    "tx_power_low_dbm",
+    "tx_power_high_dbm",
+];
+
+/// The one statement [`NodeRepo::upsert_interfaces_batch`] runs, built once.
+///
+/// ⚠️ **Adding a column still means four coordinated edits** — the INSERT list, the unnest cast
+/// list, the `.bind()` and [`VALUE_COLUMNS`] — and only the first two are checked against each
+/// other by Postgres. A `.bind()` in the wrong order is not a compile error and not a runtime
+/// error; it silently writes one column's values into another. The `SET` list and the change
+/// predicate used to be two further hand-written copies and are now generated, which is the whole
+/// reason this is a `format!` rather than a literal.
+pub(super) static UPSERT_SQL: LazyLock<String> = LazyLock::new(|| {
+    // `COALESCE` on every column because the row has **several writers** — the metadata walk, the
+    // optical probe and the MAU walk each fill different columns of it, and a walk that is
+    // switched off must not blank what another one wrote.
+    let set = VALUE_COLUMNS
+        .iter()
+        .map(|c| format!("{c} = COALESCE(EXCLUDED.{c}, interfaces.{c})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // Given that `SET`, "this row would change" is exactly "the walk said something about this
+    // column, and what it said differs from what is stored". `IS DISTINCT FROM` rather than `<>`:
+    // the stored side is nullable and `<>` would answer NULL, which a WHERE reads as false.
+    let changed = VALUE_COLUMNS
+        .iter()
+        .map(|c| {
+            format!("(EXCLUDED.{c} IS NOT NULL AND interfaces.{c} IS DISTINCT FROM EXCLUDED.{c})")
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!(
+        "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, \
+             if_duplex, if_type, if_media, transceiver_model, \
+             rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
+             last_seen) \
+         SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, \
+             t.if_duplex, t.if_type, t.if_media, t.transceiver_model, \
+             t.rx_power_low_dbm, t.rx_power_high_dbm, t.tx_power_low_dbm, \
+             t.tx_power_high_dbm, now() \
+         FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[], \
+                     $6::text[], $7::int[], $8::text[], $9::text[], \
+                     $10::float8[], $11::float8[], $12::float8[], $13::float8[]) \
+              AS t(node_id, ifindex, if_name, if_alias, if_speed, \
+                   if_duplex, if_type, if_media, transceiver_model, \
+                   rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm) \
+         ON CONFLICT (node_id, ifindex) DO UPDATE SET {set}, last_seen = now() \
+         WHERE {changed} \
+            OR interfaces.last_seen < now() - interval '1 second' * $14::float8"
+    )
+});
 
 /// One interface's stored metadata (from a table walk). Descriptive attributes only —
 /// joined to per-interface metrics at query time (thin-label model, ADR-011).
@@ -246,59 +360,35 @@ impl NodeRepo {
             tx_lows.push(iface.tx_power_low_dbm);
             tx_highs.push(iface.tx_power_high_dbm);
         }
-        // ⚠️ Adding a column here means four coordinated edits — the INSERT list, the unnest cast
-        // list, the COALESCE line and the `.bind()` — and only the first two are checked against
-        // each other by Postgres. A `.bind()` in the wrong order is not a compile error and not a
-        // runtime error; it silently writes one column's values into another.
-        sqlx::query(
-            "INSERT INTO interfaces (node_id, ifindex, if_name, if_alias, if_speed, \
-                 if_duplex, if_type, if_media, transceiver_model, \
-                 rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm, \
-                 last_seen) \
-             SELECT t.node_id, t.ifindex, t.if_name, t.if_alias, t.if_speed, \
-                 t.if_duplex, t.if_type, t.if_media, t.transceiver_model, \
-                 t.rx_power_low_dbm, t.rx_power_high_dbm, t.tx_power_low_dbm, \
-                 t.tx_power_high_dbm, now() \
-             FROM unnest($1::uuid[], $2::int[], $3::text[], $4::text[], $5::int8[], \
-                         $6::text[], $7::int[], $8::text[], $9::text[], \
-                         $10::float8[], $11::float8[], $12::float8[], $13::float8[]) \
-                  AS t(node_id, ifindex, if_name, if_alias, if_speed, \
-                       if_duplex, if_type, if_media, transceiver_model, \
-                       rx_power_low_dbm, rx_power_high_dbm, tx_power_low_dbm, tx_power_high_dbm) \
-             ON CONFLICT (node_id, ifindex) DO UPDATE SET \
-                if_name = COALESCE(EXCLUDED.if_name, interfaces.if_name), \
-                if_alias = COALESCE(EXCLUDED.if_alias, interfaces.if_alias), \
-                if_speed = COALESCE(EXCLUDED.if_speed, interfaces.if_speed), \
-                if_duplex = COALESCE(EXCLUDED.if_duplex, interfaces.if_duplex), \
-                if_type = COALESCE(EXCLUDED.if_type, interfaces.if_type), \
-                if_media = COALESCE(EXCLUDED.if_media, interfaces.if_media), \
-                transceiver_model = COALESCE(EXCLUDED.transceiver_model, \
-                    interfaces.transceiver_model), \
-                rx_power_low_dbm = COALESCE(EXCLUDED.rx_power_low_dbm, \
-                    interfaces.rx_power_low_dbm), \
-                rx_power_high_dbm = COALESCE(EXCLUDED.rx_power_high_dbm, \
-                    interfaces.rx_power_high_dbm), \
-                tx_power_low_dbm = COALESCE(EXCLUDED.tx_power_low_dbm, \
-                    interfaces.tx_power_low_dbm), \
-                tx_power_high_dbm = COALESCE(EXCLUDED.tx_power_high_dbm, \
-                    interfaces.tx_power_high_dbm), \
-                last_seen = now()",
-        )
-        .bind(&node_ids)
-        .bind(&ifindexes)
-        .bind(&names)
-        .bind(&aliases)
-        .bind(&speeds)
-        .bind(&duplexes)
-        .bind(&if_types)
-        .bind(&medias)
-        .bind(&models)
-        .bind(&rx_lows)
-        .bind(&rx_highs)
-        .bind(&tx_lows)
-        .bind(&tx_highs)
-        .execute(&self.pool)
-        .await?;
+        // Only the rows that would actually change are written — see `INTERFACE_TOUCH_SECS` for
+        // why the clock column is on a lazy touch and why that cannot make a live port look stale.
+        let written = sqlx::query(&UPSERT_SQL)
+            .bind(&node_ids)
+            .bind(&ifindexes)
+            .bind(&names)
+            .bind(&aliases)
+            .bind(&speeds)
+            .bind(&duplexes)
+            .bind(&if_types)
+            .bind(&medias)
+            .bind(&models)
+            .bind(&rx_lows)
+            .bind(&rx_highs)
+            .bind(&tx_lows)
+            .bind(&tx_highs)
+            .bind(INTERFACE_TOUCH_SECS as f64)
+            .execute(&self.pool)
+            .await?
+            .rows_affected();
+        // What this fleet costs the table, permanently visible rather than only during a load
+        // test. `skipped` is the whole point of ADR-110 Increment 1; `written` climbing to meet it
+        // means either a fleet whose ports really are changing or a predicate that has stopped
+        // matching, and neither is visible from a queue depth.
+        let offered = n as u64;
+        metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "written")
+            .increment(written);
+        metrics::counter!("yagra_interface_upsert_rows_total", "outcome" => "skipped")
+            .increment(offered.saturating_sub(written));
         Ok(())
     }
 }

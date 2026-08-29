@@ -32,12 +32,10 @@ use yagra_common::{
     METRIC_IF_TX_POWER_DBM,
 };
 
-/// An interface whose metadata has not been refreshed within this window is flagged stale. The UI
-/// shows the row either way — a switch that stopped answering SNMP still has ports.
-///
-/// `pub(crate)` because `get_node_status` reports the same flag over MCP: a second copy of the
-/// window would let the two surfaces disagree about which interfaces are current (ADR-042 I4).
-pub(crate) const INTERFACE_STALE_SECS: i64 = 900;
+// The staleness window lives with the column it describes (`repo::interfaces`), because it is one
+// half of an invariant whose other half is the lazy-touch window the writer uses — see
+// `INTERFACE_TOUCH_SECS`. This edge and the MCP node-status tool both read the same constant.
+use crate::repo::INTERFACE_STALE_SECS;
 
 /// This domain's slice of the OpenAPI document (ADR-035), merged by [`super::openapi::document`].
 #[derive(utoipa::OpenApi)]

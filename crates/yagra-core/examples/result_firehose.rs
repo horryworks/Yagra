@@ -20,12 +20,21 @@
 //!   cargo run --release --example result_firehose
 //! Env knobs (all optional):
 //!   YAGRA_BUS_URL       NATS url                         (default nats://127.0.0.1:4222)
+//!   YAGRA_BUS_CA_FILE   root CA to pin, for a `tls://` bus (same name the poller reads). Without
+//!                       it a deployment that has switched on "Accept remote pollers" refuses the
+//!                       connection, because its NATS presents a certificate from a CA that is in
+//!                       no system trust store — which is every deployment worth load-testing.
 //!   FIREHOSE_NODES      synthetic node count             (default 1000)
 //!   FIREHOSE_RATE       target results/sec               (default 1000)
 //!   FIREHOSE_SECONDS    run duration; 0 = run forever    (default 30)
 //!   FIREHOSE_DOWN_PCT   % of results reporting Unreachable, to drive liveness alerts (default 2)
 //!   FIREHOSE_IFACES     interfaces per result (needs seeded nodes for the FK upsert) (default 0)
 //!   FIREHOSE_IFACE_METRICS  per-interface metric samples per interface, 0..=11 (default 11)
+//!   FIREHOSE_SYS_DESCR  the sysDescr each result carries; empty ⇒ none (default: a real Cisco
+//!                       string). It is on by default because a real SNMP scalar poll always
+//!                       carries one, and it is what drives core's `fill_node_identity_batch` —
+//!                       without it the harness never touched the `nodes` table at all, and a
+//!                       whole per-poll write of the fleet was invisible to it (ADR-110 Inc.1).
 //!   FIREHOSE_SEEDED     1 ⇒ target the deterministic ids from `seed_nodes.rs` instead of random
 //!                       NodeIds, so results land on real FK-valid, scheduled nodes (default 0)
 //!
@@ -98,6 +107,7 @@ fn make_result(
     down_every: u64,
     ifaces: usize,
     iface_metrics: usize,
+    sys_descr: Option<&str>,
 ) -> PollResult {
     let down = down_every > 0 && i.is_multiple_of(down_every);
     let outcome = if down {
@@ -158,7 +168,7 @@ fn make_result(
         outcome,
         samples,
         interfaces,
-        sys_descr: None,
+        sys_descr: sys_descr.map(str::to_owned),
         dns_chain: None,
         neighbors: None,
         l3: None,
@@ -181,6 +191,11 @@ async fn main() -> anyhow::Result<()> {
     let iface_metrics =
         env_usize("FIREHOSE_IFACE_METRICS", IFACE_METRICS.len()).min(IFACE_METRICS.len());
     let seeded = env_usize("FIREHOSE_SEEDED", 0) != 0;
+    // A device that answers SNMP at all answers sysDescr, so the rig sends one unless told not to.
+    let sys_descr = std::env::var("FIREHOSE_SYS_DESCR").unwrap_or_else(|_| {
+        "Cisco IOS Software, C2960X Software (C2960X-UNIVERSALK9-M), Version 15.2(7)E3".to_owned()
+    });
+    let sys_descr = (!sys_descr.is_empty()).then_some(sys_descr);
 
     // Every Nth result reports down; N derived from the requested percentage (0 ⇒ never down).
     let down_every = 100u64.checked_div(down_pct as u64).unwrap_or(0);
@@ -192,7 +207,17 @@ async fn main() -> anyhow::Result<()> {
         2 + ifaces * iface_metrics,
         node_count * (2 + ifaces * iface_metrics)
     );
-    let bus = NatsBus::connect(&url).await?;
+    // Same two environment variables the poller uses, read the same way: the URL carries the
+    // credentials and `YAGRA_BUS_CA_FILE` pins the server certificate. `connect` (no CA) is kept as
+    // the plaintext single-node path so a laptop run needs no setup.
+    // Both binaries do this at startup and a TLS bus panics without it: two rustls providers are
+    // enabled in this graph, so rustls installs no default and async_nats builds its own config.
+    yagra_bus::install_tls_crypto_provider();
+    let ca = std::env::var("YAGRA_BUS_CA_FILE").ok();
+    let bus = match ca.as_deref() {
+        Some(path) => NatsBus::connect_opts(&url, Some(std::path::Path::new(path))).await?,
+        None => NatsBus::connect(&url).await?,
+    };
     // Seeded mode reproduces `seed_nodes.rs`' deterministic ids (results hit real FK-valid, scheduled
     // rows); otherwise use throwaway random ids (fine for pure ingest-throughput measurement).
     let nodes: Vec<NodeId> = if seeded {
@@ -214,7 +239,7 @@ async fn main() -> anyhow::Result<()> {
         ticker.tick().await;
         for _ in 0..per_tick {
             let node = nodes[(i as usize) % node_count];
-            let result = make_result(node, i, down_every, ifaces, iface_metrics);
+            let result = make_result(node, i, down_every, ifaces, iface_metrics, sys_descr.as_deref());
             // Fire-and-forget; a publish error means NATS is down — surface and stop.
             if let Err(e) = bus.publish_result(result).await {
                 anyhow::bail!("publish_result failed: {e}");
