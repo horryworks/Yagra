@@ -52,8 +52,20 @@ pub(crate) const POLL_PHASE_BUCKETS: &[f64] = &[
     0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0,
 ];
 
-fn record_phase(phase: &'static str, since: Instant) {
-    metrics::histogram!(POLL_PHASE_METRIC, "phase" => phase).record(since.elapsed().as_secs_f64());
+/// Record one phase of one poll, broken out by the kind of check it was (ADR-110).
+///
+/// 🚨 **The `kind` label is what makes the histogram readable at all on an SNMP fleet.** Without
+/// it, one distribution mixes an ICMP probe (three echoes), a table walk (~40 sequential round
+/// trips) and six slow-tier walks that run once an hour, so "the mean poll takes 22.5 seconds" was
+/// true, unactionable, and could not say which check spent the time. The label comes from
+/// [`CheckSpec::kind_label`], which is the same word core stamps on the dispatch span.
+///
+/// ⚠️ Meraki collects are not in here: that branch returns above without taking these phases,
+/// because one job becomes many results and the phases would not mean the same thing. So an absent
+/// `kind="meraki_collect"` says the phase was never recorded, not that the poll was free.
+fn record_phase(kind: &'static str, phase: &'static str, since: Instant) {
+    metrics::histogram!(POLL_PHASE_METRIC, "kind" => kind, "phase" => phase)
+        .record(since.elapsed().as_secs_f64());
 }
 
 /// Run the poll loop over a stream of jobs. Each job runs concurrently under the
@@ -152,7 +164,10 @@ pub async fn run_stream<S>(
         let Some(permit) = limiter.acquire_permit().await else {
             continue; // shutdown
         };
-        record_phase("wait_permit", queued_at);
+        // Read once, out here: the task takes the job by value, and every phase must carry the same
+        // word or one poll would land in two kinds.
+        let kind = job.check.kind_label();
+        record_phase(kind, "wait_permit", queued_at);
         // DNS monitors share a target by design — many names, one resolver, and every check using
         // the system resolver carries the same 0.0.0.0 display address. Per-target single-flight
         // would therefore drop every DNS check but one on each cycle, so they take the global-only
@@ -190,7 +205,7 @@ pub async fn run_stream<S>(
                 // Recorded before the branch below, so a job that waited out its whole deadline and
                 // was then dropped is in the distribution rather than missing from it — that tail is
                 // the reason this phase is measured separately from `execute`.
-                record_phase("wait_device", claimed_at);
+                record_phase(kind, "wait_device", claimed_at);
                 // Released (and the target unmarked) when the probe finishes.
                 let Some(_guard) = guard else {
                     metrics::counter!("yagra_poll_skipped_backpressure_total").increment(1);
@@ -208,14 +223,14 @@ pub async fn run_stream<S>(
                 metrics::counter!("yagra_poll_jobs_executed_total").increment(1);
                 let probed_at = Instant::now();
                 let mut result = execute(&job, transport.as_ref(), now_unix_ms()).await;
-                record_phase("execute", probed_at);
+                record_phase(kind, "execute", probed_at);
                 stamp_poller_id(&mut result, &poller_id);
                 // Carry the poll span's context so core's result-ingest span joins this trace.
                 result.trace_context = yagra_telemetry::current_trace_context();
                 // Store-and-forward: live-publish when connected, else buffer for replay (Phase 3).
                 let published_at = Instant::now();
                 sink.submit(result).await;
-                record_phase("publish", published_at);
+                record_phase(kind, "publish", published_at);
                 results_total.fetch_add(1, Ordering::Relaxed);
                 let left = inflight.fetch_sub(1, Ordering::Relaxed).saturating_sub(1);
                 metrics::gauge!("yagra_poll_inflight").set(left as f64);
@@ -248,7 +263,7 @@ mod tests {
             .build_recorder();
         let handle = recorder.handle();
         metrics::with_local_recorder(&recorder, || {
-            record_phase("execute", Instant::now());
+            record_phase("snmp_table", "execute", Instant::now());
         });
         let rendered = handle.render();
 
@@ -261,6 +276,16 @@ mod tests {
         assert!(
             rendered.contains("phase=\"execute\""),
             "the phase label did not survive to the exporter:\n{rendered}"
+        );
+        // 🚨 The kind label is the half that makes the histogram readable on an SNMP fleet
+        // (ADR-110): without it one distribution mixes a three-echo ICMP probe with a
+        // ~40-round-trip table walk and six hourly walks, and no amount of reading it says which
+        // one was slow. The word comes from `CheckSpec::kind_label`, so it is the same word core
+        // put in the dispatch span.
+        assert!(
+            rendered.contains("kind=") && rendered.contains("snmp_table"),
+            "the kind label did not survive to the exporter:
+{rendered}"
         );
         for edge in ["0.005", "1", "30"] {
             assert!(

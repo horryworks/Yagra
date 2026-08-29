@@ -27,6 +27,18 @@
 
 ### Improvements
 
+- **The poll-phase histogram now says which kind of check it is measuring.**
+  `yagra_poll_phase_seconds` gained a `kind` label carrying the same word core stamps on a
+  dispatched job (`icmp`, `snmp_table`, `snmp_optical`, `snmp_neighbors`, …) alongside the
+  existing `phase`. Without it a single distribution mixed a three-echo ICMP probe with an SNMP
+  table walk — roughly forty sequential round trips — and six slow-tier walks that run once an
+  hour, so "the mean poll takes 22.5 seconds" was true, unactionable, and could not say which
+  check spent the time. Existing queries keep working: `sum by (phase)` gives the old view.
+
+  ⚠️ Meraki collects are still absent from this histogram — that path fans one job out to many
+  results and never records these phases. An absent `kind="meraki_collect"` means the phase was
+  never recorded, not that the poll was free.
+
 - **A poller now runs 256 concurrent probes by default, up from 64 — and the knob is finally in the
   compose files.** `YAGRA_MAX_CONCURRENT_POLLS` bounds how many probes one poller has in flight;
   it was never exposed in `docker-compose.poller.yml`, `docker-compose.deploy.yml` or

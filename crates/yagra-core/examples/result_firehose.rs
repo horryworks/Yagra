@@ -25,14 +25,28 @@
 //!   FIREHOSE_SECONDS    run duration; 0 = run forever    (default 30)
 //!   FIREHOSE_DOWN_PCT   % of results reporting Unreachable, to drive liveness alerts (default 2)
 //!   FIREHOSE_IFACES     interfaces per result (needs seeded nodes for the FK upsert) (default 0)
+//!   FIREHOSE_IFACE_METRICS  per-interface metric samples per interface, 0..=11 (default 11)
 //!   FIREHOSE_SEEDED     1 ⇒ target the deterministic ids from `seed_nodes.rs` instead of random
 //!                       NodeIds, so results land on real FK-valid, scheduled nodes (default 0)
+//!
+//! ## 🚨 `FIREHOSE_IFACES` alone creates no time series, and that was the hole (ADR-110)
+//!
+//! Until v0.3.5 this harness put interfaces in `PollResult.interfaces` — the **metadata** the
+//! PostgreSQL upsert consumes — and left `samples` at two node-level gauges. So it exercised the
+//! `interfaces` table and **not one series** of the per-interface TSDB path, which is where 96% of a
+//! real fleet's cardinality lives (11 metrics × every port, `collection.rs`). A 50,000 × 24 run
+//! through the old harness would have written 1.2M rows and 100k series instead of 13.2M, and
+//! reported the receiving side as comfortable.
+//!
+//! `FIREHOSE_IFACE_METRICS` now emits the built-in catalog's eleven per-interface metrics under the
+//! same names the poller uses, so `node × ifindex × metric` matches production exactly. Set it to 0
+//! to get the old metadata-only behaviour deliberately.
 
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use uuid::Uuid;
 use yagra_bus::{Bus, CheckOutcome, DiscoveredInterface, NatsBus, PollResult, Sample};
-use yagra_common::{IfIndex, NodeId};
+use yagra_common::{IfIndex, MetricKind, NodeId};
 
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
@@ -56,8 +70,35 @@ fn seeded_node_id(i: u64) -> NodeId {
     NodeId::from(Uuid::from_u128(((SEED_TAG_HI as u128) << 64) | i as u128))
 }
 
+/// The built-in catalog's eleven per-interface metrics, in the order `collection.rs` declares them,
+/// with the kind each is stored as.
+///
+/// ⚠️ **A second copy of a list `yagra_common::builtin_catalog()` owns.** It is spelled out here
+/// rather than derived because an example may not depend on the bin crate, and because the rig must
+/// be able to emit *fewer* than all eleven on purpose. If the catalog gains a per-interface metric,
+/// a run through this harness understates the fleet's cardinality until this list follows.
+const IFACE_METRICS: [(&str, MetricKind); 11] = [
+    ("if_hc_in_octets", MetricKind::Counter),
+    ("if_hc_out_octets", MetricKind::Counter),
+    ("if_hc_in_ucast_pkts", MetricKind::Counter),
+    ("if_hc_out_ucast_pkts", MetricKind::Counter),
+    ("if_in_errors", MetricKind::Counter),
+    ("if_out_errors", MetricKind::Counter),
+    ("if_in_discards", MetricKind::Counter),
+    ("if_out_discards", MetricKind::Counter),
+    ("if_oper_status", MetricKind::Gauge),
+    ("if_admin_status", MetricKind::Gauge),
+    ("if_high_speed", MetricKind::Gauge),
+];
+
 /// Build one synthetic result for `node`, index `i` (drives the down/up pattern and sample jitter).
-fn make_result(node: NodeId, i: u64, down_every: u64, ifaces: usize) -> PollResult {
+fn make_result(
+    node: NodeId,
+    i: u64,
+    down_every: u64,
+    ifaces: usize,
+    iface_metrics: usize,
+) -> PollResult {
     let down = down_every > 0 && i.is_multiple_of(down_every);
     let outcome = if down {
         CheckOutcome::Unreachable
@@ -70,10 +111,29 @@ fn make_result(node: NodeId, i: u64, down_every: u64, ifaces: usize) -> PollResu
     let samples = if down {
         Vec::new()
     } else {
-        vec![
-            Sample::gauge("icmp_rtt_ms", rtt),
-            Sample::gauge("cpu_pct", cpu),
-        ]
+        let mut s = Vec::with_capacity(2 + ifaces * iface_metrics);
+        s.push(Sample::gauge("icmp_rtt_ms", rtt));
+        s.push(Sample::gauge("cpu_pct", cpu));
+        // The per-interface half: one sample per (port × metric), which is what makes this a
+        // cardinality test rather than a row-count one. Counters climb with `i` so `rate()` is
+        // non-zero downstream — a flat counter would leave the interface-utilisation watch with
+        // nothing to track, and it is the most expensive reader of these series.
+        for k in 0..ifaces {
+            let idx = IfIndex(k as u32 + 1);
+            for (metric, kind) in IFACE_METRICS.iter().take(iface_metrics) {
+                let value = match *metric {
+                    "if_oper_status" | "if_admin_status" => 1.0,
+                    "if_high_speed" => 1_000.0,
+                    "if_in_errors" | "if_out_errors" | "if_in_discards" | "if_out_discards" => {
+                        (i / 1_000) as f64
+                    }
+                    // ~1 Mbit/s per port with a per-port offset, as a monotonic raw counter.
+                    _ => (i * 125_000 + k as u64 * 7_919) as f64,
+                };
+                s.push(Sample::interface(*metric, idx, value, *kind));
+            }
+        }
+        s
     };
     let interfaces = (0..ifaces)
         .map(|k| DiscoveredInterface {
@@ -118,15 +178,19 @@ async fn main() -> anyhow::Result<()> {
     let seconds = env_usize("FIREHOSE_SECONDS", 30);
     let down_pct = env_usize("FIREHOSE_DOWN_PCT", 2).min(100);
     let ifaces = env_usize("FIREHOSE_IFACES", 0);
+    let iface_metrics =
+        env_usize("FIREHOSE_IFACE_METRICS", IFACE_METRICS.len()).min(IFACE_METRICS.len());
     let seeded = env_usize("FIREHOSE_SEEDED", 0) != 0;
 
     // Every Nth result reports down; N derived from the requested percentage (0 ⇒ never down).
     let down_every = 100u64.checked_div(down_pct as u64).unwrap_or(0);
 
     eprintln!(
-        "result_firehose → {url}: {node_count} {} nodes, {rate}/s, {}s, down≈{down_pct}%, {ifaces} ifaces/result",
+        "result_firehose → {url}: {node_count} {} nodes, {rate}/s, {}s, down≈{down_pct}%, \n         {ifaces} ifaces/result × {iface_metrics} metrics = {} samples/result, \n         {} series over the fleet",
         if seeded { "seeded" } else { "random" },
-        if seconds == 0 { "∞".to_owned() } else { seconds.to_string() }
+        if seconds == 0 { "∞".to_owned() } else { seconds.to_string() },
+        2 + ifaces * iface_metrics,
+        node_count * (2 + ifaces * iface_metrics)
     );
     let bus = NatsBus::connect(&url).await?;
     // Seeded mode reproduces `seed_nodes.rs`' deterministic ids (results hit real FK-valid, scheduled
@@ -150,7 +214,7 @@ async fn main() -> anyhow::Result<()> {
         ticker.tick().await;
         for _ in 0..per_tick {
             let node = nodes[(i as usize) % node_count];
-            let result = make_result(node, i, down_every, ifaces);
+            let result = make_result(node, i, down_every, ifaces, iface_metrics);
             // Fire-and-forget; a publish error means NATS is down — surface and stop.
             if let Err(e) = bus.publish_result(result).await {
                 anyhow::bail!("publish_result failed: {e}");

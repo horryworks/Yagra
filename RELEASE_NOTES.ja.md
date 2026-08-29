@@ -27,6 +27,18 @@
 
 ### 改善
 
+- **ポール所要時間のヒストグラムが「どの種類のチェックか」を言うようになりました。**
+  `yagra_poll_phase_seconds` に `kind` ラベルが増えます。中身は core がジョブに刻むのと同じ語
+  （`icmp` / `snmp_table` / `snmp_optical` / `snmp_neighbors` …）で、既存の `phase` と併用します。
+  これまでは 1 つの分布に、ICMP の 3 回打ち・SNMP の表 walk（往復およそ 40 回）・1 時間に 1 度しか
+  走らない遅い階層の walk が全部混ざっていたため、「平均 22.5 秒」は事実でありながら
+  **どのチェックがその時間を使ったのかを言えません**でした。既存のクエリはそのまま動きます
+  （`sum by (phase)` で従来の見え方になります）。
+
+  ⚠️ Meraki の収集は今もこのヒストグラムに入りません。1 ジョブが多数の結果に分かれる経路で、
+  これらの相を記録していないためです。`kind="meraki_collect"` が無いのは「記録していない」であって
+  「速い」ではありません。
+
 - **ポーラーの同時プローブ数の既定が 64 から 256 になり、その摘みがようやく compose に出ました。**
   `YAGRA_MAX_CONCURRENT_POLLS` は 1 台のポーラーが同時に走らせるプローブ数の上限ですが、
   `docker-compose.poller.yml` にも `docker-compose.deploy.yml` にも `docker-compose.yml` にも

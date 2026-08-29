@@ -1252,6 +1252,49 @@ pub enum CheckSpec {
 }
 
 impl CheckSpec {
+    /// The short kind label for this spec — the vocabulary core stamps on a dispatched job, and the
+    /// `kind` label the poller's phase histogram is broken out by (ADR-110).
+    ///
+    /// # Why here, and why core still writes its own out
+    ///
+    /// The poller needs the *same* words core uses, because an operator reading
+    /// `yagra_poll_phase_seconds{kind="snmp_table"}` is reading the label they saw in core's
+    /// `dispatch.poll_job` span. But `scheduler/assemble.rs` deliberately keeps its sixteen labels
+    /// written out beside the builder that chose the variant (ADR-084 Inc.3) — returned *with* the
+    /// spec so the spelling and the spec cannot drift apart. Computing them there would undo that.
+    ///
+    /// So the two coexist and are pinned to each other by
+    /// `assemble.rs::every_job_kind_label_matches_the_spec_it_travels_with`. This method is the
+    /// authority for the poller and for any surface that has a `CheckSpec` and no dispatch label.
+    ///
+    /// ⚠️ The four kinds core never labels — it dispatches Meraki, HTTP, DNS and the on-demand ICMP
+    /// through other paths — still need a word here, because the poller sees them.
+    #[must_use]
+    pub const fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Icmp(_) => "icmp",
+            Self::Snmp(_) => "snmp",
+            Self::SnmpV3(_) => "snmp_v3",
+            Self::SnmpTable(_) => "snmp_table",
+            Self::SnmpV3Table(_) => "snmp_v3_table",
+            Self::SnmpOptical(_) => "snmp_optical",
+            Self::SnmpV3Optical(_) => "snmp_v3_optical",
+            Self::SnmpMau(_) => "snmp_mau",
+            Self::SnmpV3Mau(_) => "snmp_v3_mau",
+            Self::Http(_) => "http",
+            Self::MerakiCollect(_) => "meraki_collect",
+            Self::Dns(_) => "dns",
+            Self::SnmpNeighbors(_) => "snmp_neighbors",
+            Self::SnmpV3Neighbors(_) => "snmp_v3_neighbors",
+            Self::SnmpL3(_) => "snmp_l3",
+            Self::SnmpV3L3(_) => "snmp_v3_l3",
+            Self::SnmpArp(_) => "snmp_arp",
+            Self::SnmpV3Arp(_) => "snmp_v3_arp",
+            Self::SnmpRouting(_) => "snmp_routing",
+            Self::SnmpV3Routing(_) => "snmp_v3_routing",
+        }
+    }
+
     /// Every plaintext credential this spec carries, for a fail-closed scan that must run where the
     /// credentials are (ADR-045 Inc.4).
     ///

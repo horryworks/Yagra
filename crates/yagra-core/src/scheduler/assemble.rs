@@ -473,7 +473,26 @@ mod tests {
     };
 
     /// The kinds present in an assembled job list (order-independent assertions).
+    /// Collect the job-kind labels — and, while walking them, pin each one to the label the spec
+    /// itself reports (ADR-110).
+    ///
+    /// 🚨 **The two vocabularies are deliberately separate and must not diverge.** These labels are
+    /// written out beside the builder that chose the variant (see [`SnmpJobSource`]) so a spelling
+    /// cannot drift from its spec; `CheckSpec::kind_label` is what the *poller* stamps on
+    /// `yagra_poll_phase_seconds{kind=…}`, where it has a job and no dispatch label. An operator
+    /// reading that histogram is reading the word they saw in the `dispatch.poll_job` span, so a
+    /// disagreement would be two different names for one check with nothing to say so.
+    ///
+    /// Asserting it here rather than in a test of its own means **every** test that inspects job
+    /// kinds enforces it, including the ones added later for reasons unrelated to labels.
     fn kinds(jobs: &[(PollJob, &'static str)]) -> Vec<&'static str> {
+        for (job, label) in jobs {
+            assert_eq!(
+                job.check.kind_label(),
+                *label,
+                "job-kind label disagrees with CheckSpec::kind_label"
+            );
+        }
         jobs.iter().map(|(_, k)| *k).collect()
     }
 

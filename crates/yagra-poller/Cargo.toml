@@ -60,3 +60,12 @@ yagra-common = { path = "../yagra-common", features = ["test-util"] }
 async-trait = { workspace = true }
 # Trap PDU fixtures for the listener tests (vendored patch build).
 snmp2 = { workspace = true }
+
+# 🚨 Examples are `test = false` by default in Cargo, so an example's `#[cfg(test)]` module is
+# built by nothing and run by nothing. `snmp_sim` carries the checks that say its generated MIB
+# still answers every table the shipped check kinds walk (ADR-110) — a rig whose guards never run
+# is a rig that will quietly stop being a fair test. Declaring the target here does not disable
+# autodiscovery of the other examples.
+[[example]]
+name = "snmp_sim"
+test = true
