@@ -26,10 +26,11 @@ const MAX_SINGLE_FLIGHT_WAIT: Duration = Duration::from_secs(60);
 /// The poller had **no histogram at all** until this one, so "the poll took 800 ms" and "the poll
 /// took 120 ms and spent the rest queueing" were the same observation from outside. The 50,000-node
 /// load test needed exactly that distinction and could not have it, and the cost of not having it
-/// was a wrong answer rather than no answer: `permits / throughput` was read as a mean hold time
-/// and it is only that when the permits are full. They were not (ADR-109). 🚨 So read this
-/// histogram beside `yagra_poll_inflight`, never on its own — a phase that looks slow while the
-/// gauge sits below the cap is a poller being starved, not a poller being slow.
+/// was a wrong answer rather than no answer: `permits / throughput` was read as a mean hold time,
+/// and it is only that when the permits are full — which nobody could have known either way,
+/// because the gauge that says so did not exist yet (ADR-109). 🚨 So read this histogram beside
+/// `yagra_poll_inflight`, never on its own — a phase that looks slow while the gauge sits below the
+/// cap is a poller being starved, not a poller being slow, and the two want opposite fixes.
 ///
 /// 🚨 **The three phases inside the spawned task sum to the permit hold time**, which is what
 /// `permits / throughput` measures from outside — so an unexplained remainder means a phase is

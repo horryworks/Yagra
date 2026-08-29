@@ -166,11 +166,16 @@ async fn run_local_scheduler(working_set: Arc<Mutex<WorkingSet>>, jobs_tx: mpsc:
         // for and every existing counter read healthy, because almost nothing was *dropped* (the
         // shed counter moved by a few hundred against 930,000 executed) — the loop below
         // back-pressures on a bounded channel and the cycle silently stretches instead.
-        // 🚨 And since ADR-109 this loop is the prime suspect for *why*: the ICMP transport alone
-        // does 4,178 polls/s on that very box, at the same concurrency and round trip where that
-        // deployment managed 643 —
-        // so the jobs were not arriving rather than running slowly. `yagra_poll_inflight` sitting
-        // below the permit cap is what would confirm it — measure before changing anything here.
+        // 🚨 This loop was the prime suspect for *why*, and it was measured and cleared (ADR-109).
+        // One poller carrying 50,000 nodes on that box now serves 1,675 polls/s — the whole of what
+        // a 30-second interval asks for — while this counter stays at 0; drop the permits to 64 and
+        // the same poller yields exactly 532 polls/s, which is 64 divided by the 120.6 ms one poll
+        // takes, and this counter fires ~95,000 per 30 s. So the ceiling is the permit count and
+        // nothing else, and the tick below is not in the way at either end.
+        // ⚠️ What is still unexplained is the load test's own number: two pollers should have made
+        // ~1,064 polls/s at 64 permits each and made 587. Do not treat this loop as cleared *for
+        // that run* — the differences (a third, co-located poller in the pool; 6 vCPU rather than
+        // 3) were never isolated.
         // ⚠️ Distinct from `yagra_poll_skipped_backpressure_total`, which counts a job that WAS
         // dispatched and then dropped at the device single-flight guard.
         if missed > 0 {

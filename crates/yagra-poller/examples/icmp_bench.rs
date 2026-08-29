@@ -8,21 +8,28 @@
 //! > 4.8% CPU. Eight times the permits bought 1.65x the throughput. **Is that ceiling inside the
 //! > ICMP transport, or upstream of it?**
 //!
-//! It was answered on 2026-08-29, and the answer was **upstream**: at 40 ms RTT this transport is
+//! It was answered on 2026-08-29, on the load test's own poller box: at 40 ms RTT this transport is
 //! linear in concurrency past 2,048 (64 → 530 polls/s, 256 → 2,123, 512 → 4,178, 2,048 → 14,581)
-//! with latency pinned at the theoretical floor, measured on the load test's own poller box, so its
-//! 643 was 6.5x below what the probe path can do there. The
-//! harness stays because that number has to be re-established on any host the question is asked
-//! about — "the transport is not the limit" is a claim about a machine, not about the code.
+//! with latency pinned at the theoretical floor.
 //!
-//! Sweep `BENCH_CONCURRENCY` and read the curve:
+//! 🚨 **Then the same box was measured again through the whole product, and the two agreed to
+//! within 1%.** A real poller carrying 50,000 nodes yields 532 polls/s at 64 permits and 2,136 at
+//! 256 — against this harness's 530 and 2,123. So there is no gap between the probe path and the
+//! pipeline around it: **the ceiling is `permits ÷ probe time`, and the answer to "transport or
+//! upstream?" turned out to be "neither — it is the permit count".** What that leaves unexplained
+//! is the load test's own 587 polls/s from two pollers, which is below what two pollers at even the
+//! lowest permit setting should manage; ADR-109 records the differences that were never isolated.
 //!
-//! - It flattens here too, near 640 polls/s ⇒ **the ceiling is the transport.** The prime suspect
-//!   is that `SurgePingTransport` holds ONE `surge_ping::Client` per address family, so a single
-//!   socket and a single receive task demultiplex every reply this process will ever get.
-//! - It keeps climbing (thousands of polls/s) ⇒ **the ceiling is upstream** — the 500 ms scheduler
-//!   tick, the 256-deep job channel, the one job loop — and the next place to look is a running
-//!   poller's `yagra_poll_phase_seconds`, which now says which phase of a poll grew.
+//! The harness stays because the curve has to be re-established on any host the question is asked
+//! about — the no-delay ceiling differed **8x** between a WSL box and this VM, so "the transport is
+//! not the limit" is a claim about a machine, not about the code. Sweep `BENCH_CONCURRENCY`:
+//!
+//! - It flattens well below `concurrency ÷ latency` ⇒ **the ceiling is the transport.** The prime
+//!   suspect is that `SurgePingTransport` holds ONE `surge_ping::Client` per address family, so a
+//!   single socket and a single receive task demultiplex every reply this process will ever get.
+//! - It tracks `concurrency ÷ latency` ⇒ the transport has room, and a deployment that is slower
+//!   than that is short of permits or short of jobs. A running poller's `yagra_poll_inflight` tells
+//!   you which: pinned at the cap is throttled, below it is starved.
 //!
 //! 🚨 **The decisive number is not throughput, it is `nstat`.** Take `IcmpInEchoReps` before and
 //! after the run and compare its delta with the `echoes_replied` printed below. Equal means every
