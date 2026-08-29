@@ -46,11 +46,11 @@
   advances at most once every five minutes rather than on every poll. The `stale` flag beside it is
   computed from the same column and is unaffected.
 
-- **Filling a node's vendor/model no longer rewrites the row when there is nothing to fill.** Every
-  poll carrying a `sysDescr` updated its `nodes` row — 50,000 rows per cycle at fleet scale, on a
-  table with more indexes than `interfaces` — even though the statement only ever fills blanks and
-  so wrote the same values back. It now writes only when a blank is genuinely filled. Nothing reads
-  the `updated_at` this was advancing.
+- **Filling a node's vendor/model no longer rewrites the row when there is nothing to fill.** A poll
+  carrying a `sysDescr` updated its `nodes` row even though the statement only ever fills blanks
+  and so wrote the same values back. It now writes only when a blank is genuinely filled; nothing
+  reads the `updated_at` this was advancing. Small: a node stops sending `sysDescr` once its maker
+  is known, so this was a handful of writes per node just after discovery, not a per-cycle cost.
 
 - **`YAGRA_PG_MAX_CONNECTIONS` now actually reaches core.** Both compositions pass it through.
   Core has always read it and `.env.example` has always said to raise it to 50–80 at tens of

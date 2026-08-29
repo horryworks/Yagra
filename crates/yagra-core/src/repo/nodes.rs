@@ -382,11 +382,21 @@ impl NodeRepo {
     ///
     /// ⚠️ **"Fill" is meant literally: a node whose vendor and model are already set is not
     /// written** (ADR-110 Increment 1). It used to be — `updated_at = now()` was unconditional, so
-    /// every poll carrying a `sysDescr` rewrote its node's row with the values it already had, at
-    /// fleet scale 50,000 rows per cycle on a table with more indexes than `interfaces`. The
-    /// COALESCE meant the stored values never moved, so the write was pure cost. `updated_at` has
-    /// no reader — it is not in [`NodeRepo::NODE_COLUMNS`], so `node_from_row` never selects it and
-    /// no API or UI surface carries it — which is why not advancing it changes nothing observable.
+    /// a poll carrying a `sysDescr` rewrote its node's row with the values it already had. The
+    /// COALESCE meant the stored values never moved, so the write was pure cost.
+    ///
+    /// 🚨 **How much cost is small, and an earlier version of this note said otherwise.** It is not
+    /// a per-cycle fleet write: `assemble.rs` sets `probe_identity` only while `node.vendor` is
+    /// `None`, so a node stops sending `sysDescr` as soon as this fills it, and `identify()` never
+    /// returns a model without a vendor. What remains is the window between the fill landing in
+    /// PostgreSQL and the scheduler's node cache noticing — a few polls per node, once. Measured on
+    /// the 32-node lab: **88 `nodes` updates in total** against 14.6M on `interfaces`. Keep the
+    /// predicate because a repeated no-op write is still a write, not because it was ever the
+    /// expensive one.
+    ///
+    /// `updated_at` has no reader — it is not in [`NodeRepo::NODE_COLUMNS`], so `node_from_row`
+    /// never selects it and no API or UI surface carries it — which is why not advancing it changes
+    /// nothing observable.
     pub async fn fill_node_identity_batch(
         &self,
         rows: &[(Uuid, Option<String>, Option<String>)],
